@@ -20,7 +20,7 @@ struct HarnessCLI {
                 try printSnapshot(client)
             case "new-workspace":
                 let name = flagValue(args, flag: "--name") ?? "Workspace"
-                let response = try client.request(.newWorkspace(name: name))
+                let response = try checkedRequest(client, .newWorkspace(name: name))
                 if case let .workspaceID(id) = response { print(id.uuidString) }
             case "new-session":
                 try handleNewSession(args, client: client)
@@ -39,13 +39,13 @@ struct HarnessCLI {
                     fputs("Usage: harness-cli close-tab --tab <uuid>\n", stderr)
                     exit(1)
                 }
-                _ = try client.request(.closeTab(tabID: tabID))
+                _ = try checkedRequest(client, .closeTab(tabID: tabID))
             case "close-session":
                 guard let sessionID = UUID(uuidString: flagValue(args, flag: "--session") ?? "") else {
                     fputs("Usage: harness-cli close-session --session <uuid>\n", stderr)
                     exit(1)
                 }
-                _ = try client.request(.closeSession(sessionID: sessionID))
+                _ = try checkedRequest(client, .closeSession(sessionID: sessionID))
             case "send":
                 guard let surface = flagValue(args, flag: "--surface"),
                       let text = flagValue(args, flag: "--text")
@@ -53,7 +53,7 @@ struct HarnessCLI {
                     fputs("Usage: harness-cli send --surface <uuid> --text \"...\"\n", stderr)
                     exit(1)
                 }
-                _ = try client.request(.send(surfaceID: surface, text: text))
+                _ = try checkedRequest(client, .send(surfaceID: surface, text: text))
             case "notify":
                 guard let surface = flagValue(args, flag: "--surface") else {
                     fputs("Usage: harness-cli notify --surface <uuid> [--title t] [--body b]\n", stderr)
@@ -61,11 +61,11 @@ struct HarnessCLI {
                 }
                 let title = flagValue(args, flag: "--title") ?? "Agent"
                 let body = flagValue(args, flag: "--body") ?? flagValue(args, flag: "--message") ?? "Needs attention"
-                _ = try client.request(.notify(surfaceID: surface, title: title, body: body))
+                _ = try checkedRequest(client, .notify(surfaceID: surface, title: title, body: body))
             case "install":
                 try installCLI()
             case "ping":
-                let response = try client.request(.ping)
+                let response = try checkedRequest(client, .ping)
                 print(response)
             case "send-keys":
                 try handleSendKeys(args, client: client)
@@ -106,7 +106,7 @@ struct HarnessCLI {
     static func handleNewTab(_ args: [String], client: DaemonClient) throws {
         if let name = flagValue(args, flag: "--workspace") {
             let cwd = flagValue(args, flag: "--cwd")
-            let response = try client.request(.newTabInWorkspace(named: name, cwd: cwd))
+            let response = try checkedRequest(client, .newTabInWorkspace(named: name, cwd: cwd))
             if case let .tabID(id) = response { print(id.uuidString) }
             return
         }
@@ -115,7 +115,7 @@ struct HarnessCLI {
             exit(1)
         }
         let cwd = flagValue(args, flag: "--cwd")
-        let response = try client.request(.newTab(workspaceID: workspaceID, cwd: cwd))
+        let response = try checkedRequest(client, .newTab(workspaceID: workspaceID, cwd: cwd))
         if case let .tabID(id) = response { print(id.uuidString) }
     }
 
@@ -126,7 +126,7 @@ struct HarnessCLI {
         }
         let cwd = flagValue(args, flag: "--cwd")
         let name = flagValue(args, flag: "--name")
-        let response = try client.request(.newSession(workspaceID: workspaceID, cwd: cwd, name: name))
+        let response = try checkedRequest(client, .newSession(workspaceID: workspaceID, cwd: cwd, name: name))
         if case let .sessionID(id) = response { print(id.uuidString) }
     }
 
@@ -139,7 +139,7 @@ struct HarnessCLI {
             exit(1)
         }
         let paneID = UUID(uuidString: flagValue(args, flag: "--pane") ?? "")
-        let response = try client.request(.newSplit(tabID: tabID, paneID: paneID, direction: direction))
+        let response = try checkedRequest(client, .newSplit(tabID: tabID, paneID: paneID, direction: direction))
         if case let .paneID(id) = response { print(id.uuidString) }
     }
 
@@ -149,9 +149,9 @@ struct HarnessCLI {
             exit(1)
         }
         if let uuid = UUID(uuidString: target) {
-            _ = try client.request(.selectWorkspace(id: uuid))
+            _ = try checkedRequest(client, .selectWorkspace(id: uuid))
         } else {
-            _ = try client.request(.selectWorkspaceByName(name: target))
+            _ = try checkedRequest(client, .selectWorkspaceByName(name: target))
         }
     }
 
@@ -162,7 +162,7 @@ struct HarnessCLI {
             fputs("Usage: harness-cli select-tab --workspace <uuid> --tab <uuid>\n", stderr)
             exit(1)
         }
-        _ = try client.request(.selectTab(workspaceID: workspaceID, tabID: tabID))
+        _ = try checkedRequest(client, .selectTab(workspaceID: workspaceID, tabID: tabID))
     }
 
     static func handleSelectSession(_ args: [String], client: DaemonClient) throws {
@@ -172,11 +172,11 @@ struct HarnessCLI {
             fputs("Usage: harness-cli select-session --workspace <name|uuid> --session <uuid>\n", stderr)
             exit(1)
         }
-        _ = try client.request(.selectSession(workspaceID: workspaceID, sessionID: sessionID))
+        _ = try checkedRequest(client, .selectSession(workspaceID: workspaceID, sessionID: sessionID))
     }
 
     static func printWorkspaces(_ client: DaemonClient) throws {
-        let response = try client.request(.listWorkspaces)
+        let response = try checkedRequest(client, .listWorkspaces)
         guard case let .workspaces(items) = response else { throw DaemonClientError.unexpectedResponse }
         for item in items {
             print("\(item.id)\t\(item.name)\t\(item.tabCount) sessions")
@@ -184,7 +184,7 @@ struct HarnessCLI {
     }
 
     static func printSurfaces(_ client: DaemonClient) throws {
-        let response = try client.request(.listSurfaces)
+        let response = try checkedRequest(client, .listSurfaces)
         guard case let .surfaces(items) = response else { throw DaemonClientError.unexpectedResponse }
         for item in items {
             print("\(item.surfaceID)\t\(item.workspaceName)\t\(item.tabTitle)\t\(item.cwd)")
@@ -198,13 +198,13 @@ struct HarnessCLI {
         if let uuid = UUID(uuidString: target) {
             return uuid
         }
-        let response = try client.request(.listWorkspaces)
+        let response = try checkedRequest(client, .listWorkspaces)
         guard case let .workspaces(items) = response else { return nil }
         return items.first { $0.name == target }?.id
     }
 
     static func printSnapshot(_ client: DaemonClient) throws {
-        let response = try client.request(.getSnapshot)
+        let response = try checkedRequest(client, .getSnapshot)
         guard case let .snapshot(snapshot) = response else { throw DaemonClientError.unexpectedResponse }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -220,7 +220,7 @@ struct HarnessCLI {
             exit(1)
         }
         let tokens = keys.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        _ = try client.request(.sendKeys(surfaceID: surface, keys: tokens))
+        _ = try checkedRequest(client, .sendKeys(surfaceID: surface, keys: tokens))
     }
 
     static func handleCapturePane(_ args: [String], client: DaemonClient) throws {
@@ -229,7 +229,7 @@ struct HarnessCLI {
             exit(1)
         }
         let scrollback = args.contains("--scrollback")
-        let response = try client.request(.capturePane(surfaceID: surface, includeScrollback: scrollback))
+        let response = try checkedRequest(client, .capturePane(surfaceID: surface, includeScrollback: scrollback))
         if case let .text(text) = response {
             print(text)
         }
@@ -240,7 +240,7 @@ struct HarnessCLI {
             fputs("Missing or invalid --pane <uuid>\n", stderr)
             exit(1)
         }
-        _ = try client.request(make(paneID))
+        _ = try checkedRequest(client, make(paneID))
     }
 
     static func handleSwapPane(_ args: [String], client: DaemonClient) throws {
@@ -250,7 +250,7 @@ struct HarnessCLI {
             fputs("Usage: harness-cli swap-pane --src <uuid> --dst <uuid>\n", stderr)
             exit(1)
         }
-        _ = try client.request(.swapPanes(srcPaneID: src, dstPaneID: dst))
+        _ = try checkedRequest(client, .swapPanes(srcPaneID: src, dstPaneID: dst))
     }
 
     static func handleResizePane(_ args: [String], client: DaemonClient) throws {
@@ -262,7 +262,7 @@ struct HarnessCLI {
             exit(1)
         }
         let amount = Int(flagValue(args, flag: "--amount") ?? "1") ?? 1
-        _ = try client.request(.resizePane(paneID: paneID, direction: direction, amount: amount))
+        _ = try checkedRequest(client, .resizePane(paneID: paneID, direction: direction, amount: amount))
     }
 
     static func parseDirection(_ raw: String) -> ResizeDirection? {
@@ -281,7 +281,7 @@ struct HarnessCLI {
             exit(1)
         }
         let enabled = !args.contains("--exit")
-        _ = try client.request(.setCopyMode(surfaceID: surface, enabled: enabled))
+        _ = try checkedRequest(client, .setCopyMode(surfaceID: surface, enabled: enabled))
     }
 
     static func handleRenameTab(_ args: [String], client: DaemonClient) throws {
@@ -291,7 +291,7 @@ struct HarnessCLI {
             fputs("Usage: harness-cli rename-tab --tab <uuid> --name \"...\"\n", stderr)
             exit(1)
         }
-        _ = try client.request(.renameTab(tabID: tabID, name: name))
+        _ = try checkedRequest(client, .renameTab(tabID: tabID, name: name))
     }
 
     static func handleRenameSession(_ args: [String], client: DaemonClient) throws {
@@ -301,7 +301,7 @@ struct HarnessCLI {
             fputs("Usage: harness-cli rename-session --session <uuid> --name \"...\"\n", stderr)
             exit(1)
         }
-        _ = try client.request(.renameSession(sessionID: sessionID, name: name))
+        _ = try checkedRequest(client, .renameSession(sessionID: sessionID, name: name))
     }
 
     static func handleRenameWorkspace(_ args: [String], client: DaemonClient) throws {
@@ -312,7 +312,7 @@ struct HarnessCLI {
             fputs("Usage: harness-cli rename-workspace --id <uuid> --name \"...\"\n", stderr)
             exit(1)
         }
-        _ = try client.request(.renameWorkspace(workspaceID: id, name: name))
+        _ = try checkedRequest(client, .renameWorkspace(workspaceID: id, name: name))
     }
 
     static func handleDetectAgent(_ args: [String], client: DaemonClient) throws {
@@ -320,7 +320,7 @@ struct HarnessCLI {
             fputs("Usage: harness-cli detect-agent --surface <id>\n", stderr)
             exit(1)
         }
-        let response = try client.request(.detectAgent(surfaceID: surface))
+        let response = try checkedRequest(client, .detectAgent(surfaceID: surface))
         if case let .agentInfo(info) = response, let info {
             print("\(info.kind.rawValue)\t\(info.executable)\t\(info.activity.rawValue)")
         }
@@ -338,7 +338,7 @@ struct HarnessCLI {
         }
         // Phase 5 will plumb full streaming; for now we replay scrollback so the
         // user can confirm a pane's recent output without launching the GUI.
-        let response = try client.request(.replayScrollback(surfaceID: surface, fromSequence: nil))
+        let response = try checkedRequest(client, .replayScrollback(surfaceID: surface, fromSequence: nil))
         if case let .text(text) = response { print(text) }
     }
 
@@ -362,6 +362,14 @@ struct HarnessCLI {
     static func flagValue(_ args: [String], flag: String) -> String? {
         guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
         return args[index + 1]
+    }
+
+    static func checkedRequest(_ client: DaemonClient, _ request: IPCRequest) throws -> IPCResponse {
+        let response = try client.request(request)
+        if case let .error(message) = response {
+            throw DaemonSessionError.daemonError(message)
+        }
+        return response
     }
 
     static func printUsage() {
@@ -408,11 +416,5 @@ enum CLIInstallLocator {
             return exe
         }
         return URL(fileURLWithPath: CommandLine.arguments[0])
-    }
-}
-
-extension DaemonClientError {
-    static var unexpectedResponse: DaemonClientError {
-        .connectionFailed
     }
 }

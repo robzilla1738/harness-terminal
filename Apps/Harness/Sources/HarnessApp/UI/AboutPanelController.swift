@@ -27,6 +27,7 @@ enum AboutPanelController {
         )
         panel.title = "About Harness"
         panel.isFloatingPanel = false
+        panel.isRestorable = false
 
         let stack = NSStackView()
         stack.orientation = .vertical

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import HarnessCore
 
@@ -6,6 +7,7 @@ public final class DaemonServer: @unchecked Sendable {
     private var listener: DispatchSourceRead?
     private let queue = DispatchQueue(label: "com.robert.harness.daemon")
     private var clientBuffers: [Int32: Data] = [:]
+    private var clientSources: [Int32: DispatchSourceRead] = [:]
     private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
 
     public init() {}
@@ -13,11 +15,16 @@ public final class DaemonServer: @unchecked Sendable {
     public func start() throws {
         try HarnessPaths.ensureDirectories()
         if FileManager.default.fileExists(atPath: HarnessPaths.socketURL.path) {
+            if case .pong = try? DaemonClient().request(.ping, timeout: 0.2) {
+                throw DaemonError.alreadyRunning
+            }
             try FileManager.default.removeItem(at: HarnessPaths.socketURL)
         }
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw DaemonError.socketFailed }
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -54,15 +61,20 @@ public final class DaemonServer: @unchecked Sendable {
     private func acceptConnection(listenerFD: Int32) {
         let clientFD = accept(listenerFD, nil, nil)
         guard clientFD >= 0 else { return }
+        var noSigPipe: Int32 = 1
+        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         clientBuffers[clientFD] = Data()
         let source = DispatchSource.makeReadSource(fileDescriptor: clientFD, queue: queue)
         source.setEventHandler { [weak self] in
             self?.readClient(fd: clientFD, source: source)
         }
-        source.setCancelHandler {
-            self.cancelSubscriptions(for: clientFD)
+        source.setCancelHandler { [weak self] in
+            self?.clientBuffers.removeValue(forKey: clientFD)
+            self?.clientSources.removeValue(forKey: clientFD)
+            self?.cancelSubscriptions(for: clientFD)
             close(clientFD)
         }
+        clientSources[clientFD] = source
         source.resume()
     }
 
@@ -71,7 +83,6 @@ public final class DaemonServer: @unchecked Sendable {
         let count = read(fd, &buffer, buffer.count)
         if count <= 0 {
             source.cancel()
-            clientBuffers.removeValue(forKey: fd)
             return
         }
         var data = clientBuffers[fd] ?? Data()
@@ -97,7 +108,17 @@ public final class DaemonServer: @unchecked Sendable {
     private func send(_ response: IPCResponse, to fd: Int32) {
         guard let data = try? IPCCodec.encode(IPCReply(response: response)) else { return }
         data.withUnsafeBytes { raw in
-            _ = write(fd, raw.baseAddress, raw.count)
+            guard let base = raw.baseAddress else { return }
+            var written = 0
+            while written < raw.count {
+                let result = write(fd, base.advanced(by: written), raw.count - written)
+                if result > 0 {
+                    written += result
+                    continue
+                }
+                if result < 0, errno == EINTR { continue }
+                break
+            }
         }
     }
 
@@ -128,12 +149,14 @@ public final class DaemonServer: @unchecked Sendable {
 }
 
 public enum DaemonError: Error, CustomStringConvertible {
+    case alreadyRunning
     case socketFailed
     case bindFailed
     case listenFailed
 
     public var description: String {
         switch self {
+        case .alreadyRunning: "HarnessDaemon is already running"
         case .socketFailed: "Failed to create socket"
         case .bindFailed: "Failed to bind socket"
         case .listenFailed: "Failed to listen on socket"

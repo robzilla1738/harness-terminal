@@ -19,6 +19,19 @@ final class SessionCoordinator: NSObject {
 
     var keepSessionsOnQuit: Bool { snapshot.keepSessionsOnQuit }
 
+    private enum ActiveTabCloseDisposition {
+        case tab
+        case session
+        case workspace
+        case window
+    }
+
+    private struct CloseConfirmationCopy {
+        var message: String
+        var informative: String
+        var button: String
+    }
+
     private override init() {
         super.init()
         syncFromDaemon()
@@ -242,6 +255,11 @@ final class SessionCoordinator: NSObject {
     }
 
     func closeActiveTab() {
+        guard let disposition = activeTabCloseDisposition() else { return }
+        performClose(disposition)
+    }
+
+    private func closeActiveTabOnly() {
         guard let tabID = snapshot.activeWorkspace?.activeTab?.id else { return }
         let surfaces = snapshot.activeWorkspace?.activeTab?.rootPane.allSurfaceIDs() ?? []
         for surfaceID in surfaces {
@@ -252,16 +270,87 @@ final class SessionCoordinator: NSObject {
     }
 
     func closeActiveTabWithConfirmation() {
-        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
-        let title = HarnessPathDisplay.title(for: tab.cwd, fallback: tab.title)
+        guard let disposition = activeTabCloseDisposition(),
+              let copy = closeConfirmationCopy(for: disposition)
+        else { return }
         let alert = NSAlert()
-        alert.messageText = "Close tab \"\(title)\"?"
-        alert.informativeText = "This will close the tab and its running shell."
+        alert.messageText = copy.message
+        alert.informativeText = copy.informative
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: copy.button)
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        closeActiveTab()
+
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window) { [weak self, weak window] response in
+                guard response == .alertFirstButtonReturn else { return }
+                Task { @MainActor in
+                    self?.performClose(disposition, closingWindow: window)
+                }
+            }
+        } else {
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            performClose(disposition)
+        }
+    }
+
+    private func activeTabCloseDisposition() -> ActiveTabCloseDisposition? {
+        guard let workspace = snapshot.activeWorkspace,
+              let session = workspace.activeSession,
+              session.activeTab != nil
+        else { return nil }
+        if session.tabs.count > 1 { return .tab }
+        if workspace.sessions.count > 1 { return .session }
+        if snapshot.workspaces.count > 1 { return .workspace }
+        return .window
+    }
+
+    private func closeConfirmationCopy(for disposition: ActiveTabCloseDisposition) -> CloseConfirmationCopy? {
+        guard let workspace = snapshot.activeWorkspace,
+              let session = workspace.activeSession,
+              let tab = session.activeTab
+        else { return nil }
+        let tabTitle = HarnessPathDisplay.title(for: tab.cwd, fallback: tab.title)
+        switch disposition {
+        case .tab:
+            return CloseConfirmationCopy(
+                message: "Close tab \"\(tabTitle)\"?",
+                informative: "This will close the tab and its running shell.",
+                button: "Close Tab"
+            )
+        case .session:
+            let sessionTitle = session.name.isEmpty ? tabTitle : session.name
+            return CloseConfirmationCopy(
+                message: "Close session \"\(sessionTitle)\"?",
+                informative: "This is the last tab in the session. The session and its running shell will close.",
+                button: "Close Session"
+            )
+        case .workspace:
+            return CloseConfirmationCopy(
+                message: "Close workspace \"\(workspace.name)\"?",
+                informative: "This is the last tab in the workspace. The workspace and its running shell will close.",
+                button: "Close Workspace"
+            )
+        case .window:
+            return CloseConfirmationCopy(
+                message: "Close Harness window?",
+                informative: "This is the last tab in the window. The running shell will close and the window will close.",
+                button: "Close Window"
+            )
+        }
+    }
+
+    private func performClose(_ disposition: ActiveTabCloseDisposition, closingWindow: NSWindow? = nil) {
+        switch disposition {
+        case .tab:
+            closeActiveTabOnly()
+        case .session:
+            closeActiveSession()
+        case .workspace:
+            closeActiveWorkspace()
+        case .window:
+            closeActiveTabOnly()
+            (closingWindow ?? NSApp.keyWindow ?? NSApp.mainWindow)?.close()
+        }
     }
 
     func closeActiveSession() {
@@ -368,6 +457,12 @@ final class SessionCoordinator: NSObject {
 
     func closeActiveWorkspace() {
         guard let id = snapshot.activeWorkspaceID, snapshot.workspaces.count > 1 else { return }
+        let surfaces = snapshot.activeWorkspace?.sessions.flatMap { session in
+            session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
+        } ?? []
+        for surfaceID in surfaces {
+            terminalHosts.removeHost(for: surfaceID)
+        }
         requestDaemon(.closeWorkspace(id: id))
         syncFromDaemon()
     }
@@ -605,6 +700,7 @@ enum CopyModeWindow {
             defer: false
         )
         win.title = "Copy Mode"
+        win.isRestorable = false
         win.contentView = scroll
         window = win
         win.center()

@@ -19,6 +19,7 @@ final class MainWindowController: NSWindowController {
             defer: false
         )
         window.title = "Harness"
+        window.isRestorable = false
         window.minSize = NSSize(width: 960, height: 600)
         window.titlebarAppearsTransparent = SessionCoordinator.shared.settings.transparentTitlebar
         window.titleVisibility = .hidden

@@ -20,10 +20,31 @@ public enum AgentDetector {
     nonisolated(unsafe) private static var hints: [String: AgentSnapshot] = [:]
     private static let hintsLock = NSLock()
 
+    nonisolated(unsafe) private static var lastOutputAt: [String: Date] = [:]
+    private static let outputLock = NSLock()
+
     public static func registerRootPID(_ pid: Int32, forSurfaceKey key: String) {
         rootsLock.lock()
         surfaceRoots[key] = pid
         rootsLock.unlock()
+    }
+
+    public static func unregisterRootPID(forSurfaceKey key: String) {
+        rootsLock.lock()
+        surfaceRoots.removeValue(forKey: key)
+        rootsLock.unlock()
+
+        snapshotsLock.lock()
+        lastSurfaceSnapshots.removeValue(forKey: key)
+        snapshotsLock.unlock()
+
+        hintsLock.lock()
+        hints.removeValue(forKey: key)
+        hintsLock.unlock()
+
+        outputLock.lock()
+        lastOutputAt.removeValue(forKey: key)
+        outputLock.unlock()
     }
 
     public static func registerHint(_ snapshot: AgentSnapshot, forSurfaceKey key: String) {
@@ -44,10 +65,15 @@ public enum AgentDetector {
     }
 
     public static func recordActivity(forSurfaceKey key: String) {
+        let now = Date()
+        outputLock.lock()
+        lastOutputAt[key] = now
+        outputLock.unlock()
+
         snapshotsLock.lock()
         if var snap = lastSurfaceSnapshots[key] {
             snap.activity = .working
-            snap.lastActivityAt = .now
+            snap.lastActivityAt = now
             lastSurfaceSnapshots[key] = snap
         }
         snapshotsLock.unlock()
@@ -64,17 +90,30 @@ public enum AgentDetector {
         var changes: [String: AgentSnapshot?] = [:]
         for (key, rootPID) in roots {
             let detected = detect(pid: rootPID, table: table)
+            outputLock.lock()
+            let lastOutput = lastOutputAt[key]
+            outputLock.unlock()
+
             snapshotsLock.lock()
             let prior = lastSurfaceSnapshots[key]
-            // Decay an old "working" state to "idle" after 3 seconds quiet.
             var resolved = detected
-            if var r = resolved, r.activity == .working,
-               Date().timeIntervalSince(r.lastActivityAt) > 3
-            {
-                r.activity = .idle
+            if var r = resolved {
+                if let lastOutput, Date().timeIntervalSince(lastOutput) <= 3 {
+                    r.activity = .working
+                    r.lastActivityAt = lastOutput
+                } else {
+                    r.activity = .idle
+                    if let prior,
+                       prior.kind == r.kind,
+                       prior.executable == r.executable,
+                       prior.pid == r.pid
+                    {
+                        r.lastActivityAt = prior.lastActivityAt
+                    }
+                }
                 resolved = r
             }
-            if resolved?.kind != prior?.kind || resolved?.activity != prior?.activity {
+            if resolved != prior {
                 changes[key] = resolved
             }
             lastSurfaceSnapshots[key] = resolved

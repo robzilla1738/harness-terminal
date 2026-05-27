@@ -70,13 +70,22 @@ public enum GhosttyConfigImporter {
 
     /// Imported defaults for the current user. `nil` when no config was found.
     public static func load() -> GhosttyImportedDefaults? {
-        for path in candidatePaths {
+        load(from: candidatePaths)
+    }
+
+    static func load(from paths: [String]) -> GhosttyImportedDefaults? {
+        var merged: GhosttyImportedDefaults?
+        for path in paths {
             guard FileManager.default.fileExists(atPath: path),
                   let data = try? String(contentsOfFile: path, encoding: .utf8)
             else { continue }
-            return parse(data)
+            if let existing = merged {
+                merged = existing.merging(parse(data))
+            } else {
+                merged = parse(data)
+            }
         }
-        return nil
+        return merged
     }
 
     static func parse(_ text: String) -> GhosttyImportedDefaults {
@@ -143,5 +152,23 @@ public enum GhosttyConfigImporter {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("#") { return trimmed }
         return "#" + trimmed
+    }
+}
+
+private extension GhosttyImportedDefaults {
+    func merging(_ newer: GhosttyImportedDefaults) -> GhosttyImportedDefaults {
+        GhosttyImportedDefaults(
+            fontFamily: newer.fontFamily ?? fontFamily,
+            fontSize: newer.fontSize ?? fontSize,
+            defaultShell: newer.defaultShell ?? defaultShell,
+            backgroundOpacity: newer.backgroundOpacity ?? backgroundOpacity,
+            backgroundBlur: newer.backgroundBlur ?? backgroundBlur,
+            windowPaddingX: newer.windowPaddingX ?? windowPaddingX,
+            windowPaddingY: newer.windowPaddingY ?? windowPaddingY,
+            themeName: newer.themeName ?? themeName,
+            backgroundHex: newer.backgroundHex ?? backgroundHex,
+            foregroundHex: newer.foregroundHex ?? foregroundHex,
+            cursorColorHex: newer.cursorColorHex ?? cursorColorHex
+        )
     }
 }

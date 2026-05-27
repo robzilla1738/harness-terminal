@@ -123,6 +123,31 @@ final class SessionEditorTests: XCTestCase {
         XCTAssertEqual(tabs.first(where: { $0.id == first.id })?.status, .waiting)
         XCTAssertEqual(tabs.first(where: { $0.id == second.id })?.status, .idle)
     }
+
+    func testInvalidSelectionDoesNotMutateSnapshot() throws {
+        var editor = SessionEditor()
+        let original = editor.snapshot
+
+        XCTAssertFalse(editor.selectWorkspace(UUID()))
+        XCTAssertFalse(editor.selectSession(workspaceID: UUID(), sessionID: UUID()))
+        XCTAssertFalse(editor.selectTab(workspaceID: UUID(), tabID: UUID()))
+        XCTAssertEqual(editor.snapshot, original)
+    }
+
+    func testThemeAndKeepSessionsBumpRevisionOnlyWhenChanged() {
+        var editor = SessionEditor()
+        let originalRevision = editor.snapshot.revision
+
+        editor.setTheme("Dracula")
+        XCTAssertEqual(editor.snapshot.themeName, "Dracula")
+        XCTAssertEqual(editor.snapshot.revision, originalRevision + 1)
+
+        editor.setTheme("Dracula")
+        XCTAssertEqual(editor.snapshot.revision, originalRevision + 1)
+
+        editor.setKeepSessionsOnQuit(!editor.snapshot.keepSessionsOnQuit)
+        XCTAssertEqual(editor.snapshot.revision, originalRevision + 2)
+    }
 }
 
 private struct LegacySnapshot: Codable {

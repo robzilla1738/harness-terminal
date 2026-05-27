@@ -13,6 +13,8 @@ public final class RealPty: @unchecked Sendable {
 
     private var master: Int32 = -1
     private var childPID: pid_t = -1
+    private var isClosed = false
+    private let lifecycleLock = NSLock()
 
     private let readQueue = DispatchQueue(label: "com.robert.harness.realpty.read")
     private var readSource: DispatchSourceRead?
@@ -85,12 +87,15 @@ public final class RealPty: @unchecked Sendable {
     }
 
     public func write(_ data: Data) {
-        guard master >= 0 else { return }
+        lifecycleLock.lock()
+        let fd = master
+        lifecycleLock.unlock()
+        guard fd >= 0 else { return }
         data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
             guard let base = buffer.baseAddress else { return }
             var written = 0
             while written < buffer.count {
-                let result = Darwin.write(master, base.advanced(by: written), buffer.count - written)
+                let result = Darwin.write(fd, base.advanced(by: written), buffer.count - written)
                 if result < 0 {
                     if errno == EINTR { continue }
                     break
@@ -106,9 +111,12 @@ public final class RealPty: @unchecked Sendable {
     }
 
     public func resize(rows: UInt16, cols: UInt16) {
-        guard master >= 0 else { return }
+        lifecycleLock.lock()
+        let fd = master
+        lifecycleLock.unlock()
+        guard fd >= 0 else { return }
         var winsize = Darwin.winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        _ = ioctl(master, TIOCSWINSZ, &winsize)
+        _ = ioctl(fd, TIOCSWINSZ, &winsize)
     }
 
     public func currentWorkingDirectory() -> String? {
@@ -116,12 +124,25 @@ public final class RealPty: @unchecked Sendable {
     }
 
     public func close() {
-        if childPID > 0 {
-            kill(childPID, SIGTERM)
+        lifecycleLock.lock()
+        guard !isClosed else {
+            lifecycleLock.unlock()
+            return
         }
-        if master >= 0 {
-            Darwin.close(master)
-            master = -1
+        isClosed = true
+        let pid = childPID
+        let source = readSource
+        let fd = master
+        readSource = nil
+        master = -1
+        lifecycleLock.unlock()
+
+        AgentDetector.unregisterRootPID(forSurfaceKey: id)
+        if pid > 0 { kill(pid, SIGTERM) }
+        if let source {
+            source.cancel()
+        } else if fd >= 0 {
+            Darwin.close(fd)
         }
     }
 
@@ -175,19 +196,28 @@ public final class RealPty: @unchecked Sendable {
     }
 
     private func startReading() {
-        let source = DispatchSource.makeReadSource(fileDescriptor: master, queue: readQueue)
+        lifecycleLock.lock()
+        let fd = master
+        lifecycleLock.unlock()
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: readQueue)
         readSource = source
         source.setEventHandler { [weak self] in
             guard let self else { return }
             var buffer = [UInt8](repeating: 0, count: 8 * 1024)
             let n = buffer.withUnsafeMutableBufferPointer { ptr -> Int in
-                Darwin.read(self.master, ptr.baseAddress, ptr.count)
+                Darwin.read(fd, ptr.baseAddress, ptr.count)
             }
-            if n <= 0 { return }
+            if n <= 0 {
+                self.close()
+                return
+            }
             let data = Data(buffer.prefix(n))
             self.handleOutput(data)
         }
-        source.setCancelHandler {}
+        source.setCancelHandler {
+            Darwin.close(fd)
+        }
         source.resume()
     }
 
@@ -217,6 +247,7 @@ public final class RealPty: @unchecked Sendable {
             guard let self else { return }
             var status: Int32 = 0
             _ = waitpid(self.childPID, &status, 0)
+            self.close()
             self.onExit?()
         }
     }

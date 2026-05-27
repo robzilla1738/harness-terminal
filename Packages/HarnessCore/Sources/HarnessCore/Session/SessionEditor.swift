@@ -105,23 +105,49 @@ public struct SessionEditor: Sendable {
         }
     }
 
-    public mutating func selectWorkspace(_ id: WorkspaceID) {
+    @discardableResult
+    public mutating func selectWorkspace(_ id: WorkspaceID) -> Bool {
+        guard snapshot.workspaces.contains(where: { $0.id == id }) else { return false }
+        if snapshot.activeWorkspaceID == id { return true }
         snapshot.activeWorkspaceID = id
         bumpRevision()
+        return true
     }
 
-    public mutating func selectSession(workspaceID: WorkspaceID, sessionID: SessionID) {
+    @discardableResult
+    public mutating func selectSession(workspaceID: WorkspaceID, sessionID: SessionID) -> Bool {
         guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }),
               snapshot.workspaces[workspaceIndex].sessions.contains(where: { $0.id == sessionID })
-        else { return }
+        else { return false }
+        if snapshot.workspaces[workspaceIndex].activeSessionID == sessionID { return true }
         snapshot.workspaces[workspaceIndex].activeSessionID = sessionID
+        bumpRevision()
+        return true
+    }
+
+    @discardableResult
+    public mutating func selectTab(workspaceID: WorkspaceID, tabID: TabID) -> Bool {
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return false }
+        if snapshot.workspaces[match.workspaceIndex].activeSessionID == snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].id,
+           snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].activeTabID == tabID
+        {
+            return true
+        }
+        snapshot.workspaces[match.workspaceIndex].activeSessionID = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].id
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].activeTabID = tabID
+        bumpRevision()
+        return true
+    }
+
+    public mutating func setTheme(_ name: String) {
+        guard snapshot.themeName != name else { return }
+        snapshot.themeName = name
         bumpRevision()
     }
 
-    public mutating func selectTab(workspaceID: WorkspaceID, tabID: TabID) {
-        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return }
-        snapshot.workspaces[match.workspaceIndex].activeSessionID = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].id
-        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].activeTabID = tabID
+    public mutating func setKeepSessionsOnQuit(_ value: Bool) {
+        guard snapshot.keepSessionsOnQuit != value else { return }
+        snapshot.keepSessionsOnQuit = value
         bumpRevision()
     }
 

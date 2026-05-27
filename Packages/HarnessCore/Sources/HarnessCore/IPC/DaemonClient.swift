@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public final class DaemonClient: @unchecked Sendable {
@@ -35,16 +36,14 @@ public final class DaemonClient: @unchecked Sendable {
         defer { close(fd) }
 
         let payload = try IPCCodec.encode(IPCEnvelope(request: ipcRequest))
-        try payload.withUnsafeBytes { raw in
-            guard write(fd, raw.baseAddress, raw.count) == raw.count else {
-                throw DaemonClientError.writeFailed
-            }
-        }
+        try writeAll(payload, to: fd)
 
         var buffer = Data()
         let deadline = Date().addingTimeInterval(timeout)
         var temp = [UInt8](repeating: 0, count: 4096)
         while Date() < deadline {
+            let remaining = max(0, deadline.timeIntervalSinceNow)
+            guard try waitForReadable(fd: fd, timeout: remaining) else { break }
             let count = read(fd, &temp, temp.count)
             if count > 0 {
                 buffer.append(contentsOf: temp.prefix(count))
@@ -54,7 +53,6 @@ public final class DaemonClient: @unchecked Sendable {
             } else if count == 0 {
                 break
             }
-            usleep(10_000)
         }
         throw DaemonClientError.timeout
     }
@@ -80,7 +78,39 @@ public final class DaemonClient: @unchecked Sendable {
             close(fd)
             throw DaemonClientError.connectionFailed
         }
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         return fd
+    }
+
+    private func writeAll(_ data: Data, to fd: Int32) throws {
+        try data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var written = 0
+            while written < raw.count {
+                let result = write(fd, base.advanced(by: written), raw.count - written)
+                if result > 0 {
+                    written += result
+                    continue
+                }
+                if result < 0, errno == EINTR { continue }
+                throw DaemonClientError.writeFailed
+            }
+        }
+    }
+
+    private func waitForReadable(fd: Int32, timeout: TimeInterval) throws -> Bool {
+        var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let timeoutMS = max(0, Int32((timeout * 1000).rounded(.up)))
+        while true {
+            let result = poll(&pfd, 1, timeoutMS)
+            if result > 0 {
+                return (pfd.revents & Int16(POLLIN | POLLHUP | POLLERR)) != 0
+            }
+            if result == 0 { return false }
+            if errno == EINTR { continue }
+            throw DaemonClientError.connectionFailed
+        }
     }
 }
 
@@ -131,12 +161,14 @@ public enum DaemonClientError: Error, CustomStringConvertible {
     case connectionFailed
     case writeFailed
     case timeout
+    case unexpectedResponse
 
     public var description: String {
         switch self {
         case .connectionFailed: "Could not connect to HarnessDaemon"
         case .writeFailed: "Failed to write IPC request"
         case .timeout: "HarnessDaemon request timed out"
+        case .unexpectedResponse: "Unexpected response from HarnessDaemon"
         }
     }
 }

@@ -337,6 +337,7 @@ enum SettingsWindowController {
             let win = NSWindow(contentViewController: controller)
             win.title = "Harness Settings"
             win.styleMask = [.titled, .closable]
+            win.isRestorable = false
             win.setContentSize(NSSize(width: 580, height: 650))
             window = win
         }

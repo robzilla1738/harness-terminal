@@ -24,6 +24,7 @@ enum CommandPaletteController {
             defer: false
         )
         panel.title = "Command Palette"
+        panel.isRestorable = false
         panel.contentViewController = controller
         panel.isFloatingPanel = true
         panel.level = .floating

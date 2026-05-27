@@ -12,7 +12,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         editor.snapshot = store.load()
         if editor.snapshot.workspaces.isEmpty {
             editor.snapshot = SessionSnapshot()
-            store.save(editor.snapshot)
+            try? store.saveImmediately(editor.snapshot)
         }
         ensureAllSnapshotSurfaces()
     }
@@ -94,22 +94,26 @@ public final class SurfaceRegistry: @unchecked Sendable {
             commit()
             return .paneID(newPaneID)
         case let .selectWorkspace(id):
-            editor.selectWorkspace(id)
+            guard editor.selectWorkspace(id) else { return .error("Workspace not found") }
             commit()
             return .ok
         case let .selectWorkspaceByName(name):
             guard let id = editor.resolveWorkspaceID(nameOrID: name) else {
                 return .error("Workspace not found: \(name)")
             }
-            editor.selectWorkspace(id)
+            guard editor.selectWorkspace(id) else { return .error("Workspace not found: \(name)") }
             commit()
             return .workspaceID(id)
         case let .selectSession(workspaceID, sessionID):
-            editor.selectSession(workspaceID: workspaceID, sessionID: sessionID)
+            guard editor.selectSession(workspaceID: workspaceID, sessionID: sessionID) else {
+                return .error("Session not found")
+            }
             commit()
             return .ok
         case let .selectTab(workspaceID, tabID):
-            editor.selectTab(workspaceID: workspaceID, tabID: tabID)
+            guard editor.selectTab(workspaceID: workspaceID, tabID: tabID) else {
+                return .error("Tab not found")
+            }
             commit()
             return .ok
         case let .closeTab(tabID):
@@ -146,11 +150,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
             commit()
             return .ok
         case let .setTheme(name):
-            editor.snapshot.themeName = name
+            editor.setTheme(name)
             commit()
             return .ok
         case let .setKeepSessionsOnQuit(value):
-            editor.snapshot.keepSessionsOnQuit = value
+            editor.setKeepSessionsOnQuit(value)
             commit()
             return .ok
         case let .send(surfaceID, text):
@@ -354,7 +358,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     private func commit() {
         let revision = editor.snapshot.revision
-        store.save(editor.snapshot)
+        do {
+            try store.saveImmediately(editor.snapshot)
+        } catch {
+            fputs("HarnessDaemon snapshot save failed: \(error)\n", stderr)
+        }
         NotificationBus.shared.postSnapshotChanged(revision: revision)
     }
 
@@ -381,6 +389,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 cols: cols,
                 scrollbackBytes: scrollbackBytes ?? 1024 * 1024
             )
+            session.onExit = { [weak self, weak session] in
+                self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session)
+            }
             sessions[surfaceID] = session
             return surfaceID
         } catch {
@@ -464,5 +475,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
         for surfaceID in surfaceIDs {
             sessions.removeValue(forKey: surfaceID)?.close()
         }
+    }
+
+    private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let session, sessions[surfaceID] === session else { return }
+        sessions.removeValue(forKey: surfaceID)
+        AgentDetector.unregisterRootPID(forSurfaceKey: surfaceID)
     }
 }
