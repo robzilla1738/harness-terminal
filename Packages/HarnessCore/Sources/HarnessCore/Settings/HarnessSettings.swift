@@ -1,0 +1,149 @@
+import Foundation
+
+public struct HarnessSettings: Codable, Sendable, Equatable {
+    public var fontSize: Float
+    public var fontFamily: String
+    public var defaultShell: String
+    public var defaultCWD: String
+    public var transparentTitlebar: Bool
+    public var sidebarVisible: Bool
+    public var backgroundOpacity: Float
+    public var backgroundBlur: Int
+    public var windowPaddingX: Float
+    public var windowPaddingY: Float
+    /// Custom hex (`#rrggbb`) overrides imported from Ghostty config when present.
+    /// `nil` means "use the active theme color".
+    public var customBackgroundHex: String?
+    public var customForegroundHex: String?
+    public var customCursorHex: String?
+    /// Signature of the Ghostty config last imported into these defaults.
+    /// Used to migrate stale early settings without overwriting later manual edits.
+    public var ghosttyConfigSignature: String?
+    /// tmux-style prefix key (default `ctrl-a`). Format: `mod1-mod2-key`,
+    /// where mod is `ctrl|cmd|opt|shift`. Set empty string to disable.
+    public var prefixKey: String
+    /// Number of lines kept in scrollback per pane (passed to libghostty + RealPty).
+    public var scrollbackLines: Int
+
+    public init(
+        fontSize: Float = 14,
+        fontFamily: String = "JetBrains Mono",
+        defaultShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh",
+        defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        transparentTitlebar: Bool = true,
+        sidebarVisible: Bool = true,
+        backgroundOpacity: Float = 1,
+        backgroundBlur: Int = 0,
+        windowPaddingX: Float = 12,
+        windowPaddingY: Float = 12,
+        customBackgroundHex: String? = nil,
+        customForegroundHex: String? = nil,
+        customCursorHex: String? = nil,
+        ghosttyConfigSignature: String? = nil,
+        prefixKey: String = "ctrl-a",
+        scrollbackLines: Int = 10_000
+    ) {
+        self.fontSize = fontSize
+        self.fontFamily = fontFamily
+        self.defaultShell = defaultShell
+        self.defaultCWD = defaultCWD
+        self.transparentTitlebar = transparentTitlebar
+        self.sidebarVisible = sidebarVisible
+        self.backgroundOpacity = backgroundOpacity
+        self.backgroundBlur = backgroundBlur
+        self.windowPaddingX = windowPaddingX
+        self.windowPaddingY = windowPaddingY
+        self.customBackgroundHex = customBackgroundHex
+        self.customForegroundHex = customForegroundHex
+        self.customCursorHex = customCursorHex
+        self.ghosttyConfigSignature = ghosttyConfigSignature
+        self.prefixKey = prefixKey
+        self.scrollbackLines = scrollbackLines
+    }
+
+    /// Decoder that gracefully accepts older settings files missing the newer fields.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let imported = GhosttyConfigImporter.load()
+        let fallback = HarnessSettings.makeDefaults(imported: imported)
+
+        fontSize = try container.decodeIfPresent(Float.self, forKey: .fontSize) ?? fallback.fontSize
+        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? fallback.fontFamily
+        defaultShell = try container.decodeIfPresent(String.self, forKey: .defaultShell) ?? fallback.defaultShell
+        defaultCWD = try container.decodeIfPresent(String.self, forKey: .defaultCWD) ?? fallback.defaultCWD
+        transparentTitlebar = try container.decodeIfPresent(Bool.self, forKey: .transparentTitlebar) ?? fallback.transparentTitlebar
+        sidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .sidebarVisible) ?? fallback.sidebarVisible
+        backgroundOpacity = try container.decodeIfPresent(Float.self, forKey: .backgroundOpacity) ?? fallback.backgroundOpacity
+        backgroundBlur = try container.decodeIfPresent(Int.self, forKey: .backgroundBlur) ?? fallback.backgroundBlur
+        windowPaddingX = try container.decodeIfPresent(Float.self, forKey: .windowPaddingX) ?? fallback.windowPaddingX
+        windowPaddingY = try container.decodeIfPresent(Float.self, forKey: .windowPaddingY) ?? fallback.windowPaddingY
+        customBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customBackgroundHex) ?? fallback.customBackgroundHex
+        customForegroundHex = try container.decodeIfPresent(String.self, forKey: .customForegroundHex) ?? fallback.customForegroundHex
+        customCursorHex = try container.decodeIfPresent(String.self, forKey: .customCursorHex) ?? fallback.customCursorHex
+        ghosttyConfigSignature = try container.decodeIfPresent(String.self, forKey: .ghosttyConfigSignature)
+        prefixKey = try container.decodeIfPresent(String.self, forKey: .prefixKey) ?? fallback.prefixKey
+        scrollbackLines = try container.decodeIfPresent(Int.self, forKey: .scrollbackLines) ?? fallback.scrollbackLines
+    }
+
+    public static func load() -> HarnessSettings {
+        let imported = GhosttyConfigImporter.load()
+        if FileManager.default.fileExists(atPath: HarnessPaths.settingsURL.path),
+           let data = try? Data(contentsOf: HarnessPaths.settingsURL),
+           var settings = try? JSONDecoder().decode(HarnessSettings.self, from: data)
+        {
+            // Schema migration: when the saved file predates a feature (e.g. it
+            // was written before customBackgroundHex existed, or before the
+            // user installed Ghostty), backfill from the live Ghostty config so
+            // visuals stay in sync without forcing a manual re-import.
+            if let imported, settings.ghosttyConfigSignature != imported.signature {
+                settings.applyImportedDefaults(imported)
+            }
+            // Persist the migration so on next save we don't lose it.
+            try? settings.save()
+            return settings
+        }
+        // First-run / user nuked the file: seed from Ghostty and persist
+        // immediately so subsequent launches are stable.
+        let seeded = HarnessSettings.makeDefaults(imported: imported)
+        try? seeded.save()
+        return seeded
+    }
+
+    public func save() throws {
+        try HarnessPaths.ensureDirectories()
+        let data = try JSONEncoder().encode(self)
+        try data.write(to: HarnessPaths.settingsURL, options: .atomic)
+    }
+
+    /// Builds a default settings instance, layering imported Ghostty values over hardcoded defaults.
+    public static func makeDefaults(imported: GhosttyImportedDefaults?) -> HarnessSettings {
+        var settings = HarnessSettings()
+        guard let imported else { return settings }
+        if let value = imported.fontFamily { settings.fontFamily = value }
+        if let value = imported.fontSize { settings.fontSize = value }
+        if let value = imported.defaultShell { settings.defaultShell = value }
+        if let value = imported.backgroundOpacity { settings.backgroundOpacity = value }
+        if let value = imported.backgroundBlur { settings.backgroundBlur = value }
+        if let value = imported.windowPaddingX { settings.windowPaddingX = value }
+        if let value = imported.windowPaddingY { settings.windowPaddingY = value }
+        if let value = imported.backgroundHex { settings.customBackgroundHex = value }
+        if let value = imported.foregroundHex { settings.customForegroundHex = value }
+        if let value = imported.cursorColorHex { settings.customCursorHex = value }
+        settings.ghosttyConfigSignature = imported.signature
+        return settings
+    }
+
+    private mutating func applyImportedDefaults(_ imported: GhosttyImportedDefaults) {
+        if let value = imported.fontFamily { fontFamily = value }
+        if let value = imported.fontSize { fontSize = value }
+        if let value = imported.defaultShell { defaultShell = value }
+        if let value = imported.backgroundOpacity { backgroundOpacity = value }
+        if let value = imported.backgroundBlur { backgroundBlur = value }
+        if let value = imported.windowPaddingX { windowPaddingX = value }
+        if let value = imported.windowPaddingY { windowPaddingY = value }
+        if let value = imported.backgroundHex { customBackgroundHex = value }
+        if let value = imported.foregroundHex { customForegroundHex = value }
+        if let value = imported.cursorColorHex { customCursorHex = value }
+        ghosttyConfigSignature = imported.signature
+    }
+}

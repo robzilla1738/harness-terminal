@@ -1,0 +1,49 @@
+name: Harness
+options:
+  bundleIdPrefix: com.robert
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  Harness:
+    path: .
+  libghostty-spm:
+    url: https://github.com/Lakr233/libghostty-spm.git
+    from: 1.2.0
+targets:
+  Harness:
+    type: application
+    platform: macOS
+    sources:
+      - Apps/Harness/Sources/HarnessApp
+    dependencies:
+      - package: Harness
+        product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalKit
+      - package: libghostty-spm
+        product: GhosttyTerminal
+      - package: libghostty-spm
+        product: GhosttyTheme
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness
+      INFOPLIST_FILE: Apps/Harness/Sources/HarnessApp/Resources/Info.plist
+      CODE_SIGN_ENTITLEMENTS: Harness.entitlements
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+  HarnessDaemon:
+    type: tool
+    platform: macOS
+    sources:
+      - Packages/HarnessDaemon/Sources/HarnessDaemon
+    dependencies:
+      - package: Harness
+        product: HarnessCore
+  harness:
+    type: tool
+    platform: macOS
+    sources:
+      - Tools/harness/Sources/HarnessCLI
+    dependencies:
+      - package: Harness
+        product: HarnessCore

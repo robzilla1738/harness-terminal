@@ -1,0 +1,179 @@
+import AppKit
+import GhosttyTheme
+import HarnessTerminalKit
+
+@MainActor
+struct HarnessChromePalette {
+    let isDark: Bool
+    let terminalBackground: NSColor
+    let sidebarBackground: NSColor
+    let surfaceElevated: NSColor
+    let border: NSColor
+    let borderStrong: NSColor
+    let accent: NSColor
+    let accentSoft: NSColor
+    let textPrimary: NSColor
+    let textSecondary: NSColor
+    let textTertiary: NSColor
+    let rowSelectedFill: NSColor
+    let rowHoverFill: NSColor
+    let iconHoverFill: NSColor
+    let waiting: NSColor
+    let danger: NSColor
+    let success: NSColor
+    let idleStatus: NSColor
+
+    static let fallback = HarnessChromePalette.from(themeName: ThemeManager.defaultThemeName)
+
+    static func from(themeName: String) -> HarnessChromePalette {
+        let theme = GhosttyThemeCatalog.theme(named: themeName)
+            ?? GhosttyThemeCatalog.theme(named: ThemeManager.defaultThemeName)
+            ?? GhosttyThemeCatalog.allThemes.first!
+        return from(theme: theme)
+    }
+
+    static func from(theme: GhosttyThemeDefinition) -> HarnessChromePalette {
+        let background = color(from: theme.background)
+        let foreground = color(from: theme.foreground)
+        let accentHex = theme.palette[4] ?? theme.palette[12] ?? theme.cursorColor ?? "89b4fa"
+        let accent = color(from: accentHex)
+        let waiting = color(from: theme.palette[12] ?? theme.palette[4] ?? "89b4fa")
+        let danger = color(from: theme.palette[1] ?? "f38ba8")
+        let success = color(from: theme.palette[2] ?? "a6e3a1")
+        let idle = color(from: theme.palette[8] ?? theme.palette[0] ?? "585b70")
+        return build(
+            background: background,
+            foreground: foreground,
+            accent: accent,
+            waiting: waiting,
+            danger: danger,
+            success: success,
+            idle: idle
+        )
+    }
+
+    /// Build a palette directly from explicit hex strings (used when the user has
+    /// set `background`/`foreground` in their Ghostty config — we want to honor
+    /// the exact black-and-white look rather than a named theme's tinted palette).
+    static func from(backgroundHex: String, foregroundHex: String, cursorHex: String? = nil) -> HarnessChromePalette {
+        let background = color(from: backgroundHex)
+        let foreground = color(from: foregroundHex)
+        let accent = cursorHex.map { color(from: $0) } ?? blend(foreground, toward: NSColor(srgbRed: 0.55, green: 0.7, blue: 1.0, alpha: 1), fraction: 0.3)
+        // A pleasant default ANSI-ish set derived from the bg/fg luminance.
+        let waiting = NSColor(srgbRed: 0.51, green: 0.69, blue: 0.96, alpha: 1)
+        let danger = NSColor(srgbRed: 0.93, green: 0.49, blue: 0.55, alpha: 1)
+        let success = NSColor(srgbRed: 0.59, green: 0.83, blue: 0.55, alpha: 1)
+        let idle = blend(foreground, toward: background, fraction: 0.55)
+        return build(
+            background: background,
+            foreground: foreground,
+            accent: accent,
+            waiting: waiting,
+            danger: danger,
+            success: success,
+            idle: idle
+        )
+    }
+
+    private static func build(
+        background: NSColor,
+        foreground: NSColor,
+        accent: NSColor,
+        waiting: NSColor,
+        danger: NSColor,
+        success: NSColor,
+        idle: NSColor
+    ) -> HarnessChromePalette {
+        let isDark = perceivedBrightness(of: background) < 0.5
+        let chromeLift = isDark ? NSColor.white : NSColor.black
+        let sidebar = blend(background, toward: chromeLift, fraction: isDark ? 0.08 : 0.04)
+        let elevated = foreground.withAlphaComponent(isDark ? 0.07 : 0.06)
+
+        return HarnessChromePalette(
+            isDark: isDark,
+            terminalBackground: background,
+            sidebarBackground: sidebar,
+            surfaceElevated: elevated,
+            border: foreground.withAlphaComponent(isDark ? 0.07 : 0.10),
+            borderStrong: foreground.withAlphaComponent(isDark ? 0.12 : 0.18),
+            accent: accent,
+            accentSoft: accent.withAlphaComponent(0.16),
+            textPrimary: foreground,
+            textSecondary: foreground.withAlphaComponent(0.66),
+            textTertiary: foreground.withAlphaComponent(0.40),
+            rowSelectedFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.07),
+            rowHoverFill: foreground.withAlphaComponent(isDark ? 0.045 : 0.04),
+            iconHoverFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.08),
+            waiting: waiting,
+            danger: danger,
+            success: success,
+            idleStatus: idle
+        )
+    }
+
+    private static func color(from hex: String) -> NSColor {
+        var cleaned = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("#") { cleaned.removeFirst() }
+        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else {
+            return .white
+        }
+        let r = CGFloat((value >> 16) & 0xff) / 255
+        let g = CGFloat((value >> 8) & 0xff) / 255
+        let b = CGFloat(value & 0xff) / 255
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+    }
+
+    private static func blend(_ base: NSColor, toward: NSColor, fraction: CGFloat) -> NSColor {
+        guard let baseRGB = base.usingColorSpace(.sRGB),
+              let towardRGB = toward.usingColorSpace(.sRGB)
+        else { return base }
+        let f = min(max(fraction, 0), 1)
+        return NSColor(
+            srgbRed: baseRGB.redComponent * (1 - f) + towardRGB.redComponent * f,
+            green: baseRGB.greenComponent * (1 - f) + towardRGB.greenComponent * f,
+            blue: baseRGB.blueComponent * (1 - f) + towardRGB.blueComponent * f,
+            alpha: 1
+        )
+    }
+
+    private static func perceivedBrightness(of color: NSColor) -> CGFloat {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return 0 }
+        return rgb.redComponent * 0.299 + rgb.greenComponent * 0.587 + rgb.blueComponent * 0.114
+    }
+}
+
+@MainActor
+enum HarnessChrome {
+    private(set) static var current: HarnessChromePalette = .fallback
+    /// Window background opacity (0…1). When < 1, chrome backgrounds gain alpha so
+    /// the underlying NSVisualEffectView blur can show through.
+    static var backgroundOpacity: CGFloat = 1
+
+    static func update(themeName: String) {
+        update(themeName: themeName, opacity: backgroundOpacity)
+    }
+
+    /// Resolve the palette honoring the user's `customBackgroundHex/customForegroundHex`
+    /// overrides — when a Ghostty config explicitly sets `background = #000000`, we
+    /// must paint pure black chrome rather than the named theme's tinted bg.
+    static func update(
+        themeName: String,
+        opacity: CGFloat,
+        backgroundHex: String? = nil,
+        foregroundHex: String? = nil,
+        cursorHex: String? = nil
+    ) {
+        if let bg = backgroundHex, let fg = foregroundHex {
+            current = HarnessChromePalette.from(backgroundHex: bg, foregroundHex: fg, cursorHex: cursorHex)
+        } else {
+            current = HarnessChromePalette.from(themeName: themeName)
+        }
+        backgroundOpacity = max(0, min(1, opacity))
+    }
+
+    /// Returns the given color with the global background opacity baked in.
+    static func tinted(_ color: NSColor) -> NSColor {
+        if backgroundOpacity >= 0.999 { return color }
+        return color.withAlphaComponent(backgroundOpacity)
+    }
+}

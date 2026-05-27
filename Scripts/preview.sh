@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+PREVIEW_HOME="$ROOT/.harness-preview"
+APP="$PREVIEW_HOME/HarnessPreview.app"
+mkdir -p "$PREVIEW_HOME"
+
+echo "Building debug preview..."
+swift build --product Harness
+swift build --product HarnessDaemon
+swift build --product harness-cli
+
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$ROOT/.build/debug/Harness" "$APP/Contents/MacOS/Harness"
+cp "$ROOT/.build/debug/HarnessDaemon" "$APP/Contents/MacOS/HarnessDaemon"
+cp "$ROOT/.build/debug/harness-cli" "$APP/Contents/MacOS/harness-cli"
+chmod +x "$APP/Contents/MacOS/"*
+if [[ -f "$ROOT/Apps/Harness/Resources/Harness.icns" ]]; then
+  cp "$ROOT/Apps/Harness/Resources/Harness.icns" "$APP/Contents/Resources/Harness.icns"
+fi
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>Harness</string>
+  <key>CFBundleIconFile</key>
+  <string>Harness</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.robert.harness.preview</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Harness Preview</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.0.0-preview</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSPrincipalClass</key>
+  <string>NSApplication</string>
+  <key>HarnessPreviewHome</key>
+  <string>$PREVIEW_HOME</string>
+</dict>
+</plist>
+PLIST
+
+cat <<EOF
+
+Launching Harness preview.
+State directory:
+  $PREVIEW_HOME
+
+This does not install Harness, create a DMG, or write to:
+  ~/Library/Application Support/Harness
+
+Preview CLI while it is running:
+  HARNESS_HOME="$PREVIEW_HOME" "$ROOT/.build/debug/harness-cli" ping
+
+EOF
+
+open -n "$APP"
