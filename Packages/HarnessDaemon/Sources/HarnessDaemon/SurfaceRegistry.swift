@@ -31,7 +31,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .pong
         case .listWorkspaces:
             return .workspaces(editor.snapshot.workspaces.map {
-                WorkspaceSummary(id: $0.id, name: $0.name, tabCount: $0.tabs.count)
+                WorkspaceSummary(id: $0.id, name: $0.name, tabCount: $0.sessions.count)
             })
         case .listSurfaces:
             return .surfaces(editor.listSurfaces())
@@ -39,6 +39,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
             let id = editor.addWorkspace(name: name)
             commit()
             return .workspaceID(id)
+        case let .newSession(workspaceID, cwd, name):
+            guard let sessionID = editor.addSession(to: workspaceID, cwd: cwd, name: name) else {
+                return .error("Workspace not found")
+            }
+            ensureSessionSurfaces(sessionID: sessionID)
+            commit()
+            return .sessionID(sessionID)
         case let .newTab(workspaceID, cwd):
             guard let tabID = editor.addTab(to: workspaceID, cwd: cwd) else {
                 return .error("Workspace not found")
@@ -58,9 +65,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .tabID(tabID)
         case let .newSplit(tabID, paneID, direction):
             guard let workspace = editor.snapshot.workspaces.first(where: { ws in
-                ws.tabs.contains { $0.id == tabID }
+                ws.sessions.contains { session in session.tabs.contains { $0.id == tabID } }
             }) else { return .error("Tab not found") }
-            let targetPane = paneID ?? workspace.activeTab?.rootPane.allPaneIDs().first
+            let tab = workspace.sessions.flatMap { $0.tabs }.first { $0.id == tabID }
+            let targetPane = paneID ?? tab?.rootPane.allPaneIDs().first
             guard let paneID = targetPane,
                   let newPaneID = editor.splitPane(
                       in: workspace.id,
@@ -71,7 +79,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             else { return .error("Could not split pane") }
             if let surfaceID = editor.surfaceID(forPaneID: newPaneID) {
                 let cwd = editor.snapshot.workspaces
-                    .flatMap(\.tabs)
+                    .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
                     .first(where: { $0.id == tabID })?
                     .cwd
                 _ = createOrEnsureSurface(
@@ -96,13 +104,17 @@ public final class SurfaceRegistry: @unchecked Sendable {
             editor.selectWorkspace(id)
             commit()
             return .workspaceID(id)
+        case let .selectSession(workspaceID, sessionID):
+            editor.selectSession(workspaceID: workspaceID, sessionID: sessionID)
+            commit()
+            return .ok
         case let .selectTab(workspaceID, tabID):
             editor.selectTab(workspaceID: workspaceID, tabID: tabID)
             commit()
             return .ok
         case let .closeTab(tabID):
             let closedSurfaces = editor.snapshot.workspaces
-                .flatMap(\.tabs)
+                .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
                 .first(where: { $0.id == tabID })?
                 .rootPane
                 .allSurfaceIDs()
@@ -112,10 +124,22 @@ public final class SurfaceRegistry: @unchecked Sendable {
             ensureAllSnapshotSurfaces()
             commit()
             return .ok
+        case let .closeSession(sessionID):
+            let closedSurfaces = editor.snapshot.workspaces
+                .flatMap(\.sessions)
+                .first(where: { $0.id == sessionID })?
+                .tabs
+                .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
+            guard editor.closeSession(sessionID) else { return .error("Session not found") }
+            closeSurfaces(closedSurfaces)
+            ensureAllSnapshotSurfaces()
+            commit()
+            return .ok
         case let .closeWorkspace(id):
             let closedSurfaces = editor.snapshot.workspaces
                 .first(where: { $0.id == id })?
-                .tabs
+                .sessions
+                .flatMap { $0.tabs }
                 .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
             guard editor.closeWorkspace(id) else { return .error("Cannot close workspace") }
             closeSurfaces(closedSurfaces)
@@ -237,6 +261,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard editor.renameTab(tabID, name: name) else { return .error("Tab not found") }
             commit()
             return .ok
+        case let .renameSession(sessionID, name):
+            guard editor.renameSession(sessionID, name: name) else { return .error("Session not found") }
+            commit()
+            return .ok
         case let .renameWorkspace(workspaceID, name):
             guard editor.renameWorkspace(workspaceID, name: name) else { return .error("Workspace not found") }
             commit()
@@ -303,7 +331,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             else { continue }
             let current = editor.snapshot.workspaces
                 .first(where: { $0.id == match.workspaceID })?
-                .tabs
+                .sessions
+                .flatMap { $0.tabs }
                 .first(where: { $0.id == match.tabID })?
                 .cwd
             guard current != cwd else { continue }
@@ -343,7 +372,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
         do {
             let shellPath = shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-            let workDir = cwd ?? FileManager.default.homeDirectoryForCurrentUser.path
+            let workDir = existingWorkingDirectory(cwd)
             let session = try RealPty(
                 id: surfaceID,
                 cwd: workDir,
@@ -360,10 +389,31 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
     }
 
+    private func existingWorkingDirectory(_ raw: String?) -> String {
+        let fallback = FileManager.default.homeDirectoryForCurrentUser.path
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return fallback
+        }
+        let expanded = (raw as NSString).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory), isDirectory.boolValue {
+            return expanded
+        }
+        var candidate = (expanded as NSString).deletingLastPathComponent
+        while !candidate.isEmpty {
+            if FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory), isDirectory.boolValue {
+                return candidate
+            }
+            let parent = (candidate as NSString).deletingLastPathComponent
+            if parent == candidate { break }
+            candidate = parent
+        }
+        return fallback
+    }
+
     private func ensureTabSurfaces(tabID: TabID) {
-        guard let tab = editor.snapshot.workspaces
-            .flatMap(\.tabs)
-            .first(where: { $0.id == tabID })
+        let tabs = editor.snapshot.workspaces.flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
+        guard let tab = tabs.first(where: { $0.id == tabID })
         else { return }
         for surfaceID in tab.rootPane.allSurfaceIDs() {
             _ = createOrEnsureSurface(
@@ -377,8 +427,26 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
     }
 
+    private func ensureSessionSurfaces(sessionID: SessionID) {
+        let allSessions = editor.snapshot.workspaces.flatMap { $0.sessions }
+        guard let session = allSessions.first(where: { $0.id == sessionID })
+        else { return }
+        for tab in session.tabs {
+            for surfaceID in tab.rootPane.allSurfaceIDs() {
+                _ = createOrEnsureSurface(
+                    surfaceID: surfaceID.uuidString,
+                    cwd: tab.cwd,
+                    shell: nil,
+                    rows: 24,
+                    cols: 80,
+                    scrollbackBytes: nil
+                )
+            }
+        }
+    }
+
     private func ensureAllSnapshotSurfaces() {
-        for tab in editor.snapshot.workspaces.flatMap(\.tabs) {
+        for tab in editor.snapshot.workspaces.flatMap({ workspace in workspace.sessions.flatMap { $0.tabs } }) {
             for surfaceID in tab.rootPane.allSurfaceIDs() {
                 _ = createOrEnsureSurface(
                     surfaceID: surfaceID.uuidString,

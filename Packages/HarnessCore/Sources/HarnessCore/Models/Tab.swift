@@ -43,7 +43,9 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         if let branch = gitBranch, !branch.isEmpty {
             return branch
         }
-        return (cwd as NSString).lastPathComponent
+        if cwd == "/" { return "/" }
+        let last = (cwd as NSString).lastPathComponent
+        return last.isEmpty ? cwd : last
     }
 
     public init(from decoder: Decoder) throws {

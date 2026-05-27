@@ -29,16 +29,40 @@ public struct SessionEditor: Sendable {
         return snapshot.workspaces.first { $0.name == nameOrID }?.id
     }
 
-    public mutating func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) -> TabID? {
-        guard let index = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else {
+    public mutating func addSession(to workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) -> SessionID? {
+        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else {
             return nil
         }
-        let tab = Tab(
-            cwd: cwd ?? FileManager.default.homeDirectoryForCurrentUser.path,
-            sortOrder: snapshot.workspaces[index].tabs.count
+        let tab = Tab(cwd: existingWorkingDirectory(cwd))
+        let session = SessionGroup(
+            name: name ?? "",
+            tabs: [tab],
+            activeTabID: tab.id,
+            sortOrder: snapshot.workspaces[workspaceIndex].sessions.count
         )
-        snapshot.workspaces[index].tabs.append(tab)
-        snapshot.workspaces[index].activeTabID = tab.id
+        snapshot.workspaces[workspaceIndex].sessions.append(session)
+        snapshot.workspaces[workspaceIndex].activeSessionID = session.id
+        bumpRevision()
+        return session.id
+    }
+
+    public mutating func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) -> TabID? {
+        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else {
+            return nil
+        }
+        if snapshot.workspaces[workspaceIndex].sessions.isEmpty {
+            _ = addSession(to: workspaceID, cwd: cwd)
+            return snapshot.workspaces[workspaceIndex].activeTab?.id
+        }
+        let activeSessionID = snapshot.workspaces[workspaceIndex].activeSessionID
+        let sessionIndex = snapshot.workspaces[workspaceIndex].sessions.firstIndex { $0.id == activeSessionID } ?? 0
+        let tab = Tab(
+            cwd: existingWorkingDirectory(cwd),
+            sortOrder: snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.count
+        )
+        snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.append(tab)
+        snapshot.workspaces[workspaceIndex].sessions[sessionIndex].activeTabID = tab.id
+        snapshot.workspaces[workspaceIndex].activeSessionID = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].id
         bumpRevision()
         return tab.id
     }
@@ -49,15 +73,13 @@ public struct SessionEditor: Sendable {
         paneID: PaneID,
         direction: SplitDirection
     ) -> PaneID? {
-        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }),
-              let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID })
-        else { return nil }
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return nil }
 
-        var tab = snapshot.workspaces[workspaceIndex].tabs[tabIndex]
+        var tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
         guard let newPaneID = split(node: &tab.rootPane, targetPaneID: paneID, direction: direction) else {
             return nil
         }
-        snapshot.workspaces[workspaceIndex].tabs[tabIndex] = tab
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
         bumpRevision()
         return newPaneID
     }
@@ -88,24 +110,53 @@ public struct SessionEditor: Sendable {
         bumpRevision()
     }
 
+    public mutating func selectSession(workspaceID: WorkspaceID, sessionID: SessionID) {
+        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }),
+              snapshot.workspaces[workspaceIndex].sessions.contains(where: { $0.id == sessionID })
+        else { return }
+        snapshot.workspaces[workspaceIndex].activeSessionID = sessionID
+        bumpRevision()
+    }
+
     public mutating func selectTab(workspaceID: WorkspaceID, tabID: TabID) {
-        guard let index = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else { return }
-        snapshot.workspaces[index].activeTabID = tabID
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return }
+        snapshot.workspaces[match.workspaceIndex].activeSessionID = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].id
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].activeTabID = tabID
         bumpRevision()
     }
 
     public mutating func closeTab(_ tabID: TabID) -> Bool {
+        guard let match = tabIndex(tabID: tabID) else { return false }
+        var session = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex]
+        session.tabs.remove(at: match.tabIndex)
+        if session.tabs.isEmpty {
+            let tab = Tab(cwd: FileManager.default.homeDirectoryForCurrentUser.path)
+            session.tabs = [tab]
+            session.activeTabID = tab.id
+        } else if session.activeTabID == tabID {
+            let fallbackIndex = min(match.tabIndex, session.tabs.count - 1)
+            session.activeTabID = session.tabs[fallbackIndex].id
+        }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex] = session
+        bumpRevision()
+        return true
+    }
+
+    public mutating func closeSession(_ sessionID: SessionID) -> Bool {
         for workspaceIndex in snapshot.workspaces.indices {
-            guard let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID })
+            guard let sessionIndex = snapshot.workspaces[workspaceIndex].sessions.firstIndex(where: { $0.id == sessionID })
             else { continue }
-            snapshot.workspaces[workspaceIndex].tabs.remove(at: tabIndex)
-            if snapshot.workspaces[workspaceIndex].activeTabID == tabID {
-                snapshot.workspaces[workspaceIndex].activeTabID = snapshot.workspaces[workspaceIndex].tabs.first?.id
+            if snapshot.workspaces[workspaceIndex].sessions.count == 1 {
+                let replacement = SessionGroup(sortOrder: 0)
+                snapshot.workspaces[workspaceIndex].sessions = [replacement]
+                snapshot.workspaces[workspaceIndex].activeSessionID = replacement.id
+                bumpRevision()
+                return true
             }
-            if snapshot.workspaces[workspaceIndex].tabs.isEmpty {
-                let tab = Tab(cwd: FileManager.default.homeDirectoryForCurrentUser.path)
-                snapshot.workspaces[workspaceIndex].tabs = [tab]
-                snapshot.workspaces[workspaceIndex].activeTabID = tab.id
+            snapshot.workspaces[workspaceIndex].sessions.remove(at: sessionIndex)
+            if snapshot.workspaces[workspaceIndex].activeSessionID == sessionID {
+                let fallbackIndex = min(sessionIndex, snapshot.workspaces[workspaceIndex].sessions.count - 1)
+                snapshot.workspaces[workspaceIndex].activeSessionID = snapshot.workspaces[workspaceIndex].sessions[fallbackIndex].id
             }
             bumpRevision()
             return true
@@ -131,29 +182,17 @@ public struct SessionEditor: Sendable {
         status: TabStatus,
         notificationText: String? = nil
     ) {
-        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }),
-              let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID })
-        else { return }
-        snapshot.workspaces[workspaceIndex].tabs[tabIndex].status = status
-        if let notificationText {
-            snapshot.workspaces[workspaceIndex].tabs[tabIndex].notificationText = notificationText
-        }
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].status = status
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].notificationText = notificationText
         bumpRevision()
     }
 
     public mutating func clearTabNotification(surfaceID: SurfaceID) {
-        guard let match = tab(for: surfaceID) else { return }
-        setTabStatus(
-            workspaceID: match.workspaceID,
-            tabID: match.tabID,
-            status: .idle,
-            notificationText: nil
-        )
-        if let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == match.workspaceID }),
-           let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == match.tabID })
-        {
-            snapshot.workspaces[workspaceIndex].tabs[tabIndex].notificationText = nil
-        }
+        guard let match = tabIndex(surfaceID: surfaceID) else { return }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].status = .idle
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].notificationText = nil
+        bumpRevision()
     }
 
     public mutating func updateTabMetadata(
@@ -162,33 +201,25 @@ public struct SessionEditor: Sendable {
         gitBranch: String?,
         cwd: String?
     ) {
-        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }),
-              let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID })
-        else { return }
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return }
         if let gitBranch {
-            snapshot.workspaces[workspaceIndex].tabs[tabIndex].gitBranch = gitBranch
+            snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].gitBranch = gitBranch
         }
         if let cwd {
-            snapshot.workspaces[workspaceIndex].tabs[tabIndex].cwd = cwd
+            snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].cwd = cwd
         }
         bumpRevision()
     }
 
     public mutating func updateTabTitle(surfaceID: SurfaceID, title: String) {
-        guard let match = tab(for: surfaceID),
-              let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == match.workspaceID }),
-              let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == match.tabID })
-        else { return }
-        snapshot.workspaces[workspaceIndex].tabs[tabIndex].title = title
+        guard let match = tabIndex(surfaceID: surfaceID) else { return }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].title = title
         bumpRevision()
     }
 
     public mutating func updateTabCwd(surfaceID: SurfaceID, path: String) {
-        guard let match = tab(for: surfaceID),
-              let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == match.workspaceID }),
-              let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == match.tabID })
-        else { return }
-        snapshot.workspaces[workspaceIndex].tabs[tabIndex].cwd = path
+        guard let match = tabIndex(surfaceID: surfaceID) else { return }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].cwd = path
         bumpRevision()
     }
 
@@ -197,21 +228,20 @@ public struct SessionEditor: Sendable {
     }
 
     public func tab(forSurfaceKey key: String) -> (workspaceID: WorkspaceID, tabID: TabID)? {
-        for workspace in snapshot.workspaces {
-            for tab in workspace.tabs {
-                if tab.rootPane.allSurfaceIDs().contains(where: { $0.uuidString == key }) {
-                    return (workspace.id, tab.id)
-                }
-            }
-        }
-        return nil
+        guard let match = tabIndex(surfaceKey: key) else { return nil }
+        return (
+            snapshot.workspaces[match.workspaceIndex].id,
+            snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].id
+        )
     }
 
     public func surfaceID(forPaneID paneID: PaneID) -> SurfaceID? {
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs {
-                if let surfaceID = surfaceID(forPaneID: paneID, in: tab.rootPane) {
-                    return surfaceID
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if let surfaceID = surfaceID(forPaneID: paneID, in: tab.rootPane) {
+                        return surfaceID
+                    }
                 }
             }
         }
@@ -231,20 +261,30 @@ public struct SessionEditor: Sendable {
 
     public func firstWaitingTab() -> (workspaceID: WorkspaceID, tabID: TabID)? {
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs where tab.status == .waiting {
-                return (workspace.id, tab.id)
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.status == .waiting {
+                    return (workspace.id, tab.id)
+                }
             }
         }
         return nil
     }
 
     public mutating func renameTab(_ tabID: TabID, name: String) -> Bool {
+        guard let match = tabIndex(tabID: tabID) else { return false }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].title = name
+        bumpRevision()
+        return true
+    }
+
+    public mutating func renameSession(_ sessionID: SessionID, name: String) -> Bool {
         for workspaceIndex in snapshot.workspaces.indices {
-            if let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID }) {
-                snapshot.workspaces[workspaceIndex].tabs[tabIndex].title = name
-                bumpRevision()
-                return true
+            guard let sessionIndex = snapshot.workspaces[workspaceIndex].sessions.firstIndex(where: { $0.id == sessionID }) else {
+                continue
             }
+            snapshot.workspaces[workspaceIndex].sessions[sessionIndex].name = name
+            bumpRevision()
+            return true
         }
         return false
     }
@@ -258,12 +298,12 @@ public struct SessionEditor: Sendable {
 
     public mutating func killPane(_ paneID: PaneID) -> Bool {
         for workspaceIndex in snapshot.workspaces.indices {
-            for tabIndex in snapshot.workspaces[workspaceIndex].tabs.indices {
-                var tab = snapshot.workspaces[workspaceIndex].tabs[tabIndex]
-                if tab.rootPane.allPaneIDs().contains(paneID) {
-                    if removePane(&tab.rootPane, target: paneID) {
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    if tab.rootPane.allPaneIDs().contains(paneID), removePane(&tab.rootPane, target: paneID) {
                         if tab.zoomedPaneID == paneID { tab.zoomedPaneID = nil }
-                        snapshot.workspaces[workspaceIndex].tabs[tabIndex] = tab
+                        snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
                         bumpRevision()
                         return true
                     }
@@ -276,7 +316,6 @@ public struct SessionEditor: Sendable {
     private func removePane(_ node: inout PaneNode, target: PaneID) -> Bool {
         switch node {
         case let .leaf(leaf) where leaf.id == target:
-            // Caller (the branch) is responsible for collapsing into the sibling.
             return false
         case .branch(let direction, let ratio, var first, var second):
             if case let .leaf(leaf) = first, leaf.id == target {
@@ -305,18 +344,22 @@ public struct SessionEditor: Sendable {
         var srcLeaf: PaneLeaf?
         var dstLeaf: PaneLeaf?
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs {
-                if let leaf = leaf(in: tab.rootPane, paneID: srcID) { srcLeaf = leaf }
-                if let leaf = leaf(in: tab.rootPane, paneID: dstID) { dstLeaf = leaf }
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if let leaf = leaf(in: tab.rootPane, paneID: srcID) { srcLeaf = leaf }
+                    if let leaf = leaf(in: tab.rootPane, paneID: dstID) { dstLeaf = leaf }
+                }
             }
         }
         guard let src = srcLeaf, let dst = dstLeaf else { return false }
         for workspaceIndex in snapshot.workspaces.indices {
-            for tabIndex in snapshot.workspaces[workspaceIndex].tabs.indices {
-                var tab = snapshot.workspaces[workspaceIndex].tabs[tabIndex]
-                replaceLeaf(in: &tab.rootPane, paneID: src.id, with: dst)
-                replaceLeaf(in: &tab.rootPane, paneID: dst.id, with: src)
-                snapshot.workspaces[workspaceIndex].tabs[tabIndex] = tab
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    replaceLeaf(in: &tab.rootPane, paneID: src.id, with: dst)
+                    replaceLeaf(in: &tab.rootPane, paneID: dst.id, with: src)
+                    snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
+                }
             }
         }
         bumpRevision()
@@ -346,13 +389,15 @@ public struct SessionEditor: Sendable {
 
     public mutating func zoomPane(_ paneID: PaneID) -> Bool {
         for workspaceIndex in snapshot.workspaces.indices {
-            for tabIndex in snapshot.workspaces[workspaceIndex].tabs.indices {
-                var tab = snapshot.workspaces[workspaceIndex].tabs[tabIndex]
-                guard tab.rootPane.allPaneIDs().contains(paneID) else { continue }
-                tab.zoomedPaneID = (tab.zoomedPaneID == paneID) ? nil : paneID
-                snapshot.workspaces[workspaceIndex].tabs[tabIndex] = tab
-                bumpRevision()
-                return true
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    guard tab.rootPane.allPaneIDs().contains(paneID) else { continue }
+                    tab.zoomedPaneID = (tab.zoomedPaneID == paneID) ? nil : paneID
+                    snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
+                    bumpRevision()
+                    return true
+                }
             }
         }
         return false
@@ -360,19 +405,21 @@ public struct SessionEditor: Sendable {
 
     public mutating func resizePane(_ paneID: PaneID, direction: ResizeDirection, amount: Int) -> Bool {
         for workspaceIndex in snapshot.workspaces.indices {
-            for tabIndex in snapshot.workspaces[workspaceIndex].tabs.indices {
-                var tab = snapshot.workspaces[workspaceIndex].tabs[tabIndex]
-                guard tab.rootPane.allPaneIDs().contains(paneID) else { continue }
-                let delta = CGFloat(amount) * 0.05
-                let signed: CGFloat
-                switch direction {
-                case .left, .up: signed = -delta
-                case .right, .down: signed = delta
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    guard tab.rootPane.allPaneIDs().contains(paneID) else { continue }
+                    let delta = CGFloat(amount) * 0.05
+                    let signed: CGFloat
+                    switch direction {
+                    case .left, .up: signed = -delta
+                    case .right, .down: signed = delta
+                    }
+                    _ = adjustRatio(&tab.rootPane, target: paneID, delta: signed)
+                    snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
+                    bumpRevision()
+                    return true
                 }
-                _ = adjustRatio(&tab.rootPane, target: paneID, delta: signed)
-                snapshot.workspaces[workspaceIndex].tabs[tabIndex] = tab
-                bumpRevision()
-                return true
             }
         }
         return false
@@ -401,28 +448,88 @@ public struct SessionEditor: Sendable {
     }
 
     public mutating func setAgent(_ agent: AgentSnapshot?, forSurfaceKey key: String) {
-        guard let match = tab(forSurfaceKey: key),
-              let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == match.workspaceID }),
-              let tabIndex = snapshot.workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == match.tabID })
-        else { return }
-        snapshot.workspaces[workspaceIndex].tabs[tabIndex].agent = agent
+        guard let match = tabIndex(surfaceKey: key) else { return }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].agent = agent
         bumpRevision()
     }
 
     public func listSurfaces() -> [SurfaceSummary] {
         var result: [SurfaceSummary] = []
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs {
-                for surfaceID in tab.rootPane.allSurfaceIDs() {
-                    result.append(SurfaceSummary(
-                        surfaceID: surfaceID.uuidString,
-                        tabTitle: tab.title,
-                        workspaceName: workspace.name,
-                        cwd: tab.cwd
-                    ))
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    for surfaceID in tab.rootPane.allSurfaceIDs() {
+                        result.append(SurfaceSummary(
+                            surfaceID: surfaceID.uuidString,
+                            tabTitle: tab.title,
+                            workspaceName: workspace.name,
+                            cwd: tab.cwd
+                        ))
+                    }
                 }
             }
         }
         return result
+    }
+
+    private func tabIndex(workspaceID: WorkspaceID, tabID: TabID) -> (workspaceIndex: Int, sessionIndex: Int, tabIndex: Int)? {
+        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else { return nil }
+        for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+            if let tabIndex = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.firstIndex(where: { $0.id == tabID }) {
+                return (workspaceIndex, sessionIndex, tabIndex)
+            }
+        }
+        return nil
+    }
+
+    private func tabIndex(tabID: TabID) -> (workspaceIndex: Int, sessionIndex: Int, tabIndex: Int)? {
+        for workspaceIndex in snapshot.workspaces.indices {
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                if let tabIndex = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.firstIndex(where: { $0.id == tabID }) {
+                    return (workspaceIndex, sessionIndex, tabIndex)
+                }
+            }
+        }
+        return nil
+    }
+
+    private func tabIndex(surfaceID: SurfaceID) -> (workspaceIndex: Int, sessionIndex: Int, tabIndex: Int)? {
+        tabIndex(surfaceKey: surfaceID.uuidString)
+    }
+
+    private func tabIndex(surfaceKey: String) -> (workspaceIndex: Int, sessionIndex: Int, tabIndex: Int)? {
+        for workspaceIndex in snapshot.workspaces.indices {
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    let tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    if tab.rootPane.allSurfaceIDs().contains(where: { $0.uuidString == surfaceKey }) {
+                        return (workspaceIndex, sessionIndex, tabIndex)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func existingWorkingDirectory(_ raw: String?) -> String {
+        let fallback = FileManager.default.homeDirectoryForCurrentUser.path
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return fallback
+        }
+        let expanded = (raw as NSString).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory), isDirectory.boolValue {
+            return expanded
+        }
+        var candidate = (expanded as NSString).deletingLastPathComponent
+        while !candidate.isEmpty {
+            if FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory), isDirectory.boolValue {
+                return candidate
+            }
+            let parent = (candidate as NSString).deletingLastPathComponent
+            if parent == candidate { break }
+            candidate = parent
+        }
+        return fallback
     }
 }

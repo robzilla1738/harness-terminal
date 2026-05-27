@@ -17,6 +17,7 @@ final class SettingsViewController: NSViewController {
     private let backgroundHexField = NSTextField()
     private let foregroundHexField = NSTextField()
     private let cursorHexField = NSTextField()
+    private let useThemeColorsButton = NSButton()
     private let prefixKeyField = NSTextField()
     private let scrollbackField = NSTextField()
     private let keepSessionsToggle = NSButton(
@@ -31,7 +32,7 @@ final class SettingsViewController: NSViewController {
     )
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 540, height: 590))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 630))
     }
 
     override func viewDidLoad() {
@@ -40,10 +41,12 @@ final class SettingsViewController: NSViewController {
         let settings = coordinator.settings
 
         themePopup.removeAllItems()
-        for name in ThemeManager.featuredThemes {
+        for name in ThemeManager.allThemeNames() {
             themePopup.addItem(withTitle: name)
         }
         themePopup.selectItem(withTitle: coordinator.snapshot.themeName)
+        themePopup.target = self
+        themePopup.action = #selector(themeDidChange)
 
         fontSizeField.stringValue = String(format: "%.0f", settings.fontSize)
         fontFamilyField.stringValue = settings.fontFamily
@@ -61,16 +64,28 @@ final class SettingsViewController: NSViewController {
         opacityLabel.textColor = .secondaryLabelColor
 
         blurField.stringValue = String(settings.backgroundBlur)
+        blurField.target = self
+        blurField.action = #selector(appearanceTextDidCommit)
         paddingXField.stringValue = String(format: "%.0f", settings.windowPaddingX)
         paddingYField.stringValue = String(format: "%.0f", settings.windowPaddingY)
         backgroundHexField.stringValue = settings.customBackgroundHex ?? ""
         foregroundHexField.stringValue = settings.customForegroundHex ?? ""
         cursorHexField.stringValue = settings.customCursorHex ?? ""
+        configureLiveAppearanceField(backgroundHexField)
+        configureLiveAppearanceField(foregroundHexField)
+        configureLiveAppearanceField(cursorHexField)
         prefixKeyField.stringValue = settings.prefixKey
         scrollbackField.stringValue = String(settings.scrollbackLines)
 
         keepSessionsToggle.state = coordinator.keepSessionsOnQuit ? .on : .off
         transparentTitlebarToggle.state = settings.transparentTitlebar ? .on : .off
+        transparentTitlebarToggle.target = self
+        transparentTitlebarToggle.action = #selector(appearanceTextDidCommit)
+
+        useThemeColorsButton.title = "Use Theme Colors"
+        useThemeColorsButton.target = self
+        useThemeColorsButton.action = #selector(useThemeColors)
+        useThemeColorsButton.bezelStyle = .rounded
 
         let opacityRow = NSStackView(views: [opacitySlider, opacityLabel])
         opacityRow.orientation = .horizontal
@@ -81,6 +96,7 @@ final class SettingsViewController: NSViewController {
         let stack = NSStackView(views: [
             sectionLabel("Appearance"),
             labeledRow("Theme", themePopup),
+            labeledRow("", useThemeColorsButton),
             labeledRow("Background opacity", opacityRow),
             labeledRow("Background blur", blurField),
             labeledRow("Background color", backgroundHexField),
@@ -171,6 +187,59 @@ final class SettingsViewController: NSViewController {
 
     @objc private func opacityDidChange() {
         opacityLabel.stringValue = formatPercent(Float(opacitySlider.doubleValue))
+        applyAppearancePreview()
+    }
+
+    @objc private func themeDidChange() {
+        backgroundHexField.stringValue = ""
+        foregroundHexField.stringValue = ""
+        cursorHexField.stringValue = ""
+        applyAppearancePreview()
+    }
+
+    @objc private func useThemeColors() {
+        backgroundHexField.stringValue = ""
+        foregroundHexField.stringValue = ""
+        cursorHexField.stringValue = ""
+        applyAppearancePreview()
+    }
+
+    @objc private func appearanceTextDidCommit() {
+        applyAppearancePreview()
+    }
+
+    @objc private func appearanceTextDidChange(_ note: Notification) {
+        guard let field = note.object as? NSTextField,
+              field === backgroundHexField || field === foregroundHexField || field === cursorHexField
+        else { return }
+        applyAppearancePreview()
+    }
+
+    private func configureLiveAppearanceField(_ field: NSTextField) {
+        field.target = self
+        field.action = #selector(appearanceTextDidCommit)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appearanceTextDidChange(_:)),
+            name: NSControl.textDidChangeNotification,
+            object: field
+        )
+    }
+
+    private func applyAppearancePreview() {
+        let coordinator = SessionCoordinator.shared
+        coordinator.settings.backgroundOpacity = Float(opacitySlider.doubleValue)
+        coordinator.settings.backgroundBlur = Int(blurField.stringValue) ?? coordinator.settings.backgroundBlur
+        coordinator.settings.customBackgroundHex = normalizedHexOrNil(backgroundHexField.stringValue)
+        coordinator.settings.customForegroundHex = normalizedHexOrNil(foregroundHexField.stringValue)
+        coordinator.settings.customCursorHex = normalizedHexOrNil(cursorHexField.stringValue)
+        coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
+        try? coordinator.settings.save()
+        if let selectedTheme = themePopup.titleOfSelectedItem {
+            coordinator.setTheme(selectedTheme, clearColorOverrides: false)
+        } else {
+            coordinator.applySettingsToHosts()
+        }
     }
 
     @objc private func reimportGhostty() {
@@ -209,9 +278,7 @@ final class SettingsViewController: NSViewController {
 
     @objc private func save() {
         let coordinator = SessionCoordinator.shared
-        if let theme = themePopup.titleOfSelectedItem {
-            coordinator.setTheme(theme)
-        }
+        let selectedTheme = themePopup.titleOfSelectedItem
         coordinator.settings.fontSize = Float(fontSizeField.stringValue) ?? 14
         coordinator.settings.fontFamily = fontFamilyField.stringValue
         coordinator.settings.defaultShell = shellField.stringValue
@@ -227,8 +294,11 @@ final class SettingsViewController: NSViewController {
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
         coordinator.settings.prefixKey = prefixKeyField.stringValue.isEmpty ? "ctrl-a" : prefixKeyField.stringValue
         coordinator.settings.scrollbackLines = max(100, Int(scrollbackField.stringValue) ?? 10_000)
-        coordinator.setKeepSessionsOnQuit(keepSessionsToggle.state == .on)
         try? coordinator.settings.save()
+        if let selectedTheme {
+            coordinator.setTheme(selectedTheme)
+        }
+        coordinator.setKeepSessionsOnQuit(keepSessionsToggle.state == .on)
         coordinator.applySettingsToHosts()
         PrefixKeymap.shared.rebuildFromSettings()
         view.window?.close()
@@ -237,7 +307,11 @@ final class SettingsViewController: NSViewController {
     private func normalizedHexOrNil(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return trimmed.hasPrefix("#") ? trimmed : "#\(trimmed)"
+        let cleaned = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard cleaned.count == 6,
+              cleaned.allSatisfy({ $0.isHexDigit })
+        else { return nil }
+        return "#\(cleaned)"
     }
 
     @objc private func openAgentsJSON() {
@@ -263,7 +337,7 @@ enum SettingsWindowController {
             let win = NSWindow(contentViewController: controller)
             win.title = "Harness Settings"
             win.styleMask = [.titled, .closable]
-            win.setContentSize(NSSize(width: 560, height: 610))
+            win.setContentSize(NSSize(width: 580, height: 650))
             window = win
         }
         window?.center()

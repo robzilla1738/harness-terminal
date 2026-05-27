@@ -8,6 +8,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     private let terminalHost = NSView()
     private var paneContainer: PaneContainerView?
     private var lastStructureKey = ""
+    private var pendingReload: Bool?
 
     override func loadView() {
         view = NSView()
@@ -28,21 +29,14 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         terminalHost.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.makeClear(terminalHost)
 
-        let tabBarLine = HarnessDesign.divider()
-        tabBarLine.translatesAutoresizingMaskIntoConstraints = false
-
         view.addSubview(tabBar)
-        view.addSubview(tabBarLine)
         view.addSubview(terminalHost)
 
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: view.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tabBarLine.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
-            tabBarLine.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tabBarLine.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            terminalHost.topAnchor.constraint(equalTo: tabBarLine.bottomAnchor),
+            terminalHost.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
             terminalHost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             terminalHost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             terminalHost.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -54,7 +48,16 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             name: NotificationBus.shared.snapshotChanged,
             object: nil
         )
-        reloadAll(force: true)
+        reloadTabBar()
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard paneContainer == nil || pendingReload != nil else { return }
+        guard terminalHost.bounds.width > 1, terminalHost.bounds.height > 1 else { return }
+        let force = pendingReload ?? true
+        pendingReload = nil
+        reloadIfNeeded(force: force)
     }
 
     @objc private func snapshotChanged(_ note: Notification) {
@@ -94,7 +97,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         if coordinator.snapshot.activeWorkspace?.activeTabID != tabID {
             coordinator.selectTab(workspaceID: workspaceID, tabID: tabID)
         }
-        coordinator.closeActiveTab()
+        coordinator.closeActiveTabWithConfirmation()
     }
 
     private func reloadAll(force: Bool) {
@@ -103,6 +106,11 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func reloadIfNeeded(force: Bool) {
+        guard terminalHost.bounds.width > 1, terminalHost.bounds.height > 1 else {
+            pendingReload = (pendingReload ?? false) || force
+            return
+        }
+
         let coordinator = SessionCoordinator.shared
         guard let workspace = coordinator.snapshot.activeWorkspace,
               let tab = workspace.activeTab
@@ -191,8 +199,10 @@ final class PaneContainerView: NSView {
 
     private func tabFor(surfaceID: SurfaceID, in snapshot: SessionSnapshot) -> Tab? {
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs where tab.rootPane.allSurfaceIDs().contains(surfaceID) {
-                return tab
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.rootPane.allSurfaceIDs().contains(surfaceID) {
+                    return tab
+                }
             }
         }
         return nil

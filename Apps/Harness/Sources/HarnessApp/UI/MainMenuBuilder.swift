@@ -109,7 +109,7 @@ final class MenuTarget: NSObject {
     }
 
     @objc func closeTab() {
-        SessionCoordinator.shared.closeActiveTab()
+        SessionCoordinator.shared.closeActiveTabWithConfirmation()
     }
 
     @objc func closeWorkspace() {

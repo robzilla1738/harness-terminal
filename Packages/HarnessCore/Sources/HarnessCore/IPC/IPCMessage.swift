@@ -5,13 +5,16 @@ public enum IPCRequest: Codable, Sendable {
     case listWorkspaces
     case listSurfaces
     case newWorkspace(name: String)
+    case newSession(workspaceID: UUID, cwd: String?, name: String?)
     case newTab(workspaceID: UUID, cwd: String?)
     case newTabInWorkspace(named: String, cwd: String?)
     case newSplit(tabID: UUID, paneID: UUID?, direction: SplitDirection)
     case selectWorkspace(id: UUID)
     case selectWorkspaceByName(name: String)
+    case selectSession(workspaceID: UUID, sessionID: UUID)
     case selectTab(workspaceID: UUID, tabID: UUID)
     case closeTab(tabID: UUID)
+    case closeSession(sessionID: UUID)
     case closeWorkspace(id: UUID)
     case setTheme(name: String)
     case setKeepSessionsOnQuit(Bool)
@@ -35,6 +38,7 @@ public enum IPCRequest: Codable, Sendable {
     case zoomPane(paneID: UUID)
     case setCopyMode(surfaceID: String, enabled: Bool)
     case renameTab(tabID: UUID, name: String)
+    case renameSession(sessionID: UUID, name: String)
     case renameWorkspace(workspaceID: UUID, name: String)
     case detectAgent(surfaceID: String)
     // Phase 5 — streaming attach
@@ -51,6 +55,7 @@ public enum IPCResponse: Codable, Sendable {
     case workspaces([WorkspaceSummary])
     case surfaces([SurfaceSummary])
     case workspaceID(UUID)
+    case sessionID(UUID)
     case tabID(UUID)
     case paneID(UUID)
     case surfaceID(String)

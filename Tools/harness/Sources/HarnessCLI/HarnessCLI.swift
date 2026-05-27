@@ -22,6 +22,8 @@ struct HarnessCLI {
                 let name = flagValue(args, flag: "--name") ?? "Workspace"
                 let response = try client.request(.newWorkspace(name: name))
                 if case let .workspaceID(id) = response { print(id.uuidString) }
+            case "new-session":
+                try handleNewSession(args, client: client)
             case "new-tab":
                 try handleNewTab(args, client: client)
             case "new-split":
@@ -30,12 +32,20 @@ struct HarnessCLI {
                 try handleSelectWorkspace(args, client: client)
             case "select-tab":
                 try handleSelectTab(args, client: client)
+            case "select-session":
+                try handleSelectSession(args, client: client)
             case "close-tab":
                 guard let tabID = UUID(uuidString: flagValue(args, flag: "--tab") ?? "") else {
                     fputs("Usage: harness-cli close-tab --tab <uuid>\n", stderr)
                     exit(1)
                 }
                 _ = try client.request(.closeTab(tabID: tabID))
+            case "close-session":
+                guard let sessionID = UUID(uuidString: flagValue(args, flag: "--session") ?? "") else {
+                    fputs("Usage: harness-cli close-session --session <uuid>\n", stderr)
+                    exit(1)
+                }
+                _ = try client.request(.closeSession(sessionID: sessionID))
             case "send":
                 guard let surface = flagValue(args, flag: "--surface"),
                       let text = flagValue(args, flag: "--text")
@@ -73,6 +83,8 @@ struct HarnessCLI {
                 try handleCopyMode(args, client: client)
             case "rename-tab":
                 try handleRenameTab(args, client: client)
+            case "rename-session":
+                try handleRenameSession(args, client: client)
             case "rename-workspace":
                 try handleRenameWorkspace(args, client: client)
             case "detect-agent":
@@ -105,6 +117,17 @@ struct HarnessCLI {
         let cwd = flagValue(args, flag: "--cwd")
         let response = try client.request(.newTab(workspaceID: workspaceID, cwd: cwd))
         if case let .tabID(id) = response { print(id.uuidString) }
+    }
+
+    static func handleNewSession(_ args: [String], client: DaemonClient) throws {
+        guard let workspaceID = try resolveWorkspaceID(args, client: client) else {
+            fputs("Usage: harness-cli new-session --workspace <name|uuid> [--cwd path] [--name name]\n", stderr)
+            exit(1)
+        }
+        let cwd = flagValue(args, flag: "--cwd")
+        let name = flagValue(args, flag: "--name")
+        let response = try client.request(.newSession(workspaceID: workspaceID, cwd: cwd, name: name))
+        if case let .sessionID(id) = response { print(id.uuidString) }
     }
 
     static func handleNewSplit(_ args: [String], client: DaemonClient) throws {
@@ -142,11 +165,21 @@ struct HarnessCLI {
         _ = try client.request(.selectTab(workspaceID: workspaceID, tabID: tabID))
     }
 
+    static func handleSelectSession(_ args: [String], client: DaemonClient) throws {
+        guard let workspaceID = try resolveWorkspaceID(args, client: client),
+              let sessionID = UUID(uuidString: flagValue(args, flag: "--session") ?? "")
+        else {
+            fputs("Usage: harness-cli select-session --workspace <name|uuid> --session <uuid>\n", stderr)
+            exit(1)
+        }
+        _ = try client.request(.selectSession(workspaceID: workspaceID, sessionID: sessionID))
+    }
+
     static func printWorkspaces(_ client: DaemonClient) throws {
         let response = try client.request(.listWorkspaces)
         guard case let .workspaces(items) = response else { throw DaemonClientError.unexpectedResponse }
         for item in items {
-            print("\(item.id)\t\(item.name)\t\(item.tabCount) tabs")
+            print("\(item.id)\t\(item.name)\t\(item.tabCount) sessions")
         }
     }
 
@@ -156,6 +189,18 @@ struct HarnessCLI {
         for item in items {
             print("\(item.surfaceID)\t\(item.workspaceName)\t\(item.tabTitle)\t\(item.cwd)")
         }
+    }
+
+    static func resolveWorkspaceID(_ args: [String], client: DaemonClient) throws -> UUID? {
+        guard let target = flagValue(args, flag: "--workspace") ?? flagValue(args, flag: "--workspace-id") else {
+            return nil
+        }
+        if let uuid = UUID(uuidString: target) {
+            return uuid
+        }
+        let response = try client.request(.listWorkspaces)
+        guard case let .workspaces(items) = response else { return nil }
+        return items.first { $0.name == target }?.id
     }
 
     static func printSnapshot(_ client: DaemonClient) throws {
@@ -249,6 +294,16 @@ struct HarnessCLI {
         _ = try client.request(.renameTab(tabID: tabID, name: name))
     }
 
+    static func handleRenameSession(_ args: [String], client: DaemonClient) throws {
+        guard let sessionStr = flagValue(args, flag: "--session"), let sessionID = UUID(uuidString: sessionStr),
+              let name = flagValue(args, flag: "--name")
+        else {
+            fputs("Usage: harness-cli rename-session --session <uuid> --name \"...\"\n", stderr)
+            exit(1)
+        }
+        _ = try client.request(.renameSession(sessionID: sessionID, name: name))
+    }
+
     static func handleRenameWorkspace(_ args: [String], client: DaemonClient) throws {
         guard let idStr = flagValue(args, flag: "--id") ?? flagValue(args, flag: "--workspace"),
               let id = UUID(uuidString: idStr),
@@ -318,11 +373,14 @@ struct HarnessCLI {
           list-surfaces
           get-snapshot
           new-workspace --name <name>
+          new-session --workspace <name|uuid> [--cwd path] [--name name]
           new-tab --workspace <name|uuid> [--cwd path]
           new-split --tab <uuid> --direction horizontal|vertical [--pane <uuid>]
           select-workspace --workspace <name|uuid>
+          select-session --workspace <name|uuid> --session <uuid>
           select-tab --workspace <uuid> --tab <uuid>
           close-tab --tab <uuid>
+          close-session --session <uuid>
           send --surface <uuid> --text "..."
           send-keys --surface <uuid> --keys "C-c Up Enter ..."
           capture-pane --surface <uuid> [--scrollback]
@@ -332,6 +390,7 @@ struct HarnessCLI {
           zoom-pane --pane <uuid>
           copy-mode --surface <uuid> [--enter|--exit]
           rename-tab --tab <uuid> --name "..."
+          rename-session --session <uuid> --name "..."
           rename-workspace --id <uuid> --name "..."
           detect-agent --surface <uuid>
           install-hooks <codex|claude-code|cursor|pi|hermes|openclaw|aider|gemini|goose>

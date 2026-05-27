@@ -80,9 +80,9 @@ final class SessionCoordinator: NSObject {
     }
 
     private func structureFingerprint(_ snap: SessionSnapshot) -> String {
-        guard let ws = snap.activeWorkspace, let tab = ws.activeTab else { return "" }
+        guard let ws = snap.activeWorkspace, let session = ws.activeSession, let tab = session.activeTab else { return "" }
         let surfaces = tab.rootPane.allSurfaceIDs().map(\.uuidString).sorted().joined(separator: ",")
-        return "\(ws.id)|\(tab.id)|\(surfaces)"
+        return "\(ws.id)|\(session.id)|\(tab.id)|\(surfaces)"
     }
 
     private func applyThemeToAllHosts() {
@@ -107,7 +107,7 @@ final class SessionCoordinator: NSObject {
 
     private func syncWaitingRings() {
         for host in terminalHosts.allHosts() {
-            if let match = snapshot.activeWorkspace?.tabs.first(where: { tab in
+            if let match = snapshot.workspaces.flatMap({ workspace in workspace.sessions.flatMap { $0.tabs } }).first(where: { tab in
                 tab.rootPane.allSurfaceIDs().contains(host.surfaceID)
             }) {
                 host.showsWaitingRing = match.status == .waiting
@@ -129,6 +129,9 @@ final class SessionCoordinator: NSObject {
             cursorHex: settings.customCursorHex
         )
         for host in terminalHosts.allHosts() {
+            if shouldApplyNamedTerminalTheme {
+                host.applyTheme(named: snapshot.themeName)
+            }
             host.applySettings(settings)
         }
         NotificationCenter.default.post(
@@ -142,7 +145,13 @@ final class SessionCoordinator: NSObject {
         )
     }
 
-    func setTheme(_ name: String) {
+    func setTheme(_ name: String, clearColorOverrides: Bool = false) {
+        if clearColorOverrides {
+            settings.customBackgroundHex = nil
+            settings.customForegroundHex = nil
+            settings.customCursorHex = nil
+            try? settings.save()
+        }
         requestDaemon(.setTheme(name: name))
         syncFromDaemon()
     }
@@ -155,6 +164,14 @@ final class SessionCoordinator: NSObject {
     func addWorkspace(name: String) {
         requestDaemon(.newWorkspace(name: name))
         syncFromDaemon()
+    }
+
+    func addSession(to workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) {
+        requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd ?? settings.defaultCWD, name: name))
+        syncFromDaemon()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            SurfaceShellTracker.shared.bumpScan()
+        }
     }
 
     func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) {
@@ -193,6 +210,16 @@ final class SessionCoordinator: NSObject {
         syncFromDaemon()
     }
 
+    func selectSession(workspaceID: WorkspaceID, sessionID: SessionID) {
+        if snapshot.activeWorkspaceID == workspaceID,
+           snapshot.activeWorkspace?.activeSessionID == sessionID
+        {
+            return
+        }
+        requestDaemon(.selectSession(workspaceID: workspaceID, sessionID: sessionID))
+        syncFromDaemon()
+    }
+
     func selectTab(workspaceID: WorkspaceID, tabID: TabID) {
         if snapshot.activeWorkspaceID == workspaceID,
            snapshot.activeWorkspace?.activeTabID == tabID
@@ -221,6 +248,29 @@ final class SessionCoordinator: NSObject {
             terminalHosts.removeHost(for: surfaceID)
         }
         requestDaemon(.closeTab(tabID: tabID))
+        syncFromDaemon()
+    }
+
+    func closeActiveTabWithConfirmation() {
+        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
+        let title = HarnessPathDisplay.title(for: tab.cwd, fallback: tab.title)
+        let alert = NSAlert()
+        alert.messageText = "Close tab \"\(title)\"?"
+        alert.informativeText = "This will close the tab and its running shell."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        closeActiveTab()
+    }
+
+    func closeActiveSession() {
+        guard let sessionID = snapshot.activeWorkspace?.activeSession?.id else { return }
+        let surfaces = snapshot.activeWorkspace?.activeSession?.tabs.flatMap { $0.rootPane.allSurfaceIDs() } ?? []
+        for surfaceID in surfaces {
+            terminalHosts.removeHost(for: surfaceID)
+        }
+        requestDaemon(.closeSession(sessionID: sessionID))
         syncFromDaemon()
     }
 
@@ -356,19 +406,23 @@ final class SessionCoordinator: NSObject {
         // the agent is NOT actively generating). Skip panes whose agent is
         // still hammering tokens — those aren't blocked yet.
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs {
+            for session in workspace.sessions {
+                for tab in session.tabs {
                 let isWaiting = tab.status == .waiting
                 let agentBlocked = tab.agent?.activity == .awaiting
                 let agentBusy = tab.agent?.activity == .working
                 if (isWaiting && !agentBusy) || agentBlocked {
                     return (workspace.id, tab.id)
                 }
+                }
             }
         }
         // Fallback: any tab that's `.waiting`, even if its agent is still working.
         for workspace in snapshot.workspaces {
-            for tab in workspace.tabs where tab.status == .waiting {
-                return (workspace.id, tab.id)
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.status == .waiting {
+                    return (workspace.id, tab.id)
+                }
             }
         }
         return nil
@@ -409,7 +463,7 @@ final class SessionCoordinator: NSObject {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 let work = await MainActor.run { () -> [(WorkspaceID, Tab)] in
                     guard let self, let workspace = self.snapshot.activeWorkspace else { return [] }
-                    return workspace.tabs.map { (workspace.id, $0) }
+                    return workspace.sessions.flatMap { $0.tabs }.map { (workspace.id, $0) }
                 }
                 let updates = work.compactMap { workspaceID, tab -> (WorkspaceID, TabID, String?)? in
                     let updated = git.refresh(tab: tab)
@@ -466,7 +520,7 @@ extension SessionCoordinator: TerminalHostDelegate {
         // Only push if the daemon's stored value is stale — avoids a feedback
         // loop when libghostty already told us about the same path.
         let current = snapshot.workspaces
-            .flatMap(\.tabs)
+            .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
             .first { $0.rootPane.allSurfaceIDs().contains(surfaceID) }?.cwd
         if current == cwd { return }
         _ = try? daemon.request(.updateTabCwd(surfaceID: surfaceID.uuidString, path: cwd))
@@ -509,6 +563,19 @@ enum DesktopNotifier {
             trigger: nil
         )
         center.add(request)
+    }
+}
+
+private enum HarnessPathDisplay {
+    static func title(for path: String, fallback: String) -> String {
+        if path == "/" { return "/" }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home { return "~" }
+        let shortened = path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+        let last = (String(shortened) as NSString).lastPathComponent
+        if !last.isEmpty { return last }
+        if !fallback.isEmpty, fallback != "Shell" { return fallback }
+        return "Terminal"
     }
 }
 

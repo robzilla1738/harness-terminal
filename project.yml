@@ -4,6 +4,14 @@ options:
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
+settings:
+  base:
+    # Harness does not ship App Intents or App Shortcuts. Disabling App Intents
+    # link generation keeps Xcode runs from repeatedly talking to linkd's
+    # autoShortcut service for metadata we do not use.
+    LM_ENABLE_LINK_GENERATION: NO
+    LM_FILTER_WARNINGS: YES
+    ENABLE_APPINTENTS_DEPLOYMENT_AWARE_PROCESSING: NO
 packages:
   Harness:
     path: .
@@ -16,7 +24,13 @@ targets:
     platform: macOS
     sources:
       - Apps/Harness/Sources/HarnessApp
+      - Apps/Harness/Resources/Harness.icns
+      - Apps/Harness/Resources/Assets.xcassets
     dependencies:
+      - target: HarnessDaemon
+        embed: false
+      - target: harness-cli
+        embed: false
       - package: Harness
         product: HarnessCore
       - package: Harness
@@ -31,6 +45,20 @@ targets:
       CODE_SIGN_ENTITLEMENTS: Harness.entitlements
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "14.0"
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    postBuildScripts:
+      - name: Copy Bundled Tools
+        script: |
+          set -euo pipefail
+          mkdir -p "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
+          cp "$BUILT_PRODUCTS_DIR/HarnessDaemon" "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/HarnessDaemon"
+          cp "$BUILT_PRODUCTS_DIR/harness-cli" "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/harness-cli"
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/HarnessDaemon
+          - $(BUILT_PRODUCTS_DIR)/harness-cli
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/HarnessDaemon
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/harness-cli
   HarnessDaemon:
     type: tool
     platform: macOS
@@ -39,7 +67,12 @@ targets:
     dependencies:
       - package: Harness
         product: HarnessCore
-  harness:
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.daemon
+      PRODUCT_NAME: HarnessDaemon
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+  harness-cli:
     type: tool
     platform: macOS
     sources:
@@ -47,3 +80,35 @@ targets:
     dependencies:
       - package: Harness
         product: HarnessCore
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.cli
+      PRODUCT_NAME: harness-cli
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+  HarnessCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessCoreTests
+    dependencies:
+      - package: Harness
+        product: HarnessCore
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessCoreTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+schemes:
+  Harness:
+    build:
+      targets:
+        Harness: all
+        HarnessDaemon: all
+        harness-cli: all
+        HarnessCoreTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - HarnessCoreTests

@@ -32,7 +32,7 @@ Never rename the app to `harness-cli`. Docs, install paths, and hooks should say
 
 - **Target:** macOS 14.0+ (Liquid Glass chrome uses `NSGlassEffectView` on macOS 26+)
 - **Language:** Swift 6.0
-- **Build:** Swift Package Manager (primary); `Harness.xcodeproj` may be stale — prefer `swift build`, `make preview`, or `make release`
+- **Build:** Swift Package Manager and generated Xcode project. `Harness.xcodeproj` is generated from `project.yml` with XcodeGen; run `xcodegen generate` after changing Xcode target/source/resource layout.
 - **Bundle ID:** `com.robert.harness` (see `Apps/Harness/Sources/HarnessApp/Resources/Info.plist`)
 
 ---
@@ -45,6 +45,12 @@ swift package resolve
 make preview          # isolated debug app under .harness-preview/
 make release          # or: ./Scripts/build-release.sh
 open Harness.app
+
+# Xcode workflow
+xcodegen generate
+open Harness.xcodeproj
+xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' build
+xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' test
 
 # Smoke test IPC (app must be running — it launches the daemon)
 .build/release/harness-cli ping
@@ -68,6 +74,7 @@ Use `make preview` when the user wants to inspect the app without installing or 
 ```
 harness/
 ├── Package.swift                 # SPM manifest and products
+├── project.yml                   # XcodeGen spec for Harness.xcodeproj
 ├── Makefile                      # build, release, dmg, sign, icon
 ├── claude.md / agents.md         # This handbook (identical files)
 ├── README.md
@@ -172,14 +179,15 @@ Socket path: `~/Library/Application Support/Harness/harness.sock`
 
 | Term | Meaning |
 |------|---------|
-| **Workspace** | Named group of tabs (e.g. "Default", "api") |
-| **Tab** | One logical session: title, cwd, git branch, status, agent, split tree |
+| **Workspace** | Named group of sessions (e.g. "Default", "api") |
+| **Session** | Sidebar row with its own tab group |
+| **Tab** | One terminal tab inside a session: title, cwd, git branch, status, agent, split tree |
 | **Pane** | Node in `PaneNode` tree — leaf (terminal) or branch (split) |
 | **Surface / SurfaceID** | UUID identifying one terminal pane; drives `HARNESS_SURFACE` |
 | **PaneID** | UUID for a pane leaf in the split tree (distinct from surface) |
 | **Snapshot** | Full `SessionSnapshot` read from daemon |
 | **revision** | Integer incremented on each daemon commit |
-| **structureRevision** | App-side counter when workspace/tab/pane topology changes |
+| **structureRevision** | App-side counter when workspace/session/tab/pane topology changes |
 
 ### Tab status (`TabStatus`)
 
@@ -202,7 +210,7 @@ Socket path: `~/Library/Application Support/Harness/harness.sock`
 
 ```swift
 struct SessionSnapshot {
-    var version: Int           // schema version (current: 1)
+    var version: Int           // schema version (current: 2)
     var revision: Int          // bumps on every daemon commit
     var workspaces: [Workspace]
     var activeWorkspaceID: WorkspaceID?
@@ -211,6 +219,8 @@ struct SessionSnapshot {
     var savedAt: Date
 }
 ```
+
+`Workspace.sessions` owns the sidebar rows. `SessionGroup.tabs` owns the top tab bar. `Cmd+T` / `new-tab` appends to the active session; `new-session` creates a new sidebar row.
 
 ### Tab (important fields)
 
@@ -447,9 +457,11 @@ harness-cli get-snapshot
 
 # Layout
 harness-cli new-workspace --name api
+harness-cli new-session --workspace api --cwd ~/Code/myproject
 harness-cli new-tab --workspace api --cwd ~/Code/myproject
 harness-cli new-split --tab <tab-uuid> --direction horizontal|vertical [--pane <pane-uuid>]
 harness-cli select-workspace --workspace <name|uuid>
+harness-cli select-session --workspace <workspace-uuid> --session <session-uuid>
 harness-cli select-tab --workspace <workspace-uuid> --tab <tab-uuid>
 harness-cli close-tab --tab <tab-uuid>
 
@@ -653,6 +665,9 @@ make dmg            # Harness.dmg
 make sign           # codesign + optional notarization
 make icon           # regenerate Harness.icns
 make clean
+xcodegen generate   # regenerate Harness.xcodeproj from project.yml
+xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' build
+xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' test
 ```
 
 `Scripts/build-release.sh` / `package-app.sh` copies into `Harness.app/Contents/MacOS/`:
@@ -666,6 +681,7 @@ Pre-release: `docs/RELEASE_CHECKLIST.md`.
 ```bash
 make release && open Harness.app
 harness-cli ping
+harness-cli new-session --workspace Default --cwd "$HOME"
 harness-cli new-tab --workspace Default --cwd "$HOME"
 # In GUI tab: cd somewhere — sidebar + tab label should show folder name within ~1s
 # Settings should show customBackgroundHex #000000 if Ghostty config has background = #000000
@@ -819,7 +835,7 @@ See `docs/ARCHITECTURE.md`.
 | `+` tab button dead | `SoftIconButton` bezel intercepting clicks | `isBordered = false` |
 | All tabs show waiting on notify | `markWaiting` bug | Must filter by surface key |
 | Opacity wrong (e.g. 0.33) | Old corrupted `settings.json` | Delete settings; re-import from Ghostty (0.85) |
-| Xcode build fails | Stale `Harness.xcodeproj` | Use SPM: `swift build` |
+| Xcode build fails | Project out of sync with `project.yml` | Run `xcodegen generate`, then `xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' build` |
 
 ---
 

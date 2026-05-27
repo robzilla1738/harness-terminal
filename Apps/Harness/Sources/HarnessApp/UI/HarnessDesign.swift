@@ -77,6 +77,7 @@ enum HarnessDesign {
     }
 
     static func shortenPath(_ path: String) -> String {
+        if path == "/" { return "/" }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if path == home { return "~" }
         if path.hasPrefix(home + "/") {
@@ -85,18 +86,18 @@ enum HarnessDesign {
         return path
     }
 
+    static func pathDisplayName(_ path: String) -> String {
+        let shortened = shortenPath(path)
+        if shortened == "/" || shortened == "~" { return shortened }
+        let last = (shortened as NSString).lastPathComponent
+        return last.isEmpty ? shortened : last
+    }
+
     /// Soft icon button with circular hover fill — used in footer / workspace bar.
     static func softIconButton(symbol: String, tooltip: String, size: CGFloat = 26) -> SoftIconButton {
         let button = SoftIconButton(frame: NSRect(x: 0, y: 0, width: size, height: size))
-        button.bezelStyle = .inline
-        button.isBordered = false
-        let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)?
-            .withSymbolConfiguration(config)
-        button.imagePosition = .imageOnly
-        button.contentTintColor = chrome.textTertiary
+        button.setSymbol(symbol, accessibilityDescription: tooltip, pointSize: 12, weight: .medium)
         button.toolTip = tooltip
-        button.setButtonType(.momentaryChange)
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: size),
@@ -114,19 +115,38 @@ enum HarnessDesign {
 /// Round, hover-tinted icon button. Manages its own tracking area + chrome.
 @MainActor
 final class SoftIconButton: NSButton {
+    private let iconView = NSImageView()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false { didSet { applyChrome() } }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        title = ""
         wantsLayer = true
         layer?.cornerCurve = .continuous
         // NSButton defaults to a rounded bezel which conflicts with our
         // layer-driven chrome (the bezel intercepts hit-testing in some macOS
         // builds). Disable it so we own the look and clicks dispatch reliably.
         isBordered = false
-        bezelStyle = .smallSquare
+        isTransparent = true
+        bezelStyle = .regularSquare
+        imagePosition = .noImage
         setButtonType(.momentaryChange)
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(iconView)
+        let iconWidth = iconView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, multiplier: 0.58)
+        let iconHeight = iconView.heightAnchor.constraint(lessThanOrEqualTo: heightAnchor, multiplier: 0.58)
+        iconWidth.priority = .defaultHigh
+        iconHeight.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconWidth,
+            iconHeight,
+        ])
+
         applyChrome()
     }
 
@@ -149,11 +169,36 @@ final class SoftIconButton: NSButton {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
+    override func layout() {
+        super.layout()
+        applyChrome()
+    }
+
+    func setSymbol(
+        _ symbol: String,
+        accessibilityDescription: String?,
+        pointSize: CGFloat,
+        weight: NSFont.Weight
+    ) {
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityDescription)?
+            .withSymbolConfiguration(config)
+        applyChrome()
+    }
+
     func applyChrome() {
-        layer?.cornerRadius = bounds.height / 2
+        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = isHovered ? c.iconHoverFill.cgColor : NSColor.clear.cgColor
-        contentTintColor = isHovered ? c.textPrimary : c.textTertiary
+        layer?.borderWidth = 1
+        layer?.borderColor = (isHovered ? c.textPrimary.withAlphaComponent(0.20) : c.textPrimary.withAlphaComponent(0.12)).cgColor
+        let base = c.terminalBackground.blended(withFraction: c.isDark ? 0.045 : 0.035, of: c.textPrimary) ?? c.terminalBackground
+        let hover = c.terminalBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
+        layer?.backgroundColor = (isHovered ? hover : base).withAlphaComponent(c.isDark ? 0.96 : 0.86).cgColor
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = isHovered ? 0.20 : 0.08
+        layer?.shadowRadius = isHovered ? 6 : 3
+        layer?.shadowOffset = NSSize(width: 0, height: -1)
+        iconView.contentTintColor = isHovered ? c.textPrimary : c.textSecondary
     }
 }
 
@@ -289,8 +334,11 @@ final class StatusDotView: NSView {
         layer?.addSublayer(halo)
         layer?.addSublayer(dot)
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: 14).isActive = true
-        heightAnchor.constraint(equalToConstant: 14).isActive = true
+        let width = widthAnchor.constraint(equalToConstant: 14)
+        let height = heightAnchor.constraint(equalToConstant: 14)
+        width.priority = .defaultHigh
+        height.priority = .defaultHigh
+        NSLayoutConstraint.activate([width, height])
         applyStyle()
     }
 

@@ -41,24 +41,35 @@ final class TerminalTabBarView: NSView {
 
         addSubview(stack)
 
-        let plusConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        newTabButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New tab")?
-            .withSymbolConfiguration(plusConfig)
-        newTabButton.imagePosition = .imageOnly
+        newTabButton.setSymbol("plus", accessibilityDescription: "New tab", pointSize: 11, weight: .medium)
         newTabButton.toolTip = "New tab (⌘T)"
         newTabButton.target = self
         newTabButton.action = #selector(addNewTab)
+        newTabButton.translatesAutoresizingMaskIntoConstraints = false
+        let newTabWidth = newTabButton.widthAnchor.constraint(equalToConstant: 24)
+        let newTabHeight = newTabButton.heightAnchor.constraint(equalToConstant: 24)
+        newTabWidth.priority = .defaultHigh
+        newTabHeight.priority = .defaultHigh
+        NSLayoutConstraint.activate([newTabWidth, newTabHeight])
 
         // The "+" lives at the end of the pill stack (Ghostty/Chrome style),
         // not pinned to the right edge.
         stack.addArrangedSubview(newTabButton)
 
+        let stackTop = stack.topAnchor.constraint(equalTo: topAnchor)
+        let stackBottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor)
+        let stackTrailing = stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10)
+        let height = heightAnchor.constraint(equalToConstant: HarnessDesign.tabBarHeight)
+        stackTop.priority = .defaultHigh
+        stackBottom.priority = .defaultHigh
+        stackTrailing.priority = .defaultHigh
+        height.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
+            stackTop,
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
-            heightAnchor.constraint(equalToConstant: HarnessDesign.tabBarHeight),
+            stackBottom,
+            stackTrailing,
+            height,
         ])
     }
 
@@ -164,22 +175,33 @@ private final class TabPillView: NSView {
         addSubview(titleLabel)
         addSubview(closeButton)
 
+        let height = heightAnchor.constraint(equalToConstant: HarnessDesign.tabPillHeight)
+        let minWidth = widthAnchor.constraint(greaterThanOrEqualToConstant: 120)
+        let maxWidth = widthAnchor.constraint(lessThanOrEqualToConstant: 220)
+        let dotLeading = statusDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8)
+        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: statusDot.trailingAnchor, constant: 4)
+        let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4)
+        let closeWidth = closeButton.widthAnchor.constraint(equalToConstant: 14)
+        let closeHeight = closeButton.heightAnchor.constraint(equalToConstant: 14)
+        [height, minWidth, dotLeading, titleLeading, closeTrailing, closeWidth, closeHeight].forEach {
+            $0.priority = .defaultHigh
+        }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: HarnessDesign.tabPillHeight),
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
-            widthAnchor.constraint(lessThanOrEqualToConstant: 220),
+            height,
+            minWidth,
+            maxWidth,
 
-            statusDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            dotLeading,
             statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            titleLabel.leadingAnchor.constraint(equalTo: statusDot.trailingAnchor, constant: 4),
+            titleLeading,
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
 
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            closeTrailing,
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 14),
-            closeButton.heightAnchor.constraint(equalToConstant: 14),
+            closeWidth,
+            closeHeight,
         ])
 
         applyChrome(isActive: isActive)
@@ -240,7 +262,7 @@ private final class TabPillView: NSView {
     }
 
     private func displayTitle(for tab: Tab) -> String {
-        let folder = (tab.cwd as NSString).lastPathComponent
+        let folder = HarnessDesign.pathDisplayName(tab.cwd)
         if !folder.isEmpty { return folder }
         let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell"
         if hasCustomTitle { return tab.title }

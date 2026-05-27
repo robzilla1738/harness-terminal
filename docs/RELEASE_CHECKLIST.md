@@ -12,7 +12,8 @@ Manual verification before tagging `v1.0.0`.
 ## Session and layout
 
 - [ ] New workspace (`Cmd+Shift+N`) persists after quit and relaunch
-- [ ] New tab (`Cmd+T`) and splits (`Cmd+D` / `Cmd+Shift+D`) persist after relaunch
+- [ ] New session creates a new sidebar row with its own tab group
+- [ ] New tab (`Cmd+T`) stays inside the active session, and splits (`Cmd+D` / `Cmd+Shift+D`) persist after relaunch
 - [ ] Workspace switcher selects correct workspace; tab list updates
 - [ ] Active tab highlight matches focused pane after reload
 
@@ -35,6 +36,7 @@ Manual verification before tagging `v1.0.0`.
 - [ ] `harness-cli ping` succeeds with app or daemon running
 - [ ] `harness-cli list-surfaces` maps UUIDs to tab titles
 - [ ] `harness-cli new-workspace --name api` resolves by name
+- [ ] `harness-cli new-session --workspace api` creates a separate session group
 - [ ] `harness-cli install` copies binary and prints PATH line
 
 ## Clean machine

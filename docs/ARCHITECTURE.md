@@ -2,13 +2,13 @@
 
 ## Processes
 
-- **Harness.app** — AppKit GUI: workspace sidebar, tab sidebar, libghostty surfaces
+- **Harness.app** — AppKit GUI: workspace sidebar, session sidebar, per-session tab bar, libghostty surfaces
 - **HarnessDaemon** — Single source of truth for `layout.json` and IPC
 - **harness-cli** — CLI client over `~/Library/Application Support/Harness/harness.sock`
 
 ## Session authority
 
-All layout mutations (workspace/tab/split/select/notify) go through **HarnessDaemon**. The app calls `DaemonSessionService` and syncs snapshot on `NotificationBus.snapshotChanged`.
+All layout mutations (workspace/session/tab/split/select/notify) go through **HarnessDaemon**. The app calls `DaemonSessionService` and syncs snapshot on `NotificationBus.snapshotChanged`.
 
 GUI terminals use libghostty `.exec` locally. Surface identity is unified via `HARNESS_SURFACE=<uuid>` in the shell environment.
 

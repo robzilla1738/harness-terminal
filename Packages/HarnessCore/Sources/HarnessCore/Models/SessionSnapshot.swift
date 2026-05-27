@@ -1,7 +1,7 @@
 import Foundation
 
 public struct SessionSnapshot: Codable, Sendable, Equatable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int
     public var revision: Int
@@ -32,6 +32,27 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
     public var activeWorkspace: Workspace? {
         guard let activeWorkspaceID else { return workspaces.first }
         return workspaces.first { $0.id == activeWorkspaceID } ?? workspaces.first
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case revision
+        case workspaces
+        case activeWorkspaceID
+        case themeName
+        case keepSessionsOnQuit
+        case savedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = SessionSnapshot.currentVersion
+        revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+        workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? [Workspace()]
+        activeWorkspaceID = try container.decodeIfPresent(WorkspaceID.self, forKey: .activeWorkspaceID) ?? workspaces.first?.id
+        themeName = try container.decodeIfPresent(String.self, forKey: .themeName) ?? "Catppuccin Mocha"
+        keepSessionsOnQuit = try container.decodeIfPresent(Bool.self, forKey: .keepSessionsOnQuit) ?? true
+        savedAt = try container.decodeIfPresent(Date.self, forKey: .savedAt) ?? .now
     }
 }
 

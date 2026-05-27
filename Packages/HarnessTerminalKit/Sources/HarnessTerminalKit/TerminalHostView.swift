@@ -173,17 +173,12 @@ public final class TerminalHostView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        guard isWaiting else { return }
         let ringRect = bounds.insetBy(dx: 3, dy: 3)
         let path = NSBezierPath(roundedRect: ringRect, xRadius: 6, yRadius: 6)
-        if isWaiting {
-            NSColor.systemBlue.withAlphaComponent(0.85).setStroke()
-            path.lineWidth = 3
-            path.stroke()
-        } else if isActiveBorder {
-            NSColor.white.withAlphaComponent(0.16).setStroke()
-            path.lineWidth = 2
-            path.stroke()
-        }
+        NSColor.systemBlue.withAlphaComponent(0.85).setStroke()
+        path.lineWidth = 3
+        path.stroke()
     }
 
     public func focusTerminal() {

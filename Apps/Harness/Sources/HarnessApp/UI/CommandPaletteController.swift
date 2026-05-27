@@ -41,6 +41,11 @@ enum CommandPaletteController {
             PaletteAction(title: "New Workspace", subtitle: "Cmd+Shift+N") {
                 coordinator.addWorkspace(name: "Workspace \(coordinator.snapshot.workspaces.count + 1)")
             },
+            PaletteAction(title: "New Session", subtitle: "Sidebar") {
+                if let id = coordinator.snapshot.activeWorkspaceID {
+                    coordinator.addSession(to: id)
+                }
+            },
             PaletteAction(title: "New Tab", subtitle: "Cmd+T") {
                 if let id = coordinator.snapshot.activeWorkspaceID {
                     coordinator.addTab(to: id)
@@ -63,7 +68,7 @@ enum CommandPaletteController {
             },
         ] + ThemeManager.featuredThemes.map { theme in
             PaletteAction(title: "Theme: \(theme)", subtitle: "Appearance") {
-                coordinator.setTheme(theme)
+                coordinator.setTheme(theme, clearColorOverrides: true)
             }
         }
     }

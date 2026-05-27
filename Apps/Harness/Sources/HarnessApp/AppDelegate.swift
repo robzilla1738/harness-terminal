@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import GhosttyTerminal
 import HarnessCore
 
@@ -7,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        TerminalDebugLog.enable(.standard)
+        configureTerminalDiagnostics()
         DaemonLauncher.shared.ensureRunning()
         SessionCoordinator.shared.syncFromDaemon()
         mainWindowController = MainWindowController()
@@ -31,5 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
+    }
+
+    private func configureTerminalDiagnostics() {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["HARNESS_GHOSTTY_DEBUG"] == "1" {
+            TerminalDebugLog.enable(.standard)
+        } else {
+            TerminalDebugLog.disable()
+            unsetenv("GHOSTTY_LOG")
+        }
     }
 }

@@ -6,7 +6,7 @@ Native macOS terminal for organizing AI agents and dev sessions — Ghostty rend
 
 - GPU-accelerated terminals via [libghostty](https://github.com/Lakr233/libghostty-spm)
 - Ghostty config import — same colors, opacity, blur, font, padding by default
-- Workspaces + vertical sidebar tabs + horizontal/vertical splits
+- Workspaces + sidebar sessions + per-session tabs + horizontal/vertical splits
 - Session layout persistence (daemon-owned JSON)
 - **harness-cli** for automation and agent hooks
 - **tmux-style commands**: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`
@@ -27,6 +27,19 @@ cd harness
 make release
 open Harness.app
 ```
+
+### Xcode development
+
+`Harness.xcodeproj` is generated from `project.yml` with XcodeGen.
+
+```bash
+xcodegen generate
+open Harness.xcodeproj
+xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' build
+xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' test
+```
+
+The Xcode app target builds and bundles `HarnessDaemon` and `harness-cli` into `Harness.app/Contents/MacOS/`, so running from Xcode uses the same helper layout as the release app.
 
 ### Install harness-cli
 
@@ -49,6 +62,7 @@ Ensure Harness is running (launches `HarnessDaemon` automatically):
 harness-cli list-workspaces
 harness-cli list-surfaces
 harness-cli new-workspace --name api
+harness-cli new-session --workspace api --cwd ~/Code/myproject
 harness-cli new-tab --workspace api --cwd ~/Code/myproject
 harness-cli notify --surface "$HARNESS_SURFACE" --title Agent --body "Needs approval"
 ```
