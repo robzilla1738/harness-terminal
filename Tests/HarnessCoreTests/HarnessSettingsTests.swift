@@ -37,6 +37,27 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.customCursorHex, "#cccccc")
     }
 
+    func testClampedOpacityAllowsFullRangeAboveTinyFloor() {
+        // Power-user range: anything from "barely visible" to fully solid is allowed.
+        // The 0.05 floor only exists so a slammed-to-zero slider doesn't leave the
+        // window completely invisible with no way to find it on screen.
+        XCTAssertEqual(HarnessSettings.clampedOpacity(0.01), 0.05, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedOpacity(0.05), 0.05, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedOpacity(0.10), 0.10, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedOpacity(0.30), 0.30, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedOpacity(0.85), 0.85, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedOpacity(1.5), 1.0, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedOpacity(-1.0), 0.05, accuracy: 0.001)
+    }
+
+    func testClampedBlurStaysInUsefulRange() {
+        XCTAssertEqual(HarnessSettings.clampedBlur(-5), 0)
+        XCTAssertEqual(HarnessSettings.clampedBlur(0), 0)
+        XCTAssertEqual(HarnessSettings.clampedBlur(20), 20)
+        XCTAssertEqual(HarnessSettings.clampedBlur(100), 100)
+        XCTAssertEqual(HarnessSettings.clampedBlur(999), 100)
+    }
+
     func testAgentColorOverridesNormalizeAndFallbackToDefaults() throws {
         let data = Data("""
         {

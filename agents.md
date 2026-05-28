@@ -293,9 +293,14 @@ From `Packages/HarnessCore/Sources/HarnessCore/Paths/HarnessPaths.swift`:
 |-------|---------|
 | `fontSize`, `fontFamily` | Terminal font (applied to libghostty) |
 | `defaultShell`, `defaultCWD` | New tab defaults |
-| `backgroundOpacity`, `backgroundBlur` | Window transparency + blur |
+| `backgroundOpacity`, `backgroundBlur` | Window transparency (5%–100%) + blur (0–100 px) |
 | `windowPaddingX/Y` | Terminal padding |
-| `customBackgroundHex`, `customForegroundHex`, `customCursorHex` | **Exact Ghostty colors** (`#000000` / `#ffffff`) |
+| `customBackgroundHex`, `customForegroundHex`, `customCursorHex` | Core Ghostty color overrides (`#000000` / `#ffffff`) |
+| `useCustomColors` | When `false`, custom hex fields are preserved on disk but ignored so a named theme visibly changes the whole app |
+| `selectionBackgroundHex`, `selectionForegroundHex`, `boldColorHex`, `cursorTextHex` | Extended terminal color overrides (`nil` → theme default) |
+| `paletteHex` | 16 ANSI palette overrides (`nil` slot → theme color) |
+| `agentColorOverrides` | Per-agent brand dot/chip colors keyed by `AgentKind.rawValue` |
+| `cursorStyle`, `cursorBlink`, `copyOnSelect`, `minimumContrast` | Ghostty cursor/copy/contrast prefs |
 | `prefixKey` | tmux-style prefix (default `ctrl-a`; empty string disables) |
 | `scrollbackLines` | Scrollback size (libghostty + RealPty) |
 | `ghosttyConfigSignature` | Last imported Ghostty config fingerprint (migration) |
@@ -312,8 +317,12 @@ Reads `~/.config/ghostty/config` (or macOS app-support fallback). Maps:
 
 ### Load / migration (`HarnessSettings.load()`)
 
-1. If `settings.json` exists → decode with fallbacks from live Ghostty config for missing `custom*Hex` fields → persist migration.
+1. If `settings.json` exists → decode with fallbacks from live Ghostty config for missing `custom*Hex` fields → clamp `backgroundOpacity` / `backgroundBlur` via `clampedOpacity` / `clampedBlur` → persist migration.
 2. If missing → `makeDefaults(imported:)` from Ghostty → save immediately.
+
+**Bounds:** `clampedOpacity` keeps opacity in 0.05–1.0 (5% floor prevents an invisible window); `clampedBlur` keeps blur in 0–100 px.
+
+**Re-import:** Ghostty import sets `useCustomColors = true` when imported bg/fg/cursor hex are present so stale `useCustomColors=false` files do not silently swallow overrides.
 
 Settings UI has **Re-import from Ghostty** (`SessionCoordinator.reimportFromGhostty()` / prefix `r`).
 
@@ -321,8 +330,9 @@ Settings UI has **Re-import from Ghostty** (`SessionCoordinator.reimportFromGhos
 
 | Layer | File | Behavior |
 |-------|------|----------|
-| Terminal colors | `TerminalHostView.applySettings` | `withBackground` / `withForeground` from custom hex |
-| Chrome palette | `HarnessChrome.update` | Uses custom hex when set, else named theme |
+| Terminal colors | `TerminalHostView.applySettings` | Applies custom hex only when `useCustomColors == true`; otherwise named theme colors |
+| Chrome palette | `HarnessChrome.update` | Uses custom hex when `useCustomColors`, else named theme |
+| Theme defaults in Settings | `ThemeManager` | Resolves bg/fg/cursor/selection/bold/palette hex from `GhosttyThemeCatalog` for swatch placeholders |
 | Window opacity | `MainWindowController.applyTransparency` | `isOpaque` when opacity ≥ 0.999 |
 | Sidebar/tab/terminal chrome | `ChromeBackdrop` in `HarnessDesign.swift` | `NSGlassEffectView` (macOS 26+) or `NSVisualEffectView` with `.underWindowBackground` + theme tint |
 | Terminal host background | `TerminalHostView` | Clear layer so libghostty metal shows blur when opacity < 1 |
@@ -540,6 +550,15 @@ Every GUI terminal pane launches:
 - `AgentScanner` runs ~1.5s cadence, calls `SurfaceRegistry.applyAgentChanges`.
 - Activity decays from `working` → `idle` after 3s quiet; I/O bumps `working`.
 
+### Title fallback (`AgentTitleInference`)
+
+When the daemon process-tree scan cannot see the agent (e.g. Claude Code launching as a renamed Node binary), sidebar and tab bar infer `AgentKind` from the terminal title the agent sets via OSC 0/2.
+
+- Implemented in `AgentSnapshot.swift` as `AgentTitleInference.kind(from:)`
+- UI uses `tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)` in `SessionCardRowView` and `TabPillView`
+- Strips leading thinking glyphs (`✱`, `★`, emoji, whitespace) and matches display names / first-word abbreviations (`Claude` → Claude Code)
+- Rejects partial-word matches (`claudette`, `vim claude.txt`, `pip install`)
+
 ### UI
 
 - **Sidebar:** `SessionCardRowView` — cwd basename, git/notification meta, `AgentChipView`, status dot.
@@ -597,7 +616,7 @@ After prefix, one-shot binding (2s timeout):
 | `?` | Cheatsheet overlay |
 | `r` | Re-import Ghostty settings |
 
-Cheatsheet: `PrefixCheatsheetWindow`. Indicator: `PrefixIndicatorWindow`.
+Cheatsheet: `PrefixCheatsheetWindow` (grouped **Panes** / **Tabs & Sessions** / **Modes**). Indicator: `PrefixIndicatorWindow`.
 
 ---
 
@@ -625,7 +644,7 @@ Cheatsheet: `PrefixCheatsheetWindow`. Indicator: `PrefixIndicatorWindow`.
 | Terminal area | `UI/ContentAreaViewController.swift` |
 | Window chrome | `UI/MainWindowController.swift` |
 | Theme / glass | `UI/HarnessChrome.swift`, `UI/HarnessDesign.swift` (`ChromeBackdrop`) |
-| Prefix / palette | `UI/PrefixKeymap.swift`, `UI/CommandPaletteController.swift` |
+| Prefix / palette | `UI/PrefixKeymap.swift`, `UI/CommandPaletteController.swift` (sectioned actions, MRU recents, SF Symbols) |
 | Settings | `Settings/SettingsViewController.swift` |
 | Menus | `UI/MainMenuBuilder.swift` |
 
@@ -662,6 +681,8 @@ Round icon buttons (`HarnessDesign.swift`). **Must** set `isBordered = false` an
 | `DaemonServer` | Daemon | Unix socket accept loop |
 | `AgentScanner` | Daemon | Periodic `AgentDetector.scan` |
 | `AgentDetector` | Core | Process-tree agent matching |
+| `AgentTitleInference` | Core | Title-based agent kind fallback for sidebar/tab chips |
+| `ThemeManager` | HarnessTerminalKit | Theme hex lookups for Settings swatches and defaults |
 | `RealPty` / `PtySession` | Daemon | `forkpty` sessions + scrollback |
 | `DaemonClient` | Core | CLI/app IPC transport |
 | `TerminalPaneRegistry` | App | `[SurfaceID: TerminalHostView]` |
@@ -785,9 +806,9 @@ See [Prefix keymap](#prefix-keymap-in-app-tmux) above.
 ### Fix colors not matching Ghostty
 
 1. Verify `~/.config/ghostty/config` has `background = #000000` (parser must not strip `#`).
-2. Check `settings.json` for `customBackgroundHex` / `customForegroundHex`.
+2. Check `settings.json` for `customBackgroundHex` / `customForegroundHex` and `useCustomColors`.
 3. Trace `HarnessSettings.load()` migration and `HarnessChrome.update(..., backgroundHex:foregroundHex:)`.
-4. Trace `TerminalHostView.applySettings` → `withBackground` / `withForeground`.
+4. Trace `TerminalHostView.applySettings` → custom hex only when `useCustomColors == true`.
 5. Check `ChromeBackdrop` tint uses `HarnessChrome.current` not hardcoded colors.
 
 ### Fix sidebar/tab cwd stuck on `~` or `Shell`
@@ -842,6 +863,9 @@ harness-cli ping
 - metadataOnly UI refresh (tabs/sidebar without remounting)
 - tmux-style CLI + in-app prefix keymap
 - Agent detection, chips, colored dots, `install-hooks` (six agents)
+- Title-based agent chip fallback (`AgentTitleInference`) when proc-tree scan misses the agent
+- Extended Settings UI: full color palette, per-agent color overrides, opacity/blur sliders, live color previews
+- Command palette sections + MRU recents (`Cmd+K`)
 - `harness-cli attach` scrollback replay; GUI streams daemon output on attach
 - 400+ Ghostty themes via `GhosttyTheme`
 
@@ -869,7 +893,9 @@ See `docs/ARCHITECTURE.md`.
 | cwd in daemon but not UI | Missing metadataOnly refresh | `refreshMetadata()` on snapshot notification |
 | `+` tab button dead | `SoftIconButton` bezel intercepting clicks | `isBordered = false` |
 | All tabs show waiting on notify | `markWaiting` bug | Must filter by surface key |
-| Opacity wrong (e.g. 0.33) | Old corrupted `settings.json` | Delete settings; re-import from Ghostty (0.85) |
+| Opacity nearly invisible | Slider at minimum or stale settings | Settings opacity slider (5%–100%); `load()` clamps via `clampedOpacity` |
+| Custom colors ignored | `useCustomColors == false` | Enable custom colors in Settings or re-import Ghostty (sets flag when hex present) |
+| Agent shows as raw title, no chip | Proc-tree scan missed agent | `AgentTitleInference` from OSC title; verify title matches agent display name |
 | Xcode build fails | Project out of sync with `project.yml` | Run `xcodegen generate`, then `xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -destination 'platform=macOS,arch=arm64' build` |
 
 ---

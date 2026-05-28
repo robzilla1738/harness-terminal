@@ -6,11 +6,11 @@ import QuartzCore
 enum HarnessDesign {
     static let sidebarWidth: CGFloat = 264
     static let titlebarChromeHeight: CGFloat = 44
-    static let tabBarHeight: CGFloat = 32
+    static let tabBarHeight: CGFloat = 34
     static let workspaceBarHeight: CGFloat = 42
     static let sessionRowHeight: CGFloat = 54
     static let footerHeight: CGFloat = 40
-    static let tabPillHeight: CGFloat = 24
+    static let tabPillHeight: CGFloat = 26
 
     static let horizontalInset: CGFloat = Spacing.lg
     static let rowSpacing: CGFloat = Spacing.xxs
@@ -57,6 +57,8 @@ enum HarnessDesign {
         static var entrance: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeOut) }
         static var exit: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeIn) }
         static var standardEase: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeInEaseOut) }
+        /// Slightly overshoot-free spring feel, used for entrance pops (palette, prefix indicator).
+        static var spring: CAMediaTimingFunction { CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1.1) }
     }
 
     /// Semantic fonts so sizes/weights live in one place.
@@ -67,6 +69,55 @@ enum HarnessDesign {
         static var sectionLabel: NSFont { .systemFont(ofSize: 10.5, weight: .semibold) }
         static var badge: NSFont { .monospacedSystemFont(ofSize: 10.5, weight: .semibold) }
         static var kbd: NSFont { .monospacedSystemFont(ofSize: 12, weight: .semibold) }
+        static var paletteTitle: NSFont { .systemFont(ofSize: 13.5, weight: .medium) }
+        static var paletteHeader: NSFont { .systemFont(ofSize: 10, weight: .heavy) }
+        static var settingsHeading: NSFont { .systemFont(ofSize: 11, weight: .semibold) }
+    }
+
+    /// Drop-shadow recipe presets. Apply with `applyShadow(.elevation1, to: layer)`.
+    enum Shadow {
+        case none
+        /// Subtle resting elevation (cards, pills).
+        case elevation1
+        /// Hover/active elevation.
+        case elevation2
+        /// Floating overlays (palette, dropdown, cheatsheet).
+        case overlay
+
+        var opacity: Float {
+            switch self {
+            case .none: return 0
+            case .elevation1: return 0.10
+            case .elevation2: return 0.18
+            case .overlay: return 0.38
+            }
+        }
+
+        var radius: CGFloat {
+            switch self {
+            case .none: return 0
+            case .elevation1: return 4
+            case .elevation2: return 9
+            case .overlay: return 30
+            }
+        }
+
+        var offsetY: CGFloat {
+            switch self {
+            case .none: return 0
+            case .elevation1: return -1
+            case .elevation2: return -3
+            case .overlay: return -16
+            }
+        }
+    }
+
+    static func applyShadow(_ shadow: Shadow, to layer: CALayer?) {
+        guard let layer else { return }
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOpacity = shadow.opacity
+        layer.shadowRadius = shadow.radius
+        layer.shadowOffset = NSSize(width: 0, height: shadow.offsetY)
     }
 
     enum ChromeRole {
@@ -195,6 +246,36 @@ enum HarnessMotion {
         transition.duration = duration
         transition.timingFunction = HarnessDesign.Motion.standardEase
         layer.add(transition, forKey: "harnessCrossfade")
+    }
+
+    /// Gentle infinite halo pulse for "working" agent indicators. Adds/removes a
+    /// `transform.scale` + `opacity` animation pair keyed on `"harnessPulse"`.
+    static func startPulse(_ layer: CALayer?, minScale: CGFloat = 1.0, maxScale: CGFloat = 1.55, duration: TimeInterval = 1.4) {
+        guard let layer else { return }
+        if layer.animation(forKey: "harnessPulse") != nil { return }
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = minScale
+        scale.toValue = maxScale
+        scale.duration = duration
+        scale.autoreverses = true
+        scale.repeatCount = .infinity
+        scale.timingFunction = HarnessDesign.Motion.standardEase
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = 1.0
+        opacity.toValue = 0.45
+        opacity.duration = duration
+        opacity.autoreverses = true
+        opacity.repeatCount = .infinity
+        opacity.timingFunction = HarnessDesign.Motion.standardEase
+        let group = CAAnimationGroup()
+        group.animations = [scale, opacity]
+        group.duration = duration * 2
+        group.repeatCount = .infinity
+        layer.add(group, forKey: "harnessPulse")
+    }
+
+    static func stopPulse(_ layer: CALayer?) {
+        layer?.removeAnimation(forKey: "harnessPulse")
     }
 }
 
@@ -408,8 +489,10 @@ final class ChromeBackdrop: NSView {
             tint.layer?.backgroundColor = baseColor.cgColor
         }
 
-        hairline.isHidden = true
-        hairline.backgroundColor = chrome.borderStrong.withAlphaComponent(0.5).cgColor
+        // Tab strip gets a quiet hairline at its bottom edge to anchor the active
+        // pill against the terminal area below. Sidebar/terminal stay clean.
+        hairline.isHidden = role != .tabBar
+        hairline.backgroundColor = chrome.border.withAlphaComponent(chrome.isDark ? 0.55 : 0.75).cgColor
         needsLayout = true
     }
 
@@ -429,11 +512,17 @@ final class ChromeBackdrop: NSView {
 /// palette, prefix cheatsheet/indicator). Add content to `contentView`; on macOS 26
 /// it sits over real glass, otherwise over a vibrancy + tint fallback. Pair with a
 /// borderless panel (`backgroundColor = .clear`, `hasShadow = true`).
+///
+/// Layered (back→front): backdrop → theme tint → top-edge highlight → contentView.
+/// The 1px inner highlight gives a real "elevated surface" feel without resorting
+/// to a heavier border.
 @MainActor
 final class HarnessOverlayBackground: NSView {
     let contentView = NSView()
     private let backdrop: NSView
     private let tint = NSView()
+    /// Top-edge inner highlight — emulates the "rim light" on macOS popovers/menus.
+    private let topHighlight = CALayer()
 
     init() {
         self.backdrop = HarnessOverlayBackground.makeBackdrop()
@@ -456,11 +545,19 @@ final class HarnessOverlayBackground: NSView {
                 sub.bottomAnchor.constraint(equalTo: bottomAnchor),
             ])
         }
+        // Highlight goes after tint but under contentView so children float above it.
+        tint.layer?.addSublayer(topHighlight)
         applyTheme()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        // Manual frame (CALayer); implicit anim suppressed during layout.
+        topHighlight.frame = CGRect(x: 1, y: bounds.height - 1, width: bounds.width - 2, height: 1)
+    }
 
     private static func makeBackdrop() -> NSView {
         if #available(macOS 26.0, *) {
@@ -485,6 +582,8 @@ final class HarnessOverlayBackground: NSView {
         } else {
             tint.layer?.backgroundColor = c.sidebarBackground.withAlphaComponent(0.95).cgColor
         }
+        // Soft inner highlight — brighter on dark themes, near-invisible on light.
+        topHighlight.backgroundColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.10 : 0.04).cgColor
     }
 }
 
@@ -555,8 +654,17 @@ final class StatusDotView: NSView {
         case let .agent(hex): color = NSColor.fromHex(hex) ?? c.accent
         }
         dot.backgroundColor = color.cgColor
-        halo.backgroundColor = color.withAlphaComponent(0.18).cgColor
+        halo.backgroundColor = color.withAlphaComponent(0.20).cgColor
         halo.isHidden = style == .idle
+        // The halo gently pulses when the dot signals live activity (agent working
+        // or a waiting notification). Idle/error/accent are static so the strip
+        // doesn't feel busy.
+        switch style {
+        case .agent, .waiting:
+            HarnessMotion.startPulse(halo, minScale: 0.92, maxScale: 1.45, duration: 1.25)
+        case .idle, .error, .accent:
+            HarnessMotion.stopPulse(halo)
+        }
     }
 }
 
@@ -603,11 +711,13 @@ final class AgentChipView: NSView {
         label.stringValue = text
         let tint = NSColor.fromHex(hex) ?? HarnessDesign.chrome.accent
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = tint.withAlphaComponent(c.isDark ? 0.14 : 0.12).cgColor
+        layer?.backgroundColor = tint.withAlphaComponent(c.isDark ? 0.16 : 0.13).cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = tint.withAlphaComponent(c.isDark ? 0.22 : 0.20).cgColor
         dot.backgroundColor = tint.cgColor
         // Brand color reads poorly as text on dark fills for some agents, so lean on
         // a bright, legible label and let the dot carry the brand hue.
-        label.textColor = c.textPrimary.withAlphaComponent(0.92)
+        label.textColor = c.textPrimary.withAlphaComponent(0.94)
     }
 }
 

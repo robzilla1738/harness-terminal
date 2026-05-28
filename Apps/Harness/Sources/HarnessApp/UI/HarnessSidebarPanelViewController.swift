@@ -427,19 +427,16 @@ private final class WorkspaceSwitcherPanelView: NSView {
         super.init(frame: .zero)
 
         wantsLayer = true
-        layer?.cornerRadius = 11
+        layer?.cornerRadius = HarnessDesign.Radius.overlay
         layer?.cornerCurve = .continuous
         // Shadow needs to escape the bounds, so the rounded fill lives on a masked
         // sublayer instead of clipping the whole view.
         layer?.masksToBounds = false
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = (c.terminalBackground.blended(withFraction: c.isDark ? 0.05 : 0.04, of: c.textPrimary) ?? c.sidebarBackground).cgColor
+        layer?.backgroundColor = (c.terminalBackground.blended(withFraction: c.isDark ? 0.06 : 0.04, of: c.textPrimary) ?? c.sidebarBackground).cgColor
         layer?.borderWidth = 1
-        layer?.borderColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.09 : 0.13).cgColor
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.30
-        layer?.shadowRadius = 22
-        layer?.shadowOffset = NSSize(width: 0, height: -12)
+        layer?.borderColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.14).cgColor
+        HarnessDesign.applyShadow(.overlay, to: layer)
 
         setupContent()
     }
@@ -724,15 +721,19 @@ final class WorkspacePillButton: NSButton {
 
     func applyChrome() {
         let c = HarnessDesign.chrome
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = HarnessDesign.Radius.card
         layer?.borderWidth = 1
-        layer?.borderColor = c.border.cgColor
-        layer?.backgroundColor = isHovered ? c.iconHoverFill.cgColor : c.surfaceElevated.cgColor
+        layer?.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
+        // Hovered = brighter elevated, resting = quieter elevated. Slightly stronger
+        // accent on dark themes since the differential is harder to read.
+        let resting = c.surfaceElevated
+        let hover = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.12)
+        layer?.backgroundColor = (isHovered ? hover : resting).cgColor
         nameLabel.textColor = c.textPrimary
-        icon.contentTintColor = c.textSecondary
-        chevron.contentTintColor = c.textTertiary
-        countBackground.layer?.backgroundColor = c.rowSelectedFill.cgColor
-        countBadge.textColor = c.textSecondary
+        icon.contentTintColor = isHovered ? c.textPrimary : c.textSecondary
+        chevron.contentTintColor = isHovered ? c.textSecondary : c.textTertiary
+        countBackground.layer?.backgroundColor = c.accent.withAlphaComponent(c.isDark ? 0.18 : 0.14).cgColor
+        countBadge.textColor = c.accent
     }
 }
 
@@ -760,6 +761,7 @@ final class SessionCardRowView: NSView {
         fill.layer?.cornerRadius = HarnessDesign.cornerRadius
         fill.layer?.cornerCurve = .continuous
         fill.layer?.borderWidth = 1
+        fill.layer?.masksToBounds = false
         fill.translatesAutoresizingMaskIntoConstraints = false
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -908,19 +910,24 @@ final class SessionCardRowView: NSView {
         let c = HarnessDesign.chrome
         metaLabel.textColor = c.textTertiary
         if isSelected {
-            fill.layer?.backgroundColor = c.rowSelectedFill.cgColor
-            // Accent-tinted outline marks the active session — doubles as the
-            // keyboard-focus indicator for the list.
-            fill.layer?.borderColor = c.focusRing.withAlphaComponent(c.isDark ? 0.45 : 0.5).cgColor
+            // Selected row: theme-tinted fill + accent rim + resting elevation. The
+            // fill is the accent at low alpha (legible on every theme) so the active
+            // session reads instantly even at a glance.
+            let selectedFill = c.accent.withAlphaComponent(c.isDark ? 0.13 : 0.10)
+            fill.layer?.backgroundColor = selectedFill.cgColor
+            fill.layer?.borderColor = c.focusRing.withAlphaComponent(c.isDark ? 0.48 : 0.52).cgColor
+            HarnessDesign.applyShadow(.elevation1, to: fill.layer)
             titleLabel.textColor = c.textPrimary
             metaLabel.textColor = c.textSecondary
         } else if isHovered {
             fill.layer?.backgroundColor = c.rowHoverFill.cgColor
             fill.layer?.borderColor = NSColor.clear.cgColor
+            HarnessDesign.applyShadow(.none, to: fill.layer)
             titleLabel.textColor = c.textPrimary
         } else {
             fill.layer?.backgroundColor = NSColor.clear.cgColor
             fill.layer?.borderColor = NSColor.clear.cgColor
+            HarnessDesign.applyShadow(.none, to: fill.layer)
             titleLabel.textColor = c.textSecondary
         }
         statusDot.applyStyle()
@@ -931,27 +938,17 @@ final class SessionCardRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         isHovered = true
-        refresh()
+        // Cross-fade the hover state so cursor flicks across the list don't strobe.
+        HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
+            refresh()
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovered = false
-        refresh()
-    }
-}
-
-private enum AgentTitleInference {
-    static func kind(from rawTitle: String) -> AgentKind? {
-        let normalized = rawTitle
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "*•·-–—|"))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        guard !normalized.isEmpty else { return nil }
-        return AgentKind.allCases.first { kind in
-            normalized == kind.displayName.lowercased()
-                || normalized.hasPrefix("\(kind.displayName.lowercased()) ")
+        HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
+            refresh()
         }
     }
 }
+

@@ -70,6 +70,52 @@ public enum AgentActivity: String, Codable, Sendable {
     case errored
 }
 
+/// Best-effort fallback for when the daemon's process-tree scan can't see the
+/// agent (e.g. Claude Code launches as a renamed Node binary that exec's
+/// without preserving argv[0]). We infer the kind from the terminal title the
+/// agent sets via OSC 0/2.
+///
+/// Robust to the leading "thinking" glyphs agents prepend (`✱`, `✶`, `✻`, `★`,
+/// `*`, `•`, emoji, whitespace) and to single-word abbreviations the agent uses
+/// for itself (`Claude` for Claude Code, `Cursor` for Cursor Agent).
+public enum AgentTitleInference {
+    public static func kind(from rawTitle: String) -> AgentKind? {
+        guard !rawTitle.isEmpty else { return nil }
+        let lower = rawTitle.lowercased()
+        // Skip every leading character that isn't a letter or digit — covers
+        // ASCII punctuation, unicode glyphs like ✱✶✻★, and emoji.
+        guard let start = lower.firstIndex(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        let trimmed = String(lower[start...])
+
+        // Exact / prefixed match against the full displayName ("Claude Code", "Cursor Agent").
+        for kind in AgentKind.allCases where kind != .generic {
+            let name = kind.displayName.lowercased()
+            if matches(trimmed, head: name) { return kind }
+            // Some agents emit their stable raw value in titles ("claude-code").
+            let raw = kind.rawValue.lowercased()
+            if raw != name, matches(trimmed, head: raw) { return kind }
+        }
+        // First-word fallback for multi-word names (`Claude` / `Cursor`). Skip
+        // single-word agents and `.generic` / `.pi` to avoid false positives
+        // like "agent.swift" or "pip install" matching arbitrary content.
+        for kind in AgentKind.allCases where kind != .generic && kind != .pi {
+            let parts = kind.displayName.lowercased().split(separator: " ")
+            guard parts.count > 1, let first = parts.first else { continue }
+            if matches(trimmed, head: String(first)) { return kind }
+        }
+        return nil
+    }
+
+    /// True if `trimmed` is exactly `head` or `head` followed by a non-alphanumeric
+    /// boundary. Prevents partial-word collisions ("claudette" matching "claude").
+    private static func matches(_ trimmed: String, head: String) -> Bool {
+        guard trimmed.hasPrefix(head) else { return false }
+        if trimmed.count == head.count { return true }
+        let next = trimmed[trimmed.index(trimmed.startIndex, offsetBy: head.count)]
+        return !(next.isLetter || next.isNumber)
+    }
+}
+
 public struct AgentSnapshot: Codable, Sendable, Equatable {
     public var kind: AgentKind
     public var executable: String

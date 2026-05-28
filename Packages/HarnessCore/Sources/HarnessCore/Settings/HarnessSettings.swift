@@ -186,6 +186,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             if let imported, settings.ghosttyConfigSignature != imported.signature {
                 settings.applyImportedDefaults(imported)
             }
+            // Recover from accidental "background-opacity = 0.05" footgun states.
+            // The slider could go all the way down; older code didn't guard it.
+            // Anything below 30% makes the window effectively invisible.
+            settings.backgroundOpacity = HarnessSettings.clampedOpacity(settings.backgroundOpacity)
+            settings.backgroundBlur = HarnessSettings.clampedBlur(settings.backgroundBlur)
             // Persist the migration so on next save we don't lose it.
             try? settings.save()
             return settings
@@ -195,6 +200,22 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         let seeded = HarnessSettings.makeDefaults(imported: imported)
         try? seeded.save()
         return seeded
+    }
+
+    /// Opacity bounds. The user can pick any value from fully transparent to
+    /// solid — that's an intentional product choice for power users who want
+    /// extreme translucency. The 0.05 floor stays just to make sure dragging
+    /// the slider to the far left doesn't strand the window completely
+    /// invisible with no way to find it on screen.
+    public static func clampedOpacity(_ value: Float) -> Float {
+        max(0.05, min(1.0, value))
+    }
+
+    /// Background blur (pixels). 0 = no blur, 100 = aggressive heavy frost.
+    /// libghostty caps the effective blur internally; we expose the full
+    /// useful range so settings doesn't feel artificially constrained.
+    public static func clampedBlur(_ value: Int) -> Int {
+        max(0, min(100, value))
     }
 
     public func save() throws {
@@ -233,6 +254,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.backgroundHex { customBackgroundHex = value }
         if let value = imported.foregroundHex { customForegroundHex = value }
         if let value = imported.cursorColorHex { customCursorHex = value }
+        // Honor the imported colors. Without this, a stale settings file with
+        // `useCustomColors=false` would silently swallow the user's Ghostty
+        // bg/fg overrides and force the named theme instead.
+        if imported.backgroundHex != nil || imported.foregroundHex != nil || imported.cursorColorHex != nil {
+            useCustomColors = true
+        }
         ghosttyConfigSignature = imported.signature
     }
 }

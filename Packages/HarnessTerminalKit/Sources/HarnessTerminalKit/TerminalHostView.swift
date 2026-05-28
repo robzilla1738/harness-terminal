@@ -148,8 +148,19 @@ public final class TerminalHostView: NSView {
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
         }
+        // CRITICAL: build a FRESH TerminalConfiguration every time instead of
+        // `startingFrom: controller.terminalConfiguration`. The builder appends
+        // commands without ever removing them, so once a user set
+        // `customBackgroundHex = "#000000"` the `.background("#000000")` command
+        // stuck in the per-session config forever — even after they cleared the
+        // override or switched themes. The theme's own background could never
+        // win because the per-session override always overlays it. Starting
+        // fresh means: if `useCustomColors == false`, no color commands are
+        // present and the theme's colors come through cleanly.
         _ = controller.setTerminalConfiguration(
-            TerminalConfiguration(startingFrom: controller.terminalConfiguration) {
+            TerminalConfiguration {
+                $0.withCustom("shell-integration", "detect")
+                $0.withCustom("shell-integration-features", "sudo,title")
                 $0.withFontSize(settings.fontSize)
                 $0.withFontFamily(settings.fontFamily)
                 $0.withBackgroundOpacity(Double(settings.backgroundOpacity))
@@ -200,18 +211,23 @@ public final class TerminalHostView: NSView {
         // The waiting ring (urgent) takes precedence over the quieter active-pane
         // border so a pane that needs attention never reads as merely focused.
         if isWaiting {
-            strokeIndicator(color: waitingRingColor, lineWidth: 2, alpha: 0.8)
+            // Two-stroke ring: a soft outer halo + a crisp inner stroke. Reads as
+            // "needs attention" without screaming.
+            strokeIndicator(color: waitingRingColor, lineWidth: 4, alpha: 0.18, inset: 1)
+            strokeIndicator(color: waitingRingColor, lineWidth: 1.5, alpha: 0.85, inset: 2)
         } else if isActiveBorder {
             // Minimal focused-pane hairline — only ever drawn when a tab is split
             // (gated in SessionCoordinator.setActiveSurface), so a lone terminal has
-            // no border at all.
-            strokeIndicator(color: activeBorderColor, lineWidth: 1, alpha: 0.35)
+            // no border at all. Two strokes give it a subtle "edge light" on dark
+            // themes without becoming a hard outline.
+            strokeIndicator(color: activeBorderColor, lineWidth: 1, alpha: 0.42, inset: 1)
         }
     }
 
-    private func strokeIndicator(color: NSColor, lineWidth: CGFloat, alpha: CGFloat) {
-        let rect = bounds.insetBy(dx: lineWidth, dy: lineWidth)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
+    private func strokeIndicator(color: NSColor, lineWidth: CGFloat, alpha: CGFloat, inset: CGFloat? = nil) {
+        let effectiveInset = inset ?? lineWidth
+        let rect = bounds.insetBy(dx: effectiveInset, dy: effectiveInset)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
         color.withAlphaComponent(alpha).setStroke()
         path.lineWidth = lineWidth
         path.stroke()

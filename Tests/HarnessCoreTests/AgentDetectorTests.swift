@@ -52,4 +52,43 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertNotNil(defaultEntry)
         XCTAssertTrue(defaultEntry?.matchesAny(["2.1.152", "claude"]) ?? false)
     }
+
+    /// Title-based fallback for when the daemon proc-tree scan can't see the
+    /// agent (the case the user reported: Claude Code shown as raw text in
+    /// the sidebar instead of a chip).
+    func testTitleInferenceRecognizesClaudeCodeWithLeadingGlyphs() {
+        XCTAssertEqual(AgentTitleInference.kind(from: "* Claude Code"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "✱ Claude Code"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "✻ Claude"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "✶ Claude"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "  Claude Code"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Claude Code"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Claude"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Claude-Code v2.1"), .claudeCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "claude: working…"), .claudeCode)
+    }
+
+    func testTitleInferenceRecognizesOtherAgents() {
+        XCTAssertEqual(AgentTitleInference.kind(from: "Codex"), .codex)
+        XCTAssertEqual(AgentTitleInference.kind(from: "• Codex"), .codex)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Cursor Agent"), .cursor)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Cursor — main.swift"), .cursor)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Aider"), .aider)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Gemini-CLI"), .gemini)
+        XCTAssertEqual(AgentTitleInference.kind(from: "goose run"), .goose)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Hermes"), .hermes)
+    }
+
+    /// Inference must NOT match partial words inside chatty shell titles —
+    /// otherwise `vim claude.txt` or "agenda.md" would light up the wrong chip.
+    func testTitleInferenceRejectsPartialAndGenericMatches() {
+        XCTAssertNil(AgentTitleInference.kind(from: "vim claude.txt"))
+        XCTAssertNil(AgentTitleInference.kind(from: "claudette"))
+        XCTAssertNil(AgentTitleInference.kind(from: "cursors and selections"))
+        XCTAssertNil(AgentTitleInference.kind(from: "agenda.md"))
+        XCTAssertNil(AgentTitleInference.kind(from: "pip install requests"))
+        XCTAssertNil(AgentTitleInference.kind(from: ""))
+        XCTAssertNil(AgentTitleInference.kind(from: "   "))
+        XCTAssertNil(AgentTitleInference.kind(from: "Shell"))
+    }
 }

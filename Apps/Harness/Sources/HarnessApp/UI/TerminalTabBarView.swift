@@ -301,12 +301,22 @@ final class TerminalTabBarView: NSView {
 @MainActor
 private func tabDisplayTitle(_ tab: Tab) -> String {
     let folder = HarnessDesign.pathDisplayName(tab.cwd)
-    let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell"
+    let inferred = tabAgentKind(for: tab)
+    let titleIsAgentBranding = !tab.title.isEmpty && AgentTitleInference.kind(from: tab.title) != nil
+    let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell" && !titleIsAgentBranding
     let base = !folder.isEmpty ? folder : (hasCustomTitle ? tab.title : "Terminal")
-    if let agent = tab.agent {
-        return "\(base) · \(agent.kind.displayName)"
+    if let kind = inferred {
+        return "\(base) · \(kind.displayName)"
     }
     return base
+}
+
+/// Effective agent kind for the tab — daemon-detected first, then a permissive
+/// inference from the shell title. Lets us paint brand colors on the dot even
+/// when proc-tree detection misses the agent (e.g. Claude Code via Node).
+@MainActor
+private func tabAgentKind(for tab: Tab) -> AgentKind? {
+    tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)
 }
 
 @MainActor
@@ -339,8 +349,9 @@ private final class TabPillView: NSView {
         self.currentAgent = tab.agent
 
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = HarnessDesign.Radius.control
         layer?.cornerCurve = .continuous
+        layer?.masksToBounds = false
 
         titleLabel.font = HarnessDesign.Typography.tabTitle
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -410,16 +421,16 @@ private final class TabPillView: NSView {
         isHovered = true
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 1
+            applyChrome(isActive: isActive)
         }
-        applyChrome(isActive: isActive)
     }
 
     override func mouseExited(with event: NSEvent) {
         isHovered = false
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 0
+            applyChrome(isActive: isActive)
         }
-        applyChrome(isActive: isActive)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -504,26 +515,23 @@ private final class TabPillView: NSView {
 
         // Selected tabs get a modest rounded highlight: softer than a square box,
         // but not a full capsule/pill.
-        let activeFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.075 : 0.06, of: c.textPrimary) ?? c.rowSelectedFill
-        let hoverFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOffset = NSSize(width: 0, height: -1)
+        let activeFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.rowSelectedFill
+        let hoverFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.060 : 0.05, of: c.textPrimary) ?? c.iconHoverFill
 
         if isActive {
-            layer?.backgroundColor = activeFill.withAlphaComponent(c.isDark ? 0.88 : 0.78).cgColor
+            layer?.backgroundColor = activeFill.withAlphaComponent(c.isDark ? 0.92 : 0.85).cgColor
             layer?.borderWidth = 0
-            layer?.shadowOpacity = 0
-            layer?.shadowRadius = 0
+            HarnessDesign.applyShadow(.elevation1, to: layer)
             titleLabel.textColor = c.textPrimary
         } else if isHovered {
-            layer?.backgroundColor = hoverFill.withAlphaComponent(c.isDark ? 0.90 : 0.80).cgColor
+            layer?.backgroundColor = hoverFill.withAlphaComponent(c.isDark ? 0.88 : 0.78).cgColor
             layer?.borderWidth = 0
-            layer?.shadowOpacity = 0
+            HarnessDesign.applyShadow(.none, to: layer)
             titleLabel.textColor = c.textPrimary
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
             layer?.borderWidth = 0
-            layer?.shadowOpacity = 0
+            HarnessDesign.applyShadow(.none, to: layer)
             titleLabel.textColor = c.textSecondary
         }
 

@@ -20,71 +20,100 @@ enum AboutPanelController {
         let cliPath = CLIInstaller.installedCLIPath.path
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 360),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         panel.title = "About Harness"
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
         panel.isFloatingPanel = false
         panel.isRestorable = false
 
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         if let icon = NSApp.applicationIconImage {
             let iconView = NSImageView(image: icon)
             iconView.imageScaling = .scaleProportionallyUpOrDown
             iconView.translatesAutoresizingMaskIntoConstraints = false
-            iconView.widthAnchor.constraint(equalToConstant: 64).isActive = true
-            iconView.heightAnchor.constraint(equalToConstant: 64).isActive = true
+            iconView.widthAnchor.constraint(equalToConstant: 96).isActive = true
+            iconView.heightAnchor.constraint(equalToConstant: 96).isActive = true
             stack.addArrangedSubview(iconView)
+            stack.setCustomSpacing(14, after: iconView)
         }
 
         let title = NSTextField(labelWithString: "Harness")
-        title.font = .boldSystemFont(ofSize: 20)
+        title.font = .systemFont(ofSize: 24, weight: .bold)
         stack.addArrangedSubview(title)
+        stack.setCustomSpacing(2, after: title)
 
-        let tagline = NSTextField(wrappingLabelWithString: "Native macOS terminal for AI agents and dev sessions.\nGPU rendering via libghostty.")
-        tagline.alignment = .center
-        tagline.preferredMaxLayoutWidth = 360
-        stack.addArrangedSubview(tagline)
-
-        let versionLabel = NSTextField(labelWithString: "Version \(version) (\(build))")
-        versionLabel.font = .systemFont(ofSize: 12)
+        let versionLabel = NSTextField(labelWithString: "Version \(version) · build \(build)")
+        versionLabel.font = .systemFont(ofSize: 11.5)
         versionLabel.textColor = .secondaryLabelColor
         stack.addArrangedSubview(versionLabel)
+        stack.setCustomSpacing(14, after: versionLabel)
 
-        let cliLabel = NSTextField(wrappingLabelWithString: "harness-cli:\n\(cliPath)")
-        cliLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        let tagline = NSTextField(wrappingLabelWithString: "A native macOS terminal for AI agents and dev sessions.\nGPU-rendered via libghostty.")
+        tagline.alignment = .center
+        tagline.font = .systemFont(ofSize: 12)
+        tagline.textColor = .secondaryLabelColor
+        tagline.preferredMaxLayoutWidth = 360
+        stack.addArrangedSubview(tagline)
+        stack.setCustomSpacing(18, after: tagline)
+
+        let cliCaption = NSTextField(labelWithString: "harness-cli installed at")
+        cliCaption.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        cliCaption.textColor = .tertiaryLabelColor
+        stack.addArrangedSubview(cliCaption)
+        stack.setCustomSpacing(2, after: cliCaption)
+
+        let cliLabel = NSTextField(wrappingLabelWithString: cliPath)
+        cliLabel.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        cliLabel.textColor = .labelColor
         cliLabel.alignment = .center
-        cliLabel.preferredMaxLayoutWidth = 360
+        cliLabel.preferredMaxLayoutWidth = 380
         stack.addArrangedSubview(cliLabel)
+        stack.setCustomSpacing(18, after: cliLabel)
 
-        let link = NSButton(title: "github.com/robert/harness", target: nil, action: nil)
-        link.bezelStyle = .inline
-        link.isBordered = false
-        link.contentTintColor = .linkColor
-        link.target = LinkHandler.shared
-        link.action = #selector(LinkHandler.openRepo)
-        stack.addArrangedSubview(link)
+        let buttons = NSStackView()
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
 
-        let copyCLI = NSButton(title: "Copy harness-cli path", target: nil, action: nil)
+        let copyCLI = NSButton(title: "Copy CLI Path", target: LinkHandler.shared, action: #selector(LinkHandler.copyCLIPath))
         copyCLI.bezelStyle = .rounded
-        copyCLI.target = LinkHandler.shared
-        copyCLI.action = #selector(LinkHandler.copyCLIPath)
-        stack.addArrangedSubview(copyCLI)
+
+        let link = NSButton(title: "Open on GitHub", target: LinkHandler.shared, action: #selector(LinkHandler.openRepo))
+        link.bezelStyle = .rounded
+        link.keyEquivalent = "\r"
+
+        buttons.addArrangedSubview(copyCLI)
+        buttons.addArrangedSubview(link)
+        stack.addArrangedSubview(buttons)
+
+        let backdrop = NSVisualEffectView()
+        backdrop.material = .underWindowBackground
+        backdrop.blendingMode = .behindWindow
+        backdrop.state = .followsWindowActiveState
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
 
         let content = NSView()
+        content.addSubview(backdrop)
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            backdrop.topAnchor.constraint(equalTo: content.topAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 28),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -24),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -28),
         ])
         panel.contentView = content
         return panel

@@ -6,6 +6,9 @@ final class MainSplitViewController: NSViewController {
     private let split = NSSplitView()
     private let sidebar = HarnessSidebarPanelViewController()
     private let content = ContentAreaViewController()
+    /// 1px hairline along the inner edge of the sidebar — adds quiet definition
+    /// between sidebar/terminal without resorting to a draggable divider line.
+    private let edgeDivider = NSView()
 
     override func loadView() {
         let root = NSView()
@@ -20,8 +23,14 @@ final class MainSplitViewController: NSViewController {
         split.autosaveName = "HarnessMainSplit"
         split.delegate = SplitChromeDelegate.shared
 
+        // Container is a transparent wrapper so the sidebar.view's own chrome
+        // backdrop is the only one in play. Stacking two ChromeBackdrops (one
+        // here, one in HarnessSidebarPanelViewController.loadView) doubled up
+        // the glass+tint and shifted the sidebar's perceived tint relative to
+        // the terminal side — making the top of the window read as a darker
+        // strip even though both regions request the same theme color.
         let sidebarContainer = NSView()
-        HarnessDesign.applySidebarChrome(to: sidebarContainer)
+        HarnessDesign.makeClear(sidebarContainer)
         sidebarContainer.translatesAutoresizingMaskIntoConstraints = false
         sidebar.view.translatesAutoresizingMaskIntoConstraints = false
         sidebarContainer.addSubview(sidebar.view)
@@ -32,8 +41,17 @@ final class MainSplitViewController: NSViewController {
             sidebar.view.bottomAnchor.constraint(equalTo: sidebarContainer.bottomAnchor),
         ])
 
-        // Sidebar/terminal separation comes from the background color contrast —
-        // no hard edge line, mirroring Ghostty/cmux.
+        // Thin inner-edge hairline on the trailing edge of the sidebar — picked up
+        // from the theme palette so it stays whisper-quiet on light themes.
+        edgeDivider.wantsLayer = true
+        edgeDivider.translatesAutoresizingMaskIntoConstraints = false
+        sidebarContainer.addSubview(edgeDivider)
+        NSLayoutConstraint.activate([
+            edgeDivider.topAnchor.constraint(equalTo: sidebarContainer.topAnchor),
+            edgeDivider.bottomAnchor.constraint(equalTo: sidebarContainer.bottomAnchor),
+            edgeDivider.trailingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
+            edgeDivider.widthAnchor.constraint(equalToConstant: 1),
+        ])
 
         split.addSubview(sidebarContainer)
         split.addSubview(content.view)
@@ -48,6 +66,10 @@ final class MainSplitViewController: NSViewController {
             split.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             split.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+
+        edgeDivider.layer?.backgroundColor = HarnessChrome.current.border.withAlphaComponent(
+            HarnessChrome.current.isDark ? 0.45 : 0.65
+        ).cgColor
 
         DispatchQueue.main.async { [weak self] in
             self?.setSidebarVisible(SessionCoordinator.shared.settings.sidebarVisible)
@@ -64,8 +86,12 @@ final class MainSplitViewController: NSViewController {
     func applyChrome() {
         HarnessDesign.makeClear(view)
         if let sidebarContainer = split.subviews.first {
-            HarnessDesign.applySidebarChrome(to: sidebarContainer)
+            // Keep this transparent — the sidebar view inside owns the chrome.
+            HarnessDesign.makeClear(sidebarContainer)
         }
+        edgeDivider.layer?.backgroundColor = HarnessChrome.current.border.withAlphaComponent(
+            HarnessChrome.current.isDark ? 0.45 : 0.65
+        ).cgColor
         sidebar.applyChromeColors()
         content.applyChrome()
         (view.window?.windowController as? MainWindowController)?.applyTransparency()

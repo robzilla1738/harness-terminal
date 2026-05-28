@@ -164,11 +164,11 @@ final class PrefixIndicatorWindow {
             return
         }
         let frame = parent.frame
-        let size = NSSize(width: 76, height: 30)
+        let size = NSSize(width: 96, height: 32)
         panel.setFrame(
             NSRect(
                 x: frame.midX - size.width / 2,
-                y: frame.minY + 28,
+                y: frame.minY + 36,
                 width: size.width,
                 height: size.height
             ),
@@ -176,7 +176,7 @@ final class PrefixIndicatorWindow {
         )
         panel.alphaValue = 0
         panel.orderFront(nil)
-        HarnessMotion.animate(HarnessDesign.Motion.fast, timing: HarnessDesign.Motion.entrance) { _ in
+        HarnessMotion.animate(HarnessDesign.Motion.fast, timing: HarnessDesign.Motion.spring) { _ in
             panel.animator().alphaValue = 1
         }
     }
@@ -191,8 +191,9 @@ final class PrefixIndicatorWindow {
     }
 
     private func makePanel() -> NSWindow {
+        let c = HarnessChrome.current
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 76, height: 30),
+            contentRect: NSRect(x: 0, y: 0, width: 96, height: 32),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -206,14 +207,26 @@ final class PrefixIndicatorWindow {
         let host = HarnessOverlayBackground()
         host.frame = panel.contentLayoutRect
 
+        let prefixIcon = NSImageView()
+        prefixIcon.image = NSImage(systemSymbolName: "command.circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
+        prefixIcon.contentTintColor = c.accent
+        prefixIcon.translatesAutoresizingMaskIntoConstraints = false
+
         label.font = HarnessDesign.Typography.kbd
-        label.textColor = HarnessChrome.current.accent
+        label.textColor = c.accent
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
-        host.contentView.addSubview(label)
+
+        let stack = NSStackView(views: [prefixIcon, label])
+        stack.orientation = .horizontal
+        stack.spacing = 6
+        stack.alignment = .centerY
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        host.contentView.addSubview(stack)
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: host.contentView.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: host.contentView.centerYAnchor),
+            stack.centerXAnchor.constraint(equalTo: host.contentView.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: host.contentView.centerYAnchor),
         ])
 
         panel.contentView = host
@@ -251,25 +264,42 @@ final class PrefixCheatsheetWindow {
         }
     }
 
-    private func build() -> NSWindow {
-        let entries: [(String, String)] = [
-            ("c", "New tab"),
-            ("%", "Split vertically"),
-            ("\"", "Split horizontally"),
+    /// Grouped key/action listing — sections mirror cmux/tmux so users coming from
+    /// either tool immediately recognize the layout.
+    private struct Group {
+        let title: String
+        let entries: [(key: String, action: String)]
+    }
+
+    private static let groups: [Group] = [
+        Group(title: "Panes", entries: [
+            ("%", "Split right"),
+            ("\"", "Split down"),
+            ("z", "Toggle zoom"),
             ("x", "Kill pane"),
-            ("z", "Zoom toggle"),
-            ("o", "Next pane"),
-            (";", "Previous pane"),
-            ("[", "Copy mode"),
-            ("d", "Detach"),
-            ("0–9", "Select workspace"),
+            ("o", "Cycle forward"),
+            (";", "Cycle back"),
+        ]),
+        Group(title: "Tabs & Sessions", entries: [
+            ("c", "New tab"),
             (",", "Rename tab"),
+            ("d", "Detach surface"),
+            ("0–9", "Select workspace"),
+        ]),
+        Group(title: "Modes", entries: [
+            ("[", "Copy mode"),
             ("r", "Re-import Ghostty"),
             ("?", "Toggle this cheatsheet"),
-        ]
-        let rowHeight: CGFloat = 24
-        let width: CGFloat = 320
-        let height = CGFloat(entries.count) * rowHeight + 56
+        ]),
+    ]
+
+    private func build() -> NSWindow {
+        let c = HarnessChrome.current
+        let width: CGFloat = 380
+        let rowHeight: CGFloat = 26
+        let groupSpacing: CGFloat = 14
+        let totalRows = Self.groups.reduce(0) { $0 + $1.entries.count }
+        let height = CGFloat(totalRows) * rowHeight + CGFloat(Self.groups.count) * 28 + 64
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
@@ -287,52 +317,52 @@ final class PrefixCheatsheetWindow {
         let overlay = HarnessOverlayBackground()
         overlay.frame = NSRect(x: 0, y: 0, width: width, height: height)
 
-        let header = NSTextField(labelWithString: "PREFIX")
-        header.font = HarnessDesign.Typography.sectionLabel
-        header.textColor = HarnessChrome.current.textTertiary
-        header.translatesAutoresizingMaskIntoConstraints = false
+        let titleRow = NSStackView()
+        titleRow.orientation = .horizontal
+        titleRow.spacing = HarnessDesign.Spacing.md
+        titleRow.alignment = .firstBaseline
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let prefixGlyph = NSTextField(labelWithString: ParsedShortcut.parse(SessionCoordinator.shared.settings.prefixKey)?.displayString ?? "⌃A")
+        prefixGlyph.font = .monospacedSystemFont(ofSize: 12, weight: .heavy)
+        prefixGlyph.textColor = c.accent
+        prefixGlyph.drawsBackground = false
+        let prefixWrap = pillWrap(prefixGlyph)
+
+        let title = NSTextField(labelWithString: "Prefix Commands")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.textColor = c.textPrimary
+
+        let hint = NSTextField(labelWithString: "press the prefix, then…")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = c.textTertiary
+
+        titleRow.addArrangedSubview(prefixWrap)
+        titleRow.addArrangedSubview(title)
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleRow.addArrangedSubview(spacer)
+        titleRow.addArrangedSubview(hint)
 
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 2
+        stack.spacing = groupSpacing
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        for (key, action) in entries {
-            let row = NSView()
-            row.translatesAutoresizingMaskIntoConstraints = false
-            let label = NSTextField(labelWithString: action)
-            label.font = .systemFont(ofSize: 12)
-            label.textColor = HarnessChrome.current.textSecondary
-            label.translatesAutoresizingMaskIntoConstraints = false
-            let kbd = NSTextField(labelWithString: key)
-            kbd.font = HarnessDesign.Typography.kbd
-            kbd.textColor = HarnessChrome.current.accent
-            kbd.alignment = .right
-            kbd.translatesAutoresizingMaskIntoConstraints = false
-            kbd.setContentHuggingPriority(.required, for: .horizontal)
-            row.addSubview(label)
-            row.addSubview(kbd)
-            stack.addArrangedSubview(row)
-            NSLayoutConstraint.activate([
-                row.heightAnchor.constraint(equalToConstant: rowHeight),
-                row.widthAnchor.constraint(equalTo: stack.widthAnchor),
-                label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-                label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-                kbd.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-                kbd.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-                kbd.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
-                label.trailingAnchor.constraint(lessThanOrEqualTo: kbd.leadingAnchor, constant: -HarnessDesign.Spacing.lg),
-            ])
+        for group in Self.groups {
+            stack.addArrangedSubview(buildGroup(group, width: width))
         }
 
         let content = overlay.contentView
-        content.addSubview(header)
+        content.addSubview(titleRow)
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.lg),
-            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
-            stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: HarnessDesign.Spacing.sm),
+            titleRow.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.lg + 2),
+            titleRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
+            titleRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.xl),
+            stack.topAnchor.constraint(equalTo: titleRow.bottomAnchor, constant: HarnessDesign.Spacing.lg),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.xl),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -HarnessDesign.Spacing.lg),
@@ -340,5 +370,74 @@ final class PrefixCheatsheetWindow {
 
         panel.contentView = overlay
         return panel
+    }
+
+    private func buildGroup(_ group: Group, width: CGFloat) -> NSView {
+        let c = HarnessChrome.current
+        let container = NSStackView()
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 6
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let header = NSTextField(labelWithString: group.title.uppercased())
+        header.font = HarnessDesign.Typography.sectionLabel
+        header.textColor = c.textTertiary
+        container.addArrangedSubview(header)
+
+        for entry in group.entries {
+            let row = NSView()
+            row.translatesAutoresizingMaskIntoConstraints = false
+
+            let kbd = NSTextField(labelWithString: entry.key)
+            kbd.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+            kbd.textColor = c.accent
+            kbd.alignment = .center
+            kbd.drawsBackground = false
+            let kbdWrap = pillWrap(kbd)
+
+            let action = NSTextField(labelWithString: entry.action)
+            action.font = .systemFont(ofSize: 12.5)
+            action.textColor = c.textSecondary
+            action.translatesAutoresizingMaskIntoConstraints = false
+
+            row.addSubview(kbdWrap)
+            row.addSubview(action)
+            NSLayoutConstraint.activate([
+                row.heightAnchor.constraint(equalToConstant: 26),
+                kbdWrap.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+                kbdWrap.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                kbdWrap.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+                action.leadingAnchor.constraint(equalTo: kbdWrap.trailingAnchor, constant: HarnessDesign.Spacing.lg),
+                action.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                action.trailingAnchor.constraint(lessThanOrEqualTo: row.trailingAnchor),
+            ])
+            container.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: width - HarnessDesign.Spacing.xl * 2).isActive = true
+        }
+
+        return container
+    }
+
+    /// Wrap a label in a subtle outlined "key cap" — the pill behind every glyph.
+    private func pillWrap(_ label: NSTextField) -> NSView {
+        let c = HarnessChrome.current
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let wrap = NSView()
+        wrap.wantsLayer = true
+        wrap.layer?.cornerRadius = HarnessDesign.Radius.badge
+        wrap.layer?.cornerCurve = .continuous
+        wrap.layer?.borderWidth = 1
+        wrap.layer?.borderColor = c.border.cgColor
+        wrap.layer?.backgroundColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.07 : 0.06).cgColor
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+        wrap.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: wrap.topAnchor, constant: 2),
+            label.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -2),
+        ])
+        return wrap
     }
 }
