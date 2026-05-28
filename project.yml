@@ -124,6 +124,21 @@ targets:
       GENERATE_INFOPLIST_FILE: YES
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "14.0"
+  HarnessTerminalKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessTerminalKitTests
+    dependencies:
+      - package: Harness
+        product: HarnessTerminalKit
+      - package: Harness
+        product: HarnessCore
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessTerminalKitTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
 schemes:
   Harness:
     build:
@@ -133,6 +148,7 @@ schemes:
         harness-cli: all
         HarnessCoreTests: [test]
         HarnessDaemonTests: [test]
+        HarnessTerminalKitTests: [test]
     run:
       config: Debug
     test:
@@ -140,3 +156,4 @@ schemes:
       targets:
         - HarnessCoreTests
         - HarnessDaemonTests
+        - HarnessTerminalKitTests

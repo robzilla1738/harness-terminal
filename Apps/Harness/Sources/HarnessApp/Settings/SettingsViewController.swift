@@ -45,7 +45,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         target: nil,
         action: nil
     )
-    // Extra customizable colors (highlight, bold, cursor text).
+    // Deprecated fields kept off-screen so old settings can be cleared safely.
     private let selectionBgHexField = NSTextField()
     private let selectionFgHexField = NSTextField()
     private let boldHexField = NSTextField()
@@ -57,7 +57,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     private let minContrastField = NSTextField()
     private weak var settingsScrollView: NSScrollView?
     private var sectionAnchors: [Int: NSView] = [:]
-    // 16 ANSI palette swatches + their working override values (nil = use theme).
+    // Deprecated ANSI palette state; kept empty and no longer surfaced.
     private var paletteWells: [NSColorWell] = []
     private var paletteHexValues: [String?] = Array(repeating: nil, count: 16)
     private var agentColorWells: [AgentKind: NSColorWell] = [:]
@@ -200,8 +200,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
                 themeColor: { ThemeManager.boldHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
         ]
-        for binding in colorBindings {
-            let hex = settings.useCustomColors ? settings[keyPath: binding.keyPath] : nil
+        for (index, binding) in colorBindings.enumerated() {
+            let hex = index < 3 ? settings[keyPath: binding.keyPath] : nil
             binding.field.stringValue = hex ?? ""
             configureLiveAppearanceField(binding.field)
             configureColorWell(binding.well)
@@ -216,9 +216,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         minContrastField.target = self
         minContrastField.action = #selector(appearanceTextDidCommit)
 
-        paletteHexValues = settings.useCustomColors
-            ? HarnessSettings.normalizedPalette(settings.paletteHex)
-            : Array(repeating: nil, count: 16)
+        paletteHexValues = Array(repeating: nil, count: 16)
         buildPaletteWells()
         buildAgentColorWells(settings: settings)
 
@@ -253,16 +251,14 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         blurLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
 
         let appearanceSection = sectionLabel("Appearance")
-        let paletteSectionLabel = sectionLabel("ANSI Palette")
         let terminalSection = sectionLabel("Terminal")
         let tmuxSection = sectionLabel("Tmux + Agents")
         let agentColorsSection = sectionLabel("Agent Colors")
         sectionAnchors = [
             0: appearanceSection,
-            1: paletteSectionLabel,
-            2: terminalSection,
-            3: tmuxSection,
-            4: agentColorsSection,
+            1: terminalSection,
+            2: tmuxSection,
+            3: agentColorsSection,
         ]
 
         let stack = NSStackView(views: [
@@ -283,29 +279,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
                 title: "Cursor", subtitle: "Color of the block / beam cursor",
                 binding: colorBindings[2]
             ),
-            hexRow(
-                title: "Text under cursor", subtitle: "Character color when the cursor sits on it",
-                binding: colorBindings[3]
-            ),
-            hexRow(
-                title: "Selection fill", subtitle: "Highlight background of selected text",
-                binding: colorBindings[4]
-            ),
-            hexRow(
-                title: "Selected text", subtitle: "Character color inside a selection",
-                binding: colorBindings[5]
-            ),
-            hexRow(
-                title: "Bold text", subtitle: "Color applied to any bold output",
-                binding: colorBindings[6]
-            ),
-            labeledRow("Minimum contrast", minContrastField),
             labeledRow("Padding X", paddingXField),
             labeledRow("Padding Y", paddingYField),
             transparentTitlebarToggle,
-            spacer(8),
-            paletteSectionLabel,
-            paletteSection(),
             spacer(8),
             terminalSection,
             labeledRow("Font size", fontSizeField),
@@ -396,11 +372,10 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     /// that match user-facing terms. Used by the sidebar search to also surface
     /// individual fields like "opacity" → Appearance.
     private static let sectionKeywords: [Int: [String]] = [
-        0: ["theme", "color", "opacity", "blur", "padding", "cursor", "selection", "appearance", "background", "foreground", "transparent"],
-        1: ["ansi", "palette", "swatch", "bright", "color"],
-        2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session"],
-        3: ["tmux", "prefix", "agent", "hook", "keybinding", "shortcut"],
-        4: ["agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw"],
+        0: ["theme", "color", "opacity", "blur", "padding", "cursor", "appearance", "background", "foreground", "transparent"],
+        1: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session"],
+        2: ["tmux", "prefix", "agent", "hook", "keybinding", "shortcut"],
+        3: ["agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw"],
     ]
 
     private func settingsSidebar() -> NSView {
@@ -432,7 +407,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         sidebarButtons.removeAll()
         let entries: [(String, String)] = [
             ("Appearance", "paintbrush"),
-            ("ANSI Palette", "swatchpalette"),
             ("Terminal", "terminal"),
             ("Tmux + Agents", "keyboard"),
             ("Agent Colors", "sparkles"),
@@ -962,9 +936,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         for binding in colorBindings {
             coordinator.settings[keyPath: binding.keyPath] = normalizedHexOrNil(binding.field.stringValue)
         }
-        coordinator.settings.useCustomColors = hasCustomColorOverrides()
-        coordinator.settings.minimumContrast = clampedContrast(minContrastField.stringValue)
-        coordinator.settings.paletteHex = paletteHexValues
+        clearDeprecatedTerminalColorSettings(&coordinator.settings)
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
         try? coordinator.settings.save()
         // Only round-trip the theme through the daemon when it has actually
@@ -1050,9 +1022,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         for binding in colorBindings {
             coordinator.settings[keyPath: binding.keyPath] = normalizedHexOrNil(binding.field.stringValue)
         }
-        coordinator.settings.useCustomColors = hasCustomColorOverrides()
-        coordinator.settings.minimumContrast = clampedContrast(minContrastField.stringValue)
-        coordinator.settings.paletteHex = paletteHexValues
+        clearDeprecatedTerminalColorSettings(&coordinator.settings)
         coordinator.settings.ghosttyConfigSignature = GhosttyConfigImporter.load()?.signature
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
         coordinator.settings.prefixKey = prefixKeyField.stringValue.isEmpty ? "ctrl-a" : prefixKeyField.stringValue
@@ -1083,6 +1053,16 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     private func hasCustomColorOverrides() -> Bool {
         colorBindings.contains { normalizedHexOrNil($0.field.stringValue) != nil }
             || paletteHexValues.contains { $0 != nil }
+    }
+
+    private func clearDeprecatedTerminalColorSettings(_ settings: inout HarnessSettings) {
+        settings.useCustomColors = false
+        settings.selectionBackgroundHex = nil
+        settings.selectionForegroundHex = nil
+        settings.boldColorHex = nil
+        settings.cursorTextHex = nil
+        settings.minimumContrast = 1
+        settings.paletteHex = Array(repeating: nil, count: 16)
     }
 
     private func syncColorWellsFromFields() {

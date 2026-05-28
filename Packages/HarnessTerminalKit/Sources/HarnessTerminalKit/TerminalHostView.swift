@@ -26,7 +26,6 @@ public final class TerminalHostView: NSView {
     private var outputSubscription: DaemonSubscription?
     private var isWaiting = false
     private var isActiveBorder = false
-    private var appliedThemeBackgroundHex: String?
     /// Theme-derived indicator colors. This package can't reach the app's palette,
     /// so the app pushes them via `applyBorderColors`. Default until the first push.
     public var activeBorderColor: NSColor = .systemBlue
@@ -64,38 +63,7 @@ public final class TerminalHostView: NSView {
             write: { data in io.send(data) },
             resize: { viewport in io.resize(rows: viewport.rows, cols: viewport.columns) }
         )
-        self.controller = controller ?? TerminalController {
-            // Let Ghostty inject its shell-integration script when possible.
-            // When the integration runs, the shell emits OSC 7 + OSC 133 so
-            // libghostty can deliver real-time pwd/exit-code updates. The
-            // PID-based SurfaceShellTracker is the fallback.
-            $0.withCustom("shell-integration", "detect")
-            $0.withCustom("shell-integration-features", "sudo,title")
-            if let settings {
-                $0.withFontSize(settings.fontSize)
-                $0.withFontFamily(settings.fontFamily)
-                $0.withBackgroundOpacity(Double(settings.backgroundOpacity))
-                $0.withBackgroundBlur(settings.backgroundBlur)
-                $0.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
-                $0.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
-                if settings.useCustomColors, let bg = settings.customBackgroundHex { $0.withBackground(bg) }
-                if settings.useCustomColors, let fg = settings.customForegroundHex { $0.withForeground(fg) }
-                if settings.useCustomColors, let cursor = settings.customCursorHex { $0.withCursorColor(cursor) }
-                if settings.useCustomColors, let selection = settings.selectionBackgroundHex { $0.withSelectionBackground(selection) }
-                if settings.useCustomColors, let selectionFg = settings.selectionForegroundHex { $0.withSelectionForeground(selectionFg) }
-                if settings.useCustomColors, let bold = settings.boldColorHex { $0.withBoldColor(bold) }
-                if settings.useCustomColors, let cursorText = settings.cursorTextHex { $0.withCursorText(cursorText) }
-                if settings.minimumContrast > 1 { $0.withMinimumContrast(settings.minimumContrast) }
-                if settings.useCustomColors {
-                    for (paletteIndex, paletteColor) in settings.paletteHex.enumerated() {
-                        if let paletteColor { $0.withPalette(paletteIndex, color: paletteColor) }
-                    }
-                }
-                $0.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
-                $0.withCursorStyleBlink(settings.cursorBlink)
-                $0.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
-            }
-        }
+        self.controller = controller ?? Self.makeController(settings: settings)
         terminalView = TerminalView(frame: .zero)
         super.init(frame: .zero)
         ensureDaemonSurface(cwd: workingDirectory, shell: shell, settings: settings)
@@ -108,13 +76,49 @@ public final class TerminalHostView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private static let emptyControllerTheme = TerminalTheme(light: .init(), dark: .init())
+
+    private static func makeController(settings: HarnessSettings?) -> TerminalController {
+        TerminalController(
+            configuration: makeTerminalConfiguration(settings: settings),
+            theme: emptyControllerTheme
+        )
+    }
+
+    static func makeTerminalConfiguration(settings: HarnessSettings?) -> TerminalConfiguration {
+        TerminalConfiguration {
+            configureTerminalBuilder(&$0, settings: settings)
+        }
+    }
+
+    private static func configureTerminalBuilder(
+        _ builder: inout TerminalConfiguration.Builder,
+        settings: HarnessSettings?
+    ) {
+        builder.withCustom("shell-integration", "detect")
+        builder.withCustom("shell-integration-features", "sudo,title")
+        TerminalColorPipeline.apply(to: &builder)
+
+        guard let settings else { return }
+        builder.withFontSize(settings.fontSize)
+        builder.withFontFamily(settings.fontFamily)
+        builder.withBackgroundOpacity(Double(settings.backgroundOpacity))
+        builder.withBackgroundBlur(settings.backgroundBlur)
+        builder.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
+        builder.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
+        let background = settings.customBackgroundHex ?? ThemeManager.defaultBaselineBackgroundHex
+        let foreground = settings.customForegroundHex ?? ThemeManager.defaultBaselineForegroundHex
+        builder.withBackground(background)
+        builder.withForeground(foreground)
+        builder.withCursorColor(settings.customCursorHex ?? foreground)
+        builder.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
+        builder.withCursorStyleBlink(settings.cursorBlink)
+        builder.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
+    }
+
     private func configure(workingDirectory: String?, settings: HarnessSettings?) {
         wantsLayer = true
-        if settings?.useCustomColors == true, let bg = settings?.customBackgroundHex, let color = NSColor.fromHex(bg) {
-            layer?.backgroundColor = color.withAlphaComponent(CGFloat(settings?.backgroundOpacity ?? 1)).cgColor
-        } else {
-            layer?.backgroundColor = NSColor.clear.cgColor
-        }
+        layer?.backgroundColor = NSColor.clear.cgColor
         terminalView.translatesAutoresizingMaskIntoConstraints = false
         terminalView.delegate = self
         terminalView.controller = controller
@@ -136,54 +140,14 @@ public final class TerminalHostView: NSView {
     }
 
     public func applyTheme(named name: String) {
-        appliedThemeBackgroundHex = ThemeManager.backgroundHex(themeName: name)
-        ThemeManager.apply(themeName: name, to: controller)
+        // Harness themes style chrome. Terminal surfaces intentionally keep an
+        // empty controller theme so ANSI/truecolor output from TUIs is not retinted.
     }
 
     public func applySettings(_ settings: HarnessSettings) {
-        if settings.useCustomColors, let bg = settings.customBackgroundHex, let color = NSColor.fromHex(bg) {
-            layer?.backgroundColor = color.withAlphaComponent(CGFloat(settings.backgroundOpacity)).cgColor
-        } else if let bg = appliedThemeBackgroundHex, let color = NSColor.fromHex(bg) {
-            layer?.backgroundColor = color.withAlphaComponent(CGFloat(settings.backgroundOpacity)).cgColor
-        } else {
-            layer?.backgroundColor = NSColor.clear.cgColor
-        }
-        // CRITICAL: build a FRESH TerminalConfiguration every time instead of
-        // `startingFrom: controller.terminalConfiguration`. The builder appends
-        // commands without ever removing them, so once a user set
-        // `customBackgroundHex = "#000000"` the `.background("#000000")` command
-        // stuck in the per-session config forever — even after they cleared the
-        // override or switched themes. The theme's own background could never
-        // win because the per-session override always overlays it. Starting
-        // fresh means: if `useCustomColors == false`, no color commands are
-        // present and the theme's colors come through cleanly.
+        layer?.backgroundColor = NSColor.clear.cgColor
         _ = controller.setTerminalConfiguration(
-            TerminalConfiguration {
-                $0.withCustom("shell-integration", "detect")
-                $0.withCustom("shell-integration-features", "sudo,title")
-                $0.withFontSize(settings.fontSize)
-                $0.withFontFamily(settings.fontFamily)
-                $0.withBackgroundOpacity(Double(settings.backgroundOpacity))
-                $0.withBackgroundBlur(settings.backgroundBlur)
-                $0.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
-                $0.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
-                if settings.useCustomColors, let bg = settings.customBackgroundHex { $0.withBackground(bg) }
-                if settings.useCustomColors, let fg = settings.customForegroundHex { $0.withForeground(fg) }
-                if settings.useCustomColors, let cursor = settings.customCursorHex { $0.withCursorColor(cursor) }
-                if settings.useCustomColors, let selection = settings.selectionBackgroundHex { $0.withSelectionBackground(selection) }
-                if settings.useCustomColors, let selectionFg = settings.selectionForegroundHex { $0.withSelectionForeground(selectionFg) }
-                if settings.useCustomColors, let bold = settings.boldColorHex { $0.withBoldColor(bold) }
-                if settings.useCustomColors, let cursorText = settings.cursorTextHex { $0.withCursorText(cursorText) }
-                if settings.minimumContrast > 1 { $0.withMinimumContrast(settings.minimumContrast) }
-                if settings.useCustomColors {
-                    for (paletteIndex, paletteColor) in settings.paletteHex.enumerated() {
-                        if let paletteColor { $0.withPalette(paletteIndex, color: paletteColor) }
-                    }
-                }
-                $0.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
-                $0.withCursorStyleBlink(settings.cursorBlink)
-                $0.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
-            }
+            Self.makeTerminalConfiguration(settings: settings)
         )
         terminalView.configuration = TerminalSurfaceOptions(
             backend: .inMemory(memorySession),
@@ -309,20 +273,6 @@ private final class SurfaceIO: @unchecked Sendable {
         queue.async { [client, surfaceID] in
             _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols))
         }
-    }
-}
-
-private extension NSColor {
-    static func fromHex(_ raw: String) -> NSColor? {
-        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.hasPrefix("#") { cleaned.removeFirst() }
-        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
-        return NSColor(
-            srgbRed: CGFloat((value >> 16) & 0xff) / 255,
-            green: CGFloat((value >> 8) & 0xff) / 255,
-            blue: CGFloat(value & 0xff) / 255,
-            alpha: 1
-        )
     }
 }
 

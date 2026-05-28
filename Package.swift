@@ -66,5 +66,10 @@ let package = Package(
             dependencies: ["HarnessDaemonCore", "HarnessCore"],
             path: "Tests/HarnessDaemonTests"
         ),
+        .testTarget(
+            name: "HarnessTerminalKitTests",
+            dependencies: ["HarnessTerminalKit", "HarnessCore"],
+            path: "Tests/HarnessTerminalKitTests"
+        ),
     ]
 )

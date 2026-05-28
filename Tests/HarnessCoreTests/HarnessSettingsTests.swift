@@ -11,7 +11,11 @@ final class HarnessSettingsTests: XCTestCase {
           "defaultCWD": "/tmp",
           "backgroundOpacity": 0.3,
           "customBackgroundHex": "#000000",
-          "customForegroundHex": "#ffffff"
+          "customForegroundHex": "#ffffff",
+          "useCustomColors": true,
+          "boldColorHex": "#eeeeee",
+          "minimumContrast": 7,
+          "paletteHex": ["#000000", "#ff0000"]
         }
         """.utf8)
 
@@ -20,9 +24,12 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertFalse(settings.useCustomColors)
         XCTAssertEqual(settings.customBackgroundHex, "#000000")
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
+        XCTAssertNil(settings.boldColorHex)
+        XCTAssertEqual(settings.minimumContrast, 1)
+        XCTAssertEqual(settings.paletteHex, Array(repeating: nil, count: 16))
     }
 
-    func testImportedGhosttyDefaultsEnableCustomColorMode() {
+    func testImportedGhosttyDefaultsKeepBaseColorsWithoutCustomAnsiMode() {
         let imported = GhosttyImportedDefaults(
             backgroundHex: "#000000",
             foregroundHex: "#ffffff",
@@ -31,10 +38,16 @@ final class HarnessSettingsTests: XCTestCase {
 
         let settings = HarnessSettings.makeDefaults(imported: imported)
 
-        XCTAssertTrue(settings.useCustomColors)
+        XCTAssertFalse(settings.useCustomColors)
         XCTAssertEqual(settings.customBackgroundHex, "#000000")
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
         XCTAssertEqual(settings.customCursorHex, "#cccccc")
+        XCTAssertNil(settings.selectionBackgroundHex)
+        XCTAssertNil(settings.selectionForegroundHex)
+        XCTAssertNil(settings.boldColorHex)
+        XCTAssertNil(settings.cursorTextHex)
+        XCTAssertEqual(settings.minimumContrast, 1)
+        XCTAssertEqual(settings.paletteHex, Array(repeating: nil, count: 16))
     }
 
     func testClampedOpacityAllowsFullRangeAboveTinyFloor() {

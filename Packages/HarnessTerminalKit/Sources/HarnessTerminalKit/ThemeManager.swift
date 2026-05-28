@@ -5,6 +5,8 @@ import GhosttyTheme
 @MainActor
 public enum ThemeManager {
     public static let defaultThemeName = "Catppuccin Mocha"
+    public static let defaultBaselineBackgroundHex = "#000000"
+    public static let defaultBaselineForegroundHex = "#ffffff"
 
     public static let featuredThemes = [
         "Catppuccin Mocha",
@@ -19,6 +21,9 @@ public enum ThemeManager {
     ]
 
     public static func apply(themeName: String, to controller: TerminalController) {
+        // TerminalHostView deliberately does not call this. Named themes are kept
+        // for chrome/preview color lookups only; terminal output should keep
+        // Ghostty/libghostty ANSI and truecolor behavior.
         if let theme = GhosttyThemeCatalog.theme(named: themeName) {
             _ = controller.setTheme(theme.toTerminalTheme())
             return
