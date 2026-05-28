@@ -13,6 +13,7 @@ public enum IPCRequest: Codable, Sendable {
     case selectWorkspaceByName(name: String)
     case selectSession(workspaceID: UUID, sessionID: UUID)
     case selectTab(workspaceID: UUID, tabID: UUID)
+    case reorderTab(workspaceID: UUID, tabID: UUID, toIndex: Int)
     case closeTab(tabID: UUID)
     case closeSession(sessionID: UUID)
     case closeWorkspace(id: UUID)
@@ -29,19 +30,22 @@ public enum IPCRequest: Codable, Sendable {
     case createSurface(cwd: String?, shell: String?)
     case ensureSurface(surfaceID: String, cwd: String?, shell: String?, rows: UInt16, cols: UInt16, scrollbackBytes: Int?)
     case attachSurface(surfaceID: String)
-    // Phase 3 — tmux-style commands
+    // tmux-style pane + key commands
     case sendKeys(surfaceID: String, keys: [String])
     case capturePane(surfaceID: String, includeScrollback: Bool)
     case killPane(paneID: UUID)
     case swapPanes(srcPaneID: UUID, dstPaneID: UUID)
     case resizePane(paneID: UUID, direction: ResizeDirection, amount: Int)
+    /// Set an absolute split ratio. The branch is identified by the representative
+    /// (first) leaf of each child subtree, which is unambiguous even when nested.
+    case resizePaneRatio(tabID: UUID, firstPaneID: UUID, secondPaneID: UUID, ratio: Double)
     case zoomPane(paneID: UUID)
     case setCopyMode(surfaceID: String, enabled: Bool)
     case renameTab(tabID: UUID, name: String)
     case renameSession(sessionID: UUID, name: String)
     case renameWorkspace(workspaceID: UUID, name: String)
     case detectAgent(surfaceID: String)
-    // Phase 5 — streaming attach
+    // Surface output streaming + attach
     case subscribeSurfaceOutput(surfaceID: String)
     case cancelSubscription(surfaceID: String)
     case replayScrollback(surfaceID: String, fromSequence: UInt64?)

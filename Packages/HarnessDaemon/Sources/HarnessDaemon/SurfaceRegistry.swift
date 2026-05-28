@@ -2,6 +2,7 @@ import Foundation
 import HarnessCore
 
 /// Single source of truth for Harness session layout and notifications.
+/// @unchecked Sendable: all access to `sessions` and `editor` is serialized by `lock`.
 public final class SurfaceRegistry: @unchecked Sendable {
     private var sessions: [DaemonSurfaceID: RealPty] = [:]
     private var editor = SessionEditor()
@@ -112,6 +113,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .ok
         case let .selectTab(workspaceID, tabID):
             guard editor.selectTab(workspaceID: workspaceID, tabID: tabID) else {
+                return .error("Tab not found")
+            }
+            commit()
+            return .ok
+        case let .reorderTab(workspaceID, tabID, toIndex):
+            guard editor.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex) else {
                 return .error("Tab not found")
             }
             commit()
@@ -254,6 +261,17 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             commit()
             return .ok
+        case let .resizePaneRatio(tabID, firstPaneID, secondPaneID, ratio):
+            guard editor.setSplitRatio(
+                tabID: tabID,
+                firstPaneID: firstPaneID,
+                secondPaneID: secondPaneID,
+                ratio: ratio
+            ) else {
+                return .error("Split not found")
+            }
+            commit()
+            return .ok
         case let .zoomPane(paneID):
             guard editor.zoomPane(paneID) else { return .error("Pane not found") }
             commit()
@@ -379,7 +397,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return surfaceID
         }
         do {
-            let shellPath = shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+            let shellPath = Self.resolveShell(shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
             let workDir = existingWorkingDirectory(cwd)
             let session = try RealPty(
                 id: surfaceID,
@@ -398,6 +416,20 @@ public final class SurfaceRegistry: @unchecked Sendable {
             fputs("HarnessDaemon surface launch failed for \(surfaceID): \(error)\n", stderr)
             return nil
         }
+    }
+
+    /// Validate the requested shell is executable, falling back (with a log) so a bad
+    /// `defaultShell` doesn't produce a silently dead pane (`forkpty` child _exit(127)).
+    private static func resolveShell(_ candidate: String) -> String {
+        let fm = FileManager.default
+        if fm.isExecutableFile(atPath: candidate) { return candidate }
+        let fallbacks = [ProcessInfo.processInfo.environment["SHELL"], "/bin/zsh", "/bin/bash", "/bin/sh"]
+            .compactMap { $0 }
+        for fallback in fallbacks where fm.isExecutableFile(atPath: fallback) {
+            fputs("HarnessDaemon: shell '\(candidate)' is not executable; falling back to '\(fallback)'\n", stderr)
+            return fallback
+        }
+        return candidate
     }
 
     private func existingWorkingDirectory(_ raw: String?) -> String {

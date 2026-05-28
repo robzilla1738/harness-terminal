@@ -13,6 +13,7 @@ final class SessionCoordinator: NSObject {
     private var lastRevision = -1
     private let terminalHosts = TerminalPaneRegistry()
     private var metadataTask: Task<Void, Never>?
+    private var pushedNotificationKeys: Set<String> = []
     var settings = HarnessSettings.load()
     var activeSurfaceID: SurfaceID?
     var structureRevision = 0
@@ -76,10 +77,12 @@ final class SessionCoordinator: NSObject {
         if structureChanged {
             structureRevision += 1
         }
+        pushNewRemoteNotifications(from: remote)
         if !metadataOnly {
             applyThemeToAllHosts()
         }
         syncWaitingRings()
+        updateDockBadge(from: remote)
         NotificationCenter.default.post(
             name: NotificationBus.shared.snapshotChanged,
             object: nil,
@@ -102,20 +105,30 @@ final class SessionCoordinator: NSObject {
         HarnessChrome.update(
             themeName: snapshot.themeName,
             opacity: CGFloat(settings.backgroundOpacity),
-            backgroundHex: settings.customBackgroundHex,
-            foregroundHex: settings.customForegroundHex,
-            cursorHex: settings.customCursorHex
+            backgroundHex: settings.useCustomColors ? settings.customBackgroundHex : nil,
+            foregroundHex: settings.useCustomColors ? settings.customForegroundHex : nil,
+            cursorHex: settings.useCustomColors ? settings.customCursorHex : nil
         )
         for host in terminalHosts.allHosts() {
             if shouldApplyNamedTerminalTheme {
                 host.applyTheme(named: snapshot.themeName)
             }
             host.applySettings(settings)
+            pushBorderColors(to: host)
         }
     }
 
-    private var shouldApplyNamedTerminalTheme: Bool {
-        settings.customBackgroundHex == nil && settings.customForegroundHex == nil
+    /// Always apply the selected theme to terminals as the base palette; custom colors
+    /// are layered on top afterward in `applySettings`. Previously this was skipped when
+    /// a custom background/foreground was set, which also dropped the theme's ANSI
+    /// palette — so e.g. a custom black background silently lost the theme's syntax
+    /// colors. Layering (theme first, overrides second) keeps both.
+    private var shouldApplyNamedTerminalTheme: Bool { true }
+
+    /// Push the theme's focus-ring / waiting colors into a host (the terminal package
+    /// can't reach the app palette, so the app owns these indicator colors).
+    private func pushBorderColors(to host: TerminalHostView) {
+        host.applyBorderColors(active: HarnessChrome.current.focusRing, waiting: HarnessChrome.current.waiting)
     }
 
     private func syncWaitingRings() {
@@ -128,6 +141,36 @@ final class SessionCoordinator: NSObject {
         }
     }
 
+    private func pushNewRemoteNotifications(from snapshot: SessionSnapshot) {
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.status == .waiting {
+                    guard let text = tab.notificationText, !text.isEmpty,
+                          let surfaceID = tab.rootPane.allSurfaceIDs().first
+                    else { continue }
+                    let key = "\(surfaceID.uuidString)|\(text)"
+                    guard !pushedNotificationKeys.contains(key) else { continue }
+                    pushedNotificationKeys.insert(key)
+                    terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
+                    if NSApp.isActive == false {
+                        let title = tab.agent?.kind.displayName ?? "Harness"
+                        DesktopNotifier.show(title: title, body: text)
+                    }
+                }
+            }
+        }
+    }
+
+    private func updateDockBadge(from snapshot: SessionSnapshot) {
+        let waiting = snapshot.workspaces.reduce(into: 0) { count, workspace in
+            count += workspace.sessions
+                .flatMap(\.tabs)
+                .filter { $0.status == .waiting }
+                .count
+        }
+        NSApp.dockTile.badgeLabel = waiting > 0 ? "\(waiting)" : nil
+    }
+
     func saveImmediately() {
         syncFromDaemon()
     }
@@ -137,15 +180,16 @@ final class SessionCoordinator: NSObject {
         HarnessChrome.update(
             themeName: snapshot.themeName,
             opacity: CGFloat(settings.backgroundOpacity),
-            backgroundHex: settings.customBackgroundHex,
-            foregroundHex: settings.customForegroundHex,
-            cursorHex: settings.customCursorHex
+            backgroundHex: settings.useCustomColors ? settings.customBackgroundHex : nil,
+            foregroundHex: settings.useCustomColors ? settings.customForegroundHex : nil,
+            cursorHex: settings.useCustomColors ? settings.customCursorHex : nil
         )
         for host in terminalHosts.allHosts() {
             if shouldApplyNamedTerminalTheme {
                 host.applyTheme(named: snapshot.themeName)
             }
             host.applySettings(settings)
+            pushBorderColors(to: host)
         }
         NotificationCenter.default.post(
             name: NotificationBus.shared.snapshotChanged,
@@ -163,6 +207,7 @@ final class SessionCoordinator: NSObject {
             settings.customBackgroundHex = nil
             settings.customForegroundHex = nil
             settings.customCursorHex = nil
+            settings.useCustomColors = false
             try? settings.save()
         }
         requestDaemon(.setTheme(name: name))
@@ -368,6 +413,29 @@ final class SessionCoordinator: NSObject {
         addTab(to: workspace.id)
     }
 
+    /// Close every tab in the active session except `keepID` (the "Close Others"
+    /// context action). Frees each closed tab's terminal hosts.
+    func closeOtherTabs(keeping keepID: TabID) {
+        guard let workspace = snapshot.activeWorkspace, let session = workspace.activeSession else { return }
+        let others = session.tabs.filter { $0.id != keepID }
+        guard !others.isEmpty else { return }
+        for tab in others {
+            for surfaceID in tab.rootPane.allSurfaceIDs() {
+                terminalHosts.removeHost(for: surfaceID)
+            }
+            requestDaemon(.closeTab(tabID: tab.id))
+        }
+        selectTab(workspaceID: workspace.id, tabID: keepID)
+        syncFromDaemon()
+    }
+
+    /// Select a tab, then split its active pane — used by the tab context menu so the
+    /// split lands in the right tab regardless of which tab was previously active.
+    func splitTab(workspaceID: WorkspaceID, tabID: TabID, direction: SplitDirection) {
+        selectTab(workspaceID: workspaceID, tabID: tabID)
+        splitActivePane(direction: direction)
+    }
+
     func killActivePane() {
         guard let workspace = snapshot.activeWorkspace,
               let tab = workspace.activeTab,
@@ -404,11 +472,58 @@ final class SessionCoordinator: NSObject {
         let nextIndex = (currentIndex + (forward ? 1 : -1) + panes.count) % panes.count
         let targetPane = panes[nextIndex]
         if let surfaceID = surfaceID(forPane: targetPane, in: tab.rootPane) {
-            activeSurfaceID = surfaceID
-            if let host = terminalHosts.host(for: surfaceID) {
-                host.focusTerminal()
+            setActiveSurface(surfaceID)
+            terminalHosts.host(for: surfaceID)?.focusTerminal()
+        }
+    }
+
+    /// Single source of truth for which pane shows the active-pane border. Setting it
+    /// updates `activeSurfaceID` and toggles the border on every live host so exactly
+    /// one pane (app-wide) is highlighted — but only when its tab is actually split.
+    /// A lone terminal needs no "which pane is focused" hint, so it stays borderless.
+    func setActiveSurface(_ surfaceID: SurfaceID?) {
+        activeSurfaceID = surfaceID
+        let showBorder = surfaceID.map { paneCount(forSurface: $0) > 1 } ?? false
+        for host in terminalHosts.allHosts() {
+            host.showsActiveBorder = showBorder && host.surfaceID == surfaceID
+        }
+    }
+
+    /// Number of panes in the tab that owns `surfaceID` (1 when unsplit).
+    private func paneCount(forSurface surfaceID: SurfaceID) -> Int {
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    let ids = tab.rootPane.allSurfaceIDs()
+                    if ids.contains(surfaceID) { return ids.count }
+                }
             }
         }
+        return 0
+    }
+
+    /// Re-assert the active-pane border after a (re)mount of `tab`'s panes. If the
+    /// tracked active surface isn't part of this tab, fall back to its first pane so
+    /// a freshly shown tab always has a clearly focused pane.
+    func ensureActivePane(for tab: Tab) {
+        let surfaces = tab.rootPane.allSurfaceIDs()
+        guard !surfaces.isEmpty else { return }
+        let target = activeSurfaceID.flatMap { surfaces.contains($0) ? $0 : nil } ?? surfaces.first
+        setActiveSurface(target)
+    }
+
+    /// Persist a divider drag. Metadata-only sync: ratio isn't part of the structure
+    /// fingerprint, so this never remounts panes or re-fades the chrome.
+    func setSplitRatio(tabID: TabID, firstPaneID: PaneID, secondPaneID: PaneID, ratio: Double) {
+        requestDaemon(.resizePaneRatio(tabID: tabID, firstPaneID: firstPaneID, secondPaneID: secondPaneID, ratio: ratio))
+        syncFromDaemon(metadataOnly: true)
+    }
+
+    /// Commit a tab drag-reorder. Full sync so the tab bar rebuilds in the new order
+    /// (the metadata path updates pills in place by ID and wouldn't reflect a reorder).
+    func reorderTab(workspaceID: WorkspaceID, tabID: TabID, toIndex: Int) {
+        requestDaemon(.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex))
+        syncFromDaemon()
     }
 
     private func surfaceID(forPane paneID: PaneID, in node: PaneNode) -> SurfaceID? {
@@ -486,6 +601,7 @@ final class SessionCoordinator: NSObject {
             host.applyTheme(named: snapshot.themeName)
         }
         host.applySettings(settings)
+        pushBorderColors(to: host)
         terminalHosts.register(host)
         return host
     }
@@ -529,6 +645,8 @@ final class SessionCoordinator: NSObject {
             title: title,
             body: body
         ))
+        let key = "\(surfaceID.uuidString)|\(body)"
+        pushedNotificationKeys.insert(key)
         terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
         if NSApp.isActive == false {
             DesktopNotifier.show(title: title, body: body)
@@ -568,7 +686,7 @@ final class SessionCoordinator: NSObject {
                 await MainActor.run {
                     guard let self else { return }
                     for update in updates {
-                        _ = try? self.daemon.request(.updateTabGitBranch(
+                        self.logIfFailed(.updateTabGitBranch(
                             workspaceID: update.0,
                             tabID: update.1,
                             branch: update.2
@@ -596,16 +714,27 @@ final class SessionCoordinator: NSObject {
             return nil
         }
     }
+
+    /// Fire-and-forget metadata update that logs on failure instead of silently
+    /// swallowing it. No modal — these (title/cwd/branch) are too frequent to alert on,
+    /// but a stale label is worth a diagnostic line.
+    private func logIfFailed(_ request: IPCRequest) {
+        do {
+            _ = try daemon.request(request)
+        } catch {
+            fputs("Harness daemon metadata update failed: \(error)\n", stderr)
+        }
+    }
 }
 
 extension SessionCoordinator: TerminalHostDelegate {
     func terminalHostDidChangeTitle(_ title: String, surfaceID: SurfaceID) {
-        _ = try? daemon.request(.updateTabTitle(surfaceID: surfaceID.uuidString, title: title))
+        logIfFailed(.updateTabTitle(surfaceID: surfaceID.uuidString, title: title))
         syncFromDaemon(metadataOnly: true)
     }
 
     func terminalHostDidChangeWorkingDirectory(_ path: String, surfaceID: SurfaceID) {
-        _ = try? daemon.request(.updateTabCwd(surfaceID: surfaceID.uuidString, path: path))
+        logIfFailed(.updateTabCwd(surfaceID: surfaceID.uuidString, path: path))
         syncFromDaemon(metadataOnly: true)
     }
 
@@ -618,16 +747,13 @@ extension SessionCoordinator: TerminalHostDelegate {
             .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
             .first { $0.rootPane.allSurfaceIDs().contains(surfaceID) }?.cwd
         if current == cwd { return }
-        _ = try? daemon.request(.updateTabCwd(surfaceID: surfaceID.uuidString, path: cwd))
+        logIfFailed(.updateTabCwd(surfaceID: surfaceID.uuidString, path: cwd))
         syncFromDaemon(metadataOnly: true)
     }
 
     func terminalHostDidChangeFocus(_ focused: Bool, surfaceID: SurfaceID) {
         if focused {
-            activeSurfaceID = surfaceID
-            for host in terminalHosts.allHosts() {
-                host.showsActiveBorder = host.surfaceID == surfaceID
-            }
+            setActiveSurface(surfaceID)
             clearNotification(for: surfaceID)
         }
     }

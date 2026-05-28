@@ -12,6 +12,9 @@ struct HarnessChromePalette {
     let borderStrong: NSColor
     let accent: NSColor
     let accentSoft: NSColor
+    /// Stroke color for keyboard-focus rings and the active-pane border. Consumers
+    /// apply their own alpha; this carries the hue.
+    let focusRing: NSColor
     let textPrimary: NSColor
     let textSecondary: NSColor
     let textTertiary: NSColor
@@ -85,25 +88,30 @@ struct HarnessChromePalette {
         idle: NSColor
     ) -> HarnessChromePalette {
         let isDark = perceivedBrightness(of: background) < 0.5
-        let chromeLift = isDark ? NSColor.white : NSColor.black
-        let sidebar = blend(background, toward: chromeLift, fraction: isDark ? 0.08 : 0.04)
-        let elevated = foreground.withAlphaComponent(isDark ? 0.07 : 0.06)
+        // Keep the sidebar and tab strip rooted in the terminal background. The
+        // surrounding controls add their own elevation; shifting the whole sidebar
+        // hue made named themes feel broken.
+        let sidebar = background
+        // Light themes need firmer separation/fills — at the dark-mode alphas the
+        // borders and hover states are effectively invisible on a bright surface.
+        let elevated = foreground.withAlphaComponent(isDark ? 0.07 : 0.08)
 
         return HarnessChromePalette(
             isDark: isDark,
             terminalBackground: background,
             sidebarBackground: sidebar,
             surfaceElevated: elevated,
-            border: foreground.withAlphaComponent(isDark ? 0.07 : 0.10),
-            borderStrong: foreground.withAlphaComponent(isDark ? 0.12 : 0.18),
+            border: foreground.withAlphaComponent(isDark ? 0.07 : 0.14),
+            borderStrong: foreground.withAlphaComponent(isDark ? 0.12 : 0.20),
             accent: accent,
             accentSoft: accent.withAlphaComponent(0.16),
+            focusRing: accent,
             textPrimary: foreground,
             textSecondary: foreground.withAlphaComponent(0.66),
             textTertiary: foreground.withAlphaComponent(0.40),
-            rowSelectedFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.07),
-            rowHoverFill: foreground.withAlphaComponent(isDark ? 0.045 : 0.04),
-            iconHoverFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.08),
+            rowSelectedFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.10),
+            rowHoverFill: foreground.withAlphaComponent(isDark ? 0.045 : 0.065),
+            iconHoverFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.10),
             waiting: waiting,
             danger: danger,
             success: success,

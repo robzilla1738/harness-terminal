@@ -336,8 +336,9 @@ struct HarnessCLI {
             fputs("Usage: harness-cli attach --surface <id>\n", stderr)
             exit(1)
         }
-        // Phase 5 will plumb full streaming; for now we replay scrollback so the
-        // user can confirm a pane's recent output without launching the GUI.
+        // Replays the pane's scrollback so the user can confirm its recent output
+        // without launching the GUI. (Live tailing is a deliberate non-goal here —
+        // the GUI is the live view; the daemon streaming foundation already exists.)
         let response = try checkedRequest(client, .replayScrollback(surfaceID: surface, fromSequence: nil))
         if case let .text(text) = response { print(text) }
     }

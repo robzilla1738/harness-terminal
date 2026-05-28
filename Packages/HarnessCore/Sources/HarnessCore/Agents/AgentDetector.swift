@@ -129,17 +129,20 @@ public enum AgentDetector {
         var best: AgentSnapshot?
         for descendant in descendantPIDs(of: pid) {
             guard let path = pidPath(descendant) else { continue }
-            let exe = (path as NSString).lastPathComponent.lowercased()
-            for entry in table.entries {
-                if entry.matches(executable: exe) {
-                    best = AgentSnapshot(
-                        kind: entry.kind,
-                        executable: path,
-                        pid: descendant,
-                        activity: .idle,
-                        lastActivityAt: best?.lastActivityAt ?? .now
-                    )
-                }
+            // Match the resolved binary basename AND the name the process was invoked
+            // as (argv[0]). Native installers symlink the launcher to a version-numbered
+            // binary — e.g. ~/.local/bin/claude -> .../versions/2.1.152 — so proc_pidpath
+            // resolves the "claude" name away and only argv[0] still carries it.
+            var names: Set<String> = [(path as NSString).lastPathComponent.lowercased()]
+            if let invoked = argv0Name(descendant) { names.insert(invoked) }
+            for entry in table.entries where entry.matchesAny(names) {
+                best = AgentSnapshot(
+                    kind: entry.kind,
+                    executable: path,
+                    pid: descendant,
+                    activity: .idle,
+                    lastActivityAt: best?.lastActivityAt ?? .now
+                )
             }
         }
         return best
@@ -196,6 +199,28 @@ public enum AgentDetector {
         let prefix = buffer.prefix(Int(length))
         return String(decoding: prefix, as: UTF8.self)
     }
+
+    /// Lowercased basename of `pid`'s argv[0] (how it was invoked), read from
+    /// KERN_PROCARGS2. Catches launchers that exec a renamed/versioned binary.
+    private static func argv0Name(_ pid: Int32) -> String? {
+        var size = 0
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard buffer.withUnsafeMutableBufferPointer({ ptr -> Int32 in
+            sysctl(&mib, 3, ptr.baseAddress, &size, nil, 0)
+        }) == 0 else { return nil }
+
+        // Layout: int argc, exec_path\0, padding NULs, then argv[0]\0 argv[1]\0 ...
+        var cursor = MemoryLayout<Int32>.size
+        while cursor < size, buffer[cursor] != 0 { cursor += 1 } // skip exec_path
+        while cursor < size, buffer[cursor] == 0 { cursor += 1 } // skip NUL padding
+        let start = cursor
+        while cursor < size, buffer[cursor] != 0 { cursor += 1 } // read argv[0]
+        guard cursor > start else { return nil }
+        let argv0 = String(decoding: buffer[start..<cursor], as: UTF8.self)
+        return (argv0 as NSString).lastPathComponent.lowercased()
+    }
 }
 
 public struct AgentTableEntry: Codable, Sendable {
@@ -209,6 +234,11 @@ public struct AgentTableEntry: Codable, Sendable {
 
     public func matches(executable: String) -> Bool {
         executables.contains(executable)
+    }
+
+    /// True if any of `names` (e.g. resolved binary basename + argv[0] name) matches.
+    public func matchesAny(_ names: Set<String>) -> Bool {
+        executables.contains { names.contains($0) }
     }
 }
 

@@ -1,5 +1,6 @@
 import Foundation
 
+/// @unchecked Sendable: the subscriber table is guarded by `lock`; posts hop to the main queue.
 public final class NotificationBus: @unchecked Sendable {
     public static let shared = NotificationBus()
 

@@ -139,6 +139,22 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    /// Move a tab to `toIndex` within its session. `toIndex` is the desired final
+    /// position among the reordered tabs (clamped). IDs are unchanged, so the active
+    /// tab stays valid.
+    @discardableResult
+    public mutating func reorderTab(workspaceID: WorkspaceID, tabID: TabID, toIndex: Int) -> Bool {
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return false }
+        var session = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex]
+        guard let from = session.tabs.firstIndex(where: { $0.id == tabID }) else { return false }
+        let tab = session.tabs.remove(at: from)
+        let target = max(0, min(session.tabs.count, toIndex))
+        session.tabs.insert(tab, at: target)
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex] = session
+        bumpRevision()
+        return true
+    }
+
     public mutating func setTheme(_ name: String) {
         guard snapshot.themeName != name else { return }
         snapshot.themeName = name
@@ -470,6 +486,51 @@ public struct SessionEditor: Sendable {
             return false
         default:
             return false
+        }
+    }
+
+    /// Set the absolute split ratio of the branch identified by the representative
+    /// (first) leaf of each child subtree. That pair is unambiguous even when splits
+    /// are nested (ancestor branches share a first-leaf but not the pair).
+    @discardableResult
+    public mutating func setSplitRatio(
+        tabID: TabID,
+        firstPaneID: PaneID,
+        secondPaneID: PaneID,
+        ratio: Double
+    ) -> Bool {
+        guard let match = tabIndex(tabID: tabID) else { return false }
+        var tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        let clamped = min(0.9, max(0.1, ratio))
+        guard setRatio(&tab.rootPane, firstPaneID: firstPaneID, secondPaneID: secondPaneID, ratio: clamped) else {
+            return false
+        }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
+        bumpRevision()
+        return true
+    }
+
+    private func setRatio(_ node: inout PaneNode, firstPaneID: PaneID, secondPaneID: PaneID, ratio: Double) -> Bool {
+        guard case .branch(let direction, let existingRatio, var first, var second) = node else { return false }
+        if firstLeafID(in: first) == firstPaneID, firstLeafID(in: second) == secondPaneID {
+            node = .branch(direction: direction, ratio: ratio, first: first, second: second)
+            return true
+        }
+        if setRatio(&first, firstPaneID: firstPaneID, secondPaneID: secondPaneID, ratio: ratio) {
+            node = .branch(direction: direction, ratio: existingRatio, first: first, second: second)
+            return true
+        }
+        if setRatio(&second, firstPaneID: firstPaneID, secondPaneID: secondPaneID, ratio: ratio) {
+            node = .branch(direction: direction, ratio: existingRatio, first: first, second: second)
+            return true
+        }
+        return false
+    }
+
+    private func firstLeafID(in node: PaneNode) -> PaneID? {
+        switch node {
+        case let .leaf(leaf): return leaf.id
+        case let .branch(_, _, first, _): return firstLeafID(in: first)
         }
     }
 

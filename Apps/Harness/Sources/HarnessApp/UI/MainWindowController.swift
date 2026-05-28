@@ -7,9 +7,9 @@ final class MainWindowController: NSWindowController {
         HarnessChrome.update(
             themeName: SessionCoordinator.shared.snapshot.themeName,
             opacity: CGFloat(SessionCoordinator.shared.settings.backgroundOpacity),
-            backgroundHex: SessionCoordinator.shared.settings.customBackgroundHex,
-            foregroundHex: SessionCoordinator.shared.settings.customForegroundHex,
-            cursorHex: SessionCoordinator.shared.settings.customCursorHex
+            backgroundHex: SessionCoordinator.shared.settings.useCustomColors ? SessionCoordinator.shared.settings.customBackgroundHex : nil,
+            foregroundHex: SessionCoordinator.shared.settings.useCustomColors ? SessionCoordinator.shared.settings.customForegroundHex : nil,
+            cursorHex: SessionCoordinator.shared.settings.useCustomColors ? SessionCoordinator.shared.settings.customCursorHex : nil
         )
 
         let window = NSWindow(

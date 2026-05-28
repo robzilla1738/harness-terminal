@@ -59,12 +59,24 @@ targets:
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/HarnessDaemon
           - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/harness-cli
-  HarnessDaemon:
-    type: tool
+  HarnessDaemonCore:
+    type: library.static
     platform: macOS
     sources:
       - Packages/HarnessDaemon/Sources/HarnessDaemon
     dependencies:
+      - package: Harness
+        product: HarnessCore
+    settings:
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+  HarnessDaemon:
+    type: tool
+    platform: macOS
+    sources:
+      - Packages/HarnessDaemon/Sources/HarnessDaemonMain
+    dependencies:
+      - target: HarnessDaemonCore
       - package: Harness
         product: HarnessCore
     settings:
@@ -98,6 +110,20 @@ targets:
       GENERATE_INFOPLIST_FILE: YES
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "14.0"
+  HarnessDaemonTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessDaemonTests
+    dependencies:
+      - target: HarnessDaemonCore
+      - package: Harness
+        product: HarnessCore
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessDaemonTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
 schemes:
   Harness:
     build:
@@ -106,9 +132,11 @@ schemes:
         HarnessDaemon: all
         harness-cli: all
         HarnessCoreTests: [test]
+        HarnessDaemonTests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - HarnessCoreTests
+        - HarnessDaemonTests

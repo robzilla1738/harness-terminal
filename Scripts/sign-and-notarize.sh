@@ -12,7 +12,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/Harness.app"
-IDENTITY="${SIGNING_IDENTITY:-Developer ID Application}"
+# Require an explicit identity so a release is never signed with the wrong or
+# ambiguous one. Use SIGNING_IDENTITY=- for an ad-hoc (unsigned) local build.
+IDENTITY="${SIGNING_IDENTITY:?Set SIGNING_IDENTITY to your Developer ID (or '-' for an ad-hoc local build).}"
 
 if [[ ! -d "$APP" ]]; then
   echo "Run Scripts/build-release.sh first." >&2

@@ -2,12 +2,47 @@ import Darwin
 import Foundation
 import HarnessCore
 
-/// PTY-backed shell session. Replaces `Process`-based `PtySession` with a
-/// genuine `forkpty(3)` master fd so the daemon can keep a long-lived
-/// terminal alive across app detach/reattach cycles.
+public enum PtyError: Error {
+    case launchFailed
+}
+
+public struct ShellLaunchProfile: Sendable, Equatable {
+    public var executable: String
+    public var arguments: [String]
+
+    public var argv: [String] { [executable] + arguments }
+
+    public static func make(shell: String) -> ShellLaunchProfile {
+        let name = URL(fileURLWithPath: shell).lastPathComponent.lowercased()
+        let arguments: [String]
+        switch name {
+        case "fish":
+            arguments = ["--features=no-query-term", "-l"]
+        case "zsh", "bash", "sh", "dash", "ksh", "csh", "tcsh":
+            arguments = ["-l"]
+        case "nu":
+            arguments = ["--login"]
+        case "pwsh", "powershell":
+            arguments = ["-Login"]
+        case "xonsh":
+            arguments = ["--login"]
+        default:
+            // Unknown shells should still launch out of the box. Avoid adding a
+            // guessed login flag that could make custom shells exit immediately.
+            arguments = []
+        }
+        return ShellLaunchProfile(executable: shell, arguments: arguments)
+    }
+}
+
+/// PTY-backed shell session built on a genuine `forkpty(3)` master fd so the daemon
+/// can keep a long-lived terminal alive across app detach/reattach cycles. Output is
+/// fanned to a scrollback ring buffer and to live subscribers (the running app plus
+/// any `harness-cli attach` clients).
 ///
-/// Public API mirrors `PtySession` so call sites can switch implementations
-/// transparently. Phase 5b plumbs this into the IPC subscription stream.
+/// @unchecked Sendable: mutable state is partitioned across three locks —
+/// `lifecycleLock` (master fd, childPID, isClosed, readSource), `scrollbackLock`
+/// (scrollback buffer + sequence counter), and `subscribersLock` (subscriber table).
 public final class RealPty: @unchecked Sendable {
     public let id: DaemonSurfaceID
 
@@ -50,35 +85,47 @@ public final class RealPty: @unchecked Sendable {
         self.id = id
         self.maxScrollbackBytes = scrollbackBytes
 
+        // Prepare everything the child needs BEFORE forking. Between fork and exec a
+        // child may only call async-signal-safe functions, so it must not malloc —
+        // `setenv`/`strdup` do. We build argv + a full envp here (parent side) and the
+        // child only calls `chdir` + `execve`, both async-signal-safe. (Doing this in
+        // the child is what made the PTY fragile under heavily-threaded callers.)
+        let argvStrings = ShellLaunchProfile.make(shell: shell).argv
+        let argv: [UnsafeMutablePointer<CChar>?] = argvStrings.map { strdup($0) } + [nil]
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["TERM"] = "xterm-256color"
+        environment["HARNESS_SURFACE"] = id
+        let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+
+        let cwdC = strdup(cwd)
+        func freeChildStrings() {
+            cwdC.map { free($0) }
+            argv.forEach { $0.map { free($0) } }
+            envp.forEach { $0.map { free($0) } }
+        }
+
         var winsize = Darwin.winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         var amaster: Int32 = -1
         let pid = forkpty(&amaster, nil, nil, &winsize)
         if pid < 0 {
+            freeChildStrings()
             throw PtyError.launchFailed
         }
         if pid == 0 {
-            // Child branch — exec the login shell. NEVER return; if exec fails we _exit.
-            let cwdC = strdup(cwd)
-            if let cwdC { _ = chdir(cwdC); free(cwdC) }
-            setenv("TERM", "xterm-256color", 1)
-            setenv("HARNESS_SURFACE", id, 1)
-            let shellName = URL(fileURLWithPath: shell).lastPathComponent
-            shell.withCString { shellPtr in
-                let arg0 = strdup(shellPtr)
-                let loginArg = strdup("-l")
-                var argv: [UnsafeMutablePointer<CChar>?]
-                if shellName == "fish" {
-                    let featureArg = strdup("--features=no-query-term")
-                    argv = [arg0, featureArg, loginArg, nil]
-                } else {
-                    argv = [arg0, loginArg, nil]
-                }
-                _ = argv.withUnsafeMutableBufferPointer { buf in
-                    execv(shellPtr, buf.baseAddress)
+            // Child branch — async-signal-safe only. NEVER return; if exec fails, _exit.
+            if let cwdC { _ = chdir(cwdC) }
+            argv.withUnsafeBufferPointer { argvBuffer in
+                envp.withUnsafeBufferPointer { envpBuffer in
+                    if let path = argvBuffer.baseAddress?.pointee {
+                        _ = execve(path, argvBuffer.baseAddress, envpBuffer.baseAddress)
+                    }
                 }
             }
             _exit(127)
         }
+        // Parent: the child holds its own copy-on-write view; free ours.
+        freeChildStrings()
         self.master = amaster
         self.childPID = pid
         AgentDetector.registerRootPID(pid, forSurfaceKey: id)
@@ -144,6 +191,13 @@ public final class RealPty: @unchecked Sendable {
         } else if fd >= 0 {
             Darwin.close(fd)
         }
+    }
+
+    deinit {
+        // Backstop: if a surface is dropped without an explicit close() (e.g. a
+        // dictionary entry overwritten), reap the child + fd so we never leak a
+        // zombie. close() is idempotent via the isClosed guard.
+        close()
     }
 
     public func captureScrollback(includeHistory: Bool) -> String {

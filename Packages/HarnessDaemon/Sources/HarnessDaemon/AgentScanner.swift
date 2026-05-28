@@ -4,13 +4,14 @@ import HarnessCore
 /// Periodically walks each surface's process tree, identifies running agents,
 /// and writes the resulting `AgentSnapshot` back into the snapshot. UI clients
 /// observe the change via the existing `snapshotChanged` notification.
-final class AgentScanner: @unchecked Sendable {
-    static let shared = AgentScanner()
+/// @unchecked Sendable: scan state is confined to the serial `queue`.
+public final class AgentScanner: @unchecked Sendable {
+    public static let shared = AgentScanner()
     private var timer: DispatchSourceTimer?
     private weak var registry: SurfaceRegistry?
     private let queue = DispatchQueue(label: "com.robert.harness.agent-scanner")
 
-    func start(registry: SurfaceRegistry) {
+    public func start(registry: SurfaceRegistry) {
         self.registry = registry
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 1.5, repeating: 1.5)

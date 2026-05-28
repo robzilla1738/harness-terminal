@@ -100,6 +100,27 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         coordinator.closeActiveTabWithConfirmation()
     }
 
+    func tabBarDidReorder(tabID: TabID, toIndex: Int) {
+        guard let workspaceID = SessionCoordinator.shared.snapshot.activeWorkspaceID else { return }
+        SessionCoordinator.shared.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex)
+    }
+
+    func tabBarDidRequestCloseOthers(tabID: TabID) {
+        SessionCoordinator.shared.closeOtherTabs(keeping: tabID)
+    }
+
+    func tabBarDidRequestRename(tabID: TabID) {
+        let coordinator = SessionCoordinator.shared
+        guard let workspaceID = coordinator.snapshot.activeWorkspaceID else { return }
+        coordinator.selectTab(workspaceID: workspaceID, tabID: tabID)
+        coordinator.beginRenameActiveTab()
+    }
+
+    func tabBarDidRequestSplit(tabID: TabID, direction: SplitDirection) {
+        guard let workspaceID = SessionCoordinator.shared.snapshot.activeWorkspaceID else { return }
+        SessionCoordinator.shared.splitTab(workspaceID: workspaceID, tabID: tabID, direction: direction)
+    }
+
     private func reloadAll(force: Bool) {
         reloadTabBar()
         reloadIfNeeded(force: force)
@@ -139,14 +160,20 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             container.bottomAnchor.constraint(equalTo: terminalHost.bottomAnchor),
         ])
         paneContainer = container
+        // Re-assert the focused-pane border after the (re)mount — reused hosts keep
+        // their flag, but a freshly shown tab needs its active pane established.
+        coordinator.ensureActivePane(for: tab)
     }
 
     private func paneKey(_ node: PaneNode) -> String {
         switch node {
         case let .leaf(leaf):
             return "l:\(leaf.surfaceID.uuidString)"
-        case let .branch(direction, ratio, first, second):
-            return "b:\(direction.rawValue):\(ratio):\(paneKey(first)):\(paneKey(second))"
+        case let .branch(direction, _, first, second):
+            // Ratio is intentionally excluded from the rebuild key: a divider drag
+            // persists the ratio but must not force a pane remount (that was the
+            // resize flicker). Ratio is re-applied via setPosition on (re)mount.
+            return "b:\(direction.rawValue):\(paneKey(first)):\(paneKey(second))"
         }
     }
 
@@ -170,8 +197,10 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 @MainActor
 final class PaneContainerView: NSView {
     private let coordinator = SessionCoordinator.shared
+    private let tabID: TabID?
 
     init(node: PaneNode, cwd: String, themeName: String) {
+        self.tabID = SessionCoordinator.shared.snapshot.activeWorkspace?.activeTab?.id
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
         build(node: node, cwd: cwd, into: self)
@@ -224,10 +253,13 @@ final class PaneContainerView: NSView {
                 host.showsWaitingRing = tab.status == .waiting
             }
         case let .branch(direction, ratio, firstNode, secondNode):
-            let split = NSSplitView()
+            let split = HarnessSplitView()
             split.dividerStyle = .thin
             split.isVertical = direction == .horizontal
-            split.delegate = SplitRatioDelegate.shared
+            split.tabID = tabID
+            split.firstPaneID = firstLeafID(firstNode)
+            split.secondPaneID = firstLeafID(secondNode)
+            split.delegate = split
             let first = NSView()
             let second = NSView()
             split.addSubview(first)
@@ -250,9 +282,68 @@ final class PaneContainerView: NSView {
             build(node: secondNode, cwd: cwd, into: second)
         }
     }
+
+    /// Representative leaf of a subtree (its first leaf in traversal order). Paired
+    /// across both children, it uniquely identifies a branch for ratio persistence.
+    private func firstLeafID(_ node: PaneNode) -> PaneID? {
+        switch node {
+        case let .leaf(leaf): return leaf.id
+        case let .branch(_, _, first, _): return firstLeafID(first)
+        }
+    }
 }
 
+/// NSSplitView for terminal panes: tints its divider to the theme, widens the grab
+/// (and cursor) area beyond the 1px thin divider, and persists user divider drags to
+/// the daemon so split ratios survive relaunch. Acts as its own delegate.
 @MainActor
-final class SplitRatioDelegate: NSObject, NSSplitViewDelegate {
-    static let shared = SplitRatioDelegate()
+final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
+    var tabID: TabID?
+    var firstPaneID: PaneID?
+    var secondPaneID: PaneID?
+    private var ratioDebounce: DispatchWorkItem?
+
+    override var dividerColor: NSColor { HarnessChrome.current.border }
+
+    func splitView(
+        _ splitView: NSSplitView,
+        effectiveRect proposedEffectiveRect: NSRect,
+        forDrawnRect drawnRect: NSRect,
+        ofDividerAt dividerIndex: Int
+    ) -> NSRect {
+        // Widen the interactive/cursor zone past the 1px thin divider. NSSplitView
+        // shows the resize cursor over the effective rect, so this covers the cursor.
+        var rect = proposedEffectiveRect
+        if isVertical { rect.size.width = 8 } else { rect.size.height = 8 }
+        return rect
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        // The divider-index key is present only when the user dragged a divider —
+        // skip programmatic setPosition and window/layout resizes.
+        guard notification.userInfo?["NSSplitViewDividerIndex"] != nil else { return }
+        persistRatio()
+    }
+
+    private func persistRatio() {
+        guard let tabID, let firstPaneID, let secondPaneID, subviews.count >= 2 else { return }
+        let total = isVertical ? bounds.width : bounds.height
+        guard total > 1 else { return }
+        let firstSize = isVertical ? subviews[0].frame.width : subviews[0].frame.height
+        let ratio = Double(firstSize / total)
+        // Coalesce the stream of drag events into one write after the drag settles.
+        ratioDebounce?.cancel()
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated {
+                SessionCoordinator.shared.setSplitRatio(
+                    tabID: tabID,
+                    firstPaneID: firstPaneID,
+                    secondPaneID: secondPaneID,
+                    ratio: ratio
+                )
+            }
+        }
+        ratioDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
 }

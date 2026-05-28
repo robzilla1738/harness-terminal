@@ -15,7 +15,10 @@ public enum HarnessPaths {
 
     public static var applicationSupport: URL {
         if let overrideRoot { return overrideRoot }
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // Fall back to ~/Library/Application Support if the lookup ever returns empty
+        // (it shouldn't on macOS) rather than force-unwrapping and crashing at launch.
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         return base.appendingPathComponent("Harness", isDirectory: true)
     }
 

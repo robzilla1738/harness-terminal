@@ -6,21 +6,56 @@ protocol TerminalTabBarDelegate: AnyObject {
     func tabBarDidSelect(tabID: TabID)
     func tabBarDidRequestNewTab()
     func tabBarDidRequestClose(tabID: TabID)
+    func tabBarDidReorder(tabID: TabID, toIndex: Int)
+    func tabBarDidRequestCloseOthers(tabID: TabID)
+    func tabBarDidRequestRename(tabID: TabID)
+    func tabBarDidRequestSplit(tabID: TabID, direction: SplitDirection)
 }
 
 extension TerminalTabBarDelegate {
     func tabBarDidRequestClose(tabID: TabID) {}
+    func tabBarDidReorder(tabID: TabID, toIndex: Int) {}
+    func tabBarDidRequestCloseOthers(tabID: TabID) {}
+    func tabBarDidRequestRename(tabID: TabID) {}
+    func tabBarDidRequestSplit(tabID: TabID, direction: SplitDirection) {}
 }
 
+enum TabContextCommand {
+    case close
+    case closeOthers
+    case rename
+    case splitHorizontal
+    case splitVertical
+}
+
+/// Frame-laid tab strip. Pills compress toward a minimum width and, once they no
+/// longer fit, spill into a trailing overflow menu (the visible window always keeps
+/// the active tab). Supports drag-to-reorder and a right-click context menu.
 @MainActor
 final class TerminalTabBarView: NSView {
     weak var delegate: TerminalTabBarDelegate?
 
-    private let stack = NSStackView()
     private let newTabButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+    private let overflowButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private var tabs: [Tab] = []
     private var activeTabID: TabID?
     private var pillsByID: [TabID: TabPillView] = [:]
+    private var orderedPills: [TabPillView] = []
+
+    // Layout metrics.
+    private let edgeInset: CGFloat = 10
+    private let pillSpacing = HarnessDesign.Spacing.xs
+    private let buttonSize: CGFloat = 24
+    private let minPillWidth: CGFloat = 72
+    private let maxPillWidth: CGFloat = 200
+
+    // Drag-reorder state.
+    private weak var draggingPill: TabPillView?
+    private var dragGrabOffsetX: CGFloat = 0
+    private var dragTargetIndex: Int?
+    private var visibleStart = 0
+    private var visibleCount = 0
+    private var currentPillWidth: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -33,70 +68,56 @@ final class TerminalTabBarView: NSView {
     private func setup() {
         HarnessDesign.applyTabBarChrome(to: self)
 
-        stack.orientation = .horizontal
-        stack.spacing = 4
-        stack.alignment = .centerY
-        stack.distribution = .fill
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(stack)
-
         newTabButton.setSymbol("plus", accessibilityDescription: "New tab", pointSize: 11, weight: .medium)
         newTabButton.toolTip = "New tab (⌘T)"
         newTabButton.target = self
         newTabButton.action = #selector(addNewTab)
-        newTabButton.translatesAutoresizingMaskIntoConstraints = false
-        let newTabWidth = newTabButton.widthAnchor.constraint(equalToConstant: 24)
-        let newTabHeight = newTabButton.heightAnchor.constraint(equalToConstant: 24)
-        newTabWidth.priority = .defaultHigh
-        newTabHeight.priority = .defaultHigh
-        NSLayoutConstraint.activate([newTabWidth, newTabHeight])
+        newTabButton.translatesAutoresizingMaskIntoConstraints = true
+        addSubview(newTabButton)
 
-        // The "+" lives at the end of the pill stack (Ghostty/Chrome style),
-        // not pinned to the right edge.
-        stack.addArrangedSubview(newTabButton)
+        overflowButton.setSymbol("chevron.down", accessibilityDescription: "More tabs", pointSize: 11, weight: .medium)
+        overflowButton.toolTip = "More tabs"
+        overflowButton.target = self
+        overflowButton.action = #selector(showOverflowMenu)
+        overflowButton.translatesAutoresizingMaskIntoConstraints = true
+        overflowButton.isHidden = true
+        addSubview(overflowButton)
 
-        let stackTop = stack.topAnchor.constraint(equalTo: topAnchor)
-        let stackBottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor)
-        let stackTrailing = stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10)
         let height = heightAnchor.constraint(equalToConstant: HarnessDesign.tabBarHeight)
-        stackTop.priority = .defaultHigh
-        stackBottom.priority = .defaultHigh
-        stackTrailing.priority = .defaultHigh
         height.priority = .defaultHigh
-        NSLayoutConstraint.activate([
-            stackTop,
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            stackBottom,
-            stackTrailing,
-            height,
-        ])
+        height.isActive = true
     }
 
     func reload(tabs: [Tab], activeTabID: TabID?) {
         self.tabs = tabs
         self.activeTabID = activeTabID
-
-        // Tear down everything except the trailing "+" button so we can re-build pills.
-        for view in stack.arrangedSubviews where view !== newTabButton {
-            stack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
+        for pill in orderedPills { pill.removeFromSuperview() }
+        orderedPills.removeAll(keepingCapacity: true)
         pillsByID.removeAll(keepingCapacity: true)
+        draggingPill = nil
+        dragTargetIndex = nil
+
         for tab in tabs {
+            let id = tab.id
             let pill = TabPillView(tab: tab, isActive: tab.id == activeTabID)
+            pill.translatesAutoresizingMaskIntoConstraints = true
+            pill.toolTip = HarnessDesign.shortenPath(tab.cwd)
             pill.onSelect = { [weak self] id in self?.delegate?.tabBarDidSelect(tabID: id) }
             pill.onClose = { [weak self] id in self?.delegate?.tabBarDidRequestClose(tabID: id) }
-            stack.insertArrangedSubview(pill, at: stack.arrangedSubviews.count - 1)
+            pill.onDragChanged = { [weak self] p, loc in self?.handleDragChanged(p, windowLocation: loc) }
+            pill.onDragEnded = { [weak self] p in self?.handleDragEnded(p) }
+            pill.onContextCommand = { [weak self] cmd in self?.handleContext(cmd, tabID: id) }
+            addSubview(pill)
+            orderedPills.append(pill)
             pillsByID[tab.id] = pill
         }
+        needsLayout = true
         applyChrome()
     }
 
-    /// Update titles/status of existing pills without rebuilding the tree, used
-    /// when `metadataChanged` fires (live PWD / title / agent updates).
+    /// Update titles/status of existing pills without rebuilding, for live PWD /
+    /// title / agent updates. Falls back to a full reload if the set of tabs changed.
     func refreshMetadata(tabs: [Tab], activeTabID: TabID?) {
-        // If the set of tabs changed structurally, fall back to a full reload.
         let currentIDs = Set(self.tabs.map(\.id))
         let newIDs = Set(tabs.map(\.id))
         if currentIDs != newIDs || self.tabs.count != tabs.count {
@@ -107,20 +128,185 @@ final class TerminalTabBarView: NSView {
         self.activeTabID = activeTabID
         for tab in tabs {
             pillsByID[tab.id]?.update(tab: tab, isActive: tab.id == activeTabID)
+            pillsByID[tab.id]?.toolTip = HarnessDesign.shortenPath(tab.cwd)
         }
+        needsLayout = true // active tab change can shift the visible window
     }
 
     func applyChrome() {
         HarnessDesign.applyTabBarChrome(to: self)
-        for case let pill as TabPillView in stack.arrangedSubviews {
+        for pill in orderedPills {
             pill.applyChrome(isActive: pill.tabID == activeTabID)
         }
         newTabButton.applyChrome()
+        overflowButton.applyChrome()
     }
 
     @objc private func addNewTab() {
         delegate?.tabBarDidRequestNewTab()
     }
+
+    // MARK: - Layout
+
+    override func layout() {
+        super.layout()
+        guard draggingPill == nil else { return } // drag drives its own positioning
+        layoutPills()
+    }
+
+    private func layoutPills() {
+        let count = orderedPills.count
+        let buttonY = (bounds.height - buttonSize) / 2
+        guard count > 0 else {
+            newTabButton.frame = NSRect(x: edgeInset, y: buttonY, width: buttonSize, height: buttonSize)
+            overflowButton.isHidden = true
+            return
+        }
+
+        // Try to fit every pill inline alongside the "+" button.
+        let inlineAvail = bounds.width - edgeInset * 2 - buttonSize - pillSpacing
+        var pillWidth = min(maxPillWidth, (inlineAvail - pillSpacing * CGFloat(count - 1)) / CGFloat(count))
+
+        var needsOverflow = false
+        var vCount = count
+        if pillWidth < minPillWidth {
+            // Can't fit all even at minimum width — reserve the overflow button too.
+            needsOverflow = true
+            let avail = bounds.width - edgeInset * 2 - buttonSize * 2 - pillSpacing * 2
+            vCount = min(count, max(1, Int((avail + pillSpacing) / (minPillWidth + pillSpacing))))
+            pillWidth = max(minPillWidth, (avail - pillSpacing * CGFloat(vCount - 1)) / CGFloat(vCount))
+        }
+
+        // Slide the visible window so it always contains the active tab.
+        var start = 0
+        if needsOverflow,
+           let activeID = activeTabID,
+           let activeIdx = orderedPills.firstIndex(where: { $0.tabID == activeID }),
+           activeIdx >= vCount {
+            start = activeIdx - vCount + 1
+        }
+        visibleStart = start
+        visibleCount = vCount
+        currentPillWidth = pillWidth
+
+        let y = (bounds.height - HarnessDesign.tabPillHeight) / 2
+        var x = edgeInset
+        for (i, pill) in orderedPills.enumerated() {
+            let visible = i >= start && i < start + vCount
+            pill.isHidden = !visible
+            guard visible else { continue }
+            pill.frame = NSRect(x: x, y: y, width: pillWidth, height: HarnessDesign.tabPillHeight)
+            x += pillWidth + pillSpacing
+        }
+        newTabButton.frame = NSRect(x: x, y: buttonY, width: buttonSize, height: buttonSize)
+
+        overflowButton.isHidden = !needsOverflow
+        if needsOverflow {
+            overflowButton.frame = NSRect(x: bounds.width - edgeInset - buttonSize, y: buttonY, width: buttonSize, height: buttonSize)
+        }
+    }
+
+    private func slotX(_ slot: Int) -> CGFloat {
+        edgeInset + CGFloat(slot) * (currentPillWidth + pillSpacing)
+    }
+
+    // MARK: - Drag reorder
+
+    private func handleDragChanged(_ pill: TabPillView, windowLocation: NSPoint) {
+        let loc = convert(windowLocation, from: nil)
+        if draggingPill !== pill {
+            draggingPill = pill
+            dragGrabOffsetX = loc.x - pill.frame.minX
+            pill.layer?.zPosition = 100
+        }
+        var f = pill.frame
+        f.origin.x = max(edgeInset, min(loc.x - dragGrabOffsetX, bounds.width - edgeInset - f.width))
+        pill.frame = f
+        repositionForDrag(pill)
+    }
+
+    private func repositionForDrag(_ dragged: TabPillView) {
+        // Reorder is scoped to the visible window; overflow pills stay put (v1).
+        let visible = orderedPills.enumerated()
+            .filter { $0.offset >= visibleStart && $0.offset < visibleStart + visibleCount }
+            .map(\.element)
+        let others = visible.filter { $0 !== dragged }
+        // Target slot from the dragged pill's own position (stable — independent of
+        // the others, which are mid-animation).
+        let pitch = currentPillWidth + pillSpacing
+        let raw = pitch > 0 ? (dragged.frame.minX - edgeInset) / pitch : 0
+        let target = max(0, min(Int(raw.rounded()), visible.count - 1))
+        dragTargetIndex = visibleStart + target
+
+        let y = (bounds.height - HarnessDesign.tabPillHeight) / 2
+        var oi = 0
+        HarnessMotion.animate(HarnessDesign.Motion.fast) { _ in
+            for slot in 0..<visible.count where slot != target {
+                guard oi < others.count else { break }
+                let pill = others[oi]; oi += 1
+                pill.animator().frame = NSRect(x: self.slotX(slot), y: y, width: self.currentPillWidth, height: HarnessDesign.tabPillHeight)
+            }
+        }
+    }
+
+    private func handleDragEnded(_ pill: TabPillView) {
+        pill.layer?.zPosition = 0
+        let target = dragTargetIndex
+        let from = orderedPills.firstIndex { $0 === pill }
+        draggingPill = nil
+        dragTargetIndex = nil
+
+        if let target, let from, target != from {
+            // Commit; the resulting snapshot reload rebuilds pills in the new order.
+            delegate?.tabBarDidReorder(tabID: pill.tabID, toIndex: target)
+        } else {
+            // No move — snap back into place.
+            needsLayout = true
+        }
+    }
+
+    // MARK: - Context + overflow menus
+
+    private func handleContext(_ cmd: TabContextCommand, tabID: TabID) {
+        switch cmd {
+        case .close: delegate?.tabBarDidRequestClose(tabID: tabID)
+        case .closeOthers: delegate?.tabBarDidRequestCloseOthers(tabID: tabID)
+        case .rename: delegate?.tabBarDidRequestRename(tabID: tabID)
+        case .splitHorizontal: delegate?.tabBarDidRequestSplit(tabID: tabID, direction: .horizontal)
+        case .splitVertical: delegate?.tabBarDidRequestSplit(tabID: tabID, direction: .vertical)
+        }
+    }
+
+    @objc private func showOverflowMenu() {
+        let menu = NSMenu()
+        for (i, tab) in tabs.enumerated() where !(i >= visibleStart && i < visibleStart + visibleCount) {
+            let item = NSMenuItem(title: tabDisplayTitle(tab), action: #selector(overflowItemSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = tab.id.uuidString
+            item.state = tab.status == .waiting ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: overflowButton.frame.minX, y: overflowButton.frame.minY), in: self)
+    }
+
+    @objc private func overflowItemSelected(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let id = UUID(uuidString: raw) else { return }
+        delegate?.tabBarDidSelect(tabID: id)
+    }
+}
+
+/// Display label shared by pills and the overflow menu. Leads with where the tab is
+/// (folder, or shell title as a fallback) and appends what's running there (the agent)
+/// so a glance at the strip reads e.g. "harness · Claude Code".
+@MainActor
+private func tabDisplayTitle(_ tab: Tab) -> String {
+    let folder = HarnessDesign.pathDisplayName(tab.cwd)
+    let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell"
+    let base = !folder.isEmpty ? folder : (hasCustomTitle ? tab.title : "Terminal")
+    if let agent = tab.agent {
+        return "\(base) · \(agent.kind.displayName)"
+    }
+    return base
 }
 
 @MainActor
@@ -128,6 +314,9 @@ private final class TabPillView: NSView {
     let tabID: TabID
     var onSelect: ((TabID) -> Void)?
     var onClose: ((TabID) -> Void)?
+    var onDragChanged: ((TabPillView, NSPoint) -> Void)?
+    var onDragEnded: ((TabPillView) -> Void)?
+    var onContextCommand: ((TabContextCommand) -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let statusDot = StatusDotView()
@@ -138,6 +327,10 @@ private final class TabPillView: NSView {
     private var status: TabStatus = .idle
     private var currentAgent: AgentSnapshot?
 
+    // Drag detection.
+    private var mouseDownLocation: NSPoint?
+    private var isDragging = false
+
     init(tab: Tab, isActive: Bool) {
         tabID = tab.id
         super.init(frame: .zero)
@@ -146,12 +339,12 @@ private final class TabPillView: NSView {
         self.currentAgent = tab.agent
 
         wantsLayer = true
-        layer?.cornerRadius = HarnessDesign.pillCornerRadius
+        layer?.cornerRadius = 6
         layer?.cornerCurve = .continuous
 
-        titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        titleLabel.font = HarnessDesign.Typography.tabTitle
         titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.stringValue = displayTitle(for: tab)
+        titleLabel.stringValue = tabDisplayTitle(tab)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -168,36 +361,26 @@ private final class TabPillView: NSView {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.alphaValue = 0
         closeButton.wantsLayer = true
-        closeButton.layer?.cornerRadius = 7
+        closeButton.layer?.cornerRadius = HarnessDesign.Radius.badge
         closeButton.layer?.cornerCurve = .continuous
 
         addSubview(statusDot)
         addSubview(titleLabel)
         addSubview(closeButton)
 
-        let height = heightAnchor.constraint(equalToConstant: HarnessDesign.tabPillHeight)
-        let minWidth = widthAnchor.constraint(greaterThanOrEqualToConstant: 120)
-        let maxWidth = widthAnchor.constraint(lessThanOrEqualToConstant: 220)
-        let dotLeading = statusDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8)
-        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: statusDot.trailingAnchor, constant: 4)
-        let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4)
+        // The pill's frame is set by the tab bar; only internal layout is constrained.
+        let dotLeading = statusDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.md)
+        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: statusDot.trailingAnchor, constant: HarnessDesign.Spacing.xs)
+        let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.xs)
         let closeWidth = closeButton.widthAnchor.constraint(equalToConstant: 14)
         let closeHeight = closeButton.heightAnchor.constraint(equalToConstant: 14)
-        [height, minWidth, dotLeading, titleLeading, closeTrailing, closeWidth, closeHeight].forEach {
-            $0.priority = .defaultHigh
-        }
+        [dotLeading, titleLeading, closeTrailing, closeWidth, closeHeight].forEach { $0.priority = .defaultHigh }
         NSLayoutConstraint.activate([
-            height,
-            minWidth,
-            maxWidth,
-
             dotLeading,
             statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
-
             titleLeading,
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -4),
-
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
             closeTrailing,
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeWidth,
@@ -225,8 +408,7 @@ private final class TabPillView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         isHovered = true
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.10
+        HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 1
         }
         applyChrome(isActive: isActive)
@@ -234,21 +416,64 @@ private final class TabPillView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         isHovered = false
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.10
+        HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 0
         }
         applyChrome(isActive: isActive)
     }
 
+    override func mouseDown(with event: NSEvent) {
+        mouseDownLocation = event.locationInWindow
+        isDragging = false
+        // Selection/drag are resolved on mouseUp/mouseDragged.
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = mouseDownLocation else { return }
+        if !isDragging, abs(event.locationInWindow.x - start.x) > 4 {
+            isDragging = true
+        }
+        if isDragging {
+            onDragChanged?(self, event.locationInWindow)
+        }
+    }
+
     override func mouseUp(with event: NSEvent) {
         let local = convert(event.locationInWindow, from: nil)
-        // Don't double-fire when the click was on the inner close button.
-        if !closeButton.frame.contains(local), bounds.contains(local) {
+        if isDragging {
+            onDragEnded?(self)
+        } else if !closeButton.frame.contains(local), bounds.contains(local) {
             onSelect?(tabID)
         }
+        mouseDownLocation = nil
+        isDragging = false
         super.mouseUp(with: event)
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onSelect?(tabID) // make this the active tab so menu actions target it
+        let menu = NSMenu()
+        menu.addItem(menuItem("Close Tab", #selector(ctxClose)))
+        menu.addItem(menuItem("Close Other Tabs", #selector(ctxCloseOthers)))
+        menu.addItem(.separator())
+        menu.addItem(menuItem("Rename…", #selector(ctxRename)))
+        menu.addItem(.separator())
+        menu.addItem(menuItem("Split Right", #selector(ctxSplitHorizontal)))
+        menu.addItem(menuItem("Split Down", #selector(ctxSplitVertical)))
+        return menu
+    }
+
+    private func menuItem(_ title: String, _ selector: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func ctxClose() { onContextCommand?(.close) }
+    @objc private func ctxCloseOthers() { onContextCommand?(.closeOthers) }
+    @objc private func ctxRename() { onContextCommand?(.rename) }
+    @objc private func ctxSplitHorizontal() { onContextCommand?(.splitHorizontal) }
+    @objc private func ctxSplitVertical() { onContextCommand?(.splitVertical) }
 
     @objc private func closeClicked() {
         onClose?(tabID)
@@ -257,16 +482,8 @@ private final class TabPillView: NSView {
     func update(tab: Tab, isActive: Bool) {
         status = tab.status
         currentAgent = tab.agent
-        titleLabel.stringValue = displayTitle(for: tab)
+        titleLabel.stringValue = tabDisplayTitle(tab)
         applyChrome(isActive: isActive)
-    }
-
-    private func displayTitle(for tab: Tab) -> String {
-        let folder = HarnessDesign.pathDisplayName(tab.cwd)
-        if !folder.isEmpty { return folder }
-        let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell"
-        if hasCustomTitle { return tab.title }
-        return "Terminal"
     }
 
     func applyChrome(isActive: Bool) {
@@ -276,7 +493,7 @@ private final class TabPillView: NSView {
         switch status {
         case .idle:
             if let agent = currentAgent, agent.activity == .working {
-                statusDot.style = .agent(hex: agent.kind.dotHex)
+                statusDot.style = .agent(hex: SessionCoordinator.shared.settings.agentColorHex(for: agent.kind))
             } else {
                 statusDot.style = isActive ? .accent : .idle
             }
@@ -285,14 +502,28 @@ private final class TabPillView: NSView {
         }
         statusDot.applyStyle()
 
+        // Selected tabs get a modest rounded highlight: softer than a square box,
+        // but not a full capsule/pill.
+        let activeFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.075 : 0.06, of: c.textPrimary) ?? c.rowSelectedFill
+        let hoverFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOffset = NSSize(width: 0, height: -1)
+
         if isActive {
-            layer?.backgroundColor = c.surfaceElevated.cgColor
+            layer?.backgroundColor = activeFill.withAlphaComponent(c.isDark ? 0.88 : 0.78).cgColor
+            layer?.borderWidth = 0
+            layer?.shadowOpacity = 0
+            layer?.shadowRadius = 0
             titleLabel.textColor = c.textPrimary
         } else if isHovered {
-            layer?.backgroundColor = c.rowHoverFill.cgColor
+            layer?.backgroundColor = hoverFill.withAlphaComponent(c.isDark ? 0.90 : 0.80).cgColor
+            layer?.borderWidth = 0
+            layer?.shadowOpacity = 0
             titleLabel.textColor = c.textPrimary
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderWidth = 0
+            layer?.shadowOpacity = 0
             titleLabel.textColor = c.textSecondary
         }
 

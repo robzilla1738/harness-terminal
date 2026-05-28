@@ -28,6 +28,13 @@ public enum ThemeManager {
         }
     }
 
+    public static func backgroundHex(themeName: String) -> String? {
+        if let theme = GhosttyThemeCatalog.theme(named: themeName) {
+            return theme.background
+        }
+        return GhosttyThemeCatalog.theme(named: defaultThemeName)?.background
+    }
+
     public static func allThemeNames() -> [String] {
         featuredThemes + GhosttyThemeCatalog.search("").map(\.name).filter { !featuredThemes.contains($0) }
     }

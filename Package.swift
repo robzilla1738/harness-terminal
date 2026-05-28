@@ -28,10 +28,17 @@ let package = Package(
             ],
             path: "Packages/HarnessTerminalKit/Sources/HarnessTerminalKit"
         ),
-        .executableTarget(
-            name: "HarnessDaemon",
+        // Daemon logic as a library so it is unit-testable; the executable below is a
+        // thin `main.swift` wrapper over it.
+        .target(
+            name: "HarnessDaemonCore",
             dependencies: ["HarnessCore"],
             path: "Packages/HarnessDaemon/Sources/HarnessDaemon"
+        ),
+        .executableTarget(
+            name: "HarnessDaemon",
+            dependencies: ["HarnessDaemonCore"],
+            path: "Packages/HarnessDaemon/Sources/HarnessDaemonMain"
         ),
         .executableTarget(
             name: "HarnessCLI",
@@ -53,6 +60,11 @@ let package = Package(
             name: "HarnessCoreTests",
             dependencies: ["HarnessCore"],
             path: "Tests/HarnessCoreTests"
+        ),
+        .testTarget(
+            name: "HarnessDaemonTests",
+            dependencies: ["HarnessDaemonCore", "HarnessCore"],
+            path: "Tests/HarnessDaemonTests"
         ),
     ]
 )

@@ -10,36 +10,54 @@ struct PaletteAction: Identifiable {
     let handler: () -> Void
 }
 
+/// Borderless panel that can still take key focus (needed for the search field).
+@MainActor
+private final class PalettePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 @MainActor
 enum CommandPaletteController {
     private static var panel: NSPanel?
 
     static func present(relativeTo parent: NSWindow?) {
-        let actions = buildActions()
-        let controller = PaletteViewController(actions: actions)
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
-            styleMask: [.nonactivatingPanel, .titled, .closable],
+        panel?.close()
+        let controller = PaletteViewController(actions: buildActions())
+        let panel = PalettePanel(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 380),
+            styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
         )
-        panel.title = "Command Palette"
         panel.isRestorable = false
-        panel.contentViewController = controller
         panel.isFloatingPanel = true
         panel.level = .floating
-        if parent != nil {
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.contentViewController = controller
+        panel.delegate = controller
+
+        // Centered over the parent's upper third — Spotlight-style placement.
+        if let parent {
+            let f = parent.frame
+            panel.setFrameOrigin(NSPoint(
+                x: f.midX - panel.frame.width / 2,
+                y: f.midY - panel.frame.height / 2 + f.height * 0.12
+            ))
+        } else {
             panel.center()
         }
-        panel.makeKeyAndOrderFront(nil)
         self.panel = panel
         NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        controller.focusSearch()
     }
 
     private static func buildActions() -> [PaletteAction] {
         let coordinator = SessionCoordinator.shared
         return [
-            PaletteAction(title: "New Workspace", subtitle: "Cmd+Shift+N") {
+            PaletteAction(title: "New Workspace", subtitle: "⇧⌘N") {
                 coordinator.addWorkspace(name: "Workspace \(coordinator.snapshot.workspaces.count + 1)")
             },
             PaletteAction(title: "New Session", subtitle: "Sidebar") {
@@ -47,24 +65,24 @@ enum CommandPaletteController {
                     coordinator.addSession(to: id)
                 }
             },
-            PaletteAction(title: "New Tab", subtitle: "Cmd+T") {
+            PaletteAction(title: "New Tab", subtitle: "⌘T") {
                 if let id = coordinator.snapshot.activeWorkspaceID {
                     coordinator.addTab(to: id)
                 }
             },
-            PaletteAction(title: "Split Horizontal", subtitle: "Cmd+D") {
+            PaletteAction(title: "Split Horizontal", subtitle: "⌘D") {
                 coordinator.splitActivePane(direction: .horizontal)
             },
-            PaletteAction(title: "Split Vertical", subtitle: "Cmd+Shift+D") {
+            PaletteAction(title: "Split Vertical", subtitle: "⇧⌘D") {
                 coordinator.splitActivePane(direction: .vertical)
             },
-            PaletteAction(title: "Jump to Notification", subtitle: "Cmd+Shift+U") {
+            PaletteAction(title: "Jump to Notification", subtitle: "⇧⌘U") {
                 coordinator.jumpToLatestNotification()
             },
             PaletteAction(title: "Install harness-cli to PATH", subtitle: "Copy to Application Support") {
                 CLIInstaller.install()
             },
-            PaletteAction(title: "Open Settings", subtitle: "Cmd+,") {
+            PaletteAction(title: "Open Settings", subtitle: "⌘,") {
                 SettingsWindowController.show()
             },
         ] + ThemeManager.featuredThemes.map { theme in
@@ -76,9 +94,12 @@ enum CommandPaletteController {
 }
 
 @MainActor
-final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
-    private let searchField = NSSearchField()
+final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate,
+    NSTextFieldDelegate, NSWindowDelegate
+{
+    private let searchField = NSTextField()
     private let tableView = NSTableView()
+    private let scrollView = NSScrollView()
     private let allActions: [PaletteAction]
     private var filtered: [PaletteAction] = []
 
@@ -89,40 +110,96 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
+    required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+        let overlay = HarnessOverlayBackground()
+        overlay.frame = NSRect(x: 0, y: 0, width: 560, height: 380)
+        view = overlay
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        searchField.placeholderString = "Search commands…"
+        let c = HarnessChrome.current
+        guard let content = (view as? HarnessOverlayBackground)?.contentView else { return }
+
+        let magnifier = NSImageView()
+        magnifier.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+        magnifier.contentTintColor = c.textTertiary
+        magnifier.translatesAutoresizingMaskIntoConstraints = false
+
+        searchField.placeholderAttributedString = NSAttributedString(
+            string: "Search commands…",
+            attributes: [.foregroundColor: c.textTertiary, .font: NSFont.systemFont(ofSize: 15)]
+        )
+        searchField.font = .systemFont(ofSize: 15)
+        searchField.textColor = c.textPrimary
+        searchField.isBordered = false
+        searchField.drawsBackground = false
+        searchField.focusRingType = .none
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
+
+        let separator = NSView()
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = c.border.cgColor
+        separator.translatesAutoresizingMaskIntoConstraints = false
+
         let column = NSTableColumn(identifier: .init("action"))
         tableView.addTableColumn(column)
         tableView.headerView = nil
+        tableView.backgroundColor = .clear
         tableView.dataSource = self
         tableView.delegate = self
-        tableView.rowHeight = 44
+        tableView.rowHeight = 40
+        tableView.intercellSpacing = .zero
+        tableView.selectionHighlightStyle = .none // PaletteRowView draws themed selection
         tableView.doubleAction = #selector(activate)
         tableView.target = self
         tableView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(searchField)
-        view.addSubview(tableView)
+
+        scrollView.documentView = tableView
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        content.addSubview(magnifier)
+        content.addSubview(searchField)
+        content.addSubview(separator)
+        content.addSubview(scrollView)
+
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-            searchField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            tableView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
-            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
+            magnifier.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
+            magnifier.widthAnchor.constraint(equalToConstant: 18),
+
+            searchField.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.lg),
+            searchField.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: HarnessDesign.Spacing.sm),
+            searchField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.xl),
+            searchField.heightAnchor.constraint(equalToConstant: 26),
+
+            separator.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: HarnessDesign.Spacing.sm),
+            separator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1),
+
+            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -HarnessDesign.Spacing.sm),
         ])
+
+        tableView.reloadData()
+        selectRow(0)
     }
+
+    func focusSearch() {
+        view.window?.makeFirstResponder(searchField)
+    }
+
+    // MARK: - Filtering
 
     func controlTextDidChange(_ obj: Notification) {
         let query = searchField.stringValue.lowercased()
@@ -134,29 +211,93 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
             }
         }
         tableView.reloadData()
+        selectRow(0)
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        filtered.count
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)):
+            selectRow(tableView.selectedRow + 1); return true
+        case #selector(NSResponder.moveUp(_:)):
+            selectRow(tableView.selectedRow - 1); return true
+        case #selector(NSResponder.insertNewline(_:)):
+            activate(); return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            view.window?.close(); return true
+        default:
+            return false
+        }
+    }
+
+    private func selectRow(_ index: Int) {
+        guard !filtered.isEmpty else { return }
+        let clamped = max(0, min(index, filtered.count - 1))
+        tableView.selectRowIndexes([clamped], byExtendingSelection: false)
+        tableView.scrollRowToVisible(clamped)
+    }
+
+    // MARK: - Table
+
+    func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        PaletteRowView()
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let action = filtered[row]
+        let c = HarnessChrome.current
+
         let title = NSTextField(labelWithString: action.title)
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        let subtitle = NSTextField(labelWithString: action.subtitle)
-        subtitle.font = .systemFont(ofSize: 11)
-        subtitle.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [title, subtitle])
-        stack.orientation = .vertical
-        stack.spacing = 2
-        return stack
+        title.font = .systemFont(ofSize: 13, weight: .medium)
+        title.textColor = c.textPrimary
+        title.translatesAutoresizingMaskIntoConstraints = false
+        title.lineBreakMode = .byTruncatingTail
+
+        let shortcut = NSTextField(labelWithString: action.subtitle)
+        shortcut.font = HarnessDesign.Typography.kbd
+        shortcut.textColor = c.textTertiary
+        shortcut.alignment = .right
+        shortcut.translatesAutoresizingMaskIntoConstraints = false
+        shortcut.setContentHuggingPriority(.required, for: .horizontal)
+        shortcut.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let cell = NSView()
+        cell.addSubview(title)
+        cell.addSubview(shortcut)
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: HarnessDesign.Spacing.xl),
+            title.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            shortcut.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -HarnessDesign.Spacing.xl),
+            shortcut.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: shortcut.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
+        ])
+        return cell
     }
 
     @objc private func activate() {
         let row = tableView.selectedRow
         guard row >= 0, row < filtered.count else { return }
-        filtered[row].handler()
+        let action = filtered[row]
         view.window?.close()
+        action.handler()
+    }
+
+    // MARK: - Dismiss on focus loss
+
+    func windowDidResignKey(_ notification: Notification) {
+        view.window?.close()
+    }
+}
+
+/// Table row that draws the themed selection fill instead of the system blue.
+@MainActor
+final class PaletteRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard isSelected else { return }
+        let rect = bounds.insetBy(dx: HarnessDesign.Spacing.sm, dy: 2)
+        let path = NSBezierPath(roundedRect: rect, xRadius: HarnessDesign.Radius.control, yRadius: HarnessDesign.Radius.control)
+        HarnessChrome.current.rowSelectedFill.setFill()
+        path.fill()
     }
 }

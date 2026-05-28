@@ -16,6 +16,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var customBackgroundHex: String?
     public var customForegroundHex: String?
     public var customCursorHex: String?
+    /// When false, custom*Hex and the extended color fields are preserved on disk
+    /// but ignored so selecting a named theme visibly changes the whole app.
+    public var useCustomColors: Bool
     /// Signature of the Ghostty config last imported into these defaults.
     /// Used to migrate stale early settings without overwriting later manual edits.
     public var ghosttyConfigSignature: String?
@@ -24,6 +27,27 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var prefixKey: String
     /// Number of lines kept in scrollback per pane (passed to libghostty + RealPty).
     public var scrollbackLines: Int
+    /// Cursor shape: `block`, `bar`, or `underline` (Ghostty `cursor-style`).
+    public var cursorStyle: String
+    /// Whether the text cursor blinks (Ghostty `cursor-style-blink`).
+    public var cursorBlink: Bool
+    /// Copy a mouse selection to the clipboard automatically (Ghostty `copy-on-select`).
+    public var copyOnSelect: Bool
+    /// Selection (highlight) colors as `#rrggbb`. nil → use the theme's selection color.
+    public var selectionBackgroundHex: String?
+    public var selectionForegroundHex: String?
+    /// Color of bold text. nil → derive from the foreground/theme.
+    public var boldColorHex: String?
+    /// Color of the text drawn under a block cursor. nil → use the theme.
+    public var cursorTextHex: String?
+    /// Minimum contrast ratio between text and its background (1 = off … 21 = max).
+    public var minimumContrast: Double
+    /// 16 ANSI palette overrides (`#rrggbb`); a nil slot uses the theme's color.
+    /// Always normalized to exactly 16 entries (see `normalizedPalette`).
+    public var paletteHex: [String?]
+    /// Per-agent brand color overrides keyed by `AgentKind.rawValue`.
+    /// Missing keys use the built-in agent default.
+    public var agentColorOverrides: [String: String]
 
     public init(
         fontSize: Float = 14,
@@ -39,9 +63,20 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         customBackgroundHex: String? = nil,
         customForegroundHex: String? = nil,
         customCursorHex: String? = nil,
+        useCustomColors: Bool = false,
         ghosttyConfigSignature: String? = nil,
         prefixKey: String = "ctrl-a",
-        scrollbackLines: Int = 10_000
+        scrollbackLines: Int = 10_000,
+        cursorStyle: String = "block",
+        cursorBlink: Bool = true,
+        copyOnSelect: Bool = false,
+        selectionBackgroundHex: String? = nil,
+        selectionForegroundHex: String? = nil,
+        boldColorHex: String? = nil,
+        cursorTextHex: String? = nil,
+        minimumContrast: Double = 1,
+        paletteHex: [String?] = Array(repeating: nil, count: 16),
+        agentColorOverrides: [String: String] = [:]
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -56,9 +91,49 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.customBackgroundHex = customBackgroundHex
         self.customForegroundHex = customForegroundHex
         self.customCursorHex = customCursorHex
+        self.useCustomColors = useCustomColors
         self.ghosttyConfigSignature = ghosttyConfigSignature
         self.prefixKey = prefixKey
         self.scrollbackLines = scrollbackLines
+        self.cursorStyle = cursorStyle
+        self.cursorBlink = cursorBlink
+        self.copyOnSelect = copyOnSelect
+        self.selectionBackgroundHex = selectionBackgroundHex
+        self.selectionForegroundHex = selectionForegroundHex
+        self.boldColorHex = boldColorHex
+        self.cursorTextHex = cursorTextHex
+        self.minimumContrast = minimumContrast
+        self.paletteHex = HarnessSettings.normalizedPalette(paletteHex)
+        self.agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColorOverrides)
+    }
+
+    /// Ensure the palette always has exactly 16 slots so index access is safe even if a
+    /// hand-edited or older settings file carries a different count.
+    public static func normalizedPalette(_ raw: [String?]) -> [String?] {
+        if raw.count == 16 { return raw }
+        if raw.count < 16 { return raw + Array(repeating: nil, count: 16 - raw.count) }
+        return Array(raw.prefix(16))
+    }
+
+    public static func normalizedAgentColorOverrides(_ raw: [String: String]) -> [String: String] {
+        raw.reduce(into: [:]) { result, item in
+            guard AgentKind(rawValue: item.key) != nil,
+                  let normalized = normalizedHex(item.value)
+            else { return }
+            result[item.key] = normalized
+        }
+    }
+
+    public static func normalizedHex(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let cleaned = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard cleaned.count == 6, cleaned.allSatisfy(\.isHexDigit) else { return nil }
+        return "#\(cleaned.uppercased())"
+    }
+
+    public func agentColorHex(for kind: AgentKind) -> String {
+        agentColorOverrides[kind.rawValue] ?? "#\(kind.dotHex.uppercased())"
     }
 
     /// Decoder that gracefully accepts older settings files missing the newer fields.
@@ -80,9 +155,22 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         customBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customBackgroundHex) ?? fallback.customBackgroundHex
         customForegroundHex = try container.decodeIfPresent(String.self, forKey: .customForegroundHex) ?? fallback.customForegroundHex
         customCursorHex = try container.decodeIfPresent(String.self, forKey: .customCursorHex) ?? fallback.customCursorHex
+        useCustomColors = try container.decodeIfPresent(Bool.self, forKey: .useCustomColors) ?? false
         ghosttyConfigSignature = try container.decodeIfPresent(String.self, forKey: .ghosttyConfigSignature)
         prefixKey = try container.decodeIfPresent(String.self, forKey: .prefixKey) ?? fallback.prefixKey
         scrollbackLines = try container.decodeIfPresent(Int.self, forKey: .scrollbackLines) ?? fallback.scrollbackLines
+        cursorStyle = try container.decodeIfPresent(String.self, forKey: .cursorStyle) ?? fallback.cursorStyle
+        cursorBlink = try container.decodeIfPresent(Bool.self, forKey: .cursorBlink) ?? fallback.cursorBlink
+        copyOnSelect = try container.decodeIfPresent(Bool.self, forKey: .copyOnSelect) ?? fallback.copyOnSelect
+        selectionBackgroundHex = try container.decodeIfPresent(String.self, forKey: .selectionBackgroundHex) ?? fallback.selectionBackgroundHex
+        selectionForegroundHex = try container.decodeIfPresent(String.self, forKey: .selectionForegroundHex) ?? fallback.selectionForegroundHex
+        boldColorHex = try container.decodeIfPresent(String.self, forKey: .boldColorHex) ?? fallback.boldColorHex
+        cursorTextHex = try container.decodeIfPresent(String.self, forKey: .cursorTextHex) ?? fallback.cursorTextHex
+        minimumContrast = try container.decodeIfPresent(Double.self, forKey: .minimumContrast) ?? fallback.minimumContrast
+        let palette = try container.decodeIfPresent([String?].self, forKey: .paletteHex) ?? fallback.paletteHex
+        paletteHex = HarnessSettings.normalizedPalette(palette)
+        let agentColors = try container.decodeIfPresent([String: String].self, forKey: .agentColorOverrides) ?? fallback.agentColorOverrides
+        agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColors)
     }
 
     public static func load() -> HarnessSettings {
@@ -129,6 +217,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.backgroundHex { settings.customBackgroundHex = value }
         if let value = imported.foregroundHex { settings.customForegroundHex = value }
         if let value = imported.cursorColorHex { settings.customCursorHex = value }
+        settings.useCustomColors = imported.backgroundHex != nil || imported.foregroundHex != nil || imported.cursorColorHex != nil
         settings.ghosttyConfigSignature = imported.signature
         return settings
     }

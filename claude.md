@@ -1,4 +1,4 @@
-# Harness — Agent Handbook
+# CLAUDE.md — Harness
 
 This document helps coding agents (Claude Code, Cursor, Codex, and similar tools) work effectively in the **Harness** repository. Read it before making architectural or UI changes.
 
@@ -58,7 +58,7 @@ harness-cli list-workspaces
 harness-cli list-surfaces
 ```
 
-Use `make preview` when the user wants to inspect the app without installing or creating release artifacts. Preview packaging creates `.harness-preview/HarnessPreview.app`, sets `HarnessPreviewHome`, and keeps state/socket/settings inside `.harness-preview/` instead of `~/Library/Application Support/Harness`. Stop it with `make preview-stop`; reset preview state with `make preview-clean`.
+Use `make preview` when the user wants to inspect the app without installing or creating release artifacts. Preview packaging creates `.harness-preview/HarnessPreview.app`, sets `HarnessPreviewHome`, and keeps state/socket/settings inside `.harness-preview/` instead of `~/Library/Application Support/Harness`. Stop it with `make preview-stop`; reset preview state with `make preview-clean`. While preview is running, point the CLI at preview state with `HARNESS_HOME=.harness-preview .build/debug/harness-cli ping`.
 
 **Rules:**
 
@@ -81,10 +81,11 @@ harness/
 ├── Harness.app/                  # Built app bundle (gitignored in practice)
 ├── Apps/Harness/
 │   └── Sources/HarnessApp/       # AppKit application
+│       ├── main.swift
 │       ├── AppDelegate.swift
-│       ├── Services/             # SessionCoordinator, SurfaceShellTracker, DaemonLauncher
+│       ├── Services/             # SessionCoordinator, SurfaceShellTracker, DaemonLauncher, CLIInstaller
 │       ├── Settings/             # SettingsViewController
-│       └── UI/                   # Chrome, sidebar, tabs, prefix keymap, palette
+│       └── UI/                   # Chrome, sidebar, tabs, prefix keymap, palette, AboutPanelController
 ├── Packages/
 │   ├── HarnessCore/              # Models, IPC, SessionEditor, persistence, agents
 │   ├── HarnessTerminalKit/       # TerminalHostView, ThemeManager
@@ -104,7 +105,8 @@ harness/
 | Product | Target | Role |
 |---------|--------|------|
 | `Harness` | `HarnessApp` | GUI executable |
-| `HarnessDaemon` | `HarnessDaemon` | Session daemon |
+| `HarnessDaemon` | `HarnessDaemon` (thin `main.swift` in `HarnessDaemonMain/`) | Session daemon executable |
+| — | `HarnessDaemonCore` | Daemon logic library (`SurfaceRegistry`, `DaemonServer`, `RealPty`, `AgentScanner`) — split out so the daemon is unit-testable |
 | `harness-cli` | `HarnessCLI` | CLI client |
 | `HarnessCore` | `HarnessCore` | Library |
 | `HarnessTerminalKit` | `HarnessTerminalKit` | Library |
@@ -276,6 +278,7 @@ From `Packages/HarnessCore/Sources/HarnessCore/Paths/HarnessPaths.swift`:
 | `.../sessions/layout.json` | Session snapshot (daemon-owned) |
 | `.../settings.json` | User settings (`HarnessSettings`) |
 | `.../bin/harness-cli` | Installed CLI copy (`harness-cli install`) |
+| `.../agents.json` | Optional custom agent detection rules (`AgentDetector`) |
 | `~/.config/ghostty/config` | Ghostty config imported on first run / migration |
 
 `HARNESS_HOME` overrides the app-support root for isolated runs. Preview uses `HARNESS_HOME=.harness-preview` via the `HarnessPreviewHome` Info.plist key and passes that value to `HarnessDaemon`.
@@ -293,8 +296,9 @@ From `Packages/HarnessCore/Sources/HarnessCore/Paths/HarnessPaths.swift`:
 | `backgroundOpacity`, `backgroundBlur` | Window transparency + blur |
 | `windowPaddingX/Y` | Terminal padding |
 | `customBackgroundHex`, `customForegroundHex`, `customCursorHex` | **Exact Ghostty colors** (`#000000` / `#ffffff`) |
-| `prefixKey` | tmux-style prefix (default `ctrl-a`) |
-| `scrollbackLines` | Scrollback size |
+| `prefixKey` | tmux-style prefix (default `ctrl-a`; empty string disables) |
+| `scrollbackLines` | Scrollback size (libghostty + RealPty) |
+| `ghosttyConfigSignature` | Last imported Ghostty config fingerprint (migration) |
 | `transparentTitlebar`, `sidebarVisible` | UI prefs |
 
 ### GhosttyConfigImporter
@@ -388,12 +392,15 @@ Observers (`MainSplitViewController`, `ContentAreaViewController`):
 | `listSurfaces` | Surface → tab/workspace map |
 | `getSnapshot` | Full snapshot |
 | `newWorkspace(name:)` | Create workspace |
-| `newTab(workspaceID:, cwd:)` | Create tab |
+| `newSession(workspaceID:, cwd:, name:)` | Create sidebar session row |
+| `newTab(workspaceID:, cwd:)` | Create tab in active session |
 | `newTabInWorkspace(named:, cwd:)` | Resolve workspace by name/UUID |
 | `newSplit(tabID:, paneID:, direction:)` | Split pane |
 | `selectWorkspace(id:)` / `selectWorkspaceByName(name:)` | Focus workspace |
+| `selectSession(workspaceID:, sessionID:)` | Focus sidebar session |
 | `selectTab(workspaceID:, tabID:)` | Focus tab |
-| `closeTab(tabID:)` / `closeWorkspace(id:)` | Remove |
+| `reorderTab(workspaceID:, tabID:, toIndex:)` | Move tab within its session (drag-reorder) |
+| `closeTab(tabID:)` / `closeSession(sessionID:)` / `closeWorkspace(id:)` | Remove |
 | `setTheme(name:)` | Global Ghostty theme name |
 | `setKeepSessionsOnQuit(Bool)` | Daemon lifetime |
 | `notify(surfaceID:, title:, body:)` | Mark tab waiting |
@@ -402,11 +409,13 @@ Observers (`MainSplitViewController`, `ContentAreaViewController`):
 | `updateTabCwd(surfaceID:, path:)` | Working directory |
 | `updateTabGitBranch(...)` | Git metadata |
 | `send(surfaceID:, text:)` | Inject text (legacy) |
+| `sendData(surfaceID:, data:)` | Raw bytes to daemon PTY (GUI input path) |
+| `ensureSurface(surfaceID:, cwd:, shell:, rows:, cols:, scrollbackBytes:)` | Create or reuse daemon PTY for a surface |
 | `sendKeys(surfaceID:, keys:)` | tmux-style key tokens (`TmuxKeyParser`) |
 | `capturePane(surfaceID:, includeScrollback:)` | Scrollback text |
-| `killPane(paneID:)` / `swapPanes` / `resizePane` / `zoomPane` | Layout ops |
+| `killPane(paneID:)` / `swapPanes` / `resizePane` / `resizePaneRatio(tabID:, firstPaneID:, secondPaneID:, ratio:)` / `zoomPane` | Layout ops (`resizePaneRatio` persists divider drags) |
 | `setCopyMode(surfaceID:, enabled:)` | Copy mode (via NotificationBus to app) |
-| `renameTab` / `renameWorkspace` | Rename |
+| `renameTab` / `renameSession` / `renameWorkspace` | Rename |
 | `detectAgent(surfaceID:)` | Query `AgentDetector` |
 | `createSurface` / `attachSurface` | Daemon PTY surfaces |
 | `subscribeSurfaceOutput` / `cancelSubscription` | Streaming (foundation) |
@@ -414,12 +423,20 @@ Observers (`MainSplitViewController`, `ContentAreaViewController`):
 
 ### IPCResponse cases
 
-`ok`, `pong`, `workspaces`, `surfaces`, `workspaceID`, `tabID`, `paneID`, `surfaceID`, `snapshot`, `text`, `data`, `agentInfo`, `error`.
+`ok`, `pong`, `workspaces`, `surfaces`, `workspaceID`, `sessionID`, `tabID`, `paneID`, `surfaceID`, `snapshot`, `text`, `data`, `agentInfo`, `error`.
 
-### GUI vs daemon surfaces for I/O
+`listWorkspaces` returns `WorkspaceSummary.tabCount` = number of **sidebar sessions** in that workspace (field name is legacy).
 
-- **Daemon PTY** (`PtySession` / `RealPty`): `sendKeys` writes directly; `capturePane` reads scrollback buffer.
-- **GUI libghostty**: `sendKeys` posts `NotificationBus.sendKeysRequested`; `capturePane` uses `registerCaptureProvider` in the app.
+### Terminal I/O path (current)
+
+All visible GUI panes use **daemon-backed `RealPty`** surfaces:
+
+1. `TerminalHostView` calls `ensureSurface` on attach and renders libghostty with an **in-memory backend**.
+2. Keystrokes → `sendData` → daemon `RealPty.write`.
+3. Output → `subscribeSurfaceOutput` (persistent socket in `DaemonServer`) → replay scrollback on attach → fan into the in-memory session.
+4. `sendKeys`, `capturePane`, and `send` from `harness-cli` hit the same daemon PTY and scrollback buffer.
+
+`setCopyMode` still posts `NotificationBus.copyModeRequested`; the in-app prefix `[` toggles copy mode directly via `SessionCoordinator`.
 
 ### markWaiting (important)
 
@@ -457,13 +474,14 @@ harness-cli get-snapshot
 
 # Layout
 harness-cli new-workspace --name api
-harness-cli new-session --workspace api --cwd ~/Code/myproject
+harness-cli new-session --workspace api --cwd ~/Code/myproject [--name "api shell"]
 harness-cli new-tab --workspace api --cwd ~/Code/myproject
 harness-cli new-split --tab <tab-uuid> --direction horizontal|vertical [--pane <pane-uuid>]
 harness-cli select-workspace --workspace <name|uuid>
 harness-cli select-session --workspace <workspace-uuid> --session <session-uuid>
 harness-cli select-tab --workspace <workspace-uuid> --tab <tab-uuid>
 harness-cli close-tab --tab <tab-uuid>
+harness-cli close-session --session <session-uuid>
 
 # tmux-style
 harness-cli send-keys --surface <uuid> --keys "C-c Up Enter"
@@ -474,12 +492,14 @@ harness-cli resize-pane --pane <uuid> --dir L|R|U|D [--amount N]
 harness-cli zoom-pane --pane <uuid>
 harness-cli copy-mode --surface <uuid> [--enter|--exit]
 harness-cli rename-tab --tab <uuid> --name "..."
+harness-cli rename-session --session <uuid> --name "..."
 harness-cli rename-workspace --id <uuid> --name "..."
 
 # Agents
 harness-cli notify --surface "$HARNESS_SURFACE" --title Agent --body "Needs approval"
+# `--message` is an alias for `--body`
 harness-cli detect-agent --surface <uuid>
-harness-cli install-hooks <codex|claude-code|cursor|pi|hermes|openclaw|aider|gemini|goose>
+harness-cli install-hooks <codex|claude-code|cursor|pi|hermes|openclaw>
 
 # Attach (scrollback replay today; full streaming WIP)
 harness-cli attach --surface <uuid>
@@ -515,7 +535,8 @@ Every GUI terminal pane launches:
 
 - Daemon walks process tree from registered shell PID (`proc_listpids`, `proc_pidpath`).
 - Matches executables against `AgentTable` (built-in + `agents.json`).
-- Kinds: `codex`, `claude-code`, `cursor`, `pi`, `hermes`, `openclaw`, `aider`, `gemini`, `goose`, `generic`.
+- Kinds: `codex`, `claude-code`, `cursor`, `pi`, `hermes`, `openclaw`, `aider`, `gemini`, `goose`, `generic` (detection table).
+- `install-hooks` writes config for: `claude-code`, `codex`, `cursor`, `pi`, `hermes`, `openclaw` only.
 - `AgentScanner` runs ~1.5s cadence, calls `SurfaceRegistry.applyAgentChanges`.
 - Activity decays from `working` → `idle` after 3s quiet; I/O bumps `working`.
 
@@ -676,6 +697,19 @@ xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug -dest
 
 Pre-release: `docs/RELEASE_CHECKLIST.md`.
 
+### Tests
+
+Two test targets (the daemon is testable because its logic lives in the `HarnessDaemonCore` library; `HarnessDaemon` is a thin `main.swift` wrapper):
+
+- **`HarnessCoreTests`** — deterministic unit tests for the data + IPC layer: `SessionEditor` (incl. reorder-tab, split-ratio, kill-pane, and the markWaiting surface-targeting regression), `IPCCodec` round-trip + framing edge cases, `HarnessPaths`, `TmuxKeyParser`, `GhosttyConfigImporter`, `AgentDetector`, `DaemonClient` timeout.
+- **`HarnessDaemonTests`** — drives `SurfaceRegistry.handle(...)` directly. The real-shell / in-process-socket integration tests (`RealPty` lifecycle, full `DaemonServer` round-trip + output streaming) spawn real shells and don't reap cleanly inside the local XCTest runner, so they are **opt-in** behind `HARNESS_LIVE_DAEMON_TESTS=1` — intended for a CI runner that handles subprocess lifecycle.
+
+```bash
+swift test                                # deterministic suite (green, fast, no subprocesses)
+HARNESS_LIVE_DAEMON_TESTS=1 swift test    # + live daemon/PTY integration tests
+# or via Xcode scheme Harness
+```
+
 ### Smoke tests agents should run
 
 ```bash
@@ -799,21 +833,22 @@ harness-cli ping
 
 ### Implemented (current)
 
-- Daemon-owned JSON layout + full IPC surface above
-- libghostty exec terminals in GUI with Ghostty config import
+- Daemon-owned JSON layout + IPC surface above
+- Daemon `RealPty` (`forkpty`) owns shell processes; GUI panes use `ensureSurface` + `sendData` + live output subscription
+- libghostty in-memory rendering in GUI with Ghostty config import
 - Custom hex chrome + terminal parity (`#000000` black)
 - Liquid Glass / vibrancy chrome (`ChromeBackdrop`)
 - Live cwd via OSC 7 + `SurfaceShellTracker`
 - metadataOnly UI refresh (tabs/sidebar without remounting)
 - tmux-style CLI + in-app prefix keymap
-- Agent detection, chips, colored dots, `install-hooks`
-- Daemon `RealPty` / scrollback foundation, GUI in-memory attach, `harness-cli attach` (replay)
+- Agent detection, chips, colored dots, `install-hooks` (six agents)
+- `harness-cli attach` scrollback replay; GUI streams daemon output on attach
 - 400+ Ghostty themes via `GhosttyTheme`
 
 ### Backlog (do not implement unless asked)
 
-- Full GUI detach/reattach (daemon PTY wired to visible surfaces after quit)
-- Live streaming `subscribeSurfaceOutput` over IPC socket
+- Full GUI detach/reattach (survive app quit with visible surfaces wired to daemon PTY)
+- `harness-cli attach` live streaming (today: scrollback replay only)
 - LaunchAgent daemon without app
 - SSH remote workspaces
 - Embedded browser pane

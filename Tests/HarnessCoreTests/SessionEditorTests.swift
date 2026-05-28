@@ -148,6 +148,71 @@ final class SessionEditorTests: XCTestCase {
         editor.setKeepSessionsOnQuit(!editor.snapshot.keepSessionsOnQuit)
         XCTAssertEqual(editor.snapshot.revision, originalRevision + 2)
     }
+
+    func testReorderTabMovesTabToRequestedIndex() throws {
+        var editor = SessionEditor()
+        let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        _ = editor.addTab(to: workspace.id, cwd: "/tmp")
+        _ = editor.addTab(to: workspace.id, cwd: "/tmp")
+        let before = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs)
+        XCTAssertEqual(before.count, 3)
+        let firstID = before[0].id
+
+        XCTAssertTrue(editor.reorderTab(workspaceID: workspace.id, tabID: firstID, toIndex: 2))
+
+        let after = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs)
+        XCTAssertEqual(after.map(\.id), [before[1].id, before[2].id, firstID])
+    }
+
+    func testSetSplitRatioUpdatesAndClampsBranch() throws {
+        var editor = SessionEditor()
+        let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab = try XCTUnwrap(workspace.activeTab)
+        let root = try XCTUnwrap(tab.rootPane.paneID)
+        _ = try XCTUnwrap(editor.splitPane(in: workspace.id, tabID: tab.id, paneID: root, direction: .horizontal))
+
+        let split = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
+        guard case let .branch(_, ratio0, first, second) = split.rootPane else { return XCTFail("expected branch") }
+        XCTAssertEqual(ratio0, 0.5, accuracy: 0.0001)
+        let firstLeaf = try XCTUnwrap(first.paneID)
+        let secondLeaf = try XCTUnwrap(second.paneID)
+
+        XCTAssertTrue(editor.setSplitRatio(tabID: tab.id, firstPaneID: firstLeaf, secondPaneID: secondLeaf, ratio: 0.7))
+        guard case let .branch(_, ratio1, _, _) = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab).rootPane else {
+            return XCTFail("expected branch")
+        }
+        XCTAssertEqual(ratio1, 0.7, accuracy: 0.0001)
+
+        // Out-of-range ratio clamps to [0.1, 0.9]; unknown panes are a no-op.
+        XCTAssertTrue(editor.setSplitRatio(tabID: tab.id, firstPaneID: firstLeaf, secondPaneID: secondLeaf, ratio: 0.99))
+        guard case let .branch(_, ratio2, _, _) = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab).rootPane else {
+            return XCTFail("expected branch")
+        }
+        XCTAssertEqual(ratio2, 0.9, accuracy: 0.0001)
+        XCTAssertFalse(editor.setSplitRatio(tabID: tab.id, firstPaneID: UUID(), secondPaneID: UUID(), ratio: 0.5))
+    }
+
+    func testSurfaceIDForPaneIDResolvesLeaves() throws {
+        let editor = SessionEditor()
+        let tab = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
+        guard case let .leaf(leaf) = tab.rootPane else { return XCTFail("expected single leaf") }
+        XCTAssertEqual(editor.surfaceID(forPaneID: leaf.id), leaf.surfaceID)
+        XCTAssertNil(editor.surfaceID(forPaneID: UUID()))
+    }
+
+    func testKillPaneCollapsesBranchToSurvivor() throws {
+        var editor = SessionEditor()
+        let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab = try XCTUnwrap(workspace.activeTab)
+        let root = try XCTUnwrap(tab.rootPane.paneID)
+        let newPane = try XCTUnwrap(editor.splitPane(in: workspace.id, tabID: tab.id, paneID: root, direction: .horizontal))
+        XCTAssertEqual(try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab).rootPane.allPaneIDs().count, 2)
+
+        XCTAssertTrue(editor.killPane(newPane))
+
+        let after = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
+        XCTAssertEqual(after.rootPane.allPaneIDs(), [root])
+    }
 }
 
 private struct LegacySnapshot: Codable {

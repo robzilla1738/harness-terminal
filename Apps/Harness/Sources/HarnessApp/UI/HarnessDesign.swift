@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 /// Layout metrics and chrome helpers; colors come from `HarnessChrome.current`.
 @MainActor
@@ -11,12 +12,62 @@ enum HarnessDesign {
     static let footerHeight: CGFloat = 40
     static let tabPillHeight: CGFloat = 24
 
-    static let horizontalInset: CGFloat = 12
-    static let rowSpacing: CGFloat = 2
-    static let cornerRadius: CGFloat = 7
-    static let pillCornerRadius: CGFloat = 5
+    static let horizontalInset: CGFloat = Spacing.lg
+    static let rowSpacing: CGFloat = Spacing.xxs
+    static let cornerRadius: CGFloat = Radius.card
+    static let pillCornerRadius: CGFloat = Radius.pill
 
     static var chrome: HarnessChromePalette { HarnessChrome.current }
+
+    // MARK: - Design tokens
+    //
+    // Single source of truth for spacing, radius, motion, and typography. New code
+    // should reference these rather than literals; existing call sites migrate to
+    // them as each file is touched. Every token equals the value it replaced, so
+    // adopting a token is a behavior-neutral change.
+
+    /// Spacing scale in points. Prefer these over literals so density stays uniform.
+    enum Spacing {
+        static let xxs: CGFloat = 2
+        static let xs: CGFloat = 4
+        static let sm: CGFloat = 6
+        static let md: CGFloat = 8
+        static let lg: CGFloat = 12
+        static let xl: CGFloat = 16
+        static let xxl: CGFloat = 22
+    }
+
+    /// Corner-radius vocabulary. Pair every use with `.cornerCurve = .continuous`.
+    enum Radius {
+        static let card: CGFloat = 7
+        static let pill: CGFloat = 5
+        static let badge: CGFloat = 4
+        static let control: CGFloat = 6
+        static let overlay: CGFloat = 10
+        static let capsule: CGFloat = 999
+    }
+
+    /// Animation durations (seconds) and shared easing curves. Keep motion short.
+    enum Motion {
+        static let microFast: TimeInterval = 0.10
+        static let fast: TimeInterval = 0.16
+        static let standard: TimeInterval = 0.22
+        static let slow: TimeInterval = 0.32
+
+        static var entrance: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeOut) }
+        static var exit: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeIn) }
+        static var standardEase: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeInEaseOut) }
+    }
+
+    /// Semantic fonts so sizes/weights live in one place.
+    enum Typography {
+        static var rowTitle: NSFont { .systemFont(ofSize: 13, weight: .semibold) }
+        static var rowMeta: NSFont { .monospacedSystemFont(ofSize: 11, weight: .regular) }
+        static var tabTitle: NSFont { .systemFont(ofSize: 12, weight: .medium) }
+        static var sectionLabel: NSFont { .systemFont(ofSize: 10.5, weight: .semibold) }
+        static var badge: NSFont { .monospacedSystemFont(ofSize: 10.5, weight: .semibold) }
+        static var kbd: NSFont { .monospacedSystemFont(ofSize: 12, weight: .semibold) }
+    }
 
     enum ChromeRole {
         case sidebar
@@ -109,6 +160,41 @@ enum HarnessDesign {
     /// Backwards-compatible alias used by older call sites.
     static func footerIconButton(symbol: String, tooltip: String) -> SoftIconButton {
         softIconButton(symbol: symbol, tooltip: tooltip)
+    }
+}
+
+/// Centralized animation helpers so motion stays consistent and tasteful across
+/// the app. Callers animate through the `animator()` proxy inside `animate`.
+@MainActor
+enum HarnessMotion {
+    /// Run an animation group with one of the shared durations + easing curves.
+    /// `completion` is `@MainActor`-isolated (hence `Sendable`) and bridged onto the
+    /// main thread, where `runAnimationGroup` always invokes its handler.
+    static func animate(
+        _ duration: TimeInterval = HarnessDesign.Motion.fast,
+        timing: CAMediaTimingFunction = HarnessDesign.Motion.standardEase,
+        _ body: (NSAnimationContext) -> Void,
+        completion: (@MainActor () -> Void)? = nil
+    ) {
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = duration
+            ctx.timingFunction = timing
+            body(ctx)
+        }, completionHandler: completion.map { handler in
+            { @Sendable in MainActor.assumeIsolated { handler() } }
+        })
+    }
+
+    /// Cross-dissolve a layer whose contents are about to swap (theme change, pane
+    /// remount). Soft transition instead of a hard cut; the swap itself is the
+    /// caller's responsibility — this only schedules the fade.
+    static func crossfade(_ layer: CALayer?, duration: TimeInterval = HarnessDesign.Motion.fast) {
+        guard let layer else { return }
+        let transition = CATransition()
+        transition.type = .fade
+        transition.duration = duration
+        transition.timingFunction = HarnessDesign.Motion.standardEase
+        layer.add(transition, forKey: "harnessCrossfade")
     }
 }
 
@@ -212,6 +298,15 @@ final class ChromeBackdrop: NSView {
     /// Liquid Glass on macOS 26+, vibrancy fallback on earlier OS releases.
     private let backdrop: NSView
     private let tint = NSView()
+    /// Hairline separator drawn at the bottom edge for the tab-bar role only, so the
+    /// tab strip reads as distinct from the terminal without a hard divider.
+    private let hairline = CALayer()
+
+    /// When true, the next `update(role:)` cross-dissolves its color change instead of
+    /// cutting. The chrome-change cascade (theme switch) sets this around its pass so a
+    /// theme switch fades rather than pops. Scoped to backdrops (behind the terminal),
+    /// so the Metal pane is never captured in the transition.
+    static var crossfadeNextUpdate = false
 
     init(role: HarnessDesign.ChromeRole) {
         self.role = role
@@ -227,6 +322,7 @@ final class ChromeBackdrop: NSView {
 
         addSubview(backdrop)
         addSubview(tint)
+        layer?.addSublayer(hairline)
         NSLayoutConstraint.activate([
             backdrop.topAnchor.constraint(equalTo: topAnchor),
             backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -239,6 +335,13 @@ final class ChromeBackdrop: NSView {
         ])
 
         update(role: role)
+    }
+
+    override func layout() {
+        super.layout()
+        // Manual frame (CALayer, not Auto Layout); AppKit suppresses implicit
+        // animations during the layout pass so this doesn't slide on resize.
+        hairline.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
     }
 
     /// Picks the best available backdrop layer:
@@ -272,13 +375,8 @@ final class ChromeBackdrop: NSView {
         let opacity = HarnessChrome.backgroundOpacity
         let isTransparent = opacity < 0.999
 
-        if let vibrancy = backdrop as? NSVisualEffectView {
-            vibrancy.material = material(for: role)
-            vibrancy.isHidden = !isTransparent
-        } else {
-            // Liquid Glass: just hide the layer when fully opaque so we get a
-            // crisp solid color without any blur.
-            backdrop.isHidden = !isTransparent
+        if Self.crossfadeNextUpdate {
+            HarnessMotion.crossfade(layer, duration: HarnessDesign.Motion.fast)
         }
 
         let baseColor: NSColor
@@ -288,13 +386,31 @@ final class ChromeBackdrop: NSView {
         case .tabBar: baseColor = chrome.sidebarBackground
         }
 
-        if isTransparent {
+        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
+            if isTransparent {
+                // Tint the Liquid Glass material itself so its blur/refraction shows
+                // through. (A flat opaque overlay on top would defeat the glass.) The
+                // glass owns its translucency, so on macOS 26 the opacity slider acts
+                // as a translucent↔solid switch rather than a precise alpha.
+                glass.isHidden = false
+                glass.tintColor = baseColor
+                tint.layer?.backgroundColor = NSColor.clear.cgColor
+            } else {
+                // Fully opaque → drop the glass for a crisp solid color (true black).
+                glass.isHidden = true
+                tint.layer?.backgroundColor = baseColor.cgColor
+            }
+        } else if let vibrancy = backdrop as? NSVisualEffectView {
+            vibrancy.material = material(for: role)
+            vibrancy.isHidden = !isTransparent
             // Tint sits ON TOP of vibrancy, providing the Ghostty background
             // color × opacity (e.g. pure-black @ 0.85) across every region.
-            tint.layer?.backgroundColor = baseColor.withAlphaComponent(opacity).cgColor
-        } else {
             tint.layer?.backgroundColor = baseColor.cgColor
         }
+
+        hairline.isHidden = true
+        hairline.backgroundColor = chrome.borderStrong.withAlphaComponent(0.5).cgColor
+        needsLayout = true
     }
 
     private func material(for role: HarnessDesign.ChromeRole) -> NSVisualEffectView.Material {
@@ -309,6 +425,69 @@ final class ChromeBackdrop: NSView {
     }
 }
 
+/// Rounded, theme-tinted Liquid-Glass surface for floating overlays (command
+/// palette, prefix cheatsheet/indicator). Add content to `contentView`; on macOS 26
+/// it sits over real glass, otherwise over a vibrancy + tint fallback. Pair with a
+/// borderless panel (`backgroundColor = .clear`, `hasShadow = true`).
+@MainActor
+final class HarnessOverlayBackground: NSView {
+    let contentView = NSView()
+    private let backdrop: NSView
+    private let tint = NSView()
+
+    init() {
+        self.backdrop = HarnessOverlayBackground.makeBackdrop()
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = HarnessDesign.Radius.overlay
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.borderWidth = 1
+
+        tint.wantsLayer = true
+        contentView.wantsLayer = true
+        for sub in [backdrop, tint, contentView] {
+            sub.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(sub)
+            NSLayoutConstraint.activate([
+                sub.topAnchor.constraint(equalTo: topAnchor),
+                sub.leadingAnchor.constraint(equalTo: leadingAnchor),
+                sub.trailingAnchor.constraint(equalTo: trailingAnchor),
+                sub.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        }
+        applyTheme()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    private static func makeBackdrop() -> NSView {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = HarnessDesign.Radius.overlay
+            return glass
+        }
+        let vibrancy = NSVisualEffectView()
+        vibrancy.material = .underWindowBackground
+        vibrancy.blendingMode = .behindWindow
+        vibrancy.state = .active
+        return vibrancy
+    }
+
+    func applyTheme() {
+        let c = HarnessDesign.chrome
+        layer?.borderColor = c.borderStrong.cgColor
+        if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
+            // Tint the glass so it reads as an elevated dark surface while keeping blur.
+            glass.tintColor = c.sidebarBackground
+            tint.layer?.backgroundColor = NSColor.clear.cgColor
+        } else {
+            tint.layer?.backgroundColor = c.sidebarBackground.withAlphaComponent(0.95).cgColor
+        }
+    }
+}
+
 /// 8 px status indicator dot. Tints itself based on `TabStatus`.
 @MainActor
 final class StatusDotView: NSView {
@@ -317,7 +496,7 @@ final class StatusDotView: NSView {
         case waiting
         case error
         case accent
-        /// Tinted by the running agent (see `AgentKind.dotHex`).
+        /// Tinted by the running agent, with optional user overrides in settings.
         case agent(hex: String)
     }
 
@@ -381,25 +560,29 @@ final class StatusDotView: NSView {
     }
 }
 
-/// Two-letter pill that identifies the agent (e.g. "CC" for Claude Code) on
-/// each session card.
+/// Clean capsule that names the running agent (e.g. "Codex", "Claude Code") on
+/// each session card: a small brand-colored dot followed by the tool's name on a
+/// faint brand-tinted fill.
 @MainActor
 final class AgentChipView: NSView {
+    private let dot = CALayer()
     private let label = NSTextField(labelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 4
         layer?.cornerCurve = .continuous
+        layer?.addSublayer(dot)
 
-        label.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
-        label.alignment = .center
+        label.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        label.alignment = .left
+        label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            // Leading room reserves space for the dot drawn in layout().
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 17),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
@@ -407,11 +590,24 @@ final class AgentChipView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    override func layout() {
+        super.layout()
+        // Capsule, with a 5px dot vertically centered against the leading inset.
+        layer?.cornerRadius = bounds.height / 2
+        let size: CGFloat = 5
+        dot.frame = CGRect(x: 8, y: (bounds.height - size) / 2, width: size, height: size)
+        dot.cornerRadius = size / 2
+    }
+
     func configure(text: String, hex: String) {
         label.stringValue = text
         let tint = NSColor.fromHex(hex) ?? HarnessDesign.chrome.accent
-        layer?.backgroundColor = tint.withAlphaComponent(0.22).cgColor
-        label.textColor = tint
+        let c = HarnessDesign.chrome
+        layer?.backgroundColor = tint.withAlphaComponent(c.isDark ? 0.14 : 0.12).cgColor
+        dot.backgroundColor = tint.cgColor
+        // Brand color reads poorly as text on dark fills for some agents, so lean on
+        // a bright, legible label and let the dot carry the brand hue.
+        label.textColor = c.textPrimary.withAlphaComponent(0.92)
     }
 }
 

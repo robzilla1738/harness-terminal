@@ -2,9 +2,8 @@ import Foundation
 import HarnessCore
 
 /// Writes per-agent hook config files so each known agent CLI can call back
-/// into Harness via `harness-cli notify --surface "$HARNESS_SURFACE"`.
-/// This is the user-facing side of Phase 6c — the agent-side guide lives in
-/// `docs/agent-hooks/<agent>.md`.
+/// into Harness via `harness-cli notify --surface "$HARNESS_SURFACE"`. The
+/// per-agent guides live in `docs/agent-hooks/<agent>.md`.
 enum AgentHookInstaller {
     static func install(agent: String) throws {
         let normalized = agent.lowercased()

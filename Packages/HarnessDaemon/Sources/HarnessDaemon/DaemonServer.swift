@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import HarnessCore
 
+/// @unchecked Sendable: socket-accept and subscription state are confined to the serial `queue`.
 public final class DaemonServer: @unchecked Sendable {
     public let registry = SurfaceRegistry()
     private var listener: DispatchSourceRead?
@@ -145,6 +146,22 @@ public final class DaemonServer: @unchecked Sendable {
 
     public func runLoop() {
         dispatchMain()
+    }
+
+    /// Cancel the accept loop and tear down all client connections + subscriptions.
+    /// Lets a server shut down cleanly (used by integration tests and for an orderly
+    /// daemon teardown).
+    public func stop() {
+        queue.sync {
+            listener?.cancel()
+            listener = nil
+            for (fd, source) in clientSources {
+                cancelSubscriptions(for: fd)
+                source.cancel()
+            }
+            clientSources.removeAll()
+            clientBuffers.removeAll()
+        }
     }
 }
 

@@ -18,6 +18,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private var activeSessionID: SessionID?
     private var isProgrammaticSelection = false
     private var workspaceDropdown: WorkspaceSwitcherPanelView?
+    private var workspaceDropdownMonitor: Any?
 
     override func loadView() {
         let root = NSView()
@@ -51,8 +52,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         HarnessDesign.makeClear(footer)
         sectionLabel.textColor = HarnessDesign.chrome.textTertiary
         workspacePill.applyChrome()
-        workspaceDropdown?.removeFromSuperview()
-        workspaceDropdown = nil
+        dismissWorkspaceDropdown()
         for case let button as SoftIconButton in footer.subviews {
             button.applyChrome()
         }
@@ -215,6 +215,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             isProgrammaticSelection = true
             sessionTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             isProgrammaticSelection = false
+            sessionTable.scrollRowToVisible(row)
         }
     }
 
@@ -257,22 +258,19 @@ final class HarnessSidebarPanelViewController: NSViewController {
     }
 
     @objc private func showWorkspaceMenu() {
-        if let dropdown = workspaceDropdown {
-            dropdown.removeFromSuperview()
-            workspaceDropdown = nil
+        if workspaceDropdown != nil {
+            dismissWorkspaceDropdown()
             return
         }
         let dropdown = WorkspaceSwitcherPanelView(
             workspaces: workspaces,
             activeWorkspaceID: activeWorkspaceID,
             onSelect: { [weak self] id in
-                self?.workspaceDropdown?.removeFromSuperview()
-                self?.workspaceDropdown = nil
+                self?.dismissWorkspaceDropdown()
                 SessionCoordinator.shared.selectWorkspace(id)
             },
             onNew: { [weak self] in
-                self?.workspaceDropdown?.removeFromSuperview()
-                self?.workspaceDropdown = nil
+                self?.dismissWorkspaceDropdown()
                 self?.addWorkspace()
             }
         )
@@ -285,13 +283,55 @@ final class HarnessSidebarPanelViewController: NSViewController {
             dropdown.topAnchor.constraint(equalTo: workspacePill.bottomAnchor, constant: 6),
             dropdown.leadingAnchor.constraint(equalTo: workspacePill.leadingAnchor),
             dropdown.trailingAnchor.constraint(equalTo: workspacePill.trailingAnchor),
-            dropdown.heightAnchor.constraint(equalToConstant: dropdown.preferredHeight),
+            dropdown.heightAnchor.constraint(equalToConstant: clampedDropdownHeight(dropdown.preferredHeight)),
         ])
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             dropdown.animator().alphaValue = 1
         }
+        installWorkspaceDropdownMonitor()
+    }
+
+    private func dismissWorkspaceDropdown() {
+        workspaceDropdown?.removeFromSuperview()
+        workspaceDropdown = nil
+        if let workspaceDropdownMonitor {
+            NSEvent.removeMonitor(workspaceDropdownMonitor)
+            self.workspaceDropdownMonitor = nil
+        }
+    }
+
+    private func installWorkspaceDropdownMonitor() {
+        if let workspaceDropdownMonitor {
+            NSEvent.removeMonitor(workspaceDropdownMonitor)
+        }
+        workspaceDropdownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, let dropdown = self.workspaceDropdown else { return event }
+            guard event.window === self.view.window else {
+                self.dismissWorkspaceDropdown()
+                return event
+            }
+            let point = event.locationInWindow
+            let dropdownPoint = dropdown.convert(point, from: nil)
+            let pillPoint = self.workspacePill.convert(point, from: nil)
+            if dropdown.bounds.contains(dropdownPoint) || self.workspacePill.bounds.contains(pillPoint) {
+                return event
+            }
+            self.dismissWorkspaceDropdown()
+            return event
+        }
+    }
+
+    /// Keep the workspace dropdown on-screen: never extend past the footer. If the
+    /// ideal height doesn't fit, the dropdown scrolls internally.
+    private func clampedDropdownHeight(_ preferred: CGFloat) -> CGFloat {
+        let available = view.bounds.height
+            - HarnessDesign.titlebarChromeHeight
+            - HarnessDesign.workspaceBarHeight
+            - HarnessDesign.footerHeight
+            - 20
+        return min(preferred, max(120, available))
     }
 
     @objc private func openDocs() {
@@ -383,21 +423,23 @@ private final class WorkspaceSwitcherPanelView: NSView {
         self.activeWorkspaceID = activeWorkspaceID
         self.onSelect = onSelect
         self.onNew = onNew
-        self.preferredHeight = max(72, CGFloat(33 * workspaces.count + 42))
+        self.preferredHeight = max(84, CGFloat(37 * workspaces.count + 50))
         super.init(frame: .zero)
 
         wantsLayer = true
-        layer?.cornerRadius = 9
+        layer?.cornerRadius = 11
         layer?.cornerCurve = .continuous
-        layer?.masksToBounds = true
+        // Shadow needs to escape the bounds, so the rounded fill lives on a masked
+        // sublayer instead of clipping the whole view.
+        layer?.masksToBounds = false
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = (c.terminalBackground.blended(withFraction: c.isDark ? 0.04 : 0.035, of: c.textPrimary) ?? c.sidebarBackground).cgColor
+        layer?.backgroundColor = (c.terminalBackground.blended(withFraction: c.isDark ? 0.05 : 0.04, of: c.textPrimary) ?? c.sidebarBackground).cgColor
         layer?.borderWidth = 1
-        layer?.borderColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.10 : 0.14).cgColor
+        layer?.borderColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.09 : 0.13).cgColor
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.24
-        layer?.shadowRadius = 18
-        layer?.shadowOffset = NSSize(width: 0, height: -10)
+        layer?.shadowOpacity = 0.30
+        layer?.shadowRadius = 22
+        layer?.shadowOffset = NSSize(width: 0, height: -12)
 
         setupContent()
     }
@@ -409,10 +451,9 @@ private final class WorkspaceSwitcherPanelView: NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .width
-        stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+        stack.spacing = 3
+        stack.edgeInsets = NSEdgeInsets(top: 7, left: 7, bottom: 7, right: 7)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
 
         for workspace in workspaces {
             let row = WorkspaceSwitcherRow(
@@ -441,17 +482,32 @@ private final class WorkspaceSwitcherPanelView: NSView {
         newRow.onClick = onNew
         stack.addArrangedSubview(newRow)
 
+        // Scrollable so a long workspace list stays on-screen when the caller clamps
+        // the dropdown height (see clampedDropdownHeight).
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.documentView = stack
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(scroll)
+
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
     }
 }
 
+/// A row is a plain NSView, not an NSButton: NSButton's bezel `alignmentRectInsets`
+/// offset it inside the stack view, which left the selected row floating off to one
+/// side. A view fills the row width cleanly and we drive the click ourselves.
 @MainActor
-private final class WorkspaceSwitcherRow: NSButton {
+private final class WorkspaceSwitcherRow: NSView {
     var onClick: (() -> Void)?
 
     private let icon = NSImageView()
@@ -465,15 +521,9 @@ private final class WorkspaceSwitcherRow: NSButton {
     init(title: String, count: Int?, isActive: Bool, symbol: String) {
         active = isActive
         super.init(frame: .zero)
-        self.title = ""
-        isBordered = false
-        bezelStyle = .smallSquare
-        setButtonType(.momentaryChange)
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 8
         layer?.cornerCurve = .continuous
-        target = self
-        action = #selector(clicked)
         translatesAutoresizingMaskIntoConstraints = false
 
         let iconConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
@@ -486,6 +536,7 @@ private final class WorkspaceSwitcherRow: NSButton {
         titleLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        toolTip = title
 
         if let count {
             countLabel.stringValue = "\(count)"
@@ -507,7 +558,7 @@ private final class WorkspaceSwitcherRow: NSButton {
         addSubview(check)
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 31),
+            heightAnchor.constraint(equalToConstant: 34),
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 15),
@@ -545,19 +596,27 @@ private final class WorkspaceSwitcherRow: NSButton {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
-    @objc private func clicked() {
-        onClick?()
+    // Capture the press (without forwarding) so this view receives the matching
+    // mouseUp; the selection fires on up if the cursor is still inside the row.
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if bounds.contains(point) { onClick?() }
     }
 
     private func applyChrome() {
         let c = HarnessDesign.chrome
-        let selectedFill = c.accent.withAlphaComponent(c.isDark ? 0.10 : 0.08)
-        layer?.backgroundColor = active ? selectedFill.cgColor : (isHovered ? c.textPrimary.withAlphaComponent(0.055).cgColor : NSColor.clear.cgColor)
-        layer?.borderWidth = active || isHovered ? 1 : 0
-        layer?.borderColor = (active ? c.accent.withAlphaComponent(0.22) : c.textPrimary.withAlphaComponent(0.08)).cgColor
+        let selectedFill = c.accent.withAlphaComponent(c.isDark ? 0.14 : 0.11)
+        layer?.backgroundColor = active
+            ? selectedFill.cgColor
+            : (isHovered ? c.textPrimary.withAlphaComponent(0.06).cgColor : NSColor.clear.cgColor)
+        // Borderless — the soft fill alone marks active/hover, which reads cleaner
+        // than the previous boxed outline.
+        layer?.borderWidth = 0
         icon.contentTintColor = active ? c.accent : c.textTertiary
         titleLabel.textColor = active || isHovered ? c.textPrimary : c.textSecondary
-        countLabel.textColor = c.textTertiary
+        countLabel.textColor = active ? c.accent.withAlphaComponent(0.9) : c.textTertiary
         check.contentTintColor = c.accent
     }
 }
@@ -659,6 +718,7 @@ final class WorkspacePillButton: NSButton {
     func configure(name: String, count: Int) {
         nameLabel.stringValue = name
         countBadge.stringValue = "\(count)"
+        toolTip = name
         applyChrome()
     }
 
@@ -705,6 +765,9 @@ final class SessionCardRowView: NSView {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        // The agent chip now carries the full tool name; let the title truncate to
+        // make room rather than squeezing the chip.
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         metaLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         metaLabel.lineBreakMode = .byTruncatingTail
@@ -756,6 +819,7 @@ final class SessionCardRowView: NSView {
             agentChip.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -6),
             agentChip.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             agentChip.heightAnchor.constraint(equalToConstant: 18),
+            agentChip.widthAnchor.constraint(lessThanOrEqualToConstant: 120),
 
             metaLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             metaLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
@@ -784,7 +848,9 @@ final class SessionCardRowView: NSView {
         let tab = session.activeTab ?? session.tabs.first ?? Tab()
         let folder = HarnessDesign.shortenPath(tab.cwd)
         let folderName = HarnessDesign.pathDisplayName(tab.cwd)
+        let displayedAgentKind = tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)
         titleLabel.stringValue = session.name.isEmpty ? folderName : session.name
+        toolTip = session.name.isEmpty ? folder : "\(session.name) — \(folder)"
 
         var metaParts: [String] = []
         if session.tabs.count > 1 {
@@ -795,7 +861,10 @@ final class SessionCardRowView: NSView {
         }
         if tab.status == .waiting, let text = tab.notificationText, !text.isEmpty {
             metaParts.append(text)
-        } else if !tab.title.isEmpty, tab.title != folderName, tab.title != "Shell" {
+        } else if !tab.title.isEmpty,
+                  tab.title != folderName,
+                  tab.title != "Shell",
+                  AgentTitleInference.kind(from: tab.title) == nil {
             metaParts.append(tab.title)
         } else {
             metaParts.append(folder)
@@ -808,7 +877,7 @@ final class SessionCardRowView: NSView {
             // color so users can scan a workspace for "what's running where" at
             // a glance.
             if let agent = tab.agent, agent.activity == .working {
-                statusDot.style = .agent(hex: agent.kind.dotHex)
+                statusDot.style = .agent(hex: SessionCoordinator.shared.settings.agentColorHex(for: agent.kind))
             } else {
                 statusDot.style = .idle
             }
@@ -816,8 +885,8 @@ final class SessionCardRowView: NSView {
         case .error: statusDot.style = .error
         }
 
-        if let agent = tab.agent {
-            agentChip.configure(text: agent.kind.chip, hex: agent.kind.dotHex)
+        if let kind = displayedAgentKind {
+            agentChip.configure(text: kind.displayName, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
             agentChip.isHidden = false
         } else {
             agentChip.isHidden = true
@@ -840,7 +909,9 @@ final class SessionCardRowView: NSView {
         metaLabel.textColor = c.textTertiary
         if isSelected {
             fill.layer?.backgroundColor = c.rowSelectedFill.cgColor
-            fill.layer?.borderColor = c.border.cgColor
+            // Accent-tinted outline marks the active session — doubles as the
+            // keyboard-focus indicator for the list.
+            fill.layer?.borderColor = c.focusRing.withAlphaComponent(c.isDark ? 0.45 : 0.5).cgColor
             titleLabel.textColor = c.textPrimary
             metaLabel.textColor = c.textSecondary
         } else if isHovered {
@@ -866,5 +937,21 @@ final class SessionCardRowView: NSView {
     override func mouseExited(with event: NSEvent) {
         isHovered = false
         refresh()
+    }
+}
+
+private enum AgentTitleInference {
+    static func kind(from rawTitle: String) -> AgentKind? {
+        let normalized = rawTitle
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "*•·-–—|"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        guard !normalized.isEmpty else { return nil }
+        return AgentKind.allCases.first { kind in
+            normalized == kind.displayName.lowercased()
+                || normalized.hasPrefix("\(kind.displayName.lowercased()) ")
+        }
     }
 }

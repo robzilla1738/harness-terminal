@@ -56,4 +56,35 @@ final class DaemonClientTests: XCTestCase {
         }
         wait(for: [accepted], timeout: 1)
     }
+
+    /// Regression: closing a tab/pane deinits its `TerminalHostView`, which calls
+    /// `DaemonSubscription.cancel()` on the main thread. The read loop parks a blocking
+    /// `read()` for the subscription's lifetime; if `cancel()` funnels through the same
+    /// queue it waits behind that read forever and the app freezes. `cancel()` must return
+    /// promptly and wake the read loop instead.
+    func testSubscriptionCancelDoesNotDeadlockWhileReadLoopBlocked() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0, "socketpair failed")
+        let localEnd = fds[0]
+        let peerEnd = fds[1]
+        // peerEnd stays open and silent, so read(localEnd) blocks exactly like an idle daemon.
+        defer { close(peerEnd) }
+
+        let readLoopEnded = expectation(description: "read loop exited")
+        let subscription = DaemonSubscription(fd: localEnd)
+        subscription.start(onData: { _, _ in }, onEnd: { readLoopEnded.fulfill() })
+
+        // Let the read loop reach its blocking read() before we cancel.
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let cancelReturned = expectation(description: "cancel returned")
+        DispatchQueue.global().async {
+            subscription.cancel()   // pre-fix: deadlocks here forever
+            cancelReturned.fulfill()
+        }
+        wait(for: [cancelReturned], timeout: 2)
+
+        // shutdown() inside cancel() must wake the blocked read so the loop exits.
+        wait(for: [readLoopEnded], timeout: 2)
+    }
 }

@@ -4,7 +4,9 @@ public enum IPCCodec {
     private static let maxPayloadLength = 64 * 1024 * 1024
 
     public static func encode<T: Encodable>(_ value: T) throws -> Data {
-        let payload = try JSONEncoder().encode(value)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let payload = try encoder.encode(value)
         var length = UInt32(payload.count).bigEndian
         var data = Data(bytes: &length, count: 4)
         data.append(payload)

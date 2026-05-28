@@ -1,6 +1,7 @@
 import Foundation
 import HarnessCore
 
+/// @unchecked Sendable: launch/poll state is confined to the serial `queue`.
 final class DaemonLauncher: @unchecked Sendable {
     static let shared = DaemonLauncher()
 

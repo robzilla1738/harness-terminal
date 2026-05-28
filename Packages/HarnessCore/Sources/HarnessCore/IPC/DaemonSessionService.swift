@@ -13,6 +13,7 @@ public enum DaemonSessionError: Error, CustomStringConvertible {
 }
 
 /// Client wrapper used by Harness.app for all session mutations.
+/// @unchecked Sendable: holds only an immutable, thread-safe `DaemonClient`.
 public final class DaemonSessionService: @unchecked Sendable {
     private let client = DaemonClient()
 

@@ -1,6 +1,8 @@
 import Darwin
 import Foundation
 
+/// Synchronous IPC client. @unchecked Sendable: stateless between calls (each request
+/// opens and closes its own socket) and all calls funnel through the serial `queue`.
 public final class DaemonClient: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.robert.harness.daemon-client")
 
@@ -114,28 +116,48 @@ public final class DaemonClient: @unchecked Sendable {
     }
 }
 
+/// Live output stream over a dedicated socket.
+///
+/// The read loop runs a *blocking* `read(fd)` on `queue`, so it parks that queue for the
+/// subscription's whole lifetime (an idle daemon keeps the socket open, so `read()` does
+/// not return on its own). Cancellation therefore must NOT funnel through `queue` — a
+/// `queue.sync` would wait behind the read loop forever, and the `close(fd)` that would
+/// wake the loop is exactly what's trapped behind it. That self-deadlock froze the main
+/// thread whenever a tab/pane closed and its `TerminalHostView` deinit called `cancel()`.
+///
+/// Instead `cancel()` flips a lock-guarded flag and `shutdown(2)`s the socket to wake the
+/// blocked `read()`. The read loop then observes EOF, exits, and owns the final `close(fd)`
+/// so the descriptor is closed exactly once and never while another thread might read it.
+///
+/// @unchecked Sendable: `fd` is immutable; `cancelled`/`finished` are guarded by `lock`.
 public final class DaemonSubscription: @unchecked Sendable {
     private let fd: Int32
     private let queue = DispatchQueue(label: "com.robert.harness.daemon-subscription")
+    private let lock = NSLock()
     private var cancelled = false
+    private var finished = false
 
     init(fd: Int32) {
         self.fd = fd
     }
 
     public func cancel() {
-        queue.sync {
-            guard !cancelled else { return }
-            cancelled = true
-            close(fd)
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled, !finished else { return }
+        cancelled = true
+        // Wake the blocked read() without touching `queue`. Holding `lock` while we call
+        // shutdown — paired with the read loop setting `finished` under the same lock
+        // before it closes — guarantees `fd` is still open here, so we never shutdown a
+        // descriptor the loop already closed and the OS may have recycled.
+        shutdown(fd, SHUT_RDWR)
     }
 
-    fileprivate func start(
+    func start(
         onData: @escaping @Sendable (Data, UInt64) -> Void,
         onEnd: (@Sendable () -> Void)?
     ) {
-        queue.async { [fd] in
+        queue.async { [weak self, fd] in
             var buffer = Data()
             var temp = [UInt8](repeating: 0, count: 65_536)
             while true {
@@ -148,6 +170,12 @@ public final class DaemonSubscription: @unchecked Sendable {
                     }
                 }
             }
+            if let self {
+                self.lock.lock()
+                self.finished = true
+                self.lock.unlock()
+            }
+            close(fd)
             onEnd?()
         }
     }

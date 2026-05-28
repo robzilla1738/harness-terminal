@@ -74,8 +74,13 @@ final class MainSplitViewController: NSViewController {
     @objc private func snapshotChanged(_ note: Notification) {
         let metadataOnly = note.userInfo?["metadataOnly"] as? Bool ?? false
         if note.userInfo?["chromeChanged"] as? Bool == true {
+            // Cross-dissolve the chrome (theme switch) instead of a hard color pop.
+            // Re-arming the flag per cascade means rapid successive switches just
+            // restart the fade rather than queueing.
+            ChromeBackdrop.crossfadeNextUpdate = true
             applyChrome()
             (view.window?.windowController as? MainWindowController)?.applyChrome()
+            ChromeBackdrop.crossfadeNextUpdate = false
         }
         if metadataOnly {
             sidebar.refreshMetadata()

@@ -1,5 +1,5 @@
 import Foundation
-import HarnessCore
+import HarnessDaemonCore
 
 let server = DaemonServer()
 do {

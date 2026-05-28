@@ -22,9 +22,15 @@ public final class TerminalHostView: NSView {
     private let controller: TerminalController
     private let memorySession: InMemoryTerminalSession
     private let daemonClient = DaemonClient()
+    private let io: SurfaceIO
     private var outputSubscription: DaemonSubscription?
     private var isWaiting = false
     private var isActiveBorder = false
+    private var appliedThemeBackgroundHex: String?
+    /// Theme-derived indicator colors. This package can't reach the app's palette,
+    /// so the app pushes them via `applyBorderColors`. Default until the first push.
+    public var activeBorderColor: NSColor = .systemBlue
+    public var waitingRingColor: NSColor = .systemBlue
 
     public var showsWaitingRing: Bool {
         get { isWaiting }
@@ -52,22 +58,11 @@ public final class TerminalHostView: NSView {
         self.surfaceID = surfaceID
         let shell = settings?.defaultShell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let surfaceEnv = harnessSurfaceEnv ?? surfaceID.uuidString
-        let writeSurfaceID = surfaceEnv
+        let io = SurfaceIO(surfaceID: surfaceEnv)
+        self.io = io
         self.memorySession = InMemoryTerminalSession(
-            write: { data in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    _ = try? DaemonClient().request(.sendData(surfaceID: writeSurfaceID, data: data))
-                }
-            },
-            resize: { viewport in
-                DispatchQueue.global(qos: .utility).async {
-                    _ = try? DaemonClient().request(.resizeSurface(
-                        surfaceID: writeSurfaceID,
-                        rows: viewport.rows,
-                        cols: viewport.columns
-                    ))
-                }
-            }
+            write: { data in io.send(data) },
+            resize: { viewport in io.resize(rows: viewport.rows, cols: viewport.columns) }
         )
         self.controller = controller ?? TerminalController {
             // Let Ghostty inject its shell-integration script when possible.
@@ -75,7 +70,7 @@ public final class TerminalHostView: NSView {
             // libghostty can deliver real-time pwd/exit-code updates. The
             // PID-based SurfaceShellTracker is the fallback.
             $0.withCustom("shell-integration", "detect")
-            $0.withCustom("shell-integration-features", "cursor,sudo,title")
+            $0.withCustom("shell-integration-features", "sudo,title")
             if let settings {
                 $0.withFontSize(settings.fontSize)
                 $0.withFontFamily(settings.fontFamily)
@@ -83,9 +78,22 @@ public final class TerminalHostView: NSView {
                 $0.withBackgroundBlur(settings.backgroundBlur)
                 $0.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
                 $0.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
-                if let bg = settings.customBackgroundHex { $0.withBackground(bg) }
-                if let fg = settings.customForegroundHex { $0.withForeground(fg) }
-                if let cursor = settings.customCursorHex { $0.withCursorColor(cursor) }
+                if settings.useCustomColors, let bg = settings.customBackgroundHex { $0.withBackground(bg) }
+                if settings.useCustomColors, let fg = settings.customForegroundHex { $0.withForeground(fg) }
+                if settings.useCustomColors, let cursor = settings.customCursorHex { $0.withCursorColor(cursor) }
+                if settings.useCustomColors, let selection = settings.selectionBackgroundHex { $0.withSelectionBackground(selection) }
+                if settings.useCustomColors, let selectionFg = settings.selectionForegroundHex { $0.withSelectionForeground(selectionFg) }
+                if settings.useCustomColors, let bold = settings.boldColorHex { $0.withBoldColor(bold) }
+                if settings.useCustomColors, let cursorText = settings.cursorTextHex { $0.withCursorText(cursorText) }
+                if settings.minimumContrast > 1 { $0.withMinimumContrast(settings.minimumContrast) }
+                if settings.useCustomColors {
+                    for (paletteIndex, paletteColor) in settings.paletteHex.enumerated() {
+                        if let paletteColor { $0.withPalette(paletteIndex, color: paletteColor) }
+                    }
+                }
+                $0.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
+                $0.withCursorStyleBlink(settings.cursorBlink)
+                $0.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
             }
         }
         terminalView = TerminalView(frame: .zero)
@@ -102,7 +110,7 @@ public final class TerminalHostView: NSView {
 
     private func configure(workingDirectory: String?, settings: HarnessSettings?) {
         wantsLayer = true
-        if let bg = settings?.customBackgroundHex, let color = NSColor.fromHex(bg) {
+        if settings?.useCustomColors == true, let bg = settings?.customBackgroundHex, let color = NSColor.fromHex(bg) {
             layer?.backgroundColor = color.withAlphaComponent(CGFloat(settings?.backgroundOpacity ?? 1)).cgColor
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
@@ -128,11 +136,14 @@ public final class TerminalHostView: NSView {
     }
 
     public func applyTheme(named name: String) {
+        appliedThemeBackgroundHex = ThemeManager.backgroundHex(themeName: name)
         ThemeManager.apply(themeName: name, to: controller)
     }
 
     public func applySettings(_ settings: HarnessSettings) {
-        if let bg = settings.customBackgroundHex, let color = NSColor.fromHex(bg) {
+        if settings.useCustomColors, let bg = settings.customBackgroundHex, let color = NSColor.fromHex(bg) {
+            layer?.backgroundColor = color.withAlphaComponent(CGFloat(settings.backgroundOpacity)).cgColor
+        } else if let bg = appliedThemeBackgroundHex, let color = NSColor.fromHex(bg) {
             layer?.backgroundColor = color.withAlphaComponent(CGFloat(settings.backgroundOpacity)).cgColor
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
@@ -145,9 +156,22 @@ public final class TerminalHostView: NSView {
                 $0.withBackgroundBlur(settings.backgroundBlur)
                 $0.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
                 $0.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
-                if let bg = settings.customBackgroundHex { $0.withBackground(bg) }
-                if let fg = settings.customForegroundHex { $0.withForeground(fg) }
-                if let cursor = settings.customCursorHex { $0.withCursorColor(cursor) }
+                if settings.useCustomColors, let bg = settings.customBackgroundHex { $0.withBackground(bg) }
+                if settings.useCustomColors, let fg = settings.customForegroundHex { $0.withForeground(fg) }
+                if settings.useCustomColors, let cursor = settings.customCursorHex { $0.withCursorColor(cursor) }
+                if settings.useCustomColors, let selection = settings.selectionBackgroundHex { $0.withSelectionBackground(selection) }
+                if settings.useCustomColors, let selectionFg = settings.selectionForegroundHex { $0.withSelectionForeground(selectionFg) }
+                if settings.useCustomColors, let bold = settings.boldColorHex { $0.withBoldColor(bold) }
+                if settings.useCustomColors, let cursorText = settings.cursorTextHex { $0.withCursorText(cursorText) }
+                if settings.minimumContrast > 1 { $0.withMinimumContrast(settings.minimumContrast) }
+                if settings.useCustomColors {
+                    for (paletteIndex, paletteColor) in settings.paletteHex.enumerated() {
+                        if let paletteColor { $0.withPalette(paletteIndex, color: paletteColor) }
+                    }
+                }
+                $0.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
+                $0.withCursorStyleBlink(settings.cursorBlink)
+                $0.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
             }
         )
         terminalView.configuration = TerminalSurfaceOptions(
@@ -173,12 +197,31 @@ public final class TerminalHostView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard isWaiting else { return }
-        let ringRect = bounds.insetBy(dx: 3, dy: 3)
-        let path = NSBezierPath(roundedRect: ringRect, xRadius: 6, yRadius: 6)
-        NSColor.systemBlue.withAlphaComponent(0.85).setStroke()
-        path.lineWidth = 3
+        // The waiting ring (urgent) takes precedence over the quieter active-pane
+        // border so a pane that needs attention never reads as merely focused.
+        if isWaiting {
+            strokeIndicator(color: waitingRingColor, lineWidth: 2, alpha: 0.8)
+        } else if isActiveBorder {
+            // Minimal focused-pane hairline — only ever drawn when a tab is split
+            // (gated in SessionCoordinator.setActiveSurface), so a lone terminal has
+            // no border at all.
+            strokeIndicator(color: activeBorderColor, lineWidth: 1, alpha: 0.35)
+        }
+    }
+
+    private func strokeIndicator(color: NSColor, lineWidth: CGFloat, alpha: CGFloat) {
+        let rect = bounds.insetBy(dx: lineWidth, dy: lineWidth)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
+        color.withAlphaComponent(alpha).setStroke()
+        path.lineWidth = lineWidth
         path.stroke()
+    }
+
+    /// Push theme-derived indicator colors from the app's palette.
+    public func applyBorderColors(active: NSColor, waiting: NSColor) {
+        activeBorderColor = active
+        waitingRingColor = waiting
+        needsDisplay = true
     }
 
     public func focusTerminal() {
@@ -187,32 +230,69 @@ public final class TerminalHostView: NSView {
     }
 
     private func ensureDaemonSurface(cwd: String?, shell: String, settings: HarnessSettings?) {
-        _ = try? daemonClient.request(.ensureSurface(
-            surfaceID: surfaceID.uuidString,
-            cwd: cwd ?? FileManager.default.homeDirectoryForCurrentUser.path,
-            shell: shell,
-            rows: 24,
-            cols: 80,
-            scrollbackBytes: (settings?.scrollbackLines ?? 10_000) * 160
-        ))
+        do {
+            _ = try daemonClient.request(.ensureSurface(
+                surfaceID: surfaceID.uuidString,
+                cwd: cwd ?? FileManager.default.homeDirectoryForCurrentUser.path,
+                shell: shell,
+                rows: 24,
+                cols: 80,
+                scrollbackBytes: (settings?.scrollbackLines ?? 10_000) * 160
+            ))
+        } catch {
+            fputs("Harness: ensureSurface failed for \(surfaceID.uuidString): \(error)\n", stderr)
+        }
     }
 
     private func startDaemonOutput() {
-        if case let .text(text) = try? daemonClient.request(.replayScrollback(
-            surfaceID: surfaceID.uuidString,
-            fromSequence: nil
-        )), !text.isEmpty {
-            memorySession.receive(text)
-        }
-        outputSubscription = try? daemonClient.subscribeSurfaceOutput(surfaceID: surfaceID.uuidString) { [weak self] data, _ in
-            Task { @MainActor in
-                self?.memorySession.receive(data)
+        do {
+            if case let .text(text) = try daemonClient.request(.replayScrollback(
+                surfaceID: surfaceID.uuidString,
+                fromSequence: nil
+            )), !text.isEmpty {
+                memorySession.receive(text)
             }
+        } catch {
+            fputs("Harness: replayScrollback failed for \(surfaceID.uuidString): \(error)\n", stderr)
+        }
+        do {
+            outputSubscription = try daemonClient.subscribeSurfaceOutput(surfaceID: surfaceID.uuidString) { [weak self] data, _ in
+                Task { @MainActor in
+                    self?.memorySession.receive(data)
+                }
+            }
+        } catch {
+            fputs("Harness: output subscription failed for \(surfaceID.uuidString): \(error)\n", stderr)
         }
     }
 
     deinit {
         outputSubscription?.cancel()
+    }
+}
+
+/// Serializes a surface's PTY input/resize onto one ordered background queue with a
+/// single reused `DaemonClient`. A fresh client per write on the concurrent global
+/// queue (the old approach) could reorder bytes to the PTY and allocated needlessly;
+/// this keeps writes ordered and off the main thread.
+/// @unchecked Sendable: `DaemonClient` is itself thread-safe and `surfaceID` is immutable.
+private final class SurfaceIO: @unchecked Sendable {
+    private let client = DaemonClient()
+    private let queue = DispatchQueue(label: "com.robert.harness.terminal-io")
+    private let surfaceID: String
+
+    init(surfaceID: String) { self.surfaceID = surfaceID }
+
+    func send(_ data: Data) {
+        queue.async { [client, surfaceID] in
+            _ = try? client.request(.sendData(surfaceID: surfaceID, data: data))
+        }
+    }
+
+    func resize(rows: UInt16, cols: UInt16) {
+        queue.async { [client, surfaceID] in
+            _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols))
+        }
     }
 }
 
@@ -241,11 +321,9 @@ extension TerminalHostView:
     TerminalSurfaceFocusDelegate
 {
     public func terminalDidResize(_ size: TerminalGridMetrics) {
-        _ = try? daemonClient.request(.resizeSurface(
-            surfaceID: surfaceID.uuidString,
-            rows: size.rows,
-            cols: size.columns
-        ))
+        // Ordered + off-main (a synchronous request here would block the UI thread
+        // on a socket round-trip during live resize).
+        io.resize(rows: size.rows, cols: size.columns)
     }
 
     public func terminalDidChangeTitle(_ title: String) {

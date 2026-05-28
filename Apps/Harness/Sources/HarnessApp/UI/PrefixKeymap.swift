@@ -102,7 +102,7 @@ final class PrefixKeymap {
     private func showIndicator() {
         let indicator = self.indicator ?? PrefixIndicatorWindow()
         self.indicator = indicator
-        indicator.present(near: NSApp.keyWindow)
+        indicator.present(near: NSApp.keyWindow, prefix: prefix.displayString)
     }
 
     private func hideIndicator() {
@@ -138,40 +138,61 @@ struct ParsedShortcut: Equatable {
         let mask: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
         return event.modifierFlags.intersection(mask) == modifiers && chars == key
     }
+
+    /// Human-readable glyph form, e.g. `⌃A`, for the prefix indicator.
+    var displayString: String {
+        var glyphs = ""
+        if modifiers.contains(.control) { glyphs += "⌃" }
+        if modifiers.contains(.option) { glyphs += "⌥" }
+        if modifiers.contains(.shift) { glyphs += "⇧" }
+        if modifiers.contains(.command) { glyphs += "⌘" }
+        return glyphs + key.uppercased()
+    }
 }
 
 @MainActor
 final class PrefixIndicatorWindow {
     private var window: NSWindow?
+    private let label = NSTextField(labelWithString: "⌃A")
 
-    func present(near keyWindow: NSWindow?) {
+    func present(near keyWindow: NSWindow?, prefix: String) {
         let panel = window ?? makePanel()
         window = panel
+        label.stringValue = prefix
         guard let parent = keyWindow else {
             panel.orderOut(nil)
             return
         }
         let frame = parent.frame
-        let size = NSSize(width: 90, height: 28)
+        let size = NSSize(width: 76, height: 30)
         panel.setFrame(
             NSRect(
                 x: frame.midX - size.width / 2,
-                y: frame.minY + 24,
+                y: frame.minY + 28,
                 width: size.width,
                 height: size.height
             ),
             display: false
         )
+        panel.alphaValue = 0
         panel.orderFront(nil)
+        HarnessMotion.animate(HarnessDesign.Motion.fast, timing: HarnessDesign.Motion.entrance) { _ in
+            panel.animator().alphaValue = 1
+        }
     }
 
     func dismiss() {
-        window?.orderOut(nil)
+        guard let window else { return }
+        HarnessMotion.animate(HarnessDesign.Motion.fast, timing: HarnessDesign.Motion.exit) { _ in
+            window.animator().alphaValue = 0
+        } completion: {
+            window.orderOut(nil)
+        }
     }
 
     private func makePanel() -> NSWindow {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 90, height: 28),
+            contentRect: NSRect(x: 0, y: 0, width: 76, height: 30),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -179,23 +200,20 @@ final class PrefixIndicatorWindow {
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.backgroundColor = .clear
+        panel.isOpaque = false
         panel.hasShadow = true
 
-        let host = NSView(frame: panel.contentLayoutRect)
-        host.wantsLayer = true
-        host.layer?.cornerRadius = 6
-        host.layer?.backgroundColor = HarnessChrome.current.surfaceElevated.withAlphaComponent(0.95).cgColor
-        host.layer?.borderWidth = 0.5
-        host.layer?.borderColor = HarnessChrome.current.borderStrong.cgColor
+        let host = HarnessOverlayBackground()
+        host.frame = panel.contentLayoutRect
 
-        let label = NSTextField(labelWithString: "Prefix")
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        label.font = HarnessDesign.Typography.kbd
         label.textColor = HarnessChrome.current.accent
+        label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
-        host.addSubview(label)
+        host.contentView.addSubview(label)
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: host.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: host.centerYAnchor),
+            label.centerXAnchor.constraint(equalTo: host.contentView.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: host.contentView.centerYAnchor),
         ])
 
         panel.contentView = host
@@ -211,12 +229,26 @@ final class PrefixCheatsheetWindow {
 
     func toggle() {
         if let window, window.isVisible {
-            window.orderOut(nil)
+            dismiss()
             return
         }
         if window == nil { window = build() }
-        window?.center()
-        window?.makeKeyAndOrderFront(nil)
+        guard let window else { return }
+        window.center()
+        window.alphaValue = 0
+        window.orderFront(nil)
+        HarnessMotion.animate(HarnessDesign.Motion.fast, timing: HarnessDesign.Motion.entrance) { _ in
+            window.animator().alphaValue = 1
+        }
+    }
+
+    private func dismiss() {
+        guard let window else { return }
+        HarnessMotion.animate(HarnessDesign.Motion.fast, timing: HarnessDesign.Motion.exit) { _ in
+            window.animator().alphaValue = 0
+        } completion: {
+            window.orderOut(nil)
+        }
     }
 
     private func build() -> NSWindow {
@@ -235,51 +267,78 @@ final class PrefixCheatsheetWindow {
             ("r", "Re-import Ghostty"),
             ("?", "Toggle this cheatsheet"),
         ]
+        let rowHeight: CGFloat = 24
+        let width: CGFloat = 320
+        let height = CGFloat(entries.count) * rowHeight + 56
+
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: CGFloat(entries.count) * 24 + 48),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.title = "Prefix Cheatsheet"
+        panel.isRestorable = false
         panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+
+        let overlay = HarnessOverlayBackground()
+        overlay.frame = NSRect(x: 0, y: 0, width: width, height: height)
+
+        let header = NSTextField(labelWithString: "PREFIX")
+        header.font = HarnessDesign.Typography.sectionLabel
+        header.textColor = HarnessChrome.current.textTertiary
+        header.translatesAutoresizingMaskIntoConstraints = false
 
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 16, right: 16)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         for (key, action) in entries {
-            let row = NSStackView()
-            row.orientation = .horizontal
-            row.spacing = 12
-            let kbd = NSTextField(labelWithString: key)
-            kbd.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
-            kbd.textColor = HarnessChrome.current.accent
-            kbd.setContentHuggingPriority(.required, for: .horizontal)
-            kbd.widthAnchor.constraint(equalToConstant: 56).isActive = true
+            let row = NSView()
+            row.translatesAutoresizingMaskIntoConstraints = false
             let label = NSTextField(labelWithString: action)
             label.font = .systemFont(ofSize: 12)
-            label.textColor = HarnessChrome.current.textPrimary
-            row.addArrangedSubview(kbd)
-            row.addArrangedSubview(label)
+            label.textColor = HarnessChrome.current.textSecondary
+            label.translatesAutoresizingMaskIntoConstraints = false
+            let kbd = NSTextField(labelWithString: key)
+            kbd.font = HarnessDesign.Typography.kbd
+            kbd.textColor = HarnessChrome.current.accent
+            kbd.alignment = .right
+            kbd.translatesAutoresizingMaskIntoConstraints = false
+            kbd.setContentHuggingPriority(.required, for: .horizontal)
+            row.addSubview(label)
+            row.addSubview(kbd)
             stack.addArrangedSubview(row)
+            NSLayoutConstraint.activate([
+                row.heightAnchor.constraint(equalToConstant: rowHeight),
+                row.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+                label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                kbd.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+                kbd.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                kbd.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+                label.trailingAnchor.constraint(lessThanOrEqualTo: kbd.leadingAnchor, constant: -HarnessDesign.Spacing.lg),
+            ])
         }
 
-        let content = NSView(frame: panel.contentLayoutRect)
-        content.wantsLayer = true
-        content.layer?.backgroundColor = HarnessChrome.current.surfaceElevated.cgColor
+        let content = overlay.contentView
+        content.addSubview(header)
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            header.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.lg),
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
+            stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: HarnessDesign.Spacing.sm),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.xl),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -HarnessDesign.Spacing.lg),
         ])
 
-        panel.contentView = content
+        panel.contentView = overlay
         return panel
     }
 }
