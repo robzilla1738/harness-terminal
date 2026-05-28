@@ -14,6 +14,19 @@ final class IPCCodecTests: XCTestCase {
             .sendData(surfaceID: "surface-1", data: Data([0, 1, 2, 254, 255])),
             .notify(surfaceID: "surface-1", title: "Agent", body: "Needs approval"),
             .newSplit(tabID: UUID(), paneID: UUID(), direction: .vertical),
+            .identifyClient(label: "harness-cli attach"),
+            .listClients,
+            .detachClient(clientID: UUID()),
+            .daemonStats,
+            .subscribeSurfaceOutput(surfaceID: "surface-1", label: "harness-cli attach"),
+            .subscribeSurfaceOutput(surfaceID: "surface-1", label: nil),
+            .setBuffer(name: "scratch", data: Data("hello".utf8)),
+            .setBuffer(name: nil, data: Data([1, 2, 3])),
+            .getBuffer(name: "scratch"),
+            .getBuffer(name: nil),
+            .listBuffers,
+            .deleteBuffer(name: "scratch"),
+            .pasteBuffer(surfaceID: "surface-1", name: "scratch"),
         ]
         for request in requests {
             let original = try IPCCodec.encode(IPCEnvelope(request: request))
@@ -33,6 +46,39 @@ final class IPCCodecTests: XCTestCase {
             .paneID(UUID()),
             .text("scrollback contents"),
             .data(Data([9, 8, 7]), sequence: 42),
+            .clientID(UUID()),
+            .clients([
+                ClientSummary(
+                    id: UUID(),
+                    label: "harness-cli attach",
+                    attachedSurfaceIDs: ["surface-1", "surface-2"],
+                    connectedAt: Date(timeIntervalSince1970: 1_700_000_000)
+                ),
+            ]),
+            .daemonStats(DaemonStats(
+                pid: 1234,
+                uptimeSeconds: 42.5,
+                surfaceCount: 7,
+                totalScrollbackBytes: 12_345,
+                clientCount: 2,
+                subscriberCount: 3,
+                snapshotRevision: 42
+            )),
+            .buffer(BufferSummary(
+                name: "scratch",
+                byteCount: 5,
+                preview: "hello",
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                data: Data("hello".utf8)
+            )),
+            .buffers([
+                BufferSummary(
+                    name: "buffer0",
+                    byteCount: 5,
+                    preview: "hello",
+                    createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+                ),
+            ]),
             .error("Tab not found"),
         ]
         for response in responses {

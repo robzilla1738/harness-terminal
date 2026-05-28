@@ -1,7 +1,7 @@
 /// Value for Ghostty's `window-colorspace` config key.
 ///
-/// `srgb` matches Ghostty.app defaults for hex/ANSI interpretation. Harness does
-/// not pin NSWindow or CALayer color spaces; libghostty owns terminal compositing.
+/// `srgb` matches Ghostty.app defaults for hex/ANSI interpretation. Harness does not
+/// pin `NSWindow` or `CALayer` colorspace — libghostty manages compositing like Ghostty.app.
 public enum TerminalColorspace: Sendable {
     case srgb
     case displayP3

@@ -1,7 +1,7 @@
 import AppKit
 import HarnessCore
 
-/// tmux-style prefix keymap. Listens globally for the configured prefix
+/// Prefix keymap. Listens globally for the configured prefix
 /// (default `Ctrl-A`); after the prefix fires, the next keystroke is consumed
 /// and routed through `bindings`. Press `?` while armed to see the cheatsheet.
 @MainActor
@@ -60,41 +60,78 @@ final class PrefixKeymap {
         hideIndicator()
     }
 
+    /// Map an NSEvent into a `KeySpec` so the prefix table can resolve it.
+    /// Returns `nil` for events whose characters we can't represent (dead keys).
+    private func makeSpec(from event: NSEvent) -> KeySpec? {
+        guard let chars = event.charactersIgnoringModifiers else { return nil }
+        // For ASCII printable letters, prefer the lowercase form so bindings
+        // for `c` work regardless of caps lock; honor shift only for symbols.
+        let key: String
+        if chars.count == 1, let scalar = chars.unicodeScalars.first {
+            switch scalar.value {
+            case 0x1B: key = "Escape"
+            case 0x09: key = "Tab"
+            case 0x0D: key = "Enter"
+            case 0x7F: key = "Backspace"
+            case 0xF700: key = "Up"
+            case 0xF701: key = "Down"
+            case 0xF702: key = "Left"
+            case 0xF703: key = "Right"
+            case 0xF729: key = "Home"
+            case 0xF72B: key = "End"
+            case 0xF72C: key = "PageUp"
+            case 0xF72D: key = "PageDown"
+            case 0xF704...0xF70F: key = "F\(Int(scalar.value) - 0xF703)"
+            default: key = chars
+            }
+        } else {
+            key = chars
+        }
+        var modifiers: KeySpec.Modifiers = []
+        let mask = event.modifierFlags
+        if mask.contains(.control) { modifiers.insert(.control) }
+        if mask.contains(.option)  { modifiers.insert(.option) }
+        if mask.contains(.command) { modifiers.insert(.command) }
+        // Shift is only meaningful for non-printable keys (Tab, arrows, F-keys);
+        // for letters/symbols the character already reflects shift.
+        if mask.contains(.shift), key.count > 1 { modifiers.insert(.shift) }
+        return KeySpec(key: key, modifiers: modifiers)
+    }
+
     private func consume(event: NSEvent) {
         defer { disarm() }
-        guard let chars = event.charactersIgnoringModifiers else { return }
-        let key = chars.lowercased()
-        let coordinator = SessionCoordinator.shared
-        switch key {
-        case "c":
-            coordinator.openTabInActiveWorkspace()
-        case "%":
-            coordinator.splitActivePane(direction: .vertical)
-        case "\"":
-            coordinator.splitActivePane(direction: .horizontal)
-        case "x":
-            coordinator.killActivePane()
-        case "z":
-            coordinator.zoomActivePane()
-        case "o":
-            coordinator.cycleActivePane(forward: true)
-        case ";":
-            coordinator.cycleActivePane(forward: false)
-        case "[":
-            coordinator.toggleCopyMode()
-        case "d":
-            coordinator.detachActiveSurface()
-        case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
-            if let idx = Int(key) {
-                coordinator.selectWorkspace(byIndex: idx)
+        guard let spec = makeSpec(from: event) else {
+            NSSound.beep()
+            return
+        }
+        // `:` enters the command prompt — always available under the prefix.
+        if spec.key == ":" {
+            CommandPromptController.shared.present()
+            return
+        }
+        guard let binding = KeybindingsService.shared.lookup(table: .prefix, spec: spec) else {
+            // Fall back to a case-insensitive letter lookup so bound `c` matches
+            // a typed `C` without forcing the user to bind both forms.
+            if spec.key.count == 1,
+               let alt = KeybindingsService.shared.lookup(
+                   table: .prefix,
+                   spec: KeySpec(key: spec.key.lowercased(), modifiers: spec.modifiers)
+               )
+            {
+                executeBinding(alt)
+                return
             }
-        case ",":
-            coordinator.beginRenameActiveTab()
-        case "?":
-            PrefixCheatsheetWindow.shared.toggle()
-        case "r":
-            coordinator.reimportFromGhostty()
-        default:
+            NSSound.beep()
+            return
+        }
+        executeBinding(binding)
+    }
+
+    private func executeBinding(_ binding: Binding) {
+        do {
+            try MainExecutor.shared.execute(binding.command)
+        } catch {
+            fputs("PrefixKeymap: \(error)\n", stderr)
             NSSound.beep()
         }
     }
@@ -264,34 +301,37 @@ final class PrefixCheatsheetWindow {
         }
     }
 
-    /// Grouped key/action listing — sections mirror cmux/tmux so users coming from
-    /// either tool immediately recognize the layout.
+    /// Grouped key/action listing. Now generated from the live KeyTable so any
+    /// `bind-key` change shows up immediately; group titles are inferred from
+    /// the command kind so users see logical sections without us hand-curating.
     private struct Group {
         let title: String
         let entries: [(key: String, action: String)]
     }
 
-    private static let groups: [Group] = [
-        Group(title: "Panes", entries: [
-            ("%", "Split right"),
-            ("\"", "Split down"),
-            ("z", "Toggle zoom"),
-            ("x", "Kill pane"),
-            ("o", "Cycle forward"),
-            (";", "Cycle back"),
-        ]),
-        Group(title: "Tabs & Sessions", entries: [
-            ("c", "New tab"),
-            (",", "Rename tab"),
-            ("d", "Detach surface"),
-            ("0–9", "Select workspace"),
-        ]),
-        Group(title: "Modes", entries: [
-            ("[", "Copy mode"),
-            ("r", "Re-import Ghostty"),
-            ("?", "Toggle this cheatsheet"),
-        ]),
-    ]
+    private static var groups: [Group] {
+        let bindings = KeybindingsService.shared.bindings(in: .prefix)
+        var panes: [(String, String)] = []
+        var tabs: [(String, String)] = []
+        var modes: [(String, String)] = []
+        for binding in bindings {
+            let entry = (binding.spec.description, binding.note ?? binding.command.shortDescription)
+            switch binding.command {
+            case .splitWindow, .killPane, .zoomPane, .selectPane, .swapPane, .resizePane:
+                panes.append(entry)
+            case .newWindow, .killWindow, .renameWindow, .nextWindow, .previousWindow, .selectWindow,
+                 .newSession, .killSession, .renameSession, .selectWorkspace, .nextWorkspace, .previousWorkspace:
+                tabs.append(entry)
+            default:
+                modes.append(entry)
+            }
+        }
+        var result: [Group] = []
+        if !panes.isEmpty { result.append(Group(title: "Panes", entries: panes)) }
+        if !tabs.isEmpty { result.append(Group(title: "Tabs & Sessions", entries: tabs)) }
+        if !modes.isEmpty { result.append(Group(title: "Modes", entries: modes)) }
+        return result
+    }
 
     private func build() -> NSWindow {
         let c = HarnessChrome.current

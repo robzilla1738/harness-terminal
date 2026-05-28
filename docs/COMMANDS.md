@@ -1,0 +1,111 @@
+# Harness command reference
+
+Every action — keystroke binding, palette entry, `:` prompt, hook firing, `harness-cli` subcommand — resolves to a `Command` value in `HarnessCore/Commands/Command.swift`. The textual form below is what the parser accepts (in `keybindings.json`, the `:` prompt, `bind-key`, etc.); the right column is the IPC + UI effect.
+
+## Pane operations
+
+| Command | What it does |
+|---|---|
+| `split-window` (alias `split-window -h`) | Split active pane side-by-side (vertical divider). |
+| `split-window -v` | Split active pane top/bottom (horizontal divider). |
+| `kill-pane` | Close the active pane. Collapses the parent branch. |
+| `zoom-pane` (alias `resize-pane -Z`) | Toggle full-tab zoom on the active pane. |
+| `select-pane -L` / `-R` / `-U` / `-D` | Directional navigation. Resolved by daemon tree walk. |
+| `select-pane` (no flag) | Cycle forward by flat pane order. |
+| `swap-pane` | Swap the active pane with the next pane in flat order. |
+| `resize-pane -L` / `-R` / `-U` / `-D` `N` | Shift the parent divider `N` units. |
+| `respawn-pane` (alias `respawn-pane -k` to clear scrollback) | Kill and re-spawn the shell with the same surface ID. |
+| `break-pane` | Move the active pane to a new tab in the same session. |
+| `rotate-window` (alias `rotate-window -D` for reverse) | Cycle children at every branch. |
+
+## Tabs / windows
+
+| Command | Effect |
+|---|---|
+| `new-window` (alias `new-tab`) | Add a tab to the active session. |
+| `kill-window` (alias `kill-tab`) | Close the active tab. |
+| `rename-window [-N name]` | Inline rename if `-N` given, else interactive. |
+| `next-window` / `previous-window` | Cycle tab focus. |
+| `select-window -t :<n>` | Select tab by index. |
+| `select-layout <name>` | Apply one of `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, `tiled`. |
+| `next-layout` / `previous-layout` | Cycle through built-in layouts. |
+
+## Sessions / workspaces
+
+| Command | Effect |
+|---|---|
+| `new-session [-s name]` | Add a session row in the active workspace. |
+| `kill-session` | Close the active session. |
+| `rename-session [name]` | Interactive or inline. |
+| `select-workspace <0..N>` | Focus workspace by index. |
+| `next-workspace` / `previous-workspace` | Cycle workspaces. |
+
+## Modes
+
+| Command | Effect |
+|---|---|
+| `copy-mode` | Open the vim-style copy-mode viewer for the active pane. |
+| `detach-client` | Detach the calling client (CLI attach) or fire SIGTERM-like handling. |
+
+## Buffers (paste store)
+
+| Command | Effect |
+|---|---|
+| `set-buffer (--data <text> \| --stdin) [--name <name>]` | Store data in a buffer; auto-name `buffer0/1/…` if `--name` omitted. |
+| `list-buffers` | List name/size/preview/created-at. |
+| `show-buffer [--name <name>]` | Dump bytes to stdout. |
+| `delete-buffer --name <name>` | Remove. |
+| `paste-buffer --surface <uuid> [--name <name>]` | Write buffer contents to a surface's PTY. |
+
+## Bindings
+
+| Command | Effect |
+|---|---|
+| `bind-key [-T <table>] <spec> <command...>` | Bind a key in a named table. Recursive — `<command>` parses to a `Command`. |
+| `unbind-key [-T <table>] <spec>` | Remove a binding. |
+| `list-keys [-T <table>]` | Print bindings; one table per `[table]` header. |
+
+## Options
+
+| Command | Effect |
+|---|---|
+| `set-option [-g\|-w\|-s\|-t\|-p] [-T <target>] <key> <value>` | Set a typed option in the chosen scope. Coerces `on`/`off`/`true`/`false`/integers. |
+| `show-options [-g\|-w\|-s\|-t\|-p]` | Dump options for the chosen scope (or all). |
+
+Built-in defaults include:
+
+- `status` (bool, default `on`) — show the bottom status line.
+- `status-left`, `status-right`, `status-center` — `FormatString` source for the three status segments.
+- `mouse` (bool, default `on`) — enable mouse reporting / pane-click selection.
+- `mode-keys` (string, default `vi`) — copy-mode key style.
+- `set-clipboard` (bool, default `on`) — mirror yank → NSPasteboard.
+- `history-limit` (int, default `10000`) — scrollback line cap.
+
+## Hooks
+
+| Command | Effect |
+|---|---|
+| `bind-hook <event> <command...> [--if <format>]` | Bind a command to an event. The optional `--if` is a `FormatString` whose result must be non-empty/non-zero to fire. |
+| `unbind-hook --id <uuid>` | Remove a hook by its ID. |
+| `list-hooks [--event <event>]` | List bound hooks. |
+
+Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted`.
+
+## Scripting
+
+| Command | Effect |
+|---|---|
+| `send-keys <tokens…>` | Inject keystrokes (`C-c`, `Up`, `Enter`, etc.) into the active pane. |
+| `display-message <format>` | Render a `FormatString` and surface as a transient notice. |
+| `run-shell <command>` | Spawn a subprocess. |
+| `source-config` (alias `source`, `reload-config`) | Re-import Ghostty config and refresh chrome. |
+| `reload-keybindings` | Re-read `keybindings.json` so an external edit takes effect. |
+
+## Composition
+
+| Form | Effect |
+|---|---|
+| `a ; b ; c` | Sequence. Commits each in order; later steps see the post-state of earlier ones. |
+| `"literal text"` / `'literal text'` | Quoted arguments preserve whitespace and `;`. |
+
+See `docs/KEYBINDINGS.md` for the default key tables and `Packages/HarnessCore/Sources/HarnessCore/Format/FormatString.swift` for the full `FormatString` token list.

@@ -62,12 +62,19 @@ enum CommandPaletteController {
         panel.contentViewController = controller
         panel.delegate = controller
 
-        // Centered over the parent's upper third — Spotlight-style placement.
-        if let parent {
-            let f = parent.frame
+        // Centered on the parent window (Spotlight-style — slightly above
+        // center so it doesn't feel buried under text the user is reading).
+        // Falling back to screen center when there is no parent window keeps
+        // the palette usable from an empty-app launch.
+        if let frame = parent?.frame {
             panel.setFrameOrigin(NSPoint(
-                x: f.midX - panel.frame.width / 2,
-                y: f.midY - panel.frame.height / 2 + f.height * 0.14
+                x: frame.midX - panel.frame.width / 2,
+                y: frame.midY - panel.frame.height / 2 + frame.height * 0.10
+            ))
+        } else if let screenFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
+            panel.setFrameOrigin(NSPoint(
+                x: screenFrame.midX - panel.frame.width / 2,
+                y: screenFrame.midY - panel.frame.height / 2 + screenFrame.height * 0.10
             ))
         } else {
             panel.center()
@@ -159,7 +166,7 @@ enum CommandPaletteController {
             PaletteAction(
                 id: "action.zoomPane",
                 title: "Zoom Pane",
-                subtitle: "Toggle tmux-style zoom on the active pane",
+                subtitle: "Toggle full-tab zoom on the active pane",
                 symbol: "arrow.up.left.and.arrow.down.right",
                 shortcut: "Prefix z",
                 section: .actions
@@ -429,15 +436,12 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         let c = HarnessChrome.current
         guard let content = (view as? HarnessOverlayBackground)?.contentView else { return }
 
-        let magnifier = NSImageView()
-        magnifier.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
-        magnifier.contentTintColor = c.textTertiary
-        magnifier.translatesAutoresizingMaskIntoConstraints = false
-
         searchField.placeholderAttributedString = NSAttributedString(
             string: "Search commands, workspaces, themes…",
-            attributes: [.foregroundColor: c.textTertiary, .font: NSFont.systemFont(ofSize: 15)]
+            attributes: [
+                .foregroundColor: c.textTertiary,
+                .font: NSFont.systemFont(ofSize: 15),
+            ]
         )
         searchField.font = .systemFont(ofSize: 15)
         searchField.textColor = c.textPrimary
@@ -460,6 +464,9 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         tableView.delegate = self
         tableView.intercellSpacing = .zero
         tableView.selectionHighlightStyle = .none // PaletteRowView draws themed selection
+        // Both single-click and double-click activate. Spotlight/Raycast feel —
+        // there's no value in "select but don't run" inside a transient palette.
+        tableView.action = #selector(activate)
         tableView.doubleAction = #selector(activate)
         tableView.target = self
         tableView.translatesAutoresizingMaskIntoConstraints = false
@@ -488,7 +495,6 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
             footerHint.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
         ])
 
-        content.addSubview(magnifier)
         content.addSubview(searchField)
         content.addSubview(separator)
         content.addSubview(scrollView)
@@ -496,12 +502,8 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         content.addSubview(footer)
 
         NSLayoutConstraint.activate([
-            magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl + 2),
-            magnifier.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
-            magnifier.widthAnchor.constraint(equalToConstant: 18),
-
             searchField.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.lg + 2),
-            searchField.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: HarnessDesign.Spacing.md),
+            searchField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
             searchField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.xl),
             searchField.heightAnchor.constraint(equalToConstant: 28),
 

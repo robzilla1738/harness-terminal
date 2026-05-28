@@ -11,6 +11,15 @@ public final class DaemonServer: @unchecked Sendable {
     private var clientSources: [Int32: DispatchSourceRead] = [:]
     private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
 
+    private struct ClientRecord {
+        let id: UUID
+        var label: String
+        let connectedAt: Date
+    }
+    private var clients: [Int32: ClientRecord] = [:]
+    private var clientFDsByID: [UUID: Int32] = [:]
+    private let startedAt = Date()
+
     public init() {}
 
     public func start() throws {
@@ -65,14 +74,22 @@ public final class DaemonServer: @unchecked Sendable {
         var noSigPipe: Int32 = 1
         setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         clientBuffers[clientFD] = Data()
+        // Don't auto-register the connection as a client — `DaemonClient.request`
+        // opens a fresh socket per call, and bookkeeping every one of those would
+        // make `list-clients` useless. Clients announce themselves with
+        // `identifyClient`; everything else is treated as ephemeral RPC.
         let source = DispatchSource.makeReadSource(fileDescriptor: clientFD, queue: queue)
         source.setEventHandler { [weak self] in
             self?.readClient(fd: clientFD, source: source)
         }
         source.setCancelHandler { [weak self] in
-            self?.clientBuffers.removeValue(forKey: clientFD)
-            self?.clientSources.removeValue(forKey: clientFD)
-            self?.cancelSubscriptions(for: clientFD)
+            guard let self else { close(clientFD); return }
+            if let removed = self.clients.removeValue(forKey: clientFD) {
+                self.clientFDsByID.removeValue(forKey: removed.id)
+            }
+            self.clientBuffers.removeValue(forKey: clientFD)
+            self.clientSources.removeValue(forKey: clientFD)
+            self.cancelSubscriptions(for: clientFD)
             close(clientFD)
         }
         clientSources[clientFD] = source
@@ -93,8 +110,12 @@ public final class DaemonServer: @unchecked Sendable {
         while let envelope = IPCCodec.decodeRequest(from: &data) {
             clientBuffers[fd] = data
             guard let request = envelope.request else { continue }
-            if case let .subscribeSurfaceOutput(surfaceID) = request {
-                handleSubscribe(surfaceID: surfaceID, fd: fd)
+            if case let .subscribeSurfaceOutput(surfaceID, label) = request {
+                handleSubscribe(surfaceID: surfaceID, label: label, fd: fd)
+                continue
+            }
+            if let intercepted = handleClientLifecycle(request, fd: fd) {
+                send(intercepted, to: fd)
                 continue
             }
             let response = registry.handle(request)
@@ -104,6 +125,62 @@ public final class DaemonServer: @unchecked Sendable {
             send(response, to: fd)
         }
         clientBuffers[fd] = data
+    }
+
+    /// Requests the server owns (because they query/mutate the FD layer rather
+    /// than session state). Returning `nil` falls through to `registry.handle`.
+    private func handleClientLifecycle(_ request: IPCRequest, fd: Int32) -> IPCResponse? {
+        switch request {
+        case let .identifyClient(label):
+            // Idempotent: identifying twice on the same socket updates the label
+            // but keeps the same client ID so callers can identify-then-act.
+            if var record = clients[fd] {
+                record.label = label
+                clients[fd] = record
+                return .clientID(record.id)
+            }
+            let record = ClientRecord(id: UUID(), label: label, connectedAt: Date())
+            clients[fd] = record
+            clientFDsByID[record.id] = fd
+            return .clientID(record.id)
+        case .listClients:
+            let summaries = clients
+                .sorted { $0.value.connectedAt < $1.value.connectedAt }
+                .map { entry -> ClientSummary in
+                    let surfaces = (outputSubscriptions[entry.key] ?? []).map(\.surfaceID)
+                    return ClientSummary(
+                        id: entry.value.id,
+                        label: entry.value.label,
+                        attachedSurfaceIDs: surfaces,
+                        connectedAt: entry.value.connectedAt
+                    )
+                }
+            return .clients(summaries)
+        case let .detachClient(clientID):
+            guard let targetFD = clientFDsByID[clientID] else {
+                return .error("Client not found: \(clientID.uuidString)")
+            }
+            guard targetFD != fd else {
+                return .error("Cannot detach the calling client; close the socket instead")
+            }
+            clientSources[targetFD]?.cancel()
+            return .ok
+        case .daemonStats:
+            let telemetry = registry.surfaceTelemetry
+            let totalSubs = outputSubscriptions.values.reduce(0) { $0 + $1.count }
+            let stats = DaemonStats(
+                pid: getpid(),
+                uptimeSeconds: Date().timeIntervalSince(startedAt),
+                surfaceCount: telemetry.surfaceCount,
+                totalScrollbackBytes: telemetry.scrollbackBytes,
+                clientCount: clients.count,
+                subscriberCount: totalSubs,
+                snapshotRevision: registry.snapshot.revision
+            )
+            return .daemonStats(stats)
+        default:
+            return nil
+        }
     }
 
     private func send(_ response: IPCResponse, to fd: Int32) {
@@ -123,7 +200,7 @@ public final class DaemonServer: @unchecked Sendable {
         }
     }
 
-    private func handleSubscribe(surfaceID: String, fd: Int32) {
+    private func handleSubscribe(surfaceID: String, label: String?, fd: Int32) {
         guard let token = registry.subscribe(surfaceID: surfaceID, handler: { [weak self] data, sequence in
             guard let server = self else { return }
             server.queue.async { [weak server] in
@@ -134,6 +211,19 @@ public final class DaemonServer: @unchecked Sendable {
             return
         }
         outputSubscriptions[fd, default: []].append((surfaceID, token))
+        // A subscription connection is long-lived and identifies a real client
+        // (Harness.app, harness-cli attach, etc.). Register it so `list-clients`
+        // and `daemon-stats` reflect actual users, not ephemeral RPC sockets.
+        if var record = clients[fd] {
+            if let label, label != record.label {
+                record.label = label
+                clients[fd] = record
+            }
+        } else {
+            let record = ClientRecord(id: UUID(), label: label ?? "subscriber", connectedAt: Date())
+            clients[fd] = record
+            clientFDsByID[record.id] = fd
+        }
         send(.ok, to: fd)
     }
 
@@ -161,6 +251,8 @@ public final class DaemonServer: @unchecked Sendable {
             }
             clientSources.removeAll()
             clientBuffers.removeAll()
+            clients.removeAll()
+            clientFDsByID.removeAll()
         }
     }
 }

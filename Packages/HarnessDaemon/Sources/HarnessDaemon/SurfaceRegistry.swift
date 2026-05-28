@@ -8,6 +8,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
     private var editor = SessionEditor()
     private let store = SessionStore()
     private let lock = NSLock()
+    private let bufferStore = PasteBufferStore()
+    public let optionStore = OptionStore()
+    public let hookRegistry = HookRegistry()
 
     public init() {
         editor.snapshot = store.load()
@@ -22,6 +25,16 @@ public final class SurfaceRegistry: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return editor.snapshot
+    }
+
+    /// Aggregate counts for `daemon-stats`. Returned in a single locked read so
+    /// the values are mutually consistent.
+    public var surfaceTelemetry: (surfaceCount: Int, scrollbackBytes: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        let count = sessions.count
+        let bytes = sessions.values.reduce(0) { $0 + $1.scrollbackByteCount }
+        return (count, bytes)
     }
 
     public func handle(_ request: IPCRequest) -> IPCResponse {
@@ -120,6 +133,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case let .reorderTab(workspaceID, tabID, toIndex):
             guard editor.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex) else {
                 return .error("Tab not found")
+            }
+            commit()
+            return .ok
+        case let .reorderSession(workspaceID, sessionID, toIndex):
+            guard editor.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex) else {
+                return .error("Session not found")
             }
             commit()
             return .ok
@@ -233,7 +252,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case .attachSurface:
             return .ok
         case let .sendKeys(surfaceID, keys):
-            let bytes = TmuxKeyParser.encode(keys: keys)
+            let bytes = KeyTokenParser.encode(keys: keys)
             if let session = sessions[surfaceID] {
                 session.write(bytes)
                 return .ok
@@ -293,7 +312,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .ok
         case let .detectAgent(surfaceID):
             return .agentInfo(AgentDetector.snapshot(forSurfaceKey: surfaceID))
-        case let .subscribeSurfaceOutput(surfaceID):
+        case let .subscribeSurfaceOutput(surfaceID, _):
             return subscribe(surfaceID: surfaceID)
         case let .cancelSubscription(surfaceID):
             sessions[surfaceID]?.cancelSubscription()
@@ -306,6 +325,143 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .ok
         case let .detachSurface(surfaceID):
             sessions[surfaceID]?.detachSubscriber()
+            return .ok
+        case .identifyClient, .listClients, .detachClient, .daemonStats:
+            // Client lifecycle and aggregate stats are owned by the DaemonServer
+            // layer (it tracks FDs). Server intercepts these before reaching the
+            // registry; the stubs here exist only to keep the switch exhaustive.
+            return .error("Client lifecycle requests must be handled by DaemonServer")
+        case let .setBuffer(name, data):
+            let final = bufferStore.set(data, name: name)
+            return .text(final)
+        case let .getBuffer(name):
+            let buffer: PasteBufferStore.Buffer?
+            if let name { buffer = bufferStore.get(name) }
+            else { buffer = bufferStore.mostRecent() }
+            guard let buffer else { return .error("Buffer not found") }
+            return .buffer(BufferSummary(
+                name: buffer.name,
+                byteCount: buffer.data.count,
+                preview: buffer.preview,
+                createdAt: buffer.createdAt,
+                data: buffer.data
+            ))
+        case .listBuffers:
+            let summaries = bufferStore.list().map {
+                BufferSummary(name: $0.name, byteCount: $0.data.count, preview: $0.preview, createdAt: $0.createdAt)
+            }
+            return .buffers(summaries)
+        case let .deleteBuffer(name):
+            return bufferStore.delete(name) ? .ok : .error("Buffer not found")
+        case let .pasteBuffer(surfaceID, name):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            let buffer: PasteBufferStore.Buffer?
+            if let name { buffer = bufferStore.get(name) }
+            else { buffer = bufferStore.mostRecent() }
+            guard let buffer else { return .error("Buffer not found") }
+            session.write(buffer.data)
+            return .ok
+        case let .selectPaneDirectional(currentPaneID, direction):
+            let target: Command.PaneTarget
+            switch direction {
+            case .left: target = .left
+            case .right: target = .right
+            case .up: target = .up
+            case .down: target = .down
+            }
+            guard let neighbor = editor.directionalNeighbor(of: currentPaneID, direction: target) else {
+                return .error("No neighbor in that direction")
+            }
+            return .paneID(neighbor)
+        case let .applyLayout(tabID, layout, mainPaneID):
+            guard let template = LayoutTemplate(rawValue: layout) else {
+                return .error("Unknown layout: \(layout)")
+            }
+            guard editor.applyLayout(tabID: tabID, layout: template, mainPaneID: mainPaneID) else {
+                return .error("Tab not found or has fewer than 2 panes")
+            }
+            commit()
+            return .ok
+        case let .nextLayout(tabID):
+            // No per-tab "last layout" memory yet (lands in Phase 6 with the
+            // option store); we cycle from `evenHorizontal` each call. That's
+            // already a useful "give me a different layout" gesture.
+            guard editor.applyLayout(tabID: tabID, layout: .evenHorizontal.next(), mainPaneID: nil) else {
+                return .error("Tab not found")
+            }
+            commit()
+            return .ok
+        case let .previousLayout(tabID):
+            guard editor.applyLayout(tabID: tabID, layout: .evenHorizontal.previous(), mainPaneID: nil) else {
+                return .error("Tab not found")
+            }
+            commit()
+            return .ok
+        case let .rotatePanes(tabID, forward):
+            guard editor.rotatePanes(tabID: tabID, forward: forward) else {
+                return .error("Tab not found")
+            }
+            commit()
+            return .ok
+        case let .breakPane(paneID):
+            guard let newTab = editor.breakPane(paneID: paneID) else {
+                return .error("Cannot break pane (only pane in tab, or pane not found)")
+            }
+            commit()
+            return .tabID(newTab)
+        case let .joinPane(source, dest, direction):
+            guard let newPane = editor.joinPane(sourcePaneID: source, destPaneID: dest, direction: direction) else {
+                return .error("Cannot join pane")
+            }
+            commit()
+            return .paneID(newPane)
+        case let .respawnPane(surfaceID, keepHistory):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            session.respawn(clearHistory: !keepHistory)
+            return .ok
+        case let .setOption(scopeRaw, target, key, raw):
+            guard let scope = OptionStore.Scope(rawValue: scopeRaw) else {
+                return .error("Unknown option scope: \(scopeRaw)")
+            }
+            optionStore.set(.init(parsing: raw), key: key, scope: scope, target: target)
+            return .ok
+        case let .showOptions(scopeRaw):
+            let scope = scopeRaw.flatMap(OptionStore.Scope.init(rawValue:))
+            let entries = optionStore.snapshot(scope: scope).map { key, value in
+                OptionEntry(scope: key.scope.rawValue, target: key.target, key: key.key, value: value.stringValue)
+            }
+            return .options(entries)
+        case let .bindHook(eventRaw, source, condition):
+            guard let event = HookEvent(rawValue: eventRaw) else {
+                return .error("Unknown hook event: \(eventRaw)")
+            }
+            do {
+                let command = try CommandParser.parse(source)
+                let id = hookRegistry.bind(event: event, command: command, conditionFormat: condition)
+                return .hookID(id)
+            } catch {
+                return .error("Parse failed: \(error)")
+            }
+        case let .unbindHook(id):
+            return hookRegistry.unbind(id: id) ? .ok : .error("Hook not found")
+        case let .listHooks(eventRaw):
+            let event = eventRaw.flatMap(HookEvent.init(rawValue:))
+            let entries = hookRegistry.list(event: event).map {
+                HookEntry(id: $0.id, event: $0.event.rawValue, commandSource: $0.command.shortDescription, condition: $0.conditionFormat)
+            }
+            return .hooks(entries)
+        case let .displayMessage(format):
+            // Render via FormatString using whatever context the daemon can
+            // build right now (active workspace/tab from snapshot). UI clients
+            // observe the notification bus and decide how to surface it.
+            let context = buildFormatContext()
+            let text = FormatString.evaluate(format, context: context)
+            NotificationBus.shared.post(AgentNotification(
+                surfaceID: nil,
+                daemonSurfaceID: nil,
+                title: "Harness",
+                body: text
+            ))
             return .ok
         }
     }
@@ -362,6 +518,30 @@ public final class SurfaceRegistry: @unchecked Sendable {
             changed = true
         }
         if changed { commit() }
+    }
+
+    /// Build a `FormatContext` from the current snapshot's active selection.
+    /// Used by `display-message` and hook firing. Conservative: nil fields
+    /// stay nil so format strings render an empty token instead of "(none)".
+    public func buildFormatContext(surfaceKey: String? = nil) -> FormatContext {
+        let workspace = editor.snapshot.activeWorkspace
+        let session = workspace?.activeSession
+        let tab = workspace?.activeTab
+        return FormatContext(
+            paneID: surfaceKey,
+            paneTitle: tab?.title,
+            paneCwd: tab?.cwd,
+            paneActive: surfaceKey != nil,
+            paneIndex: nil,
+            sessionName: session?.name.isEmpty == false ? session?.name : nil,
+            tabName: tab?.title,
+            tabIndex: session?.tabs.firstIndex(where: { $0.id == tab?.id }),
+            workspaceName: workspace?.name,
+            agentKind: tab?.agent?.kind.rawValue,
+            agentActivity: tab?.agent?.activity.rawValue,
+            gitBranch: tab?.gitBranch,
+            clientName: nil
+        )
     }
 
     private func markWaiting(surfaceKey: String, text: String) {

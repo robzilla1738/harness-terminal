@@ -38,7 +38,43 @@ public enum HarnessPaths {
         applicationSupport.appendingPathComponent("settings.json")
     }
 
+    public static var logsDirectory: URL {
+        applicationSupport.appendingPathComponent("logs", isDirectory: true)
+    }
+
+    public static var daemonLogURL: URL {
+        logsDirectory.appendingPathComponent("daemon.log")
+    }
+
+    public static var daemonPIDURL: URL {
+        applicationSupport.appendingPathComponent("daemon.pid")
+    }
+
+    public static var buffersURL: URL {
+        applicationSupport.appendingPathComponent("buffers.json")
+    }
+
+    public static var fishCompletionDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/fish/completions", isDirectory: true)
+    }
+
+    public static var fishCompletionURL: URL {
+        fishCompletionDirectory.appendingPathComponent("harness-cli.fish")
+    }
+
+    /// launchd label for the user-domain LaunchAgent that supervises HarnessDaemon.
+    /// Stable so `launchctl print gui/$UID/<label>` works for support diagnostics.
+    public static let launchAgentLabel = "com.robert.harness.daemon"
+
+    public static var launchAgentURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(launchAgentLabel).plist")
+    }
+
     public static func ensureDirectories() throws {
         try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
     }
 }

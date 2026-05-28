@@ -454,7 +454,6 @@ final class ChromeBackdrop: NSView {
         self.role = role
         let chrome = HarnessDesign.chrome
         let opacity = HarnessChrome.backgroundOpacity
-        let isTransparent = opacity < 0.999
 
         if Self.crossfadeNextUpdate {
             HarnessMotion.crossfade(layer, duration: HarnessDesign.Motion.fast)
@@ -467,27 +466,16 @@ final class ChromeBackdrop: NSView {
         case .tabBar: baseColor = chrome.sidebarBackground
         }
 
+        // Safe Ghostty-style split: terminal panes own their translucency/blur inside
+        // libghostty, while non-terminal chrome can use native glass behind a single
+        // theme tint. Never place AppKit blur over terminal output.
         if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
-            if isTransparent {
-                // Tint the Liquid Glass material itself so its blur/refraction shows
-                // through. (A flat opaque overlay on top would defeat the glass.) The
-                // glass owns its translucency, so on macOS 26 the opacity slider acts
-                // as a translucent↔solid switch rather than a precise alpha.
-                glass.isHidden = false
-                glass.tintColor = baseColor
-                tint.layer?.backgroundColor = NSColor.clear.cgColor
-            } else {
-                // Fully opaque → drop the glass for a crisp solid color (true black).
-                glass.isHidden = true
-                tint.layer?.backgroundColor = baseColor.cgColor
-            }
+            glass.isHidden = role == .terminal
         } else if let vibrancy = backdrop as? NSVisualEffectView {
             vibrancy.material = material(for: role)
-            vibrancy.isHidden = !isTransparent
-            // Tint sits ON TOP of vibrancy, providing the Ghostty background
-            // color × opacity (e.g. pure-black @ 0.85) across every region.
-            tint.layer?.backgroundColor = baseColor.cgColor
+            vibrancy.isHidden = role == .terminal
         }
+        tint.layer?.backgroundColor = baseColor.withAlphaComponent(opacity).cgColor
 
         // Tab strip gets a quiet hairline at its bottom edge to anchor the active
         // pill against the terminal area below. Sidebar/terminal stay clean.

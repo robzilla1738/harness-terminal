@@ -6,20 +6,46 @@ import HarnessTerminalKit
 final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate {
     private let tabBar = TerminalTabBarView()
     private let terminalHost = NSView()
+    private let topDivider = NSView()
     private var paneContainer: PaneContainerView?
     private var lastStructureKey = ""
     private var pendingReload: Bool?
+    /// Pasteboard change counter captured at left-mouse-down. On mouse-up, if it
+    /// has incremented inside the terminal area AND the user has `copy-on-select`
+    /// enabled, that means libghostty just copied the selection — surface a brief
+    /// "Selection copied" toast.
+    private var pasteboardCountAtMouseDown: Int = NSPasteboard.general.changeCount
+    private var copySelectionMonitor: Any?
 
     override func loadView() {
         view = NSView()
-        HarnessDesign.applyTerminalChrome(to: view)
+        // The terminal area stays visually independent from app chrome. libghostty
+        // owns its own background color, opacity, blur, and color pipeline here;
+        // sidebar/tab chrome must not add an AppKit backdrop over or behind it.
+        HarnessDesign.makeClear(view)
     }
 
     func applyChrome() {
-        HarnessDesign.applyTerminalChrome(to: view)
+        HarnessDesign.makeClear(view)
         HarnessDesign.makeClear(terminalHost)
         tabBar.applyChrome()
         paneContainer?.applyChrome()
+        refreshTopDividerColor()
+    }
+
+    /// Tab-bar bottom hairline — keeps the same color as the sidebar's vertical
+    /// edge divider so both read as one consistent chrome line system. Both
+    /// honor `settings.dividerHex` when set.
+    private func refreshTopDividerColor() {
+        let settings = SessionCoordinator.shared.settings
+        let c = HarnessChrome.current
+        let color: NSColor
+        if let hex = settings.dividerHex, let custom = NSColor.fromHex(hex) {
+            color = custom
+        } else {
+            color = c.border.withAlphaComponent(c.isDark ? 0.45 : 0.65)
+        }
+        topDivider.layer?.backgroundColor = color.cgColor
     }
 
     override func viewDidLoad() {
@@ -30,17 +56,30 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         HarnessDesign.makeClear(terminalHost)
 
         view.addSubview(tabBar)
+        topDivider.wantsLayer = true
+        topDivider.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(topDivider)
         view.addSubview(terminalHost)
 
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: view.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            terminalHost.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
+
+            // 1px hairline directly under the tab bar; same color resolution as
+            // the sidebar's vertical edge divider so both reads as one chrome
+            // line system (honors `settings.dividerHex`).
+            topDivider.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
+            topDivider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topDivider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            topDivider.heightAnchor.constraint(equalToConstant: 1),
+
+            terminalHost.topAnchor.constraint(equalTo: topDivider.bottomAnchor),
             terminalHost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             terminalHost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             terminalHost.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+        refreshTopDividerColor()
 
         NotificationCenter.default.addObserver(
             self,
@@ -48,7 +87,30 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             name: NotificationBus.shared.snapshotChanged,
             object: nil
         )
+        installCopySelectionToast()
         reloadTabBar()
+    }
+
+    private func installCopySelectionToast() {
+        copySelectionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .leftMouseDown {
+                self.pasteboardCountAtMouseDown = NSPasteboard.general.changeCount
+            } else if event.type == .leftMouseUp,
+                      SessionCoordinator.shared.settings.copyOnSelect,
+                      self.eventIsInsideTerminalArea(event),
+                      NSPasteboard.general.changeCount > self.pasteboardCountAtMouseDown
+            {
+                Toast.show("Selection copied", in: self.terminalHost)
+            }
+            return event
+        }
+    }
+
+    private func eventIsInsideTerminalArea(_ event: NSEvent) -> Bool {
+        guard let window = event.window, window === view.window else { return false }
+        let pointInHost = terminalHost.convert(event.locationInWindow, from: nil)
+        return terminalHost.bounds.contains(pointInHost)
     }
 
     override func viewDidLayout() {

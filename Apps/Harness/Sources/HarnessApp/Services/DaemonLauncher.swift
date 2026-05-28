@@ -1,11 +1,22 @@
+import Darwin
 import Foundation
 import HarnessCore
 
+/// Connects the app to the long-lived `HarnessDaemon` process. The daemon is
+/// owned by launchd (installed by `LaunchAgentInstaller`) so it survives
+/// `Harness.app` quitting, system logout, and even a fresh boot. The launcher's
+/// job is to *find* a running daemon and, on first run only, install the
+/// LaunchAgent so that one exists.
+///
+/// Direct child-process spawning is a last-resort fallback for DEBUG / preview
+/// builds where the LaunchAgent isn't installed; the app never kills a running
+/// daemon on quit.
+///
 /// @unchecked Sendable: launch/poll state is confined to the serial `queue`.
 final class DaemonLauncher: @unchecked Sendable {
     static let shared = DaemonLauncher()
 
-    private var process: Process?
+    private var fallbackProcess: Process?
     private let queue = DispatchQueue(label: "com.robert.harness.daemon-launcher")
 
     private init() {}
@@ -13,17 +24,12 @@ final class DaemonLauncher: @unchecked Sendable {
     func ensureRunning() {
         queue.sync {
             if daemonResponds() { return }
-            launchDaemon()
-        }
-    }
-
-    func stopIfNeeded() {
-        queue.sync {
-            process?.terminate()
-            process = nil
-            if FileManager.default.fileExists(atPath: HarnessPaths.socketURL.path) {
-                try? FileManager.default.removeItem(at: HarnessPaths.socketURL)
+            // Try to install the LaunchAgent (idempotent). If installed, launchd
+            // will start the daemon on the next request to the socket.
+            if installLaunchAgentIfPossible() {
+                if pollUntilResponding(timeoutSeconds: 3) { return }
             }
+            spawnFallbackProcess()
         }
     }
 
@@ -33,7 +39,27 @@ final class DaemonLauncher: @unchecked Sendable {
         return false
     }
 
-    private func launchDaemon() {
+    private func pollUntilResponding(timeoutSeconds: Double) -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if daemonResponds() { return true }
+            usleep(100_000)
+        }
+        return false
+    }
+
+    private func installLaunchAgentIfPossible() -> Bool {
+        guard let executable = daemonExecutableURL() else { return false }
+        do {
+            _ = try LaunchAgentInstaller.install(daemonPath: executable)
+            return true
+        } catch {
+            fputs("Harness: LaunchAgent install failed: \(error) — falling back to in-process daemon\n", stderr)
+            return false
+        }
+    }
+
+    private func spawnFallbackProcess() {
         guard let executable = daemonExecutableURL() else {
             fputs("Harness: could not locate HarnessDaemon executable\n", stderr)
             return
@@ -47,11 +73,8 @@ final class DaemonLauncher: @unchecked Sendable {
         proc.environment = environment
         try? HarnessPaths.ensureDirectories()
         try? proc.run()
-        process = proc
-        for _ in 0 ..< 30 {
-            if daemonResponds() { return }
-            usleep(100_000)
-        }
+        fallbackProcess = proc
+        _ = pollUntilResponding(timeoutSeconds: 3)
     }
 
     private func daemonExecutableURL() -> URL? {

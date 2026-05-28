@@ -92,7 +92,58 @@ struct HarnessCLI {
             case "install-hooks":
                 try handleInstallHooks(args)
             case "attach":
-                try handleAttach(args, client: client)
+                let code = try handleAttach(args)
+                exit(code)
+            case "daemon-stats":
+                try printDaemonStats(client)
+            case "list-clients":
+                try printClients(client)
+            case "detach-client":
+                try handleDetachClient(args, client: client)
+            case "bind-key", "bind":
+                try handleBindKey(args)
+            case "unbind-key", "unbind":
+                try handleUnbindKey(args)
+            case "list-keys":
+                try handleListKeys(args)
+            case "set-buffer":
+                try handleSetBuffer(args, client: client)
+            case "list-buffers":
+                try handleListBuffers(client)
+            case "show-buffer":
+                try handleShowBuffer(args, client: client)
+            case "delete-buffer":
+                try handleDeleteBuffer(args, client: client)
+            case "paste-buffer":
+                try handlePasteBuffer(args, client: client)
+            case "select-layout":
+                try handleSelectLayout(args, client: client)
+            case "next-layout":
+                try handleCycleLayout(args, client: client, forward: true)
+            case "previous-layout":
+                try handleCycleLayout(args, client: client, forward: false)
+            case "rotate-window":
+                try handleRotateWindow(args, client: client)
+            case "break-pane":
+                try handleBreakPane(args, client: client)
+            case "join-pane":
+                try handleJoinPane(args, client: client)
+            case "respawn-pane":
+                try handleRespawnPane(args, client: client)
+            case "select-pane":
+                try handleSelectPane(args, client: client)
+            case "set-option", "setw":
+                try handleSetOption(args, client: client)
+            case "show-options":
+                try handleShowOptions(args, client: client)
+            case "bind-hook":
+                try handleBindHook(args, client: client)
+            case "unbind-hook":
+                try handleUnbindHook(args, client: client)
+            case "list-hooks":
+                try handleListHooks(args, client: client)
+            case "display-message":
+                try handleDisplayMessage(args, client: client)
             default:
                 printUsage()
                 exit(1)
@@ -331,16 +382,324 @@ struct HarnessCLI {
         try AgentHookInstaller.install(agent: agent)
     }
 
-    static func handleAttach(_ args: [String], client: DaemonClient) throws {
+    static func handleAttach(_ args: [String]) throws -> Int32 {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli attach --surface <id>\n", stderr)
+            fputs("Usage: harness-cli attach --surface <id> [--detach-keys <bytes>]\n", stderr)
+            return 64
+        }
+        var configuration = AttachClient.Configuration()
+        if let raw = flagValue(args, flag: "--detach-keys"),
+           let parsed = parseDetachSequence(raw) {
+            configuration.detachSequence = parsed
+        }
+        return try AttachClient.run(surfaceID: surface, configuration: configuration)
+    }
+
+    /// Parse `C-a d`, `0x01 0x64`, or comma-separated decimal bytes into a raw
+    /// byte sequence. Single-character tokens become their literal ASCII byte.
+    static func parseDetachSequence(_ raw: String) -> [UInt8]? {
+        let tokens = raw.split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init)
+        var bytes: [UInt8] = []
+        for token in tokens {
+            if token.hasPrefix("0x"), let value = UInt8(token.dropFirst(2), radix: 16) {
+                bytes.append(value)
+            } else if let value = UInt8(token) {
+                bytes.append(value)
+            } else if token.count == 3, token.hasPrefix("C-") || token.hasPrefix("c-") {
+                let ch = token.last!.uppercased().first!
+                guard let scalar = ch.asciiValue else { return nil }
+                bytes.append(scalar & 0x1f)
+            } else if token.count == 1, let scalar = token.first?.asciiValue {
+                bytes.append(scalar)
+            } else {
+                return nil
+            }
+        }
+        return bytes.isEmpty ? nil : bytes
+    }
+
+    static func printDaemonStats(_ client: DaemonClient) throws {
+        let response = try checkedRequest(client, .daemonStats)
+        guard case let .daemonStats(stats) = response else { throw DaemonClientError.unexpectedResponse }
+        print("pid: \(stats.pid)")
+        print(String(format: "uptime: %.0fs", stats.uptimeSeconds))
+        print("surfaces: \(stats.surfaceCount)")
+        print("scrollback: \(stats.totalScrollbackBytes) bytes")
+        print("clients: \(stats.clientCount)")
+        print("subscribers: \(stats.subscriberCount)")
+        print("snapshot-revision: \(stats.snapshotRevision)")
+    }
+
+    static func printClients(_ client: DaemonClient) throws {
+        let response = try checkedRequest(client, .listClients)
+        guard case let .clients(items) = response else { throw DaemonClientError.unexpectedResponse }
+        for item in items {
+            let attached = item.attachedSurfaceIDs.isEmpty ? "-" : item.attachedSurfaceIDs.joined(separator: ",")
+            print("\(item.id.uuidString)\t\(item.label)\t\(attached)\t\(item.connectedAt)")
+        }
+    }
+
+    static func handleDetachClient(_ args: [String], client: DaemonClient) throws {
+        guard let raw = flagValue(args, flag: "--client"), let id = UUID(uuidString: raw) else {
+            fputs("Usage: harness-cli detach-client --client <uuid>\n", stderr)
             exit(1)
         }
-        // Replays the pane's scrollback so the user can confirm its recent output
-        // without launching the GUI. (Live tailing is a deliberate non-goal here —
-        // the GUI is the live view; the daemon streaming foundation already exists.)
-        let response = try checkedRequest(client, .replayScrollback(surfaceID: surface, fromSequence: nil))
-        if case let .text(text) = response { print(text) }
+        _ = try checkedRequest(client, .detachClient(clientID: id))
+    }
+
+    static func handleBindKey(_ args: [String]) throws {
+        // Usage: harness-cli bind-key [-T <table>] <spec> <command source>
+        let table = flagValue(args, flag: "-T") ?? "prefix"
+        var positional = args
+        positional.removeAll { $0 == "-T" }
+        if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
+        guard positional.count >= 2 else {
+            fputs("Usage: harness-cli bind-key [-T <table>] <spec> <command...>\n", stderr)
+            exit(1)
+        }
+        let spec = positional[0]
+        let source = positional.dropFirst().joined(separator: " ")
+        guard let parsedSpec = KeySpec.parse(spec) else {
+            fputs("Invalid key spec: \(spec)\n", stderr)
+            exit(1)
+        }
+        let command = try CommandParser.parse(source)
+        var set = KeybindingsStore.load()
+        set.setBinding(table: KeyTableID(rawValue: table), binding: Binding(spec: parsedSpec, command: command))
+        let url = try KeybindingsStore.save(set)
+        print(url.path)
+    }
+
+    static func handleUnbindKey(_ args: [String]) throws {
+        let table = flagValue(args, flag: "-T") ?? "prefix"
+        var positional = args
+        positional.removeAll { $0 == "-T" }
+        if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
+        guard let spec = positional.first, let parsedSpec = KeySpec.parse(spec) else {
+            fputs("Usage: harness-cli unbind-key [-T <table>] <spec>\n", stderr)
+            exit(1)
+        }
+        var set = KeybindingsStore.load()
+        set.removeBinding(table: KeyTableID(rawValue: table), spec: parsedSpec)
+        let url = try KeybindingsStore.save(set)
+        print(url.path)
+    }
+
+    static func handleSetBuffer(_ args: [String], client: DaemonClient) throws {
+        let name = flagValue(args, flag: "--name")
+        let data: Data
+        if let inline = flagValue(args, flag: "--data") {
+            data = Data(inline.utf8)
+        } else if args.contains("--stdin") {
+            data = FileHandle.standardInput.readDataToEndOfFile()
+        } else {
+            fputs("Usage: harness-cli set-buffer (--data <text> | --stdin) [--name <name>]\n", stderr)
+            exit(1)
+        }
+        let response = try checkedRequest(client, .setBuffer(name: name, data: data))
+        if case let .text(final) = response { print(final) }
+    }
+
+    static func handleListBuffers(_ client: DaemonClient) throws {
+        let response = try checkedRequest(client, .listBuffers)
+        guard case let .buffers(items) = response else { throw DaemonClientError.unexpectedResponse }
+        for item in items {
+            print("\(item.name)\t\(item.byteCount)B\t\(item.preview)")
+        }
+    }
+
+    static func handleShowBuffer(_ args: [String], client: DaemonClient) throws {
+        let name = flagValue(args, flag: "--name")
+        let response = try checkedRequest(client, .getBuffer(name: name))
+        guard case let .buffer(summary) = response, let data = summary.data else {
+            throw DaemonClientError.unexpectedResponse
+        }
+        FileHandle.standardOutput.write(data)
+    }
+
+    static func handleDeleteBuffer(_ args: [String], client: DaemonClient) throws {
+        guard let name = flagValue(args, flag: "--name") else {
+            fputs("Usage: harness-cli delete-buffer --name <name>\n", stderr)
+            exit(1)
+        }
+        _ = try checkedRequest(client, .deleteBuffer(name: name))
+    }
+
+    static func handlePasteBuffer(_ args: [String], client: DaemonClient) throws {
+        guard let surface = flagValue(args, flag: "--surface") else {
+            fputs("Usage: harness-cli paste-buffer --surface <id> [--name <name>]\n", stderr)
+            exit(1)
+        }
+        let name = flagValue(args, flag: "--name")
+        _ = try checkedRequest(client, .pasteBuffer(surfaceID: surface, name: name))
+    }
+
+    static func handleSelectLayout(_ args: [String], client: DaemonClient) throws {
+        guard let tabStr = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabStr),
+              let layout = flagValue(args, flag: "--layout")
+        else {
+            fputs("Usage: harness-cli select-layout --tab <uuid> --layout <name> [--main <paneUUID>]\n", stderr)
+            exit(1)
+        }
+        let mainPaneID = flagValue(args, flag: "--main").flatMap { UUID(uuidString: $0) }
+        _ = try checkedRequest(client, .applyLayout(tabID: tabID, layout: layout, mainPaneID: mainPaneID))
+    }
+
+    static func handleCycleLayout(_ args: [String], client: DaemonClient, forward: Bool) throws {
+        guard let tabStr = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabStr) else {
+            fputs("Usage: harness-cli \(forward ? "next" : "previous")-layout --tab <uuid>\n", stderr)
+            exit(1)
+        }
+        _ = try checkedRequest(client, forward ? .nextLayout(tabID: tabID) : .previousLayout(tabID: tabID))
+    }
+
+    static func handleRotateWindow(_ args: [String], client: DaemonClient) throws {
+        guard let tabStr = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabStr) else {
+            fputs("Usage: harness-cli rotate-window --tab <uuid> [--reverse]\n", stderr)
+            exit(1)
+        }
+        let forward = !args.contains("--reverse")
+        _ = try checkedRequest(client, .rotatePanes(tabID: tabID, forward: forward))
+    }
+
+    static func handleBreakPane(_ args: [String], client: DaemonClient) throws {
+        guard let paneStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneStr) else {
+            fputs("Usage: harness-cli break-pane --pane <uuid>\n", stderr)
+            exit(1)
+        }
+        let response = try checkedRequest(client, .breakPane(paneID: paneID))
+        if case let .tabID(id) = response { print(id.uuidString) }
+    }
+
+    static func handleJoinPane(_ args: [String], client: DaemonClient) throws {
+        guard let srcStr = flagValue(args, flag: "--src"), let src = UUID(uuidString: srcStr),
+              let dstStr = flagValue(args, flag: "--dst"), let dst = UUID(uuidString: dstStr),
+              let dirStr = flagValue(args, flag: "--direction"),
+              let direction = SplitDirection(rawValue: dirStr)
+        else {
+            fputs("Usage: harness-cli join-pane --src <uuid> --dst <uuid> --direction horizontal|vertical\n", stderr)
+            exit(1)
+        }
+        let response = try checkedRequest(client, .joinPane(sourcePaneID: src, destPaneID: dst, direction: direction))
+        if case let .paneID(id) = response { print(id.uuidString) }
+    }
+
+    static func handleRespawnPane(_ args: [String], client: DaemonClient) throws {
+        guard let surface = flagValue(args, flag: "--surface") else {
+            fputs("Usage: harness-cli respawn-pane --surface <id> [--clear-history]\n", stderr)
+            exit(1)
+        }
+        let keepHistory = !args.contains("--clear-history")
+        _ = try checkedRequest(client, .respawnPane(surfaceID: surface, keepHistory: keepHistory))
+    }
+
+    static func handleSelectPane(_ args: [String], client: DaemonClient) throws {
+        guard let paneStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneStr) else {
+            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", stderr)
+            exit(1)
+        }
+        guard let dirStr = flagValue(args, flag: "--dir")?.lowercased(),
+              let axis = DirectionalAxis(short: dirStr)
+        else {
+            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", stderr)
+            exit(1)
+        }
+        let response = try checkedRequest(client, .selectPaneDirectional(currentPaneID: paneID, direction: axis))
+        if case let .paneID(id) = response { print(id.uuidString) }
+    }
+
+    static func handleSetOption(_ args: [String], client: DaemonClient) throws {
+        // Usage: set-option [-g|-w|-s|-t|-p] [-T <target>] <key> <value>
+        var scope = "global"
+        if args.contains("-g") { scope = "global" }
+        if args.contains("-w") { scope = "workspace" }
+        if args.contains("-s") { scope = "session" }
+        if args.contains("-t") { scope = "tab" }
+        if args.contains("-p") { scope = "pane" }
+        let target = flagValue(args, flag: "-T")
+        let positional = args.filter { !$0.hasPrefix("-") && $0 != target }
+        guard positional.count >= 2 else {
+            fputs("Usage: harness-cli set-option [-g|-w|-s|-t|-p] [-T <target>] <key> <value>\n", stderr)
+            exit(1)
+        }
+        let key = positional[0]
+        let value = positional.dropFirst().joined(separator: " ")
+        _ = try checkedRequest(client, .setOption(scope: scope, target: target, key: key, rawValue: value))
+    }
+
+    static func handleShowOptions(_ args: [String], client: DaemonClient) throws {
+        var scope: String?
+        if args.contains("-g") { scope = "global" }
+        if args.contains("-w") { scope = "workspace" }
+        if args.contains("-s") { scope = "session" }
+        if args.contains("-t") { scope = "tab" }
+        if args.contains("-p") { scope = "pane" }
+        let response = try checkedRequest(client, .showOptions(scope: scope))
+        guard case let .options(items) = response else { throw DaemonClientError.unexpectedResponse }
+        for item in items.sorted(by: { $0.key < $1.key }) {
+            let prefix = item.target.map { "\(item.scope):\($0)" } ?? item.scope
+            print("\(prefix)\t\(item.key)\t\(item.value)")
+        }
+    }
+
+    static func handleBindHook(_ args: [String], client: DaemonClient) throws {
+        guard args.count >= 3 else {
+            fputs("Usage: harness-cli bind-hook <event> <command...> [--if <format>]\n", stderr)
+            exit(1)
+        }
+        let event = args[0]
+        let ifIndex = args.firstIndex(of: "--if")
+        let condition = (ifIndex.flatMap { args.count > $0 + 1 ? args[$0 + 1] : nil })
+        let source: String
+        if let ifIndex {
+            source = args[1..<ifIndex].joined(separator: " ")
+        } else {
+            source = args.dropFirst().joined(separator: " ")
+        }
+        let response = try checkedRequest(client, .bindHook(event: event, source: source, condition: condition))
+        if case let .hookID(id) = response { print(id.uuidString) }
+    }
+
+    static func handleUnbindHook(_ args: [String], client: DaemonClient) throws {
+        guard let raw = flagValue(args, flag: "--id"), let id = UUID(uuidString: raw) else {
+            fputs("Usage: harness-cli unbind-hook --id <uuid>\n", stderr)
+            exit(1)
+        }
+        _ = try checkedRequest(client, .unbindHook(id: id))
+    }
+
+    static func handleListHooks(_ args: [String], client: DaemonClient) throws {
+        let event = flagValue(args, flag: "--event")
+        let response = try checkedRequest(client, .listHooks(event: event))
+        guard case let .hooks(items) = response else { throw DaemonClientError.unexpectedResponse }
+        for item in items {
+            let cond = item.condition.map { " if '\($0)'" } ?? ""
+            print("\(item.id.uuidString)\t\(item.event)\t\(item.commandSource)\(cond)")
+        }
+    }
+
+    static func handleDisplayMessage(_ args: [String], client: DaemonClient) throws {
+        let format = args.joined(separator: " ")
+        guard !format.isEmpty else {
+            fputs("Usage: harness-cli display-message <format>\n", stderr)
+            exit(1)
+        }
+        _ = try checkedRequest(client, .displayMessage(format: format))
+    }
+
+    static func handleListKeys(_ args: [String]) throws {
+        let tableFlag = flagValue(args, flag: "-T")
+        let set = KeybindingsStore.load()
+        let chosen: [KeyTable] = tableFlag.map {
+            [set.table(KeyTableID(rawValue: $0))].compactMap { $0 }
+        } ?? set.tableList
+        for table in chosen {
+            print("[\(table.id.rawValue)]")
+            for binding in table.bindings {
+                let note = binding.note.map { "  -- \($0)" } ?? ""
+                print("  \(binding.spec.description)\t\(binding.command.shortDescription)\(note)")
+            }
+        }
     }
 
     static func installCLI() throws {
@@ -358,6 +717,37 @@ struct HarnessCLI {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
         print(dest.path)
         print("export PATH=\"\(dest.deletingLastPathComponent().path):$PATH\"")
+        // Install the LaunchAgent so the daemon survives reboot.
+        if let daemon = locateDaemonBinary() {
+            do {
+                let report = try LaunchAgentInstaller.install(daemonPath: daemon)
+                print("launch-agent: \(report.plistPath.path)")
+            } catch {
+                fputs("warning: LaunchAgent install failed: \(error)\n", stderr)
+            }
+        } else {
+            fputs("warning: HarnessDaemon binary not found; LaunchAgent not installed\n", stderr)
+        }
+        // Shell completions (fish only for now — zsh/bash land in a follow-up).
+        do {
+            let url = try ShellCompletionInstaller.installFishCompletion()
+            print("fish-completion: \(url.path)")
+        } catch {
+            fputs("warning: fish completion install failed: \(error)\n", stderr)
+        }
+    }
+
+    /// Locate the daemon executable next to the running CLI. The CLI is
+    /// expected to be either (a) inside Harness.app's MacOS folder, where
+    /// HarnessDaemon is a sibling, or (b) in `.build/<config>/` during dev.
+    static func locateDaemonBinary() -> URL? {
+        let cli = CLIInstallLocator.sourceBinary()
+        let candidate = cli.deletingLastPathComponent().appendingPathComponent("HarnessDaemon")
+        if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        // Try the installed app bundle.
+        let appCandidate = URL(fileURLWithPath: "/Applications/Harness.app/Contents/MacOS/HarnessDaemon")
+        if FileManager.default.fileExists(atPath: appCandidate.path) { return appCandidate }
+        return nil
     }
 
     static func flagValue(_ args: [String], flag: String) -> String? {
@@ -403,8 +793,33 @@ struct HarnessCLI {
           rename-workspace --id <uuid> --name "..."
           detect-agent --surface <uuid>
           install-hooks <codex|claude-code|cursor|pi|hermes|openclaw|aider|gemini|goose>
-          attach --surface <uuid>
+          attach --surface <uuid> [--detach-keys "C-a d"]
           notify --surface <uuid> [--title t] [--body b]
+          daemon-stats
+          list-clients
+          detach-client --client <uuid>
+          bind-key [-T <table>] <spec> <command...>
+          unbind-key [-T <table>] <spec>
+          list-keys [-T <table>]
+          set-buffer (--data <text> | --stdin) [--name <name>]
+          list-buffers
+          show-buffer [--name <name>]
+          delete-buffer --name <name>
+          paste-buffer --surface <uuid> [--name <name>]
+          select-layout --tab <uuid> --layout even-horizontal|even-vertical|main-horizontal|main-vertical|tiled
+          next-layout --tab <uuid>
+          previous-layout --tab <uuid>
+          rotate-window --tab <uuid> [--reverse]
+          break-pane --pane <uuid>
+          join-pane --src <uuid> --dst <uuid> --direction horizontal|vertical
+          respawn-pane --surface <id> [--clear-history]
+          select-pane --pane <uuid> --dir L|R|U|D
+          set-option [-g|-w|-s|-t|-p] [-T target] <key> <value>
+          show-options [-g|-w|-s|-t|-p]
+          bind-hook <event> <command...> [--if <format>]
+          unbind-hook --id <uuid>
+          list-hooks [--event <event>]
+          display-message <format>
           install
           ping
         """)

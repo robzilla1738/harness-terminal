@@ -6,6 +6,7 @@ final class MainSplitViewController: NSViewController {
     private let split = NSSplitView()
     private let sidebar = HarnessSidebarPanelViewController()
     private let content = ContentAreaViewController()
+    private let statusLine = StatusLineView()
     /// 1px hairline along the inner edge of the sidebar — adds quiet definition
     /// between sidebar/terminal without resorting to a draggable divider line.
     private let edgeDivider = NSView()
@@ -41,35 +42,36 @@ final class MainSplitViewController: NSViewController {
             sidebar.view.bottomAnchor.constraint(equalTo: sidebarContainer.bottomAnchor),
         ])
 
-        // Thin inner-edge hairline on the trailing edge of the sidebar — picked up
-        // from the theme palette so it stays whisper-quiet on light themes.
-        edgeDivider.wantsLayer = true
-        edgeDivider.translatesAutoresizingMaskIntoConstraints = false
-        sidebarContainer.addSubview(edgeDivider)
-        NSLayoutConstraint.activate([
-            edgeDivider.topAnchor.constraint(equalTo: sidebarContainer.topAnchor),
-            edgeDivider.bottomAnchor.constraint(equalTo: sidebarContainer.bottomAnchor),
-            edgeDivider.trailingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
-            edgeDivider.widthAnchor.constraint(equalToConstant: 1),
-        ])
-
         split.addSubview(sidebarContainer)
         split.addSubview(content.view)
         addChild(sidebar)
         addChild(content)
 
         split.translatesAutoresizingMaskIntoConstraints = false
+        statusLine.translatesAutoresizingMaskIntoConstraints = false
+        edgeDivider.wantsLayer = true
+        edgeDivider.translatesAutoresizingMaskIntoConstraints = false
+
         view.addSubview(split)
+        view.addSubview(statusLine)
+        view.addSubview(edgeDivider)
         NSLayoutConstraint.activate([
             split.topAnchor.constraint(equalTo: view.topAnchor),
             split.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            split.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            split.bottomAnchor.constraint(equalTo: statusLine.topAnchor),
+
+            statusLine.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            statusLine.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            statusLine.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            edgeDivider.topAnchor.constraint(equalTo: view.topAnchor),
+            edgeDivider.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            edgeDivider.leadingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
+            edgeDivider.widthAnchor.constraint(equalToConstant: 1),
         ])
 
-        edgeDivider.layer?.backgroundColor = HarnessChrome.current.border.withAlphaComponent(
-            HarnessChrome.current.isDark ? 0.45 : 0.65
-        ).cgColor
+        edgeDivider.layer?.backgroundColor = resolvedDividerColor().cgColor
 
         DispatchQueue.main.async { [weak self] in
             self?.setSidebarVisible(SessionCoordinator.shared.settings.sidebarVisible)
@@ -83,17 +85,28 @@ final class MainSplitViewController: NSViewController {
         )
     }
 
+    /// Resolve the divider line color: user override (`settings.dividerHex`) wins;
+    /// otherwise the theme's border × alpha.
+    private func resolvedDividerColor() -> NSColor {
+        let custom = SessionCoordinator.shared.settings.dividerHex
+        if let hex = custom, let color = NSColor.fromHex(hex) { return color }
+        let c = HarnessChrome.current
+        return c.border.withAlphaComponent(c.isDark ? 0.45 : 0.65)
+    }
+
     func applyChrome() {
         HarnessDesign.makeClear(view)
         if let sidebarContainer = split.subviews.first {
             // Keep this transparent — the sidebar view inside owns the chrome.
             HarnessDesign.makeClear(sidebarContainer)
         }
-        edgeDivider.layer?.backgroundColor = HarnessChrome.current.border.withAlphaComponent(
-            HarnessChrome.current.isDark ? 0.45 : 0.65
-        ).cgColor
+        edgeDivider.layer?.backgroundColor = resolvedDividerColor().cgColor
+        // Tell the window controller to repaint the window bg with the (possibly
+        // new) chrome color × opacity.
+        (view.window?.windowController as? MainWindowController)?.applyTransparency()
         sidebar.applyChromeColors()
         content.applyChrome()
+        statusLine.applyChrome()
         (view.window?.windowController as? MainWindowController)?.applyTransparency()
     }
 

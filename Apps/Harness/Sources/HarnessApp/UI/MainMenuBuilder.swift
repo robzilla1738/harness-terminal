@@ -75,6 +75,10 @@ enum MainMenuBuilder {
         let paletteItem = NSMenuItem(title: "Command Palette", action: #selector(MenuTarget.commandPalette), keyEquivalent: "k")
         paletteItem.target = MenuTarget.shared
         view.submenu?.addItem(paletteItem)
+        let promptItem = NSMenuItem(title: "Command Prompt", action: #selector(MenuTarget.commandPrompt), keyEquivalent: ";")
+        promptItem.keyEquivalentModifierMask = [.command]
+        promptItem.target = MenuTarget.shared
+        view.submenu?.addItem(promptItem)
         let sidebarItem = NSMenuItem(title: "Toggle Sidebar", action: #selector(MenuTarget.toggleSidebar), keyEquivalent: "\\")
         sidebarItem.keyEquivalentModifierMask = [.command]
         sidebarItem.target = MenuTarget.shared
@@ -147,6 +151,10 @@ final class MenuTarget: NSObject {
         if let window = NSApp.keyWindow {
             CommandPaletteController.present(relativeTo: window)
         }
+    }
+
+    @objc func commandPrompt() {
+        CommandPromptController.shared.present()
     }
 
     @objc func openSettings() {

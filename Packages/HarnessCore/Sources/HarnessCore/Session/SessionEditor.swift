@@ -155,6 +155,21 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    /// Move a session to `toIndex` within its workspace's session list. IDs are
+    /// unchanged, so the active session stays valid.
+    @discardableResult
+    public mutating func reorderSession(workspaceID: WorkspaceID, sessionID: SessionID, toIndex: Int) -> Bool {
+        guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else { return false }
+        var workspace = snapshot.workspaces[workspaceIndex]
+        guard let from = workspace.sessions.firstIndex(where: { $0.id == sessionID }) else { return false }
+        let session = workspace.sessions.remove(at: from)
+        let target = max(0, min(workspace.sessions.count, toIndex))
+        workspace.sessions.insert(session, at: target)
+        snapshot.workspaces[workspaceIndex] = workspace
+        bumpRevision()
+        return true
+    }
+
     public mutating func setTheme(_ name: String) {
         guard snapshot.themeName != name else { return }
         snapshot.themeName = name
@@ -596,6 +611,317 @@ public struct SessionEditor: Sendable {
             }
         }
         return nil
+    }
+
+    // MARK: - Phase 4: directional select, layouts, break/join/rotate
+
+    /// Resolve the directional neighbor of `paneID` within its tab. The
+    /// algorithm walks up the binary tree to find the first ancestor whose
+    /// split axis matches `direction` and from whose opposite child we came;
+    /// then descends back into the other subtree to the leaf nearest the
+    /// shared edge. Returns `nil` when no neighbor exists (e.g. the active
+    /// pane is already at the requested edge).
+    public func directionalNeighbor(of paneID: PaneID, direction: Command.PaneTarget) -> PaneID? {
+        guard direction == .left || direction == .right || direction == .up || direction == .down else {
+            return nil
+        }
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if let path = pathTo(paneID: paneID, in: tab.rootPane) {
+                        return findNeighbor(in: tab.rootPane, path: path, direction: direction)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Apply a named layout to the panes in `tabID`. The active pane (if known
+    /// via `mainPaneID`) is preserved as the "main" pane for layouts that have
+    /// one (main-vertical / main-horizontal). Surfaces are reused; only the
+    /// tree structure + ratios are rebuilt.
+    public mutating func applyLayout(
+        tabID: TabID,
+        layout: LayoutTemplate,
+        mainPaneID: PaneID? = nil
+    ) -> Bool {
+        guard let index = tabIndex(tabID: tabID) else { return false }
+        var tab = snapshot.workspaces[index.workspaceIndex].sessions[index.sessionIndex].tabs[index.tabIndex]
+        let leaves = collectLeaves(in: tab.rootPane)
+        guard leaves.count >= 2 else { return false }
+        let ordered: [PaneLeaf]
+        if let main = mainPaneID, let main = leaves.first(where: { $0.id == main }) {
+            ordered = [main] + leaves.filter { $0.id != main.id }
+        } else {
+            ordered = leaves
+        }
+        tab.rootPane = build(layout: layout, leaves: ordered)
+        tab.zoomedPaneID = nil
+        snapshot.workspaces[index.workspaceIndex].sessions[index.sessionIndex].tabs[index.tabIndex] = tab
+        bumpRevision()
+        return true
+    }
+
+    /// Cycle children at each branch (the `rotate-window` command).
+    public mutating func rotatePanes(tabID: TabID, forward: Bool) -> Bool {
+        guard let index = tabIndex(tabID: tabID) else { return false }
+        var tab = snapshot.workspaces[index.workspaceIndex].sessions[index.sessionIndex].tabs[index.tabIndex]
+        let leaves = collectLeaves(in: tab.rootPane)
+        guard leaves.count >= 2 else { return false }
+        let rotated: [PaneLeaf]
+        if forward {
+            rotated = Array(leaves.dropFirst()) + [leaves.first!]
+        } else {
+            rotated = [leaves.last!] + Array(leaves.dropLast())
+        }
+        // Re-emit a balanced tree with the same SplitDirection mix as the
+        // original by walking the original's structure and substituting.
+        var iterator = rotated.makeIterator()
+        tab.rootPane = substituteLeaves(in: tab.rootPane, iterator: &iterator)
+        snapshot.workspaces[index.workspaceIndex].sessions[index.sessionIndex].tabs[index.tabIndex] = tab
+        bumpRevision()
+        return true
+    }
+
+    /// Extract `paneID` from its tab and place it as the root of a brand-new
+    /// tab in the same session. Returns the new TabID. Surface keeps its
+    /// daemon-side PTY (no respawn).
+    public mutating func breakPane(paneID: PaneID) -> TabID? {
+        for workspaceIndex in snapshot.workspaces.indices {
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    guard let leaf = leaf(in: tab.rootPane, paneID: paneID) else { continue }
+                    // Don't break the last pane in a tab — that would just close it.
+                    guard tab.rootPane.allPaneIDs().count > 1 else { return nil }
+                    _ = removePane(&tab.rootPane, target: paneID)
+                    if tab.zoomedPaneID == paneID { tab.zoomedPaneID = nil }
+                    snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
+                    let newTab = Tab(cwd: tab.cwd, rootPane: .leaf(leaf))
+                    snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.append(newTab)
+                    bumpRevision()
+                    return newTab.id
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Move `sourcePaneID` from its current tab into `destPaneID`'s tab,
+    /// splitting `destPaneID`'s position with `direction`. Surfaces are
+    /// preserved.
+    @discardableResult
+    public mutating func joinPane(
+        sourcePaneID: PaneID,
+        destPaneID: PaneID,
+        direction: SplitDirection
+    ) -> PaneID? {
+        var sourceLeaf: PaneLeaf?
+        for workspaceIndex in snapshot.workspaces.indices {
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    if let leaf = leaf(in: tab.rootPane, paneID: sourcePaneID) {
+                        sourceLeaf = leaf
+                        if tab.rootPane.allPaneIDs().count > 1 {
+                            _ = removePane(&tab.rootPane, target: sourcePaneID)
+                            if tab.zoomedPaneID == sourcePaneID { tab.zoomedPaneID = nil }
+                            snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
+                        } else {
+                            // Source pane is the only one in its tab — joining
+                            // would orphan an empty tab. Refuse.
+                            return nil
+                        }
+                    }
+                }
+            }
+        }
+        guard let leaf = sourceLeaf else { return nil }
+        for workspaceIndex in snapshot.workspaces.indices {
+            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
+                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
+                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
+                    guard tab.rootPane.allPaneIDs().contains(destPaneID) else { continue }
+                    let newLeaf = PaneLeaf(id: UUID(), surfaceID: leaf.surfaceID, daemonSurfaceID: leaf.daemonSurfaceID)
+                    insertSplit(&tab.rootPane, at: destPaneID, with: newLeaf, direction: direction)
+                    snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
+                    bumpRevision()
+                    return newLeaf.id
+                }
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Phase 4 internals
+
+    private func pathTo(paneID: PaneID, in node: PaneNode) -> [Int]? {
+        switch node {
+        case let .leaf(leaf): return leaf.id == paneID ? [] : nil
+        case let .branch(_, _, first, second):
+            if let sub = pathTo(paneID: paneID, in: first) { return [0] + sub }
+            if let sub = pathTo(paneID: paneID, in: second) { return [1] + sub }
+            return nil
+        }
+    }
+
+    private func findNeighbor(in root: PaneNode, path: [Int], direction: Command.PaneTarget) -> PaneID? {
+        // Walk up until we find a branch whose split axis matches `direction`
+        // and we descended from the side opposite the direction we want.
+        var cursor = root
+        var ancestors: [(direction: SplitDirection, came: Int)] = []
+        for step in path {
+            if case let .branch(direction, _, first, second) = cursor {
+                ancestors.append((direction, step))
+                cursor = step == 0 ? first : second
+            } else {
+                return nil
+            }
+        }
+        guard case .leaf = cursor else { return nil }
+        // Decide which axis matches the request.
+        let wantHorizontalAxis: Bool = direction == .left || direction == .right
+        let wantNegativeSide: Bool = direction == .left || direction == .up
+        for i in (0..<ancestors.count).reversed() {
+            let ancestor = ancestors[i]
+            let isHorizontal = ancestor.direction == .vertical // .vertical divider → side-by-side
+            if isHorizontal == wantHorizontalAxis {
+                // We need to have come from the side opposite the target side.
+                let cameFromHigh = ancestor.came == 1
+                if (wantNegativeSide && cameFromHigh) || (!wantNegativeSide && !cameFromHigh) {
+                    // Descend the OTHER side, picking the leaf closest to the
+                    // shared edge: rightmost when going left, leftmost when going
+                    // right, bottommost when going up, topmost when going down.
+                    var descend = root
+                    for step in path.prefix(i) {
+                        guard case let .branch(_, _, first, second) = descend else { return nil }
+                        descend = step == 0 ? first : second
+                    }
+                    guard case let .branch(_, _, first, second) = descend else { return nil }
+                    descend = wantNegativeSide ? first : second
+                    while case let .branch(branchDir, _, l, r) = descend {
+                        if branchDir == ancestor.direction {
+                            // Same axis — pick the leaf adjacent to the shared edge.
+                            descend = wantNegativeSide ? r : l
+                        } else {
+                            // Different axis — descend into either side; pick
+                            // the first leaf to keep behavior deterministic.
+                            descend = l
+                        }
+                    }
+                    return descend.paneID
+                }
+            }
+        }
+        return nil
+    }
+
+    private func collectLeaves(in node: PaneNode) -> [PaneLeaf] {
+        switch node {
+        case let .leaf(leaf): return [leaf]
+        case let .branch(_, _, first, second):
+            return collectLeaves(in: first) + collectLeaves(in: second)
+        }
+    }
+
+    private func substituteLeaves(in node: PaneNode, iterator: inout IndexingIterator<[PaneLeaf]>) -> PaneNode {
+        switch node {
+        case .leaf:
+            return iterator.next().map { .leaf($0) } ?? node
+        case let .branch(direction, ratio, first, second):
+            let f = substituteLeaves(in: first, iterator: &iterator)
+            let s = substituteLeaves(in: second, iterator: &iterator)
+            return .branch(direction: direction, ratio: ratio, first: f, second: s)
+        }
+    }
+
+    private func insertSplit(_ node: inout PaneNode, at target: PaneID, with newLeaf: PaneLeaf, direction: SplitDirection) {
+        switch node {
+        case let .leaf(leaf) where leaf.id == target:
+            node = .branch(direction: direction, ratio: 0.5, first: .leaf(leaf), second: .leaf(newLeaf))
+        case .branch(let dir, let ratio, var first, var second):
+            insertSplit(&first, at: target, with: newLeaf, direction: direction)
+            insertSplit(&second, at: target, with: newLeaf, direction: direction)
+            node = .branch(direction: dir, ratio: ratio, first: first, second: second)
+        default:
+            break
+        }
+    }
+
+    private func build(layout: LayoutTemplate, leaves: [PaneLeaf]) -> PaneNode {
+        switch layout {
+        case .evenHorizontal:
+            // panes side-by-side (vertical dividers between them)
+            return buildEven(leaves: leaves, direction: .vertical)
+        case .evenVertical:
+            return buildEven(leaves: leaves, direction: .horizontal)
+        case .mainHorizontal:
+            // main pane on top (full width), the rest tiled side-by-side underneath
+            guard let main = leaves.first else { return .leaf(PaneLeaf()) }
+            let rest = Array(leaves.dropFirst())
+            if rest.isEmpty { return .leaf(main) }
+            let bottom = buildEven(leaves: rest, direction: .vertical)
+            return .branch(direction: .horizontal, ratio: 0.5, first: .leaf(main), second: bottom)
+        case .mainVertical:
+            // main pane on left (full height), rest stacked top/bottom on right
+            guard let main = leaves.first else { return .leaf(PaneLeaf()) }
+            let rest = Array(leaves.dropFirst())
+            if rest.isEmpty { return .leaf(main) }
+            let right = buildEven(leaves: rest, direction: .horizontal)
+            return .branch(direction: .vertical, ratio: 0.5, first: .leaf(main), second: right)
+        case .tiled:
+            return buildTiled(leaves: leaves)
+        }
+    }
+
+    private func buildEven(leaves: [PaneLeaf], direction: SplitDirection) -> PaneNode {
+        guard !leaves.isEmpty else { return .leaf(PaneLeaf()) }
+        if leaves.count == 1 { return .leaf(leaves[0]) }
+        // Recursive equal split — produces a balanced binary tree whose visual
+        // result is N evenly-sized panes along the chosen axis.
+        let mid = leaves.count / 2
+        let left = Array(leaves.prefix(mid))
+        let right = Array(leaves.suffix(from: mid))
+        let ratio = Double(left.count) / Double(leaves.count)
+        return .branch(
+            direction: direction,
+            ratio: ratio,
+            first: buildEven(leaves: left, direction: direction),
+            second: buildEven(leaves: right, direction: direction)
+        )
+    }
+
+    private func buildTiled(leaves: [PaneLeaf]) -> PaneNode {
+        // Grid that's roughly square. For N leaves, columns = ceil(sqrt(N)),
+        // rows = ceil(N / columns). Last row may be shorter.
+        guard !leaves.isEmpty else { return .leaf(PaneLeaf()) }
+        if leaves.count == 1 { return .leaf(leaves[0]) }
+        let columns = max(1, Int(Double(leaves.count).squareRoot().rounded(.up)))
+        var rows: [[PaneLeaf]] = []
+        var i = 0
+        while i < leaves.count {
+            let end = min(i + columns, leaves.count)
+            rows.append(Array(leaves[i..<end]))
+            i = end
+        }
+        let rowNodes = rows.map { buildEven(leaves: $0, direction: .vertical) }
+        return buildEvenNodes(rowNodes, direction: .horizontal)
+    }
+
+    private func buildEvenNodes(_ nodes: [PaneNode], direction: SplitDirection) -> PaneNode {
+        guard !nodes.isEmpty else { return .leaf(PaneLeaf()) }
+        if nodes.count == 1 { return nodes[0] }
+        let mid = nodes.count / 2
+        let left = Array(nodes.prefix(mid))
+        let right = Array(nodes.suffix(from: mid))
+        let ratio = Double(left.count) / Double(nodes.count)
+        return .branch(
+            direction: direction,
+            ratio: ratio,
+            first: buildEvenNodes(left, direction: direction),
+            second: buildEvenNodes(right, direction: direction)
+        )
     }
 
     private func existingWorkingDirectory(_ raw: String?) -> String {

@@ -26,10 +26,18 @@ public final class TerminalHostView: NSView {
     private var outputSubscription: DaemonSubscription?
     private var isWaiting = false
     private var isActiveBorder = false
+    private var appliedThemeBackgroundHex: String?
+    private var cachedSettings: HarnessSettings?
+    private var cachedThemeName: String
     /// Theme-derived indicator colors. This package can't reach the app's palette,
     /// so the app pushes them via `applyBorderColors`. Default until the first push.
     public var activeBorderColor: NSColor = .systemBlue
     public var waitingRingColor: NSColor = .systemBlue
+
+    /// Empty libghostty theme section. Harness themes must never override
+    /// terminal output colors; terminal tools should render with Ghostty/base
+    /// config ANSI and truecolor behavior.
+    private static let emptyControllerTheme = TerminalTheme()
 
     public var showsWaitingRing: Bool {
         get { isWaiting }
@@ -52,9 +60,11 @@ public final class TerminalHostView: NSView {
         workingDirectory: String? = nil,
         harnessSurfaceEnv: String? = nil,
         settings: HarnessSettings? = nil,
+        themeName: String = ThemeManager.defaultThemeName,
         controller: TerminalController? = nil
     ) {
         self.surfaceID = surfaceID
+        self.cachedThemeName = themeName
         let shell = settings?.defaultShell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let surfaceEnv = harnessSurfaceEnv ?? surfaceID.uuidString
         let io = SurfaceIO(surfaceID: surfaceEnv)
@@ -63,7 +73,8 @@ public final class TerminalHostView: NSView {
             write: { data in io.send(data) },
             resize: { viewport in io.resize(rows: viewport.rows, cols: viewport.columns) }
         )
-        self.controller = controller ?? Self.makeController(settings: settings)
+        self.cachedSettings = settings
+        self.controller = controller ?? Self.makeController(settings: settings, themeName: themeName)
         terminalView = TerminalView(frame: .zero)
         super.init(frame: .zero)
         ensureDaemonSurface(cwd: workingDirectory, shell: shell, settings: settings)
@@ -76,29 +87,34 @@ public final class TerminalHostView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private static let emptyControllerTheme = TerminalTheme(light: .init(), dark: .init())
-
-    private static func makeController(settings: HarnessSettings?) -> TerminalController {
-        TerminalController(
-            configuration: makeTerminalConfiguration(settings: settings),
+    private static func makeController(settings: HarnessSettings?, themeName: String) -> TerminalController {
+        let terminalConfiguration = makeTerminalConfiguration(settings: settings, themeName: themeName)
+        return TerminalController(
+            configuration: terminalConfiguration,
             theme: emptyControllerTheme
         )
     }
 
-    static func makeTerminalConfiguration(settings: HarnessSettings?) -> TerminalConfiguration {
+    /// Single merged terminal block: Ghostty/base config → color pipeline →
+    /// settings. Named Harness themes are intentionally absent from terminal
+    /// output so they cannot wash or retint terminal tools.
+    static func makeTerminalConfiguration(
+        settings: HarnessSettings?,
+        themeName: String
+    ) -> TerminalConfiguration {
         TerminalConfiguration {
-            configureTerminalBuilder(&$0, settings: settings)
+            configureTerminalBuilder(&$0, settings: settings, themeName: themeName)
         }
     }
 
     private static func configureTerminalBuilder(
         _ builder: inout TerminalConfiguration.Builder,
-        settings: HarnessSettings?
+        settings: HarnessSettings?,
+        themeName: String
     ) {
         builder.withCustom("shell-integration", "detect")
         builder.withCustom("shell-integration-features", "sudo,title")
         TerminalColorPipeline.apply(to: &builder)
-
         guard let settings else { return }
         builder.withFontSize(settings.fontSize)
         builder.withFontFamily(settings.fontFamily)
@@ -114,6 +130,13 @@ public final class TerminalHostView: NSView {
         builder.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
         builder.withCursorStyleBlink(settings.cursorBlink)
         builder.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
+    }
+
+    private func pushConfiguration() {
+        guard let cachedSettings else { return }
+        _ = controller.setTerminalConfiguration(
+            Self.makeTerminalConfiguration(settings: cachedSettings, themeName: cachedThemeName)
+        )
     }
 
     private func configure(workingDirectory: String?, settings: HarnessSettings?) {
@@ -140,15 +163,20 @@ public final class TerminalHostView: NSView {
     }
 
     public func applyTheme(named name: String) {
-        // Harness themes style chrome. Terminal surfaces intentionally keep an
-        // empty controller theme so ANSI/truecolor output from TUIs is not retinted.
+        cachedThemeName = name
+        appliedThemeBackgroundHex = ThemeManager.backgroundHex(themeName: name)
+        pushConfiguration()
     }
 
     public func applySettings(_ settings: HarnessSettings) {
+        cachedSettings = settings
+        // Clear — libghostty's own `withBackgroundOpacity` paint IS the bg paint
+        // in the terminal area, mirroring the chrome backdrop's single `bg ×
+        // opacity` layer in other regions. Painting bg color here would compound
+        // alpha with libghostty's paint and make terminal area read as more
+        // opaque than the sidebar at any opacity < 1.
         layer?.backgroundColor = NSColor.clear.cgColor
-        _ = controller.setTerminalConfiguration(
-            Self.makeTerminalConfiguration(settings: settings)
-        )
+        pushConfiguration()
         terminalView.configuration = TerminalSurfaceOptions(
             backend: .inMemory(memorySession),
             fontSize: settings.fontSize,
@@ -236,7 +264,10 @@ public final class TerminalHostView: NSView {
             fputs("Harness: replayScrollback failed for \(surfaceID.uuidString): \(error)\n", stderr)
         }
         do {
-            outputSubscription = try daemonClient.subscribeSurfaceOutput(surfaceID: surfaceID.uuidString) { [weak self] data, _ in
+            outputSubscription = try daemonClient.subscribeSurfaceOutput(
+                surfaceID: surfaceID.uuidString,
+                label: "Harness.app"
+            ) { [weak self] data, _ in
                 Task { @MainActor in
                     self?.memorySession.receive(data)
                 }

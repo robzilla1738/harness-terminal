@@ -26,7 +26,11 @@ struct HarnessChromePalette {
     let success: NSColor
     let idleStatus: NSColor
 
-    static let fallback = HarnessChromePalette.from(themeName: ThemeManager.defaultThemeName)
+    static let fallback = HarnessChromePalette.from(
+        backgroundHex: ThemeManager.defaultBaselineBackgroundHex,
+        foregroundHex: ThemeManager.defaultBaselineForegroundHex,
+        cursorHex: ThemeManager.defaultBaselineForegroundHex
+    )
 
     static func from(themeName: String) -> HarnessChromePalette {
         let theme = GhosttyThemeCatalog.theme(named: themeName)
@@ -156,27 +160,37 @@ enum HarnessChrome {
     /// Window background opacity (0…1). When < 1, chrome backgrounds gain alpha so
     /// the underlying NSVisualEffectView blur can show through.
     static var backgroundOpacity: CGFloat = 1
+    /// Terminal backdrop blur (0…100) from settings; libghostty applies this on each
+    /// terminal surface. Chrome uses this for optional vibrancy tuning only.
+    static var backgroundBlur: Int = 0
 
     static func update(themeName: String) {
-        update(themeName: themeName, opacity: backgroundOpacity)
+        update(themeName: themeName, opacity: backgroundOpacity, blur: backgroundBlur)
     }
 
     /// Resolve the palette honoring the user's `customBackgroundHex/customForegroundHex`
     /// overrides — when a Ghostty config explicitly sets `background = #000000`, we
-    /// must paint pure black chrome rather than the named theme's tinted bg.
+    /// must paint pure black chrome rather than the named theme's tinted bg. Either
+    /// override may be present alone; missing slots fall back to the theme so the
+    /// chrome (sidebar/tabs/status line) tracks the same color as the terminal canvas.
     static func update(
         themeName: String,
         opacity: CGFloat,
+        blur: Int = 0,
         backgroundHex: String? = nil,
         foregroundHex: String? = nil,
         cursorHex: String? = nil
     ) {
-        if let bg = backgroundHex, let fg = foregroundHex {
-            current = HarnessChromePalette.from(backgroundHex: bg, foregroundHex: fg, cursorHex: cursorHex)
+        let resolvedBg = backgroundHex ?? ThemeManager.backgroundHex(themeName: themeName)
+        let resolvedFg = foregroundHex ?? ThemeManager.foregroundHex(themeName: themeName)
+        let resolvedCursor = cursorHex ?? ThemeManager.cursorHex(themeName: themeName)
+        if let bg = resolvedBg, let fg = resolvedFg {
+            current = HarnessChromePalette.from(backgroundHex: bg, foregroundHex: fg, cursorHex: resolvedCursor)
         } else {
             current = HarnessChromePalette.from(themeName: themeName)
         }
         backgroundOpacity = max(0, min(1, opacity))
+        backgroundBlur = max(0, min(100, blur))
     }
 
     /// Returns the given color with the global background opacity baked in.

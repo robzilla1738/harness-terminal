@@ -17,17 +17,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = MainMenuBuilder.build()
         PrefixKeymap.shared.install()
         SurfaceShellTracker.shared.start()
+        // Request notification authorization once at launch instead of on every
+        // notification post. macOS only shows the system prompt the first time
+        // and silently denies after; doing it eagerly means notifications can
+        // start arriving as soon as the first agent transitions to `waiting`.
+        DesktopNotifier.requestAuthorizationIfNeeded()
         FirstRunExperience.offerCLIInstallIfNeeded()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !SessionCoordinator.shared.keepSessionsOnQuit
+        // Closing the last window quits the app; the daemon (launchd-managed)
+        // keeps sessions alive in the background so reopening reattaches.
+        true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if !SessionCoordinator.shared.keepSessionsOnQuit {
-            DaemonLauncher.shared.stopIfNeeded()
-        }
+        // The daemon is owned by launchd and intentionally outlives the GUI —
+        // never tear it down on quit. Sessions and scrollback stay alive so
+        // `harness-cli attach` and a subsequent app launch see the same state.
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {

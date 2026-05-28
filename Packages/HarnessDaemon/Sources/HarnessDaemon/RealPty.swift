@@ -157,6 +157,101 @@ public final class RealPty: @unchecked Sendable {
         write(data)
     }
 
+    /// Terminate the child shell and respawn a new one with the same surface
+    /// ID, same env, same cwd. The scrollback is preserved unless
+    /// `clearHistory` is true — letting users either keep their context or
+    /// start clean depending on intent. Surface subscribers keep their
+    /// subscription (it's keyed by surface ID, not shell PID), so the GUI and
+    /// any `harness-cli attach` simply see fresh output begin.
+    public func respawn(clearHistory: Bool) {
+        lifecycleLock.lock()
+        let oldPID = childPID
+        let oldFD = master
+        let oldSource = readSource
+        let oldRows: UInt16
+        let oldCols: UInt16
+        var winsize = Darwin.winsize()
+        if oldFD >= 0, ioctl(oldFD, TIOCGWINSZ, &winsize) == 0 {
+            oldRows = winsize.ws_row
+            oldCols = winsize.ws_col
+        } else {
+            oldRows = 24
+            oldCols = 80
+        }
+        readSource = nil
+        master = -1
+        childPID = -1
+        isClosed = false
+        lifecycleLock.unlock()
+
+        if oldPID > 0 { kill(oldPID, SIGTERM) }
+        if let oldSource {
+            oldSource.cancel()
+        } else if oldFD >= 0 {
+            Darwin.close(oldFD)
+        }
+        if clearHistory {
+            scrollbackLock.lock()
+            scrollback.removeAll()
+            scrollbackBytes = 0
+            nextSequence = 1
+            scrollbackLock.unlock()
+        }
+        // Spawn a new shell, reusing the cwd of the previous process if we can
+        // still read it from the dead PID's last-known location, otherwise the
+        // home directory.
+        let cwd = Self.cwd(for: oldPID) ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        do {
+            try restartChild(cwd: cwd, shell: shell, rows: oldRows, cols: oldCols)
+        } catch {
+            fputs("HarnessDaemon: respawn failed for \(id): \(error)\n", stderr)
+        }
+    }
+
+    private func restartChild(cwd: String, shell: String, rows: UInt16, cols: UInt16) throws {
+        let argvStrings = ShellLaunchProfile.make(shell: shell).argv
+        let argv: [UnsafeMutablePointer<CChar>?] = argvStrings.map { strdup($0) } + [nil]
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["TERM"] = "xterm-256color"
+        environment["HARNESS_SURFACE"] = id
+        let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        let cwdC = strdup(cwd)
+        func freeChildStrings() {
+            cwdC.map { free($0) }
+            argv.forEach { $0.map { free($0) } }
+            envp.forEach { $0.map { free($0) } }
+        }
+
+        var winsize = Darwin.winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+        var amaster: Int32 = -1
+        let pid = forkpty(&amaster, nil, nil, &winsize)
+        if pid < 0 {
+            freeChildStrings()
+            throw PtyError.launchFailed
+        }
+        if pid == 0 {
+            if let cwdC { _ = chdir(cwdC) }
+            argv.withUnsafeBufferPointer { argvBuffer in
+                envp.withUnsafeBufferPointer { envpBuffer in
+                    if let path = argvBuffer.baseAddress?.pointee {
+                        _ = execve(path, argvBuffer.baseAddress, envpBuffer.baseAddress)
+                    }
+                }
+            }
+            _exit(127)
+        }
+        freeChildStrings()
+        lifecycleLock.lock()
+        self.master = amaster
+        self.childPID = pid
+        lifecycleLock.unlock()
+        AgentDetector.registerRootPID(pid, forSurfaceKey: id)
+        startReading()
+        watchForExit()
+    }
+
     public func resize(rows: UInt16, cols: UInt16) {
         lifecycleLock.lock()
         let fd = master
@@ -198,6 +293,12 @@ public final class RealPty: @unchecked Sendable {
         // dictionary entry overwritten), reap the child + fd so we never leak a
         // zombie. close() is idempotent via the isClosed guard.
         close()
+    }
+
+    public var scrollbackByteCount: Int {
+        scrollbackLock.lock()
+        defer { scrollbackLock.unlock() }
+        return scrollbackBytes
     }
 
     public func captureScrollback(includeHistory: Bool) -> String {

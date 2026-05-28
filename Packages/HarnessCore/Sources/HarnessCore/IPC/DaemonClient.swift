@@ -17,11 +17,12 @@ public final class DaemonClient: @unchecked Sendable {
     @discardableResult
     public func subscribeSurfaceOutput(
         surfaceID: String,
+        label: String? = nil,
         onData: @escaping @Sendable (Data, UInt64) -> Void,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
         let fd = try connectSocket()
-        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSurfaceOutput(surfaceID: surfaceID)))
+        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSurfaceOutput(surfaceID: surfaceID, label: label)))
         try payload.withUnsafeBytes { raw in
             guard write(fd, raw.baseAddress, raw.count) == raw.count else {
                 close(fd)

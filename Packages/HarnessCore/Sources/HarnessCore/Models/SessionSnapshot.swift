@@ -16,7 +16,7 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         revision: Int = 0,
         workspaces: [Workspace] = [Workspace()],
         activeWorkspaceID: WorkspaceID? = nil,
-        themeName: String = "Catppuccin Mocha",
+        themeName: String = "Default",
         keepSessionsOnQuit: Bool = true,
         savedAt: Date = .now
     ) {
@@ -50,7 +50,7 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? [Workspace()]
         activeWorkspaceID = try container.decodeIfPresent(WorkspaceID.self, forKey: .activeWorkspaceID) ?? workspaces.first?.id
-        themeName = try container.decodeIfPresent(String.self, forKey: .themeName) ?? "Catppuccin Mocha"
+        themeName = try container.decodeIfPresent(String.self, forKey: .themeName) ?? "Default"
         keepSessionsOnQuit = try container.decodeIfPresent(Bool.self, forKey: .keepSessionsOnQuit) ?? true
         savedAt = try container.decodeIfPresent(Date.self, forKey: .savedAt) ?? .now
     }

@@ -5,8 +5,29 @@ import GhosttyTheme
 @MainActor
 public enum ThemeManager {
     public static let defaultThemeName = "Catppuccin Mocha"
+
+    /// Dropdown entry representing the user's Ghostty-like terminal baseline.
+    /// Terminal output no longer consumes named theme palettes; themes are for
+    /// Harness chrome only, so tools such as Claude Code keep their native colors.
+    public static let defaultDisplayName = "Default"
     public static let defaultBaselineBackgroundHex = "#000000"
     public static let defaultBaselineForegroundHex = "#ffffff"
+    public static let defaultBaselinePaletteHex = [
+        "#1D1F21", "#CC6666", "#B5BD68", "#F0C674",
+        "#81A2BE", "#B294BB", "#8ABEB7", "#C5C8C6",
+        "#666666", "#D54E53", "#B9CA4A", "#E7C547",
+        "#7AA6DA", "#C397D8", "#70C0B1", "#EAEAEA",
+    ]
+
+    /// Black/white baseline used by older callers. It deliberately does not set
+    /// ANSI palette entries; libghostty/Ghostty should own terminal tool colors.
+    private static func defaultBaselineTheme() -> TerminalTheme {
+        let config = TerminalConfiguration {
+            $0.withBackground(defaultBaselineBackgroundHex)
+            $0.withForeground(defaultBaselineForegroundHex)
+        }
+        return TerminalTheme(light: config, dark: config)
+    }
 
     public static let featuredThemes = [
         "Catppuccin Mocha",
@@ -21,33 +42,43 @@ public enum ThemeManager {
     ]
 
     public static func apply(themeName: String, to controller: TerminalController) {
-        // TerminalHostView deliberately does not call this. Named themes are kept
-        // for chrome/preview color lookups only; terminal output should keep
-        // Ghostty/libghostty ANSI and truecolor behavior.
+        if themeName == defaultDisplayName {
+            _ = controller.setTheme(defaultBaselineTheme())
+            return
+        }
         if let theme = GhosttyThemeCatalog.theme(named: themeName) {
             _ = controller.setTheme(theme.toTerminalTheme())
             return
         }
-        if let theme = GhosttyThemeCatalog.theme(named: "Catppuccin Mocha") {
+        if let theme = GhosttyThemeCatalog.theme(named: defaultThemeName) {
             _ = controller.setTheme(theme.toTerminalTheme())
         }
     }
 
+    /// Terminal output intentionally ignores Harness themes. Themes may style
+    /// chrome previews, tabs, sidebar, etc.; libghostty/Ghostty own ANSI and
+    /// truecolor rendering so terminal tools are not retinted by Harness.
+    public static func configureBuilder(_ builder: inout TerminalConfiguration.Builder, themeName: String) {}
+
     public static func backgroundHex(themeName: String) -> String? {
-        themed(themeName)?.background.normalizedHashedHex
+        if themeName == defaultDisplayName { return defaultBaselineBackgroundHex }
+        return themed(themeName)?.background.normalizedHashedHex
     }
 
     public static func foregroundHex(themeName: String) -> String? {
-        themed(themeName)?.foreground.normalizedHashedHex
+        if themeName == defaultDisplayName { return defaultBaselineForegroundHex }
+        return themed(themeName)?.foreground.normalizedHashedHex
     }
 
     public static func cursorHex(themeName: String) -> String? {
-        themed(themeName)?.cursorColor?.normalizedHashedHex
+        if themeName == defaultDisplayName { return defaultBaselineForegroundHex }
+        return themed(themeName)?.cursorColor?.normalizedHashedHex
             ?? themed(themeName)?.foreground.normalizedHashedHex
     }
 
     public static func cursorTextHex(themeName: String) -> String? {
-        themed(themeName)?.cursorText?.normalizedHashedHex
+        if themeName == defaultDisplayName { return defaultBaselineBackgroundHex }
+        return themed(themeName)?.cursorText?.normalizedHashedHex
             ?? themed(themeName)?.background.normalizedHashedHex
     }
 
@@ -66,18 +97,24 @@ public enum ThemeManager {
             ?? themed(themeName)?.foreground.normalizedHashedHex
     }
 
-    /// 16 ANSI palette colors for the named theme (`nil` slot = unset).
+    /// 16 ANSI palette colors for settings preview swatches only. TerminalHostView
+    /// does not apply these values to libghostty.
     public static func paletteHex(themeName: String) -> [String?] {
+        if themeName == defaultDisplayName { return defaultBaselinePaletteHex }
         guard let theme = themed(themeName) else { return Array(repeating: nil, count: 16) }
         return (0 ..< 16).map { theme.palette[$0]?.normalizedHashedHex }
     }
 
     public static func allThemeNames() -> [String] {
-        featuredThemes + GhosttyThemeCatalog.search("").map(\.name).filter { !featuredThemes.contains($0) }
+        [defaultDisplayName]
+            + featuredThemes
+            + GhosttyThemeCatalog.search("").map(\.name)
+                .filter { !featuredThemes.contains($0) && $0 != defaultDisplayName }
     }
 
     private static func themed(_ name: String) -> GhosttyThemeDefinition? {
-        GhosttyThemeCatalog.theme(named: name) ?? GhosttyThemeCatalog.theme(named: defaultThemeName)
+        let resolved = (name == defaultDisplayName) ? defaultThemeName : name
+        return GhosttyThemeCatalog.theme(named: resolved) ?? GhosttyThemeCatalog.theme(named: defaultThemeName)
     }
 }
 

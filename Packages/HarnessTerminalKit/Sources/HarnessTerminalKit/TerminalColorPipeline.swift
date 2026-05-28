@@ -2,9 +2,11 @@ import GhosttyTerminal
 
 /// Ghostty config keys that keep embedded terminal TUI colors matching Ghostty.app.
 ///
-/// Translucency and blur are applied by libghostty. Do not add a second AppKit
-/// blur or background layer over terminal output.
+/// Uses macOS Ghostty defaults for color interpretation/blending. Translucency +
+/// blur use libghostty `background-opacity` / `background-blur` only — do not
+/// apply `WindowBlur` (CGS) over the terminal output.
 enum TerminalColorPipeline {
+    /// macOS Ghostty default — Display P3 native blending with sRGB color interpretation.
     static let alphaBlendingValue = "native"
 
     static func apply(to builder: inout TerminalConfiguration.Builder) {

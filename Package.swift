@@ -62,14 +62,18 @@ let package = Package(
             path: "Tests/HarnessCoreTests"
         ),
         .testTarget(
+            name: "HarnessTerminalKitTests",
+            dependencies: [
+                "HarnessCore",
+                "HarnessTerminalKit",
+                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+            ],
+            path: "Tests/HarnessTerminalKitTests"
+        ),
+        .testTarget(
             name: "HarnessDaemonTests",
             dependencies: ["HarnessDaemonCore", "HarnessCore"],
             path: "Tests/HarnessDaemonTests"
-        ),
-        .testTarget(
-            name: "HarnessTerminalKitTests",
-            dependencies: ["HarnessTerminalKit", "HarnessCore"],
-            path: "Tests/HarnessTerminalKitTests"
         ),
     ]
 )

@@ -1,9 +1,17 @@
 import Foundation
 
-/// Parses tmux/Ghostty-style key tokens into raw bytes that can be written to
-/// a PTY (or sent via libghostty's send-text path). Mirrors `tmux send-keys`
-/// behavior: `C-c`, `M-x`, `S-a`, `Enter`, `Tab`, `Space`, `Esc`, `Up`, etc.
-public enum TmuxKeyParser {
+/// Parses Harness key tokens into the raw byte sequence a PTY expects when
+/// the user (or an agent script) sends them. Handles control/meta/shift
+/// modifiers (`C-c`, `M-x`, `S-Tab`, chained `C-M-x`), the standard named
+/// keys (`Enter`, `Tab`, `Space`, `Esc`, `Backspace`, `Delete`, arrows,
+/// `Home`, `End`, `PageUp`, `PageDown`, `F1`–`F12`), and falls through to
+/// the literal UTF-8 bytes for anything else.
+///
+/// The token vocabulary is intentionally compact and stable so it can appear
+/// in `keybindings.json`, `harness-cli send-keys`, and agent hooks without
+/// version drift. The same grammar is what `KeySpec.parse` accepts on the
+/// modifier side.
+public enum KeyTokenParser {
     public static func encode(keys: [String]) -> Data {
         var out = Data()
         for token in keys {
@@ -102,3 +110,9 @@ public enum TmuxKeyParser {
         return out
     }
 }
+
+/// Deprecated alias kept transiently for any out-of-tree callers. Use
+/// `KeyTokenParser` going forward; this re-export can be removed once we
+/// confirm nothing external depends on it.
+@available(*, deprecated, renamed: "KeyTokenParser")
+public typealias TmuxKeyParser = KeyTokenParser

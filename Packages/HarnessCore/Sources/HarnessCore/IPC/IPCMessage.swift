@@ -14,6 +14,7 @@ public enum IPCRequest: Codable, Sendable {
     case selectSession(workspaceID: UUID, sessionID: UUID)
     case selectTab(workspaceID: UUID, tabID: UUID)
     case reorderTab(workspaceID: UUID, tabID: UUID, toIndex: Int)
+    case reorderSession(workspaceID: UUID, sessionID: UUID, toIndex: Int)
     case closeTab(tabID: UUID)
     case closeSession(sessionID: UUID)
     case closeWorkspace(id: UUID)
@@ -30,7 +31,7 @@ public enum IPCRequest: Codable, Sendable {
     case createSurface(cwd: String?, shell: String?)
     case ensureSurface(surfaceID: String, cwd: String?, shell: String?, rows: UInt16, cols: UInt16, scrollbackBytes: Int?)
     case attachSurface(surfaceID: String)
-    // tmux-style pane + key commands
+    // Pane + key commands
     case sendKeys(surfaceID: String, keys: [String])
     case capturePane(surfaceID: String, includeScrollback: Bool)
     case killPane(paneID: UUID)
@@ -46,11 +47,56 @@ public enum IPCRequest: Codable, Sendable {
     case renameWorkspace(workspaceID: UUID, name: String)
     case detectAgent(surfaceID: String)
     // Surface output streaming + attach
-    case subscribeSurfaceOutput(surfaceID: String)
+    case subscribeSurfaceOutput(surfaceID: String, label: String?)
     case cancelSubscription(surfaceID: String)
     case replayScrollback(surfaceID: String, fromSequence: UInt64?)
     case resizeSurface(surfaceID: String, rows: UInt16, cols: UInt16)
     case detachSurface(surfaceID: String)
+    /// Identify this connection to the daemon so it shows up in `list-clients`
+    /// and can be addressed by `detach-client`. Idempotent; safe to send once
+    /// per persistent connection.
+    case identifyClient(label: String)
+    case listClients
+    case detachClient(clientID: UUID)
+    case daemonStats
+    // Paste buffers
+    case setBuffer(name: String?, data: Data)
+    case getBuffer(name: String?)
+    case listBuffers
+    case deleteBuffer(name: String)
+    case pasteBuffer(surfaceID: String, name: String?)
+    // Phase 4: layouts + pane ops
+    case selectPaneDirectional(currentPaneID: UUID, direction: DirectionalAxis)
+    case applyLayout(tabID: UUID, layout: String, mainPaneID: UUID?)
+    case nextLayout(tabID: UUID)
+    case previousLayout(tabID: UUID)
+    case rotatePanes(tabID: UUID, forward: Bool)
+    case breakPane(paneID: UUID)
+    case joinPane(sourcePaneID: UUID, destPaneID: UUID, direction: SplitDirection)
+    case respawnPane(surfaceID: String, keepHistory: Bool)
+    // Phase 6: options + hooks + display
+    case setOption(scope: String, target: String?, key: String, rawValue: String)
+    case showOptions(scope: String?)
+    case bindHook(event: String, source: String, condition: String?)
+    case unbindHook(id: UUID)
+    case listHooks(event: String?)
+    case displayMessage(format: String)
+}
+
+public enum DirectionalAxis: String, Codable, Sendable {
+    case left, right, up, down
+
+    /// Accept the short spellings (`l`, `L`, `r`, `R`, `u`, `U`, `d`, `D`)
+    /// in addition to the full names. Used by CLI flag parsing.
+    public init?(short: String) {
+        switch short.lowercased() {
+        case "l", "left": self = .left
+        case "r", "right": self = .right
+        case "u", "up": self = .up
+        case "d", "down": self = .down
+        default: return nil
+        }
+    }
 }
 
 public enum IPCResponse: Codable, Sendable {
@@ -67,7 +113,57 @@ public enum IPCResponse: Codable, Sendable {
     case text(String)
     case data(Data, sequence: UInt64)
     case agentInfo(AgentSnapshot?)
+    case clients([ClientSummary])
+    case daemonStats(DaemonStats)
+    case clientID(UUID)
+    case buffer(BufferSummary)
+    case buffers([BufferSummary])
+    case options([OptionEntry])
+    case hookID(UUID)
+    case hooks([HookEntry])
     case error(String)
+}
+
+public struct OptionEntry: Codable, Sendable, Equatable {
+    public var scope: String
+    public var target: String?
+    public var key: String
+    public var value: String
+    public init(scope: String, target: String?, key: String, value: String) {
+        self.scope = scope
+        self.target = target
+        self.key = key
+        self.value = value
+    }
+}
+
+public struct HookEntry: Codable, Sendable, Equatable {
+    public var id: UUID
+    public var event: String
+    public var commandSource: String
+    public var condition: String?
+    public init(id: UUID, event: String, commandSource: String, condition: String?) {
+        self.id = id
+        self.event = event
+        self.commandSource = commandSource
+        self.condition = condition
+    }
+}
+
+public struct BufferSummary: Codable, Sendable, Equatable {
+    public var name: String
+    public var byteCount: Int
+    public var preview: String
+    public var createdAt: Date
+    public var data: Data?
+
+    public init(name: String, byteCount: Int, preview: String, createdAt: Date, data: Data? = nil) {
+        self.name = name
+        self.byteCount = byteCount
+        self.preview = preview
+        self.createdAt = createdAt
+        self.data = data
+    }
 }
 
 public enum ResizeDirection: String, Codable, Sendable {

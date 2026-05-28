@@ -329,7 +329,6 @@ private final class TabPillView: NSView {
     var onContextCommand: ((TabContextCommand) -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "")
-    private let statusDot = StatusDotView()
     private let closeButton = NSButton()
     private var trackingArea: NSTrackingArea?
     private var isActive = false
@@ -355,6 +354,7 @@ private final class TabPillView: NSView {
 
         titleLabel.font = HarnessDesign.Typography.tabTitle
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.alignment = .center
         titleLabel.stringValue = tabDisplayTitle(tab)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -375,21 +375,21 @@ private final class TabPillView: NSView {
         closeButton.layer?.cornerRadius = HarnessDesign.Radius.badge
         closeButton.layer?.cornerCurve = .continuous
 
-        addSubview(statusDot)
         addSubview(titleLabel)
         addSubview(closeButton)
 
-        // The pill's frame is set by the tab bar; only internal layout is constrained.
-        let dotLeading = statusDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.md)
-        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: statusDot.trailingAnchor, constant: HarnessDesign.Spacing.xs)
+        // Title centers inside the pill with the close button floating on the
+        // right edge. Leading edge inset matches the close button's trailing
+        // inset so the title stays optically centered even when the close
+        // button is visible.
+        let titleLeading = titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: HarnessDesign.Spacing.md)
         let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.xs)
         let closeWidth = closeButton.widthAnchor.constraint(equalToConstant: 14)
         let closeHeight = closeButton.heightAnchor.constraint(equalToConstant: 14)
-        [dotLeading, titleLeading, closeTrailing, closeWidth, closeHeight].forEach { $0.priority = .defaultHigh }
+        [titleLeading, closeTrailing, closeWidth, closeHeight].forEach { $0.priority = .defaultHigh }
         NSLayoutConstraint.activate([
-            dotLeading,
-            statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLeading,
+            titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
             closeTrailing,
@@ -500,18 +500,6 @@ private final class TabPillView: NSView {
     func applyChrome(isActive: Bool) {
         self.isActive = isActive
         let c = HarnessDesign.chrome
-
-        switch status {
-        case .idle:
-            if let agent = currentAgent, agent.activity == .working {
-                statusDot.style = .agent(hex: SessionCoordinator.shared.settings.agentColorHex(for: agent.kind))
-            } else {
-                statusDot.style = isActive ? .accent : .idle
-            }
-        case .waiting: statusDot.style = .waiting
-        case .error: statusDot.style = .error
-        }
-        statusDot.applyStyle()
 
         // Selected tabs get a modest rounded highlight: softer than a square box,
         // but not a full capsule/pill.

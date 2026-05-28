@@ -27,18 +27,48 @@ enum CLIInstaller {
             }
             try FileManager.default.copyItem(at: source, to: installedCLIPath)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installedCLIPath.path)
+            var launchAgentMessage = ""
+            if let daemon = daemonSourceURL() {
+                do {
+                    _ = try LaunchAgentInstaller.install(daemonPath: daemon)
+                    launchAgentMessage = "\nLaunchAgent installed at \(HarnessPaths.launchAgentURL.path)"
+                } catch {
+                    launchAgentMessage = "\nLaunchAgent install failed: \(error)"
+                }
+            }
+            var completionMessage = ""
+            if let url = try? ShellCompletionInstaller.installFishCompletion() {
+                completionMessage = "\nFish completion installed at \(url.path)"
+            }
             showAlert("""
             harness-cli installed to:
             \(installedCLIPath.path)
 
             Add to your shell profile:
-            export PATH="\(binDirectory.path):$PATH"
+            export PATH="\(binDirectory.path):$PATH"\(launchAgentMessage)\(completionMessage)
             """)
             return true
         } catch {
             showAlert("Install failed: \(error.localizedDescription)")
             return false
         }
+    }
+
+    static func daemonSourceURL() -> URL? {
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/HarnessDaemon")
+        if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
+        #if DEBUG
+        let debug = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(".build/debug/HarnessDaemon")
+        if FileManager.default.fileExists(atPath: debug.path) { return debug }
+        #endif
+        return nil
     }
 
     static func cliSourceURL() -> URL {

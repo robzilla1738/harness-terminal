@@ -70,6 +70,11 @@ targets:
     settings:
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "14.0"
+      # Pure-Swift target — no Objective-C consumers. Disabling the generated
+      # `-Swift.h` header and defines-module avoids the libghostty umbrella
+      # header warning about HarnessDaemonCore-Swift.h not being umbrellated.
+      SWIFT_INSTALL_OBJC_HEADER: NO
+      DEFINES_MODULE: NO
   HarnessDaemon:
     type: tool
     platform: macOS
@@ -131,9 +136,11 @@ targets:
       - Tests/HarnessTerminalKitTests
     dependencies:
       - package: Harness
-        product: HarnessTerminalKit
-      - package: Harness
         product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalKit
+      - package: libghostty-spm
+        product: GhosttyTerminal
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessTerminalKitTests
       GENERATE_INFOPLIST_FILE: YES

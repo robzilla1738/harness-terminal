@@ -18,8 +18,6 @@ final class SessionCoordinator: NSObject {
     var activeSurfaceID: SurfaceID?
     var structureRevision = 0
 
-    var keepSessionsOnQuit: Bool { snapshot.keepSessionsOnQuit }
-
     private enum ActiveTabCloseDisposition {
         case tab
         case session
@@ -105,6 +103,7 @@ final class SessionCoordinator: NSObject {
         HarnessChrome.update(
             themeName: snapshot.themeName,
             opacity: CGFloat(settings.backgroundOpacity),
+            blur: settings.backgroundBlur,
             backgroundHex: settings.useCustomColors ? settings.customBackgroundHex : nil,
             foregroundHex: settings.useCustomColors ? settings.customForegroundHex : nil,
             cursorHex: settings.useCustomColors ? settings.customCursorHex : nil
@@ -152,13 +151,27 @@ final class SessionCoordinator: NSObject {
                     guard !pushedNotificationKeys.contains(key) else { continue }
                     pushedNotificationKeys.insert(key)
                     terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
-                    if NSApp.isActive == false {
-                        let title = tab.agent?.kind.displayName ?? "Harness"
+                    if settings.systemNotificationsEnabled {
+                        let agentLabel = tab.agent?.kind.displayName ?? "Harness"
+                        let title = "\(agentLabel) · \(tab.title.isEmpty ? "Terminal" : tab.title)"
                         DesktopNotifier.show(title: title, body: text)
                     }
                 }
             }
         }
+        // Snapshot also clears keys whose notification has been dismissed remotely
+        // so a re-arming of the same tab+text can fire a new notification later.
+        let live = Set(snapshot.workspaces.flatMap { ws in
+            ws.sessions.flatMap { ses in
+                ses.tabs.compactMap { tab -> String? in
+                    guard tab.status == .waiting, let text = tab.notificationText, !text.isEmpty,
+                          let surfaceID = tab.rootPane.allSurfaceIDs().first
+                    else { return nil }
+                    return "\(surfaceID.uuidString)|\(text)"
+                }
+            }
+        })
+        pushedNotificationKeys = pushedNotificationKeys.intersection(live)
     }
 
     private func updateDockBadge(from snapshot: SessionSnapshot) {
@@ -180,6 +193,7 @@ final class SessionCoordinator: NSObject {
         HarnessChrome.update(
             themeName: snapshot.themeName,
             opacity: CGFloat(settings.backgroundOpacity),
+            blur: settings.backgroundBlur,
             backgroundHex: settings.useCustomColors ? settings.customBackgroundHex : nil,
             foregroundHex: settings.useCustomColors ? settings.customForegroundHex : nil,
             cursorHex: settings.useCustomColors ? settings.customCursorHex : nil
@@ -211,11 +225,6 @@ final class SessionCoordinator: NSObject {
             try? settings.save()
         }
         requestDaemon(.setTheme(name: name))
-        syncFromDaemon()
-    }
-
-    func setKeepSessionsOnQuit(_ value: Bool) {
-        requestDaemon(.setKeepSessionsOnQuit(value))
         syncFromDaemon()
     }
 
@@ -521,6 +530,16 @@ final class SessionCoordinator: NSObject {
 
     /// Commit a tab drag-reorder. Full sync so the tab bar rebuilds in the new order
     /// (the metadata path updates pills in place by ID and wouldn't reflect a reorder).
+    func reorderSession(workspaceID: WorkspaceID, sessionID: SessionID, toIndex: Int) {
+        requestDaemon(.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex))
+        syncFromDaemon()
+    }
+
+    func renameWorkspace(id: WorkspaceID, name: String) {
+        requestDaemon(.renameWorkspace(workspaceID: id, name: name))
+        syncFromDaemon()
+    }
+
     func reorderTab(workspaceID: WorkspaceID, tabID: TabID, toIndex: Int) {
         requestDaemon(.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex))
         syncFromDaemon()
@@ -541,7 +560,7 @@ final class SessionCoordinator: NSObject {
         guard let surfaceID = activeSurfaceID else { return }
         let response = requestDaemon(.capturePane(surfaceID: surfaceID.uuidString, includeScrollback: true))
         if case let .text(text) = response {
-            CopyModeWindow.show(text: text)
+            CopyModeViewController.shared.present(surfaceID: surfaceID, text: text)
         }
     }
 
@@ -565,6 +584,8 @@ final class SessionCoordinator: NSObject {
             try? settings.save()
             if let theme = imported.themeName {
                 setTheme(theme)
+            } else {
+                setTheme(ThemeManager.defaultDisplayName)
             }
             applySettingsToHosts()
         }
@@ -572,7 +593,12 @@ final class SessionCoordinator: NSObject {
 
     func closeActiveWorkspace() {
         guard let id = snapshot.activeWorkspaceID, snapshot.workspaces.count > 1 else { return }
-        let surfaces = snapshot.activeWorkspace?.sessions.flatMap { session in
+        closeWorkspace(id: id)
+    }
+
+    func closeWorkspace(id: WorkspaceID) {
+        guard snapshot.workspaces.count > 1 else { return }
+        let surfaces = snapshot.workspaces.first(where: { $0.id == id })?.sessions.flatMap { session in
             session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
         } ?? []
         for surfaceID in surfaces {
@@ -594,7 +620,8 @@ final class SessionCoordinator: NSObject {
             surfaceID: surfaceID,
             workingDirectory: cwd,
             harnessSurfaceEnv: surfaceID.uuidString,
-            settings: settings
+            settings: settings,
+            themeName: snapshot.themeName
         )
         host.hostDelegate = self
         if shouldApplyNamedTerminalTheme {
@@ -610,6 +637,48 @@ final class SessionCoordinator: NSObject {
         guard let waiting = firstWaitingTab() else { return }
         selectWorkspace(waiting.workspaceID)
         selectTab(workspaceID: waiting.workspaceID, tabID: waiting.tabID)
+    }
+
+    /// All tabs currently `.waiting` plus enough context to render a notification
+    /// dropdown row (workspace name, tab title, agent kind, notification body).
+    func notificationsList() -> [NotificationEntry] {
+        var entries: [NotificationEntry] = []
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.status == .waiting {
+                    guard let surfaceID = tab.rootPane.allSurfaceIDs().first else { continue }
+                    entries.append(NotificationEntry(
+                        workspaceID: workspace.id,
+                        workspaceName: workspace.name,
+                        sessionID: session.id,
+                        tabID: tab.id,
+                        tabTitle: tab.title.isEmpty ? (session.name.isEmpty ? "Terminal" : session.name) : tab.title,
+                        surfaceID: surfaceID,
+                        agentKind: tab.agent?.kind,
+                        body: tab.notificationText ?? "Needs attention"
+                    ))
+                }
+            }
+        }
+        return entries
+    }
+
+    func openNotification(_ entry: NotificationEntry) {
+        selectWorkspace(entry.workspaceID)
+        selectTab(workspaceID: entry.workspaceID, tabID: entry.tabID)
+        clearNotification(surfaceID: entry.surfaceID)
+    }
+
+    func clearNotification(surfaceID: SurfaceID) {
+        requestDaemon(.clearNotification(surfaceID: surfaceID.uuidString))
+        syncFromDaemon()
+    }
+
+    func clearAllNotifications() {
+        for entry in notificationsList() {
+            requestDaemon(.clearNotification(surfaceID: entry.surfaceID.uuidString))
+        }
+        syncFromDaemon()
     }
 
     private func firstWaitingTab() -> (workspaceID: WorkspaceID, tabID: TabID)? {
@@ -699,7 +768,7 @@ final class SessionCoordinator: NSObject {
     }
 
     @discardableResult
-    private func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
+    func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
         do {
             return try daemon.request(request)
         } catch {
@@ -771,19 +840,36 @@ extension SessionCoordinator: TerminalHostDelegate {
     }
 }
 
+struct NotificationEntry: Identifiable, Equatable {
+    let workspaceID: WorkspaceID
+    let workspaceName: String
+    let sessionID: SessionID
+    let tabID: TabID
+    let tabTitle: String
+    let surfaceID: SurfaceID
+    let agentKind: AgentKind?
+    let body: String
+    var id: TabID { tabID }
+}
+
 enum DesktopNotifier {
+    /// Call once at app launch. macOS only shows the system prompt the first
+    /// time; subsequent calls are no-ops, so it's safe to call eagerly.
+    static func requestAuthorizationIfNeeded() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
     static func show(title: String, body: String) {
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
+        content.sound = .default
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
             trigger: nil
         )
-        center.add(request)
+        UNUserNotificationCenter.current().add(request)
     }
 }
 
@@ -797,40 +883,5 @@ private enum HarnessPathDisplay {
         if !last.isEmpty { return last }
         if !fallback.isEmpty, fallback != "Shell" { return fallback }
         return "Terminal"
-    }
-}
-
-@MainActor
-enum CopyModeWindow {
-    private static var window: NSWindow?
-
-    static func show(text: String) {
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
-        scroll.autohidesScrollers = true
-
-        let textView = NSTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.font = .monospacedSystemFont(ofSize: CGFloat(SessionCoordinator.shared.settings.fontSize), weight: .regular)
-        textView.string = text
-        textView.textColor = HarnessChrome.current.textPrimary
-        textView.backgroundColor = HarnessChrome.current.terminalBackground
-        scroll.documentView = textView
-
-        let win = window ?? NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 560),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        win.title = "Copy Mode"
-        win.isRestorable = false
-        win.contentView = scroll
-        window = win
-        win.center()
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 }

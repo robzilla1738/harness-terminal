@@ -39,22 +39,26 @@ final class MainWindowController: NSWindowController {
         (contentViewController as? MainSplitViewController)?.applyChrome()
     }
 
-    /// Re-reads opacity/blur from settings and applies to the window.
-    /// The actual blur is rendered by per-area `ChromeBackdrop` views inside the
-    /// content; the window itself just needs to be non-opaque so they show.
+    /// Re-reads opacity from settings and applies window chrome (not terminal blur).
     func applyTransparency() {
         guard let window else { return }
-        let opacity = max(0, min(1, SessionCoordinator.shared.settings.backgroundOpacity))
+        let settings = SessionCoordinator.shared.settings
+        let opacity = max(0, min(1, settings.backgroundOpacity))
         let isOpaque = opacity >= 0.999
 
-        window.titlebarAppearsTransparent = SessionCoordinator.shared.settings.transparentTitlebar
+        window.titlebarAppearsTransparent = settings.transparentTitlebar
         window.isOpaque = isOpaque
         window.backgroundColor = isOpaque ? HarnessChrome.current.terminalBackground : .clear
 
-        // Make sure the content view paints transparent so backdrops show through.
         if let content = window.contentView {
             content.wantsLayer = true
             content.layer?.backgroundColor = NSColor.clear.cgColor
+            content.layer?.cornerRadius = 0
+            content.layer?.masksToBounds = false
         }
+
+        // Terminal translucency + blur: libghostty `background-opacity` / `background-blur`
+        // on each surface (Ghostty.app). No CGSSetWindowBackgroundBlurRadius here — that
+        // blurs the desktop under the whole window and washes TUI truecolor on composite.
     }
 }

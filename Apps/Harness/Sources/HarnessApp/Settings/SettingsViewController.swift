@@ -3,10 +3,11 @@ import HarnessCore
 import HarnessTerminalKit
 
 @MainActor
-final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
+final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSFontChanging {
     private let themePopup = NSPopUpButton()
     private let fontSizeField = NSTextField()
     private let fontFamilyField = NSTextField()
+    private let fontReadout = NSTextField(labelWithString: "")
     private let shellField = NSTextField()
     private let cwdField = NSTextField()
     private let opacitySlider = NSSlider()
@@ -22,13 +23,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     private let foregroundWell = NSColorWell()
     private let cursorWell = NSColorWell()
     private let useThemeColorsButton = NSButton()
-    private let prefixKeyField = NSTextField()
     private let scrollbackField = NSTextField()
-    private let keepSessionsToggle = NSButton(
-        checkboxWithTitle: "Keep sessions running when Harness quits",
-        target: nil,
-        action: nil
-    )
     private let transparentTitlebarToggle = NSButton(
         checkboxWithTitle: "Transparent title bar",
         target: nil,
@@ -45,46 +40,56 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         target: nil,
         action: nil
     )
-    // Deprecated fields kept off-screen so old settings can be cleared safely.
     private let selectionBgHexField = NSTextField()
     private let selectionFgHexField = NSTextField()
     private let boldHexField = NSTextField()
     private let cursorTextHexField = NSTextField()
+    private let dividerHexField = NSTextField()
+    private let statusLineHexField = NSTextField()
     private let selectionBgWell = NSColorWell()
     private let selectionFgWell = NSColorWell()
     private let boldWell = NSColorWell()
     private let cursorTextWell = NSColorWell()
+    private let dividerWell = NSColorWell()
+    private let statusLineWell = NSColorWell()
+    private let systemNotificationsToggle = NSButton()
     private let minContrastField = NSTextField()
-    private weak var settingsScrollView: NSScrollView?
-    private var sectionAnchors: [Int: NSView] = [:]
-    // Deprecated ANSI palette state; kept empty and no longer surfaced.
+    private let livePreview = LiveTerminalPreview()
+    private let pageContainer = NSView()
+    private var pages: [Int: NSView] = [:]
+    private var currentPage: Int = 0
     private var paletteWells: [NSColorWell] = []
     private var paletteHexValues: [String?] = Array(repeating: nil, count: 16)
     private var agentColorWells: [AgentKind: NSColorWell] = [:]
     private var agentColorPreviews: [AgentKind: AgentChipView] = [:]
-    /// Every hex field is paired with a color well + reset button + settings key path,
-    /// so one generic flow drives validation, live preview, and save for all of them.
     private var colorBindings: [ColorBinding] = []
+    private var keyRecorder: KeyRecorderView!
 
     private struct ColorBinding {
         let field: NSTextField
         let well: NSColorWell
         let reset: NSButton
-        let preview: ColorSamplePreview
         let keyPath: WritableKeyPath<HarnessSettings, String?>
-        /// Where the chosen color shows up in the terminal. Drives the live
-        /// sample so the user can see exactly what they're changing without
-        /// hunting through the terminal for a bold word or selected text.
-        let role: ColorSamplePreview.Role
-        /// Closure to fetch the theme-derived value for this slot. When the override
-        /// is unset, we still show this color in the well so the swatch is meaningful.
         let themeColor: () -> String?
     }
 
-    /// xterm-style defaults shown in palette swatches until the user overrides a slot.
     private static let defaultAnsiPalette = [
-        "#000000", "#cd0000", "#00cd00", "#cdcd00", "#0000ee", "#cd00cd", "#00cdcd", "#e5e5e5",
-        "#7f7f7f", "#ff0000", "#00ff00", "#ffff00", "#5c5cff", "#ff00ff", "#00ffff", "#ffffff",
+        ThemeManager.defaultBaselinePaletteHex[0],
+        ThemeManager.defaultBaselinePaletteHex[1],
+        ThemeManager.defaultBaselinePaletteHex[2],
+        ThemeManager.defaultBaselinePaletteHex[3],
+        ThemeManager.defaultBaselinePaletteHex[4],
+        ThemeManager.defaultBaselinePaletteHex[5],
+        ThemeManager.defaultBaselinePaletteHex[6],
+        ThemeManager.defaultBaselinePaletteHex[7],
+        ThemeManager.defaultBaselinePaletteHex[8],
+        ThemeManager.defaultBaselinePaletteHex[9],
+        ThemeManager.defaultBaselinePaletteHex[10],
+        ThemeManager.defaultBaselinePaletteHex[11],
+        ThemeManager.defaultBaselinePaletteHex[12],
+        ThemeManager.defaultBaselinePaletteHex[13],
+        ThemeManager.defaultBaselinePaletteHex[14],
+        ThemeManager.defaultBaselinePaletteHex[15],
     ]
     private static let ansiNames = [
         "0 Black", "1 Red", "2 Green", "3 Yellow", "4 Blue", "5 Magenta", "6 Cyan", "7 White",
@@ -97,11 +102,20 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     ]
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 680))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 880, height: 660))
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        configureControls()
+        layoutShell()
+        showPage(0)
+        refreshLivePreview()
+    }
+
+    // MARK: - Control configuration (initial state from settings)
+
+    private func configureControls() {
         let coordinator = SessionCoordinator.shared
         let settings = coordinator.settings
 
@@ -114,13 +128,17 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         themePopup.action = #selector(themeDidChange)
 
         fontSizeField.stringValue = String(format: "%.0f", settings.fontSize)
+        fontSizeField.target = self
+        fontSizeField.action = #selector(appearanceTextDidCommit)
         fontFamilyField.stringValue = settings.fontFamily
         shellField.stringValue = settings.defaultShell
+        shellField.target = self
+        shellField.action = #selector(appearanceTextDidCommit)
         cwdField.stringValue = settings.defaultCWD
+        cwdField.target = self
+        cwdField.action = #selector(appearanceTextDidCommit)
 
-        // Full 5%–100% range — power users want extreme translucency, and the
-        // 5% floor only exists so an accidental zero doesn't strand an invisible
-        // window. The settings window itself stays solid regardless.
+        // 5%–100% range; 5% floor prevents an invisible window if someone slams to 0.
         opacitySlider.minValue = 0.05
         opacitySlider.maxValue = 1.0
         opacitySlider.doubleValue = Double(settings.backgroundOpacity)
@@ -132,9 +150,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         opacityLabel.textColor = .secondaryLabelColor
         opacitySlider.toolTip = "Window background opacity (5%–100%)"
 
-        // 0–100 covers no-blur through heavy frosted glass. libghostty caps the
-        // effective amount internally, but exposing the full range matches user
-        // intent for the "I want whatever I want" use case.
         blurSlider.minValue = 0
         blurSlider.maxValue = 100
         blurSlider.doubleValue = Double(settings.backgroundBlur)
@@ -144,73 +159,78 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         blurLabel.stringValue = formatBlur(settings.backgroundBlur)
         blurLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         blurLabel.textColor = .secondaryLabelColor
-        blurSlider.toolTip = "Background blur radius in pixels (0 = none, 100 = heavy)"
+        blurSlider.toolTip = "Terminal backdrop blur (Ghostty); applied to the terminal surface, not the whole window."
+
         paddingXField.stringValue = String(format: "%.0f", settings.windowPaddingX)
+        paddingXField.target = self
+        paddingXField.action = #selector(appearanceTextDidCommit)
         paddingYField.stringValue = String(format: "%.0f", settings.windowPaddingY)
-        // Resolve theme colors lazily so swapping themes keeps placeholders fresh
-        // without having to rebuild the bindings list.
+        paddingYField.target = self
+        paddingYField.action = #selector(appearanceTextDidCommit)
+
         colorBindings = [
             ColorBinding(
                 field: backgroundHexField, well: backgroundWell, reset: makeResetButton(),
-                preview: ColorSamplePreview(role: .background),
                 keyPath: \.customBackgroundHex,
-                role: .background,
                 themeColor: { ThemeManager.backgroundHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
             ColorBinding(
                 field: foregroundHexField, well: foregroundWell, reset: makeResetButton(),
-                preview: ColorSamplePreview(role: .foreground),
                 keyPath: \.customForegroundHex,
-                role: .foreground,
                 themeColor: { ThemeManager.foregroundHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
             ColorBinding(
                 field: cursorHexField, well: cursorWell, reset: makeResetButton(),
-                preview: ColorSamplePreview(role: .cursor),
                 keyPath: \.customCursorHex,
-                role: .cursor,
                 themeColor: { ThemeManager.cursorHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
             ColorBinding(
                 field: cursorTextHexField, well: cursorTextWell, reset: makeResetButton(),
-                preview: ColorSamplePreview(role: .cursorText),
                 keyPath: \.cursorTextHex,
-                role: .cursorText,
                 themeColor: { ThemeManager.cursorTextHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
             ColorBinding(
                 field: selectionBgHexField, well: selectionBgWell, reset: makeResetButton(),
-                preview: ColorSamplePreview(role: .selectionBackground),
                 keyPath: \.selectionBackgroundHex,
-                role: .selectionBackground,
                 themeColor: { ThemeManager.selectionBackgroundHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
             ColorBinding(
                 field: selectionFgHexField, well: selectionFgWell, reset: makeResetButton(),
-                preview: ColorSamplePreview(role: .selectionForeground),
                 keyPath: \.selectionForegroundHex,
-                role: .selectionForeground,
                 themeColor: { ThemeManager.selectionForegroundHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
             ColorBinding(
                 field: boldHexField, well: boldWell, reset: makeResetButton(),
-                preview: ColorSamplePreview(role: .bold),
                 keyPath: \.boldColorHex,
-                role: .bold,
                 themeColor: { ThemeManager.boldHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
             ),
+            // Window-chrome accents: the hairline dividers and the status line text.
+            // Always honored — not gated by `useCustomColors` — since these are pure
+            // chrome and the user explicitly opted in by setting a hex.
+            ColorBinding(
+                field: dividerHexField, well: dividerWell, reset: makeResetButton(),
+                keyPath: \.dividerHex,
+                themeColor: { ThemeManager.foregroundHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
+            ),
+            ColorBinding(
+                field: statusLineHexField, well: statusLineWell, reset: makeResetButton(),
+                keyPath: \.statusLineHex,
+                themeColor: { ThemeManager.foregroundHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
+            ),
         ]
-        for (index, binding) in colorBindings.enumerated() {
-            let hex = index < 3 ? settings[keyPath: binding.keyPath] : nil
+        for binding in colorBindings {
+            // Divider + status line read regardless of useCustomColors; everything else
+            // stays gated by it so the theme picker can wipe color overrides cleanly.
+            let isChromeAccent = binding.keyPath == \.dividerHex || binding.keyPath == \.statusLineHex
+            let hex = (settings.useCustomColors || isChromeAccent)
+                ? settings[keyPath: binding.keyPath]
+                : nil
             binding.field.stringValue = hex ?? ""
             configureLiveAppearanceField(binding.field)
             configureColorWell(binding.well)
             configureResetButton(binding.reset)
             refreshColorBinding(binding)
         }
-        // Second pass so each preview tile reflects the full context (the bold
-        // sample needs to know the background even though it was created first).
-        refreshAllPreviews()
 
         minContrastField.stringValue = String(format: "%.1f", settings.minimumContrast)
         minContrastField.target = self
@@ -220,15 +240,22 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         buildPaletteWells()
         buildAgentColorWells(settings: settings)
 
-        prefixKeyField.stringValue = settings.prefixKey
         scrollbackField.stringValue = String(settings.scrollbackLines)
+        scrollbackField.target = self
+        scrollbackField.action = #selector(appearanceTextDidCommit)
 
+        cursorStylePopup.removeAllItems()
         cursorStylePopup.addItems(withTitles: ["Block", "Beam", "Underline"])
         cursorStylePopup.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
+        cursorStylePopup.target = self
+        cursorStylePopup.action = #selector(appearanceTextDidCommit)
         cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
+        cursorBlinkToggle.target = self
+        cursorBlinkToggle.action = #selector(appearanceTextDidCommit)
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
+        copyOnSelectToggle.target = self
+        copyOnSelectToggle.action = #selector(appearanceTextDidCommit)
 
-        keepSessionsToggle.state = coordinator.keepSessionsOnQuit ? .on : .off
         transparentTitlebarToggle.state = settings.transparentTitlebar ? .on : .off
         transparentTitlebarToggle.target = self
         transparentTitlebarToggle.action = #selector(appearanceTextDidCommit)
@@ -238,147 +265,81 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         useThemeColorsButton.action = #selector(useThemeColors)
         useThemeColorsButton.bezelStyle = .rounded
 
-        let opacityRow = NSStackView(views: [opacitySlider, opacityLabel])
-        opacityRow.orientation = .horizontal
-        opacityRow.spacing = 10
-        opacitySlider.widthAnchor.constraint(equalToConstant: 240).isActive = true
-        opacityLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        keyRecorder = KeyRecorderView(initial: settings.prefixKey)
+        keyRecorder.onChange = { [weak self] value in
+            SessionCoordinator.shared.settings.prefixKey = value.isEmpty ? "ctrl-a" : value
+            try? SessionCoordinator.shared.settings.save()
+            PrefixKeymap.shared.rebuildFromSettings()
+            self?.refreshLivePreview()
+        }
 
-        let blurRow = NSStackView(views: [blurSlider, blurLabel])
-        blurRow.orientation = .horizontal
-        blurRow.spacing = 10
-        blurSlider.widthAnchor.constraint(equalToConstant: 240).isActive = true
-        blurLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        updateFontReadout()
+    }
 
-        let appearanceSection = sectionLabel("Appearance")
-        let terminalSection = sectionLabel("Terminal")
-        let tmuxSection = sectionLabel("Tmux + Agents")
-        let agentColorsSection = sectionLabel("Agent Colors")
-        sectionAnchors = [
-            0: appearanceSection,
-            1: terminalSection,
-            2: tmuxSection,
-            3: agentColorsSection,
-        ]
+    // MARK: - Shell layout (sidebar + paged content)
 
-        let stack = NSStackView(views: [
-            appearanceSection,
-            labeledRow("Theme", themePopup),
-            colorButtonsRow(),
-            labeledRow("Window opacity", opacityRow),
-            labeledRow("Window blur", blurRow),
-            hexRow(
-                title: "Background", subtitle: "Terminal canvas color",
-                binding: colorBindings[0]
-            ),
-            hexRow(
-                title: "Text", subtitle: "Default foreground for printed characters",
-                binding: colorBindings[1]
-            ),
-            hexRow(
-                title: "Cursor", subtitle: "Color of the block / beam cursor",
-                binding: colorBindings[2]
-            ),
-            labeledRow("Padding X", paddingXField),
-            labeledRow("Padding Y", paddingYField),
-            transparentTitlebarToggle,
-            spacer(8),
-            terminalSection,
-            labeledRow("Font size", fontSizeField),
-            labeledRow("Font family", fontFamilyField),
-            labeledRow("Default shell", shellField),
-            labeledRow("Default directory", cwdField),
-            labeledRow("Scrollback lines", scrollbackField),
-            labeledRow("Cursor style", cursorStylePopup),
-            cursorBlinkToggle,
-            copyOnSelectToggle,
-            keepSessionsToggle,
-            spacer(8),
-            tmuxSection,
-            labeledRow("Prefix key", prefixKeyField),
-            agentsRow(),
-            spacer(8),
-            agentColorsSection,
-            agentColorsSectionView(),
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        // Scrollable body so the entire settings list stays reachable on any window
-        // height; the action buttons stay pinned in a footer below the scroll area.
-        let documentView = SettingsFlippedView()
-        documentView.translatesAutoresizingMaskIntoConstraints = false
-        documentView.addSubview(stack)
-
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.drawsBackground = false
-        scroll.documentView = documentView
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        settingsScrollView = scroll
-
-        let sidebar = settingsSidebar()
+    private func layoutShell() {
+        let sidebar = buildSidebar()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(sidebar)
-        view.addSubview(scroll)
 
-        let importButton = NSButton(title: "Re-import from Ghostty", target: self, action: #selector(reimportGhostty))
-        importButton.bezelStyle = .rounded
-        importButton.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(importButton)
+        pageContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(pageContainer)
 
-        let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
-        saveButton.bezelStyle = .rounded
-        saveButton.keyEquivalent = "\r"
-        saveButton.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(saveButton)
+        let doneButton = NSButton(title: "Done", target: self, action: #selector(closeWindow))
+        doneButton.bezelStyle = .rounded
+        doneButton.keyEquivalent = "\r"
+        doneButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(doneButton)
 
         NSLayoutConstraint.activate([
             sidebar.topAnchor.constraint(equalTo: view.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sidebar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: 190),
+            sidebar.widthAnchor.constraint(equalToConstant: 200),
 
-            scroll.topAnchor.constraint(equalTo: view.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: saveButton.topAnchor, constant: -12),
+            pageContainer.topAnchor.constraint(equalTo: view.topAnchor),
+            pageContainer.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            pageContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            pageContainer.bottomAnchor.constraint(equalTo: doneButton.topAnchor, constant: -12),
 
-            // Document view tracks the content width (no horizontal scroll); its height
-            // grows with the stack, which is what makes the body scroll when it overflows.
-            documentView.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
-            documentView.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
-            documentView.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
-            documentView.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-
-            stack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 22),
-            stack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 22),
-            stack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -22),
-            stack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -22),
-
-            saveButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
-            saveButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -22),
-            importButton.centerYAnchor.constraint(equalTo: saveButton.centerYAnchor),
-            importButton.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 22),
+            doneButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            doneButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -22),
         ])
+
+        pages[0] = buildAppearancePage()
+        pages[1] = buildTerminalPage()
+        pages[2] = buildPrefixPage()
+        pages[3] = buildAgentColorsPage()
     }
+
+    private func showPage(_ index: Int) {
+        for button in sidebarButtons { button.isSelected = (button.tag == index) }
+        for subview in pageContainer.subviews { subview.removeFromSuperview() }
+        guard let page = pages[index] else { return }
+        page.translatesAutoresizingMaskIntoConstraints = false
+        pageContainer.addSubview(page)
+        NSLayoutConstraint.activate([
+            page.topAnchor.constraint(equalTo: pageContainer.topAnchor),
+            page.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
+            page.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
+            page.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
+        ])
+        currentPage = index
+    }
+
+    // MARK: - Sidebar
 
     private var sidebarButtons: [SettingsSidebarButton] = []
     private let settingsSearch = NSSearchField()
-    /// Lookup table mapping section index → keywords (besides the section title)
-    /// that match user-facing terms. Used by the sidebar search to also surface
-    /// individual fields like "opacity" → Appearance.
     private static let sectionKeywords: [Int: [String]] = [
-        0: ["theme", "color", "opacity", "blur", "padding", "cursor", "appearance", "background", "foreground", "transparent"],
+        0: ["theme", "opacity", "blur", "padding", "appearance", "background", "foreground", "transparent"],
         1: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session"],
-        2: ["tmux", "prefix", "agent", "hook", "keybinding", "shortcut"],
+        2: ["prefix", "binding", "keybinding", "shortcut", "agent", "hook"],
         3: ["agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw"],
     ]
 
-    private func settingsSidebar() -> NSView {
+    private func buildSidebar() -> NSView {
         let container = NSVisualEffectView()
         container.material = .underWindowBackground
         container.blendingMode = .behindWindow
@@ -387,11 +348,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         let title = NSTextField(labelWithString: "Settings")
         title.font = .systemFont(ofSize: 19, weight: .bold)
         title.translatesAutoresizingMaskIntoConstraints = false
-
-        let subtitle = NSTextField(labelWithString: "Theme · Terminal · Agents")
-        subtitle.font = .systemFont(ofSize: 11.5, weight: .regular)
-        subtitle.textColor = .secondaryLabelColor
-        subtitle.translatesAutoresizingMaskIntoConstraints = false
 
         settingsSearch.placeholderString = "Filter sections…"
         settingsSearch.delegate = self
@@ -408,7 +364,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         let entries: [(String, String)] = [
             ("Appearance", "paintbrush"),
             ("Terminal", "terminal"),
-            ("Tmux + Agents", "keyboard"),
+            ("Prefix + Agents", "keyboard"),
             ("Agent Colors", "sparkles"),
         ]
         for (index, entry) in entries.enumerated() {
@@ -416,23 +372,19 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
             button.tag = index
             button.isSelected = index == 0
             button.target = self
-            button.action = #selector(jumpToSettingsSection(_:))
+            button.action = #selector(sidebarItemClicked(_:))
             buttons.addArrangedSubview(button)
             sidebarButtons.append(button)
         }
 
         container.addSubview(title)
-        container.addSubview(subtitle)
         container.addSubview(settingsSearch)
         container.addSubview(buttons)
         NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: container.topAnchor, constant: 26),
+            title.topAnchor.constraint(equalTo: container.topAnchor, constant: 28),
             title.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
             title.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
-            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            settingsSearch.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 16),
+            settingsSearch.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 18),
             settingsSearch.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
             settingsSearch.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
             buttons.topAnchor.constraint(equalTo: settingsSearch.bottomAnchor, constant: 14),
@@ -442,10 +394,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         return container
     }
 
-    // NSSearchFieldDelegate — filter sidebar buttons in real-time. The matching
-    // surfaces both exact title hits and per-section keyword hits ("opacity" →
-    // Appearance), so users hunting for a single field still get the right
-    // section highlighted.
     func controlTextDidChange(_ obj: Notification) {
         guard obj.object as? NSSearchField === settingsSearch else { return }
         let query = settingsSearch.stringValue.lowercased().trimmingCharacters(in: .whitespaces)
@@ -461,82 +409,339 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         }
     }
 
-    @objc private func jumpToSettingsSection(_ sender: SettingsSidebarButton) {
-        for button in sidebarButtons { button.isSelected = (button === sender) }
-        guard let scroll = settingsScrollView,
-              let documentView = scroll.documentView,
-              let anchor = sectionAnchors[sender.tag]
-        else { return }
-        documentView.layoutSubtreeIfNeeded()
-        let y = max(anchor.frame.minY - 12, 0)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = HarnessDesign.Motion.standard
-            ctx.timingFunction = HarnessDesign.Motion.standardEase
-            scroll.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: y))
-        }
-        scroll.reflectScrolledClipView(scroll.contentView)
+    @objc private func sidebarItemClicked(_ sender: SettingsSidebarButton) {
+        showPage(sender.tag)
     }
 
-    private func labeledRow(_ title: String, _ field: NSView) -> NSView {
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 12)
-        label.textColor = .secondaryLabelColor
-        label.alignment = .right
-        label.widthAnchor.constraint(equalToConstant: 130).isActive = true
-        let row = NSStackView(views: [label, field])
-        row.orientation = .horizontal
-        row.spacing = 12
-        if field is NSTextField {
-            field.widthAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
-        }
-        return row
+    // MARK: - Page: Appearance
+
+    private func buildAppearancePage() -> NSView {
+        // Ghostty config is imported automatically as the default theme on first
+        // launch (and whenever its signature changes). No manual button — the
+        // user's Ghostty config IS the default.
+        let header = pageHeader(title: "Appearance", trailing: nil)
+
+        livePreview.translatesAutoresizingMaskIntoConstraints = false
+
+        // Theme picker is the primary control. Use Theme Colors / Reset to Defaults
+        // are secondary and styled as link buttons so the row reads cleanly.
+        useThemeColorsButton.title = "Use theme colors"
+        styleAsLink(useThemeColorsButton)
+        let resetDefaults = makeLinkButton("Reset to defaults", action: #selector(resetToDefaults))
+        let themeRow = NSStackView(views: [themePopup, useThemeColorsButton, resetDefaults])
+        themeRow.orientation = .horizontal
+        themeRow.spacing = 14
+        themeRow.alignment = .centerY
+        themePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+
+        let opacityRow = NSStackView(views: [opacitySlider, opacityLabel])
+        opacityRow.orientation = .horizontal
+        opacityRow.spacing = 12
+        opacitySlider.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        opacityLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        opacityLabel.alignment = .right
+
+        let blurRow = NSStackView(views: [blurSlider, blurLabel])
+        blurRow.orientation = .horizontal
+        blurRow.spacing = 12
+        blurSlider.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        blurLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        blurLabel.alignment = .right
+
+        paddingXField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        paddingYField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        let paddingRow = NSStackView(views: [
+            paddingXField,
+            NSTextField(labelWithString: "×"),
+            paddingYField,
+            NSTextField(labelWithString: "pt"),
+        ])
+        paddingRow.orientation = .horizontal
+        paddingRow.spacing = 6
+        paddingRow.alignment = .centerY
+
+        let windowGroup = formGrid(rows: [
+            ("Theme", themeRow),
+            ("Opacity", opacityRow),
+            ("Blur", blurRow),
+            ("Padding", paddingRow),
+            ("", transparentTitlebarToggle),
+        ])
+
+        // Chrome accent rows: dividers + status line text. These are colorBindings
+        // indices 7 and 8 since I appended them after the 7 terminal colors.
+        let dividerRow = colorHexRow(title: "Divider lines", binding: colorBindings[7])
+        let statusRow = colorHexRow(title: "Status line text", binding: colorBindings[8])
+        let chromeAccents = NSStackView(views: [dividerRow, statusRow])
+        chromeAccents.orientation = .horizontal
+        chromeAccents.spacing = 28
+        chromeAccents.alignment = .top
+        chromeAccents.distribution = .fillEqually
+
+        let stack = NSStackView(views: [
+            header,
+            livePreview,
+            sectionHeading("Window"),
+            windowGroup,
+            sectionHeading("Chrome"),
+            chromeAccents,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 20
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        return scrollWrap(stack)
     }
 
-    /// One row in the color section: stacked label + subtitle on the left, then the
-    /// hex field, the color well, a live preview tile showing exactly *where* the
-    /// color shows up in the terminal, and a clear button. The preview was the
-    /// missing link before — users would change "Bold text" and assume nothing
-    /// happened because the active pane had no bold output to repaint.
-    private func hexRow(title: String, subtitle: String, binding: ColorBinding) -> NSView {
+    private func makeLinkButton(_ title: String, action: Selector) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        styleAsLink(button)
+        return button
+    }
+
+    private func styleAsLink(_ button: NSButton) {
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        let title = button.title
+        let attr = NSAttributedString(string: title, attributes: [
+            .foregroundColor: NSColor.controlAccentColor,
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+        ])
+        button.attributedTitle = attr
+        button.contentTintColor = .controlAccentColor
+    }
+
+    // MARK: - Page: Terminal
+
+    private func buildTerminalPage() -> NSView {
+        let header = pageHeader(title: "Terminal", trailing: nil)
+
+        let chooseFont = NSButton(title: "Choose Font…", target: self, action: #selector(chooseFont))
+        chooseFont.bezelStyle = .rounded
+        fontReadout.font = .systemFont(ofSize: 12)
+        fontReadout.textColor = .secondaryLabelColor
+        let fontRow = NSStackView(views: [chooseFont, fontReadout])
+        fontRow.orientation = .horizontal
+        fontRow.spacing = 12
+        fontRow.alignment = .centerY
+
+        fontSizeField.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        shellField.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        cwdField.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        scrollbackField.widthAnchor.constraint(equalToConstant: 100).isActive = true
+
+        let fontGroup = formGrid(rows: [
+            ("Font", fontRow),
+            ("Size", fontSizeField),
+        ])
+
+        let shellGroup = formGrid(rows: [
+            ("Shell", shellField),
+            ("Default directory", cwdField),
+        ])
+
+        let behaviorGroup = formGrid(rows: [
+            ("Cursor style", cursorStylePopup),
+            ("Scrollback", scrollbackField),
+            ("", cursorBlinkToggle),
+            ("", copyOnSelectToggle),
+        ])
+
+        let stack = NSStackView(views: [
+            header,
+            sectionHeading("Font"),
+            fontGroup,
+            sectionHeading("Shell"),
+            shellGroup,
+            sectionHeading("Behavior"),
+            behaviorGroup,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return scrollWrap(stack)
+    }
+
+    // MARK: - Page: Prefix + Agents
+
+    private func buildPrefixPage() -> NSView {
+        let header = pageHeader(title: "Prefix + Agents", trailing: nil)
+
+        let prefixHint = NSTextField(labelWithString: "Click to record a new shortcut. Esc cancels.")
+        prefixHint.font = .systemFont(ofSize: 11.5)
+        prefixHint.textColor = .secondaryLabelColor
+
+        let editAgents = NSButton(title: "Edit agents.json…", target: self, action: #selector(openAgentsJSON))
+        editAgents.bezelStyle = .rounded
+
+        systemNotificationsToggle.title = "Show system notifications when an agent needs attention"
+        systemNotificationsToggle.setButtonType(.switch)
+        systemNotificationsToggle.state = SessionCoordinator.shared.settings.systemNotificationsEnabled ? .on : .off
+        systemNotificationsToggle.target = self
+        systemNotificationsToggle.action = #selector(appearanceTextDidCommit)
+
+        let prefixGroup = formGrid(rows: [
+            ("Prefix key", keyRecorder),
+            ("", prefixHint),
+        ])
+        let agentGroup = formGrid(rows: [
+            ("Agent table", editAgents),
+        ])
+        let notificationsGroup = formGrid(rows: [
+            ("", systemNotificationsToggle),
+        ])
+
+        let stack = NSStackView(views: [
+            header,
+            sectionHeading("Prefix"),
+            prefixGroup,
+            sectionHeading("Agents"),
+            agentGroup,
+            sectionHeading("Notifications"),
+            notificationsGroup,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return scrollWrap(stack)
+    }
+
+    // MARK: - Page: Agent Colors
+
+    private func buildAgentColorsPage() -> NSView {
+        let header = pageHeader(title: "Agent Colors", trailing: nil)
+        let caption = NSTextField(labelWithString: "Per-agent chip color shown in sidebar/tab pills.")
+        caption.font = .systemFont(ofSize: 11.5)
+        caption.textColor = .secondaryLabelColor
+
+        // Two-column agent grid.
+        let halves = Self.agentColorKinds.chunked(into: (Self.agentColorKinds.count + 1) / 2)
+        let columns = halves.map { kinds -> NSStackView in
+            let rows = kinds.map(agentColorRow)
+            let s = NSStackView(views: rows)
+            s.orientation = .vertical
+            s.alignment = .leading
+            s.spacing = 8
+            return s
+        }
+        let grid = NSStackView(views: columns)
+        grid.orientation = .horizontal
+        grid.spacing = 28
+        grid.alignment = .top
+
+        let reset = NSButton(title: "Reset agent colors", target: self, action: #selector(resetAgentColors))
+        reset.bezelStyle = .rounded
+
+        let stack = NSStackView(views: [header, caption, grid, reset])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 16
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return scrollWrap(stack)
+    }
+
+    // MARK: - Layout helpers
+
+    private func pageHeader(title: String, trailing: NSButton?) -> NSView {
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 12
+        stack.addArrangedSubview(titleLabel)
+        if let trailing {
+            trailing.bezelStyle = .rounded
+            let spacer = NSView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            stack.addArrangedSubview(spacer)
+            stack.addArrangedSubview(trailing)
+        }
+        return stack
+    }
+
+    private func sectionHeading(_ text: String) -> NSView {
+        let label = NSTextField(labelWithString: text.uppercased())
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .tertiaryLabelColor
+        return label
+    }
+
+    /// Right-aligned label column + control column, like macOS System Settings.
+    private func formGrid(rows: [(String, NSView)]) -> NSView {
+        let grid = NSGridView()
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        grid.rowSpacing = 10
+        grid.columnSpacing = 14
+        for (title, control) in rows {
+            let label = NSTextField(labelWithString: title)
+            label.font = .systemFont(ofSize: 12)
+            label.textColor = .secondaryLabelColor
+            label.alignment = .right
+            grid.addRow(with: [label, control])
+        }
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 0).width = 130
+        grid.column(at: 1).xPlacement = .leading
+        return grid
+    }
+
+    /// `[swatch] Name [hex] [↺]` — consistent width pattern so every row aligns.
+    private func colorHexRow(title: String, binding: ColorBinding) -> NSView {
+        binding.field.widthAnchor.constraint(equalToConstant: 92).isActive = true
+        binding.field.placeholderString = binding.themeColor()?.uppercased() ?? "—"
+        binding.field.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+        binding.field.usesSingleLineMode = true
+
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.textColor = .labelColor
-        label.alignment = .right
+        label.widthAnchor.constraint(equalToConstant: 110).isActive = true
 
-        let detail = NSTextField(labelWithString: subtitle)
-        detail.font = .systemFont(ofSize: 10.5)
-        detail.textColor = .tertiaryLabelColor
-        detail.alignment = .right
-        detail.lineBreakMode = .byTruncatingTail
-
-        let labelStack = NSStackView(views: [label, detail])
-        labelStack.orientation = .vertical
-        labelStack.alignment = .trailing
-        labelStack.spacing = 1
-        labelStack.widthAnchor.constraint(equalToConstant: 156).isActive = true
-
-        binding.field.widthAnchor.constraint(equalToConstant: 110).isActive = true
-        binding.field.placeholderString = binding.themeColor()?.uppercased() ?? "—"
-        binding.field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        binding.field.usesSingleLineMode = true
-        binding.field.toolTip = subtitle
-
-        binding.preview.translatesAutoresizingMaskIntoConstraints = false
-        binding.preview.widthAnchor.constraint(equalToConstant: 88).isActive = true
-        binding.preview.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        binding.preview.toolTip = subtitle
-
-        let row = NSStackView(views: [labelStack, binding.field, binding.well, binding.preview, binding.reset])
+        let row = NSStackView(views: [binding.well, label, binding.field, binding.reset])
         row.orientation = .horizontal
         row.spacing = 10
         row.alignment = .centerY
         return row
     }
 
+    /// Wraps a page's content stack in a vertical scroll view so it remains
+    /// reachable on shorter window heights without forcing every section to
+    /// scroll all together.
+    private func scrollWrap(_ content: NSStackView) -> NSView {
+        let documentView = SettingsFlippedView()
+        documentView.translatesAutoresizingMaskIntoConstraints = false
+        documentView.addSubview(content)
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.documentView = documentView
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            documentView.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            documentView.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            documentView.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            documentView.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+
+            content.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 26),
+            content.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 28),
+            content.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -28),
+            content.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -28),
+        ])
+        return scroll
+    }
+
     private func makeResetButton() -> NSButton {
         let button = NSButton()
         button.bezelStyle = .recessed
-        button.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: "Clear override")
+        button.image = NSImage(systemSymbolName: "arrow.uturn.backward.circle",
+                               accessibilityDescription: "Reset to theme color")
         button.imagePosition = .imageOnly
         button.isBordered = false
         button.target = self
@@ -550,34 +755,13 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         button.heightAnchor.constraint(equalToConstant: 22).isActive = true
     }
 
-    /// "Use Theme Colors" + "Reset to Defaults", indented to align with the fields.
-    private func colorButtonsRow() -> NSView {
-        let reset = NSButton(title: "Reset to Defaults", target: self, action: #selector(resetToDefaults))
-        reset.bezelStyle = .rounded
-        let buttons = NSStackView(views: [useThemeColorsButton, reset])
-        buttons.orientation = .horizontal
-        buttons.spacing = 12
-        let indent = NSView()
-        indent.widthAnchor.constraint(equalToConstant: 130).isActive = true
-        let row = NSStackView(views: [indent, buttons])
-        row.orientation = .horizontal
-        row.spacing = 12
-        return row
-    }
-
-    private func agentsRow() -> NSView {
-        let button = NSButton(title: "Edit agents.json…", target: self, action: #selector(openAgentsJSON))
-        button.bezelStyle = .rounded
-        return labeledRow("Agent table", button)
-    }
-
     private func buildPaletteWells() {
         paletteWells.removeAll()
         for index in 0 ..< 16 {
             let well = NSColorWell()
             well.translatesAutoresizingMaskIntoConstraints = false
-            well.widthAnchor.constraint(equalToConstant: 30).isActive = true
-            well.heightAnchor.constraint(equalToConstant: 22).isActive = true
+            well.widthAnchor.constraint(equalToConstant: 40).isActive = true
+            well.heightAnchor.constraint(equalToConstant: 32).isActive = true
             well.color = paletteHexValues[index].flatMap(NSColor.fromHex)
                 ?? NSColor.fromHex(Self.defaultAnsiPalette[index]) ?? .gray
             well.target = self
@@ -602,68 +786,23 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         }
     }
 
-    /// Two rows of 8 ANSI swatches (0–7 normal, 8–15 bright) plus a reset button.
-    private func paletteSection() -> NSView {
-        let caption = NSTextField(labelWithString: "0–7 normal · 8–15 bright · click a swatch to override the theme")
-        caption.font = .systemFont(ofSize: 10.5)
-        caption.textColor = .tertiaryLabelColor
-
-        func paletteRow(_ range: Range<Int>) -> NSStackView {
-            let row = NSStackView(views: range.map(paletteCell))
-            row.orientation = .horizontal
-            row.spacing = 6
-            return row
-        }
-        let grid = NSStackView(views: [paletteRow(0 ..< 8), paletteRow(8 ..< 16)])
-        grid.orientation = .vertical
-        grid.spacing = 6
-        grid.alignment = .leading
-
-        let reset = NSButton(title: "Reset palette", target: self, action: #selector(resetPalette))
-        reset.bezelStyle = .rounded
-
-        let section = NSStackView(views: [caption, grid, reset])
-        section.orientation = .vertical
-        section.alignment = .leading
-        section.spacing = 8
-        return section
-    }
-
     private func paletteCell(_ index: Int) -> NSView {
         let label = NSTextField(labelWithString: "\(index)")
-        label.font = .monospacedDigitSystemFont(ofSize: 9, weight: .regular)
+        label.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         label.textColor = .tertiaryLabelColor
         label.alignment = .center
         let cell = NSStackView(views: [paletteWells[index], label])
         cell.orientation = .vertical
-        cell.spacing = 2
+        cell.spacing = 4
         cell.alignment = .centerX
         return cell
-    }
-
-    private func agentColorsSectionView() -> NSView {
-        let rows = Self.agentColorKinds.map(agentColorRow)
-        let grid = NSStackView(views: rows)
-        grid.orientation = .vertical
-        grid.alignment = .leading
-        grid.spacing = 8
-
-        let reset = NSButton(title: "Reset agent colors", target: self, action: #selector(resetAgentColors))
-        reset.bezelStyle = .rounded
-
-        let section = NSStackView(views: [grid, reset])
-        section.orientation = .vertical
-        section.alignment = .leading
-        section.spacing = 10
-        return section
     }
 
     private func agentColorRow(_ kind: AgentKind) -> NSView {
         let label = NSTextField(labelWithString: kind.displayName)
         label.font = .systemFont(ofSize: 12)
         label.textColor = .secondaryLabelColor
-        label.alignment = .right
-        label.widthAnchor.constraint(equalToConstant: 130).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 120).isActive = true
 
         let preview = AgentChipView()
         preview.translatesAutoresizingMaskIntoConstraints = false
@@ -672,24 +811,13 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         preview.configure(text: kind.displayName, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
         agentColorPreviews[kind] = preview
 
-        let row = NSStackView(views: [label, agentColorWells[kind] ?? NSView(), preview])
+        let row = NSStackView(views: [agentColorWells[kind] ?? NSView(), label, preview])
         row.orientation = .horizontal
-        row.spacing = 12
+        row.spacing = 10
         return row
     }
 
-    private func sectionLabel(_ title: String) -> NSView {
-        let label = NSTextField(labelWithString: title.uppercased())
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
-        label.textColor = .tertiaryLabelColor
-        return label
-    }
-
-    private func spacer(_ height: CGFloat) -> NSView {
-        let s = NSView()
-        s.heightAnchor.constraint(equalToConstant: height).isActive = true
-        return s
-    }
+    // MARK: - Formatting / utilities
 
     private func formatPercent(_ value: Float) -> String {
         "\(Int((value * 100).rounded()))%"
@@ -699,7 +827,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         value == 0 ? "off" : "\(value) px"
     }
 
-    /// Map the saved Ghostty `cursor-style` value to a friendly popup title.
     private func cursorStyleTitle(_ value: String) -> String {
         switch value {
         case "bar": return "Beam"
@@ -708,7 +835,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         }
     }
 
-    /// Inverse of `cursorStyleTitle` — popup title back to the Ghostty value.
     private func cursorStyleValue(_ title: String?) -> String {
         switch title {
         case "Beam": return "bar"
@@ -717,30 +843,47 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         }
     }
 
+    private func updateFontReadout() {
+        let s = SessionCoordinator.shared.settings
+        fontReadout.stringValue = "\(s.fontFamily) · \(Int(s.fontSize.rounded()))pt"
+    }
+
+    // MARK: - Live apply
+
     @objc private func opacityDidChange() {
         opacityLabel.stringValue = formatPercent(Float(opacitySlider.doubleValue))
-        applyAppearancePreview()
+        flushAndApply()
     }
 
     @objc private func blurDidChange() {
         let rounded = Int(blurSlider.doubleValue.rounded())
         blurLabel.stringValue = formatBlur(rounded)
-        applyAppearancePreview()
+        flushAndApply()
     }
 
     @objc private func themeDidChange() {
+        if themePopup.titleOfSelectedItem == ThemeManager.defaultDisplayName {
+            // "Default" bundles the Ghostty-stock visual baseline. Reset settings,
+            // then mirror every reset value into its control so the subsequent
+            // flushAndApply (which reads controls back) doesn't clobber the reset.
+            SessionCoordinator.shared.settings.applyGhosttyDefaults(imported: GhosttyConfigImporter.load())
+            syncAppearanceControlsFromSettings()
+            flushAndApply()
+            refreshColorPlaceholders()
+            return
+        }
         clearAllCustomColors()
-        applyAppearancePreview()
+        flushAndApply()
         refreshColorPlaceholders()
     }
 
     @objc private func useThemeColors() {
         clearAllCustomColors()
-        applyAppearancePreview()
+        flushAndApply()
     }
 
     @objc private func appearanceTextDidCommit() {
-        applyAppearancePreview()
+        flushAndApply()
     }
 
     @objc private func appearanceTextDidChange(_ note: Notification) {
@@ -748,15 +891,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
               let binding = colorBindings.first(where: { $0.field === field })
         else { return }
         refreshColorBinding(binding)
-        refreshAllPreviews()
-        // Live well preview is free, but committing through the daemon on every
-        // keystroke would spam the IPC socket and write settings.json on every
-        // character. Push only when the field is either empty (clearing the
-        // override) or fully valid — partially-typed hex codes don't need to
-        // make it to the terminal until the user finishes typing.
         let raw = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.isEmpty || normalizedHexOrNil(raw) != nil {
-            applyAppearancePreview()
+            flushAndApply()
         }
     }
 
@@ -772,41 +909,25 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         guard let binding = colorBindings.first(where: { $0.well === sender }) else { return }
         binding.field.stringValue = hexString(sender.color)
         refreshColorBinding(binding)
-        // Every preview tile renders against the shared color context, so a
-        // change to one color (e.g. background) needs to repaint all the
-        // other previews too. Otherwise the bold sample would still show
-        // the old background behind it.
-        refreshAllPreviews()
-        applyAppearancePreview()
+        flushAndApply()
     }
 
     @objc private func colorResetClicked(_ sender: NSButton) {
         guard let binding = colorBindings.first(where: { $0.reset === sender }) else { return }
         binding.field.stringValue = ""
         refreshColorBinding(binding)
-        refreshAllPreviews()
-        applyAppearancePreview()
+        flushAndApply()
     }
 
-    /// Refresh validation, well color, preview, and reset-button enabled state for
-    /// a binding. The well + preview always show the *effective* color (override if
-    /// set, else theme), and the reset button only enables when there's something
-    /// to clear. The preview also reflects neighboring colors (e.g. the "Selected
-    /// text" sample needs the current selection-background to look right), so it
-    /// re-resolves the whole context on every call.
     private func refreshColorBinding(_ binding: ColorBinding) {
         validateHexField(binding.field)
         let hasOverride = normalizedHexOrNil(binding.field.stringValue) != nil
         let effective = normalizedHexOrNil(binding.field.stringValue) ?? binding.themeColor()
         binding.well.color = effective.flatMap(NSColor.fromHex) ?? HarnessChrome.current.terminalBackground
-        binding.reset.isEnabled = hasOverride
-        binding.reset.alphaValue = hasOverride ? 1.0 : 0.25
-        binding.preview.update(context: currentPreviewContext(), highlight: binding.role)
+        binding.reset.isHidden = !hasOverride
     }
 
-    /// Snapshot of the current effective colors for the preview tiles. Each tile
-    /// renders against this shared palette so e.g. the bold sample sits on the
-    /// right background, the selection sample uses the right fill, etc.
+    /// Resolve the live context the shared preview tile renders against.
     private func currentPreviewContext() -> ColorSamplePreview.Context {
         func resolve(_ binding: ColorBinding) -> NSColor? {
             let chosen = normalizedHexOrNil(binding.field.stringValue) ?? binding.themeColor()
@@ -823,29 +944,45 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         )
     }
 
-    /// Push the current preview context to every preview tile. Used after any
-    /// edit so all swatches stay in sync (changing the background also affects
-    /// how every other sample looks).
-    private func refreshAllPreviews() {
-        let context = currentPreviewContext()
-        for binding in colorBindings {
-            binding.preview.update(context: context, highlight: binding.role)
+    private func currentPalette() -> [NSColor] {
+        let themed = ThemeManager.paletteHex(themeName: SessionCoordinator.shared.snapshot.themeName)
+        return (0 ..< 16).map { idx -> NSColor in
+            if let override = paletteHexValues[idx], let color = NSColor.fromHex(override) { return color }
+            if idx < themed.count, let hex = themed[idx], let color = NSColor.fromHex(hex) { return color }
+            return NSColor.fromHex(Self.defaultAnsiPalette[idx]) ?? .gray
         }
     }
 
-    /// Refresh every binding's well + placeholder; used after the theme changes.
+    private func refreshLivePreview() {
+        let s = SessionCoordinator.shared.settings
+        let style: LiveTerminalPreview.CursorStyle
+        switch s.cursorStyle {
+        case "bar": style = .beam
+        case "underline": style = .underline
+        default: style = .block
+        }
+        livePreview.update(LiveTerminalPreview.State(
+            colors: currentPreviewContext(),
+            palette: currentPalette(),
+            fontName: s.fontFamily,
+            fontSize: CGFloat(s.fontSize),
+            opacity: CGFloat(s.backgroundOpacity),
+            cursorStyle: style,
+            cursorBlink: s.cursorBlink
+        ))
+    }
+
     private func refreshColorPlaceholders() {
         for binding in colorBindings {
             binding.field.placeholderString = binding.themeColor()?.uppercased() ?? "—"
             refreshColorBinding(binding)
         }
-        refreshAllPreviews()
     }
 
     @objc private func paletteWellChanged(_ sender: NSColorWell) {
         guard let index = paletteWells.firstIndex(where: { $0 === sender }) else { return }
         paletteHexValues[index] = hexString(sender.color)
-        applyAppearancePreview()
+        flushAndApply()
     }
 
     @objc private func agentColorWellChanged(_ sender: NSColorWell) {
@@ -874,10 +1011,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
             paletteHexValues[index] = nil
             well.color = NSColor.fromHex(Self.defaultAnsiPalette[index]) ?? .gray
         }
-        applyAppearancePreview()
+        flushAndApply()
     }
 
-    /// Drop every custom color override (singular colors + palette) back to "use theme".
     private func clearAllCustomColors() {
         for binding in colorBindings {
             binding.field.stringValue = ""
@@ -889,6 +1025,33 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         }
     }
 
+    private func syncAppearanceControlsFromSettings() {
+        let settings = SessionCoordinator.shared.settings
+        opacitySlider.doubleValue = Double(settings.backgroundOpacity)
+        opacityLabel.stringValue = formatPercent(settings.backgroundOpacity)
+        blurSlider.doubleValue = Double(settings.backgroundBlur)
+        blurLabel.stringValue = formatBlur(settings.backgroundBlur)
+        paddingXField.stringValue = String(Int(settings.windowPaddingX.rounded()))
+        paddingYField.stringValue = String(Int(settings.windowPaddingY.rounded()))
+        minContrastField.stringValue = String(format: "%.1f", settings.minimumContrast)
+        fontFamilyField.stringValue = settings.fontFamily
+        fontSizeField.stringValue = String(Int(settings.fontSize.rounded()))
+        cursorStylePopup.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
+        cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
+        copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
+        for binding in colorBindings {
+            let isChromeAccent = binding.keyPath == \.dividerHex || binding.keyPath == \.statusLineHex
+            let hex = isChromeAccent ? settings[keyPath: binding.keyPath] : nil
+            binding.field.stringValue = hex ?? ""
+            refreshColorBinding(binding)
+        }
+        paletteHexValues = Array(repeating: nil, count: 16)
+        for (index, well) in paletteWells.enumerated() {
+            well.color = paletteHexValues[index].flatMap(NSColor.fromHex)
+                ?? NSColor.fromHex(Self.defaultAnsiPalette[index]) ?? .gray
+        }
+    }
+
     private func hexString(_ color: NSColor) -> String {
         guard let rgb = color.usingColorSpace(.sRGB) else { return "" }
         let r = Int((rgb.redComponent * 255).rounded())
@@ -897,8 +1060,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         return String(format: "#%02X%02X%02X", r, g, b)
     }
 
-    /// Tint the field red when its contents aren't a valid hex color (empty is fine —
-    /// that means "use theme colors"). Replaces the previous silent rejection.
     private func validateHexField(_ field: NSTextField) {
         let raw = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let valid = raw.isEmpty || normalizedHexOrNil(raw) != nil
@@ -906,16 +1067,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     }
 
     @objc private func resetToDefaults() {
-        clearAllCustomColors()
-        opacitySlider.doubleValue = 0.85
-        opacityLabel.stringValue = formatPercent(0.85)
-        blurSlider.doubleValue = 20
-        blurLabel.stringValue = formatBlur(20)
-        paddingXField.stringValue = "12"
-        paddingYField.stringValue = "12"
-        minContrastField.stringValue = "1.0"
-        refreshAllPreviews()
-        applyAppearancePreview()
+        SessionCoordinator.shared.settings.applyGhosttyDefaults(imported: GhosttyConfigImporter.load())
+        syncAppearanceControlsFromSettings()
+        flushAndApply()
     }
 
     private func configureLiveAppearanceField(_ field: NSTextField) {
@@ -929,115 +1083,85 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
         )
     }
 
-    private func applyAppearancePreview() {
+    /// Single flush — push every field into HarnessSettings, save, and apply
+    /// to the live terminal/window. Called from every control's action so the
+    /// settings window behaves entirely live.
+    private func flushAndApply() {
         let coordinator = SessionCoordinator.shared
         coordinator.settings.backgroundOpacity = HarnessSettings.clampedOpacity(Float(opacitySlider.doubleValue))
         coordinator.settings.backgroundBlur = HarnessSettings.clampedBlur(Int(blurSlider.doubleValue.rounded()))
-        for binding in colorBindings {
-            coordinator.settings[keyPath: binding.keyPath] = normalizedHexOrNil(binding.field.stringValue)
-        }
-        clearDeprecatedTerminalColorSettings(&coordinator.settings)
+        coordinator.settings.dividerHex = normalizedHexOrNil(dividerHexField.stringValue)
+        coordinator.settings.statusLineHex = normalizedHexOrNil(statusLineHexField.stringValue)
+        coordinator.settings.useCustomColors = false
+        coordinator.settings.selectionBackgroundHex = nil
+        coordinator.settings.selectionForegroundHex = nil
+        coordinator.settings.boldColorHex = nil
+        coordinator.settings.cursorTextHex = nil
+        coordinator.settings.minimumContrast = 1
+        coordinator.settings.paletteHex = Array(repeating: nil, count: 16)
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
+        coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
+        coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
+        coordinator.settings.fontSize = Float(fontSizeField.stringValue) ?? 14
+        coordinator.settings.fontFamily = fontFamilyField.stringValue
+        coordinator.settings.defaultShell = shellField.stringValue
+        coordinator.settings.defaultCWD = cwdField.stringValue
+        coordinator.settings.scrollbackLines = max(100, Int(scrollbackField.stringValue) ?? 10_000)
+        coordinator.settings.cursorStyle = cursorStyleValue(cursorStylePopup.titleOfSelectedItem)
+        coordinator.settings.cursorBlink = cursorBlinkToggle.state == .on
+        coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on
+        coordinator.settings.systemNotificationsEnabled = systemNotificationsToggle.state == .on
         try? coordinator.settings.save()
-        // Only round-trip the theme through the daemon when it has actually
-        // changed — otherwise scrubbing a slider would fire a setTheme IPC per
-        // tick. applySettingsToHosts() already refreshes chrome locally.
+
+        // Only round-trip the theme through the daemon when it has actually changed —
+        // otherwise scrubbing a slider would fire setTheme IPC every tick.
         if let selectedTheme = themePopup.titleOfSelectedItem,
            selectedTheme != coordinator.snapshot.themeName {
             coordinator.setTheme(selectedTheme, clearColorOverrides: false)
         } else {
             coordinator.applySettingsToHosts()
         }
+        updateFontReadout()
+        refreshLivePreview()
     }
 
-    /// Clamp the contrast field to Ghostty's accepted range (1 = off … 21 = max).
     private func clampedContrast(_ raw: String) -> Double {
         guard let value = Double(raw) else { return 1 }
         return min(21, max(1, value))
     }
 
-    @objc private func reimportGhostty() {
-        guard let imported = GhosttyConfigImporter.load() else {
-            let alert = NSAlert()
-            alert.messageText = "No Ghostty config found"
-            alert.informativeText = "Looked in ~/.config/ghostty/config and ~/Library/Application Support/com.mitchellh.ghostty/config."
-            alert.alertStyle = .informational
-            alert.runModal()
-            return
-        }
-        if let value = imported.fontFamily { fontFamilyField.stringValue = value }
-        if let value = imported.fontSize { fontSizeField.stringValue = String(format: "%.0f", value) }
-        if let value = imported.defaultShell { shellField.stringValue = value }
-        if let value = imported.backgroundOpacity {
-            let clamped = HarnessSettings.clampedOpacity(value)
-            opacitySlider.doubleValue = Double(clamped)
-            opacityLabel.stringValue = formatPercent(clamped)
-        }
-        if let value = imported.backgroundBlur {
-            let clamped = HarnessSettings.clampedBlur(value)
-            blurSlider.doubleValue = Double(clamped)
-            blurLabel.stringValue = formatBlur(clamped)
-        }
-        if let value = imported.windowPaddingX { paddingXField.stringValue = String(format: "%.0f", value) }
-        if let value = imported.windowPaddingY { paddingYField.stringValue = String(format: "%.0f", value) }
-        if let value = imported.backgroundHex { backgroundHexField.stringValue = value }
-        if let value = imported.foregroundHex { foregroundHexField.stringValue = value }
-        if let value = imported.cursorColorHex { cursorHexField.stringValue = value }
-        // Ghostty import covers bg/fg/cursor; the extended colors + palette reset to theme.
-        for field in [selectionBgHexField, selectionFgHexField, boldHexField, cursorTextHexField] {
-            field.stringValue = ""
-            validateHexField(field)
-        }
-        minContrastField.stringValue = "1.0"
-        for (index, well) in paletteWells.enumerated() {
-            paletteHexValues[index] = nil
-            well.color = NSColor.fromHex(Self.defaultAnsiPalette[index]) ?? .gray
-        }
-        syncColorWellsFromFields()
-        if let value = imported.themeName {
-            themePopup.selectItem(withTitle: value)
-        }
-        let coordinator = SessionCoordinator.shared
-        let existingAgentColors = coordinator.settings.agentColorOverrides
-        coordinator.settings = HarnessSettings.makeDefaults(imported: imported)
-        coordinator.settings.agentColorOverrides = existingAgentColors
-        try? coordinator.settings.save()
-        if let theme = imported.themeName {
-            coordinator.setTheme(theme)
-        }
-        coordinator.applySettingsToHosts()
+
+    @objc private func closeWindow() {
+        flushAndApply()
+        view.window?.close()
     }
 
-    @objc private func save() {
-        let coordinator = SessionCoordinator.shared
-        let selectedTheme = themePopup.titleOfSelectedItem
-        coordinator.settings.fontSize = Float(fontSizeField.stringValue) ?? 14
-        coordinator.settings.fontFamily = fontFamilyField.stringValue
-        coordinator.settings.defaultShell = shellField.stringValue
-        coordinator.settings.defaultCWD = cwdField.stringValue
-        coordinator.settings.backgroundOpacity = HarnessSettings.clampedOpacity(Float(opacitySlider.doubleValue))
-        coordinator.settings.backgroundBlur = HarnessSettings.clampedBlur(Int(blurSlider.doubleValue.rounded()))
-        coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
-        coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
-        for binding in colorBindings {
-            coordinator.settings[keyPath: binding.keyPath] = normalizedHexOrNil(binding.field.stringValue)
-        }
-        clearDeprecatedTerminalColorSettings(&coordinator.settings)
-        coordinator.settings.ghosttyConfigSignature = GhosttyConfigImporter.load()?.signature
-        coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
-        coordinator.settings.prefixKey = prefixKeyField.stringValue.isEmpty ? "ctrl-a" : prefixKeyField.stringValue
-        coordinator.settings.scrollbackLines = max(100, Int(scrollbackField.stringValue) ?? 10_000)
-        coordinator.settings.cursorStyle = cursorStyleValue(cursorStylePopup.titleOfSelectedItem)
-        coordinator.settings.cursorBlink = cursorBlinkToggle.state == .on
-        coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on
-        try? coordinator.settings.save()
-        if let selectedTheme {
-            coordinator.setTheme(selectedTheme)
-        }
-        coordinator.setKeepSessionsOnQuit(keepSessionsToggle.state == .on)
-        coordinator.applySettingsToHosts()
-        PrefixKeymap.shared.rebuildFromSettings()
-        view.window?.close()
+    // MARK: - Font picker (Terminal page)
+
+    @objc private func chooseFont() {
+        let current = NSFont(name: SessionCoordinator.shared.settings.fontFamily,
+                             size: CGFloat(SessionCoordinator.shared.settings.fontSize))
+            ?? .monospacedSystemFont(ofSize: CGFloat(SessionCoordinator.shared.settings.fontSize), weight: .regular)
+        let fontManager = NSFontManager.shared
+        fontManager.target = self
+        fontManager.setSelectedFont(current, isMultiple: false)
+        let panel = fontManager.fontPanel(true)
+        panel?.makeKeyAndOrderFront(nil)
+    }
+
+    func changeFont(_ sender: NSFontManager?) {
+        guard let manager = sender else { return }
+        let base = NSFont(name: fontFamilyField.stringValue,
+                          size: CGFloat(Float(fontSizeField.stringValue) ?? 14))
+            ?? .monospacedSystemFont(ofSize: 14, weight: .regular)
+        let converted = manager.convert(base)
+        fontFamilyField.stringValue = converted.familyName ?? converted.fontName
+        fontSizeField.stringValue = String(format: "%.0f", converted.pointSize)
+        flushAndApply()
+    }
+
+    func validModesForFontPanel(_ fontPanel: NSFontPanel) -> NSFontPanel.ModeMask {
+        [.collection, .face, .size]
     }
 
     private func normalizedHexOrNil(_ raw: String) -> String? {
@@ -1051,18 +1175,14 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     }
 
     private func hasCustomColorOverrides() -> Bool {
-        colorBindings.contains { normalizedHexOrNil($0.field.stringValue) != nil }
-            || paletteHexValues.contains { $0 != nil }
-    }
-
-    private func clearDeprecatedTerminalColorSettings(_ settings: inout HarnessSettings) {
-        settings.useCustomColors = false
-        settings.selectionBackgroundHex = nil
-        settings.selectionForegroundHex = nil
-        settings.boldColorHex = nil
-        settings.cursorTextHex = nil
-        settings.minimumContrast = 1
-        settings.paletteHex = Array(repeating: nil, count: 16)
+        // Divider + status line are chrome accents — they're allowed to be set
+        // without flipping `useCustomColors` on, which would otherwise also
+        // override the terminal palette.
+        let chromeAccentPaths: [WritableKeyPath<HarnessSettings, String?>] = [\.dividerHex, \.statusLineHex]
+        let terminalColors = colorBindings.contains {
+            normalizedHexOrNil($0.field.stringValue) != nil && !chromeAccentPaths.contains($0.keyPath)
+        }
+        return terminalColors || paletteHexValues.contains { $0 != nil }
     }
 
     private func syncColorWellsFromFields() {
@@ -1072,7 +1192,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     @objc private func openAgentsJSON() {
         let url = HarnessPaths.applicationSupport.appendingPathComponent("agents.json")
         if !FileManager.default.fileExists(atPath: url.path) {
-            // Seed it with the defaults so the user sees a useful starting point.
             let defaults = AgentTable.default
             if let data = try? JSONEncoder().encode(defaults) {
                 try? data.write(to: url, options: .atomic)
@@ -1082,20 +1201,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate {
     }
 }
 
-/// Top-origin document view for the settings scroll area, so content lays out from
-/// the top and the scroll view starts scrolled to the first section.
 @MainActor
 private final class SettingsFlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// Tiny "terminal-shaped" tile that paints a representative slice of the current
-/// color settings, highlighting whichever role the row owns. Lets the user see
-/// *exactly* what a setting affects — e.g. the "Selection fill" preview always
-/// shows a sample with text selected, the "Bold text" preview shows bold output,
-/// and so on. Solves the original "I changed Bold text and nothing happened"
-/// confusion: now the change shows up here even if the live terminal has no
-/// bold output to repaint.
 @MainActor
 final class ColorSamplePreview: NSView {
     enum Role {
@@ -1112,160 +1222,8 @@ final class ColorSamplePreview: NSView {
         var selectionForeground: NSColor
         var bold: NSColor
     }
-
-    private let role: Role
-    private var context: Context = .init(
-        background: .black, foreground: .white, cursor: .systemBlue,
-        cursorText: .black, selectionBackground: NSColor.systemBlue.withAlphaComponent(0.5),
-        selectionForeground: .white, bold: .white
-    )
-    private var highlight: Role
-
-    init(role: Role) {
-        self.role = role
-        self.highlight = role
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 5
-        layer?.cornerCurve = .continuous
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    func update(context: Context, highlight: Role) {
-        self.context = context
-        self.highlight = highlight
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-
-        let rect = bounds
-        let cornerPath = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
-        cornerPath.addClip()
-
-        // Always start with the background — every preview shows the terminal's
-        // canvas color so the user can read the sample in real context.
-        context.background.setFill()
-        ctx.fill(rect)
-
-        let baseFont = NSFont(name: "Menlo", size: 11) ?? .monospacedSystemFont(ofSize: 11, weight: .regular)
-        let boldFont = NSFont(name: "Menlo-Bold", size: 11) ?? .monospacedSystemFont(ofSize: 11, weight: .bold)
-
-        switch role {
-        case .background:
-            // Show the canvas only — that's literally what this color controls.
-            let label = NSAttributedString(
-                string: "abc",
-                attributes: [.foregroundColor: context.foreground, .font: baseFont]
-            )
-            drawString(label, centeredIn: rect)
-
-        case .foreground:
-            let label = NSAttributedString(
-                string: "Abc 123",
-                attributes: [.foregroundColor: context.foreground, .font: baseFont]
-            )
-            drawString(label, centeredIn: rect)
-
-        case .cursor:
-            // Render a sample word with the cursor block beside the last char.
-            let textWidth: CGFloat = 32
-            let cursorWidth: CGFloat = 8
-            let combinedWidth = textWidth + 2 + cursorWidth
-            let originX = rect.midX - combinedWidth / 2
-            let yCenter = rect.midY
-
-            let label = NSAttributedString(
-                string: "abc",
-                attributes: [.foregroundColor: context.foreground, .font: baseFont]
-            )
-            let textRect = NSRect(x: originX, y: yCenter - 6.5, width: textWidth, height: 13)
-            label.draw(in: textRect)
-
-            let cursorRect = NSRect(x: originX + textWidth + 2, y: yCenter - 6, width: cursorWidth, height: 12)
-            context.cursor.setFill()
-            ctx.fill(cursorRect)
-
-        case .cursorText:
-            // Block cursor overlaying a character — the character is painted in
-            // the "text under cursor" color so the user sees the inversion effect.
-            let glyphSize: CGFloat = 11
-            let cursorWidth: CGFloat = 9
-            let yCenter = rect.midY
-
-            let cursorRect = NSRect(x: rect.midX - cursorWidth / 2, y: yCenter - 6, width: cursorWidth, height: 12)
-            context.cursor.setFill()
-            ctx.fill(cursorRect)
-
-            let charAttrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: context.cursorText,
-                .font: NSFont(name: "Menlo", size: glyphSize) ?? .monospacedSystemFont(ofSize: glyphSize, weight: .regular),
-            ]
-            let glyph = NSAttributedString(string: "A", attributes: charAttrs)
-            drawString(glyph, centeredIn: cursorRect)
-
-        case .selectionBackground:
-            // Show the highlight fill behind sample text.
-            let selectionWidth: CGFloat = 56
-            let selectionHeight: CGFloat = 16
-            let selectionRect = NSRect(
-                x: rect.midX - selectionWidth / 2,
-                y: rect.midY - selectionHeight / 2,
-                width: selectionWidth,
-                height: selectionHeight
-            )
-            context.selectionBackground.setFill()
-            NSBezierPath(roundedRect: selectionRect, xRadius: 2, yRadius: 2).fill()
-            let label = NSAttributedString(
-                string: "abcdef",
-                attributes: [.foregroundColor: context.selectionForeground, .font: baseFont]
-            )
-            drawString(label, centeredIn: selectionRect)
-
-        case .selectionForeground:
-            // Same composition but emphasize the *text* inside the selection.
-            let selectionWidth: CGFloat = 56
-            let selectionHeight: CGFloat = 16
-            let selectionRect = NSRect(
-                x: rect.midX - selectionWidth / 2,
-                y: rect.midY - selectionHeight / 2,
-                width: selectionWidth,
-                height: selectionHeight
-            )
-            context.selectionBackground.setFill()
-            NSBezierPath(roundedRect: selectionRect, xRadius: 2, yRadius: 2).fill()
-            let label = NSAttributedString(
-                string: "abcdef",
-                attributes: [.foregroundColor: context.selectionForeground, .font: baseFont]
-            )
-            drawString(label, centeredIn: selectionRect)
-
-        case .bold:
-            let label = NSAttributedString(
-                string: "Bold",
-                attributes: [.foregroundColor: context.bold, .font: boldFont]
-            )
-            drawString(label, centeredIn: rect)
-        }
-    }
-
-    private func drawString(_ string: NSAttributedString, centeredIn rect: NSRect) {
-        let size = string.size()
-        let originX = rect.midX - size.width / 2
-        let originY = rect.midY - size.height / 2
-        string.draw(at: NSPoint(x: originX, y: originY))
-    }
 }
 
-/// Sidebar row in the Settings window — SF Symbol + label, selectable, full-width
-/// hover/active fills. Sits inside an `NSStackView`; uses its own layer chrome
-/// instead of `NSButton`'s bezel so dark mode reads cleanly.
 @MainActor
 final class SettingsSidebarButton: NSControl {
     private let iconView = NSImageView()
@@ -1326,7 +1284,6 @@ final class SettingsSidebarButton: NSControl {
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
-
     override func mouseDown(with event: NSEvent) {}
 
     override func mouseUp(with event: NSEvent) {
@@ -1365,14 +1322,22 @@ enum SettingsWindowController {
             win.title = "Harness Settings"
             win.styleMask = [.titled, .closable, .resizable]
             win.isRestorable = false
-            win.minSize = NSSize(width: 720, height: 600)
-            win.setContentSize(NSSize(width: 760, height: 720))
+            win.minSize = NSSize(width: 820, height: 600)
+            win.setContentSize(NSSize(width: 880, height: 660))
             window = win
         }
-        // Match the terminal theme so native controls render in the right appearance.
         window?.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+private extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [self] }
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0 ..< Swift.min($0 + size, count)])
+        }
     }
 }

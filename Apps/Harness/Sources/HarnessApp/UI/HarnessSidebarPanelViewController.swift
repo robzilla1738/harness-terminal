@@ -7,6 +7,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private let chromeHeader = NSView()
     private let workspaceBar = NSView()
     private let workspacePill = WorkspacePillButton()
+    private let notificationBell = NotificationBellButton()
     private let sectionHeader = NSView()
     private let sectionLabel = NSTextField(labelWithString: "Sessions")
     private let sessionTable = NSTableView()
@@ -77,9 +78,17 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
         workspacePill.target = self
         workspacePill.action = #selector(showWorkspaceMenu)
+        workspacePill.onMoreClick = { [weak self] anchor in
+            self?.showActiveWorkspaceActions(from: anchor)
+        }
         workspacePill.translatesAutoresizingMaskIntoConstraints = false
 
+        notificationBell.translatesAutoresizingMaskIntoConstraints = false
+        notificationBell.target = self
+        notificationBell.action = #selector(notificationBellClicked)
+
         workspaceBar.addSubview(workspacePill)
+        workspaceBar.addSubview(notificationBell)
         view.addSubview(workspaceBar)
 
         NSLayoutConstraint.activate([
@@ -88,10 +97,84 @@ final class HarnessSidebarPanelViewController: NSViewController {
             workspaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             workspaceBar.heightAnchor.constraint(equalToConstant: HarnessDesign.workspaceBarHeight),
             workspacePill.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.horizontalInset - 4),
-            workspacePill.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
+            workspacePill.trailingAnchor.constraint(equalTo: notificationBell.leadingAnchor, constant: -6),
             workspacePill.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
             workspacePill.heightAnchor.constraint(equalToConstant: 30),
+            notificationBell.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
+            notificationBell.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
+            notificationBell.widthAnchor.constraint(equalToConstant: 30),
+            notificationBell.heightAnchor.constraint(equalToConstant: 30),
         ])
+    }
+
+    @objc private func notificationBellClicked() {
+        showNotificationsDropdown()
+    }
+
+    private var notificationsDropdown: NotificationDropdownPanelView?
+    private var notificationsDropdownMonitor: Any?
+
+    private func showNotificationsDropdown() {
+        if notificationsDropdown != nil {
+            dismissNotificationsDropdown()
+            return
+        }
+        let coordinator = SessionCoordinator.shared
+        let entries = coordinator.notificationsList()
+        let dropdown = NotificationDropdownPanelView(
+            entries: entries,
+            onSelect: { [weak self] entry in
+                self?.dismissNotificationsDropdown()
+                coordinator.openNotification(entry)
+            },
+            onClearAll: { [weak self] in
+                self?.dismissNotificationsDropdown()
+                coordinator.clearAllNotifications()
+            }
+        )
+        dropdown.alphaValue = 0
+        dropdown.translatesAutoresizingMaskIntoConstraints = false
+        dropdown.layer?.zPosition = 100
+        view.addSubview(dropdown)
+        notificationsDropdown = dropdown
+        // Anchor leading + trailing to the sidebar's inset so the panel never
+        // overshoots the sidebar (previous fixed-300-width trailing-anchored
+        // panel had its left edge clip past the sidebar's leading bound).
+        NSLayoutConstraint.activate([
+            dropdown.topAnchor.constraint(equalTo: notificationBell.bottomAnchor, constant: 6),
+            dropdown.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            dropdown.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            dropdown.heightAnchor.constraint(equalToConstant: dropdown.preferredHeight),
+        ])
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            dropdown.animator().alphaValue = 1
+        }
+        installNotificationsDropdownMonitor()
+    }
+
+    private func dismissNotificationsDropdown() {
+        notificationsDropdown?.removeFromSuperview()
+        notificationsDropdown = nil
+        if let monitor = notificationsDropdownMonitor {
+            NSEvent.removeMonitor(monitor)
+            notificationsDropdownMonitor = nil
+        }
+    }
+
+    private func installNotificationsDropdownMonitor() {
+        notificationsDropdownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, let dropdown = self.notificationsDropdown else { return event }
+            let point = dropdown.convert(event.locationInWindow, from: nil)
+            if !dropdown.bounds.contains(point) {
+                let bellPoint = self.notificationBell.convert(event.locationInWindow, from: nil)
+                if !self.notificationBell.bounds.contains(bellPoint) {
+                    self.dismissNotificationsDropdown()
+                }
+            }
+            return event
+        }
     }
 
     private func setupSectionHeader() {
@@ -130,6 +213,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
         sessionTable.delegate = self
         sessionTable.doubleAction = #selector(sessionDoubleClick)
         sessionTable.target = self
+        sessionTable.registerForDraggedTypes([Self.sessionRowPasteboardType])
+        sessionTable.draggingDestinationFeedbackStyle = .gap
 
         let scroll = NSScrollView()
         scroll.documentView = sessionTable
@@ -248,6 +333,77 @@ final class HarnessSidebarPanelViewController: NSViewController {
         SessionCoordinator.shared.addWorkspace(name: "Workspace \(count)")
     }
 
+    /// Quick-actions menu opened from a row's ellipsis (inside the workspace
+    /// dropdown). Just "Delete workspace…" — rename lives on the pill itself.
+    fileprivate func confirmDeleteWorkspace(_ workspace: Workspace, anchor: NSView) {
+        let menu = NSMenu()
+        let delete = NSMenuItem(title: "Delete workspace…", action: #selector(deleteWorkspaceFromMenu(_:)), keyEquivalent: "")
+        delete.target = self
+        delete.representedObject = workspace.id
+        menu.addItem(delete)
+        let point = NSPoint(x: 0, y: anchor.bounds.height + 4)
+        menu.popUp(positioning: nil, at: point, in: anchor)
+    }
+
+    /// Quick-actions menu opened from the workspace pill's ellipsis (top-level).
+    /// Rename and Delete for the active workspace. Delete is disabled when this
+    /// is the only workspace (you can't remove the last one).
+    private func showActiveWorkspaceActions(from anchor: NSView) {
+        guard let active = workspaces.first(where: { $0.id == activeWorkspaceID }) else { return }
+        let menu = NSMenu()
+        let rename = NSMenuItem(title: "Rename workspace…", action: #selector(renameActiveWorkspace(_:)), keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = active.id
+        menu.addItem(rename)
+
+        menu.addItem(.separator())
+
+        let delete = NSMenuItem(title: "Delete workspace…", action: #selector(deleteWorkspaceFromMenu(_:)), keyEquivalent: "")
+        delete.target = self
+        delete.representedObject = active.id
+        delete.isEnabled = workspaces.count > 1
+        menu.addItem(delete)
+
+        let point = NSPoint(x: 0, y: anchor.bounds.height + 4)
+        menu.popUp(positioning: nil, at: point, in: anchor)
+    }
+
+    @objc private func renameActiveWorkspace(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? WorkspaceID,
+              let workspace = workspaces.first(where: { $0.id == id })
+        else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename workspace"
+        alert.informativeText = "Enter a new name for \"\(workspace.name)\"."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 22))
+        input.stringValue = workspace.name
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != workspace.name else { return }
+        SessionCoordinator.shared.renameWorkspace(id: id, name: trimmed)
+    }
+
+    @objc private func deleteWorkspaceFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? WorkspaceID,
+              let workspace = workspaces.first(where: { $0.id == id })
+        else { return }
+        dismissWorkspaceDropdown()
+        let alert = NSAlert()
+        alert.messageText = "Delete \"\(workspace.name)\"?"
+        alert.informativeText = "All sessions and tabs in this workspace will be closed. This can't be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            SessionCoordinator.shared.closeWorkspace(id: id)
+        }
+    }
+
     @objc private func addSession() {
         guard let activeWorkspaceID else { return }
         SessionCoordinator.shared.addSession(to: activeWorkspaceID)
@@ -272,6 +428,9 @@ final class HarnessSidebarPanelViewController: NSViewController {
             onNew: { [weak self] in
                 self?.dismissWorkspaceDropdown()
                 self?.addWorkspace()
+            },
+            onDelete: { [weak self] workspace, anchor in
+                self?.confirmDeleteWorkspace(workspace, anchor: anchor)
             }
         )
         dropdown.alphaValue = 0
@@ -380,8 +539,52 @@ final class HarnessSidebarPanelViewController: NSViewController {
 }
 
 extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewDelegate {
+    fileprivate static let sessionRowPasteboardType = NSPasteboard.PasteboardType("com.robert.harness.session-row")
+
     func numberOfRows(in tableView: NSTableView) -> Int {
         sessions.count
+    }
+
+    // MARK: - Drag to reorder
+
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        let item = NSPasteboardItem()
+        item.setString(String(row), forType: Self.sessionRowPasteboardType)
+        return item
+    }
+
+    func tableView(
+        _ tableView: NSTableView,
+        validateDrop info: NSDraggingInfo,
+        proposedRow row: Int,
+        proposedDropOperation dropOperation: NSTableView.DropOperation
+    ) -> NSDragOperation {
+        guard dropOperation == .above else { return [] }
+        return .move
+    }
+
+    func tableView(
+        _ tableView: NSTableView,
+        acceptDrop info: NSDraggingInfo,
+        row: Int,
+        dropOperation: NSTableView.DropOperation
+    ) -> Bool {
+        guard let workspaceID = activeWorkspaceID,
+              let item = info.draggingPasteboard.pasteboardItems?.first,
+              let raw = item.string(forType: Self.sessionRowPasteboardType),
+              let from = Int(raw),
+              from >= 0, from < sessions.count
+        else { return false }
+        // NSTableView reports the *gap* index; adjust so a downward move lands at
+        // the slot just below the gap (drop above row 3 from row 1 → target 2).
+        let target = from < row ? row - 1 : row
+        guard target != from else { return false }
+        SessionCoordinator.shared.reorderSession(
+            workspaceID: workspaceID,
+            sessionID: sessions[from].id,
+            toIndex: target
+        )
+        return true
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -411,18 +614,21 @@ private final class WorkspaceSwitcherPanelView: NSView {
     private let activeWorkspaceID: WorkspaceID?
     private let onSelect: (WorkspaceID) -> Void
     private let onNew: () -> Void
+    private let onDelete: (Workspace, NSView) -> Void
     let preferredHeight: CGFloat
 
     init(
         workspaces: [Workspace],
         activeWorkspaceID: WorkspaceID?,
         onSelect: @escaping (WorkspaceID) -> Void,
-        onNew: @escaping () -> Void
+        onNew: @escaping () -> Void,
+        onDelete: @escaping (Workspace, NSView) -> Void
     ) {
         self.workspaces = workspaces
         self.activeWorkspaceID = activeWorkspaceID
         self.onSelect = onSelect
         self.onNew = onNew
+        self.onDelete = onDelete
         self.preferredHeight = max(84, CGFloat(37 * workspaces.count + 50))
         super.init(frame: .zero)
 
@@ -453,13 +659,19 @@ private final class WorkspaceSwitcherPanelView: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         for workspace in workspaces {
+            let isLast = workspaces.count == 1
             let row = WorkspaceSwitcherRow(
                 title: workspace.name,
                 count: workspace.sessions.count,
                 isActive: workspace.id == activeWorkspaceID,
-                symbol: "square.stack.3d.up"
+                symbol: "square.stack.3d.up",
+                canDelete: !isLast
             )
             row.onClick = { [onSelect] in onSelect(workspace.id) }
+            row.onMoreClick = { [weak row, onDelete] in
+                guard let row else { return }
+                onDelete(workspace, row)
+            }
             stack.addArrangedSubview(row)
         }
 
@@ -506,17 +718,22 @@ private final class WorkspaceSwitcherPanelView: NSView {
 @MainActor
 private final class WorkspaceSwitcherRow: NSView {
     var onClick: (() -> Void)?
+    var onMoreClick: (() -> Void)?
 
     private let icon = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
-    private let countLabel = NSTextField(labelWithString: "")
-    private let check = NSImageView()
+    private let moreButton = NSButton()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false { didSet { applyChrome() } }
     private let active: Bool
+    private let canDelete: Bool
 
-    init(title: String, count: Int?, isActive: Bool, symbol: String) {
+    init(title: String, count: Int?, isActive: Bool, symbol: String, canDelete: Bool = true) {
         active = isActive
+        self.canDelete = canDelete
+        // `count` retained on the init signature so call sites don't have to
+        // change; the visual badge has been removed for a cleaner row.
+        _ = count
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 8
@@ -535,24 +752,24 @@ private final class WorkspaceSwitcherRow: NSView {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         toolTip = title
 
-        if let count {
-            countLabel.stringValue = "\(count)"
-        }
-        countLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
-        countLabel.alignment = .center
-        countLabel.translatesAutoresizingMaskIntoConstraints = false
-        countLabel.isHidden = count == nil
-
-        let checkConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
-        check.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
-            .withSymbolConfiguration(checkConfig)
-        check.translatesAutoresizingMaskIntoConstraints = false
-        check.isHidden = !isActive
+        // Ellipsis overflow button: shown on hover or when the row is active, so
+        // the active row gets a clear "more actions" affordance without crowding
+        // every row at rest.
+        let moreConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        moreButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More")?
+            .withSymbolConfiguration(moreConfig)
+        moreButton.imagePosition = .imageOnly
+        moreButton.bezelStyle = .accessoryBarAction
+        moreButton.isBordered = false
+        moreButton.translatesAutoresizingMaskIntoConstraints = false
+        moreButton.target = self
+        moreButton.action = #selector(moreClicked)
+        moreButton.alphaValue = 0
+        moreButton.isHidden = !canDelete
 
         addSubview(icon)
         addSubview(titleLabel)
-        addSubview(countLabel)
-        addSubview(check)
+        addSubview(moreButton)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 34),
@@ -562,16 +779,17 @@ private final class WorkspaceSwitcherRow: NSView {
             icon.heightAnchor.constraint(equalToConstant: 15),
             titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: countLabel.leadingAnchor, constant: -6),
-            countLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            countLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 16),
-            countLabel.trailingAnchor.constraint(equalTo: check.leadingAnchor, constant: -7),
-            check.centerYAnchor.constraint(equalTo: centerYAnchor),
-            check.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
-            check.widthAnchor.constraint(equalToConstant: 14),
-            check.heightAnchor.constraint(equalToConstant: 14),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: moreButton.leadingAnchor, constant: -6),
+            moreButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            moreButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            moreButton.widthAnchor.constraint(equalToConstant: 22),
+            moreButton.heightAnchor.constraint(equalToConstant: 22),
         ])
         applyChrome()
+    }
+
+    @objc private func moreClicked() {
+        onMoreClick?()
     }
 
     @available(*, unavailable)
@@ -608,13 +826,17 @@ private final class WorkspaceSwitcherRow: NSView {
         layer?.backgroundColor = active
             ? selectedFill.cgColor
             : (isHovered ? c.textPrimary.withAlphaComponent(0.06).cgColor : NSColor.clear.cgColor)
-        // Borderless — the soft fill alone marks active/hover, which reads cleaner
-        // than the previous boxed outline.
         layer?.borderWidth = 0
         icon.contentTintColor = active ? c.accent : c.textTertiary
         titleLabel.textColor = active || isHovered ? c.textPrimary : c.textSecondary
-        countLabel.textColor = active ? c.accent.withAlphaComponent(0.9) : c.textTertiary
-        check.contentTintColor = c.accent
+        moreButton.contentTintColor = c.textSecondary
+        // Ellipsis is visible on the active row at rest and on any row when hovered.
+        // Fade for polish — popping in is jarring next to the count label.
+        let shouldShow = canDelete && (active || isHovered)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.10
+            moreButton.animator().alphaValue = shouldShow ? 1 : 0
+        }
     }
 }
 
@@ -622,11 +844,12 @@ private final class WorkspaceSwitcherRow: NSView {
 
 @MainActor
 final class WorkspacePillButton: NSButton {
+    var onMoreClick: ((NSView) -> Void)?
+
     private let icon = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
-    private let countBadge = NSTextField(labelWithString: "")
     private let chevron = NSImageView()
-    private let countBackground = NSView()
+    private let moreButton = NSButton()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false { didSet { applyChrome() } }
 
@@ -649,24 +872,28 @@ final class WorkspacePillButton: NSButton {
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        countBackground.wantsLayer = true
-        countBackground.layer?.cornerRadius = 4
-        countBackground.layer?.cornerCurve = .continuous
-        countBackground.translatesAutoresizingMaskIntoConstraints = false
-
-        countBadge.font = .systemFont(ofSize: 10.5, weight: .semibold)
-        countBadge.alignment = .center
-        countBadge.translatesAutoresizingMaskIntoConstraints = false
-        countBackground.addSubview(countBadge)
-
         let chevronConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
         chevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
             .withSymbolConfiguration(chevronConfig)
         chevron.translatesAutoresizingMaskIntoConstraints = false
 
+        // Ellipsis: quick actions (rename, delete) without opening the workspace
+        // dropdown first. Its own NSButton so the click is captured here instead
+        // of falling through to the pill's primary action.
+        let moreConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        moreButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Workspace actions")?
+            .withSymbolConfiguration(moreConfig)
+        moreButton.imagePosition = .imageOnly
+        moreButton.bezelStyle = .accessoryBarAction
+        moreButton.isBordered = false
+        moreButton.translatesAutoresizingMaskIntoConstraints = false
+        moreButton.target = self
+        moreButton.action = #selector(moreClicked)
+        moreButton.toolTip = "Workspace actions"
+
         addSubview(icon)
         addSubview(nameLabel)
-        addSubview(countBackground)
+        addSubview(moreButton)
         addSubview(chevron)
 
         NSLayoutConstraint.activate([
@@ -676,14 +903,11 @@ final class WorkspacePillButton: NSButton {
             icon.heightAnchor.constraint(equalToConstant: 16),
             nameLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: countBackground.leadingAnchor, constant: -6),
-            countBackground.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -6),
-            countBackground.centerYAnchor.constraint(equalTo: centerYAnchor),
-            countBackground.heightAnchor.constraint(equalToConstant: 18),
-            countBackground.widthAnchor.constraint(greaterThanOrEqualToConstant: 22),
-            countBadge.leadingAnchor.constraint(equalTo: countBackground.leadingAnchor, constant: 6),
-            countBadge.trailingAnchor.constraint(equalTo: countBackground.trailingAnchor, constant: -6),
-            countBadge.centerYAnchor.constraint(equalTo: countBackground.centerYAnchor),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: moreButton.leadingAnchor, constant: -4),
+            moreButton.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -2),
+            moreButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            moreButton.widthAnchor.constraint(equalToConstant: 20),
+            moreButton.heightAnchor.constraint(equalToConstant: 20),
             chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
             chevron.widthAnchor.constraint(equalToConstant: 12),
@@ -691,6 +915,10 @@ final class WorkspacePillButton: NSButton {
         ])
 
         applyChrome()
+    }
+
+    @objc private func moreClicked() {
+        onMoreClick?(moreButton)
     }
 
     @available(*, unavailable)
@@ -713,8 +941,11 @@ final class WorkspacePillButton: NSButton {
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
     func configure(name: String, count: Int) {
+        // `count` retained in the signature for callers that still pass it; the
+        // visual badge is gone (cleaner pill) but the parameter is kept to avoid
+        // a churn-y signature change at every call site.
+        _ = count
         nameLabel.stringValue = name
-        countBadge.stringValue = "\(count)"
         toolTip = name
         applyChrome()
     }
@@ -724,16 +955,13 @@ final class WorkspacePillButton: NSButton {
         layer?.cornerRadius = HarnessDesign.Radius.card
         layer?.borderWidth = 1
         layer?.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
-        // Hovered = brighter elevated, resting = quieter elevated. Slightly stronger
-        // accent on dark themes since the differential is harder to read.
         let resting = c.surfaceElevated
         let hover = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.12)
         layer?.backgroundColor = (isHovered ? hover : resting).cgColor
         nameLabel.textColor = c.textPrimary
         icon.contentTintColor = isHovered ? c.textPrimary : c.textSecondary
         chevron.contentTintColor = isHovered ? c.textSecondary : c.textTertiary
-        countBackground.layer?.backgroundColor = c.accent.withAlphaComponent(c.isDark ? 0.18 : 0.14).cgColor
-        countBadge.textColor = c.accent
+        moreButton.contentTintColor = isHovered ? c.textSecondary : c.textTertiary
     }
 }
 
@@ -858,19 +1086,7 @@ final class SessionCardRowView: NSView {
         if session.tabs.count > 1 {
             metaParts.append("\(session.tabs.count) tabs")
         }
-        if let branch = tab.gitBranch, !branch.isEmpty {
-            metaParts.append(branch)
-        }
-        if tab.status == .waiting, let text = tab.notificationText, !text.isEmpty {
-            metaParts.append(text)
-        } else if !tab.title.isEmpty,
-                  tab.title != folderName,
-                  tab.title != "Shell",
-                  AgentTitleInference.kind(from: tab.title) == nil {
-            metaParts.append(tab.title)
-        } else {
-            metaParts.append(folder)
-        }
+        metaParts.append(folder)
         metaLabel.stringValue = metaParts.joined(separator: "  •  ")
 
         switch tab.status {
