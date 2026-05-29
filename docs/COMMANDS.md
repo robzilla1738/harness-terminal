@@ -54,6 +54,16 @@ Every action — keystroke binding, palette entry, `:` prompt, hook firing, `har
 | `copy-mode` | Open the vim-style copy-mode viewer for the active pane. |
 | `detach-client` | Detach the calling client (CLI attach) or fire SIGTERM-like handling. |
 
+### Attaching from a plain terminal
+
+`harness-cli attach --surface <id>` connects a single pane (raw passthrough).
+`harness-cli attach-window [--tab <id>] [--detach-keys <bytes>]` renders a whole
+tab's **split layout** — every pane with borders, a status line, and the active
+pane's cursor — into any plain terminal (incl. over ssh). Without `--tab` it
+attaches the active tab. Inside: the prefix (`Ctrl-A`) then `o` / `;` cycles the
+active pane, `d` detaches; `SIGWINCH` re-lays-out live; splitting/killing panes
+in the GUI re-composites automatically.
+
 ## Buffers (paste store)
 
 | Command | Effect |
