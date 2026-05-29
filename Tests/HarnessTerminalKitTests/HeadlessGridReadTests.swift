@@ -2,72 +2,55 @@ import Foundation
 import GhosttyTerminal
 import XCTest
 
-/// Phase 1 spike: validates the forked `ghostty_surface_read_cells` styled-grid
-/// API end-to-end through `HeadlessTerminalEmulator`. Proves two things:
-///   1. A libghostty surface can be created and driven fully headlessly (no
-///      window / display link) — the linchpin for the terminal compositor.
-///   2. `readGrid()` faithfully reports codepoints, SGR colors, attributes, and
-///      wide characters.
-@MainActor
+/// Validates the forked styled-grid read API end-to-end through `GridTerminal`,
+/// the renderer-free headless terminal (`ghostty_terminal_*`). This is the
+/// primitive the `harness attach` compositor uses: a pure VT state machine with
+/// no renderer / Metal / NSView, safe to create, drive, resize, and destroy.
+///
+/// `readGrid()` must faithfully report codepoints, SGR colors (palette + RGB),
+/// attributes, wide characters, and the cursor.
 final class HeadlessGridReadTests: XCTestCase {
-    /// The apprt embedded Surface always carries a Metal renderer tied to an
-    /// NSView; off-screen it crashes on `deinit` (renderer teardown). For these
-    /// read-only fidelity tests we intentionally leak the emulators (statics are
-    /// not deinited at process exit) so teardown never runs. The production
-    /// headless compositor uses a renderer-free path instead.
-    private static var leaked: [HeadlessTerminalEmulator] = []
-
-    private func makeEmulator(cols: Int = 80, rows: Int = 24) -> HeadlessTerminalEmulator {
-        let emu = HeadlessTerminalEmulator(cols: cols, rows: rows)
-        Self.leaked.append(emu)
-        return emu
-    }
-
-    /// Feed bytes, then spin the run loop until `predicate(grid)` holds or we
-    /// time out. Host-managed IO may parse slightly asynchronously, so polling
-    /// is more robust than a single read.
-    private func feedAndWait(
-        _ emu: HeadlessTerminalEmulator,
+    private func feedAndRead(
         _ bytes: String,
-        attempts: Int = 50,
-        predicate: (TerminalGridSnapshot) -> Bool
-    ) -> TerminalGridSnapshot? {
-        emu.feed(bytes)
-        // Host-managed IO parses synchronously on `feed`'s tick, but poll a few
-        // times with a short sleep to absorb any latency without running the run
-        // loop (which would service the off-screen surface's render callbacks).
-        for _ in 0 ..< attempts {
-            if let grid = emu.readGrid(), predicate(grid) {
-                return grid
-            }
-            usleep(10_000)
+        cols: Int = 80,
+        rows: Int = 24
+    ) -> (GridTerminal, TerminalGridSnapshot)? {
+        guard let term = GridTerminal(cols: cols, rows: rows) else {
+            XCTFail("GridTerminal failed to create")
+            return nil
         }
-        return emu.readGrid()
+        term.feed(bytes)
+        guard let grid = term.readGrid() else {
+            XCTFail("readGrid returned nil")
+            return nil
+        }
+        return (term, grid)
     }
 
-    func testHeadlessSurfaceCreates() {
-        let emu = makeEmulator()
-        XCTAssertTrue(emu.isValid, "headless libghostty surface failed to create")
-        let grid = emu.readGrid()
-        XCTAssertNotNil(grid, "readGrid returned nil on a valid surface")
-        if let grid {
-            // NOTE: a precise grid size is not asserted here. Without a running
-            // IO loop the host-managed `.resize` doesn't propagate to the screen,
-            // so the grid keeps libghostty's default size. What matters for the
-            // read API is internal consistency: a rectangular, fully-populated
-            // grid. Exact sizing is the renderer-free path's concern.
-            XCTAssertGreaterThan(grid.cols, 0)
-            XCTAssertGreaterThan(grid.rows, 0)
-            XCTAssertEqual(grid.cells.count, grid.rows * grid.cols)
+    func testCreatesAtExactSize() {
+        guard let term = GridTerminal(cols: 80, rows: 24) else {
+            return XCTFail("create failed")
         }
+        let grid = term.readGrid()
+        XCTAssertNotNil(grid)
+        XCTAssertEqual(grid?.cols, 80)
+        XCTAssertEqual(grid?.rows, 24)
+        XCTAssertEqual(grid?.cells.count, 80 * 24)
+    }
+
+    func testResizeIsExactAndSynchronous() {
+        guard let term = GridTerminal(cols: 80, rows: 24) else {
+            return XCTFail("create failed")
+        }
+        term.resize(cols: 120, rows: 40)
+        let grid = term.readGrid()
+        XCTAssertEqual(grid?.cols, 120)
+        XCTAssertEqual(grid?.rows, 40)
+        XCTAssertEqual(grid?.cells.count, 120 * 40)
     }
 
     func testPlainTextLandsInCells() {
-        let emu = makeEmulator()
-        let grid = feedAndWait(emu, "Hello") { g in
-            g.cell(row: 0, col: 0)?.codepoint == UInt32(UnicodeScalar("H").value)
-        }
-        guard let grid else { return XCTFail("no grid") }
+        guard let (_, grid) = feedAndRead("Hello") else { return }
         let expected = Array("Hello".unicodeScalars).map { UInt32($0.value) }
         for (i, cp) in expected.enumerated() {
             XCTAssertEqual(grid.cell(row: 0, col: i)?.codepoint, cp, "mismatch at col \(i)")
@@ -75,76 +58,56 @@ final class HeadlessGridReadTests: XCTestCase {
     }
 
     func testForegroundPaletteColor() {
-        let emu = makeEmulator()
         // SGR 31 = red (palette index 1).
-        let grid = feedAndWait(emu, "\u{1b}[31mR") { g in
-            g.cell(row: 0, col: 0)?.codepoint == UInt32(UnicodeScalar("R").value)
-        }
-        guard let cell = grid?.cell(row: 0, col: 0) else { return XCTFail("no cell") }
-        XCTAssertEqual(cell.foreground, .palette(1), "expected red = palette 1, got \(cell.foreground)")
+        guard let (_, grid) = feedAndRead("\u{1b}[31mR") else { return }
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.foreground, .palette(1))
     }
 
     func test256Color() {
-        let emu = makeEmulator()
         // SGR 38;5;208 = palette index 208 foreground.
-        let grid = feedAndWait(emu, "\u{1b}[38;5;208mO") { g in
-            g.cell(row: 0, col: 0)?.codepoint == UInt32(UnicodeScalar("O").value)
-        }
-        guard let cell = grid?.cell(row: 0, col: 0) else { return XCTFail("no cell") }
-        XCTAssertEqual(cell.foreground, .palette(208))
+        guard let (_, grid) = feedAndRead("\u{1b}[38;5;208mO") else { return }
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.foreground, .palette(208))
     }
 
     func testTrueColorBackground() {
-        let emu = makeEmulator()
         // SGR 48;2;10;20;30 = direct RGB background.
-        let grid = feedAndWait(emu, "\u{1b}[48;2;10;20;30mX") { g in
-            g.cell(row: 0, col: 0)?.codepoint == UInt32(UnicodeScalar("X").value)
-        }
-        guard let cell = grid?.cell(row: 0, col: 0) else { return XCTFail("no cell") }
-        XCTAssertEqual(cell.background, .rgb(r: 10, g: 20, b: 30))
+        guard let (_, grid) = feedAndRead("\u{1b}[48;2;10;20;30mX") else { return }
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.background, .rgb(r: 10, g: 20, b: 30))
     }
 
     func testAttributesBoldItalicUnderline() {
-        let emu = makeEmulator()
         // Bold + italic + single underline.
-        let grid = feedAndWait(emu, "\u{1b}[1;3;4mA") { g in
-            g.cell(row: 0, col: 0)?.codepoint == UInt32(UnicodeScalar("A").value)
-        }
-        guard let cell = grid?.cell(row: 0, col: 0) else { return XCTFail("no cell") }
+        guard let (_, grid) = feedAndRead("\u{1b}[1;3;4mA") else { return }
+        guard let cell = grid.cell(row: 0, col: 0) else { return XCTFail("no cell") }
         XCTAssertTrue(cell.bold, "bold not set")
         XCTAssertTrue(cell.italic, "italic not set")
         XCTAssertEqual(cell.underline, .single, "underline not single")
     }
 
     func testInverseAttribute() {
-        let emu = makeEmulator()
-        let grid = feedAndWait(emu, "\u{1b}[7mI") { g in
-            g.cell(row: 0, col: 0)?.codepoint == UInt32(UnicodeScalar("I").value)
-        }
-        guard let cell = grid?.cell(row: 0, col: 0) else { return XCTFail("no cell") }
-        XCTAssertTrue(cell.inverse, "inverse not set")
+        guard let (_, grid) = feedAndRead("\u{1b}[7mI") else { return }
+        XCTAssertTrue(grid.cell(row: 0, col: 0)?.inverse ?? false, "inverse not set")
     }
 
     func testWideCharacter() {
-        let emu = makeEmulator()
         // CJK ideograph occupies two cells: a wide cell + a spacer tail.
-        let grid = feedAndWait(emu, "世") { g in
-            g.cell(row: 0, col: 0)?.codepoint == UInt32(UnicodeScalar("世").value)
-        }
-        guard let grid else { return XCTFail("no grid") }
+        guard let (_, grid) = feedAndRead("世") else { return }
         XCTAssertEqual(grid.cell(row: 0, col: 0)?.width, .wide, "first cell should be wide")
         XCTAssertEqual(grid.cell(row: 0, col: 1)?.width, .spacerTail, "second cell should be spacer tail")
     }
 
     func testCursorPosition() {
-        let emu = makeEmulator()
         // Move cursor to row 5, col 10 (1-based CSI -> 0-based grid).
-        let grid = feedAndWait(emu, "\u{1b}[5;10H") { g in
-            g.cursor.row == 4 && g.cursor.col == 9
-        }
-        guard let grid else { return XCTFail("no grid") }
+        guard let (_, grid) = feedAndRead("\u{1b}[5;10H") else { return }
         XCTAssertEqual(grid.cursor.row, 4)
         XCTAssertEqual(grid.cursor.col, 9)
         XCTAssertTrue(grid.cursor.visible)
+    }
+
+    func testNewlinesAdvanceRows() {
+        guard let (_, grid) = feedAndRead("a\r\nb\r\nc") else { return }
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, UInt32(UnicodeScalar("a").value))
+        XCTAssertEqual(grid.cell(row: 1, col: 0)?.codepoint, UInt32(UnicodeScalar("b").value))
+        XCTAssertEqual(grid.cell(row: 2, col: 0)?.codepoint, UInt32(UnicodeScalar("c").value))
     }
 }
