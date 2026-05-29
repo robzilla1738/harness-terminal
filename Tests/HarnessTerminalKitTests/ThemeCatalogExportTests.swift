@@ -3,6 +3,10 @@ import GhosttyTheme
 import HarnessTheme
 import XCTest
 
+// GhosttyTheme transitively imports AppKit/ApplicationServices, whose QuickDraw header
+// declares a C `struct RGBColor`. Pin the unqualified name to ours in this file.
+private typealias RGBColor = HarnessTheme.RGBColor
+
 /// One-off porter: extracts the libghostty fork's full theme catalog into our native
 /// `themes.json` resource, in `HarnessThemeDefinition` JSON form. This is how we take
 /// ownership of the ~400 community theme *values* (colors only — no Ghostty code) so the
