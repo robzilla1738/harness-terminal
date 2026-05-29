@@ -38,10 +38,24 @@ public final class TerminalEmulator: VTParserHandler {
     public init(cols: Int, rows: Int) {
         let c = max(1, cols)
         let r = max(1, rows)
-        primary = TerminalScreen(cols: c, rows: r)
+        primary = TerminalScreen(cols: c, rows: r, recordsHistory: true)
         alternate = TerminalScreen(cols: c, rows: r)
         current = primary
         parser = VTParser(handler: self)
+    }
+
+    /// Scrollback lines available on the current screen (0 on the alternate screen).
+    public var historyCount: Int { current.historyCount }
+
+    /// Cap on retained primary-screen scrollback.
+    public var maxScrollbackLines: Int {
+        get { primary.maxHistoryLines }
+        set { primary.maxHistoryLines = max(0, newValue) }
+    }
+
+    /// Read the viewport scrolled `offset` lines up into scrollback (0 = live bottom).
+    public func readGrid(scrollbackOffset offset: Int) -> TerminalGridSnapshot {
+        current.snapshot(scrollbackOffset: offset)
     }
 
     // MARK: - Input

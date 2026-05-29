@@ -32,12 +32,25 @@ final class TerminalScreen {
     /// Current graphic rendition applied to newly printed cells.
     private var pen = Pen()
 
-    init(cols: Int, rows: Int) {
+    /// Lines that have scrolled off the top of the screen, oldest first. Only the primary
+    /// screen records history (the alternate screen is for full-screen TUIs). Each entry is
+    /// one row of cells captured at its width when evicted; the reader pads/truncates.
+    private var history: [[TerminalGridCell]] = []
+    /// Whether this screen accumulates scrollback (primary = true, alternate = false).
+    let recordsHistory: Bool
+    /// Cap on retained scrollback lines.
+    var maxHistoryLines = 10_000
+
+    /// Number of scrolled-off lines currently retained.
+    var historyCount: Int { history.count }
+
+    init(cols: Int, rows: Int, recordsHistory: Bool = false) {
         let c = max(1, cols)
         let r = max(1, rows)
         self.cols = c
         self.rows = r
         self.scrollBottom = r - 1
+        self.recordsHistory = recordsHistory
         self.cells = Array(repeating: .blank, count: c * r)
     }
 
@@ -50,6 +63,38 @@ final class TerminalScreen {
             rows: rows,
             cells: cells,
             cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: cursorVisible)
+        )
+    }
+
+    /// A snapshot scrolled `offset` lines up into history (0 = the live viewport). The
+    /// window spans `rows` lines over the virtual sequence [history ++ viewport]; history
+    /// lines are padded/truncated to the current width. The cursor is hidden when scrolled
+    /// off the live view.
+    func snapshot(scrollbackOffset offset: Int) -> TerminalGridSnapshot {
+        let clamped = max(0, min(offset, history.count))
+        guard clamped > 0 else { return snapshot() }
+        var out = [TerminalGridCell]()
+        out.reserveCapacity(cols * rows)
+        let topIndex = history.count - clamped // index into [history ++ viewport]
+        for i in 0 ..< rows {
+            let idx = topIndex + i
+            if idx < history.count {
+                let line = history[idx]
+                for c in 0 ..< cols { out.append(c < line.count ? line[c] : .blank) }
+            } else {
+                let viewportRow = idx - history.count
+                if viewportRow >= 0, viewportRow < rows {
+                    for c in 0 ..< cols { out.append(cells[viewportRow * cols + c]) }
+                } else {
+                    for _ in 0 ..< cols { out.append(.blank) }
+                }
+            }
+        }
+        return TerminalGridSnapshot(
+            cols: cols,
+            rows: rows,
+            cells: out,
+            cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: false)
         )
     }
 
@@ -230,6 +275,13 @@ final class TerminalScreen {
         let count = max(1, n)
         let blank = erasedCell()
         for _ in 0 ..< count {
+            // A line leaving the very top of the screen (not a sub-region) is scrollback.
+            if recordsHistory, scrollTop == 0 {
+                history.append(Array(cells[0 ..< cols]))
+                if history.count > maxHistoryLines {
+                    history.removeFirst(history.count - maxHistoryLines)
+                }
+            }
             // Drop the top region line; shift the rest up; blank the bottom line.
             for r in scrollTop ..< scrollBottom {
                 for c in 0 ..< cols {
@@ -523,9 +575,10 @@ final class TerminalScreen {
 
     // MARK: - Reset
 
-    /// RIS — full reset: clear, home cursor, default pen and modes.
+    /// RIS — full reset: clear, home cursor, default pen and modes, and drop scrollback.
     func fullReset() {
         pen = Pen()
+        history.removeAll()
         cells = Array(repeating: .blank, count: cols * rows)
         cursorRow = 0
         cursorCol = 0

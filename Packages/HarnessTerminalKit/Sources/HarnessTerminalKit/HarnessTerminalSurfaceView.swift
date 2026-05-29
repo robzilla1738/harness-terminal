@@ -73,6 +73,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var selectionForeground: RGBColor?
     /// Copy the selection to the pasteboard automatically when a drag ends.
     private var copyOnSelect = false
+    /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
+    private var scrollOffset = 0
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -107,7 +109,14 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     /// Feed PTY output bytes into the emulator and schedule a redraw.
     public func receive(_ data: Data) {
+        let beforeHistory = emulator.historyCount
         emulator.feed(data)
+        // If the user is scrolled up, stay anchored on the same content as new lines push
+        // into history; at the bottom (offset 0) we naturally follow new output.
+        if scrollOffset > 0 {
+            let added = emulator.historyCount - beforeHistory
+            if added > 0 { scrollOffset = min(emulator.historyCount, scrollOffset + added) }
+        }
         wakeCursor()
         scheduleRender()
     }
@@ -136,8 +145,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         paddingY: CGFloat,
         selectionBackgroundHex: String?,
         selectionForegroundHex: String?,
-        copyOnSelect: Bool
+        copyOnSelect: Bool,
+        scrollbackLines: Int
     ) {
+        emulator.maxScrollbackLines = scrollbackLines
         let bg = RGBColor(hex: canvasBackgroundHex) ?? RGBColor(red: 0, green: 0, blue: 0)
         let fg = RGBColor(hex: canvasForegroundHex) ?? RGBColor(red: 255, green: 255, blue: 255)
         let cursor = RGBColor(hex: cursorHex) ?? fg
@@ -296,7 +307,8 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func renderNow() {
         guard let renderer, let drawable = metalLayer.nextDrawable() else { return }
-        var frame = frameBuilder.build(emulator.readGrid(), selection: currentSelection)
+        let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
+        var frame = frameBuilder.build(grid, selection: currentSelection)
         // Cursor blink: hide on the off-beat (only while focused + blink enabled). A
         // program-hidden cursor (DECTCEM off) stays hidden regardless.
         if frame.cursor.visible, focused, cursorBlinkEnabled, !cursorBlinkVisible {
@@ -339,6 +351,25 @@ public final class HarnessTerminalSurfaceView: NSView {
             cursorBlinkVisible = true
             scheduleRender()
         }
+    }
+
+    // MARK: - Scrollback
+
+    /// Scroll the viewport by `lines` (positive = back into history). Clamped to the
+    /// available history; clears any selection (its coordinates are viewport-relative).
+    private func scrollBy(lines: Int) {
+        let target = max(0, min(emulator.historyCount, scrollOffset + lines))
+        guard target != scrollOffset else { return }
+        scrollOffset = target
+        clearSelection()
+        scheduleRender()
+    }
+
+    /// Jump back to the live bottom (e.g. on typing).
+    private func snapToBottom() {
+        guard scrollOffset != 0 else { return }
+        scrollOffset = 0
+        scheduleRender()
     }
 
     // MARK: - Selection & copy
@@ -460,7 +491,12 @@ public final class HarnessTerminalSurfaceView: NSView {
             if event.scrollingDeltaY != 0 { reportMouse(event, button: button, kind: .press) }
             return
         }
-        super.scrollWheel(with: event)
+        // Local scrollback: positive deltaY (content moves down) scrolls back into history.
+        guard event.scrollingDeltaY != 0, let renderer else { return }
+        let scale = window?.backingScaleFactor ?? 2.0
+        let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
+        let steps = max(1, Int((abs(event.scrollingDeltaY) / cellH).rounded()))
+        scrollBy(lines: event.scrollingDeltaY > 0 ? steps : -steps)
     }
 
     /// Standard responder copy (Edit ▸ Copy / ⌘C via the menu).
@@ -535,6 +571,14 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
         wakeCursor()
+        // Shift+PageUp/PageDown page through scrollback instead of going to the app.
+        if event.modifierFlags.contains(.shift), let sk = Self.specialKey(for: event),
+           sk == .pageUp || sk == .pageDown {
+            scrollBy(lines: sk == .pageUp ? rows : -rows)
+            return
+        }
+        // Any other key returns to the live bottom.
+        snapToBottom()
         clearSelection()
 
         var mods: KeyModifiers = []

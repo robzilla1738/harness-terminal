@@ -301,7 +301,8 @@ public final class TerminalHostView: NSView {
                 ?? ThemeManager.selectionBackgroundHex(themeName: cachedThemeName),
             selectionForegroundHex: settings.selectionForegroundHex
                 ?? ThemeManager.selectionForegroundHex(themeName: cachedThemeName),
-            copyOnSelect: settings.copyOnSelect
+            copyOnSelect: settings.copyOnSelect,
+            scrollbackLines: settings.scrollbackLines
         )
     }
 
