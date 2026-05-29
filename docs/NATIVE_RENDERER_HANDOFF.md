@@ -120,14 +120,25 @@ cutover gate):
   the oracle/export/headless tests; dropped the `GhosttyTerminal` import from `ThemeManager`
   and the libghostty debug block from `AppDelegate`.
 
+- ✅ **Line decorations** — Metal `deco_fragment`: antialiased underline (single/double/dotted/
+  dashed) + **undercurl** + strikethrough + overline in the resolved color.
+- ✅ **Cursor-text inversion** — glyph under a block cursor draws in the cursor-text color.
+- ✅ **Gamma-correct (linear) blending** — `linearBlending` applies a coverage gamma to glyphs.
+- ✅ **Ligatures** — CoreText run shaping (`GlyphRasterizer.shape`), grid-snapped to source
+  cells; `ligatures` setting (default on) + toggle.
+- ✅ **Wide IME preedit** — composing text is wide-char aware (`CharacterWidth`) and underlined.
+- ✅ **De-Ghostty** — config import renamed to `TerminalConfigImporter` /
+  `ImportedTerminalConfig`; no "Ghostty" in identifiers, UI, or comments. The only residue is
+  the filesystem paths the importer reads (`~/.config/ghostty`) so migrating users keep their
+  config.
+
 ### Remaining polish (optional)
-- **Ligatures**, **procedural box-drawing/block glyphs** for pixel alignment, **damage tracking**
-  (only redraw dirty rows), **program-driven cursor style** (DECSCUSR), **cursor-text inversion**
-  under a block cursor, **full-width IME preedit** layout.
+- **Procedural box-drawing/block glyphs** for pixel-perfect alignment, **damage tracking**
+  (only redraw dirty rows), **program-driven cursor style** (DECSCUSR), **shaped-run caching**
+  (perf: ligature shaping rebuilds CTLines each frame).
 - **Theme export/import UI** in `SettingsViewController` (NSSavePanel/NSOpenPanel via
   `ThemeFileService`) + register the `.harnesstheme` doc type in `Info.plist` + handle
   `application(_:open:)` for double-click install.
-- **Comment sweep**: some historical comments still say "libghostty"; harmless but stale.
 
 ## Gotchas already hit (so you don't re-learn them)
 - **`RGBColor` vs QuickDraw**: any file importing AppKit (or `GhosttyTerminal`, which pulls in
