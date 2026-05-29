@@ -1,4 +1,5 @@
 import Metal
+import QuartzCore
 import simd
 
 /// GPU instance layouts — must match the structs in `MetalShaders.source`.
@@ -99,9 +100,23 @@ public final class TerminalMetalRenderer {
     }
 
     /// Render `frame` into `target`, clearing to `clearColor` first. Synchronous: the
-    /// command buffer is committed and waited on (suitable for offscreen capture; the
-    /// live view will use a presenting variant).
+    /// command buffer is committed and waited on (suitable for offscreen capture).
     public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor) {
+        guard let commandBuffer = encode(frame, target: target, clearColor: clearColor) else { return }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+    }
+
+    /// Render `frame` into a layer drawable and present it. Used by the live view.
+    public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor) {
+        guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor) else { return }
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+    }
+
+    /// Build the instance buffers and encode both passes into a fresh command buffer
+    /// targeting `target`. Caller decides whether to wait (offscreen) or present (live).
+    private func encode(_ frame: TerminalFrame, target: MTLTexture, clearColor: RenderColor) -> MTLCommandBuffer? {
         let viewport = SIMD2<Float>(Float(target.width), Float(target.height))
 
         var backgrounds: [BgInstance] = []
@@ -151,35 +166,35 @@ public final class TerminalMetalRenderer {
         )
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass)
-        else { return }
+              let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass)
+        else { return nil }
 
         var vp = viewport
         // Background pass.
         if let buffer = device.makeBuffer(bytes: backgrounds, length: backgrounds.count * MemoryLayout<BgInstance>.stride, options: .storageModeShared) {
-            encoder.setRenderPipelineState(bgPipeline)
-            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-            encoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: backgrounds.count)
+            renderEncoder.setRenderPipelineState(bgPipeline)
+            renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: backgrounds.count)
         }
 
         // Glyph pass.
         if !glyphs.isEmpty,
            let buffer = device.makeBuffer(bytes: glyphs, length: glyphs.count * MemoryLayout<GlyphInstance>.stride, options: .storageModeShared) {
-            encoder.setRenderPipelineState(glyphPipeline)
-            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-            encoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-            encoder.setFragmentTexture(atlas.texture, index: 0)
-            encoder.setFragmentSamplerState(sampler, index: 0)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: glyphs.count)
+            renderEncoder.setRenderPipelineState(glyphPipeline)
+            renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            renderEncoder.setFragmentTexture(atlas.texture, index: 0)
+            renderEncoder.setFragmentSamplerState(sampler, index: 0)
+            renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: glyphs.count)
         }
 
-        encoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
+        renderEncoder.endEncoding()
+        return commandBuffer
     }
 
     private func vector(_ c: RenderColor) -> SIMD4<Float> {
         SIMD4(c.red, c.green, c.blue, c.alpha)
     }
 }
+
