@@ -102,6 +102,11 @@ public final class OptionStore: @unchecked Sendable {
         "mode-keys": .string("vi"),
         "set-clipboard": .bool(true),
         "history-limit": .int(10_000),
+        // Index of the first window / pane in `-t session:window.pane` targets and
+        // in display (`#{window_index}`, `#{pane_index}`, display-panes numbers).
+        // Default 0 (array-aligned); set to 1 for tmux's common `base-index 1`.
+        "base-index": .int(0),
+        "pane-base-index": .int(0),
         // Title behavior: `allow-rename` (global) lets a program set the title via
         // OSC; `automatic-rename` (per-tab, defaults on) is turned off by a manual
         // `rename-tab` so the chosen name sticks.
