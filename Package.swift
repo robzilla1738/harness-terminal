@@ -13,6 +13,9 @@ let package = Package(
         // Native theme catalog + the shareable `.harnesstheme` document format. Pure
         // Swift — replaces the libghostty fork's GhosttyTheme.
         .library(name: "HarnessTheme", targets: ["HarnessTheme"]),
+        // Native terminal renderer. Color-resolution layer is pure Swift (tested without
+        // a GPU); the Metal glyph/draw layer is added in a later phase.
+        .library(name: "HarnessTerminalRenderer", targets: ["HarnessTerminalRenderer"]),
         .library(name: "HarnessTerminalKit", targets: ["HarnessTerminalKit"]),
         .executable(name: "Harness", targets: ["HarnessApp"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
@@ -44,6 +47,13 @@ let package = Package(
         .target(
             name: "HarnessTheme",
             path: "Packages/HarnessTheme/Sources/HarnessTheme"
+        ),
+        // Native renderer — depends on the engine (grid types) and theme (colors). The
+        // color-resolution layer here is pure Swift; Metal/CoreText code lands later.
+        .target(
+            name: "HarnessTerminalRenderer",
+            dependencies: ["HarnessTerminalEngine", "HarnessTheme"],
+            path: "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer"
         ),
         .target(
             name: "HarnessTerminalKit",
@@ -97,6 +107,11 @@ let package = Package(
             name: "HarnessThemeTests",
             dependencies: ["HarnessTheme"],
             path: "Tests/HarnessThemeTests"
+        ),
+        .testTarget(
+            name: "HarnessTerminalRendererTests",
+            dependencies: ["HarnessTerminalRenderer", "HarnessTerminalEngine", "HarnessTheme"],
+            path: "Tests/HarnessTerminalRendererTests"
         ),
         .testTarget(
             name: "HarnessTerminalKitTests",

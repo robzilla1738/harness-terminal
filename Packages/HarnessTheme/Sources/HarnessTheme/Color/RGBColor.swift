@@ -70,6 +70,21 @@ public struct RGBColor: Equatable, Sendable, Hashable {
     }
 
     public var isDark: Bool { perceivedBrightness < 0.5 }
+
+    /// Linearly mix toward `other` by `fraction` (0 = self, 1 = other), per channel.
+    /// Alpha is mixed too. Used for effects like faint/dim (mixing fg toward bg).
+    public func blended(toward other: RGBColor, fraction: Double) -> RGBColor {
+        let f = min(max(fraction, 0), 1)
+        func mix(_ a: UInt8, _ b: UInt8) -> UInt8 {
+            UInt8((Double(a) * (1 - f) + Double(b) * f).rounded())
+        }
+        return RGBColor(
+            red: mix(red, other.red),
+            green: mix(green, other.green),
+            blue: mix(blue, other.blue),
+            alpha: mix(alpha, other.alpha)
+        )
+    }
 }
 
 extension RGBColor: Codable {
