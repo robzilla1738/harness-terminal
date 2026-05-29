@@ -80,6 +80,13 @@ public struct TerminalFrame: Equatable, Sendable {
     }
 }
 
+/// Cursor shape, matching the Ghostty `cursor-style` set.
+public enum CursorStyle: String, Equatable, Sendable {
+    case block
+    case bar
+    case underline
+}
+
 /// Where to draw the cursor and in what color (already resolved). `visible` follows the
 /// terminal's DECTCEM state.
 public struct CursorRender: Equatable, Sendable {
@@ -87,6 +94,15 @@ public struct CursorRender: Equatable, Sendable {
     public var column: Int
     public var visible: Bool
     public var color: RenderColor
+    public var style: CursorStyle
+
+    public init(row: Int, column: Int, visible: Bool, color: RenderColor, style: CursorStyle = .block) {
+        self.row = row
+        self.column = column
+        self.visible = visible
+        self.color = color
+        self.style = style
+    }
 }
 
 /// Turns an engine `TerminalGridSnapshot` into a `TerminalFrame` by resolving every
@@ -102,20 +118,34 @@ public struct FrameBuilder {
     /// readable. Cells with an explicit program background — and any glyph/cursor — remain
     /// fully opaque. 1 = fully opaque canvas (no translucency).
     public let canvasOpacity: Float
+    /// Cursor shape drawn at the cursor cell.
+    public let cursorStyle: CursorStyle
 
-    public init(resolver: CellColorResolver, cursorColor: RGBColor, canvasOpacity: Float = 1) {
+    public init(
+        resolver: CellColorResolver,
+        cursorColor: RGBColor,
+        canvasOpacity: Float = 1,
+        cursorStyle: CursorStyle = .block
+    ) {
         self.resolver = resolver
         self.cursorColor = cursorColor
         self.canvasOpacity = max(0, min(1, canvasOpacity))
+        self.cursorStyle = cursorStyle
     }
 
     /// Convenience builder from a theme: resolver + cursor color in one call.
-    public init(theme: HarnessThemeDefinition, boldBrightens: Bool = true, canvasOpacity: Float = 1) {
+    public init(
+        theme: HarnessThemeDefinition,
+        boldBrightens: Bool = true,
+        canvasOpacity: Float = 1,
+        cursorStyle: CursorStyle = .block
+    ) {
         let resolver = CellColorResolver(theme: theme, boldBrightens: boldBrightens)
         self.init(
             resolver: resolver,
             cursorColor: theme.cursor ?? theme.foreground,
-            canvasOpacity: canvasOpacity
+            canvasOpacity: canvasOpacity,
+            cursorStyle: cursorStyle
         )
     }
 
@@ -159,7 +189,8 @@ public struct FrameBuilder {
                 row: snapshot.cursor.row,
                 column: snapshot.cursor.col,
                 visible: snapshot.cursor.visible,
-                color: RenderColor(cursorColor)
+                color: RenderColor(cursorColor),
+                style: cursorStyle
             )
         )
     }

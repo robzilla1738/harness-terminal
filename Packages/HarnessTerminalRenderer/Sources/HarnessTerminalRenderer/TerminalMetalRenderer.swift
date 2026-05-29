@@ -101,31 +101,35 @@ public final class TerminalMetalRenderer {
 
     /// Render `frame` into `target`, clearing to `clearColor` first. Synchronous: the
     /// command buffer is committed and waited on (suitable for offscreen capture).
-    public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor) {
-        guard let commandBuffer = encode(frame, target: target, clearColor: clearColor) else { return }
+    /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
+    public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0)) {
+        guard let commandBuffer = encode(frame, target: target, clearColor: clearColor, origin: origin) else { return }
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
     }
 
     /// Render `frame` into a layer drawable and present it. Used by the live view.
-    public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor) {
-        guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor) else { return }
+    /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
+    public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0)) {
+        guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor, origin: origin) else { return }
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
 
     /// Build the instance buffers and encode both passes into a fresh command buffer
     /// targeting `target`. Caller decides whether to wait (offscreen) or present (live).
-    private func encode(_ frame: TerminalFrame, target: MTLTexture, clearColor: RenderColor) -> MTLCommandBuffer? {
+    private func encode(_ frame: TerminalFrame, target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int)) -> MTLCommandBuffer? {
         let viewport = SIMD2<Float>(Float(target.width), Float(target.height))
+        let ox = Float(origin.x)
+        let oy = Float(origin.y)
 
         var backgrounds: [BgInstance] = []
         backgrounds.reserveCapacity(frame.cells.count + 1)
         var glyphs: [GlyphInstance] = []
 
         for cell in frame.cells {
-            let originX = Float(cell.column * cellPixelWidth)
-            let originY = Float(cell.row * cellPixelHeight)
+            let originX = ox + Float(cell.column * cellPixelWidth)
+            let originY = oy + Float(cell.row * cellPixelHeight)
             backgrounds.append(BgInstance(
                 origin: SIMD2(originX, originY),
                 size: SIMD2(Float(cellPixelWidth), Float(cellPixelHeight)),
@@ -147,11 +151,31 @@ public final class TerminalMetalRenderer {
             ))
         }
 
-        // Block cursor: paint over its cell's background (glyphs still draw on top).
+        // Cursor: block fills the cell (glyphs still draw on top); bar is a thin left
+        // edge; underline is a thin bottom edge. All respect the grid origin offset.
         if frame.cursor.visible {
+            let cellX = ox + Float(frame.cursor.column * cellPixelWidth)
+            let cellY = oy + Float(frame.cursor.row * cellPixelHeight)
+            let cellW = Float(cellPixelWidth)
+            let cellH = Float(cellPixelHeight)
+            let cursorOrigin: SIMD2<Float>
+            let cursorSize: SIMD2<Float>
+            switch frame.cursor.style {
+            case .block:
+                cursorOrigin = SIMD2(cellX, cellY)
+                cursorSize = SIMD2(cellW, cellH)
+            case .bar:
+                let w = max(2, Float(cellPixelWidth) / 8)
+                cursorOrigin = SIMD2(cellX, cellY)
+                cursorSize = SIMD2(w, cellH)
+            case .underline:
+                let h = max(2, Float(cellPixelHeight) / 10)
+                cursorOrigin = SIMD2(cellX, cellY + cellH - h)
+                cursorSize = SIMD2(cellW, h)
+            }
             backgrounds.append(BgInstance(
-                origin: SIMD2(Float(frame.cursor.column * cellPixelWidth), Float(frame.cursor.row * cellPixelHeight)),
-                size: SIMD2(Float(cellPixelWidth), Float(cellPixelHeight)),
+                origin: cursorOrigin,
+                size: cursorSize,
                 color: vector(frame.cursor.color)
             ))
         }

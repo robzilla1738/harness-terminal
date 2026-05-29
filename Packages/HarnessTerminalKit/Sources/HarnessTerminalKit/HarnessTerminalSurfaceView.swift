@@ -46,6 +46,22 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// 0...1. < 1 makes the canvas translucent (the window blur shows through); program
     /// output backgrounds and glyphs stay opaque.
     private var canvasOpacity: Float
+    /// Window padding in points (Ghostty `window-padding-x/y`); converted to device
+    /// pixels and used both as the grid inset and the renderer's draw origin.
+    private var paddingPointsX: CGFloat = 0
+    private var paddingPointsY: CGFloat = 0
+    /// Device-pixel grid origin (= padding × scale), reused by `renderNow` and (later)
+    /// mouse→cell mapping.
+    private var originOffsetX = 0
+    private var originOffsetY = 0
+    /// Cursor shape + blink (Ghostty `cursor-style` / `cursor-style-blink`).
+    private var cursorStyle: CursorStyle = .block
+    private var cursorBlinkEnabled = true
+    /// Blink phase: false hides the cursor on the off-beat. Reset to true on activity.
+    private var cursorBlinkVisible = true
+    private var blinkTimer: Timer?
+    /// First-responder state — the cursor only blinks while focused.
+    private var focused = false
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -81,6 +97,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Feed PTY output bytes into the emulator and schedule a redraw.
     public func receive(_ data: Data) {
         emulator.feed(data)
+        wakeCursor()
         scheduleRender()
     }
 
@@ -101,7 +118,11 @@ public final class HarnessTerminalSurfaceView: NSView {
         canvasForegroundHex: String,
         cursorHex: String,
         outputPaletteHex: [String?],
-        canvasOpacity: Float
+        canvasOpacity: Float,
+        cursorStyle: String,
+        cursorBlink: Bool,
+        paddingX: CGFloat,
+        paddingY: CGFloat
     ) {
         let bg = RGBColor(hex: canvasBackgroundHex) ?? RGBColor(red: 0, green: 0, blue: 0)
         let fg = RGBColor(hex: canvasForegroundHex) ?? RGBColor(red: 255, green: 255, blue: 255)
@@ -117,6 +138,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.vivid = vivid
         self.canvasBackground = bg
         self.canvasOpacity = max(0, min(1, canvasOpacity))
+        self.cursorStyle = CursorStyle(rawValue: cursorStyle) ?? .block
+        self.cursorBlinkEnabled = cursorBlink
+        self.paddingPointsX = max(0, paddingX)
+        self.paddingPointsY = max(0, paddingY)
         let resolver = CellColorResolver(
             palette: ANSIPalette(base16: palette),
             defaultForeground: fg,
@@ -125,8 +150,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.frameBuilder = FrameBuilder(
             resolver: resolver,
             cursorColor: cursor,
-            canvasOpacity: self.canvasOpacity
+            canvasOpacity: self.canvasOpacity,
+            cursorStyle: self.cursorStyle
         )
+        restartBlinkTimer()
         // Opaque only when fully opaque; otherwise the layer must be non-opaque so the
         // window-wide blur shows through the translucent canvas.
         metalLayer.isOpaque = self.canvasOpacity >= 1
@@ -184,8 +211,15 @@ public final class HarnessTerminalSurfaceView: NSView {
         if window != nil {
             buildRenderer() // pick up the real backing scale
             updateGridSize()
+            restartBlinkTimer()
             scheduleRender()
             window?.makeFirstResponder(self)
+        } else {
+            // Removed from the window (pane closed / re-mounted): stop the blink timer so
+            // it doesn't keep the run loop (and a dangling render) alive. The timer holds
+            // `[weak self]`, so this is the teardown hook (no retain cycle either way).
+            blinkTimer?.invalidate()
+            blinkTimer = nil
         }
     }
 
@@ -211,8 +245,15 @@ public final class HarnessTerminalSurfaceView: NSView {
         let pixelHeight = max(1, Int(bounds.height * scale))
         metalLayer.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
 
-        let newCols = max(1, pixelWidth / renderer.cellPixelWidth)
-        let newRows = max(1, pixelHeight / renderer.cellPixelHeight)
+        // Inset the grid by the window padding (in device pixels); the same offset is the
+        // renderer's draw origin so the padding region shows the canvas color.
+        originOffsetX = Int((paddingPointsX * scale).rounded())
+        originOffsetY = Int((paddingPointsY * scale).rounded())
+        let usableWidth = max(1, pixelWidth - 2 * originOffsetX)
+        let usableHeight = max(1, pixelHeight - 2 * originOffsetY)
+
+        let newCols = max(1, usableWidth / renderer.cellPixelWidth)
+        let newRows = max(1, usableHeight / renderer.cellPixelHeight)
         if newCols != columns || newRows != rows {
             columns = newCols
             rows = newRows
@@ -232,16 +273,67 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func renderNow() {
         guard let renderer, let drawable = metalLayer.nextDrawable() else { return }
-        let frame = frameBuilder.build(emulator.readGrid())
+        var frame = frameBuilder.build(emulator.readGrid())
+        // Cursor blink: hide on the off-beat (only while focused + blink enabled). A
+        // program-hidden cursor (DECTCEM off) stays hidden regardless.
+        if frame.cursor.visible, focused, cursorBlinkEnabled, !cursorBlinkVisible {
+            frame.cursor.visible = false
+        }
         // Clear to the canvas color at canvas opacity so any cell-rounding remainder reads
-        // as the canvas (no seam, and translucent when opacity < 1).
-        renderer.present(frame, to: drawable, clearColor: RenderColor(canvasBackground, alpha: canvasOpacity))
+        // as the canvas (no seam, and translucent when opacity < 1). The grid draws at the
+        // padding origin so the inset region shows the canvas.
+        renderer.present(
+            frame,
+            to: drawable,
+            clearColor: RenderColor(canvasBackground, alpha: canvasOpacity),
+            origin: (originOffsetX, originOffsetY)
+        )
+    }
+
+    // MARK: - Cursor blink
+
+    private func restartBlinkTimer() {
+        blinkTimer?.invalidate()
+        blinkTimer = nil
+        cursorBlinkVisible = true
+        guard cursorBlinkEnabled else { return }
+        let timer = Timer(timeInterval: 0.53, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                guard self.focused else { return }
+                self.cursorBlinkVisible.toggle()
+                self.scheduleRender()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        blinkTimer = timer
+    }
+
+    /// Reset the cursor to solid after activity (typing/output), matching Ghostty.
+    private func wakeCursor() {
+        guard cursorBlinkEnabled else { return }
+        if !cursorBlinkVisible {
+            cursorBlinkVisible = true
+            scheduleRender()
+        }
     }
 
     // MARK: - Input
 
     public override var acceptsFirstResponder: Bool { true }
-    public override func becomeFirstResponder() -> Bool { true }
+
+    public override func becomeFirstResponder() -> Bool {
+        focused = true
+        cursorBlinkVisible = true
+        scheduleRender()
+        return true
+    }
+
+    public override func resignFirstResponder() -> Bool {
+        focused = false
+        scheduleRender()
+        return true
+    }
 
     public override func keyDown(with event: NSEvent) {
         // Let the app handle Command shortcuts (menus, palette, etc.).
@@ -249,6 +341,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             super.keyDown(with: event)
             return
         }
+        wakeCursor()
 
         var mods: KeyModifiers = []
         let flags = event.modifierFlags

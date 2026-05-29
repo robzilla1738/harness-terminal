@@ -289,7 +289,11 @@ public final class TerminalHostView: NSView {
             canvasForegroundHex: canvas.foregroundHex,
             cursorHex: canvas.cursorHex,
             outputPaletteHex: nativeOutputPaletteHex(settings: settings),
-            canvasOpacity: HarnessSettings.clampedOpacity(settings.backgroundOpacity)
+            canvasOpacity: HarnessSettings.clampedOpacity(settings.backgroundOpacity),
+            cursorStyle: settings.cursorStyle,
+            cursorBlink: settings.cursorBlink,
+            paddingX: CGFloat(settings.windowPaddingX),
+            paddingY: CGFloat(settings.windowPaddingY)
         )
     }
 
