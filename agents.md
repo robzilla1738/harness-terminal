@@ -12,7 +12,7 @@ Agent handbook for the **Harness** repository. Read before architectural or UI c
 
 Native macOS terminal combining:
 
-- **Ghostty rendering** — GPU terminals via [libghostty-spm](https://github.com/Lakr233/libghostty-spm)
+- **Ghostty rendering** — GPU terminals via a local **libghostty fork** (`../libghostty-spm-fork`, sibling of this repo; based on [libghostty-spm](https://github.com/Lakr233/libghostty-spm)) that adds the styled-grid read API powering the terminal compositor
 - **cmux-style organization** — workspaces, sidebar sessions, tabs, splits, agent sidebar
 - **Harness command system** — prefix keymap, `:` prompt, `harness-cli`, shared `Command` vocabulary (familiar multiplexer verbs, Harness-owned)
 - **Agent awareness** — Codex, Claude Code, Cursor, Pi, Hermes, OpenClaw, and more
@@ -25,7 +25,7 @@ Native macOS terminal combining:
 | **harness-cli** | CLI binary (`Package.swift` product) |
 | **HarnessDaemon** | Background session authority |
 | **HarnessCore** | Shared models, IPC, commands, persistence |
-| **HarnessTerminalKit** | libghostty wrapper (`TerminalHostView`) |
+| **HarnessTerminalKit** | libghostty wrapper (`TerminalHostView`, `GridCompositor`) |
 
 Never rename the app to `harness-cli`.
 
@@ -136,12 +136,13 @@ harness/
 │                                  # CopyMode, StatusLine, notifications, CommandPalette, Chrome
 ├── Packages/
 │   ├── HarnessCore/               # Models, IPC, SessionEditor, Commands, Keybindings,
-│   │                              # Options, Events, Format, Layouts, Buffers, Agents
-│   ├── HarnessTerminalKit/        # TerminalHostView, ThemeManager
+│   │                              # Options, Events, Format, Layouts, Buffers, Agents,
+│   │                              # Session/PaneRectSolver (compositor pane layout)
+│   ├── HarnessTerminalKit/        # TerminalHostView, ThemeManager, GridCompositor
 │   └── HarnessDaemon/
 │       ├── Sources/HarnessDaemon/ # HarnessDaemonCore: SurfaceRegistry, DaemonServer, RealPty
 │       └── Sources/HarnessDaemonMain/main.swift
-├── Tools/harness/Sources/HarnessCLI/
+├── Tools/harness/Sources/HarnessCLI/  # HarnessCLI, AttachClient, WindowAttachClient
 ├── Tests/
 │   ├── HarnessCoreTests/
 │   ├── HarnessDaemonTests/
@@ -162,11 +163,11 @@ harness/
 | `Harness` | `HarnessApp` | GUI |
 | `HarnessDaemon` | `HarnessDaemon` | Thin `main` over `HarnessDaemonCore` |
 | — | `HarnessDaemonCore` | Testable daemon logic |
-| `harness-cli` | `HarnessCLI` | CLI client |
+| `harness-cli` | `HarnessCLI` | CLI client (depends on `HarnessTerminalKit` for the compositor) |
 | `HarnessCore` | `HarnessCore` | Shared library |
 | `HarnessTerminalKit` | `HarnessTerminalKit` | libghostty wrapper |
 
-Dependency: **libghostty-spm** (`GhosttyTerminal`, `GhosttyTheme`).
+Dependency: the local **libghostty fork** as `.package(path: "../libghostty-spm-fork")` — identity `libghostty-spm-fork`, products `GhosttyTerminal`, `GhosttyTheme` (matched in `project.yml`). The fork's `BinaryTarget/GhosttyKit.xcframework` is gitignored; build it with that repo's `Script/build.sh` before resolving. It carries patch `0009-read-cells` (styled-grid `ghostty_surface_read_cells` + the renderer-free `ghostty_terminal_*` headless terminal). See [[harness-multiplexer-remaining-work]] and [[harness-libghostty-fork-toolchain]] in agent memory.
 
 ---
 
@@ -303,7 +304,7 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 | **Layout** | `new-workspace --name api`, `new-session --workspace Default --cwd ~`, `new-tab --workspace Default`, `new-split --tab <uuid> --direction horizontal`, `select-workspace/tab/session`, `rename-tab/session`, `rename-workspace --id <uuid> --name "…"`, `close-tab/session` |
 | **Pane** | `send-keys --surface <uuid> --keys "C-c Enter"`, `capture-pane`, `kill-pane`, `swap-pane`, `resize-pane --dir L`, `zoom-pane`, `select-pane --pane <uuid> --dir L`, `break-pane`, `join-pane --src --dst --direction`, `respawn-pane --clear-history`, `copy-mode` |
 | **Layouts** | `select-layout --tab <uuid> --layout tiled`, `next-layout --tab <uuid>`, `previous-layout --tab <uuid>`, `rotate-window --tab <uuid> [--reverse]` |
-| **Attach** | `attach --surface <uuid> [--detach-keys "C-a d"]` |
+| **Attach** | `attach --surface <uuid> [--detach-keys "C-a d"]` (single pane); `attach-window [--tab <id> \| --session <id\|name> \| --window <id>] [--detach-keys …]` (full split layout — the compositor) |
 | **Bindings** | `bind-key` (`bind`), `unbind-key` (`unbind`), `list-keys` (local `keybindings.json`) |
 | **Buffers** | `set-buffer`, `list-buffers`, `show-buffer`, `delete-buffer`, `paste-buffer --surface <uuid>` |
 | **Options** | `set-option` (`setw`) `-g status on`, `show-options -g` |
@@ -316,6 +317,40 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 **Key tokens** (`KeyTokenParser`): `C-c`, `C-a`, `Enter`, `Up`, `M-x`, etc.
 
 **Note:** `join-pane` is CLI-only — not in the `Command` enum (no prefix/`: prompt` binding unless added).
+
+---
+
+## Terminal compositor (`attach-window`)
+
+The headline feature: `harness-cli attach-window` renders a tab's **full split layout** (every pane, borders, status line, active-pane cursor) into any plain terminal, including over ssh — like tmux, but Harness-native.
+
+**Why a fork was needed.** The prebuilt libghostty only exposed `ghostty_surface_read_text` (plain text). Faithful compositing of N side-by-side panes needs each pane's **styled cell grid**. The local fork's patch `0009-read-cells` adds `ghostty_surface_read_cells` (on-screen surfaces) **and** the renderer-free `ghostty_terminal_*` C API.
+
+**Why renderer-free.** The apprt `Surface` (what the GUI + `InMemoryTerminalSession` use) always owns a Metal renderer bound to an NSView; off-screen it crashes on draw and teardown. So headless emulation uses `ghostty_terminal_new/write/resize/read_cells/free` — a bare `terminal.Terminal` + `vtStream()` (read-only VT parser), fully synchronous, no Metal/IO-thread. It uses `c_allocator`, not `global.alloc` (which is undefined until `ghostty_init`).
+
+**Pipeline (client-side emulation; the daemon stays a dumb byte pipe):**
+
+```
+daemon PTY bytes ──subscribeSurfaceOutput──▶ GridTerminal (per pane, fork)
+                  replayScrollback (seed)        │ readGrid() → TerminalGridSnapshot
+PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
+                                                 ▼
+                              GridCompositor ──ANSI frame (diffed)──▶ TTY
+```
+
+| Piece | File | Role |
+|-------|------|------|
+| `GridTerminal` | fork `GhosttyTerminal/InMemory/GridTerminal.swift` | Headless per-pane VT emulator over `ghostty_terminal_*` |
+| `TerminalGridSnapshot` | fork `…/TerminalGridSnapshot.swift` | Value snapshot of a viewport (codepoints, SGR-source colors, attrs, wide, cursor) |
+| `PaneRectSolver` | `HarnessCore/Session/PaneRectSolver.swift` | `PaneNode` + cols×rows → interior `[PaneRect]` with 1-cell dividers |
+| `GridCompositor` | `HarnessTerminalKit/GridCompositor.swift` | Panes → ANSI frame: box-drawing borders, SGR re-emit, back-buffer diff, status, cursor |
+| `WindowAttachClient` | `HarnessCLI/WindowAttachClient.swift` | Live wiring: subscribe/seed/composite, raw TTY (reuses `AttachClient`), SIGWINCH, prefix routing, 0.5s snapshot poll |
+
+**Geometry invariant:** `.horizontal` = side-by-side (first = left), `.vertical` = stacked (first = top), `ratio` = first child's fraction — matches the GUI's `split.isVertical = direction == .horizontal`. **Surface-key invariant:** `PaneLeaf.surfaceID.uuidString` is the daemon surface key (used directly for `subscribeSurfaceOutput`/`sendData`/`resizeSurface`). **Active pane** is client-local today (cycle/select don't yet sync a server-side active pane — the model has no `activePaneID`).
+
+**Tests:** `HeadlessGridReadTests` (GridTerminal fidelity), `GridCompositorTests` (borders/SGR/diff), `PaneRectSolverTests` (layout). Run the AppKit-linked grid suite via `xcrun xctest` if `swift test`'s parallel runner is flaky.
+
+**Not yet (optional):** `subscribeSnapshot` push (replace the poll), multi-client smallest-wins sizing, server-side active-pane sync, prefix→full `CommandParser` routing + copy-mode in the compositor.
 
 ---
 
@@ -517,7 +552,8 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Area | Status |
 |------|--------|
 | Session authority | Daemon-owned layout + IPC; launchd `KeepAlive` |
-| PTY / attach | `RealPty` + GUI in-memory ghostty; `harness-cli attach` with detach keys |
+| PTY / attach | `RealPty` + GUI in-memory ghostty; `harness-cli attach` (single pane) with detach keys |
+| Terminal compositor | `harness-cli attach-window` renders a tab's full split layout in any plain terminal (incl. ssh): client-side `GridTerminal` emulation per pane + `PaneRectSolver` + `GridCompositor` (borders, SGR, diff, status); prefix (`Ctrl-A`) routes `%`/`"` split, `x` kill, `z` zoom, `hjkl` select, `o`/`;` cycle, `c` new-tab, `n`/`p` tab, `d` detach |
 | Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key` |
 | Copy mode | Vim-style viewer; paste buffers in `buffers.json` |
 | Layouts | `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, `tiled`; break/join/rotate/respawn |
