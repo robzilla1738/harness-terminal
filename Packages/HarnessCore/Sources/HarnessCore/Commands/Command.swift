@@ -88,6 +88,12 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case displayPopup(command: String?)            // display-popup [-E <command>]
     case displayMenu(items: [MenuItem])            // display-menu -T title <name> <key> <command> …
 
+    // MARK: Targeting
+    /// Run `command` as if the client's focus were `spec`'s resolved target
+    /// (tmux's universal `-t session:window.pane`). Resolved centrally in
+    /// `CommandIPCTranslator` so every front-end applies the same addressing.
+    case targeted(TargetSpec, Command)
+
     public enum PaneTarget: String, Codable, Sendable, Equatable {
         case left, right, up, down
         case next, previous, last
@@ -171,6 +177,8 @@ extension Command {
         case .unlinkWindow: return "unlink-window"
         case let .displayPopup(command): return command.map { "display-popup -E '\($0)'" } ?? "display-popup"
         case let .displayMenu(items): return "display-menu (\(items.count) items)"
+        case let .targeted(spec, command):
+            return "\(command.shortDescription)\(spec.raw.isEmpty ? "" : " -t \(spec.raw)")"
         }
     }
 }

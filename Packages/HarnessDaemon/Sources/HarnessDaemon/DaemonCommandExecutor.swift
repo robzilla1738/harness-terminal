@@ -45,7 +45,9 @@ final class DaemonCommandExecutor: @unchecked Sendable {
             // Everything else: resolve against the global active chain and run
             // through the shared translator — identical to the CLI/compositor.
             let target = CommandTarget(snapshot: registry.snapshot)
-            switch CommandIPCTranslator.translate(command, target: target) {
+            let baseIndex = registry.optionStore.get("base-index")?.intValue ?? 0
+            let paneBaseIndex = registry.optionStore.get("pane-base-index")?.intValue ?? 0
+            switch CommandIPCTranslator.translate(command, target: target, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
             case let .requests(requests):
                 for request in requests { _ = registry.handle(request) }
             case .clientLocal:

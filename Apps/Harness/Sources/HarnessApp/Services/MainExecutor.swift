@@ -207,7 +207,46 @@ final class MainExecutor: CommandExecutor {
             Phase67UI.presentPopup(command: command, coordinator: coordinator)
         case .displayMenu(let items):
             Phase67UI.presentMenu(items: items)
+        case let .targeted(spec, inner):
+            try dispatchTargeted(spec: spec, inner: inner, coordinator: coordinator)
         }
+    }
+
+    // MARK: Targeting
+
+    /// Resolve a `-t session:window.pane` target and run the inner command against
+    /// it through the shared `CommandIPCTranslator` — the same resolution the CLI,
+    /// compositor, and hook executor use. Structural results go straight to the
+    /// daemon; client-local inner verbs (UI overlays) fall back to normal dispatch.
+    @MainActor
+    private func dispatchTargeted(spec: TargetSpec, inner: Command, coordinator: SessionCoordinator) throws {
+        let baseIndex = optionInt("base-index", default: 0, coordinator: coordinator)
+        let paneBaseIndex = optionInt("pane-base-index", default: 0, coordinator: coordinator)
+        let activeTab = coordinator.snapshot.activeWorkspace?.activeTab
+        let activePane = coordinator.activeSurfaceID.flatMap { sid in
+            activeTab.flatMap { panePathLookup(surfaceID: sid, in: $0.rootPane) }
+        }
+        let focus = CommandTarget(
+            snapshot: coordinator.snapshot,
+            focusedWorkspaceID: coordinator.snapshot.activeWorkspaceID,
+            focusedTabID: activeTab?.id,
+            focusedPaneID: activePane
+        )
+        switch CommandIPCTranslator.translate(.targeted(spec, inner), target: focus, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
+        case let .requests(requests):
+            for request in requests { _ = coordinator.requestDaemon(request) }
+            coordinator.syncFromDaemon()
+        case let .clientLocal(local):
+            try dispatch(local)
+        case .unresolved:
+            throw CommandExecutionError.noActiveSurface
+        }
+    }
+
+    @MainActor
+    private func optionInt(_ key: String, default fallback: Int, coordinator: SessionCoordinator) -> Int {
+        guard case let .options(entries)? = coordinator.requestDaemon(.showOptions(scope: nil)) else { return fallback }
+        return entries.first { $0.key == key }.flatMap { Int($0.value) } ?? fallback
     }
 
     // MARK: Phase 6/7 helpers

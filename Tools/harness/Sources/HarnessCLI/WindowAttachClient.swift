@@ -136,6 +136,10 @@ private final class WindowSession: @unchecked Sendable {
     /// Resolved status options (`status`, `status-left`, `status-right`),
     /// refreshed from the daemon so the status line matches the GUI's.
     private var statusOptions: [String: String] = [:]
+    /// `base-index` / `pane-base-index`, refreshed with the status options so
+    /// `-t session:window.pane` indices match the user's configured base.
+    private var baseIndex = 0
+    private var paneBaseIndex = 0
     /// A transient status override (e.g. `display-message`), shown briefly.
     private var statusOverride: String?
     private var statusOverrideToken = 0
@@ -394,6 +398,8 @@ private final class WindowSession: @unchecked Sendable {
             }
         }
         statusOptions = resolved
+        for entry in entries where entry.key == "base-index" { baseIndex = Int(entry.value) ?? baseIndex }
+        for entry in entries where entry.key == "pane-base-index" { paneBaseIndex = Int(entry.value) ?? paneBaseIndex }
     }
 
     // MARK: Input
@@ -574,7 +580,7 @@ private final class WindowSession: @unchecked Sendable {
             focusedPaneID: activePaneID,
             markedPaneID: markedPaneID
         )
-        switch CommandIPCTranslator.translate(command, target: target) {
+        switch CommandIPCTranslator.translate(command, target: target, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
         case let .requests(requests):
             for request in requests { _ = try? client.request(request, timeout: 2) }
             checkStructure()

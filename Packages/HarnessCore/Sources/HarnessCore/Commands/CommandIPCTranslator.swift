@@ -135,8 +135,29 @@ public enum CommandIPCTranslator {
         commandDirection == .vertical ? .horizontal : .vertical
     }
 
-    public static func translate(_ command: Command, target: CommandTarget) -> CommandTranslation {
+    public static func translate(
+        _ command: Command,
+        target: CommandTarget,
+        baseIndex: Int = 0,
+        paneBaseIndex: Int = 0
+    ) -> CommandTranslation {
         switch command {
+        // MARK: Targeting — resolve `-t` then run the inner verb against it.
+        case let .targeted(spec, inner):
+            let resolved = target.resolving(spec, command: inner, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex)
+            // For "select" verbs with an explicit target, selecting *is* focusing
+            // the resolved window/pane (absolute), not a relative step.
+            switch inner {
+            case .selectPane:
+                guard let tab = resolved.tab, let pane = resolved.paneID else { return .unresolved }
+                return .requests([.selectPane(tabID: tab.id, paneID: pane)])
+            case .selectWindow:
+                guard let ws = resolved.workspace, let tab = resolved.tab else { return .unresolved }
+                return .requests([.selectTab(workspaceID: ws.id, tabID: tab.id)])
+            default:
+                return translate(inner, target: resolved, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex)
+            }
+
         // MARK: Pane structure
         case let .splitWindow(direction):
             guard let tab = target.tab, let pane = target.paneID else { return .unresolved }
@@ -220,9 +241,10 @@ public enum CommandIPCTranslator {
             return adjacentTab(target: target, delta: -1)
 
         case let .selectWindow(index):
+            let pos = index - baseIndex
             guard let ws = target.workspace, let session = target.session,
-                  index >= 0, index < session.tabs.count else { return .unresolved }
-            return .requests([.selectTab(workspaceID: ws.id, tabID: session.tabs[index].id)])
+                  pos >= 0, pos < session.tabs.count else { return .unresolved }
+            return .requests([.selectTab(workspaceID: ws.id, tabID: session.tabs[pos].id)])
 
         case let .moveWindow(index):
             guard let ws = target.workspace, let tab = target.tab else { return .unresolved }

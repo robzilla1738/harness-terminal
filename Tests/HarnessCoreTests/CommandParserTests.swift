@@ -22,6 +22,43 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("select-workspace 2"), .selectWorkspace(index: 2))
     }
 
+    func testUniversalTargetWrapsCommand() throws {
+        XCTAssertEqual(
+            try CommandParser.parse("kill-pane -t :2"),
+            .targeted(TargetSpec(window: .byIndex(2), raw: ":2"), .killPane)
+        )
+        XCTAssertEqual(
+            try CommandParser.parse("split-window -h -t api:1"),
+            .targeted(TargetSpec(session: .byName("api"), window: .byIndex(1), raw: "api:1"),
+                      .splitWindow(direction: .vertical))
+        )
+        XCTAssertEqual(
+            try CommandParser.parse("new-window -t api:"),
+            .targeted(TargetSpec(session: .byName("api"), raw: "api:"), .newWindow)
+        )
+    }
+
+    func testSelectWindowTargetForms() throws {
+        // Bare index and `:index` keep the plain form (no regression).
+        XCTAssertEqual(try CommandParser.parse("select-window 3"), .selectWindow(index: 3))
+        XCTAssertEqual(try CommandParser.parse("select-window -t :3"), .selectWindow(index: 3))
+        // Session-qualified resolves centrally.
+        XCTAssertEqual(
+            try CommandParser.parse("select-window -t api:2"),
+            .targeted(TargetSpec(session: .byName("api"), window: .byIndex(2), raw: "api:2"),
+                      .selectWindow(index: 2))
+        )
+    }
+
+    func testSendKeysDoesNotLeakTargetValue() throws {
+        // The `-t` value must be stripped, not collected as a key.
+        XCTAssertEqual(
+            try CommandParser.parse("send-keys -t api:1.0 Enter"),
+            .targeted(TargetSpec(session: .byName("api"), window: .byIndex(1), pane: .byIndex(0), raw: "api:1.0"),
+                      .sendKeys(keys: ["Enter"]))
+        )
+    }
+
     func testParsesSequences() throws {
         let parsed = try CommandParser.parse("split-window -h ; copy-mode")
         XCTAssertEqual(parsed, .sequence([

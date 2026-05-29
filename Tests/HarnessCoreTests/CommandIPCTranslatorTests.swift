@@ -73,6 +73,51 @@ final class CommandIPCTranslatorTests: XCTestCase {
         }
     }
 
+    func testTargetedKillResolvesWindowByIndex() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab1 = try XCTUnwrap(ws.activeSession?.tabs.first)
+        let tab1Pane = try XCTUnwrap(tab1.rootPane.allPaneIDs().first)
+        _ = try XCTUnwrap(editor.addTab(to: ws.id))  // active is now the 2nd tab
+        let target = CommandTarget(snapshot: editor.snapshot)
+
+        // `-t :0` targets the first window even though the 2nd is active.
+        let spec = TargetSpec(window: .byIndex(0), raw: ":0")
+        guard case let .requests(reqs) = CommandIPCTranslator.translate(.targeted(spec, .killPane), target: target),
+              case let .killPane(pane) = reqs.first
+        else { return XCTFail("expected killPane on the targeted window") }
+        XCTAssertEqual(pane, tab1Pane)
+    }
+
+    func testTargetedHonorsBaseIndex() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab1 = try XCTUnwrap(ws.activeSession?.tabs.first)
+        let tab1Pane = try XCTUnwrap(tab1.rootPane.allPaneIDs().first)
+        _ = try XCTUnwrap(editor.addTab(to: ws.id))
+        let target = CommandTarget(snapshot: editor.snapshot)
+
+        // With base-index 1, window "1" is the first window (array position 0).
+        let spec = TargetSpec(window: .byIndex(1), raw: ":1")
+        guard case let .requests(reqs) = CommandIPCTranslator.translate(.targeted(spec, .killPane), target: target, baseIndex: 1),
+              case let .killPane(pane) = reqs.first
+        else { return XCTFail("expected killPane") }
+        XCTAssertEqual(pane, tab1Pane)
+    }
+
+    func testSelectWindowAppliesBaseIndexOffset() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let firstTab = try XCTUnwrap(ws.activeSession?.tabs.first)
+        _ = try XCTUnwrap(editor.addTab(to: ws.id))
+        let target = CommandTarget(snapshot: editor.snapshot)
+
+        guard case let .requests(reqs) = CommandIPCTranslator.translate(.selectWindow(index: 1), target: target, baseIndex: 1),
+              case let .selectTab(_, tabID) = reqs.first
+        else { return XCTFail("expected selectTab") }
+        XCTAssertEqual(tabID, firstTab.id, "window 1 under base-index 1 is the first tab")
+    }
+
     func testClientLocalVerbsAreNotIPC() throws {
         let (target, _, _) = try makeTarget()
         for command: Command in [.copyMode, .detachClient, .displayPanes, .showCheatsheet] {

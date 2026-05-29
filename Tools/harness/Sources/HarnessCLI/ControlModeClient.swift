@@ -86,7 +86,8 @@ enum ControlModeClient {
             throw ControlModeError.noSnapshot
         }
         let target = CommandTarget(snapshot: snapshot)
-        switch CommandIPCTranslator.translate(command, target: target) {
+        let (baseIndex, paneBaseIndex) = indexBases(client: client)
+        switch CommandIPCTranslator.translate(command, target: target, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
         case let .requests(requests):
             var output = ""
             for request in requests {
@@ -98,6 +99,14 @@ enum ControlModeClient {
         case .unresolved:
             throw ControlModeError.unresolved
         }
+    }
+
+    /// Read `base-index` / `pane-base-index` from the daemon (default 0) so
+    /// `-t session:window.pane` indices match the user's configured base.
+    private static func indexBases(client: DaemonClient) -> (Int, Int) {
+        guard case let .options(entries)? = try? client.request(.showOptions(scope: nil), timeout: 1) else { return (0, 0) }
+        func val(_ key: String) -> Int { entries.first { $0.key == key }.flatMap { Int($0.value) } ?? 0 }
+        return (val("base-index"), val("pane-base-index"))
     }
 
     /// tmux-style escaping for `%output`: octal-escape control and high bytes.

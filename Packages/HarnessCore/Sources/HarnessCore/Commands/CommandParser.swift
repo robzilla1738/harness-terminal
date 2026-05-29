@@ -36,7 +36,36 @@ public enum CommandParser {
             throw CommandParseError.expectedCommand
         }
         let tokens = lexer.collectStatementTokens()
+        let canonical = resolveAlias(name) ?? name
+        // Universal `-t <target>` handling: for commands that don't parse `-t`
+        // themselves, strip the `-t <spec>` pair and wrap the result in
+        // `.targeted` so the target resolves centrally at translate time (tmux's
+        // context-sensitive `-t`). Commands in `selfTargetingCommands` keep `-t`
+        // and interpret it in their own case (index / directional / menu).
+        if !selfTargetingCommands.contains(canonical),
+           let raw = stringValue(for: "-t", in: tokens) {
+            let spec = TargetSpec.parse(raw)
+            let reduced = removingFlagPair("-t", in: tokens)
+            let inner = try buildCommand(name: name, tokens: reduced)
+            return spec.isEmpty ? inner : .targeted(spec, inner)
+        }
         return try buildCommand(name: name, tokens: tokens)
+    }
+
+    /// Commands whose `-t` is interpreted in their own `buildCommand` case (an
+    /// index, a directional/relative pane target, or a menu position) rather than
+    /// stripped and wrapped by the universal handler.
+    private static let selfTargetingCommands: Set<String> = [
+        "select-window", "select-tab", "move-window", "move-tab", "swap-window", "swap-tab",
+        "select-pane", "swap-pane", "display-menu", "menu",
+    ]
+
+    private static func removingFlagPair(_ flag: String, in tokens: [String]) -> [String] {
+        guard let i = tokens.firstIndex(of: flag) else { return tokens }
+        var out = tokens
+        if i + 1 < out.count { out.remove(at: i + 1) }
+        out.remove(at: i)
+        return out
     }
 
     /// tmux command-name aliases (the short forms in muscle memory) → canonical
@@ -109,10 +138,22 @@ public enum CommandParser {
         case "previous-window", "previous-tab":
             return .previousWindow
         case "select-window", "select-tab":
-            guard let raw = tokens.first(where: { $0.first?.isNumber ?? false }) ?? tokens.last,
-                  let index = Int(raw.trimmingCharacters(in: CharacterSet(charactersIn: ":")))
-            else { throw CommandParseError.missingFlag("select-window requires a window index") }
-            return .selectWindow(index: index)
+            // Accept `select-window 3`, `-t :3`, or `-t session:3` / `-t session:!`.
+            let targetRaw = stringValue(for: "-t", in: tokens)
+                ?? tokens.first(where: { ($0.first?.isNumber ?? false) || $0.contains(":") })
+                ?? tokens.last
+            let spec = targetRaw.map(TargetSpec.parse) ?? TargetSpec()
+            if case let .byIndex(n)? = spec.window {
+                return spec.session != nil ? .targeted(spec, .selectWindow(index: n)) : .selectWindow(index: n)
+            }
+            if let bare = spec.bareToken, let n = Int(bare) {
+                return spec.session != nil ? .targeted(spec, .selectWindow(index: n)) : .selectWindow(index: n)
+            }
+            if spec.session != nil || spec.window != nil {
+                // Session- or relative-addressed window: resolve centrally.
+                return .targeted(spec, .selectWindow(index: 0))
+            }
+            throw CommandParseError.missingFlag("select-window requires a window index")
         case "move-window", "move-tab":
             guard let raw = tokens.first(where: { ($0.first?.isNumber ?? false) || $0.hasPrefix(":") }),
                   let index = Int(raw.trimmingCharacters(in: CharacterSet(charactersIn: ":")))
