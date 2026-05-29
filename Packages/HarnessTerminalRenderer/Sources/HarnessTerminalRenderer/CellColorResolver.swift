@@ -87,7 +87,9 @@ public struct CellColorResolver: Sendable {
         return ResolvedCellColors(foreground: fg, background: bg)
     }
 
-    private func rgb(_ color: TerminalGridColor, default fallback: RGBColor) -> RGBColor {
+    /// Resolve a single logical color to RGB (palette / truecolor / default). Public so
+    /// the frame builder can resolve e.g. underline colors independently of fg/bg.
+    public func resolved(_ color: TerminalGridColor, default fallback: RGBColor) -> RGBColor {
         switch color {
         case .none:
             return fallback
@@ -96,5 +98,9 @@ public struct CellColorResolver: Sendable {
         case let .rgb(r, g, b):
             return RGBColor(red: r, green: g, blue: b)
         }
+    }
+
+    private func rgb(_ color: TerminalGridColor, default fallback: RGBColor) -> RGBColor {
+        resolved(color, default: fallback)
     }
 }
