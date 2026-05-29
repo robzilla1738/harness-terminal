@@ -1,13 +1,19 @@
 # Native terminal renderer — handoff
 
-Status of the from-scratch, self-contained terminal stack that replaces the external
-**libghostty fork** (`robzilla1738/libghostty-spm-fork`, products `GhosttyTerminal` +
-`GhosttyTheme`). Branch: **`claude/macos-terminal-colors-N3rKO`**.
+**STATUS: COMPLETE.** The from-scratch, self-contained terminal stack has fully replaced the
+external **libghostty fork**. The fork dependency is **removed** — `swift build` resolves zero
+external packages, `grep -rn "import GhosttyTerminal\|import GhosttyTheme"` is empty, and the
+GUI/CLI render entirely on `HarnessTerminalEngine` + `HarnessTheme` + `HarnessTerminalRenderer`
+via `HarnessTerminalSurfaceView`. Branch: **`claude/macos-terminal-colors-N3rKO`**.
 
-Goal: Harness becomes "its own thing" — Ghostty-grade crisp color (Display-P3 + sRGB),
-485-theme catalog, `.harnesstheme` export/sharing, full customization, opacity/blur — with
-**no Ghostty dependency**. Approach: build a native engine + Metal renderer behind a clean
-module boundary, keep the fork as an **A/B test oracle** until the very end (Phase 8).
+Goal (achieved): Harness is "its own thing" — crisp color (Display-P3 + sRGB), 485-theme
+catalog, `.harnesstheme` export/sharing, themed translucent canvas with untouched output,
+window padding, cursor styles + blink, text selection + copy, mouse reporting, scrollback,
+and IME — with **no Ghostty dependency**.
+
+The only remaining "ghostty" references are the **opt-in config import** (`GhosttyConfigImporter`
+reads `~/.config/ghostty` so users migrating from Ghostty.app keep their colors/font — kept by
+product decision) and some historical code comments.
 
 ## How to work this branch
 
@@ -100,23 +106,28 @@ cutover gate):
   extract (wide-char aware, trailing-trimmed, `\n`-joined) to `NSPasteboard` + the daemon paste
   buffer. **Verify the highlight with a real mouse drag** — automated drag tests are flaky.
 
-### Follow-ups (after it renders live)
-- **Mouse reporting** (SGR 1006) — when `emulator.modes.mouseTrackingEnabled`, encode mouse
-  events to the PTY instead of selecting (shift overrides to force selection).
-- **Scrollback view** — the engine renders only the viewport; the daemon owns history. Give the
-  engine/screen a history ring and let the surface scroll an offset into history+viewport
-  (wheel/keys).
-- **IME / dead keys** (adopt `NSTextInputClient`), **ligatures**, **procedural box-drawing/block
-  glyphs** for pixel alignment, **damage tracking** (only redraw dirty rows), **program-driven
-  cursor style** (DECSCUSR), **cursor-text inversion** under a block cursor.
+### Done
+- ✅ **Mouse reporting** (SGR 1006 + legacy X10) — `InputEncoder.encodeMouse`; surface routes
+  down/drag/up/right/middle/wheel to the PTY when tracking is on (Shift forces selection).
+- ✅ **Scrollback** — engine history ring on the primary screen; surface scrolls via wheel +
+  Shift+PageUp/Down, stays anchored during output, snaps to bottom on typing.
+- ✅ **IME / dead keys** — `NSTextInputClient`; plain keys route through `interpretKeyEvents`,
+  preedit drawn over the grid, candidate window anchored at the cursor.
+- ✅ **Phase 8 — fork removed** — deleted `libghostty-spm-fork` from `Package.swift` /
+  `project.yml` (and `Package.resolved` is gone — no external deps); `TerminalHostView` is
+  native-only (the Ghostty `terminalView`/controller/session path is deleted); removed the
+  `useNativeRenderer` flag + toggle; deleted `TerminalColorPipeline`/`TerminalColorspace` +
+  the oracle/export/headless tests; dropped the `GhosttyTerminal` import from `ThemeManager`
+  and the libghostty debug block from `AppDelegate`.
+
+### Remaining polish (optional)
+- **Ligatures**, **procedural box-drawing/block glyphs** for pixel alignment, **damage tracking**
+  (only redraw dirty rows), **program-driven cursor style** (DECSCUSR), **cursor-text inversion**
+  under a block cursor, **full-width IME preedit** layout.
 - **Theme export/import UI** in `SettingsViewController` (NSSavePanel/NSOpenPanel via
   `ThemeFileService`) + register the `.harnesstheme` doc type in `Info.plist` + handle
   `application(_:open:)` for double-click install.
-- **Phase 8 — remove the fork**: once the native view is the only renderer, delete
-  `libghostty-spm-fork` from `Package.swift` / `project.yml` / `Package.resolved`, delete
-  `EngineOracleTests` + `ThemeCatalogExportTests` (their only reason is the oracle/port), drop
-  the residual `GhosttyTerminal` import in `ThemeManager` (the no-op `configureBuilder` +
-  `TerminalColorPipeline`), and `grep -ri ghostty` to confirm zero references.
+- **Comment sweep**: some historical comments still say "libghostty"; harmless but stale.
 
 ## Gotchas already hit (so you don't re-learn them)
 - **`RGBColor` vs QuickDraw**: any file importing AppKit (or `GhosttyTerminal`, which pulls in

@@ -8,21 +8,23 @@ Agent handbook for the **Harness** repository. Read before architectural or UI c
 
 ---
 
-## ⚠️ Active migration: native renderer (replacing the libghostty fork)
+## Native renderer (libghostty fork removed)
 
-A from-scratch, self-contained terminal stack is being built on branch
-`claude/macos-terminal-colors-N3rKO` to remove the external **libghostty fork**. The engine,
-485-theme catalog, color/Metal renderer, keyboard input encoder, and a `CAMetalLayer` surface
-view are **built and tested**; `harness attach` and the app's theme/chrome already run on the
-native code (the fork is kept only as an A/B test oracle). The native surface is now **wired
-into the GUI** behind `HarnessSettings.useNativeRenderer` (Settings ▸ Color rendering toggle,
-default off): when on, `TerminalHostView` builds only `HarnessTerminalSurfaceView` and the
-Ghostty surface is never constructed. Remaining: live visual verification + first-pixel fixes,
-then follow-ups (selection, scrollback, theme export UI), then deleting the fork.
+Harness renders terminals with its **own** self-contained stack — there is **no Ghostty/
+libghostty dependency** (`swift build` resolves zero external packages). `TerminalHostView`
+hosts `HarnessTerminalSurfaceView` (a `CAMetalLayer` view) driving `HarnessTerminalEngine`
+(VT parser + screen/scrollback), `HarnessTheme` (485-theme catalog + `.harnesstheme`), and
+`HarnessTerminalRenderer` (CoreText atlas + Metal). Features: themed translucent canvas with
+untouched program output (`applyThemeToTerminalOutput` toggles theme-colored output), window
+padding, cursor styles + blink, text selection + copy / copy-on-select, mouse reporting
+(SGR 1006), scrollback (wheel / Shift+PageUp/Down), and IME / dead keys (`NSTextInputClient`).
 
-**Before touching the terminal renderer, theme system, or `TerminalHostView`, read
-[docs/NATIVE_RENDERER_HANDOFF.md](docs/NATIVE_RENDERER_HANDOFF.md).** New modules under
-`Packages/`: `HarnessTerminalEngine`, `HarnessTheme`, `HarnessTerminalRenderer`.
+The only remaining "ghostty" is the **opt-in config import** (`GhosttyConfigImporter` reads
+`~/.config/ghostty` so Ghostty.app users keep their colors/font) — kept by product decision.
+
+**Before touching the terminal renderer or theme system, read
+[docs/NATIVE_RENDERER_HANDOFF.md](docs/NATIVE_RENDERER_HANDOFF.md).** Modules under `Packages/`:
+`HarnessTerminalEngine`, `HarnessTheme`, `HarnessTerminalRenderer`, `HarnessTerminalKit`.
 
 ---
 

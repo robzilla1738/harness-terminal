@@ -1,5 +1,4 @@
 import Foundation
-import GhosttyTerminal
 import HarnessTheme
 
 @MainActor
@@ -31,10 +30,6 @@ public enum ThemeManager {
         "GitHub Dark",
     ]
 
-    /// Terminal output intentionally ignores Harness themes. Themes may style
-    /// chrome previews, tabs, sidebar, etc.; libghostty/Ghostty own ANSI and
-    /// truecolor rendering so terminal tools are not retinted by Harness.
-    public static func configureBuilder(_ builder: inout TerminalConfiguration.Builder, themeName: String) {}
 
     public static func backgroundHex(themeName: String) -> String? {
         if themeName == defaultDisplayName { return defaultBaselineBackgroundHex }

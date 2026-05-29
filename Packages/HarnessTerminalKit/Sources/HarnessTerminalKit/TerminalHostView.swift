@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import GhosttyTerminal
 import HarnessCore
 
 @MainActor
@@ -13,38 +12,27 @@ public protocol TerminalHostDelegate: AnyObject {
     func terminalHostDidClose(surfaceID: SurfaceID)
 }
 
+/// Hosts one terminal pane: Harness's native `HarnessTerminalSurfaceView` (GPU renderer +
+/// engine) wired to the daemon-owned PTY. Input/resize go to the daemon; output is streamed
+/// back and fed to the surface. The pane border/ring/mark overlays are drawn here.
 @MainActor
 public final class TerminalHostView: NSView {
     public let surfaceID: SurfaceID
     public weak var hostDelegate: TerminalHostDelegate?
 
-    /// Native-renderer migration (A/B). When `useNativeRenderer` is on, only `nativeView`
-    /// is built — the Ghostty `terminalView`/`controller`/`memorySession` stay nil so no
-    /// offscreen libghostty surface or Metal renderer is ever created. Default off keeps
-    /// the Ghostty path identical. See docs/NATIVE_RENDERER_HANDOFF.md.
-    private let useNativeRenderer: Bool
-    private let terminalView: TerminalView?
-    private let controller: TerminalController?
-    private let memorySession: InMemoryTerminalSession?
-    private let nativeView: HarnessTerminalSurfaceView?
+    private let nativeView: HarnessTerminalSurfaceView
     private let daemonClient = DaemonClient()
     private let io: SurfaceIO
     private let inputGate: InputGate
     private var outputSubscription: DaemonSubscription?
     private var isWaiting = false
     private var isActiveBorder = false
-    private var appliedThemeBackgroundHex: String?
     private var cachedSettings: HarnessSettings?
     private var cachedThemeName: String
     /// Theme-derived indicator colors. This package can't reach the app's palette,
     /// so the app pushes them via `applyBorderColors`. Default until the first push.
     public var activeBorderColor: NSColor = .systemBlue
     public var waitingRingColor: NSColor = .systemBlue
-
-    /// Empty libghostty theme section. Harness themes must never override
-    /// terminal output colors; terminal tools should render with Ghostty/base
-    /// config ANSI and truecolor behavior.
-    private static let emptyControllerTheme = TerminalTheme()
 
     public var showsWaitingRing: Bool {
         get { isWaiting }
@@ -78,8 +66,7 @@ public final class TerminalHostView: NSView {
         workingDirectory: String? = nil,
         harnessSurfaceEnv: String? = nil,
         settings: HarnessSettings? = nil,
-        themeName: String = ThemeManager.defaultThemeName,
-        controller: TerminalController? = nil
+        themeName: String = ThemeManager.defaultThemeName
     ) {
         self.surfaceID = surfaceID
         self.cachedThemeName = themeName
@@ -90,39 +77,17 @@ public final class TerminalHostView: NSView {
         self.io = io
         let inputGate = InputGate(io: io)
         self.inputGate = inputGate
-        let native = settings?.useNativeRenderer ?? false
-        self.useNativeRenderer = native
-
-        if native {
-            // Native path: no Ghostty surface at all.
-            self.memorySession = nil
-            self.controller = nil
-            self.terminalView = nil
-            let nativeView = HarnessTerminalSurfaceView(
-                themeName: themeName,
-                fontFamily: settings?.fontFamily ?? "Menlo",
-                fontSize: CGFloat(settings?.fontSize ?? 14),
-                vivid: settings?.vividColors ?? true
-            )
-            self.nativeView = nativeView
-            super.init(frame: .zero)
-            ensureDaemonSurface(cwd: workingDirectory, shell: shell, settings: settings)
-            configureNative(nativeView, io: io, inputGate: inputGate)
-            startDaemonOutput()
-        } else {
-            // Ghostty path (unchanged).
-            self.nativeView = nil
-            self.memorySession = InMemoryTerminalSession(
-                write: { data in inputGate.route(data) },
-                resize: { viewport in io.resize(rows: viewport.rows, cols: viewport.columns) }
-            )
-            self.controller = controller ?? Self.makeController(settings: settings, themeName: themeName)
-            terminalView = TerminalView(frame: .zero)
-            super.init(frame: .zero)
-            ensureDaemonSurface(cwd: workingDirectory, shell: shell, settings: settings)
-            configure(workingDirectory: workingDirectory, settings: settings)
-            startDaemonOutput()
-        }
+        let nativeView = HarnessTerminalSurfaceView(
+            themeName: themeName,
+            fontFamily: settings?.fontFamily ?? "Menlo",
+            fontSize: CGFloat(settings?.fontSize ?? 14),
+            vivid: settings?.vividColors ?? true
+        )
+        self.nativeView = nativeView
+        super.init(frame: .zero)
+        ensureDaemonSurface(cwd: workingDirectory, shell: shell, settings: settings)
+        configureNative(nativeView, io: io, inputGate: inputGate)
+        startDaemonOutput()
     }
 
     @available(*, unavailable)
@@ -130,115 +95,8 @@ public final class TerminalHostView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private static func makeController(settings: HarnessSettings?, themeName: String) -> TerminalController {
-        let terminalConfiguration = makeTerminalConfiguration(settings: settings, themeName: themeName)
-        return TerminalController(
-            configuration: terminalConfiguration,
-            theme: emptyControllerTheme
-        )
-    }
-
-    /// Single merged terminal block: Ghostty/base config → color pipeline →
-    /// settings. Named Harness themes are intentionally absent from terminal
-    /// output so they cannot wash or retint terminal tools.
-    static func makeTerminalConfiguration(
-        settings: HarnessSettings?,
-        themeName: String
-    ) -> TerminalConfiguration {
-        TerminalConfiguration {
-            configureTerminalBuilder(&$0, settings: settings, themeName: themeName)
-        }
-    }
-
-    private static func configureTerminalBuilder(
-        _ builder: inout TerminalConfiguration.Builder,
-        settings: HarnessSettings?,
-        themeName: String
-    ) {
-        builder.withCustom("shell-integration", "detect")
-        builder.withCustom("shell-integration-features", "sudo,title")
-        // Color rendering is user-selectable (Settings ▸ Appearance): vivid full
-        // Display-P3 vs accurate sRGB, and native vs gamma-correct blending.
-        TerminalColorPipeline.apply(
-            to: &builder,
-            colorspace: (settings?.vividColors ?? false) ? .displayP3 : .srgb,
-            alphaBlending: (settings?.linearBlending ?? false)
-                ? TerminalColorPipeline.linearAlphaBlending
-                : TerminalColorPipeline.nativeAlphaBlending
-        )
-        guard let settings else { return }
-        builder.withFontSize(settings.fontSize)
-        builder.withFontFamily(settings.fontFamily)
-        // The terminal ALWAYS renders fully opaque so its colors are true-Ghostty rich
-        // and never washed. Translucency/blur is a CHROME-only effect (sidebar / tab
-        // strip / status line) driven by `backgroundOpacity` at the window/CGS level —
-        // compositing a translucent terminal over the blurred desktop is exactly what
-        // desaturated the output. Keeping the terminal surface opaque isolates it from
-        // the glass so it shows the renderer's full-gamut color. (The window-wide CGS
-        // blur then only shows through the translucent chrome regions.)
-        builder.withBackgroundOpacity(1.0)
-        builder.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
-        builder.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
-        // Canvas bg/fg/cursor come from the one shared resolver so the terminal
-        // surface always matches the chrome (no seam between sidebar and output).
-        let canvas = ThemeManager.resolvedCanvas(
-            themeName: themeName,
-            customBackgroundHex: settings.customBackgroundHex,
-            customForegroundHex: settings.customForegroundHex,
-            customCursorHex: settings.customCursorHex
-        )
-        builder.withBackground(canvas.backgroundHex)
-        builder.withForeground(canvas.foregroundHex)
-        builder.withCursorColor(canvas.cursorHex)
-        // Full Ghostty-parity color set. nil = let libghostty derive from bg/fg
-        // (its native default); a value is pushed verbatim. Picking a theme seeds
-        // these into settings, so a chosen theme renders its complete palette.
-        if let value = settings.cursorTextHex { builder.withCursorText(value) }
-        if let value = settings.selectionBackgroundHex { builder.withSelectionBackground(value) }
-        if let value = settings.selectionForegroundHex { builder.withSelectionForeground(value) }
-        if let value = settings.boldColorHex { builder.withBoldColor(value) }
-        for (index, hex) in settings.paletteHex.enumerated() {
-            if let hex { builder.withPalette(index, color: hex) }
-        }
-        builder.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
-        builder.withCursorStyleBlink(settings.cursorBlink)
-        builder.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
-    }
-
-    private func pushConfiguration() {
-        guard let controller, let cachedSettings else { return }
-        _ = controller.setTerminalConfiguration(
-            Self.makeTerminalConfiguration(settings: cachedSettings, themeName: cachedThemeName)
-        )
-    }
-
-    private func configure(workingDirectory: String?, settings: HarnessSettings?) {
-        guard let terminalView, let memorySession else { return }
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-        terminalView.translatesAutoresizingMaskIntoConstraints = false
-        terminalView.delegate = self
-        terminalView.controller = controller
-        var options = TerminalSurfaceOptions(
-            backend: .inMemory(memorySession),
-            workingDirectory: workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
-        )
-        if let settings {
-            options.fontSize = settings.fontSize
-        }
-        terminalView.configuration = options
-        addSubview(terminalView)
-        NSLayoutConstraint.activate([
-            terminalView.topAnchor.constraint(equalTo: topAnchor),
-            terminalView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            terminalView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-        applyColorspace(settings: settings)
-    }
-
-    /// Native-renderer path: mount `HarnessTerminalSurfaceView` filling the host and wire
-    /// its input/resize to the same PTY plumbing, plus title/cwd/bell to the delegate.
+    /// Mount the surface filling the host and wire its input/resize to the PTY plumbing,
+    /// plus title/cwd/bell/copy out to the delegate / paste buffer.
     private func configureNative(_ native: HarnessTerminalSurfaceView, io: SurfaceIO, inputGate: InputGate) {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -270,14 +128,14 @@ public final class TerminalHostView: NSView {
         applyNativeAppearance()
     }
 
-    /// Push the full appearance to the native surface, computed from the cached settings +
-    /// theme. The canvas (default bg/fg/cursor) always resolves through the SAME
-    /// `ThemeManager.resolvedCanvas` the chrome uses, so terminal and chrome never seam.
-    /// Program output keeps untouched/default ANSI colors unless `applyThemeToTerminalOutput`
-    /// is on. The canvas is translucent when `backgroundOpacity` < 1 (window blur shows
-    /// through), while glyphs and explicit program backgrounds stay opaque.
+    /// Push the full appearance to the surface, computed from the cached settings + theme.
+    /// The canvas (default bg/fg/cursor) resolves through the SAME `ThemeManager.resolvedCanvas`
+    /// the chrome uses, so terminal and chrome never seam. Program output keeps untouched/
+    /// default ANSI colors unless `applyThemeToTerminalOutput` is on. The canvas is translucent
+    /// when `backgroundOpacity` < 1 (window blur shows through); glyphs + explicit program
+    /// backgrounds stay opaque.
     private func applyNativeAppearance() {
-        guard let nativeView, let settings = cachedSettings else { return }
+        guard let settings = cachedSettings else { return }
         let canvas = ThemeManager.resolvedCanvas(
             themeName: cachedThemeName,
             customBackgroundHex: settings.customBackgroundHex,
@@ -306,8 +164,8 @@ public final class TerminalHostView: NSView {
         )
     }
 
-    /// Mirror a native-renderer copy into the daemon paste buffer (parity with copy-mode),
-    /// so `paste-buffer` and the buffer list see selections made by mouse.
+    /// Mirror a copy into the daemon paste buffer (parity with copy-mode), so `paste-buffer`
+    /// and the buffer list see selections made by mouse.
     private func storeCopyBuffer(_ text: String) {
         guard !text.isEmpty else { return }
         let data = Data(text.utf8)
@@ -316,10 +174,10 @@ public final class TerminalHostView: NSView {
         }
     }
 
-    /// The 16 ANSI colors used for terminal *output*. When `applyThemeToTerminalOutput` is
-    /// on, the theme's palette (as seeded into settings, with theme fallback) recolors
-    /// output; otherwise nil slots let the native surface fall back to its untouched
-    /// default palette so programs render their true colors.
+    /// The 16 ANSI colors used for terminal *output*. When `applyThemeToTerminalOutput` is on,
+    /// the theme's palette (seeded into settings, with theme fallback) recolors output;
+    /// otherwise nil slots let the surface fall back to its untouched default palette so
+    /// programs render their true colors.
     private func nativeOutputPaletteHex(settings: HarnessSettings) -> [String?] {
         guard settings.applyThemeToTerminalOutput else {
             return Array(repeating: nil, count: 16)
@@ -328,62 +186,20 @@ public final class TerminalHostView: NSView {
         return (0 ..< 16).map { settings.paletteHex[$0] ?? themePalette[$0] }
     }
 
-    /// Tag the rendering layer's colorspace to match the configured
-    /// `window-colorspace` (Display-P3 when vivid, sRGB otherwise) so Core
-    /// Animation presents the renderer's pixels accurately instead of clamping
-    /// them — the true fix for washed-out chromatic colors.
-    private func applyColorspace(settings: HarnessSettings?) {
-        let vivid = settings?.vividColors ?? cachedSettings?.vividColors ?? true
-        let name: CFString = vivid ? CGColorSpace.displayP3 : CGColorSpace.sRGB
-        terminalView?.setColorspace(CGColorSpace(name: name))
-    }
-
     public func applyTheme(named name: String) {
         cachedThemeName = name
-        appliedThemeBackgroundHex = ThemeManager.backgroundHex(themeName: name)
-        if nativeView != nil {
-            applyNativeAppearance()
-            return
-        }
-        pushConfiguration()
+        applyNativeAppearance()
     }
 
     public func applySettings(_ settings: HarnessSettings) {
         cachedSettings = settings
-        if nativeView != nil {
-            applyNativeAppearance()
-            return
-        }
-        guard let terminalView, let memorySession else { return }
-        // Clear — libghostty's own `withBackgroundOpacity` paint IS the bg paint
-        // in the terminal area, mirroring the chrome backdrop's single `bg ×
-        // opacity` layer in other regions. Painting bg color here would compound
-        // alpha with libghostty's paint and make terminal area read as more
-        // opaque than the sidebar at any opacity < 1.
-        layer?.backgroundColor = NSColor.clear.cgColor
-        pushConfiguration()
-        applyColorspace(settings: settings)
-        terminalView.configuration = TerminalSurfaceOptions(
-            backend: .inMemory(memorySession),
-            fontSize: settings.fontSize,
-            workingDirectory: terminalView.configuration.workingDirectory,
-            context: terminalView.configuration.context
-        )
-        terminalView.fitToSize()
-    }
-
-    public override func layout() {
-        super.layout()
-        // The native surface fills via constraints and recomputes its grid in its own
-        // `layout()`; only the Ghostty view needs an explicit fit.
-        terminalView?.fitToSize()
+        applyNativeAppearance()
     }
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        let target: NSView? = nativeView ?? terminalView
-        if let target, window?.firstResponder !== target {
-            window?.makeFirstResponder(target)
+        if window?.firstResponder !== nativeView {
+            window?.makeFirstResponder(nativeView)
         }
     }
 
@@ -432,7 +248,7 @@ public final class TerminalHostView: NSView {
     }
 
     public func focusTerminal() {
-        window?.makeFirstResponder(nativeView ?? terminalView)
+        window?.makeFirstResponder(nativeView)
         hostDelegate?.terminalHostDidChangeFocus(true, surfaceID: surfaceID)
     }
 
@@ -463,7 +279,7 @@ public final class TerminalHostView: NSView {
                 surfaceID: surfaceID.uuidString,
                 fromSequence: nil
             )), !text.isEmpty {
-                deliverOutput(text)
+                nativeView.receive(text)
             }
         } catch {
             fputs("Harness: replayScrollback failed for \(surfaceID.uuidString): \(error)\n", stderr)
@@ -474,21 +290,12 @@ public final class TerminalHostView: NSView {
                 label: "Harness.app"
             ) { [weak self] data, _ in
                 Task { @MainActor in
-                    self?.deliverOutput(data)
+                    self?.nativeView.receive(data)
                 }
             }
         } catch {
             fputs("Harness: output subscription failed for \(surfaceID.uuidString): \(error)\n", stderr)
         }
-    }
-
-    /// Route PTY output to whichever renderer is active.
-    private func deliverOutput(_ text: String) {
-        if let nativeView { nativeView.receive(text) } else { memorySession?.receive(text) }
-    }
-
-    private func deliverOutput(_ data: Data) {
-        if let nativeView { nativeView.receive(data) } else { memorySession?.receive(data) }
     }
 
     deinit {
@@ -525,7 +332,7 @@ private final class SurfaceIO: @unchecked Sendable {
 /// When `synchronize-panes` is on, the app sets sibling surface ids and each
 /// keystroke is also mirrored to them via the daemon (so typing hits every pane
 /// in the window). Fully sendable — holds only strings + a thread-safe client,
-/// never a view — so it's safe to call from libghostty's input callback thread.
+/// never a view — so it's safe to call from any input callback thread.
 private final class InputGate: @unchecked Sendable {
     private let io: SurfaceIO
     private let broadcastClient = DaemonClient()
@@ -552,48 +359,5 @@ private final class InputGate: @unchecked Sendable {
                 _ = try? broadcastClient.request(.sendData(surfaceID: sid, data: data))
             }
         }
-    }
-}
-
-extension TerminalHostView:
-    TerminalSurfaceTitleDelegate,
-    TerminalSurfaceGridResizeDelegate,
-    TerminalSurfaceResizeDelegate,
-    TerminalSurfaceCloseDelegate,
-    TerminalSurfaceDesktopNotificationDelegate,
-    TerminalSurfaceBellDelegate,
-    TerminalSurfacePwdDelegate,
-    TerminalSurfaceFocusDelegate
-{
-    public func terminalDidResize(_ size: TerminalGridMetrics) {
-        // Ordered + off-main (a synchronous request here would block the UI thread
-        // on a socket round-trip during live resize).
-        io.resize(rows: size.rows, cols: size.columns)
-    }
-
-    public func terminalDidChangeTitle(_ title: String) {
-        hostDelegate?.terminalHostDidChangeTitle(title, surfaceID: surfaceID)
-    }
-
-    public func terminalDidResize(columns _: Int, rows _: Int) {}
-
-    public func terminalDidClose(processAlive _: Bool) {
-        hostDelegate?.terminalHostDidClose(surfaceID: surfaceID)
-    }
-
-    public func terminalDidRequestDesktopNotification(title: String, body: String) {
-        hostDelegate?.terminalHostDidRequestDesktopNotification(title: title, body: body, surfaceID: surfaceID)
-    }
-
-    public func terminalDidRingBell() {
-        hostDelegate?.terminalHostDidRingBell(surfaceID: surfaceID)
-    }
-
-    public func terminalDidChangeWorkingDirectory(_ path: String) {
-        hostDelegate?.terminalHostDidChangeWorkingDirectory(path, surfaceID: surfaceID)
-    }
-
-    public func terminalDidChangeFocus(_ focused: Bool) {
-        hostDelegate?.terminalHostDidChangeFocus(focused, surfaceID: surfaceID)
     }
 }

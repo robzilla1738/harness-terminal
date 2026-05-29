@@ -7,31 +7,18 @@ let package = Package(
     products: [
         .library(name: "HarnessCore", targets: ["HarnessCore"]),
         // Self-contained native terminal engine (VT parser + screen/grid model). Pure
-        // Swift, no Metal/AppKit — replaces the libghostty fork's GhosttyTerminal. Grows
-        // alongside the fork (which stays as an A/B correctness oracle) until cutover.
+        // Swift, no Metal/AppKit.
         .library(name: "HarnessTerminalEngine", targets: ["HarnessTerminalEngine"]),
-        // Native theme catalog + the shareable `.harnesstheme` document format. Pure
-        // Swift — replaces the libghostty fork's GhosttyTheme.
+        // Native theme catalog + the shareable `.harnesstheme` document format. Pure Swift.
         .library(name: "HarnessTheme", targets: ["HarnessTheme"]),
-        // Native terminal renderer. Color-resolution layer is pure Swift (tested without
-        // a GPU); the Metal glyph/draw layer is added in a later phase.
+        // Native terminal renderer: pure-Swift color resolution + a Metal glyph/draw layer.
         .library(name: "HarnessTerminalRenderer", targets: ["HarnessTerminalRenderer"]),
         .library(name: "HarnessTerminalKit", targets: ["HarnessTerminalKit"]),
         .executable(name: "Harness", targets: ["HarnessApp"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
         .executable(name: "harness-cli", targets: ["HarnessCLI"]),
     ],
-    dependencies: [
-        // Harness's libghostty fork (read-cells styled-grid API + Display-P3
-        // colorspace). Pinned by revision; its XCFramework resolves from a GitHub
-        // release asset by url+checksum, so a clean clone builds with no sibling
-        // checkout and no Zig rebuild. For local fork development, temporarily swap
-        // this back to `.package(path: "../libghostty-spm-fork")`.
-        .package(
-            url: "https://github.com/robzilla1738/libghostty-spm-fork.git",
-            revision: "16f6d4fd91ccc2688a5e7e835506e3b85c65ea2f"
-        ),
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "HarnessCore",
@@ -63,8 +50,6 @@ let package = Package(
                 "HarnessTerminalEngine",
                 "HarnessTerminalRenderer",
                 "HarnessTheme",
-                .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
-                .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
             path: "Packages/HarnessTerminalKit/Sources/HarnessTerminalKit"
         ),
@@ -91,8 +76,6 @@ let package = Package(
                 "HarnessCore",
                 "HarnessTerminalKit",
                 "HarnessTheme",
-                .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
-                .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
             path: "Apps/Harness/Sources/HarnessApp",
             exclude: ["Resources"]
@@ -124,11 +107,6 @@ let package = Package(
                 "HarnessTerminalEngine",
                 "HarnessTerminalKit",
                 "HarnessTheme",
-                // Still present so HeadlessGridReadTests can A/B the new engine against
-                // the libghostty GridTerminal oracle, and ThemeCatalogExportTests can
-                // port the fork's theme catalog, until the fork is removed (Phase 8).
-                .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
-                .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
             path: "Tests/HarnessTerminalKitTests"
         ),

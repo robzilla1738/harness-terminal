@@ -1,6 +1,5 @@
 import AppKit
 import Darwin
-import GhosttyTerminal
 import HarnessCore
 
 @MainActor
@@ -8,8 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        configureTerminalDiagnostics()
-
         // Build the UI immediately so launch never blocks on the daemon. The
         // coordinator starts from a default snapshot and repopulates the moment
         // the daemon answers (below) — no frozen window, no modal timeout dialog.
@@ -50,15 +47,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
-    }
-
-    private func configureTerminalDiagnostics() {
-        let environment = ProcessInfo.processInfo.environment
-        if environment["HARNESS_GHOSTTY_DEBUG"] == "1" {
-            TerminalDebugLog.enable(.standard)
-        } else {
-            TerminalDebugLog.disable()
-            unsetenv("GHOSTTY_LOG")
-        }
     }
 }
