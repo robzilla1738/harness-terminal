@@ -46,7 +46,8 @@ let package = Package(
         // Native theme system — pure Swift, no external dependencies.
         .target(
             name: "HarnessTheme",
-            path: "Packages/HarnessTheme/Sources/HarnessTheme"
+            path: "Packages/HarnessTheme/Sources/HarnessTheme",
+            resources: [.process("Resources/themes.json")]
         ),
         // Native renderer — depends on the engine (grid types) and theme (colors). The
         // color-resolution layer here is pure Swift; Metal/CoreText code lands later.
@@ -119,9 +120,12 @@ let package = Package(
                 "HarnessCore",
                 "HarnessTerminalEngine",
                 "HarnessTerminalKit",
+                "HarnessTheme",
                 // Still present so HeadlessGridReadTests can A/B the new engine against
-                // the libghostty GridTerminal oracle until the fork is removed (Phase 8).
+                // the libghostty GridTerminal oracle, and ThemeCatalogExportTests can
+                // port the fork's theme catalog, until the fork is removed (Phase 8).
                 .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
+                .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
             path: "Tests/HarnessTerminalKitTests"
         ),

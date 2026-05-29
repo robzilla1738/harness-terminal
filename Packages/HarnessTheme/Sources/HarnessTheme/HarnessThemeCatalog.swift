@@ -43,10 +43,29 @@ public enum HarnessThemeCatalog {
 
     // MARK: - Storage
 
+    /// Featured builtins first (in `featuredNames` order), then every bundled theme not
+    /// already covered by a builtin, alphabetically. Builtins win on name conflicts so
+    /// our curated palettes are authoritative.
     private static let all: [HarnessThemeDefinition] = {
-        // Featured order preserved; future bundled themes are appended + sorted.
-        builtins
+        var seen = Set(builtins.map { $0.name.lowercased() })
+        let extras = loadBundledThemes()
+            .filter { seen.insert($0.name.lowercased()).inserted }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+        return builtins + extras
     }()
+
+    /// Load the ported community catalog from the bundled `themes.json` (an array of
+    /// `HarnessThemeDefinition`). Returns empty if the resource is missing or empty —
+    /// the catalog then runs on the curated builtins alone. Regenerate the file with the
+    /// `ThemeCatalogExportTests` exporter.
+    private static func loadBundledThemes() -> [HarnessThemeDefinition] {
+        guard
+            let url = Bundle.module.url(forResource: "themes", withExtension: "json"),
+            let data = try? Data(contentsOf: url),
+            let themes = try? JSONDecoder().decode([HarnessThemeDefinition].self, from: data)
+        else { return [] }
+        return themes
+    }
 
     private static let builtins: [HarnessThemeDefinition] = [
         .make(

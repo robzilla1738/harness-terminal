@@ -151,8 +151,12 @@ targets:
         product: HarnessTerminalEngine
       - package: Harness
         product: HarnessTerminalKit
+      - package: Harness
+        product: HarnessTheme
       - package: libghostty-spm-fork
         product: GhosttyTerminal
+      - package: libghostty-spm-fork
+        product: GhosttyTheme
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessTerminalKitTests
       GENERATE_INFOPLIST_FILE: YES
