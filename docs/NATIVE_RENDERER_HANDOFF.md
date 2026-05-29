@@ -35,49 +35,71 @@ Integrated into the app (off the fork already):
 - **`ThemeManager` + `HarnessChrome`** read from `HarnessThemeCatalog` (not `GhosttyTheme`).
   No production file imports `GhosttyTheme` anymore — only the test exporter does.
 
-Live view, built but **NOT yet wired in**:
+Live view, built **and now wired in behind the flag**:
 - `Packages/HarnessTerminalKit/Sources/HarnessTerminalKit/HarnessTerminalSurfaceView.swift`
   — `CAMetalLayer` `NSView`: drives a `TerminalEmulator`, draws with `TerminalMetalRenderer`,
-  `receive(_:)` for PTY bytes, `onInput`/`onResize` closures, keyboard via `InputEncoder`,
-  live resize, colorspace tagging. Compiles; not referenced by the app yet.
+  `receive(_:)` for PTY bytes, `onInput`/`onResize`/`onTitle`/`onPwd`/`onBell` closures,
+  keyboard via `InputEncoder`, live resize, colorspace tagging.
+- `TerminalHostView` now branches on `HarnessSettings.useNativeRenderer`: when on it builds
+  **only** the native surface (no offscreen Ghostty surface/Metal at all — the Ghostty
+  `terminalView`/`controller`/`memorySession` stay nil) and routes daemon PTY output, input,
+  resize, theme, settings, focus, and title/cwd/bell through it. Flag default off ⇒ the
+  Ghostty path is byte-for-byte unchanged.
+- Settings ▸ Color rendering has a **"Native renderer (experimental)"** toggle. Flipping it
+  calls `SessionCoordinator.rebuildTerminalHosts()` (drop all hosts → bump `structureRevision`
+  → remount) so live panes swap engines without losing the daemon-owned shell/scrollback.
 
 ## What's left
 
-### Chunk 4 — go live (the immediate next step)
-Wire `HarnessTerminalSurfaceView` into `TerminalHostView`
-(`Packages/HarnessTerminalKit/Sources/HarnessTerminalKit/TerminalHostView.swift`) **behind a
-`useNativeRenderer` flag** so the Ghostty path is untouched when off (safe A/B).
+### Chunk 4 — go live
+Steps 1–3 are **done** (`swift build` + all 271 unit tests green, incl. the `EngineOracleTests`
+cutover gate):
 
-1. Add `useNativeRenderer: Bool = false` to `HarnessSettings`
-   (`Packages/HarnessCore/.../Settings/HarnessSettings.swift`): the memberwise `init` (line ~62),
-   the `init(from:)` decoder (line ~182, `decodeIfPresent ... ?? fallback`), and the property
-   list (~line 60). CodingKeys are auto-synthesized.
-2. In `TerminalHostView`, when the flag is on: create a `HarnessTerminalSurfaceView` instead of
-   Ghostty's `terminalView`, add it as the filling subview, and wire:
-   - `nativeView.onInput = { inputGate.route($0) }` (to the PTY)
-   - `nativeView.onResize = { cols, rows in io.resize(rows: UInt16(rows), cols: UInt16(cols)) }`
-   - daemon output subscription + `replayScrollback` → `nativeView.receive(...)` (instead of
-     `memorySession.receive`)
-   - first responder, `applyTheme`/`applySettings`, `focusTerminal` → native view
-3. Surface title/cwd/bell from the native view to `hostDelegate`: add `onTitle`/`onPwd`/`onBell`
-   closures to `HarnessTerminalSurfaceView` that forward `emulator.onTitleChange` /
-   `onWorkingDirectoryChange` / `onBell` (the emulator already exposes these).
-4. **Verify by running the app** (`make build` / Xcode), flip the toggle, and iterate on the
-   live visuals. Expect first-pixel fixes: cursor style/blink, window padding (apply
-   `windowPaddingX/Y`), font-size→cell metrics, vertical glyph baseline, selection (not built
-   yet). Compare side-by-side with Ghostty (flag off).
+1. ✅ `useNativeRenderer: Bool = false` added to `HarnessSettings` (property, memberwise `init`,
+   `init(from:)` decoder).
+2. ✅ `TerminalHostView` branches on the flag (see "Live view" above). Made the Ghostty
+   `terminalView`/`controller`/`memorySession` optional so they're never constructed on the
+   native path; added `configureNative(...)` + a `deliverOutput(...)` router; `applyTheme` /
+   `applySettings` / `focusTerminal` / `viewDidMoveToWindow` / `layout` all branch.
+3. ✅ `onTitle`/`onPwd`/`onBell` added to `HarnessTerminalSurfaceView`, forwarded from
+   `emulator.onTitleChange` / `onWorkingDirectoryChange` / `onBell` to `hostDelegate`.
+   Plus the Settings toggle + `rebuildTerminalHosts()` live-swap.
+
+   Note: prefix (`Ctrl-A`) still works on the native path — `PrefixKeymap` is a global
+   `NSEvent` local monitor that swallows consumed keys before the responder chain, so it
+   doesn't depend on which view is first responder.
+
+4. **Still to do — verify by running the app** (`make preview`, toggle on in Settings ▸ Color
+   rendering, or pre-seed `.harness-preview/settings.json` with `"useNativeRenderer": true`).
+   Iterate on the live visuals; expected first-pixel fixes: cursor style/blink (native draws a
+   plain block cursor only), window padding (native ignores `windowPaddingX/Y` today),
+   font-size→cell metrics, vertical glyph baseline, selection (not built yet). Compare
+   side-by-side with Ghostty (flag off).
+
+### Done since go-live (verified live in `make preview`)
+- ✅ **Themed canvas (no seam) + untouched output + translucency/blur.** The native surface's
+  canvas (default bg/fg/cursor) now resolves through the SAME `ThemeManager.resolvedCanvas` the
+  chrome uses (`TerminalHostView.applyNativeAppearance` → `HarnessTerminalSurfaceView.configureAppearance`),
+  so terminal and chrome never seam (this also fixed a "line at the top" that was the
+  canvas/chrome color mismatch). Program **output** keeps untouched/default ANSI colors
+  (`ThemeManager.defaultBaselinePaletteHex`) unless **`HarnessSettings.applyThemeToTerminalOutput`**
+  (Settings ▸ Color rendering toggle, default off) is on, which feeds the theme's 16-color
+  palette to the resolver. The canvas is **translucent** when `backgroundOpacity` < 1:
+  `FrameBuilder.canvasOpacity` applies alpha to default-bg cells only (glyphs + explicit program
+  backgrounds stay opaque), the Metal clear uses the same alpha, and the layer goes non-opaque so
+  the window-wide CGS blur shows through — matching the chrome glass. `contentsGravity = .topLeft`
+  parks any sub-cell remainder at the bottom-right.
 
 ### Follow-ups (after it renders live)
 - **Mouse reporting** (SGR 1006), **text selection + copy/copy-on-select**, **scrollback view**
   (engine renders the viewport; daemon owns history — decide how to scroll back), **IME / dead
   keys** (call `interpretKeyEvents` / adopt `NSTextInputClient`), **ligatures**, **procedural
   box-drawing/block glyphs** for pixel alignment, **damage tracking** (only redraw dirty rows),
-  **window padding + opacity/blur** parity (keep CGS `WindowBlur` + `MainWindowController`).
+  **cursor style/blink** (native draws a plain block), **window padding** (native ignores
+  `windowPaddingX/Y` today).
 - **Theme export/import UI** in `SettingsViewController` (NSSavePanel/NSOpenPanel via
   `ThemeFileService`) + register the `.harnesstheme` doc type in `Info.plist` + handle
   `application(_:open:)` for double-click install.
-- **"Apply theme to terminal output" toggle** (sync the 16-color palette into the terminal vs
-  keep it standalone) — `HarnessSettings` bool plumbed to the surface's `FrameBuilder`/resolver.
 - **Phase 8 — remove the fork**: once the native view is the only renderer, delete
   `libghostty-spm-fork` from `Package.swift` / `project.yml` / `Package.resolved`, delete
   `EngineOracleTests` + `ThemeCatalogExportTests` (their only reason is the oracle/port), drop
@@ -87,8 +109,9 @@ Wire `HarnessTerminalSurfaceView` into `TerminalHostView`
 ## Gotchas already hit (so you don't re-learn them)
 - **`RGBColor` vs QuickDraw**: any file importing AppKit (or `GhosttyTerminal`, which pulls in
   AppKit) sees Apple's C `struct RGBColor`. Pin with `private typealias RGBColor =
-  HarnessTheme.RGBColor` in such files (see `ThemeCatalogExportTests.swift`). The surface view
-  avoids it by never naming `RGBColor`.
+  HarnessTheme.RGBColor` in such files (see `ThemeCatalogExportTests.swift` and now
+  `HarnessTerminalSurfaceView.swift`). `TerminalHostView` sidesteps it by passing canvas/palette
+  colors as **hex strings** to `configureAppearance` (the surface view does the hex→RGBColor).
 - **`MTLRenderPipelineColorAttachmentDescriptorArray[0]` is optional** in this SDK — force-unwrap.
 - **Atlas/texture storage mode**: `.shared` on unified memory (Apple Silicon), `.managed` on
   discrete GPUs (`device.hasUnifiedMemory`).

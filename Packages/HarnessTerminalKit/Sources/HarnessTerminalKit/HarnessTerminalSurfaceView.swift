@@ -5,6 +5,10 @@ import HarnessTheme
 import Metal
 import QuartzCore
 
+// AppKit re-exports QuickDraw's legacy C `struct RGBColor`, which shadows
+// `HarnessTheme.RGBColor` in this file. Pin the name to ours.
+private typealias RGBColor = HarnessTheme.RGBColor
+
 /// The native, self-contained terminal surface: a `CAMetalLayer`-backed `NSView` that
 /// drives a `TerminalEmulator` and draws it with `TerminalMetalRenderer`. This is the
 /// replacement for the libghostty `TerminalView` — bytes in via `receive(_:)`, input out
@@ -19,17 +23,29 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onInput: ((Data) -> Void)?
     /// New grid size after a resize (columns, rows) — the host forwards this to the daemon.
     public var onResize: ((Int, Int) -> Void)?
+    /// Window/tab title (OSC 0 / OSC 2) — the host forwards this to its delegate.
+    public var onTitle: ((String) -> Void)?
+    /// Reported working directory (OSC 7) — the host forwards this to its delegate.
+    public var onPwd: ((String) -> Void)?
+    /// Terminal bell (BEL) — the host forwards this to its delegate.
+    public var onBell: (() -> Void)?
 
     private let emulator: TerminalEmulator
     private let inputEncoder = InputEncoder()
     private let metalLayer = CAMetalLayer()
     private var renderer: TerminalMetalRenderer?
 
-    private var theme: HarnessThemeDefinition
     private var frameBuilder: FrameBuilder
     private var vivid: Bool
     private var fontFamily: String
     private var fontSize: CGFloat
+    /// The canvas (default) background — used as the Metal clear color and (at
+    /// `canvasOpacity`) for default-bg cells. Resolved by the host through the same
+    /// `ThemeManager.resolvedCanvas` the chrome uses, so terminal and chrome never seam.
+    private var canvasBackground: RGBColor
+    /// 0...1. < 1 makes the canvas translucent (the window blur shows through); program
+    /// output backgrounds and glyphs stay opaque.
+    private var canvasOpacity: Float
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -43,8 +59,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     ) {
         let theme = HarnessThemeCatalog.theme(named: themeName)
             ?? HarnessThemeCatalog.theme(named: ThemeManager.defaultThemeName)!
-        self.theme = theme
+        // Baseline appearance; the host immediately overrides via configureAppearance.
         self.frameBuilder = FrameBuilder(theme: theme)
+        self.canvasBackground = theme.background
+        self.canvasOpacity = 1
         self.fontFamily = fontFamily
         self.fontSize = fontSize
         self.vivid = vivid
@@ -68,19 +86,50 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     public func receive(_ text: String) { receive(Data(text.utf8)) }
 
-    /// Re-theme live (theme picker / settings change).
-    public func applyTheme(named name: String) {
-        guard let theme = HarnessThemeCatalog.theme(named: name) else { return }
-        self.theme = theme
-        self.frameBuilder = FrameBuilder(theme: theme)
-        scheduleRender()
-    }
-
-    /// Switch font / colorspace (settings change) — rebuilds the renderer + atlas.
-    public func applyAppearance(fontFamily: String, fontSize: CGFloat, vivid: Bool) {
+    /// The full appearance the host computes from settings + theme:
+    /// - `canvasBackground/Foreground/cursor` come from `ThemeManager.resolvedCanvas`, so
+    ///   the terminal canvas matches the chrome (no seam) regardless of theme-output mode.
+    /// - `outputPalette` is the 16 ANSI colors for *program output*: the theme palette when
+    ///   "apply theme to output" is on, otherwise the untouched default palette.
+    /// - `canvasOpacity` < 1 makes the canvas translucent for the window blur.
+    /// Rebuilds the renderer/atlas (font/colorspace) and the color resolver.
+    public func configureAppearance(
+        fontFamily: String,
+        fontSize: CGFloat,
+        vivid: Bool,
+        canvasBackgroundHex: String,
+        canvasForegroundHex: String,
+        cursorHex: String,
+        outputPaletteHex: [String?],
+        canvasOpacity: Float
+    ) {
+        let bg = RGBColor(hex: canvasBackgroundHex) ?? RGBColor(red: 0, green: 0, blue: 0)
+        let fg = RGBColor(hex: canvasForegroundHex) ?? RGBColor(red: 255, green: 255, blue: 255)
+        let cursor = RGBColor(hex: cursorHex) ?? fg
+        // 16 ANSI colors for program output; nil slots fall back to the default palette.
+        let palette: [RGBColor] = (0 ..< 16).map { i in
+            let hex = (i < outputPaletteHex.count ? outputPaletteHex[i] : nil)
+                ?? ThemeManager.defaultBaselinePaletteHex[i]
+            return RGBColor(hex: hex) ?? RGBColor(red: 0, green: 0, blue: 0)
+        }
         self.fontFamily = fontFamily
         self.fontSize = fontSize
         self.vivid = vivid
+        self.canvasBackground = bg
+        self.canvasOpacity = max(0, min(1, canvasOpacity))
+        let resolver = CellColorResolver(
+            palette: ANSIPalette(base16: palette),
+            defaultForeground: fg,
+            defaultBackground: bg
+        )
+        self.frameBuilder = FrameBuilder(
+            resolver: resolver,
+            cursorColor: cursor,
+            canvasOpacity: self.canvasOpacity
+        )
+        // Opaque only when fully opaque; otherwise the layer must be non-opaque so the
+        // window-wide blur shows through the translucent canvas.
+        metalLayer.isOpaque = self.canvasOpacity >= 1
         metalLayer.colorspace = CGColorSpace(name: vivid ? CGColorSpace.displayP3 : CGColorSpace.sRGB)
         buildRenderer()
         updateGridSize()
@@ -97,6 +146,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         metalLayer.pixelFormat = TerminalMetalRenderer.pixelFormat
         metalLayer.framebufferOnly = true
         metalLayer.isOpaque = true
+        // Pin the grid to the top-left so any sub-cell remainder from flooring rows/cols
+        // parks at the bottom-right instead of being centered into a hairline seam at the
+        // top edge during live resize.
+        metalLayer.contentsGravity = .topLeft
         // Tag the layer colorspace so wide-gamut output isn't clamped — the crisp-color
         // contract (Display-P3 when vivid, sRGB otherwise).
         metalLayer.colorspace = CGColorSpace(name: vivid ? CGColorSpace.displayP3 : CGColorSpace.sRGB)
@@ -105,6 +158,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func configureEmulatorCallbacks() {
         emulator.onResponse = { [weak self] data in
             self?.onInput?(data)
+        }
+        emulator.onTitleChange = { [weak self] title in
+            self?.onTitle?(title)
+        }
+        emulator.onWorkingDirectoryChange = { [weak self] path in
+            self?.onPwd?(path)
+        }
+        emulator.onBell = { [weak self] in
+            self?.onBell?()
         }
     }
 
@@ -171,7 +233,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func renderNow() {
         guard let renderer, let drawable = metalLayer.nextDrawable() else { return }
         let frame = frameBuilder.build(emulator.readGrid())
-        renderer.present(frame, to: drawable, clearColor: RenderColor(theme.background))
+        // Clear to the canvas color at canvas opacity so any cell-rounding remainder reads
+        // as the canvas (no seam, and translucent when opacity < 1).
+        renderer.present(frame, to: drawable, clearColor: RenderColor(canvasBackground, alpha: canvasOpacity))
     }
 
     // MARK: - Input

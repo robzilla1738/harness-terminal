@@ -58,7 +58,7 @@ enum AboutPanelController {
         stack.addArrangedSubview(versionLabel)
         stack.setCustomSpacing(14, after: versionLabel)
 
-        let tagline = NSTextField(wrappingLabelWithString: "A native macOS terminal for AI agents and dev sessions.\nGPU-rendered via libghostty.")
+        let tagline = NSTextField(wrappingLabelWithString: "A native macOS terminal for AI agents and dev sessions.\nGPU-rendered by Harness's own terminal engine.")
         tagline.alignment = .center
         tagline.font = .systemFont(ofSize: 12)
         tagline.textColor = .secondaryLabelColor

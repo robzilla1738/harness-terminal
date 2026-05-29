@@ -55,6 +55,16 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         target: nil,
         action: nil
     )
+    private let nativeRendererToggle = NSButton(
+        checkboxWithTitle: "Harness renderer (experimental) — Harness's own GPU terminal engine",
+        target: nil,
+        action: nil
+    )
+    private let themeTerminalOutputToggle = NSButton(
+        checkboxWithTitle: "Apply theme colors to terminal output (native) — off = canvas matches theme, output untouched",
+        target: nil,
+        action: nil
+    )
     private let selectionBgHexField = NSTextField()
     private let selectionFgHexField = NSTextField()
     private let boldHexField = NSTextField()
@@ -273,6 +283,12 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         linearBlendingToggle.state = settings.linearBlending ? .on : .off
         linearBlendingToggle.target = self
         linearBlendingToggle.action = #selector(appearanceTextDidCommit)
+        nativeRendererToggle.state = settings.useNativeRenderer ? .on : .off
+        nativeRendererToggle.target = self
+        nativeRendererToggle.action = #selector(appearanceTextDidCommit)
+        themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
+        themeTerminalOutputToggle.target = self
+        themeTerminalOutputToggle.action = #selector(appearanceTextDidCommit)
 
         transparentTitlebarToggle.state = settings.transparentTitlebar ? .on : .off
         transparentTitlebarToggle.target = self
@@ -518,6 +534,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         let renderingGroup = formGrid(rows: [
             ("", vividColorsToggle),
             ("", linearBlendingToggle),
+            ("", nativeRendererToggle),
+            ("", themeTerminalOutputToggle),
         ])
 
         // Chrome accent rows: dividers + status line text (colorBindings 7 and 8).
@@ -1130,6 +1148,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         keepSessionsToggle.state = SessionCoordinator.shared.snapshot.keepSessionsOnQuit ? .on : .off
         vividColorsToggle.state = settings.vividColors ? .on : .off
         linearBlendingToggle.state = settings.linearBlending ? .on : .off
+        nativeRendererToggle.state = settings.useNativeRenderer ? .on : .off
+        themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         for binding in colorBindings {
             binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
@@ -1199,12 +1219,21 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.systemNotificationsEnabled = systemNotificationsToggle.state == .on
         coordinator.settings.vividColors = vividColorsToggle.state == .on
         coordinator.settings.linearBlending = linearBlendingToggle.state == .on
+        let newNativeRenderer = nativeRendererToggle.state == .on
+        let rendererChanged = coordinator.settings.useNativeRenderer != newNativeRenderer
+        coordinator.settings.useNativeRenderer = newNativeRenderer
+        coordinator.settings.applyThemeToTerminalOutput = themeTerminalOutputToggle.state == .on
         try? coordinator.settings.save()
 
         // Theme switching (and its color seeding) is handled by themeDidChange, so
         // flushAndApply only ever pushes the current settings to the live surfaces —
         // scrubbing a slider never fires a setTheme IPC.
         coordinator.applySettingsToHosts()
+        // Swapping renderers can't happen on a live host (the choice is made at
+        // construction), so rebuild the panes to pick up the new engine.
+        if rendererChanged {
+            coordinator.rebuildTerminalHosts()
+        }
         updateFontReadout()
         refreshLivePreview()
     }

@@ -322,7 +322,7 @@ enum CommandPaletteController {
             actions.append(PaletteAction(
                 id: "theme.\(theme)",
                 title: theme,
-                subtitle: "Apply Ghostty theme",
+                subtitle: "Apply theme",
                 symbol: "paintpalette",
                 shortcut: "",
                 section: .themes

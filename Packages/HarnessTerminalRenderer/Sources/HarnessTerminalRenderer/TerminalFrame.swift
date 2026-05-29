@@ -25,6 +25,17 @@ public struct RenderColor: Equatable, Sendable {
             alpha: Float(c.alpha) / 255
         )
     }
+
+    /// RGB from the color, but with an explicit alpha (0...1) — used to make the
+    /// translucent canvas background while keeping the color channels exact.
+    public init(_ c: RGBColor, alpha: Float) {
+        self.init(
+            red: Float(c.red) / 255,
+            green: Float(c.green) / 255,
+            blue: Float(c.blue) / 255,
+            alpha: alpha
+        )
+    }
 }
 
 /// One drawable cell: final fg/bg/underline colors plus the glyph and the attributes the
@@ -86,16 +97,26 @@ public struct FrameBuilder {
     public let resolver: CellColorResolver
     /// Cursor block color (typically the theme cursor color).
     public let cursorColor: RGBColor
+    /// Alpha (0...1) applied to cells drawn with the *default* (canvas) background, so the
+    /// canvas can be translucent (showing the window blur) while program output stays
+    /// readable. Cells with an explicit program background — and any glyph/cursor — remain
+    /// fully opaque. 1 = fully opaque canvas (no translucency).
+    public let canvasOpacity: Float
 
-    public init(resolver: CellColorResolver, cursorColor: RGBColor) {
+    public init(resolver: CellColorResolver, cursorColor: RGBColor, canvasOpacity: Float = 1) {
         self.resolver = resolver
         self.cursorColor = cursorColor
+        self.canvasOpacity = max(0, min(1, canvasOpacity))
     }
 
     /// Convenience builder from a theme: resolver + cursor color in one call.
-    public init(theme: HarnessThemeDefinition, boldBrightens: Bool = true) {
+    public init(theme: HarnessThemeDefinition, boldBrightens: Bool = true, canvasOpacity: Float = 1) {
         let resolver = CellColorResolver(theme: theme, boldBrightens: boldBrightens)
-        self.init(resolver: resolver, cursorColor: theme.cursor ?? theme.foreground)
+        self.init(
+            resolver: resolver,
+            cursorColor: theme.cursor ?? theme.foreground,
+            canvasOpacity: canvasOpacity
+        )
     }
 
     public func build(_ snapshot: TerminalGridSnapshot) -> TerminalFrame {
@@ -107,12 +128,19 @@ public struct FrameBuilder {
                 let colors = resolver.resolve(cell)
                 // Underline color defaults to the resolved foreground when unset.
                 let underline = resolver.resolved(cell.underlineColor, default: colors.foreground)
+                // A cell shows the canvas only when its background is the terminal default
+                // (no explicit SGR bg) and it isn't inverted (which promotes the foreground
+                // into the bg slot). Those — and only those — get the translucent alpha.
+                let isCanvasBackground = cell.background == .none && !cell.inverse
+                let background = isCanvasBackground
+                    ? RenderColor(colors.background, alpha: canvasOpacity)
+                    : RenderColor(colors.background)
                 cells.append(RenderCell(
                     row: row,
                     column: column,
                     codepoint: cell.codepoint,
                     foreground: RenderColor(colors.foreground),
-                    background: RenderColor(colors.background),
+                    background: background,
                     underlineColor: RenderColor(underline),
                     bold: cell.bold,
                     italic: cell.italic,

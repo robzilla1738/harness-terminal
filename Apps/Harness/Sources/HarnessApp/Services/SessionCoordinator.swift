@@ -192,6 +192,27 @@ final class SessionCoordinator: NSObject {
         syncFromDaemon()
     }
 
+    /// Tear down every live terminal host and force a pane remount so the next mount
+    /// rebuilds fresh hosts that pick up the current `settings` (used when switching the
+    /// `useNativeRenderer` A/B flag, which is decided at host construction). The daemon
+    /// surfaces are untouched — each new host re-attaches by surface ID and replays
+    /// scrollback, so output and shell state survive the swap.
+    func rebuildTerminalHosts() {
+        for host in terminalHosts.allHosts() {
+            terminalHosts.removeHost(for: host.surfaceID)
+        }
+        structureRevision += 1
+        NotificationCenter.default.post(
+            name: NotificationBus.shared.snapshotChanged,
+            object: nil,
+            userInfo: [
+                "revision": snapshot.revision,
+                "structureChanged": true,
+                "chromeChanged": true,
+            ]
+        )
+    }
+
     /// Push the current `settings` to every live terminal host and refresh chrome.
     func applySettingsToHosts() {
         HarnessChrome.update(

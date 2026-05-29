@@ -1,11 +1,11 @@
 # Harness
 
-Native macOS terminal for organizing AI agents and dev sessions — Ghostty rendering, cmux-style workspaces, harness-cli automation.
+Native macOS terminal for organizing AI agents and dev sessions — Harness's own GPU renderer, cmux-style workspaces, harness-cli automation.
 
 ## Features
 
-- GPU-accelerated terminals via [libghostty](https://github.com/Lakr233/libghostty-spm)
-- Ghostty config import — same colors, opacity, blur, font, padding by default
+- GPU-accelerated terminals rendered by **Harness's own terminal engine** — crisp Display-P3 / sRGB color, themed translucent canvas with untouched program output (a libghostty path remains as the proven fallback during rollout)
+- Optional Ghostty config import — match your existing colors, opacity, blur, font, and padding
 - Workspaces + sidebar sessions + per-session tabs + horizontal/vertical splits
 - Session layout persistence (daemon-owned JSON)
 - **harness-cli** for automation and agent hooks
@@ -15,7 +15,7 @@ Native macOS terminal for organizing AI agents and dev sessions — Ghostty rend
 - Agent notifications (desktop + sidebar + pane rings), jump-to-waiting (`Cmd+Shift+U`) skips panes still generating
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`), Settings (`Cmd+,`)
-- 400+ color themes via GhosttyTheme
+- 485 built-in color themes + `.harnesstheme` export/import for sharing
 
 ## Download and install
 
@@ -97,8 +97,8 @@ harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 | Feature | Harness v1.0 | Ghostty | cmux | tmux |
 |---------|----------------|---------|------|------|
 | Native macOS app | Yes | Yes | Yes | No |
-| GPU libghostty | Yes | Yes | Yes | N/A |
-| Ghostty-config aware (theme/opacity/blur) | Yes | Yes | No | No |
+| GPU-rendered terminal (own engine) | Yes | Yes | Yes | N/A |
+| Ghostty-config import (theme/opacity/blur) | Yes | Yes | No | No |
 | Workspaces + agent sidebar | Yes | Limited | Yes | DIY |
 | harness-cli automation | Yes | No | Yes | Yes |
 | Scriptable send-keys / capture-pane / resize-pane | Yes | No | Limited | Yes |

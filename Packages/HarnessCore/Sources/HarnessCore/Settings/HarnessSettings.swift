@@ -58,6 +58,16 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Gamma-correct ("linear-corrected") alpha blending for text antialiasing when
     /// true, or macOS-native blending when false. Maps to Ghostty `alpha-blending`.
     public var linearBlending: Bool
+    /// Render terminal panes with Harness's own native engine + Metal renderer instead
+    /// of the libghostty fork. A/B flag during the native-renderer migration (default
+    /// off so the Ghostty path is untouched). See docs/NATIVE_RENDERER_HANDOFF.md.
+    public var useNativeRenderer: Bool
+    /// When true, the active theme's 16 ANSI colors recolor terminal *output* too (native
+    /// renderer only). Default false: the canvas (default bg/fg/cursor) always follows the
+    /// theme so it matches the chrome, but program output keeps untouched/default ANSI
+    /// colors — programs render their true colors over a themed, optionally translucent
+    /// canvas.
+    public var applyThemeToTerminalOutput: Bool
 
     public init(
         fontSize: Float = 14,
@@ -89,7 +99,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         statusLineHex: String? = nil,
         systemNotificationsEnabled: Bool = true,
         vividColors: Bool = true,
-        linearBlending: Bool = false
+        linearBlending: Bool = false,
+        useNativeRenderer: Bool = false,
+        applyThemeToTerminalOutput: Bool = false
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -121,6 +133,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.systemNotificationsEnabled = systemNotificationsEnabled
         self.vividColors = vividColors
         self.linearBlending = linearBlending
+        self.useNativeRenderer = useNativeRenderer
+        self.applyThemeToTerminalOutput = applyThemeToTerminalOutput
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -215,6 +229,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         systemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? true
         vividColors = try container.decodeIfPresent(Bool.self, forKey: .vividColors) ?? fallback.vividColors
         linearBlending = try container.decodeIfPresent(Bool.self, forKey: .linearBlending) ?? fallback.linearBlending
+        useNativeRenderer = try container.decodeIfPresent(Bool.self, forKey: .useNativeRenderer) ?? fallback.useNativeRenderer
+        applyThemeToTerminalOutput = try container.decodeIfPresent(Bool.self, forKey: .applyThemeToTerminalOutput) ?? fallback.applyThemeToTerminalOutput
     }
 
     public static func load() -> HarnessSettings {

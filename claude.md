@@ -14,9 +14,11 @@ A from-scratch, self-contained terminal stack is being built on branch
 `claude/macos-terminal-colors-N3rKO` to remove the external **libghostty fork**. The engine,
 485-theme catalog, color/Metal renderer, keyboard input encoder, and a `CAMetalLayer` surface
 view are **built and tested**; `harness attach` and the app's theme/chrome already run on the
-native code (the fork is kept only as an A/B test oracle). The remaining step is wiring
-`HarnessTerminalSurfaceView` into `TerminalHostView` behind a `useNativeRenderer` flag, then
-follow-ups (selection, scrollback, theme export UI), then deleting the fork.
+native code (the fork is kept only as an A/B test oracle). The native surface is now **wired
+into the GUI** behind `HarnessSettings.useNativeRenderer` (Settings ▸ Color rendering toggle,
+default off): when on, `TerminalHostView` builds only `HarnessTerminalSurfaceView` and the
+Ghostty surface is never constructed. Remaining: live visual verification + first-pixel fixes,
+then follow-ups (selection, scrollback, theme export UI), then deleting the fork.
 
 **Before touching the terminal renderer, theme system, or `TerminalHostView`, read
 [docs/NATIVE_RENDERER_HANDOFF.md](docs/NATIVE_RENDERER_HANDOFF.md).** New modules under
