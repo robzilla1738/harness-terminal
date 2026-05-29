@@ -134,7 +134,7 @@ final class EngineOracleTests: XCTestCase {
         return "normal"
     }
 
-    private func width(_ w: GhosttyTerminal.TerminalCellWidth) -> String {
+    private func width(_ w: GhosttyTerminal.TerminalGridCellWidth) -> String {
         if w == .wide { return "wide" }
         if w == .spacerTail { return "spacerTail" }
         return "normal"
