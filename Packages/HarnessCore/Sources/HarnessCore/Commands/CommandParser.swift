@@ -37,12 +37,13 @@ public enum CommandParser {
         }
         let tokens = lexer.collectStatementTokens()
         let canonical = resolveAlias(name) ?? name
-        // Universal `-t <target>` handling: for commands that don't parse `-t`
-        // themselves, strip the `-t <spec>` pair and wrap the result in
-        // `.targeted` so the target resolves centrally at translate time (tmux's
-        // context-sensitive `-t`). Commands in `selfTargetingCommands` keep `-t`
-        // and interpret it in their own case (index / directional / menu).
-        if !selfTargetingCommands.contains(canonical),
+        // Universal `-t <target>` handling: for the leaf verbs in
+        // `universalTargetCommands`, strip the `-t <spec>` pair and wrap the result
+        // in `.targeted` so the target resolves centrally at translate time (tmux's
+        // context-sensitive `-t`). An allowlist (not a denylist) keeps `-t` intact
+        // for verbs that interpret it themselves (select/move/swap, menu) or that
+        // carry a nested command with its own `-t` (bind-key, if-shell, …).
+        if universalTargetCommands.contains(canonical),
            let raw = stringValue(for: "-t", in: tokens) {
             let spec = TargetSpec.parse(raw)
             let reduced = removingFlagPair("-t", in: tokens)
@@ -52,12 +53,17 @@ public enum CommandParser {
         return try buildCommand(name: name, tokens: tokens)
     }
 
-    /// Commands whose `-t` is interpreted in their own `buildCommand` case (an
-    /// index, a directional/relative pane target, or a menu position) rather than
-    /// stripped and wrapped by the universal handler.
-    private static let selfTargetingCommands: Set<String> = [
-        "select-window", "select-tab", "move-window", "move-tab", "swap-window", "swap-tab",
-        "select-pane", "swap-pane", "display-menu", "menu",
+    /// Leaf verbs that accept a universal `-t session:window.pane` target. Aliases
+    /// resolve to the canonical hyphen form before this check; the `-tab` synonyms
+    /// (not in the alias table) are listed explicitly.
+    private static let universalTargetCommands: Set<String> = [
+        "split-window", "kill-pane", "zoom-pane", "resize-pane", "break-pane",
+        "respawn-pane", "send-keys", "pipe-pane", "copy-mode", "display-panes",
+        "synchronize-panes", "synchronize-pane", "setw-synchronize",
+        "kill-window", "kill-tab", "rename-window", "rename-tab",
+        "new-window", "new-tab", "rotate-window", "select-layout",
+        "new-session", "kill-session", "rename-session",
+        "link-window", "unlink-window",
     ]
 
     private static func removingFlagPair(_ flag: String, in tokens: [String]) -> [String] {
