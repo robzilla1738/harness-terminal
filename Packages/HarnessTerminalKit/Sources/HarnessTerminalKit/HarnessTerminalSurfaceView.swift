@@ -79,6 +79,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var canvasForeground: RGBColor = RGBColor(red: 255, green: 255, blue: 255)
     /// In-progress IME composition (preedit). Empty when not composing.
     private var markedText = ""
+    /// Glyph coverage gamma: 1 = native blending; < 1 = gamma-correct (thicker) text.
+    private var glyphGamma: Float = 1
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -150,9 +152,12 @@ public final class HarnessTerminalSurfaceView: NSView {
         selectionBackgroundHex: String?,
         selectionForegroundHex: String?,
         copyOnSelect: Bool,
-        scrollbackLines: Int
+        scrollbackLines: Int,
+        linearBlending: Bool
     ) {
         emulator.maxScrollbackLines = scrollbackLines
+        // Gamma-correct ("linear") blending thickens light-on-dark antialiasing slightly.
+        glyphGamma = linearBlending ? 0.8 : 1.0
         let bg = RGBColor(hex: canvasBackgroundHex) ?? RGBColor(red: 0, green: 0, blue: 0)
         let fg = RGBColor(hex: canvasForegroundHex) ?? RGBColor(red: 255, green: 255, blue: 255)
         let cursor = RGBColor(hex: cursorHex) ?? fg
@@ -330,7 +335,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             frame,
             to: drawable,
             clearColor: RenderColor(canvasBackground, alpha: canvasOpacity),
-            origin: (originOffsetX, originOffsetY)
+            origin: (originOffsetX, originOffsetY),
+            gamma: glyphGamma
         )
     }
 
@@ -562,13 +568,21 @@ public final class HarnessTerminalSurfaceView: NSView {
         var col = frame.cursor.column
         let fg = RenderColor(canvasForeground)
         for scalar in markedText.unicodeScalars {
-            guard col >= 0, col < frame.columns else { break }
+            let width = max(1, CharacterWidth.width(of: scalar))
+            guard col >= 0, col + width <= frame.columns else { break }
             let idx = row * frame.columns + col
             guard idx >= 0, idx < frame.cells.count else { break }
             frame.cells[idx].codepoint = scalar.value
             frame.cells[idx].foreground = fg
             frame.cells[idx].underline = .single
-            col += 1
+            frame.cells[idx].width = (width == 2) ? .wide : .normal
+            // Mark the trailing cell of a wide composing glyph as its spacer.
+            if width == 2, idx + 1 < frame.cells.count {
+                frame.cells[idx + 1].codepoint = 0
+                frame.cells[idx + 1].width = .spacerTail
+                frame.cells[idx + 1].underline = .single
+            }
+            col += width
         }
         frame.cursor.column = min(col, frame.columns - 1)
     }

@@ -1,3 +1,4 @@
+import HarnessTerminalEngine
 import Metal
 import QuartzCore
 import simd
@@ -17,6 +18,27 @@ private struct GlyphInstance {
     var color: SIMD4<Float>
 }
 
+/// Procedural line decoration (underline family / strikethrough / overline). Field order +
+/// alignment must match `DecoInstance` in `MetalShaders.source` (color@0, params@16,
+/// origin@32, size@40, kind@48).
+private struct DecoInstance {
+    var color: SIMD4<Float>
+    /// (centerY, thickness, amplitude, period) in px.
+    var params: SIMD4<Float>
+    var origin: SIMD2<Float>
+    var size: SIMD2<Float>
+    var kind: UInt32
+}
+
+/// Line-decoration styles; raw values match the `kind` switch in `deco_fragment`.
+private enum DecoKind: UInt32 {
+    case solid = 0
+    case double = 1
+    case dotted = 2
+    case dashed = 3
+    case curly = 4
+}
+
 /// Renders a `TerminalFrame` with Metal: a solid background pass over every cell, then a
 /// texture-sampled glyph pass, then the cursor. Pixel sizes derive from the font's cell
 /// metrics × display scale. Designed to draw into either an offscreen texture (tests) or a
@@ -29,6 +51,7 @@ public final class TerminalMetalRenderer {
     private let commandQueue: MTLCommandQueue
     private let bgPipeline: MTLRenderPipelineState
     private let glyphPipeline: MTLRenderPipelineState
+    private let decoPipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
     private let atlas: GlyphAtlas
     private let ascentPixels: Int
@@ -54,6 +77,10 @@ public final class TerminalMetalRenderer {
             glyphPipeline = try Self.makePipeline(
                 device: device, library: library,
                 vertex: "glyph_vertex", fragment: "glyph_fragment", blending: true
+            )
+            decoPipeline = try Self.makePipeline(
+                device: device, library: library,
+                vertex: "deco_vertex", fragment: "deco_fragment", blending: true
             )
         } catch {
             return nil
@@ -102,44 +129,68 @@ public final class TerminalMetalRenderer {
     /// Render `frame` into `target`, clearing to `clearColor` first. Synchronous: the
     /// command buffer is committed and waited on (suitable for offscreen capture).
     /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
-    public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0)) {
-        guard let commandBuffer = encode(frame, target: target, clearColor: clearColor, origin: origin) else { return }
+    public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1) {
+        guard let commandBuffer = encode(frame, target: target, clearColor: clearColor, origin: origin, gamma: gamma) else { return }
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
     }
 
     /// Render `frame` into a layer drawable and present it. Used by the live view.
     /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
-    public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0)) {
-        guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor, origin: origin) else { return }
+    /// `gamma` > 1 applies gamma-correct (linear) text coverage; 1 = native blending.
+    public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1) {
+        guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor, origin: origin, gamma: gamma) else { return }
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
 
-    /// Build the instance buffers and encode both passes into a fresh command buffer
-    /// targeting `target`. Caller decides whether to wait (offscreen) or present (live).
-    private func encode(_ frame: TerminalFrame, target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int)) -> MTLCommandBuffer? {
+    /// Build the instance buffers and encode the background, glyph, and decoration passes
+    /// into a fresh command buffer. Caller decides whether to wait (offscreen) or present.
+    private func encode(_ frame: TerminalFrame, target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int), gamma: Float) -> MTLCommandBuffer? {
         let viewport = SIMD2<Float>(Float(target.width), Float(target.height))
         let ox = Float(origin.x)
         let oy = Float(origin.y)
+        let cellW = Float(cellPixelWidth)
+        let cellH = Float(cellPixelHeight)
+        // Decoration geometry (px): line thickness, underline baseline offset, etc.
+        let thickness = max(1, Float(cellPixelHeight) / 16)
+        let underlineY = min(cellH - thickness, Float(ascentPixels) + max(1, cellH * 0.08))
+        let strikeY = Float(ascentPixels) * 0.65
+        let overlineY = thickness
+
+        // Cursor cell + whether the glyph there should flip to the cursor-text color.
+        let cursorCol = frame.cursor.column
+        let cursorRow = frame.cursor.row
+        let invertCursorGlyph = frame.cursor.visible && frame.cursor.style == .block
 
         var backgrounds: [BgInstance] = []
         backgrounds.reserveCapacity(frame.cells.count + 1)
         var glyphs: [GlyphInstance] = []
+        var decorations: [DecoInstance] = []
 
         for cell in frame.cells {
             let originX = ox + Float(cell.column * cellPixelWidth)
             let originY = oy + Float(cell.row * cellPixelHeight)
             backgrounds.append(BgInstance(
                 origin: SIMD2(originX, originY),
-                size: SIMD2(Float(cellPixelWidth), Float(cellPixelHeight)),
+                size: SIMD2(cellW, cellH),
                 color: vector(cell.background)
             ))
+
+            // Line decorations sit on top of the glyph; emit for the full cell.
+            appendDecorations(cell, originX: originX, originY: originY,
+                              cellSize: SIMD2(cellW, cellH),
+                              thickness: thickness, underlineY: underlineY,
+                              strikeY: strikeY, overlineY: overlineY, into: &decorations)
 
             guard cell.hasGlyph,
                   let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
             else { continue }
 
+            // The glyph under a block cursor flips to the cursor-text color for legibility.
+            let fg = (invertCursorGlyph && cell.row == cursorRow && cell.column == cursorCol)
+                ? vector(frame.cursor.textColor)
+                : vector(cell.foreground)
             let gx = originX + Float(entry.bearingX)
             let gy = originY + Float(ascentPixels - entry.bearingY)
             glyphs.append(GlyphInstance(
@@ -147,7 +198,7 @@ public final class TerminalMetalRenderer {
                 size: SIMD2(Float(entry.pixelWidth), Float(entry.pixelHeight)),
                 uvOrigin: entry.uvOrigin,
                 uvSize: entry.uvSize,
-                color: vector(cell.foreground)
+                color: fg
             ))
         }
 
@@ -202,19 +253,70 @@ public final class TerminalMetalRenderer {
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: backgrounds.count)
         }
 
-        // Glyph pass.
+        // Glyph pass (with the gamma-correct coverage uniform).
         if !glyphs.isEmpty,
            let buffer = device.makeBuffer(bytes: glyphs, length: glyphs.count * MemoryLayout<GlyphInstance>.stride, options: .storageModeShared) {
+            var glyphGamma = max(0.1, gamma)
             renderEncoder.setRenderPipelineState(glyphPipeline)
             renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
             renderEncoder.setFragmentTexture(atlas.texture, index: 0)
             renderEncoder.setFragmentSamplerState(sampler, index: 0)
+            renderEncoder.setFragmentBytes(&glyphGamma, length: MemoryLayout<Float>.stride, index: 0)
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: glyphs.count)
+        }
+
+        // Decoration pass (underline family / strikethrough / overline) — over the glyphs.
+        if !decorations.isEmpty,
+           let buffer = device.makeBuffer(bytes: decorations, length: decorations.count * MemoryLayout<DecoInstance>.stride, options: .storageModeShared) {
+            renderEncoder.setRenderPipelineState(decoPipeline)
+            renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: decorations.count)
         }
 
         renderEncoder.endEncoding()
         return commandBuffer
+    }
+
+    /// Emit underline (any style) + strikethrough + overline decoration instances for a cell.
+    private func appendDecorations(
+        _ cell: RenderCell,
+        originX: Float, originY: Float, cellSize: SIMD2<Float>,
+        thickness: Float, underlineY: Float, strikeY: Float, overlineY: Float,
+        into decorations: inout [DecoInstance]
+    ) {
+        let origin = SIMD2(originX, originY)
+        if cell.underline != .none {
+            let kind: DecoKind
+            switch cell.underline {
+            case .none: kind = .solid
+            case .single: kind = .solid
+            case .double: kind = .double
+            case .curly: kind = .curly
+            case .dotted: kind = .dotted
+            case .dashed: kind = .dashed
+            }
+            decorations.append(DecoInstance(
+                color: vector(cell.underlineColor),
+                params: SIMD4(underlineY, thickness, max(1, thickness), max(2, cellSize.x * 0.5)),
+                origin: origin, size: cellSize, kind: kind.rawValue
+            ))
+        }
+        if cell.strikethrough {
+            decorations.append(DecoInstance(
+                color: vector(cell.foreground),
+                params: SIMD4(strikeY, thickness, 0, 0),
+                origin: origin, size: cellSize, kind: DecoKind.solid.rawValue
+            ))
+        }
+        if cell.overline {
+            decorations.append(DecoInstance(
+                color: vector(cell.foreground),
+                params: SIMD4(overlineY, thickness, 0, 0),
+                origin: origin, size: cellSize, kind: DecoKind.solid.rawValue
+            ))
+        }
     }
 
     private func vector(_ c: RenderColor) -> SIMD4<Float> {

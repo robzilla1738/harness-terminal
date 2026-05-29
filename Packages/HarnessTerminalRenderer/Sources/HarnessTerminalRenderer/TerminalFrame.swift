@@ -94,13 +94,24 @@ public struct CursorRender: Equatable, Sendable {
     public var column: Int
     public var visible: Bool
     public var color: RenderColor
+    /// Color of the glyph sitting under a block cursor (for legibility), typically the
+    /// theme cursor-text / canvas background.
+    public var textColor: RenderColor
     public var style: CursorStyle
 
-    public init(row: Int, column: Int, visible: Bool, color: RenderColor, style: CursorStyle = .block) {
+    public init(
+        row: Int,
+        column: Int,
+        visible: Bool,
+        color: RenderColor,
+        textColor: RenderColor,
+        style: CursorStyle = .block
+    ) {
         self.row = row
         self.column = column
         self.visible = visible
         self.color = color
+        self.textColor = textColor
         self.style = style
     }
 }
@@ -140,6 +151,8 @@ public struct FrameBuilder {
     public let resolver: CellColorResolver
     /// Cursor block color (typically the theme cursor color).
     public let cursorColor: RGBColor
+    /// Color for the glyph under a block cursor (cursor-text); defaults to the canvas bg.
+    public let cursorTextColor: RGBColor
     /// Alpha (0...1) applied to cells drawn with the *default* (canvas) background, so the
     /// canvas can be translucent (showing the window blur) while program output stays
     /// readable. Cells with an explicit program background — and any glyph/cursor — remain
@@ -155,6 +168,7 @@ public struct FrameBuilder {
     public init(
         resolver: CellColorResolver,
         cursorColor: RGBColor,
+        cursorTextColor: RGBColor? = nil,
         canvasOpacity: Float = 1,
         cursorStyle: CursorStyle = .block,
         selectionBackground: RGBColor? = nil,
@@ -162,6 +176,7 @@ public struct FrameBuilder {
     ) {
         self.resolver = resolver
         self.cursorColor = cursorColor
+        self.cursorTextColor = cursorTextColor ?? resolver.defaultBackground
         self.canvasOpacity = max(0, min(1, canvasOpacity))
         self.cursorStyle = cursorStyle
         self.selectionBackground = selectionBackground
@@ -181,6 +196,7 @@ public struct FrameBuilder {
         self.init(
             resolver: resolver,
             cursorColor: theme.cursor ?? theme.foreground,
+            cursorTextColor: theme.cursorText ?? theme.background,
             canvasOpacity: canvasOpacity,
             cursorStyle: cursorStyle,
             selectionBackground: selectionBackground,
@@ -239,6 +255,7 @@ public struct FrameBuilder {
                 column: snapshot.cursor.col,
                 visible: snapshot.cursor.visible,
                 color: RenderColor(cursorColor),
+                textColor: RenderColor(cursorTextColor),
                 style: cursorStyle
             )
         )
