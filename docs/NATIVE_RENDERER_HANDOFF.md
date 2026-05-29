@@ -89,14 +89,26 @@ cutover gate):
   backgrounds stay opaque), the Metal clear uses the same alpha, and the layer goes non-opaque so
   the window-wide CGS blur shows through — matching the chrome glass. `contentsGravity = .topLeft`
   parks any sub-cell remainder at the bottom-right.
+- ✅ **Window padding** — `windowPaddingX/Y` inset the grid (device px); the renderer draws at
+  that `origin` offset and the canvas fills the padding region.
+- ✅ **Cursor style + blink** — block/bar/underline (`CursorStyle` on `CursorRender`, drawn by
+  `TerminalMetalRenderer`); `settings.cursorBlink` drives a 0.53s timer that hides the cursor on
+  the off-beat while focused, woken solid by typing/output/focus.
+- ✅ **Text selection + copy + copy-on-select** — `TerminalSelection` (normalized linear span)
+  highlights via `FrameBuilder`; mouse drag in `HarnessTerminalSurfaceView` builds it (point→cell
+  accounts for padding + scale + AppKit's bottom-left origin); ⌘C / Edit▸Copy / copy-on-select
+  extract (wide-char aware, trailing-trimmed, `\n`-joined) to `NSPasteboard` + the daemon paste
+  buffer. **Verify the highlight with a real mouse drag** — automated drag tests are flaky.
 
 ### Follow-ups (after it renders live)
-- **Mouse reporting** (SGR 1006), **text selection + copy/copy-on-select**, **scrollback view**
-  (engine renders the viewport; daemon owns history — decide how to scroll back), **IME / dead
-  keys** (call `interpretKeyEvents` / adopt `NSTextInputClient`), **ligatures**, **procedural
-  box-drawing/block glyphs** for pixel alignment, **damage tracking** (only redraw dirty rows),
-  **cursor style/blink** (native draws a plain block), **window padding** (native ignores
-  `windowPaddingX/Y` today).
+- **Mouse reporting** (SGR 1006) — when `emulator.modes.mouseTrackingEnabled`, encode mouse
+  events to the PTY instead of selecting (shift overrides to force selection).
+- **Scrollback view** — the engine renders only the viewport; the daemon owns history. Give the
+  engine/screen a history ring and let the surface scroll an offset into history+viewport
+  (wheel/keys).
+- **IME / dead keys** (adopt `NSTextInputClient`), **ligatures**, **procedural box-drawing/block
+  glyphs** for pixel alignment, **damage tracking** (only redraw dirty rows), **program-driven
+  cursor style** (DECSCUSR), **cursor-text inversion** under a block cursor.
 - **Theme export/import UI** in `SettingsViewController` (NSSavePanel/NSOpenPanel via
   `ThemeFileService`) + register the `.harnesstheme` doc type in `Info.plist` + handle
   `application(_:open:)` for double-click install.
