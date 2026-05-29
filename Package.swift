@@ -10,6 +10,9 @@ let package = Package(
         // Swift, no Metal/AppKit — replaces the libghostty fork's GhosttyTerminal. Grows
         // alongside the fork (which stays as an A/B correctness oracle) until cutover.
         .library(name: "HarnessTerminalEngine", targets: ["HarnessTerminalEngine"]),
+        // Native theme catalog + the shareable `.harnesstheme` document format. Pure
+        // Swift — replaces the libghostty fork's GhosttyTheme.
+        .library(name: "HarnessTheme", targets: ["HarnessTheme"]),
         .library(name: "HarnessTerminalKit", targets: ["HarnessTerminalKit"]),
         .executable(name: "Harness", targets: ["HarnessApp"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
@@ -36,6 +39,11 @@ let package = Package(
         .target(
             name: "HarnessTerminalEngine",
             path: "Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine"
+        ),
+        // Native theme system — pure Swift, no external dependencies.
+        .target(
+            name: "HarnessTheme",
+            path: "Packages/HarnessTheme/Sources/HarnessTheme"
         ),
         .target(
             name: "HarnessTerminalKit",
@@ -83,6 +91,11 @@ let package = Package(
             name: "HarnessTerminalEngineTests",
             dependencies: ["HarnessTerminalEngine"],
             path: "Tests/HarnessTerminalEngineTests"
+        ),
+        .testTarget(
+            name: "HarnessThemeTests",
+            dependencies: ["HarnessTheme"],
+            path: "Tests/HarnessThemeTests"
         ),
         .testTarget(
             name: "HarnessTerminalKitTests",
