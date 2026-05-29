@@ -14,6 +14,12 @@ final class MainSplitViewController: NSViewController {
     /// Bumped each time a sidebar collapse/expand starts so any in-flight animation
     /// frame bails out — prevents two toggles from fighting over the divider position.
     private var sidebarAnimToken = 0
+    /// Owned (not a singleton) so collapse state is per-window. Carries the
+    /// `allowFullCollapse` flag the divider min-coordinate reads.
+    private let splitDelegate = SplitChromeDelegate()
+    /// Leading inset the tab strip needs to clear the macOS traffic lights when the
+    /// sidebar is fully collapsed (content shifts to x=0 under `.fullSizeContentView`).
+    private let trafficLightInset: CGFloat = 72
 
     override func loadView() {
         let root = NSView()
@@ -25,8 +31,10 @@ final class MainSplitViewController: NSViewController {
         super.viewDidLoad()
         split.isVertical = true
         split.dividerStyle = .thin
-        split.autosaveName = "HarnessMainSplit"
-        split.delegate = SplitChromeDelegate.shared
+        // No autosaveName: visibility lives in `settings.sidebarVisible` and is
+        // re-applied on load; an autosaved divider width would restore a stale
+        // collapsed state and fight the settings-driven restore.
+        split.delegate = splitDelegate
 
         // Container is a transparent wrapper so the sidebar.view's own chrome
         // backdrop is the only one in play. Stacking two ChromeBackdrops (one
@@ -147,24 +155,38 @@ final class MainSplitViewController: NSViewController {
     /// Collapse/expand the sidebar. `NSSplitView.setPosition` is not animatable via the
     /// animator proxy, so for a genuinely fluid slide we drive the divider ourselves
     /// with an eased per-frame stepper. A token cancels any in-flight animation.
+    ///
+    /// `allowFullCollapse` is set on the delegate for the whole move so the divider's
+    /// min-coordinate drops to 0 (it's 200 at rest, so a *user drag* can't shrink the
+    /// sidebar to an unusable sliver — but a programmatic collapse must reach 0).
     func setSidebarVisible(_ visible: Bool, animated: Bool) {
         SessionCoordinator.shared.settings.sidebarVisible = visible
         try? SessionCoordinator.shared.settings.save()
         sidebarAnimToken &+= 1
         let target = visible ? HarnessDesign.sidebarWidth : 0
+        splitDelegate.allowFullCollapse = true
 
         guard animated, let panel = split.subviews.first else {
-            split.subviews.first?.isHidden = !visible
+            let panel = split.subviews.first
+            panel?.isHidden = false              // unhide so setPosition can size it to 0
             split.setPosition(target, ofDividerAt: 0)
+            panel?.isHidden = !visible
+            splitDelegate.allowFullCollapse = false
+            edgeDivider.isHidden = !visible
+            updateContentLeadingInset(visible: visible)
             return
         }
 
-        // Expanding: unhide before the slide so the panel is visible as it grows.
+        // Unhide before the slide so the panel is visible as it shrinks/grows.
         panel.isHidden = false
+        // Show/hide the inner hairline immediately so it never strands over the terminal.
+        edgeDivider.isHidden = !visible
         let start = panel.frame.width
         guard abs(target - start) > 0.5 else {
             split.setPosition(target, ofDividerAt: 0)
             if !visible { panel.isHidden = true }
+            splitDelegate.allowFullCollapse = false
+            updateContentLeadingInset(visible: visible)
             return
         }
         animateSidebar(from: start, to: target, t0: CACurrentMediaTime(), visible: visible, token: sidebarAnimToken)
@@ -176,6 +198,7 @@ final class MainSplitViewController: NSViewController {
         let raw = min(1, max(0, (CACurrentMediaTime() - t0) / duration))
         // easeInOutQuad — smooth start and settle.
         let eased = raw < 0.5 ? 2 * raw * raw : 1 - pow(-2 * raw + 2, 2) / 2
+        let width = start + (target - start) * CGFloat(eased)
         // Drive the divider inside a transaction with implicit actions OFF and lay
         // out synchronously each frame. Without this, the manual per-frame
         // setPosition lets the sidebar's vibrancy/glass backdrop animate its bounds
@@ -184,11 +207,16 @@ final class MainSplitViewController: NSViewController {
         // layout keeps the backdrop locked to the divider every step.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        split.setPosition(start + (target - start) * CGFloat(eased), ofDividerAt: 0)
+        split.setPosition(width, ofDividerAt: 0)
+        // Interpolate the tab-strip inset against the live sidebar width so it slides
+        // in lockstep with the divider rather than snapping at the end.
+        setContentLeadingInset(forSidebarWidth: width)
         split.layoutSubtreeIfNeeded()
         CATransaction.commit()
         if raw >= 1 {
             if !visible { panel.isHidden = true }
+            splitDelegate.allowFullCollapse = false   // restore the 200pt drag floor
+            updateContentLeadingInset(visible: visible)
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0) { [weak self] in
@@ -196,6 +224,17 @@ final class MainSplitViewController: NSViewController {
                 self?.animateSidebar(from: start, to: target, t0: t0, visible: visible, token: token)
             }
         }
+    }
+
+    /// Inset the tab strip proportionally to how collapsed the sidebar is: full inset
+    /// at width 0, none once the sidebar is wide enough to cover the traffic lights.
+    private func setContentLeadingInset(forSidebarWidth width: CGFloat) {
+        let t = max(0, min(1, 1 - width / trafficLightInset))
+        content.setTabBarLeadingInset(trafficLightInset * t)
+    }
+
+    private func updateContentLeadingInset(visible: Bool) {
+        content.setTabBarLeadingInset(visible ? 0 : trafficLightInset)
     }
 
     func toggleSidebar() {
@@ -206,10 +245,14 @@ final class MainSplitViewController: NSViewController {
 
 @MainActor
 private final class SplitChromeDelegate: NSObject, NSSplitViewDelegate {
-    static let shared = SplitChromeDelegate()
+    /// While a programmatic collapse/expand is running, let the divider reach 0 so the
+    /// sidebar can fully disappear. At rest it's false, so a *user drag* still floors
+    /// at 200pt and can't shrink the sidebar to an unusable sliver.
+    var allowFullCollapse = false
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimum: CGFloat, ofSubviewAt index: Int) -> CGFloat {
-        index == 0 ? 200 : proposedMinimum
+        guard index == 0 else { return proposedMinimum }
+        return allowFullCollapse ? 0 : 200
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximum: CGFloat, ofSubviewAt index: Int) -> CGFloat {

@@ -37,6 +37,12 @@ final class TerminalTabBarView: NSView {
 
     private let newTabButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private let overflowButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+    /// Always-visible control at the content's leading edge that shows/hides the
+    /// session sidebar. Sits inside the traffic-light clearance so it doubles as the
+    /// "show sidebar" affordance when the sidebar is collapsed.
+    private let sidebarToggleButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+    /// Invoked when the sidebar-toggle button is clicked. Wired by the content VC.
+    var onToggleSidebar: (() -> Void)?
     private var tabs: [Tab] = []
     private var activeTabID: TabID?
     private var pillsByID: [TabID: TabPillView] = [:]
@@ -48,6 +54,18 @@ final class TerminalTabBarView: NSView {
     private let buttonSize: CGFloat = 24
     private let minPillWidth: CGFloat = 72
     private let maxPillWidth: CGFloat = 200
+
+    /// Extra leading inset so the tab strip clears the macOS traffic lights when the
+    /// sidebar is collapsed (content shifts to x=0 under `.fullSizeContentView`). 0
+    /// when the sidebar is visible. Driven (and animated) by the split controller.
+    var leadingInset: CGFloat = 0 {
+        didSet { guard leadingInset != oldValue else { return }; needsLayout = true }
+    }
+
+    /// Leading x of the sidebar-toggle button (rides the traffic-light inset).
+    private var sidebarToggleLeft: CGFloat { edgeInset + leadingInset }
+    /// Leading x for all tab pills / buttons (after the toggle button).
+    private var contentLeft: CGFloat { sidebarToggleLeft + buttonSize + pillSpacing }
 
     // Drag-reorder state.
     private weak var draggingPill: TabPillView?
@@ -67,6 +85,13 @@ final class TerminalTabBarView: NSView {
 
     private func setup() {
         HarnessDesign.applyTabBarChrome(to: self)
+
+        sidebarToggleButton.setSymbol("sidebar.left", accessibilityDescription: "Toggle sidebar", pointSize: 12, weight: .medium)
+        sidebarToggleButton.toolTip = "Toggle sidebar (⌘\\)"
+        sidebarToggleButton.target = self
+        sidebarToggleButton.action = #selector(sidebarToggleClicked)
+        sidebarToggleButton.translatesAutoresizingMaskIntoConstraints = true
+        addSubview(sidebarToggleButton)
 
         newTabButton.setSymbol("plus", accessibilityDescription: "New tab", pointSize: 11, weight: .medium)
         newTabButton.toolTip = "New tab (⌘T)"
@@ -140,10 +165,22 @@ final class TerminalTabBarView: NSView {
         }
         newTabButton.applyChrome()
         overflowButton.applyChrome()
+        sidebarToggleButton.applyChrome()
     }
 
     @objc private func addNewTab() {
         delegate?.tabBarDidRequestNewTab()
+    }
+
+    @objc private func sidebarToggleClicked() {
+        onToggleSidebar?()
+    }
+
+    /// Animate the traffic-light clearance inset (driven by the split controller as the
+    /// sidebar collapses/expands). 0 = sidebar visible, ~72 = collapsed.
+    func setLeadingInset(_ inset: CGFloat) {
+        leadingInset = inset
+        layoutSubtreeIfNeeded()
     }
 
     // MARK: - Layout
@@ -157,14 +194,16 @@ final class TerminalTabBarView: NSView {
     private func layoutPills() {
         let count = orderedPills.count
         let buttonY = (bounds.height - buttonSize) / 2
+        // Sidebar toggle always sits at the content's leading edge (rides the inset).
+        sidebarToggleButton.frame = NSRect(x: sidebarToggleLeft, y: buttonY, width: buttonSize, height: buttonSize)
         guard count > 0 else {
-            newTabButton.frame = NSRect(x: edgeInset, y: buttonY, width: buttonSize, height: buttonSize)
+            newTabButton.frame = NSRect(x: contentLeft, y: buttonY, width: buttonSize, height: buttonSize)
             overflowButton.isHidden = true
             return
         }
 
         // Try to fit every pill inline alongside the "+" button.
-        let inlineAvail = bounds.width - edgeInset * 2 - buttonSize - pillSpacing
+        let inlineAvail = bounds.width - contentLeft - edgeInset - buttonSize - pillSpacing
         var pillWidth = min(maxPillWidth, (inlineAvail - pillSpacing * CGFloat(count - 1)) / CGFloat(count))
 
         var needsOverflow = false
@@ -172,7 +211,7 @@ final class TerminalTabBarView: NSView {
         if pillWidth < minPillWidth {
             // Can't fit all even at minimum width — reserve the overflow button too.
             needsOverflow = true
-            let avail = bounds.width - edgeInset * 2 - buttonSize * 2 - pillSpacing * 2
+            let avail = bounds.width - contentLeft - edgeInset - buttonSize * 2 - pillSpacing * 2
             vCount = min(count, max(1, Int((avail + pillSpacing) / (minPillWidth + pillSpacing))))
             pillWidth = max(minPillWidth, (avail - pillSpacing * CGFloat(vCount - 1)) / CGFloat(vCount))
         }
@@ -190,7 +229,7 @@ final class TerminalTabBarView: NSView {
         currentPillWidth = pillWidth
 
         let y = (bounds.height - HarnessDesign.tabPillHeight) / 2
-        var x = edgeInset
+        var x = contentLeft
         for (i, pill) in orderedPills.enumerated() {
             let visible = i >= start && i < start + vCount
             pill.isHidden = !visible
@@ -207,7 +246,7 @@ final class TerminalTabBarView: NSView {
     }
 
     private func slotX(_ slot: Int) -> CGFloat {
-        edgeInset + CGFloat(slot) * (currentPillWidth + pillSpacing)
+        contentLeft + CGFloat(slot) * (currentPillWidth + pillSpacing)
     }
 
     // MARK: - Drag reorder
@@ -220,7 +259,7 @@ final class TerminalTabBarView: NSView {
             pill.layer?.zPosition = 100
         }
         var f = pill.frame
-        f.origin.x = max(edgeInset, min(loc.x - dragGrabOffsetX, bounds.width - edgeInset - f.width))
+        f.origin.x = max(contentLeft, min(loc.x - dragGrabOffsetX, bounds.width - edgeInset - f.width))
         pill.frame = f
         repositionForDrag(pill)
     }
@@ -234,7 +273,7 @@ final class TerminalTabBarView: NSView {
         // Target slot from the dragged pill's own position (stable — independent of
         // the others, which are mid-animation).
         let pitch = currentPillWidth + pillSpacing
-        let raw = pitch > 0 ? (dragged.frame.minX - edgeInset) / pitch : 0
+        let raw = pitch > 0 ? (dragged.frame.minX - contentLeft) / pitch : 0
         let target = max(0, min(Int(raw.rounded()), visible.count - 1))
         dragTargetIndex = visibleStart + target
 

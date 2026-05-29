@@ -369,6 +369,101 @@ final class SoftIconButton: NSButton {
     }
 }
 
+/// Theme-aware pill button used for primary/secondary actions across onboarding and
+/// settings. Deliberately monochrome — the app's deep-black chrome reads as one
+/// surface, so we never tint these with the system accent (no macOS blue). `.primary`
+/// is a filled near-foreground pill with an on-canvas (background-colored) label;
+/// `.secondary` is a quiet outlined pill. Manages its own tracking area + chrome,
+/// mirroring `SoftIconButton`.
+@MainActor
+final class HarnessPillButton: NSButton {
+    enum Kind { case primary, secondary }
+
+    private let kind: Kind
+    private let titleLabel = NSTextField(labelWithString: "")
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false { didSet { applyChrome() } }
+    private var isPressed = false { didSet { applyChrome() } }
+
+    init(title: String, kind: Kind = .primary) {
+        self.kind = kind
+        super.init(frame: .zero)
+        self.title = ""
+        wantsLayer = true
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryChange)
+        layer?.cornerRadius = HarnessDesign.Radius.control
+        layer?.cornerCurve = .continuous
+
+        titleLabel.stringValue = title
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.alignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleLabel)
+        NSLayoutConstraint.activate([
+            titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
+        ])
+        setContentHuggingPriority(.required, for: .horizontal)
+        applyChrome()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setTitleText(_ text: String) {
+        titleLabel.stringValue = text
+        applyChrome()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false; isPressed = false }
+    override func mouseDown(with event: NSEvent) {
+        isPressed = true
+        super.mouseDown(with: event)
+        isPressed = false
+    }
+
+    private func applyChrome() {
+        let c = HarnessDesign.chrome
+        switch kind {
+        case .primary:
+            // Filled near-foreground; label paints in the canvas color so it reads on
+            // the bright fill regardless of theme (dark label on light themes too).
+            let base = c.textPrimary
+            let fill = isPressed
+                ? base.withAlphaComponent(0.82)
+                : (isHovered ? base.withAlphaComponent(0.92) : base)
+            layer?.backgroundColor = fill.cgColor
+            layer?.borderWidth = 0
+            titleLabel.textColor = c.terminalBackground
+        case .secondary:
+            let resting = c.surfaceElevated
+            let hover = c.textPrimary.withAlphaComponent(c.isDark ? 0.12 : 0.10)
+            layer?.backgroundColor = (isPressed || isHovered ? hover : resting).cgColor
+            layer?.borderWidth = 1
+            layer?.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
+            titleLabel.textColor = isHovered ? c.textPrimary : c.textSecondary
+        }
+    }
+}
+
 /// Backdrop that blends an NSVisualEffectView with a thin tint overlay so the
 /// chrome feels native (Terminal-style blur) while still respecting the
 /// active theme color. When window opacity is fully opaque, the vibrancy view

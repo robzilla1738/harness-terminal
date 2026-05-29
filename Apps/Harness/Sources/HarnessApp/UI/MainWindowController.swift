@@ -54,8 +54,21 @@ final class MainWindowController: NSWindowController {
         if let content = window.contentView {
             content.wantsLayer = true
             content.layer?.backgroundColor = NSColor.clear.cgColor
-            content.layer?.cornerRadius = 0
-            content.layer?.masksToBounds = false
+            if isOpaque {
+                // Opaque: the system window mask crops the solid fill cleanly, and
+                // leaving clipping off keeps the Metal terminal layer un-masked.
+                content.layer?.cornerRadius = 0
+                content.layer?.masksToBounds = false
+            } else {
+                // Translucent: clip the whole composited stack (chrome + terminal + the
+                // CGS blur showing through) to the system corner radius. The rectangular
+                // CGS backdrop blur is otherwise masked only by the square contentView,
+                // so it pokes a light fringe past the window's rounded corners. Clipping
+                // makes the corners transparent, so the server blur isn't shown there.
+                content.layer?.cornerRadius = Self.systemWindowCornerRadius(for: window)
+                content.layer?.cornerCurve = .continuous
+                content.layer?.masksToBounds = true
+            }
         }
 
         // One uniform blur for the whole window — the same private CGS surface blur
@@ -65,5 +78,19 @@ final class MainWindowController: NSWindowController {
         // share exactly one blurred backdrop. (the renderer's own `background-blur` is a
         // no-op in embedded mode since it doesn't own this NSWindow.) Opaque → no blur.
         WindowBlur.apply(radius: isOpaque ? 0 : settings.backgroundBlur, to: window)
+    }
+
+    /// Best-effort system window corner radius. There's no public API, and macOS 26
+    /// (Liquid Glass) rounds windows more than classic macOS — so read the theme frame
+    /// view's backing-layer radius when it's realized, falling back to a per-OS constant
+    /// (bias slightly large: over-rounding hides under the system mask, under-rounding
+    /// reintroduces the fringe).
+    static func systemWindowCornerRadius(for window: NSWindow) -> CGFloat {
+        if let frameLayer = window.contentView?.superview?.layer,
+           frameLayer.cornerRadius > 0.5 {
+            return frameLayer.cornerRadius
+        }
+        if #available(macOS 26.0, *) { return 16 }
+        return 10
     }
 }

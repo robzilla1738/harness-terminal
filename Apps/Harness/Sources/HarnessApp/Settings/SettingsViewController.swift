@@ -313,6 +313,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     // MARK: - Shell layout (sidebar + paged content)
 
     private func layoutShell() {
+        // The right-hand content area paints the theme canvas so the window reads as
+        // one surface with the app (cards lift off it); the left nav is glassy chrome.
+        view.wantsLayer = true
+        view.layer?.backgroundColor = HarnessChrome.current.terminalBackground.cgColor
+
         let sidebar = buildSidebar()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(sidebar)
@@ -320,8 +325,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         pageContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(pageContainer)
 
-        let doneButton = NSButton(title: "Done", target: self, action: #selector(closeWindow))
-        doneButton.bezelStyle = .rounded
+        let doneButton = HarnessPillButton(title: "Done", kind: .primary)
+        doneButton.target = self
+        doneButton.action = #selector(closeWindow)
         doneButton.keyEquivalent = "\r"
         doneButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(doneButton)
@@ -330,21 +336,22 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             sidebar.topAnchor.constraint(equalTo: view.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sidebar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: 200),
+            sidebar.widthAnchor.constraint(equalToConstant: 208),
 
             pageContainer.topAnchor.constraint(equalTo: view.topAnchor),
             pageContainer.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             pageContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            pageContainer.bottomAnchor.constraint(equalTo: doneButton.topAnchor, constant: -12),
+            pageContainer.bottomAnchor.constraint(equalTo: doneButton.topAnchor, constant: -10),
 
             doneButton.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
-            doneButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -22),
+            doneButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
         ])
 
         pages[0] = buildAppearancePage()
-        pages[1] = buildTerminalPage()
-        pages[2] = buildPrefixPage()
-        pages[3] = buildAgentColorsPage()
+        pages[1] = buildColorsPage()
+        pages[2] = buildTerminalPage()
+        pages[3] = buildKeysPage()
+        pages[4] = buildAgentsPage()
     }
 
     private func showPage(_ index: Int) {
@@ -367,20 +374,23 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     private var sidebarButtons: [SettingsSidebarButton] = []
     private let settingsSearch = NSSearchField()
     private static let sectionKeywords: [Int: [String]] = [
-        0: ["theme", "opacity", "blur", "padding", "appearance", "background", "foreground", "transparent"],
-        1: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session"],
-        2: ["prefix", "binding", "keybinding", "shortcut", "agent", "hook"],
-        3: ["agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw"],
+        0: ["appearance", "theme", "opacity", "blur", "padding", "window", "transparent", "titlebar"],
+        1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status"],
+        2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session"],
+        3: ["keys", "prefix", "binding", "keybinding", "shortcut"],
+        4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification"],
     ]
 
     private func buildSidebar() -> NSView {
-        let container = NSVisualEffectView()
-        container.material = .underWindowBackground
-        container.blendingMode = .behindWindow
-        container.state = .followsWindowActiveState
+        // Theme-aware glass rail (real Liquid Glass on macOS 26) instead of the raw
+        // system vibrancy + label colors, so the nav matches the app chrome.
+        let container = NSView()
+        container.wantsLayer = true
+        HarnessDesign.applySidebarChrome(to: container)
 
         let title = NSTextField(labelWithString: "Settings")
         title.font = .systemFont(ofSize: 19, weight: .bold)
+        title.textColor = HarnessChrome.current.textPrimary
         title.translatesAutoresizingMaskIntoConstraints = false
 
         settingsSearch.placeholderString = "Filter sections…"
@@ -397,9 +407,10 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         sidebarButtons.removeAll()
         let entries: [(String, String)] = [
             ("Appearance", "paintbrush"),
+            ("Colors", "paintpalette"),
             ("Terminal", "terminal"),
-            ("Prefix + Agents", "keyboard"),
-            ("Agent Colors", "sparkles"),
+            ("Keys", "keyboard"),
+            ("Agents", "sparkles"),
         ]
         for (index, entry) in entries.enumerated() {
             let button = SettingsSidebarButton(title: entry.0, symbol: entry.1)
@@ -415,13 +426,13 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         container.addSubview(settingsSearch)
         container.addSubview(buttons)
         NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: container.topAnchor, constant: 28),
+            title.topAnchor.constraint(equalTo: container.topAnchor, constant: 30),
             title.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
             title.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
             settingsSearch.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 18),
             settingsSearch.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
             settingsSearch.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
-            buttons.topAnchor.constraint(equalTo: settingsSearch.bottomAnchor, constant: 14),
+            buttons.topAnchor.constraint(equalTo: settingsSearch.bottomAnchor, constant: 16),
             buttons.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
             buttons.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
         ])
@@ -450,27 +461,18 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     // MARK: - Page: Appearance
 
     private func buildAppearancePage() -> NSView {
-        // terminal config is imported automatically as the default theme on first
-        // launch (and whenever its signature changes). No manual button — the
-        // user's terminal config IS the default.
         let header = pageHeader(title: "Appearance", trailing: nil)
-
         livePreview.translatesAutoresizingMaskIntoConstraints = false
 
-        // Theme picker is the primary control. Use Theme Colors / Reset to Defaults
-        // are secondary and styled as link buttons so the row reads cleanly.
         useThemeColorsButton.title = "Use theme colors"
         styleAsLink(useThemeColorsButton)
         let resetDefaults = makeLinkButton("Reset to defaults", action: #selector(resetToDefaults))
-        // The theme row is just the popup; the two link actions live on their own row
-        // below so they never get squeezed into wrapping (the old single-row layout
-        // collapsed the links to a few px wide on narrow content widths).
         for link in [useThemeColorsButton, resetDefaults] {
             link.lineBreakMode = .byClipping
             link.setContentCompressionResistancePriority(.required, for: .horizontal)
             link.setContentHuggingPriority(.required, for: .horizontal)
         }
-        themePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        themePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
 
         let opacityRow = NSStackView(views: [opacitySlider, opacityLabel])
         opacityRow.orientation = .horizontal
@@ -503,18 +505,37 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         themeActions.spacing = 16
         themeActions.alignment = .centerY
 
-        let windowGroup = formGrid(rows: [
+        let themeGroup = formGrid(rows: [
             ("Theme", themePopup),
             ("", themeActions),
+        ])
+        let windowGroup = formGrid(rows: [
             ("Opacity", opacityRow),
             ("Blur", blurRow),
             ("Padding", paddingRow),
             ("", transparentTitlebarToggle),
         ])
 
-        // Terminal colors (full terminal parity). colorBindings 0–6 are the terminal
-        // colors; 7–8 are the chrome accents. The selected theme seeds every one of
-        // these; the user can then edit any swatch.
+        let stack = NSStackView(views: [
+            header,
+            livePreview,
+            sectionCard("Theme", themeGroup),
+            sectionCard("Window", windowGroup),
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return scrollWrap(stack)
+    }
+
+    // MARK: - Page: Colors
+
+    private func buildColorsPage() -> NSView {
+        let header = pageHeader(title: "Colors", trailing: nil)
+
+        // colorBindings 0–6 are the terminal colors; 7–8 are the chrome accents. The
+        // selected theme seeds every one; the user can then edit any swatch.
         let colorsGroup = NSStackView(views: [
             colorPairRow(colorHexRow(title: "Background", binding: colorBindings[0]),
                          colorHexRow(title: "Foreground", binding: colorBindings[1])),
@@ -529,8 +550,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         colorsGroup.alignment = .width
         colorsGroup.spacing = 10
 
-        // Color rendering: how the renderer maps colors to the display. Vivid uses the
-        // full Display-P3 gamut (brighter, like Terminal.app); off is accurate sRGB.
         let renderingGroup = formGrid(rows: [
             ("", vividColorsToggle),
             ("", linearBlendingToggle),
@@ -538,30 +557,22 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("", ligaturesToggle),
         ])
 
-        // Chrome accent rows: dividers + status line text (colorBindings 7 and 8).
-        let dividerRow = colorHexRow(title: "Divider lines", binding: colorBindings[7])
-        let statusRow = colorHexRow(title: "Status line text", binding: colorBindings[8])
-        let chromeAccents = colorPairRow(dividerRow, statusRow)
+        let chromeAccents = colorPairRow(
+            colorHexRow(title: "Divider lines", binding: colorBindings[7]),
+            colorHexRow(title: "Status line text", binding: colorBindings[8])
+        )
 
         let stack = NSStackView(views: [
             header,
-            livePreview,
-            sectionHeading("Window"),
-            windowGroup,
-            sectionHeading("Colors"),
-            colorsGroup,
-            sectionHeading("Color rendering"),
-            renderingGroup,
-            sectionHeading("ANSI Palette"),
-            buildPaletteSection(),
-            sectionHeading("Chrome"),
-            chromeAccents,
+            sectionCard("Terminal colors", colorsGroup),
+            sectionCard("Color rendering", renderingGroup),
+            sectionCard("ANSI palette", buildPaletteSection()),
+            sectionCard("Chrome", chromeAccents),
         ])
         stack.orientation = .vertical
         stack.alignment = .width
-        stack.spacing = 20
+        stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
-
         return scrollWrap(stack)
     }
 
@@ -574,13 +585,14 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     private func styleAsLink(_ button: NSButton) {
         button.bezelStyle = .accessoryBarAction
         button.isBordered = false
-        let title = button.title
-        let attr = NSAttributedString(string: title, attributes: [
-            .foregroundColor: NSColor.controlAccentColor,
+        // Monochrome link: the foreground color, never the system blue accent.
+        let link = HarnessChrome.current.textPrimary
+        let attr = NSAttributedString(string: button.title, attributes: [
+            .foregroundColor: link,
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
         ])
         button.attributedTitle = attr
-        button.contentTintColor = .controlAccentColor
+        button.contentTintColor = link
     }
 
     // MARK: - Page: Terminal
@@ -588,11 +600,12 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     private func buildTerminalPage() -> NSView {
         let header = pageHeader(title: "Terminal", trailing: nil)
 
-        let chooseFont = NSButton(title: "Choose Font…", target: self, action: #selector(chooseFont))
-        chooseFont.bezelStyle = .rounded
+        let chooseFontButton = HarnessPillButton(title: "Choose font…", kind: .secondary)
+        chooseFontButton.target = self
+        chooseFontButton.action = #selector(chooseFont)
         fontReadout.font = .systemFont(ofSize: 12)
         fontReadout.textColor = .secondaryLabelColor
-        let fontRow = NSStackView(views: [chooseFont, fontReadout])
+        let fontRow = NSStackView(views: [chooseFontButton, fontReadout])
         fontRow.orientation = .horizontal
         fontRow.spacing = 12
         fontRow.alignment = .centerY
@@ -606,12 +619,10 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("Font", fontRow),
             ("Size", fontSizeField),
         ])
-
         let shellGroup = formGrid(rows: [
             ("Shell", shellField),
             ("Default directory", cwdField),
         ])
-
         let behaviorGroup = formGrid(rows: [
             ("Cursor style", cursorStylePopup),
             ("Scrollback", scrollbackField),
@@ -622,31 +633,47 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
 
         let stack = NSStackView(views: [
             header,
-            sectionHeading("Font"),
-            fontGroup,
-            sectionHeading("Shell"),
-            shellGroup,
-            sectionHeading("Behavior"),
-            behaviorGroup,
+            sectionCard("Font", fontGroup),
+            sectionCard("Shell", shellGroup),
+            sectionCard("Behavior", behaviorGroup),
         ])
         stack.orientation = .vertical
-        stack.alignment = .leading
+        stack.alignment = .width
         stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
         return scrollWrap(stack)
     }
 
-    // MARK: - Page: Prefix + Agents
+    // MARK: - Page: Keys
 
-    private func buildPrefixPage() -> NSView {
-        let header = pageHeader(title: "Prefix + Agents", trailing: nil)
+    private func buildKeysPage() -> NSView {
+        let header = pageHeader(title: "Keys", trailing: nil)
 
         let prefixHint = NSTextField(labelWithString: "Click to record a new shortcut. Esc cancels.")
         prefixHint.font = .systemFont(ofSize: 11.5)
         prefixHint.textColor = .secondaryLabelColor
 
-        let editAgents = NSButton(title: "Edit agents.json…", target: self, action: #selector(openAgentsJSON))
-        editAgents.bezelStyle = .rounded
+        let prefixGroup = formGrid(rows: [
+            ("Prefix key", keyRecorder),
+            ("", prefixHint),
+        ])
+
+        let stack = NSStackView(views: [header, sectionCard("Prefix", prefixGroup)])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return scrollWrap(stack)
+    }
+
+    // MARK: - Page: Agents
+
+    private func buildAgentsPage() -> NSView {
+        let header = pageHeader(title: "Agents", trailing: nil)
+
+        let editAgents = HarnessPillButton(title: "Edit agents.json…", kind: .secondary)
+        editAgents.target = self
+        editAgents.action = #selector(openAgentsJSON)
 
         systemNotificationsToggle.title = "Show system notifications when an agent needs attention"
         systemNotificationsToggle.setButtonType(.switch)
@@ -654,42 +681,15 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         systemNotificationsToggle.target = self
         systemNotificationsToggle.action = #selector(appearanceTextDidCommit)
 
-        let prefixGroup = formGrid(rows: [
-            ("Prefix key", keyRecorder),
-            ("", prefixHint),
-        ])
-        let agentGroup = formGrid(rows: [
+        let detectionGroup = formGrid(rows: [
             ("Agent table", editAgents),
-        ])
-        let notificationsGroup = formGrid(rows: [
             ("", systemNotificationsToggle),
         ])
 
-        let stack = NSStackView(views: [
-            header,
-            sectionHeading("Prefix"),
-            prefixGroup,
-            sectionHeading("Agents"),
-            agentGroup,
-            sectionHeading("Notifications"),
-            notificationsGroup,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 18
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        return scrollWrap(stack)
-    }
-
-    // MARK: - Page: Agent Colors
-
-    private func buildAgentColorsPage() -> NSView {
-        let header = pageHeader(title: "Agent Colors", trailing: nil)
-        let caption = NSTextField(labelWithString: "Per-agent chip color shown in sidebar/tab pills.")
+        let caption = NSTextField(labelWithString: "Per-agent chip color shown in the sidebar and tab pills.")
         caption.font = .systemFont(ofSize: 11.5)
         caption.textColor = .secondaryLabelColor
 
-        // Two-column agent grid.
         let halves = Self.agentColorKinds.chunked(into: (Self.agentColorKinds.count + 1) / 2)
         let columns = halves.map { kinds -> NSStackView in
             let rows = kinds.map(agentColorRow)
@@ -704,13 +704,23 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         grid.spacing = 28
         grid.alignment = .top
 
-        let reset = NSButton(title: "Reset agent colors", target: self, action: #selector(resetAgentColors))
-        reset.bezelStyle = .rounded
+        let reset = HarnessPillButton(title: "Reset agent colors", kind: .secondary)
+        reset.target = self
+        reset.action = #selector(resetAgentColors)
 
-        let stack = NSStackView(views: [header, caption, grid, reset])
+        let colorsBox = NSStackView(views: [caption, grid, reset])
+        colorsBox.orientation = .vertical
+        colorsBox.alignment = .leading
+        colorsBox.spacing = 12
+
+        let stack = NSStackView(views: [
+            header,
+            sectionCard("Detection", detectionGroup),
+            sectionCard("Agent colors", colorsBox),
+        ])
         stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 16
+        stack.alignment = .width
+        stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
         return scrollWrap(stack)
     }
@@ -734,6 +744,45 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             stack.addArrangedSubview(trailing)
         }
         return stack
+    }
+
+    /// macOS System-Settings-style grouped card: a rounded elevated surface holding
+    /// an optional uppercased title and the section's content, theme-aware.
+    private func sectionCard(_ title: String?, _ content: NSView) -> NSView {
+        let c = HarnessChrome.current
+        let card = NSView()
+        card.wantsLayer = true
+        card.layer?.backgroundColor = c.surfaceElevated.cgColor
+        card.layer?.cornerRadius = HarnessDesign.Radius.card
+        card.layer?.cornerCurve = .continuous
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = c.border.cgColor
+        card.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        // .width so width-dependent content (color pair rows, form grids) lays out to
+        // the full card width rather than collapsing to intrinsic size.
+        stack.alignment = .width
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        if let title {
+            let label = NSTextField(labelWithString: title.uppercased())
+            label.font = .systemFont(ofSize: 11, weight: .semibold)
+            label.textColor = c.textTertiary
+            stack.addArrangedSubview(label)
+        }
+        content.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(content)
+
+        card.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -16),
+        ])
+        return card
     }
 
     private func sectionHeading(_ text: String) -> NSView {
@@ -1403,18 +1452,20 @@ final class SettingsSidebarButton: NSControl {
     }
 
     private func applyChrome() {
+        // Monochrome selection (no system blue): a subtle foreground-tinted fill.
+        let c = HarnessChrome.current
         if isSelected {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.20).cgColor
-            iconView.contentTintColor = NSColor.controlAccentColor
-            label.textColor = .labelColor
+            layer?.backgroundColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.12 : 0.10).cgColor
+            iconView.contentTintColor = c.textPrimary
+            label.textColor = c.textPrimary
         } else if isHovered {
-            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
-            iconView.contentTintColor = .secondaryLabelColor
-            label.textColor = .labelColor
+            layer?.backgroundColor = c.textPrimary.withAlphaComponent(0.06).cgColor
+            iconView.contentTintColor = c.textSecondary
+            label.textColor = c.textPrimary
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
-            iconView.contentTintColor = .tertiaryLabelColor
-            label.textColor = .secondaryLabelColor
+            iconView.contentTintColor = c.textTertiary
+            label.textColor = c.textSecondary
         }
     }
 }

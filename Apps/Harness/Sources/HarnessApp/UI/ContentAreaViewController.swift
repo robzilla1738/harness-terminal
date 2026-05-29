@@ -50,6 +50,9 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     override func viewDidLoad() {
         super.viewDidLoad()
         tabBar.delegate = self
+        tabBar.onToggleSidebar = { [weak self] in
+            (self?.view.window?.contentViewController as? MainSplitViewController)?.toggleSidebar()
+        }
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         terminalHost.translatesAutoresizingMaskIntoConstraints = false
         refreshTerminalHostFill()
@@ -125,6 +128,12 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     func reloadTabBar() {
         let snap = SessionCoordinator.shared.snapshot
         tabBar.reload(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
+    }
+
+    /// Leading inset for the tab strip so it clears the macOS traffic lights when the
+    /// sidebar is collapsed. Driven by `MainSplitViewController` during the toggle.
+    func setTabBarLeadingInset(_ inset: CGFloat) {
+        tabBar.setLeadingInset(inset)
     }
 
     func refreshTabBarMetadata() {
