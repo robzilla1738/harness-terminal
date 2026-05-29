@@ -74,8 +74,12 @@ final class HarnessThemeCatalogTests: XCTestCase {
 
     func testSearchFiltersByName() {
         let results = HarnessThemeCatalog.search("tokyo")
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results.first?.name, "Tokyo Night")
+        // Robust to catalog size: the query must filter (fewer than all), every result
+        // must match it, and the canonical theme must be present.
+        XCTAssertFalse(results.isEmpty)
+        XCTAssertLessThan(results.count, HarnessThemeCatalog.allThemes.count)
+        XCTAssertTrue(results.allSatisfy { $0.name.lowercased().contains("tokyo") })
+        XCTAssertTrue(results.contains { $0.name == "Tokyo Night" })
     }
 
     func testDarkThemesAreClassifiedDark() {
