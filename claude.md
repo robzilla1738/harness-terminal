@@ -16,8 +16,10 @@ hosts `HarnessTerminalSurfaceView` (a `CAMetalLayer` view) driving `HarnessTermi
 (VT parser + screen/scrollback), `HarnessTheme` (485-theme catalog + `.harnesstheme`), and
 `HarnessTerminalRenderer` (CoreText atlas + Metal). Features: themed translucent canvas with
 untouched program output (`applyThemeToTerminalOutput` toggles theme-colored output), window
-padding, cursor styles + blink, text selection + copy / copy-on-select, mouse reporting
-(SGR 1006), scrollback (wheel / Shift+PageUp/Down), and IME / dead keys (`NSTextInputClient`).
+padding, cursor styles + blink, text selection + copy / paste (bracketed-paste aware) /
+copy-on-select / right-click menu, mouse reporting (SGR 1006), scrollback (wheel /
+Shift+PageUp/Down), reflow on resize, procedurally-rendered block elements + box-drawing
+(seamless, font-independent), and IME / dead keys (`NSTextInputClient`).
 
 The only remaining "ghostty" is the **opt-in config import** (`TerminalConfigImporter` reads
 `~/.config/ghostty` so Ghostty.app users keep their colors/font) — kept by product decision.
@@ -25,6 +27,23 @@ The only remaining "ghostty" is the **opt-in config import** (`TerminalConfigImp
 **Before touching the terminal renderer or theme system, read
 [docs/NATIVE_RENDERER_HANDOFF.md](docs/NATIVE_RENDERER_HANDOFF.md).** Modules under `Packages/`:
 `HarnessTerminalEngine`, `HarnessTheme`, `HarnessTerminalRenderer`, `HarnessTerminalKit`.
+
+**Renderer/engine invariants** (recently hardened — keep these):
+- **Block elements** (`U+2580–U+259F`) and **box-drawing** (`U+2500–U+257F`) render
+  *procedurally*, not from the font, so they tile seamlessly (the Ghostty/kitty approach):
+  blocks as exact-fill rects in the background pass (`TerminalMetalRenderer.blockElementRects`),
+  box-drawing as cell-sized sprites (`BoxDrawing` → `GlyphRasterizer.rasterizeBox`, drawn at the
+  cell origin via `bearingX 0` / `bearingY = ascent`). Doubles, diagonals and mixed-weight
+  variants fall back to the font. The glyph emitters skip these codepoints.
+- **CSI private introducers** `< = > ?` are *all* flagged private in `VTParser` — so `\e[>4;1m`
+  (XTMODKEYS, emitted by fish at startup) is never misread as SGR `4;1m` (the old bug: a
+  permanently bold + underlined prompt). SGR is never a private sequence.
+- **Resize:** `HarnessTerminalSurfaceView.updateGridSize` *rounds* the drawable (no edge seam
+  under `.topLeft`) and `layout()` renders synchronously inside a `CATransaction` (no stretch
+  flicker). `TerminalScreen.resize` *reflows* the primary screen — rejoin soft-wrapped rows via
+  a per-row wrap flag, re-wrap to the new width (wide chars never split), map the cursor; the
+  alternate screen just clamps (TUIs redraw on SIGWINCH). The PTY env sets `COLORTERM=truecolor`.
+- **Decorations** (underline/strike/overline) are pixel-snapped for crisp 1–2px lines.
 
 ---
 
@@ -604,7 +623,8 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Area | Status |
 |------|--------|
 | Session authority | Daemon-owned layout + IPC; launchd `KeepAlive` |
-| PTY / attach | `RealPty` + GUI native renderer; `harness-cli attach` (single pane) with detach keys |
+| PTY / attach | `RealPty` (PTY env sets `COLORTERM=truecolor`) + GUI native renderer; `harness-cli attach` (single pane) with detach keys |
+| Rendering | Native Metal renderer: themed translucent canvas, ligatures, pixel-snapped decorations; **block elements + box-drawing drawn procedurally** (seamless, font-independent); reflow on resize; copy / paste / right-click menu |
 | Terminal compositor | `harness-cli attach-window` renders a tab's full split layout in any plain terminal (incl. ssh): client-side `HarnessGridTerminal` emulation per pane + `PaneRectSolver` + `GridCompositor` (borders, SGR, diff, status); prefix (`Ctrl-A`) routes `%`/`"` split, `x` kill, `z` zoom, `hjkl` select, `o`/`;` cycle, `c` new-tab, `n`/`p` tab, `d` detach |
 | Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key`; display panes (`prefix q`) |
 | Copy mode | Vim-style viewer; paste buffers in `buffers.json` |
