@@ -6,6 +6,10 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "HarnessCore", targets: ["HarnessCore"]),
+        // Self-contained native terminal engine (VT parser + screen/grid model). Pure
+        // Swift, no Metal/AppKit — replaces the libghostty fork's GhosttyTerminal. Grows
+        // alongside the fork (which stays as an A/B correctness oracle) until cutover.
+        .library(name: "HarnessTerminalEngine", targets: ["HarnessTerminalEngine"]),
         .library(name: "HarnessTerminalKit", targets: ["HarnessTerminalKit"]),
         .executable(name: "Harness", targets: ["HarnessApp"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
@@ -26,6 +30,12 @@ let package = Package(
         .target(
             name: "HarnessCore",
             path: "Packages/HarnessCore/Sources/HarnessCore"
+        ),
+        // Native terminal engine — pure Swift, no external dependencies. Foundation only
+        // so it links for headless CLI use and unit tests without a GPU.
+        .target(
+            name: "HarnessTerminalEngine",
+            path: "Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine"
         ),
         .target(
             name: "HarnessTerminalKit",
@@ -68,6 +78,11 @@ let package = Package(
             name: "HarnessCoreTests",
             dependencies: ["HarnessCore"],
             path: "Tests/HarnessCoreTests"
+        ),
+        .testTarget(
+            name: "HarnessTerminalEngineTests",
+            dependencies: ["HarnessTerminalEngine"],
+            path: "Tests/HarnessTerminalEngineTests"
         ),
         .testTarget(
             name: "HarnessTerminalKitTests",
