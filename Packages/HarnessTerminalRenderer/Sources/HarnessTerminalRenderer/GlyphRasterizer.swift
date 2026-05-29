@@ -28,9 +28,11 @@ public struct CellMetrics: Equatable, Sendable {
 public struct RasterizedGlyph: Equatable, Sendable {
     public let width: Int
     public let height: Int
-    /// Left offset (pixels) from the cell pen origin to the glyph's left edge.
+    /// Left offset (pixels) from the cell pen origin to the bitmap's left edge.
     public let bearingX: Int
-    /// Offset (pixels) from the baseline up to the glyph's top edge.
+    /// Pixels from the baseline up to the bitmap's top edge; the renderer places the bitmap top
+    /// at `baseline − bearingY`. The baseline is pixel-snapped at rasterization so every glyph
+    /// shares the exact same baseline (no per-glyph rounding jitter).
     public let bearingY: Int
     public let coverage: [UInt8]
 }
@@ -195,8 +197,17 @@ public final class GlyphRasterizer {
         CTFontGetBoundingRectsForGlyphs(font, .horizontal, &g, &bounds, 1)
         guard bounds.width > 0, bounds.height > 0 else { return nil }
 
-        let pxW = Int((bounds.width * scale).rounded(.up)) + 2  // +2px padding to avoid clipping AA edges
-        let pxH = Int((bounds.height * scale).rounded(.up)) + 2
+        // Work in whole device pixels and snap the glyph's pen origin (baseline + left edge) to
+        // the pixel grid, so the baseline lands on the SAME integer row for every glyph. Drawing
+        // at a fractional position while rounding the bearing independently (the old path) left a
+        // sub-pixel residual per glyph — a wavy / "squiggly" baseline across a line of text.
+        let pad = 1
+        let leftPx = Int(floor(bounds.minX * scale))   // pen → ink left  (may be negative)
+        let rightPx = Int(ceil(bounds.maxX * scale))   // pen → ink right
+        let topPx = Int(ceil(bounds.maxY * scale))     // baseline → ink top (rows above baseline)
+        let botPx = Int(floor(bounds.minY * scale))    // baseline → ink bottom (≤ 0 with descenders)
+        let pxW = (rightPx - leftPx) + 2 * pad
+        let pxH = (topPx - botPx) + 2 * pad
         guard pxW > 0, pxH > 0 else { return nil }
 
         guard let ctx = CGContext(
@@ -215,17 +226,20 @@ public final class GlyphRasterizer {
         ctx.setFillColor(gray: 1, alpha: 1) // white ink on the zero-cleared (black) bitmap
         ctx.scaleBy(x: scale, y: scale)
 
-        // Position so the glyph's bbox maps into the bitmap, with 1px (pre-scale) padding.
-        let pad = 1.0 / scale
-        var position = CGPoint(x: -bounds.minX + pad, y: -bounds.minY + pad)
+        // Pen origin at integer device pixels (CG is y-up from the bitmap bottom), so the baseline
+        // is pixel-aligned. `position` is in points (pre-scale), hence the /scale.
+        var position = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTFontDrawGlyphs(font, &g, &position, 1, ctx)
 
         let coverage = readCoverage(ctx, width: pxW, height: pxH)
+        // bearingX = bitmap-left relative to the pen; bearingY = rows from the bitmap top down to
+        // the baseline. The renderer places the bitmap top at (baseline − bearingY), so with the
+        // baseline at integer row `topPx + pad`, every glyph renders on the exact same baseline.
         return RasterizedGlyph(
             width: pxW,
             height: pxH,
-            bearingX: Int((bounds.minX * scale).rounded()) - 1,
-            bearingY: Int((bounds.maxY * scale).rounded()) + 1,
+            bearingX: leftPx - pad,
+            bearingY: topPx + pad,
             coverage: coverage
         )
     }
