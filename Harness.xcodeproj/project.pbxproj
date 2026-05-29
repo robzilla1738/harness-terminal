@@ -193,7 +193,6 @@
 		C98251A71A00B4D1AAD8859A /* SessionEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEditorTests.swift; sourceTree = "<group>"; };
 		CA12DE19711C76D4DAF36509 /* NotificationDropdownPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDropdownPanel.swift; sourceTree = "<group>"; };
 		D3E473950CF7C898DE998767 /* Harness.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Harness.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		D4CB93DC3D3696289C05BCC9 /* libghostty-spm-fork */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "libghostty-spm-fork"; path = "../libghostty-spm-fork"; sourceTree = SOURCE_ROOT; };
 		D63DA77DC70E5E962937FB27 /* harness */ = {isa = PBXFileReference; lastKnownFileType = folder; name = harness; path = .; sourceTree = SOURCE_ROOT; };
 		D745FE112DC4440236DABA22 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D798A050D3824B4FEA80EA3A /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
@@ -520,7 +519,6 @@
 			isa = PBXGroup;
 			children = (
 				D63DA77DC70E5E962937FB27 /* harness */,
-				D4CB93DC3D3696289C05BCC9 /* libghostty-spm-fork */,
 				110A2B44B81DF76896EEF5AD /* HarnessDaemon */,
 			);
 			path = Packages;
@@ -721,8 +719,8 @@
 			mainGroup = 5A46B0D24AB7DF64B93F488B;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				8926475F0DD78FD9A7004265 /* XCRemoteSwiftPackageReference "libghostty-spm-fork" */,
 				85EE5EFBDA5821241B2BEEEE /* XCLocalSwiftPackageReference "." */,
-				A3B20675795422916C660356 /* XCLocalSwiftPackageReference "../libghostty-spm-fork" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8B9F84DC775F556DAE85C788 /* Products */;
@@ -1396,11 +1394,18 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = .;
 		};
-		A3B20675795422916C660356 /* XCLocalSwiftPackageReference "../libghostty-spm-fork" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "../libghostty-spm-fork";
-		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8926475F0DD78FD9A7004265 /* XCRemoteSwiftPackageReference "libghostty-spm-fork" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/robzilla1738/libghostty-spm-fork.git";
+			requirement = {
+				kind = revision;
+				revision = 16f6d4fd91ccc2688a5e7e835506e3b85c65ea2f;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		0C48BB6BE591F289927C480C /* HarnessTerminalKit */ = {
@@ -1425,6 +1430,7 @@
 		};
 		43AA8AEC4901F69431BA92A0 /* GhosttyTheme */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 8926475F0DD78FD9A7004265 /* XCRemoteSwiftPackageReference "libghostty-spm-fork" */;
 			productName = GhosttyTheme;
 		};
 		66F38C2DC62795B61205FDE7 /* HarnessCore */ = {
@@ -1433,6 +1439,7 @@
 		};
 		6C67610DA6D1643EBEB26598 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 8926475F0DD78FD9A7004265 /* XCRemoteSwiftPackageReference "libghostty-spm-fork" */;
 			productName = GhosttyTerminal;
 		};
 		80A7F3466CEB9D469FDED468 /* HarnessTerminalKit */ = {
@@ -1445,10 +1452,12 @@
 		};
 		8A90E4E9161B2EE1AEB7E8FF /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 8926475F0DD78FD9A7004265 /* XCRemoteSwiftPackageReference "libghostty-spm-fork" */;
 			productName = GhosttyTerminal;
 		};
 		A338F3A5C7DA4CDD3B9E764B /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 8926475F0DD78FD9A7004265 /* XCRemoteSwiftPackageReference "libghostty-spm-fork" */;
 			productName = GhosttyTerminal;
 		};
 		F628D4A8E3A428009E22A230 /* HarnessCore */ = {

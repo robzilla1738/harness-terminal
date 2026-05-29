@@ -1,6 +1,14 @@
 {
-  "originHash" : "db732edd5772f531ab44062e19daffa8a22e2e59d6644b902ed1367b07db105c",
+  "originHash" : "a6c4359eb08d53b5b6b4ad18011767b78b26715e99012c948f670b724995a2e7",
   "pins" : [
+    {
+      "identity" : "libghostty-spm-fork",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/robzilla1738/libghostty-spm-fork.git",
+      "state" : {
+        "revision" : "16f6d4fd91ccc2688a5e7e835506e3b85c65ea2f"
+      }
+    },
     {
       "identity" : "msdisplaylink",
       "kind" : "remoteSourceControl",

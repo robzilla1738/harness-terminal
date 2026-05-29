@@ -12,10 +12,15 @@ let package = Package(
         .executable(name: "harness-cli", targets: ["HarnessCLI"]),
     ],
     dependencies: [
-        // Local fork carrying the read-cells styled-grid API for the terminal
-        // compositor. Sibling checkout of the harness repo; build its XCFramework
-        // with `Script/build.sh` in that repo before resolving here.
-        .package(path: "../libghostty-spm-fork"),
+        // Harness's libghostty fork (read-cells styled-grid API + Display-P3
+        // colorspace). Pinned by revision; its XCFramework resolves from a GitHub
+        // release asset by url+checksum, so a clean clone builds with no sibling
+        // checkout and no Zig rebuild. For local fork development, temporarily swap
+        // this back to `.package(path: "../libghostty-spm-fork")`.
+        .package(
+            url: "https://github.com/robzilla1738/libghostty-spm-fork.git",
+            revision: "16f6d4fd91ccc2688a5e7e835506e3b85c65ea2f"
+        ),
     ],
     targets: [
         .target(

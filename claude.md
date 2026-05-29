@@ -12,7 +12,7 @@ Agent handbook for the **Harness** repository. Read before architectural or UI c
 
 Native macOS terminal combining:
 
-- **Ghostty rendering** — GPU terminals via a local **libghostty fork** (`../libghostty-spm-fork`, sibling of this repo; based on [libghostty-spm](https://github.com/Lakr233/libghostty-spm)) that adds the styled-grid read API powering the terminal compositor
+- **Ghostty rendering** — GPU terminals via a **libghostty fork** ([robzilla1738/libghostty-spm-fork](https://github.com/robzilla1738/libghostty-spm-fork), based on [libghostty-spm](https://github.com/Lakr233/libghostty-spm); pinned by revision, xcframework via release asset — see SPM products below) that adds the styled-grid read API powering the terminal compositor
 - **cmux-style organization** — workspaces, sidebar sessions, tabs, splits, agent sidebar
 - **Harness command system** — prefix keymap, `:` prompt, `harness-cli`, shared `Command` vocabulary (familiar multiplexer verbs, Harness-owned)
 - **Agent awareness** — Codex, Claude Code, Cursor, Pi, Hermes, OpenClaw, and more
@@ -171,7 +171,13 @@ harness/
 | `HarnessCore` | `HarnessCore` | Shared library |
 | `HarnessTerminalKit` | `HarnessTerminalKit` | libghostty wrapper |
 
-Dependency: the local **libghostty fork** as `.package(path: "../libghostty-spm-fork")` — identity `libghostty-spm-fork`, products `GhosttyTerminal`, `GhosttyTheme` (matched in `project.yml`). The fork's `BinaryTarget/GhosttyKit.xcframework` is gitignored; build it with that repo's `Script/build.sh` before resolving. It carries patch `0009-read-cells` (styled-grid `ghostty_surface_read_cells` + the renderer-free `ghostty_terminal_*` headless terminal). See [[harness-multiplexer-remaining-work]] and [[harness-libghostty-fork-toolchain]] in agent memory.
+Dependency: the **libghostty fork** ([robzilla1738/libghostty-spm-fork](https://github.com/robzilla1738/libghostty-spm-fork), based on [libghostty-spm](https://github.com/Lakr233/libghostty-spm)) — identity `libghostty-spm-fork`, products `GhosttyTerminal`, `GhosttyTheme`. It carries patch `0009-read-cells` (styled-grid `ghostty_surface_read_cells` + the renderer-free `ghostty_terminal_*` headless terminal) plus the Display-P3 colorspace fix.
+
+**Resolution (reproducible — no sibling checkout, no Zig rebuild):** both `Package.swift` and `project.yml` pin the fork by **`url` + `revision`**, and the fork's `Package.swift` resolves `GhosttyKit.xcframework` from a **GitHub release asset** by `url` + `checksum` (the 39 MB Zig build product is gitignored, never committed). So `git clone && swift build` (or `xcodegen generate && build`) works on any machine. A clean `swift package resolve` fetches the fork at the pinned commit and downloads + checksum-verifies the xcframework.
+
+**Cutting a new fork binary:** rebuild the xcframework (that repo's `Script/build.sh`, Zig per [[harness-libghostty-fork-toolchain]]), `cd BinaryTarget && zip -rqX GhosttyKit.xcframework.zip GhosttyKit.xcframework`, `swift package compute-checksum …`, push the fork, `gh release create <tag> …zip`, then bump the `url`+`checksum` in the fork's `Package.swift` and the `revision` in this repo's `Package.swift` + `project.yml`.
+
+**Local fork development:** temporarily swap the dep back to `.package(path: "../libghostty-spm-fork")` (Package.swift) / `path: ../libghostty-spm-fork` (project.yml) so edits to the sibling checkout build directly; restore the pinned `url`+`revision` before committing. See [[harness-multiplexer-remaining-work]] and [[harness-libghostty-fork-toolchain]] in agent memory.
 
 ---
 

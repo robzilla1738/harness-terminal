@@ -16,8 +16,12 @@ packages:
   Harness:
     path: .
   libghostty-spm-fork:
-    # Local fork carrying the read-cells styled-grid API (sibling checkout).
-    path: ../libghostty-spm-fork
+    # Harness's libghostty fork (read-cells styled-grid API + Display-P3 colorspace).
+    # Pinned by revision; XCFramework resolves from a GitHub release asset by
+    # url+checksum — no sibling checkout, no Zig rebuild. For local fork dev, swap
+    # back to `path: ../libghostty-spm-fork`.
+    url: https://github.com/robzilla1738/libghostty-spm-fork.git
+    revision: 16f6d4fd91ccc2688a5e7e835506e3b85c65ea2f
 targets:
   Harness:
     type: application
