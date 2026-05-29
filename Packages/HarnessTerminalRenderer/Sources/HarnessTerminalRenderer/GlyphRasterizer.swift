@@ -99,6 +99,9 @@ public final class GlyphRasterizer {
     /// caller draws only the background for those.
     public func rasterize(codepoint: UInt32, bold isBold: Bool = false, italic isItalic: Bool = false) -> RasterizedGlyph? {
         guard let scalar = Unicode.Scalar(codepoint) else { return nil }
+        // Box-drawing characters are rendered procedurally (cell-sized sprite) so they tile
+        // seamlessly across cells regardless of the font.
+        if BoxDrawing.supported(codepoint) { return rasterizeBox(codepoint) }
         var chosenFont = font(bold: isBold, italic: isItalic)
         let glyph: CGGlyph
         if let g = glyphID(for: codepoint, in: chosenFont) {
@@ -156,6 +159,32 @@ public final class GlyphRasterizer {
             }
         }
         return out
+    }
+
+    /// Procedurally rasterize a box-drawing character to a cell-sized coverage bitmap so it
+    /// tiles seamlessly across cells (font glyphs vary and can leave gaps). Returns nil if the
+    /// codepoint isn't one we draw — the caller then falls back to the font glyph.
+    private func rasterizeBox(_ codepoint: UInt32) -> RasterizedGlyph? {
+        let m = metrics()
+        let w = max(1, Int((m.width * scale).rounded()))
+        let h = max(1, Int((m.height * scale).rounded()))
+        let ascentPx = Int((m.ascent * scale).rounded())
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: grayColorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return nil }
+        ctx.setAllowsAntialiasing(true)
+        ctx.setShouldAntialias(true)
+        ctx.setFillColor(gray: 1, alpha: 1)
+        ctx.setStrokeColor(gray: 1, alpha: 1)
+        // Flip to top-left origin / y-down so BoxDrawing's geometry matches the cell layout.
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+        guard BoxDrawing.draw(in: ctx, codepoint: codepoint, width: w, height: h) else { return nil }
+        let coverage = readCoverage(ctx, width: w, height: h)
+        // bearingX 0 + bearingY = ascent places the cell-sized sprite at the cell's top-left
+        // (the renderer draws it at originY + ascentPixels − bearingY = originY).
+        return RasterizedGlyph(width: w, height: h, bearingX: 0, bearingY: ascentPx, coverage: coverage)
     }
 
     /// Render a resolved glyph id in a font into an alpha-coverage bitmap. Returns nil when

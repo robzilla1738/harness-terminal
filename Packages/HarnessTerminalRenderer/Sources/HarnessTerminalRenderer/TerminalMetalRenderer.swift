@@ -377,6 +377,14 @@ public final class TerminalMetalRenderer {
                     col += 1
                     continue
                 }
+                // Box-drawing chars use a procedural cell-sized sprite — never shape them into
+                // a ligature run (that would render the font glyph and reintroduce seams).
+                if BoxDrawing.supported(cell.codepoint) {
+                    emitSingleGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                                    color: vector(cell.foreground), into: &glyphs)
+                    col += 1
+                    continue
+                }
                 // Accumulate a run of contiguous, same-style, same-color glyph cells.
                 var runText = ""
                 var utf16ToColumn: [Int] = []
@@ -386,6 +394,7 @@ public final class TerminalMetalRenderer {
                     if rc.width == .spacerTail { c += 1; continue } // wide-char tail
                     if !rc.hasGlyph { break }
                     if Self.isBlockElement(rc.codepoint) { break } // drawn procedurally
+                    if BoxDrawing.supported(rc.codepoint) { break } // procedural box sprite
                     if let cur = cursorCell, cur.row == row, cur.column == c { break }
                     if rc.bold != bold || rc.italic != italic || rc.foreground != fg { break }
                     let scalar = Unicode.Scalar(rc.codepoint) ?? " "
