@@ -4,7 +4,7 @@ Agent handbook for the **Harness** repository. Read before architectural or UI c
 
 `claude.md` and `agents.md` are **identical** except the title — update both together.
 
-**Rules:** Do not edit `.cursor/plans/` unless asked. Commit only when requested. Prefer minimal, focused diffs. Fix root causes (Ghostty parity, cwd/title, tab creation) over UI bandaids.
+**Rules:** Do not edit `.cursor/plans/` unless asked. Commit only when requested. Prefer minimal, focused diffs. Fix root causes (render/color fidelity, cwd/title, tab creation) over UI bandaids.
 
 ---
 
@@ -19,7 +19,7 @@ untouched program output (`applyThemeToTerminalOutput` toggles theme-colored out
 padding, cursor styles + blink, text selection + copy / copy-on-select, mouse reporting
 (SGR 1006), scrollback (wheel / Shift+PageUp/Down), and IME / dead keys (`NSTextInputClient`).
 
-The only remaining "ghostty" is the **opt-in config import** (`GhosttyConfigImporter` reads
+The only remaining "ghostty" is the **opt-in config import** (`TerminalConfigImporter` reads
 `~/.config/ghostty` so Ghostty.app users keep their colors/font) — kept by product decision.
 
 **Before touching the terminal renderer or theme system, read
@@ -32,7 +32,7 @@ The only remaining "ghostty" is the **opt-in config import** (`GhosttyConfigImpo
 
 Native macOS terminal combining:
 
-- **Ghostty rendering** — GPU terminals via a **libghostty fork** ([robzilla1738/libghostty-spm-fork](https://github.com/robzilla1738/libghostty-spm-fork), based on [libghostty-spm](https://github.com/Lakr233/libghostty-spm); pinned by revision, xcframework via release asset — see SPM products below) that adds the styled-grid read API powering the terminal compositor
+- **Native GPU rendering** — Harness's own self-contained terminal stack: `HarnessTerminalEngine` (VT emulator + scrollback), `HarnessTheme` (485-theme catalog + `.harnesstheme`), and `HarnessTerminalRenderer` (CoreText glyph atlas + Metal). No external terminal dependency
 - **cmux-style organization** — workspaces, sidebar sessions, tabs, splits, agent sidebar
 - **Harness command system** — prefix keymap, `:` prompt, `harness-cli`, shared `Command` vocabulary (familiar multiplexer verbs, Harness-owned)
 - **Agent awareness** — Codex, Claude Code, Cursor, Pi, Hermes, OpenClaw, and more
@@ -45,7 +45,7 @@ Native macOS terminal combining:
 | **harness-cli** | CLI binary (`Package.swift` product) |
 | **HarnessDaemon** | Background session authority |
 | **HarnessCore** | Shared models, IPC, commands, persistence |
-| **HarnessTerminalKit** | libghostty wrapper (`TerminalHostView`, `GridCompositor`) |
+| **HarnessTerminalKit** | Native terminal surface host + compositor (`TerminalHostView`, `HarnessTerminalSurfaceView`, `GridCompositor`) |
 
 Never rename the app to `harness-cli`.
 
@@ -104,7 +104,7 @@ flowchart TB
     Prefix[PrefixKeymap]
     Exec[MainExecutor]
     Coord[SessionCoordinator]
-    Ghostty[TerminalHostView]
+    Host[TerminalHostView]
   end
   Prefix --> Keys --> Cmd
   CLI --> Parser --> Cmd
@@ -114,15 +114,15 @@ flowchart TB
   CLI --> Daemon
   Daemon --> Registry --> Store --> Layout
   Registry --> Pty
-  Ghostty -->|sendData / subscribe output| Daemon
-  Pty --> Ghostty
+  Host -->|sendData / subscribe output| Daemon
+  Pty --> Host
 ```
 
 ### Authority rules (critical)
 
 1. **HarnessDaemon owns session truth.** All layout mutations go through IPC. Only `SurfaceRegistry` writes `layout.json`.
 2. **Harness.app is a client.** `SessionCoordinator` → `DaemonSessionService` → `syncFromDaemon()`. Never write `layout.json` from the app.
-3. **GUI panes are daemon-backed `RealPty`.** libghostty in-memory backend; input via `sendData`; output via `subscribeSurfaceOutput` + scrollback replay on attach.
+3. **GUI panes are daemon-backed `RealPty`.** The native `HarnessTerminalSurfaceView` emulates the pane locally; input via `sendData`; output via `subscribeSurfaceOutput` + scrollback replay on attach.
 4. **One surface ID everywhere.** `PaneLeaf.surfaceID` = daemon PTY ID = `HARNESS_SURFACE` env = `harness-cli notify --surface`.
 5. **Reuse terminal views.** `TerminalPaneRegistry` keyed by `SurfaceID`. Rebuild panes only on `structureRevision` change.
 6. **Metadata vs structure.** cwd/title/agent/git → `syncFromDaemon(metadataOnly: true)` + `refreshMetadata()`. Topology → `structureRevision` + pane remount.
@@ -160,7 +160,7 @@ harness/
 │   │                              # Options, Events, Format, Layouts, Buffers, Agents,
 │   │                              # Session/PaneRectSolver (compositor pane layout)
 │   ├── HarnessTerminalKit/        # TerminalHostView, ThemeManager, GridCompositor,
-│   │                              # TerminalColorPipeline, TerminalColorspace
+│   │                              # HarnessTerminalSurfaceView (native CAMetalLayer view)
 │   └── HarnessDaemon/
 │       ├── Sources/HarnessDaemon/ # HarnessDaemonCore: SurfaceRegistry, DaemonServer,
 │       │                          # RealPty, AgentScanner
@@ -189,15 +189,9 @@ harness/
 | — | `HarnessDaemonCore` | Testable daemon logic |
 | `harness-cli` | `HarnessCLI` | CLI client (depends on `HarnessTerminalKit` for the compositor) |
 | `HarnessCore` | `HarnessCore` | Shared library |
-| `HarnessTerminalKit` | `HarnessTerminalKit` | libghostty wrapper |
+| `HarnessTerminalKit` | `HarnessTerminalKit` | Native terminal surface host + compositor |
 
-Dependency: the **libghostty fork** ([robzilla1738/libghostty-spm-fork](https://github.com/robzilla1738/libghostty-spm-fork), based on [libghostty-spm](https://github.com/Lakr233/libghostty-spm)) — identity `libghostty-spm-fork`, products `GhosttyTerminal`, `GhosttyTheme`. It carries patch `0009-read-cells` (styled-grid `ghostty_surface_read_cells` + the renderer-free `ghostty_terminal_*` headless terminal) plus the Display-P3 colorspace fix.
-
-**Resolution (reproducible — no sibling checkout, no Zig rebuild):** both `Package.swift` and `project.yml` pin the fork by **`url` + `revision`**, and the fork's `Package.swift` resolves `GhosttyKit.xcframework` from a **GitHub release asset** by `url` + `checksum` (the 39 MB Zig build product is gitignored, never committed). So `git clone && swift build` (or `xcodegen generate && build`) works on any machine. A clean `swift package resolve` fetches the fork at the pinned commit and downloads + checksum-verifies the xcframework.
-
-**Cutting a new fork binary:** rebuild the xcframework (that repo's `Script/build.sh`, Zig per [[harness-libghostty-fork-toolchain]]), `cd BinaryTarget && zip -rqX GhosttyKit.xcframework.zip GhosttyKit.xcframework`, `swift package compute-checksum …`, push the fork, `gh release create <tag> …zip`, then bump the `url`+`checksum` in the fork's `Package.swift` and the `revision` in this repo's `Package.swift` + `project.yml`.
-
-**Local fork development:** temporarily swap the dep back to `.package(path: "../libghostty-spm-fork")` (Package.swift) / `path: ../libghostty-spm-fork` (project.yml) so edits to the sibling checkout build directly; restore the pinned `url`+`revision` before committing. See [[harness-multiplexer-remaining-work]] and [[harness-libghostty-fork-toolchain]] in agent memory.
+**No external dependencies.** Every product is first-party pure Swift (`Package.swift` `dependencies: []`); `swift build` / `xcodegen generate` resolve zero remote packages, so `git clone && swift build` just works on any machine.
 
 ---
 
@@ -263,7 +257,7 @@ Under `~/Library/Application Support/Harness/` (or `HARNESS_HOME`):
 | `~/Library/LaunchAgents/com.robert.harness.daemon.plist` | launchd | Daemon supervisor |
 | `~/.config/fish/completions/harness-cli.fish` | install | Fish completion |
 
-**Ghostty import sources** (`GhosttyConfigImporter.candidatePaths`): `~/.config/ghostty/config`, `~/.config/ghostty/config.ghostty`, `~/Library/Application Support/com.mitchellh.ghostty/config`, and `…/config.ghostty`.
+**Ghostty import sources** (`TerminalConfigImporter.candidatePaths`): `~/.config/ghostty/config`, `~/.config/ghostty/config.ghostty`, `~/Library/Application Support/com.mitchellh.ghostty/config`, and `…/config.ghostty`.
 
 **Note:** The on-disk table lists all persisted paths; [`HarnessPaths`](Packages/HarnessCore/Sources/HarnessCore/Paths/HarnessPaths.swift) exposes only a subset (socket, snapshot, settings, logs, buffers, fish completion, launch agent). `keybindings.json`, `options.json`, `hooks.json`, `agents.json`, and `bin/harness-cli` live at the same root but are owned by their respective stores/installers.
 
@@ -356,14 +350,14 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 
 The headline feature: `harness-cli attach-window` renders a tab's **full split layout** (every pane, borders, status line, active-pane cursor) into any plain terminal, including over ssh — like tmux, but Harness-native.
 
-**Why a fork was needed.** The prebuilt libghostty only exposed `ghostty_surface_read_text` (plain text). Faithful compositing of N side-by-side panes needs each pane's **styled cell grid**. The local fork's patch `0009-read-cells` adds `ghostty_surface_read_cells` (on-screen surfaces) **and** the renderer-free `ghostty_terminal_*` C API.
+**Why a native engine.** Faithful compositing of N side-by-side panes needs each pane's **styled cell grid**, not just text. `HarnessGridTerminal` (in `HarnessTerminalEngine`) is a headless VT emulator exposing `readGrid()` for exactly that — pure Swift, no external dependency.
 
-**Why renderer-free.** The apprt `Surface` (what the GUI + `InMemoryTerminalSession` use) always owns a Metal renderer bound to an NSView; off-screen it crashes on draw and teardown. So headless emulation uses `ghostty_terminal_new/write/resize/read_cells/free` — a bare `terminal.Terminal` + `vtStream()` (read-only VT parser), fully synchronous, no Metal/IO-thread. It uses `c_allocator`, not `global.alloc` (which is undefined until `ghostty_init`).
+**Headless + synchronous.** `HarnessGridTerminal` wraps the engine's `TerminalEmulator` with a value-snapshot `readGrid()` — no Metal, no IO thread — so compositing N panes off-screen is fully synchronous and crash-free.
 
 **Pipeline (client-side emulation; the daemon stays a dumb byte pipe):**
 
 ```
-daemon PTY bytes ──subscribeSurfaceOutput──▶ GridTerminal (per pane, fork)
+daemon PTY bytes ──subscribeSurfaceOutput──▶ HarnessGridTerminal (per pane)
                   replayScrollback (seed)        │ readGrid() → TerminalGridSnapshot
 PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
                                                  ▼
@@ -372,8 +366,8 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 | Piece | File | Role |
 |-------|------|------|
-| `GridTerminal` | fork `GhosttyTerminal/InMemory/GridTerminal.swift` | Headless per-pane VT emulator over `ghostty_terminal_*` |
-| `TerminalGridSnapshot` | fork `…/TerminalGridSnapshot.swift` | Value snapshot of a viewport (codepoints, SGR-source colors, attrs, wide, cursor) |
+| `HarnessGridTerminal` | `HarnessTerminalEngine` | Headless per-pane VT emulator; `readGrid()` → snapshot |
+| `TerminalGridSnapshot` | `HarnessTerminalEngine` | Value snapshot of a viewport (codepoints, SGR colors, attrs, wide, cursor) |
 | `PaneRectSolver` | `HarnessCore/Session/PaneRectSolver.swift` | `PaneNode` + cols×rows → interior `[PaneRect]` with 1-cell dividers |
 | `GridCompositor` | `HarnessTerminalKit/GridCompositor.swift` | Panes → ANSI frame: box-drawing borders, SGR re-emit, back-buffer diff, status, cursor |
 | `WindowAttachClient` | `HarnessCLI/WindowAttachClient.swift` | Live wiring: subscribe/seed/composite, raw TTY (reuses `AttachClient`), SIGWINCH, **snapshot-push** structure tracking, prefix bytes → `KeyTable` → `CommandIPCTranslator`, follows the session's active tab |
@@ -386,13 +380,13 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 **Multi-client sizing:** `DaemonServer` records each client's requested PTY size per surface and resizes to the **smallest** (tmux `window-size smallest`); a surface grows back when a small client detaches.
 
-**Tests:** `HeadlessGridReadTests` (GridTerminal fidelity), `GridCompositorTests` (borders/SGR/diff), `PaneRectSolverTests` (layout), `CommandIPCTranslatorTests` (verb mapping + split inversion). Run the AppKit-linked grid suite via `xcrun xctest` if `swift test`'s parallel runner is flaky.
+**Tests:** `GridCompositorTests` (borders/SGR/diff), `PaneRectSolverTests` (layout), `CommandIPCTranslatorTests` (verb mapping + split inversion), `HarnessGridTerminalTests` (engine fidelity). Run the AppKit-linked grid suite via `xcrun xctest` if `swift test`'s parallel runner is flaky.
 
 **Roadmap (see [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md)):** copy-mode + SGR mouse in the compositor (GUI has both natively); explicit `-t session:window.pane` target parsing; grouped sessions; `wait-for`. The rest of the tmux verb surface — control mode (`-CC`), `link-window`, `display-popup`/`-menu`, `lock`/`clock-mode`, `command-prompt`, `choose-*`, `confirm-before`, `pipe-pane`, `capture-pane -S/-E`, command aliases — is implemented.
 
 ---
 
-## Settings and Ghostty
+## Settings
 
 `HarnessSettings` in `settings.json`. High-signal fields:
 
@@ -401,20 +395,21 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `fontSize`, `fontFamily`, `defaultShell`, `defaultCWD` | Terminal defaults |
 | `customBackgroundHex`, `customForegroundHex`, `customCursorHex` | Canvas colors; resolved via `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) for terminal **and** chrome |
 | `windowPaddingX/Y`, `backgroundOpacity` (0.05–1), `backgroundBlur` (0–100) | Chrome translucency; one uniform CGS `WindowBlur` for the whole window (terminal stays opaque) |
-| `vividColors`, `linearBlending` | Display-P3 vs sRGB colorspace; native vs gamma-correct alpha blending (`TerminalColorPipeline`) |
+| `vividColors`, `linearBlending` | Display-P3 vs sRGB layer colorspace; gamma-correct glyph coverage when linear |
+| `ligatures`, `applyThemeToTerminalOutput` | Programming ligatures (CoreText shaping); theme palette recolors program output (off = untouched) |
 | `prefixKey` | Prefix binding (`ctrl-a`; empty disables); edited via `KeyRecorderView` in Settings |
 | `scrollbackLines` | Scrollback size |
-| `cursorStyle`, `cursorBlink`, `copyOnSelect` | Terminal behavior (Ghostty parity) |
+| `cursorStyle`, `cursorBlink`, `copyOnSelect` | Terminal behavior |
 | `dividerHex`, `statusLineHex` | Chrome accents (nil → derive from theme) |
-| `selection*Hex`, `boldColorHex`, `cursorTextHex`, `paletteHex[16]` | Terminal colors (Ghostty parity); seeded by theme preset, pushed to libghostty |
+| `selection*Hex`, `boldColorHex`, `cursorTextHex`, `paletteHex[16]` | Terminal colors; seeded by theme preset, applied by the native renderer |
 | `agentColorOverrides` | Per-agent brand color overrides |
 | `systemNotificationsEnabled` | macOS banners when agent → `waiting` (in-window bell still updates) |
-| `ghosttyConfigSignature` | Fingerprint of last Ghostty import (migration) |
+| `importedConfigSignature` | Fingerprint of last imported terminal config (migration) |
 | `transparentTitlebar`, `sidebarVisible` | Chrome |
 
-**Ghostty import** (`GhosttyConfigImporter`): tries four candidate paths (see On-disk layout). **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is parsed on import for fingerprint only — not stored in `settings.json`.
+**Terminal config import** (`TerminalConfigImporter`): reads an existing terminal config (the `~/.config/ghostty` paths in On-disk layout) so users migrating in keep their colors/font. **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is parsed for the fingerprint only — not stored in `settings.json`.
 
-**Apply colors (single source of truth):** `ThemeManager.resolvedCanvas(themeName:custom*Hex:)` resolves bg/fg/cursor (explicit custom > theme preset > baseline). **Both** `TerminalHostView.configureTerminalBuilder` and `HarnessChrome.update` consume it, so terminal and chrome paint the **identical** canvas — no seam. Selecting a theme seeds the full editable color set into `settings.json` (`SessionCoordinator.setTheme` + `ThemeManager.presetColors`); colors then flow from settings, never the libghostty theme slot (kept empty via `emptyControllerTheme`). Selection/bold/cursor-text/16-ANSI-palette are pushed to libghostty in `configureTerminalBuilder`. **Translucency + blur:** The terminal surface is always fully opaque (`withBackgroundOpacity(1.0)`) so colors stay true-Ghostty rich. `backgroundOpacity` and the one window-wide CGS `WindowBlur` apply to **chrome** (sidebar, tab strip, status line) via `HarnessChrome` — not per-pixel libghostty terminal opacity. Chrome hides its vibrancy material when translucent so the single blur is uniform (no double-composite). Chrome backdrop: `ChromeBackdrop` with `.underWindowBackground` or Liquid Glass — **not** `.sidebar` / `.titlebar` (blue tint).
+**Apply colors (single source of truth):** `ThemeManager.resolvedCanvas(themeName:custom*Hex:)` resolves the canvas bg/fg/cursor (explicit custom > theme preset > baseline). **Both** `TerminalHostView.applyNativeAppearance` (→ `HarnessTerminalSurfaceView.configureAppearance`) and `HarnessChrome.update` consume it, so terminal canvas and chrome paint the **identical** color — no seam. Program **output** keeps untouched/default ANSI colors unless `applyThemeToTerminalOutput` is on. Selecting a theme seeds the full editable color set into `settings.json` (`SessionCoordinator.setTheme` + `ThemeManager.presetColors`); colors flow from settings. **Translucency + blur:** the native canvas honors `backgroundOpacity` (default-bg cells get the alpha so the one window-wide CGS `WindowBlur` shows through), while glyphs and explicit program backgrounds stay opaque so output reads true. Chrome backdrop: `ChromeBackdrop` with `.underWindowBackground` or Liquid Glass — **not** `.sidebar` / `.titlebar` (blue tint).
 
 ---
 
@@ -471,7 +466,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 ┌──────────────────────────────────────────────────────────┐
 │ Workspace pill │ Tab bar (pills +)                      │
 │ Session cards  ├────────────────────────────────────────┤
-│                │ Terminal panes (libghostty)            │
+│                │ Terminal panes (native renderer)       │
 │ Footer         │ Status line (FormatString)             │
 └────────────────┴────────────────────────────────────────┘
 ```
@@ -501,7 +496,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Pane lookup | `TerminalPaneRegistryAccess` | `@MainActor` lookup by `SurfaceID` |
 | Shell tracker | `SurfaceShellTracker` | cwd polling via proc tree |
 | Daemon fallback | `DaemonLauncher` | Starts daemon when launchd unavailable |
-| Terminal | `TerminalHostView` | In-memory ghostty, daemon I/O |
+| Terminal | `TerminalHostView` | Hosts `HarnessTerminalSurfaceView`; daemon I/O |
 | Settings UI | `SettingsViewController`, `KeyRecorderView`, `LiveTerminalPreview` | Full settings + prefix capture |
 | Daemon | `SurfaceRegistry`, `RealPty`, `DaemonServer` | Session authority |
 | Core | `SessionEditor`, `CommandParser`, `OptionStore`, `HookRegistry`, `PasteBufferStore`, `FormatString` | |
@@ -521,11 +516,15 @@ HARNESS_LIVE_DAEMON_TESTS=1 swift test        # + real shell / socket tests
 
 Bundle in `Harness.app/Contents/MacOS/`: `Harness`, `HarnessDaemon`, `harness-cli`; icon at `Contents/Resources/Harness.icns`.
 
-**HarnessCoreTests:** `SessionEditor`, `SessionEditorPhase4`, `IPCCodec`, `KeyTokenParser`, `KeyTable`, `FormatString`, `CommandParser`, `PasteBufferStore`, `LaunchAgentInstaller`, `HarnessSettings`, `AgentDetector`, `DaemonClient`, `HarnessPaths`, `GhosttyConfigImporter`, `PaneRectSolver`.
+**HarnessCoreTests:** `SessionEditor`, `SessionEditorPhase4`, `IPCCodec`, `KeyTokenParser`, `KeyTable`, `FormatString`, `CommandParser`, `PasteBufferStore`, `LaunchAgentInstaller`, `HarnessSettings`, `AgentDetector`, `DaemonClient`, `HarnessPaths`, `TerminalConfigImporter`, `PaneRectSolver`.
 
 **HarnessDaemonTests:** `SurfaceRegistry`, `ShellLaunchProfile`, `DaemonRoundTrip`, `RealPtyLifecycle` (`DaemonRoundTrip` and `RealPtyLifecycle` opt-in via `HARNESS_LIVE_DAEMON_TESTS=1`).
 
-**HarnessTerminalKitTests:** `TerminalColorPipeline`, `GridCompositorTests`, `HeadlessGridReadTests`.
+**HarnessTerminalKitTests:** `GridCompositorTests`, `CommandIPCTranslatorTests`.
+
+**HarnessTerminalRendererTests:** `FrameBuilderTests` (incl. selection), `GlyphRasterizerTests` (incl. shaping), `CellColorResolverTests`, `MetalRendererTests`.
+
+**HarnessTerminalEngineTests:** `HarnessGridTerminalTests`, `InputEncoderTests` (incl. mouse), `ScrollbackTests`, `EngineConformanceTests`.
 
 **Smoke:**
 
@@ -572,11 +571,11 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 4. Notifications keyed by surface ID string.
 5. Terminal and chrome resolve the canvas through the one `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) so they never drift; a theme seeds the editable colors, colors flow from `settings.json`.
 6. No blue sidebar vibrancy.
-7. Blur is one window-wide CGS `WindowBlur` on chrome; libghostty `background-blur` is never used (no-op in embedded mode). The terminal surface is always opaque; translucency is chrome-only via `HarnessChrome.backgroundOpacity`.
+7. Blur is one window-wide CGS `WindowBlur`. The native terminal canvas honors `backgroundOpacity` (translucent over the blur); glyphs and explicit cell backgrounds stay opaque so output reads true.
 
 ### Playbooks
 
-**Colors not matching Ghostty:** Check config `#` parsing → `settings.json` hex fields → `HarnessSettings.load()` → `ThemeManager.resolvedCanvas` (one resolver for terminal **and** chrome) → `configureTerminalBuilder` (pushes bg/fg/cursor/selection/bold/palette). Seam between sidebar and terminal ⇒ a caller bypassing `resolvedCanvas`.
+**Colors look wrong:** Check `settings.json` hex fields → `HarnessSettings.load()` → `ThemeManager.resolvedCanvas` (one resolver for terminal **and** chrome) → `applyNativeAppearance` / `configureAppearance`. Seam between sidebar and terminal ⇒ a caller bypassing `resolvedCanvas`.
 
 **cwd stuck on `Shell`:** `harness-cli get-snapshot` → `SurfaceShellTracker` → `metadataOnly` + `refreshMetadata()` → `displayTitle` logic.
 
@@ -595,15 +594,15 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Area | Status |
 |------|--------|
 | Session authority | Daemon-owned layout + IPC; launchd `KeepAlive` |
-| PTY / attach | `RealPty` + GUI in-memory ghostty; `harness-cli attach` (single pane) with detach keys |
-| Terminal compositor | `harness-cli attach-window` renders a tab's full split layout in any plain terminal (incl. ssh): client-side `GridTerminal` emulation per pane + `PaneRectSolver` + `GridCompositor` (borders, SGR, diff, status); prefix (`Ctrl-A`) routes `%`/`"` split, `x` kill, `z` zoom, `hjkl` select, `o`/`;` cycle, `c` new-tab, `n`/`p` tab, `d` detach |
+| PTY / attach | `RealPty` + GUI native renderer; `harness-cli attach` (single pane) with detach keys |
+| Terminal compositor | `harness-cli attach-window` renders a tab's full split layout in any plain terminal (incl. ssh): client-side `HarnessGridTerminal` emulation per pane + `PaneRectSolver` + `GridCompositor` (borders, SGR, diff, status); prefix (`Ctrl-A`) routes `%`/`"` split, `x` kill, `z` zoom, `hjkl` select, `o`/`;` cycle, `c` new-tab, `n`/`p` tab, `d` detach |
 | Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key`; display panes (`prefix q`) |
 | Copy mode | Vim-style viewer; paste buffers in `buffers.json` |
 | Layouts | `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, `tiled`; break/join/rotate/respawn |
 | Options / status | `OptionStore`; `StatusLineView` + `FormatString` tokens |
 | Hooks | `HookRegistry` + `bind-hook`; agent `install-hooks` |
 | Agents | Detection, chips, title inference, bell/dropdown + OS notifications |
-| Chrome / themes | Custom hex, Liquid Glass; 400+ Ghostty themes in Settings; palette `Cmd+K` lists featured themes only; live Settings preview |
+| Chrome / themes | Custom hex, Liquid Glass; 485 built-in themes + `.harnesstheme` import/export; palette `Cmd+K` lists featured themes only; live Settings preview |
 | CLI install | Menu/palette `install`; copies CLI, fish completion, LaunchAgent |
 
 ### Backlog (do not implement unless asked)
@@ -619,15 +618,15 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `connection failed` | Daemon down | Open app or check launchd |
-| Not true black | Hex stripped or missing | Fix importer; re-import Ghostty |
+| Not true black | Hex stripped or missing | Fix importer; re-import terminal config |
 | Blue sidebar | Wrong material | `.underWindowBackground` / glass |
 | Tab shows `Shell` | cwd not updating | `SurfaceShellTracker`, `displayTitle` |
 | cwd in daemon, stale UI | No metadata refresh | `refreshMetadata()` |
 | `+` dead | Button bezel | `isBordered = false` |
 | All tabs waiting | `markWaiting` bug | Filter by surface key |
-| Terminal colors wrong | Stale hex or import path | Re-import Ghostty; check `ThemeManager.resolvedCanvas` + `configureTerminalBuilder` |
+| Terminal colors wrong | Stale hex or import path | Re-import terminal config; check `ThemeManager.resolvedCanvas` + `applyNativeAppearance` |
 | Seam: sidebar ≠ terminal | A caller bypassed `resolvedCanvas` | Route bg/fg/cursor through `ThemeManager.resolvedCanvas` |
-| Blur does nothing | Expecting libghostty blur or terminal translucency | Blur is window-wide CGS `WindowBlur` on chrome (`applyTransparency`); terminal is always opaque; chrome opacity < 1 shows blur through sidebar/tab strip/status |
+| Blur does nothing | Window opaque | Blur is a window-wide CGS `WindowBlur`; set `backgroundOpacity` < 1 so the canvas + chrome show it |
 | No agent chip | Proc-tree miss | `AgentTitleInference` |
 | Xcode build fails | Stale project | `xcodegen generate` |
 
