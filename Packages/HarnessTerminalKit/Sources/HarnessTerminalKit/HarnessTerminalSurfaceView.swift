@@ -75,6 +75,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var copyOnSelect = false
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
+    /// Canvas foreground — used to draw IME preedit (marked) text over the grid.
+    private var canvasForeground: RGBColor = RGBColor(red: 255, green: 255, blue: 255)
+    /// In-progress IME composition (preedit). Empty when not composing.
+    private var markedText = ""
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -166,6 +170,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.fontSize = fontSize
         self.vivid = vivid
         self.canvasBackground = bg
+        self.canvasForeground = fg
         self.canvasOpacity = max(0, min(1, canvasOpacity))
         self.cursorStyle = CursorStyle(rawValue: cursorStyle) ?? .block
         self.cursorBlinkEnabled = cursorBlink
@@ -309,6 +314,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard let renderer, let drawable = metalLayer.nextDrawable() else { return }
         let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
         var frame = frameBuilder.build(grid, selection: currentSelection)
+        // IME preedit: draw the in-progress composition over the grid at the cursor.
+        if !markedText.isEmpty, scrollOffset == 0 {
+            overlayPreedit(into: &frame)
+        }
         // Cursor blink: hide on the off-beat (only while focused + blink enabled). A
         // program-hidden cursor (DECTCEM off) stays hidden regardless.
         if frame.cursor.visible, focused, cursorBlinkEnabled, !cursorBlinkVisible {
@@ -542,6 +551,28 @@ public final class HarnessTerminalSurfaceView: NSView {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: - IME preedit
+
+    /// Draw the marked (composing) text over the grid starting at the cursor, and park the
+    /// cursor at its end. Best-effort: one cell per scalar (wide composition may pack
+    /// loosely until full-width preedit handling lands).
+    private func overlayPreedit(into frame: inout TerminalFrame) {
+        let row = frame.cursor.row
+        guard row >= 0, row < frame.rows else { return }
+        var col = frame.cursor.column
+        let fg = RenderColor(canvasForeground)
+        for scalar in markedText.unicodeScalars {
+            guard col >= 0, col < frame.columns else { break }
+            let idx = row * frame.columns + col
+            guard idx >= 0, idx < frame.cells.count else { break }
+            frame.cells[idx].codepoint = scalar.value
+            frame.cells[idx].foreground = fg
+            frame.cells[idx].underline = .single
+            col += 1
+        }
+        frame.cursor.column = min(col, frame.columns - 1)
+    }
+
     // MARK: - Input
 
     public override var acceptsFirstResponder: Bool { true }
@@ -592,11 +623,15 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
 
-        // Control/Option use the layout-independent characters; otherwise the composed
-        // characters (handles shift, dead keys).
-        let useIgnoring = mods.contains(.control) || mods.contains(.option)
-        let text = (useIgnoring ? event.charactersIgnoringModifiers : event.characters) ?? ""
-        emit(inputEncoder.encode(text: text, modifiers: mods))
+        // Control/Option take the raw path (Meta prefix + control collapsing). Plain keys
+        // go through the input context so dead keys and IME composition work — committed
+        // text arrives via `insertText`, composition via `setMarkedText`.
+        if mods.contains(.control) || mods.contains(.option) {
+            let text = event.charactersIgnoringModifiers ?? ""
+            emit(inputEncoder.encode(text: text, modifiers: mods))
+            return
+        }
+        interpretKeyEvents([event])
     }
 
     private func emit(_ bytes: [UInt8]) {
@@ -637,4 +672,70 @@ public final class HarnessTerminalSurfaceView: NSView {
         default: return nil
         }
     }
+}
+
+// MARK: - NSTextInputClient (dead keys + IME)
+
+extension HarnessTerminalSurfaceView: @preconcurrency NSTextInputClient {
+    private func plainString(_ obj: Any) -> String {
+        if let s = obj as? String { return s }
+        if let a = obj as? NSAttributedString { return a.string }
+        return ""
+    }
+
+    /// Committed text (plain typing, dead-key result, or finished IME composition).
+    public func insertText(_ string: Any, replacementRange: NSRange) {
+        markedText = ""
+        let text = plainString(string)
+        guard !text.isEmpty else { scheduleRender(); return }
+        emit(inputEncoder.encode(text: text))
+        scheduleRender()
+    }
+
+    /// In-progress composition shown as preedit over the grid.
+    public func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        markedText = plainString(string)
+        scheduleRender()
+    }
+
+    public func unmarkText() {
+        markedText = ""
+        scheduleRender()
+    }
+
+    public func hasMarkedText() -> Bool { !markedText.isEmpty }
+
+    public func markedRange() -> NSRange {
+        markedText.isEmpty ? NSRange(location: NSNotFound, length: 0)
+            : NSRange(location: 0, length: markedText.utf16.count)
+    }
+
+    public func selectedRange() -> NSRange { NSRange(location: 0, length: 0) }
+
+    public func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+        nil
+    }
+
+    public func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+
+    /// Where the IME candidate window should anchor: the cursor cell, in screen space.
+    public func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        guard let renderer, let window else { return .zero }
+        let scale = window.backingScaleFactor
+        let cellW = CGFloat(renderer.cellPixelWidth) / scale
+        let cellH = CGFloat(renderer.cellPixelHeight) / scale
+        let snapshot = emulator.readGrid()
+        let x = paddingPointsX + CGFloat(snapshot.cursor.col) * cellW
+        // Convert grid-from-top to AppKit bottom-left origin.
+        let yTop = paddingPointsY + CGFloat(snapshot.cursor.row) * cellH
+        let viewRect = NSRect(x: x, y: bounds.height - yTop - cellH, width: cellW, height: cellH)
+        let windowRect = convert(viewRect, to: nil)
+        return window.convertToScreen(windowRect)
+    }
+
+    public func characterIndex(for point: NSPoint) -> Int { 0 }
+
+    /// Keys the input system classifies as commands (e.g. Return) are already handled in
+    /// `keyDown` before reaching the IME, so swallow these silently (no system beep).
+    public override func doCommand(by selector: Selector) {}
 }
