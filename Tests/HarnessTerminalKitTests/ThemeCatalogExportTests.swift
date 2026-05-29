@@ -28,7 +28,8 @@ final class ThemeCatalogExportTests: XCTestCase {
         var exported: [HarnessThemeDefinition] = []
         var skipped: [String] = []
 
-        for theme in GhosttyThemeCatalog.search("") {
+        // `allThemes` is the full set (the fork's `search("")` returns empty, unlike ours).
+        for theme in GhosttyThemeCatalog.allThemes {
             guard
                 let background = RGBColor(hex: theme.background),
                 let foreground = RGBColor(hex: theme.foreground)
