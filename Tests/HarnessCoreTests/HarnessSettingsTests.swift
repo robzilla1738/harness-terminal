@@ -17,12 +17,11 @@ final class HarnessSettingsTests: XCTestCase {
 
         let settings = try JSONDecoder().decode(HarnessSettings.self, from: data)
 
-        XCTAssertFalse(settings.useCustomColors)
         XCTAssertEqual(settings.customBackgroundHex, "#000000")
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
     }
 
-    func testImportedGhosttyDefaultsKeepBaseColorsAndDropAdvancedOverrides() {
+    func testImportedGhosttyDefaultsKeepFullColorSet() {
         let imported = GhosttyImportedDefaults(
             backgroundHex: "#000000",
             foregroundHex: "#ffffff",
@@ -40,16 +39,17 @@ final class HarnessSettingsTests: XCTestCase {
 
         let settings = HarnessSettings.makeDefaults(imported: imported)
 
-        XCTAssertFalse(settings.useCustomColors)
         XCTAssertEqual(settings.customBackgroundHex, "#000000")
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
         XCTAssertEqual(settings.customCursorHex, "#cccccc")
-        XCTAssertNil(settings.selectionBackgroundHex)
-        XCTAssertNil(settings.selectionForegroundHex)
-        XCTAssertNil(settings.boldColorHex)
-        XCTAssertNil(settings.cursorTextHex)
-        XCTAssertEqual(settings.minimumContrast, 1)
-        XCTAssertNil(settings.paletteHex[0])
+        // Full Ghostty parity: selection/bold/cursor-text/contrast/palette are kept.
+        XCTAssertEqual(settings.selectionBackgroundHex, "#123456")
+        XCTAssertEqual(settings.selectionForegroundHex, "#abcdef")
+        XCTAssertEqual(settings.boldColorHex, "#eeeeee")
+        XCTAssertEqual(settings.cursorTextHex, "#000000")
+        XCTAssertEqual(settings.minimumContrast, 1.5)
+        XCTAssertEqual(settings.paletteHex[0], "#111111")
+        XCTAssertEqual(settings.paletteHex.count, 16)
         XCTAssertEqual(settings.cursorStyle, "bar")
         XCTAssertFalse(settings.cursorBlink)
         XCTAssertTrue(settings.copyOnSelect)
@@ -102,7 +102,6 @@ final class HarnessSettingsTests: XCTestCase {
         s.defaultCWD = "/tmp/work"
         s.backgroundOpacity = 0.42
         s.backgroundBlur = 20
-        s.useCustomColors = true
         s.customBackgroundHex = "#123456"
         s.paletteHex[0] = "#abcdef"
         s.minimumContrast = 7
@@ -111,7 +110,6 @@ final class HarnessSettingsTests: XCTestCase {
 
         XCTAssertEqual(s.backgroundOpacity, 1)
         XCTAssertEqual(s.backgroundBlur, 0)
-        XCTAssertFalse(s.useCustomColors)
         XCTAssertNil(s.customBackgroundHex)
         XCTAssertNil(s.paletteHex[0])
         XCTAssertEqual(s.minimumContrast, 1)

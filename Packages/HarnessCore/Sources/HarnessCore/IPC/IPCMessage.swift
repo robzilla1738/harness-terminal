@@ -14,6 +14,7 @@ public enum IPCRequest: Codable, Sendable {
     case selectSession(workspaceID: UUID, sessionID: UUID)
     case selectTab(workspaceID: UUID, tabID: UUID)
     case reorderTab(workspaceID: UUID, tabID: UUID, toIndex: Int)
+    case swapTab(workspaceID: UUID, tabID: UUID, withIndex: Int)
     case reorderSession(workspaceID: UUID, sessionID: UUID, toIndex: Int)
     case closeTab(tabID: UUID)
     case closeSession(sessionID: UUID)

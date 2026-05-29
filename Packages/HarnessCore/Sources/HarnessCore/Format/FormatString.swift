@@ -64,8 +64,8 @@ public enum FormatString {
         // DateFormatter.dateFormat takes ICU patterns, not strftime. Feeding it
         // `%H:%M` produces `%11:%5` (%=literal, H=hour-with-no-padding,
         // M=month-in-year) — visibly wrong. We translate strftime to ICU here
-        // so the user-facing syntax matches tmux / date(1) as the docstring
-        // promises.
+        // so the user-facing syntax matches the standard strftime / date(1)
+        // format the docstring promises.
         if body.hasPrefix("time:") {
             let format = String(body.dropFirst("time:".count))
             let formatter = DateFormatter()

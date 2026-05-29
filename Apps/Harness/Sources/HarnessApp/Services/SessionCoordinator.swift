@@ -16,6 +16,13 @@ final class SessionCoordinator: NSObject {
     private var pushedNotificationKeys: Set<String> = []
     var settings = HarnessSettings.load()
     var activeSurfaceID: SurfaceID?
+    /// Most-recently-active pane within the current tab, for `select-pane -l`
+    /// (last-pane). Updated only on genuine intra-tab pane switches.
+    private(set) var lastActiveSurfaceID: SurfaceID?
+    /// The marked pane (`select-pane -m`) — implicit source for `join-pane`.
+    private(set) var markedSurfaceID: SurfaceID?
+    /// Tabs with `synchronize-panes` on — input typed in any pane mirrors to all.
+    private var synchronizedTabIDs: Set<TabID> = []
     var structureRevision = 0
 
     private enum ActiveTabCloseDisposition {
@@ -104,25 +111,18 @@ final class SessionCoordinator: NSObject {
             themeName: snapshot.themeName,
             opacity: CGFloat(settings.backgroundOpacity),
             blur: settings.backgroundBlur,
-            backgroundHex: settings.useCustomColors ? settings.customBackgroundHex : nil,
-            foregroundHex: settings.useCustomColors ? settings.customForegroundHex : nil,
-            cursorHex: settings.useCustomColors ? settings.customCursorHex : nil
+            backgroundHex: settings.customBackgroundHex,
+            foregroundHex: settings.customForegroundHex,
+            cursorHex: settings.customCursorHex
         )
         for host in terminalHosts.allHosts() {
-            if shouldApplyNamedTerminalTheme {
-                host.applyTheme(named: snapshot.themeName)
-            }
+            host.applyTheme(named: snapshot.themeName)
             host.applySettings(settings)
             pushBorderColors(to: host)
         }
+        refreshSyncSiblings()
+        reassertMarkedPane()
     }
-
-    /// Always apply the selected theme to terminals as the base palette; custom colors
-    /// are layered on top afterward in `applySettings`. Previously this was skipped when
-    /// a custom background/foreground was set, which also dropped the theme's ANSI
-    /// palette — so e.g. a custom black background silently lost the theme's syntax
-    /// colors. Layering (theme first, overrides second) keeps both.
-    private var shouldApplyNamedTerminalTheme: Bool { true }
 
     /// Push the theme's focus-ring / waiting colors into a host (the terminal package
     /// can't reach the app palette, so the app owns these indicator colors).
@@ -194,14 +194,12 @@ final class SessionCoordinator: NSObject {
             themeName: snapshot.themeName,
             opacity: CGFloat(settings.backgroundOpacity),
             blur: settings.backgroundBlur,
-            backgroundHex: settings.useCustomColors ? settings.customBackgroundHex : nil,
-            foregroundHex: settings.useCustomColors ? settings.customForegroundHex : nil,
-            cursorHex: settings.useCustomColors ? settings.customCursorHex : nil
+            backgroundHex: settings.customBackgroundHex,
+            foregroundHex: settings.customForegroundHex,
+            cursorHex: settings.customCursorHex
         )
         for host in terminalHosts.allHosts() {
-            if shouldApplyNamedTerminalTheme {
-                host.applyTheme(named: snapshot.themeName)
-            }
+            host.applyTheme(named: snapshot.themeName)
             host.applySettings(settings)
             pushBorderColors(to: host)
         }
@@ -216,12 +214,48 @@ final class SessionCoordinator: NSObject {
         )
     }
 
-    func setTheme(_ name: String, clearColorOverrides: Bool = false) {
-        if clearColorOverrides {
-            settings.customBackgroundHex = nil
-            settings.customForegroundHex = nil
-            settings.customCursorHex = nil
-            settings.useCustomColors = false
+    /// The live `FormatString` context for the active workspace/session/tab/pane.
+    /// Shared by the status line and `display-message` so both render the same tokens.
+    func currentFormatContext() -> FormatContext {
+        let workspace = snapshot.activeWorkspace
+        let session = workspace?.activeSession
+        let tab = workspace?.activeTab
+        return FormatContext(
+            paneID: activeSurfaceID?.uuidString,
+            paneTitle: tab?.title,
+            paneCwd: tab?.cwd,
+            paneActive: activeSurfaceID != nil,
+            paneIndex: nil,
+            sessionName: session?.name.isEmpty == false ? session?.name : nil,
+            tabName: tab?.title,
+            tabIndex: session?.tabs.firstIndex(where: { $0.id == tab?.id }),
+            workspaceName: workspace?.name,
+            agentKind: tab?.agent?.kind.rawValue,
+            agentActivity: tab?.agent?.activity.rawValue,
+            gitBranch: tab?.gitBranch,
+            clientName: "Harness.app"
+        )
+    }
+
+    /// Apply a theme. By default this seeds the full editable color set from the
+    /// theme preset (overwriting prior color edits) so the whole canvas — terminal
+    /// and chrome — adopts the theme. Pass `seedColors: false` for programmatic /
+    /// restore paths that must preserve already-resolved colors (e.g. a fresh
+    /// Ghostty re-import, where the imported config colors must win).
+    func setTheme(_ name: String, seedColors: Bool = true) {
+        if seedColors {
+            let preset = ThemeManager.presetColors(themeName: name)
+            settings.customBackgroundHex = preset.backgroundHex
+            settings.customForegroundHex = preset.foregroundHex
+            settings.customCursorHex = preset.cursorHex
+            settings.cursorTextHex = preset.cursorTextHex
+            settings.selectionBackgroundHex = preset.selectionBackgroundHex
+            settings.selectionForegroundHex = preset.selectionForegroundHex
+            settings.boldColorHex = preset.boldHex
+            settings.paletteHex = HarnessSettings.normalizedPalette(preset.paletteHex)
+            // Chrome accents re-derive from the new theme unless re-set by the user.
+            settings.dividerHex = nil
+            settings.statusLineHex = nil
             try? settings.save()
         }
         requestDaemon(.setTheme(name: name))
@@ -491,6 +525,13 @@ final class SessionCoordinator: NSObject {
     /// one pane (app-wide) is highlighted — but only when its tab is actually split.
     /// A lone terminal needs no "which pane is focused" hint, so it stays borderless.
     func setActiveSurface(_ surfaceID: SurfaceID?) {
+        // last-pane MRU: when the user switches to a different pane *within the same
+        // tab*, remember where they came from. Tab switches and remounts (different
+        // tab, or a no-op re-set) don't pollute the within-tab history.
+        if let old = activeSurfaceID, let new = surfaceID, old != new,
+           let oldTab = tabID(forSurface: old), oldTab == tabID(forSurface: new) {
+            lastActiveSurfaceID = old
+        }
         activeSurfaceID = surfaceID
         let showBorder = surfaceID.map { paneCount(forSurface: $0) > 1 } ?? false
         for host in terminalHosts.allHosts() {
@@ -509,6 +550,113 @@ final class SessionCoordinator: NSObject {
             }
         }
         return 0
+    }
+
+    /// The tab that owns `surfaceID`, if any.
+    private func tabID(forSurface surfaceID: SurfaceID) -> TabID? {
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.rootPane.allSurfaceIDs().contains(surfaceID) {
+                    return tab.id
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Jump to the most-recently-active pane in the current tab (`select-pane -l`).
+    /// No-op if there's no remembered pane still present in this tab.
+    func selectLastPane() {
+        guard let tab = snapshot.activeWorkspace?.activeTab,
+              let last = lastActiveSurfaceID,
+              tab.rootPane.allSurfaceIDs().contains(last)
+        else { return }
+        setActiveSurface(last)
+        terminalHosts.host(for: last)?.focusTerminal()
+    }
+
+    /// Mark/unmark the active pane as the `join-pane` source (`select-pane -m`/`-M`).
+    /// Marking a second pane moves the mark; `set: false` clears it.
+    func setMarkedPane(_ set: Bool) {
+        markedSurfaceID = set ? activeSurfaceID : nil
+        for host in terminalHosts.allHosts() {
+            host.showsMarkedBorder = host.surfaceID == markedSurfaceID
+        }
+    }
+
+    /// Re-assert the marked border after a pane remount (called from the content
+    /// mount path alongside `ensureActivePane`).
+    func reassertMarkedPane() {
+        for host in terminalHosts.allHosts() {
+            host.showsMarkedBorder = markedSurfaceID != nil && host.surfaceID == markedSurfaceID
+        }
+    }
+
+    /// `display-panes`: overlay a number on each pane of the active tab; the digit
+    /// the user presses jumps to that pane.
+    func showDisplayPanes() {
+        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
+        let surfaces = tab.rootPane.allSurfaceIDs()
+        let panes = surfaces.enumerated().compactMap { index, sid -> (number: Int, host: TerminalHostView)? in
+            guard let host = terminalHosts.host(for: sid) else { return nil }
+            return (number: index, host: host)
+        }
+        DisplayPanesOverlay.shared.show(panes: panes) { [weak self] surfaceID in
+            self?.setActiveSurface(surfaceID)
+            self?.terminalHosts.host(for: surfaceID)?.focusTerminal()
+        }
+    }
+
+    /// `synchronize-panes`: toggle (or set) input mirroring across all panes of the
+    /// active tab. `on == nil` toggles.
+    func setSynchronizePanes(_ on: Bool?) {
+        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
+        let nowOn = on ?? !synchronizedTabIDs.contains(tab.id)
+        if nowOn { synchronizedTabIDs.insert(tab.id) } else { synchronizedTabIDs.remove(tab.id) }
+        refreshSyncSiblings()
+        DisplayMessage.show(nowOn ? "synchronize-panes: on" : "synchronize-panes: off")
+    }
+
+    /// Push each live host its sibling surface ids when its tab is synchronized
+    /// (and clears them otherwise). Called on toggle and after every structure sync.
+    func refreshSyncSiblings() {
+        let liveTabIDs = Set(snapshot.workspaces.flatMap { $0.sessions.flatMap { $0.tabs.map(\.id) } })
+        synchronizedTabIDs.formIntersection(liveTabIDs)
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    let surfaceIDs = tab.rootPane.allSurfaceIDs()
+                    let synced = synchronizedTabIDs.contains(tab.id) && surfaceIDs.count > 1
+                    for sid in surfaceIDs {
+                        guard let host = terminalHosts.host(for: sid) else { continue }
+                        host.setSyncSiblings(synced ? surfaceIDs.filter { $0 != sid }.map(\.uuidString) : [])
+                    }
+                }
+            }
+        }
+    }
+
+    /// Join the marked pane into the active pane as a split (`join-pane`). The
+    /// marked pane becomes a new split alongside the active pane, then the mark
+    /// clears. No-op (with a toast) if nothing is marked or the mark is gone.
+    func joinMarkedPane(direction: SplitDirection) {
+        guard let markedSurface = markedSurfaceID,
+              let tab = snapshot.activeWorkspace?.activeTab,
+              let activeSurface = activeSurfaceID,
+              let destPane = paneID(for: activeSurface, in: tab.rootPane)
+        else { DisplayMessage.show("join-pane: no marked pane"); return }
+        // The marked pane can live in any tab; find its pane id across the snapshot.
+        let sourcePane = snapshot.workspaces
+            .flatMap(\.sessions).flatMap(\.tabs)
+            .compactMap { paneID(for: markedSurface, in: $0.rootPane) }
+            .first
+        guard let sourcePane, sourcePane != destPane else {
+            DisplayMessage.show("join-pane: invalid mark")
+            return
+        }
+        _ = requestDaemon(.joinPane(sourcePaneID: sourcePane, destPaneID: destPane, direction: direction))
+        setMarkedPane(false)
+        syncFromDaemon()
     }
 
     /// Re-assert the active-pane border after a (re)mount of `tab`'s panes. If the
@@ -582,10 +730,12 @@ final class SessionCoordinator: NSObject {
         if let imported = GhosttyConfigImporter.load() {
             settings = HarnessSettings.makeDefaults(imported: imported)
             try? settings.save()
+            // Colors were just seeded from the imported Ghostty config above;
+            // don't let the theme preset overwrite the user's explicit config.
             if let theme = imported.themeName {
-                setTheme(theme)
+                setTheme(theme, seedColors: false)
             } else {
-                setTheme(ThemeManager.defaultDisplayName)
+                setTheme(ThemeManager.defaultDisplayName, seedColors: false)
             }
             applySettingsToHosts()
         }
@@ -624,9 +774,7 @@ final class SessionCoordinator: NSObject {
             themeName: snapshot.themeName
         )
         host.hostDelegate = self
-        if shouldApplyNamedTerminalTheme {
-            host.applyTheme(named: snapshot.themeName)
-        }
+        host.applyTheme(named: snapshot.themeName)
         host.applySettings(settings)
         pushBorderColors(to: host)
         terminalHosts.register(host)

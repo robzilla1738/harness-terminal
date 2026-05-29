@@ -4,7 +4,7 @@ import HarnessCore
 /// `:` command prompt. Pressing prefix `:` (or invoking via Command Palette →
 /// "Run command…") brings up a single-line field anchored under the active
 /// window. The text is parsed via `CommandParser` and dispatched through
-/// `MainExecutor`. History persists for the session; arrow keys cycle it.
+/// `MainExecutor`. History persists across launches; arrow keys cycle it.
 @MainActor
 final class CommandPromptController: NSObject, NSTextFieldDelegate {
     static let shared = CommandPromptController()
@@ -14,8 +14,23 @@ final class CommandPromptController: NSObject, NSTextFieldDelegate {
     private var history: [String] = []
     private var historyCursor: Int = -1
 
+    private static var historyURL: URL {
+        HarnessPaths.applicationSupport.appendingPathComponent("command-history.json")
+    }
+
     private override init() {
         super.init()
+        if let data = try? Data(contentsOf: Self.historyURL),
+           let saved = try? JSONDecoder().decode([String].self, from: data) {
+            history = saved
+        }
+    }
+
+    private func saveHistory() {
+        try? HarnessPaths.ensureDirectories()
+        if let data = try? JSONEncoder().encode(history) {
+            try? data.write(to: Self.historyURL, options: .atomic)
+        }
     }
 
     func present() {
@@ -80,6 +95,7 @@ final class CommandPromptController: NSObject, NSTextFieldDelegate {
         if history.last != raw { history.append(raw) }
         if history.count > 100 { history.removeFirst(history.count - 100) }
         historyCursor = -1
+        saveHistory()
         let source = raw
         // Dismiss first so the executed command sees no overlay (some commands
         // like `display-message` would otherwise stack on top of us).

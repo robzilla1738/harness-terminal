@@ -1,10 +1,12 @@
 import AppKit
+import CoreImage
 
 /// Big "this is what your terminal looks like right now" tile shown at the top
 /// of the Appearance page. Renders a faux Harness window using the live
-/// settings — background tint × opacity, foreground, cursor, selection, bold,
-/// and the 16-slot ANSI palette across the bottom. Repaints on every
-/// slider/field/well change so the user sees their edit immediately.
+/// settings — a representative blurred desktop behind a background tint ×
+/// opacity, foreground, cursor, selection, bold, and the 16-slot ANSI palette
+/// across the bottom. Repaints on every slider/field/well change so the user
+/// sees their edit (including opacity + blur) immediately.
 @MainActor
 final class LiveTerminalPreview: NSView {
     enum CursorStyle { case block, beam, underline }
@@ -15,9 +17,14 @@ final class LiveTerminalPreview: NSView {
         var fontName: String
         var fontSize: CGFloat
         var opacity: CGFloat
+        var blur: CGFloat = 0
         var cursorStyle: CursorStyle
         var cursorBlink: Bool
     }
+
+    /// Cached representative-desktop backdrop, keyed by size + blur so it only
+    /// recomputes when those change (not on every opacity/color tick).
+    private var backdropCache: (key: String, image: NSImage)?
 
     private var state: State = .init(
         colors: .init(
@@ -62,7 +69,13 @@ final class LiveTerminalPreview: NSView {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let rect = bounds
 
-        // Background — tinted bg × opacity, so dialing opacity down visibly fades the tile.
+        // Representative desktop behind the window so opacity (how much shows
+        // through) and blur (how soft it is) read truthfully — mirroring the real
+        // CGS window blur. At opacity 1 the tint below fully covers it.
+        desktopBackdrop(for: rect).draw(in: rect, from: .zero, operation: .copy, fraction: 1)
+
+        // Background — tinted bg × opacity, so dialing opacity down reveals the
+        // backdrop just like the real translucent window.
         let bg = state.colors.background.withAlphaComponent(state.opacity)
         bg.setFill()
         ctx.fill(rect)
@@ -188,5 +201,54 @@ final class LiveTerminalPreview: NSView {
             let bold = NSFont(descriptor: descriptor, size: size)
         { return bold }
         return .monospacedSystemFont(ofSize: size, weight: .bold)
+    }
+
+    /// Cached representative desktop, blurred by the current blur amount.
+    private func desktopBackdrop(for rect: NSRect) -> NSImage {
+        let key = "\(Int(rect.width))x\(Int(rect.height))@\(Int(state.blur))"
+        if let cached = backdropCache, cached.key == key { return cached.image }
+        let base = drawDesktopImage(size: rect.size)
+        let image = state.blur > 0.5 ? (gaussianBlurred(base, radius: state.blur * 0.4) ?? base) : base
+        backdropCache = (key, image)
+        return image
+    }
+
+    /// A colorful gradient with a few soft blobs — enough high-frequency detail
+    /// that the blur amount is visibly different.
+    private func drawDesktopImage(size: NSSize) -> NSImage {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSGradient(colors: [
+            NSColor(srgbRed: 0.16, green: 0.30, blue: 0.66, alpha: 1),
+            NSColor(srgbRed: 0.42, green: 0.22, blue: 0.58, alpha: 1),
+            NSColor(srgbRed: 0.90, green: 0.46, blue: 0.34, alpha: 1),
+        ])?.draw(in: NSRect(origin: .zero, size: size), angle: 35)
+        let blobs: [(CGFloat, CGFloat, CGFloat, NSColor)] = [
+            (0.18, 0.32, 64, NSColor(srgbRed: 1.0, green: 0.85, blue: 0.40, alpha: 0.55)),
+            (0.60, 0.68, 84, NSColor(srgbRed: 0.40, green: 0.90, blue: 0.80, alpha: 0.45)),
+            (0.86, 0.26, 56, NSColor(srgbRed: 1.0, green: 0.50, blue: 0.70, alpha: 0.50)),
+        ]
+        for (fx, fy, r, color) in blobs {
+            color.setFill()
+            let c = NSPoint(x: fx * size.width, y: fy * size.height)
+            NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)).fill()
+        }
+        image.unlockFocus()
+        return image
+    }
+
+    private func gaussianBlurred(_ image: NSImage, radius: CGFloat) -> NSImage? {
+        guard let tiff = image.tiffRepresentation,
+              let input = CIImage(data: tiff),
+              let filter = CIFilter(name: "CIGaussianBlur")
+        else { return nil }
+        filter.setValue(input, forKey: kCIInputImageKey)
+        filter.setValue(radius, forKey: kCIInputRadiusKey)
+        // Crop back to the input extent so the blur doesn't shrink/expand the tile.
+        guard let output = filter.outputImage?.cropped(to: input.extent) else { return nil }
+        let rep = NSCIImageRep(ciImage: output)
+        let result = NSImage(size: image.size)
+        result.addRepresentation(rep)
+        return result
     }
 }

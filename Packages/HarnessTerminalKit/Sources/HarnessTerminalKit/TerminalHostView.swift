@@ -23,6 +23,7 @@ public final class TerminalHostView: NSView {
     private let memorySession: InMemoryTerminalSession
     private let daemonClient = DaemonClient()
     private let io: SurfaceIO
+    private let inputGate: InputGate
     private var outputSubscription: DaemonSubscription?
     private var isWaiting = false
     private var isActiveBorder = false
@@ -55,6 +56,17 @@ public final class TerminalHostView: NSView {
         }
     }
 
+    private var isMarked = false
+    /// The "marked" pane (`select-pane -m`) — the implicit source for `join-pane`.
+    /// Drawn as a distinct dashed accent border so the user can see the mark.
+    public var showsMarkedBorder: Bool {
+        get { isMarked }
+        set {
+            isMarked = newValue
+            needsDisplay = true
+        }
+    }
+
     public init(
         surfaceID: SurfaceID = UUID(),
         workingDirectory: String? = nil,
@@ -69,8 +81,10 @@ public final class TerminalHostView: NSView {
         let surfaceEnv = harnessSurfaceEnv ?? surfaceID.uuidString
         let io = SurfaceIO(surfaceID: surfaceEnv)
         self.io = io
+        let inputGate = InputGate(io: io)
+        self.inputGate = inputGate
         self.memorySession = InMemoryTerminalSession(
-            write: { data in io.send(data) },
+            write: { data in inputGate.route(data) },
             resize: { viewport in io.resize(rows: viewport.rows, cols: viewport.columns) }
         )
         self.cachedSettings = settings
@@ -118,15 +132,34 @@ public final class TerminalHostView: NSView {
         guard let settings else { return }
         builder.withFontSize(settings.fontSize)
         builder.withFontFamily(settings.fontFamily)
+        // Color translucency only. Blur is applied once at the window level (CGS),
+        // not per-surface: libghostty's background-blur is a no-op in embedded mode
+        // (it doesn't own the NSWindow) and would otherwise double the chrome blur.
         builder.withBackgroundOpacity(Double(settings.backgroundOpacity))
-        builder.withBackgroundBlur(settings.backgroundBlur)
         builder.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
         builder.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
-        let background = settings.customBackgroundHex ?? ThemeManager.defaultBaselineBackgroundHex
-        let foreground = settings.customForegroundHex ?? ThemeManager.defaultBaselineForegroundHex
-        builder.withBackground(background)
-        builder.withForeground(foreground)
-        builder.withCursorColor(settings.customCursorHex ?? foreground)
+        // Canvas bg/fg/cursor come from the one shared resolver so the terminal
+        // surface always matches the chrome (no seam between sidebar and output).
+        let canvas = ThemeManager.resolvedCanvas(
+            themeName: themeName,
+            customBackgroundHex: settings.customBackgroundHex,
+            customForegroundHex: settings.customForegroundHex,
+            customCursorHex: settings.customCursorHex
+        )
+        builder.withBackground(canvas.backgroundHex)
+        builder.withForeground(canvas.foregroundHex)
+        builder.withCursorColor(canvas.cursorHex)
+        // Full Ghostty-parity color set. nil = let libghostty derive from bg/fg
+        // (its native default); a value is pushed verbatim. Picking a theme seeds
+        // these into settings, so a chosen theme renders its complete palette.
+        if let value = settings.cursorTextHex { builder.withCursorText(value) }
+        if let value = settings.selectionBackgroundHex { builder.withSelectionBackground(value) }
+        if let value = settings.selectionForegroundHex { builder.withSelectionForeground(value) }
+        if let value = settings.boldColorHex { builder.withBoldColor(value) }
+        if settings.minimumContrast > 1 { builder.withMinimumContrast(settings.minimumContrast) }
+        for (index, hex) in settings.paletteHex.enumerated() {
+            if let hex { builder.withPalette(index, color: hex) }
+        }
         builder.withCursorStyle(TerminalCursorStyle(rawValue: settings.cursorStyle) ?? .block)
         builder.withCursorStyleBlink(settings.cursorBlink)
         builder.withCustom("copy-on-select", settings.copyOnSelect ? "true" : "false")
@@ -214,6 +247,16 @@ public final class TerminalHostView: NSView {
             // themes without becoming a hard outline.
             strokeIndicator(color: activeBorderColor, lineWidth: 1, alpha: 0.42, inset: 1)
         }
+        // The marked pane (join-pane source) gets a distinct dashed accent on top,
+        // so it reads as "marked" independently of focus.
+        if isMarked {
+            let rect = bounds.insetBy(dx: 1.5, dy: 1.5)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+            path.lineWidth = 1.5
+            path.setLineDash([5, 3], count: 2, phase: 0)
+            waitingRingColor.withAlphaComponent(0.9).setStroke()
+            path.stroke()
+        }
     }
 
     private func strokeIndicator(color: NSColor, lineWidth: CGFloat, alpha: CGFloat, inset: CGFloat? = nil) {
@@ -235,6 +278,12 @@ public final class TerminalHostView: NSView {
     public func focusTerminal() {
         window?.makeFirstResponder(terminalView)
         hostDelegate?.terminalHostDidChangeFocus(true, surfaceID: surfaceID)
+    }
+
+    /// `synchronize-panes`: the surface-id strings (excluding this pane) that this
+    /// pane's input should also be mirrored to. Empty = normal single-pane input.
+    public func setSyncSiblings(_ surfaceIDStrings: [String]) {
+        inputGate.setSiblings(surfaceIDStrings)
     }
 
     private func ensureDaemonSurface(cwd: String?, shell: String, settings: HarnessSettings?) {
@@ -303,6 +352,40 @@ private final class SurfaceIO: @unchecked Sendable {
     func resize(rows: UInt16, cols: UInt16) {
         queue.async { [client, surfaceID] in
             _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols))
+        }
+    }
+}
+
+/// Routes a pane's keyboard input. Normally just forwards to the pane's own PTY.
+/// When `synchronize-panes` is on, the app sets sibling surface ids and each
+/// keystroke is also mirrored to them via the daemon (so typing hits every pane
+/// in the window). Fully sendable — holds only strings + a thread-safe client,
+/// never a view — so it's safe to call from libghostty's input callback thread.
+private final class InputGate: @unchecked Sendable {
+    private let io: SurfaceIO
+    private let broadcastClient = DaemonClient()
+    private let broadcastQueue = DispatchQueue(label: "com.robert.harness.sync-input")
+    private let lock = NSLock()
+    private var siblingsStorage: [String] = []
+
+    init(io: SurfaceIO) { self.io = io }
+
+    func setSiblings(_ ids: [String]) {
+        lock.lock(); siblingsStorage = ids; lock.unlock()
+    }
+
+    private var siblings: [String] {
+        lock.lock(); defer { lock.unlock() }; return siblingsStorage
+    }
+
+    func route(_ data: Data) {
+        io.send(data)
+        let mirrors = siblings
+        guard !mirrors.isEmpty else { return }
+        broadcastQueue.async { [broadcastClient] in
+            for sid in mirrors {
+                _ = try? broadcastClient.request(.sendData(surfaceID: sid, data: data))
+            }
         }
     }
 }

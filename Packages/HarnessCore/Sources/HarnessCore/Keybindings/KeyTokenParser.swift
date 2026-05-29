@@ -110,9 +110,3 @@ public enum KeyTokenParser {
         return out
     }
 }
-
-/// Deprecated alias kept transiently for any out-of-tree callers. Use
-/// `KeyTokenParser` going forward; this re-export can be removed once we
-/// confirm nothing external depends on it.
-@available(*, deprecated, renamed: "KeyTokenParser")
-public typealias TmuxKeyParser = KeyTokenParser

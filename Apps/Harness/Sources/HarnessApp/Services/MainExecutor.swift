@@ -55,6 +55,14 @@ final class MainExecutor: CommandExecutor {
             coordinator.syncFromDaemon()
         case .resizePane(let direction, let amount):
             try resizeActivePane(direction: direction, amount: amount, coordinator: coordinator)
+        case .markPane(let set):
+            coordinator.setMarkedPane(set)
+        case .joinPane(let direction):
+            coordinator.joinMarkedPane(direction: direction)
+        case .synchronizePanes(let set):
+            coordinator.setSynchronizePanes(set)
+        case .displayPanes:
+            coordinator.showDisplayPanes()
         case .newWindow:
             coordinator.openTabInActiveWorkspace()
         case .killWindow:
@@ -75,6 +83,18 @@ final class MainExecutor: CommandExecutor {
             cycleActiveTab(coordinator: coordinator, forward: false)
         case .selectWindow(let index):
             selectTab(coordinator: coordinator, atIndex: index)
+        case .moveWindow(let index):
+            if let workspace = coordinator.snapshot.activeWorkspace,
+               let tabID = workspace.activeTab?.id {
+                coordinator.requestDaemon(.reorderTab(workspaceID: workspace.id, tabID: tabID, toIndex: index))
+                coordinator.syncFromDaemon()
+            }
+        case .swapWindow(let index):
+            if let workspace = coordinator.snapshot.activeWorkspace,
+               let tabID = workspace.activeTab?.id {
+                coordinator.requestDaemon(.swapTab(workspaceID: workspace.id, tabID: tabID, withIndex: index))
+                coordinator.syncFromDaemon()
+            }
         case .newSession(let name):
             if let workspaceID = coordinator.snapshot.activeWorkspaceID {
                 coordinator.addSession(to: workspaceID, name: name)
@@ -104,10 +124,16 @@ final class MainExecutor: CommandExecutor {
             coordinator.requestDaemon(.sendKeys(surfaceID: surfaceID.uuidString, keys: keys))
         case .displayMessage(let format):
             DisplayMessage.show(format)
-        case .runShell(let shellCommand):
-            try RunShell.fireAndForget(shellCommand)
-        case .bindKey(let table, let spec, let inner):
-            try KeybindingsService.shared.bind(table: KeyTableID(rawValue: table), specRaw: spec, command: inner)
+        case .runShell(let shellCommand, let captureToBuffer):
+            RunShell.run(shellCommand, captureToBuffer: captureToBuffer)
+        case .ifShell(let condition, let then, let otherwise):
+            RunShell.runConditional(condition) { success in
+                let branch = success ? then : otherwise
+                guard let branch else { return }
+                try? MainExecutor.shared.execute(branch)
+            }
+        case .bindKey(let table, let spec, let inner, let repeatable):
+            try KeybindingsService.shared.bind(table: KeyTableID(rawValue: table), specRaw: spec, command: inner, repeatable: repeatable)
             PrefixKeymap.shared.rebuildFromSettings()
         case .unbindKey(let table, let spec):
             try KeybindingsService.shared.unbind(table: KeyTableID(rawValue: table), specRaw: spec)
@@ -178,7 +204,8 @@ final class MainExecutor: CommandExecutor {
     private func selectPane(target: Command.PaneTarget, coordinator: SessionCoordinator) throws {
         switch target {
         case .next: coordinator.cycleActivePane(forward: true)
-        case .previous, .last: coordinator.cycleActivePane(forward: false)
+        case .previous: coordinator.cycleActivePane(forward: false)
+        case .last: coordinator.selectLastPane()
         case .left, .right, .up, .down:
             guard let tab = coordinator.snapshot.activeWorkspace?.activeTab,
                   let sid = coordinator.activeSurfaceID,
@@ -269,29 +296,63 @@ final class MainExecutor: CommandExecutor {
 
 @MainActor
 enum DisplayMessage {
-    /// Lightweight transient toast. Phase 5 will replace this with a styled
-    /// status-line popover; for now we surface it via an alert-style notice.
+    /// Non-blocking transient toast anchored to the active window, with the
+    /// message run through the `FormatString` evaluator so tokens like
+    /// `#{pane_title}` / `#{session_name}` resolve (matching the status line).
     static func show(_ format: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = format
-        alert.runModal()
+        let rendered = FormatString.evaluate(format, context: SessionCoordinator.shared.currentFormatContext())
+        guard let host = (NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: { $0.contentView != nil }))?.contentView else { return }
+        Toast.show(rendered, in: host)
     }
 }
 
 @MainActor
 enum RunShell {
-    /// Fire-and-forget shell execution. Phase 6 wires `-b` to capture stdout
-    /// into a paste buffer; this implementation just runs and drops output.
-    static func fireAndForget(_ command: String) throws {
-        let shell = SessionCoordinator.shared.settings.defaultShell.isEmpty
-            ? (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
-            : SessionCoordinator.shared.settings.defaultShell
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-lc", command]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        try process.run()
+    private static var loginShell: String {
+        let s = SessionCoordinator.shared.settings.defaultShell
+        return s.isEmpty ? (ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh") : s
+    }
+
+    /// Run a shell command off the main thread. With `captureToBuffer`, stdout is
+    /// stored in a paste buffer (`run-shell -b`); otherwise output is dropped.
+    static func run(_ command: String, captureToBuffer: Bool) {
+        let shell = loginShell
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: shell)
+            process.arguments = ["-lc", command]
+            let out = Pipe()
+            process.standardOutput = out
+            process.standardError = Pipe()
+            guard (try? process.run()) != nil else { return }
+            let data = captureToBuffer ? out.fileHandleForReading.readDataToEndOfFile() : Data()
+            process.waitUntilExit()
+            if captureToBuffer, !data.isEmpty {
+                DispatchQueue.main.async {
+                    _ = SessionCoordinator.shared.requestDaemon(.setBuffer(name: nil, data: data))
+                }
+            }
+        }
+    }
+
+    /// Run a shell command and call `completion(success)` on the main thread with
+    /// `success == (exit code 0)`, for `if-shell` branching.
+    static func runConditional(_ command: String, completion: @escaping @MainActor (Bool) -> Void) {
+        let shell = loginShell
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: shell)
+            process.arguments = ["-lc", command]
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            let success: Bool
+            if (try? process.run()) != nil {
+                process.waitUntilExit()
+                success = process.terminationStatus == 0
+            } else {
+                success = false
+            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(success) } }
+        }
     }
 }

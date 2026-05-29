@@ -155,6 +155,21 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    /// Swap the tab `tabID` with the tab currently at `withIndex` in the same
+    /// session (`swap-window`). IDs are unchanged so both tabs stay valid.
+    @discardableResult
+    public mutating func swapTab(workspaceID: WorkspaceID, tabID: TabID, withIndex: Int) -> Bool {
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return false }
+        var session = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex]
+        guard let a = session.tabs.firstIndex(where: { $0.id == tabID }),
+              withIndex >= 0, withIndex < session.tabs.count, withIndex != a
+        else { return false }
+        session.tabs.swapAt(a, withIndex)
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex] = session
+        bumpRevision()
+        return true
+    }
+
     /// Move a session to `toIndex` within its workspace's session list. IDs are
     /// unchanged, so the active session stays valid.
     @discardableResult

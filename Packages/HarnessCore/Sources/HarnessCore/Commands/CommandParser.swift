@@ -62,8 +62,21 @@ public enum CommandParser {
             let amount = numericTrailing(in: tokens) ?? 1
             return .resizePane(direction: dir, amount: amount)
         case "select-pane":
+            if tokens.contains("-m") { return .markPane(set: true) }
+            if tokens.contains("-M") { return .markPane(set: false) }
             let target = try paneTarget(from: tokens, defaultValue: .next)
             return .selectPane(target: target)
+        case "join-pane":
+            // `-v` → stacked (horizontal divider); default/`-h` → side by side.
+            if tokens.contains("-v") { return .joinPane(direction: .horizontal) }
+            return .joinPane(direction: .vertical)
+        case "synchronize-panes", "synchronize-pane", "setw-synchronize":
+            let value = tokens.first { !$0.hasPrefix("-") }
+            switch value {
+            case "on", "true", "1": return .synchronizePanes(set: true)
+            case "off", "false", "0": return .synchronizePanes(set: false)
+            default: return .synchronizePanes(set: nil)
+            }
         case "swap-pane":
             let target = try paneTarget(from: tokens, defaultValue: .next)
             return .swapPane(target: target)
@@ -83,6 +96,16 @@ public enum CommandParser {
                   let index = Int(raw.trimmingCharacters(in: CharacterSet(charactersIn: ":")))
             else { throw CommandParseError.missingFlag("select-window requires a window index") }
             return .selectWindow(index: index)
+        case "move-window", "move-tab":
+            guard let raw = tokens.first(where: { ($0.first?.isNumber ?? false) || $0.hasPrefix(":") }),
+                  let index = Int(raw.trimmingCharacters(in: CharacterSet(charactersIn: ":")))
+            else { throw CommandParseError.missingFlag("move-window requires a target index (-t :<n>)") }
+            return .moveWindow(toIndex: index)
+        case "swap-window", "swap-tab":
+            guard let raw = tokens.first(where: { ($0.first?.isNumber ?? false) || $0.hasPrefix(":") }),
+                  let index = Int(raw.trimmingCharacters(in: CharacterSet(charactersIn: ":")))
+            else { throw CommandParseError.missingFlag("swap-window requires a target index (-t :<n>)") }
+            return .swapWindow(withIndex: index)
         case "new-session":
             let name = stringValue(for: "-s", in: tokens) ?? tokens.first { !$0.hasPrefix("-") }
             return .newSession(name: name)
@@ -99,6 +122,7 @@ public enum CommandParser {
         case "next-workspace": return .nextWorkspace
         case "previous-workspace": return .previousWorkspace
         case "copy-mode": return .copyMode
+        case "display-panes", "displayp": return .displayPanes
         case "detach", "detach-client": return .detachClient
         case "send-keys":
             return .sendKeys(keys: tokens.filter { !$0.hasPrefix("-") })
@@ -109,7 +133,16 @@ public enum CommandParser {
             guard let cmd = tokens.first(where: { !$0.hasPrefix("-") }) else {
                 throw CommandParseError.missingArgument("run-shell requires a command string")
             }
-            return .runShell(shellCommand: cmd)
+            return .runShell(shellCommand: cmd, captureToBuffer: tokens.contains("-b"))
+        case "if-shell", "if":
+            // if-shell <condition> <then-command> [<else-command>]
+            let positional = tokens.filter { !$0.hasPrefix("-") }
+            guard positional.count >= 2 else {
+                throw CommandParseError.missingArgument("if-shell requires a condition and a command")
+            }
+            let then = try parse(positional[1])
+            let otherwise = positional.count >= 3 ? try parse(positional[2]) : nil
+            return .ifShell(condition: positional[0], then: then, otherwise: otherwise)
         case "bind-key", "bind":
             // bind-key -T <table> <spec> <command...>
             let table = stringValue(for: "-T", in: tokens) ?? "prefix"
@@ -121,6 +154,9 @@ public enum CommandParser {
                 remaining.remove(at: i + 1)
                 remaining.remove(at: i)
             }
+            // `-r` (repeatable) is a flag, not the key spec — pull it out first.
+            let repeatable = remaining.contains("-r")
+            remaining.removeAll { $0 == "-r" }
             guard !remaining.isEmpty else {
                 throw CommandParseError.missingArgument("bind-key requires a key spec")
             }
@@ -129,7 +165,7 @@ public enum CommandParser {
                 throw CommandParseError.missingArgument("bind-key requires a command")
             }
             let inner = try parse(remaining.joined(separator: " "))
-            return .bindKey(table: table, spec: spec, command: inner)
+            return .bindKey(table: table, spec: spec, command: inner, repeatable: repeatable)
         case "unbind-key", "unbind":
             let table = stringValue(for: "-T", in: tokens) ?? "prefix"
             var remaining = tokens

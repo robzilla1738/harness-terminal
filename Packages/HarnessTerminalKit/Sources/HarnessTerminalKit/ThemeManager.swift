@@ -76,6 +76,29 @@ public enum ThemeManager {
             ?? themed(themeName)?.foreground.normalizedHashedHex
     }
 
+    /// The background/foreground/cursor that define the shared canvas. The
+    /// terminal surface and the app chrome (sidebar/tabs/status) both resolve
+    /// through this so the canvas can never drift between regions.
+    public struct ResolvedCanvas: Sendable, Equatable {
+        public let backgroundHex: String
+        public let foregroundHex: String
+        public let cursorHex: String
+    }
+
+    /// Single source of truth for the canvas colors. Resolution order:
+    /// explicit custom hex > named theme preset > black/white baseline.
+    public static func resolvedCanvas(
+        themeName: String,
+        customBackgroundHex: String?,
+        customForegroundHex: String?,
+        customCursorHex: String?
+    ) -> ResolvedCanvas {
+        let bg = customBackgroundHex ?? backgroundHex(themeName: themeName) ?? defaultBaselineBackgroundHex
+        let fg = customForegroundHex ?? foregroundHex(themeName: themeName) ?? defaultBaselineForegroundHex
+        let cursor = customCursorHex ?? cursorHex(themeName: themeName) ?? fg
+        return ResolvedCanvas(backgroundHex: bg, foregroundHex: fg, cursorHex: cursor)
+    }
+
     public static func cursorTextHex(themeName: String) -> String? {
         if themeName == defaultDisplayName { return defaultBaselineBackgroundHex }
         return themed(themeName)?.cursorText?.normalizedHashedHex
@@ -103,6 +126,33 @@ public enum ThemeManager {
         if themeName == defaultDisplayName { return defaultBaselinePaletteHex }
         guard let theme = themed(themeName) else { return Array(repeating: nil, count: 16) }
         return (0 ..< 16).map { theme.palette[$0]?.normalizedHashedHex }
+    }
+
+    /// The complete editable color set a named theme contributes. Selecting a
+    /// theme seeds these into `HarnessSettings`, after which the user may edit
+    /// any of them — the theme is a starting preset, not a live override.
+    public struct ThemePreset: Sendable, Equatable {
+        public let backgroundHex: String?
+        public let foregroundHex: String?
+        public let cursorHex: String?
+        public let cursorTextHex: String?
+        public let selectionBackgroundHex: String?
+        public let selectionForegroundHex: String?
+        public let boldHex: String?
+        public let paletteHex: [String?]
+    }
+
+    public static func presetColors(themeName: String) -> ThemePreset {
+        ThemePreset(
+            backgroundHex: backgroundHex(themeName: themeName),
+            foregroundHex: foregroundHex(themeName: themeName),
+            cursorHex: cursorHex(themeName: themeName),
+            cursorTextHex: cursorTextHex(themeName: themeName),
+            selectionBackgroundHex: selectionBackgroundHex(themeName: themeName),
+            selectionForegroundHex: selectionForegroundHex(themeName: themeName),
+            boldHex: boldHex(themeName: themeName),
+            paletteHex: paletteHex(themeName: themeName)
+        )
     }
 
     public static func allThemeNames() -> [String] {

@@ -46,17 +46,37 @@ final class PrefixKeymap {
         return event
     }
 
+    /// Bumped on every (dis)arm so stale auto-disarm timers can't kill a newer
+    /// armed window (e.g. when a repeatable binding re-arms the prefix).
+    private var armGeneration = 0
+
     private func arm() {
         armed = true
         showIndicator()
         // Auto-disarm after 2 seconds so users aren't surprised later.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.disarm()
+        scheduleAutoDisarm(after: 2)
+    }
+
+    /// Re-arm a short window after a repeatable binding (`bind-key -r`) so the key
+    /// repeats without re-pressing the prefix — tmux's `repeat-time` behavior.
+    private func armRepeat() {
+        armed = true
+        showIndicator()
+        scheduleAutoDisarm(after: 0.6)
+    }
+
+    private func scheduleAutoDisarm(after seconds: TimeInterval) {
+        armGeneration += 1
+        let generation = armGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, self.armGeneration == generation else { return }
+            self.disarm()
         }
     }
 
     private func disarm() {
         armed = false
+        armGeneration += 1 // invalidate any pending auto-disarm
         hideIndicator()
     }
 
@@ -99,32 +119,34 @@ final class PrefixKeymap {
     }
 
     private func consume(event: NSEvent) {
-        defer { disarm() }
         guard let spec = makeSpec(from: event) else {
             NSSound.beep()
+            disarm()
             return
         }
         // `:` enters the command prompt — always available under the prefix.
         if spec.key == ":" {
             CommandPromptController.shared.present()
+            disarm()
             return
         }
-        guard let binding = KeybindingsService.shared.lookup(table: .prefix, spec: spec) else {
-            // Fall back to a case-insensitive letter lookup so bound `c` matches
-            // a typed `C` without forcing the user to bind both forms.
-            if spec.key.count == 1,
-               let alt = KeybindingsService.shared.lookup(
-                   table: .prefix,
-                   spec: KeySpec(key: spec.key.lowercased(), modifiers: spec.modifiers)
-               )
-            {
-                executeBinding(alt)
-                return
-            }
+        // Fall back to a case-insensitive letter lookup so bound `c` matches a
+        // typed `C` without forcing the user to bind both forms.
+        let binding = KeybindingsService.shared.lookup(table: .prefix, spec: spec)
+            ?? (spec.key.count == 1
+                ? KeybindingsService.shared.lookup(
+                    table: .prefix,
+                    spec: KeySpec(key: spec.key.lowercased(), modifiers: spec.modifiers))
+                : nil)
+        guard let binding else {
             NSSound.beep()
+            disarm()
             return
         }
         executeBinding(binding)
+        // Repeatable bindings keep the prefix armed for a short window so the key
+        // can repeat; everything else disarms immediately.
+        if binding.repeatable { armRepeat() } else { disarm() }
     }
 
     private func executeBinding(_ binding: Binding) {

@@ -181,21 +181,20 @@ enum HarnessChrome {
         foregroundHex: String? = nil,
         cursorHex: String? = nil
     ) {
-        let resolvedBg = backgroundHex ?? ThemeManager.backgroundHex(themeName: themeName)
-        let resolvedFg = foregroundHex ?? ThemeManager.foregroundHex(themeName: themeName)
-        let resolvedCursor = cursorHex ?? ThemeManager.cursorHex(themeName: themeName)
-        if let bg = resolvedBg, let fg = resolvedFg {
-            current = HarnessChromePalette.from(backgroundHex: bg, foregroundHex: fg, cursorHex: resolvedCursor)
-        } else {
-            current = HarnessChromePalette.from(themeName: themeName)
-        }
+        // Resolve through the same single source of truth the terminal surface
+        // uses, so chrome and terminal paint the identical canvas color.
+        let canvas = ThemeManager.resolvedCanvas(
+            themeName: themeName,
+            customBackgroundHex: backgroundHex,
+            customForegroundHex: foregroundHex,
+            customCursorHex: cursorHex
+        )
+        current = HarnessChromePalette.from(
+            backgroundHex: canvas.backgroundHex,
+            foregroundHex: canvas.foregroundHex,
+            cursorHex: canvas.cursorHex
+        )
         backgroundOpacity = max(0, min(1, opacity))
         backgroundBlur = max(0, min(100, blur))
-    }
-
-    /// Returns the given color with the global background opacity baked in.
-    static func tinted(_ color: NSColor) -> NSColor {
-        if backgroundOpacity >= 0.999 { return color }
-        return color.withAlphaComponent(backgroundOpacity)
     }
 }

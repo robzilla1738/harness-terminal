@@ -23,8 +23,13 @@ Trigger: the prefix key (default `ctrl-a`, configurable via `settings.prefixKey`
 | `z` | `zoom-pane` |
 | `&` | `kill-window` |
 | `o` / `;` | `select-pane next` / `previous` |
+| `l` | `select-pane -l` (last / most-recently-active pane) |
 | `Left` / `Right` / `Up` / `Down` | `select-pane -L` / `-R` / `-U` / `-D` |
-| `S-Left` / `S-Right` / `S-Up` / `S-Down` | `resize-pane -L 5` / `-R 5` / `-U 3` / `-D 3` |
+| `S-Left` / `S-Right` / `S-Up` / `S-Down` | `resize-pane -L 5` / `-R 5` / `-U 3` / `-D 3` (repeatable — hold under the prefix) |
+| `q` | `display-panes` (overlay numbers; press a digit to jump) |
+| `m` / `M` | mark / unmark the active pane (`join-pane` source) |
+| `j` | `join-pane` (join the marked pane into the active one) |
+| `S` | toggle `synchronize-panes` for the tab |
 | `n` / `p` | `next-window` / `previous-window` |
 | `,` | `rename-window` (interactive) |
 | `0`–`9` | `select-workspace <n>` |

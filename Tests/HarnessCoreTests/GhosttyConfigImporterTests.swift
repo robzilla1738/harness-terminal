@@ -55,7 +55,7 @@ final class GhosttyConfigImporterTests: XCTestCase {
         XCTAssertEqual(imported.cursorStyle, "block")
         XCTAssertEqual(imported.cursorBlink, false)
         XCTAssertEqual(imported.copyOnSelect, true)
-        XCTAssertTrue(imported.signature.hasPrefix("v3|"))
+        XCTAssertTrue(imported.signature.hasPrefix("v4|"))
         XCTAssertEqual(imported.fontFamily, "JetBrainsMono Nerd Font")
         XCTAssertEqual(imported.fontSize, 17)
         XCTAssertEqual(imported.windowPaddingX, 14)

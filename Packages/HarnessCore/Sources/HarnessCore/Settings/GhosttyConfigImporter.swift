@@ -2,7 +2,9 @@ import Foundation
 
 /// Snapshot of the bits of the user's Ghostty config we mirror as defaults.
 public struct GhosttyImportedDefaults: Sendable, Equatable {
-    private static let signatureVersion = "v3"
+    // v4: selection/bold/cursor-text/minimum-contrast/palette are now honored
+    // (previously imported then discarded), so bump to force a one-time re-import.
+    private static let signatureVersion = "v4"
 
     public var fontFamily: String?
     public var fontSize: Float?

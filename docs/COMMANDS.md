@@ -12,11 +12,16 @@ Every action — keystroke binding, palette entry, `:` prompt, hook firing, `har
 | `zoom-pane` (alias `resize-pane -Z`) | Toggle full-tab zoom on the active pane. |
 | `select-pane -L` / `-R` / `-U` / `-D` | Directional navigation. Resolved by daemon tree walk. |
 | `select-pane` (no flag) | Cycle forward by flat pane order. |
+| `select-pane -l` | Jump to the last (most-recently-active) pane in the tab. |
+| `select-pane -m` / `-M` | Mark / unmark the active pane (the implicit `join-pane` source). |
 | `swap-pane` | Swap the active pane with the next pane in flat order. |
+| `join-pane` (alias `join-pane -v` for top/bottom) | Join the marked pane into the active pane as a split. |
 | `resize-pane -L` / `-R` / `-U` / `-D` `N` | Shift the parent divider `N` units. |
 | `respawn-pane` (alias `respawn-pane -k` to clear scrollback) | Kill and re-spawn the shell with the same surface ID. |
 | `break-pane` | Move the active pane to a new tab in the same session. |
 | `rotate-window` (alias `rotate-window -D` for reverse) | Cycle children at every branch. |
+| `display-panes` | Overlay a number on each pane; press the digit to jump to it. |
+| `synchronize-panes [on\|off]` | Toggle mirroring typed input to every pane in the tab. |
 
 ## Tabs / windows
 
@@ -27,6 +32,8 @@ Every action — keystroke binding, palette entry, `:` prompt, hook firing, `har
 | `rename-window [-N name]` | Inline rename if `-N` given, else interactive. |
 | `next-window` / `previous-window` | Cycle tab focus. |
 | `select-window -t :<n>` | Select tab by index. |
+| `move-window -t :<n>` | Reorder the active tab to index `n` within its session. |
+| `swap-window -t :<n>` | Swap the active tab with the tab at index `n`. |
 | `select-layout <name>` | Apply one of `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, `tiled`. |
 | `next-layout` / `previous-layout` | Cycle through built-in layouts. |
 
@@ -61,7 +68,7 @@ Every action — keystroke binding, palette entry, `:` prompt, hook firing, `har
 
 | Command | Effect |
 |---|---|
-| `bind-key [-T <table>] <spec> <command...>` | Bind a key in a named table. Recursive — `<command>` parses to a `Command`. |
+| `bind-key [-r] [-T <table>] <spec> <command...>` | Bind a key in a named table. Recursive — `<command>` parses to a `Command`. `-r` makes it repeatable (the prefix stays armed briefly so the key repeats). |
 | `unbind-key [-T <table>] <spec>` | Remove a binding. |
 | `list-keys [-T <table>]` | Print bindings; one table per `[table]` header. |
 
@@ -96,8 +103,9 @@ Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pan
 | Command | Effect |
 |---|---|
 | `send-keys <tokens…>` | Inject keystrokes (`C-c`, `Up`, `Enter`, etc.) into the active pane. |
-| `display-message <format>` | Render a `FormatString` and surface as a transient notice. |
-| `run-shell <command>` | Spawn a subprocess. |
+| `display-message <format>` | Render a `FormatString` and surface as a non-blocking status toast. |
+| `run-shell [-b] <command>` | Spawn a subprocess. `-b` captures stdout into a paste buffer. |
+| `if-shell <condition> <then> [<else>]` | Run `<condition>` in the shell; on exit 0 run `<then>`, else `<else>`. |
 | `source-config` (alias `source`, `reload-config`) | Re-import Ghostty config and refresh chrome. |
 | `reload-keybindings` | Re-read `keybindings.json` so an external edit takes effect. |
 

@@ -323,7 +323,7 @@ enum CommandPaletteController {
                 shortcut: "",
                 section: .themes
             ) {
-                coordinator.setTheme(theme, clearColorOverrides: true)
+                coordinator.setTheme(theme)
             })
         }
 

@@ -15,9 +15,9 @@ settings:
 packages:
   Harness:
     path: .
-  libghostty-spm:
-    url: https://github.com/Lakr233/libghostty-spm.git
-    from: 1.2.0
+  libghostty-spm-fork:
+    # Local fork carrying the read-cells styled-grid API (sibling checkout).
+    path: ../libghostty-spm-fork
 targets:
   Harness:
     type: application
@@ -35,9 +35,9 @@ targets:
         product: HarnessCore
       - package: Harness
         product: HarnessTerminalKit
-      - package: libghostty-spm
+      - package: libghostty-spm-fork
         product: GhosttyTerminal
-      - package: libghostty-spm
+      - package: libghostty-spm-fork
         product: GhosttyTheme
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness
@@ -139,7 +139,7 @@ targets:
         product: HarnessCore
       - package: Harness
         product: HarnessTerminalKit
-      - package: libghostty-spm
+      - package: libghostty-spm-fork
         product: GhosttyTerminal
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessTerminalKitTests

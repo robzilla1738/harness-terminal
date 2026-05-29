@@ -159,7 +159,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         blurLabel.stringValue = formatBlur(settings.backgroundBlur)
         blurLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         blurLabel.textColor = .secondaryLabelColor
-        blurSlider.toolTip = "Terminal backdrop blur (Ghostty); applied to the terminal surface, not the whole window."
+        blurSlider.toolTip = "Backdrop blur for the whole window (terminal + chrome), 0–100 px."
 
         paddingXField.stringValue = String(format: "%.0f", settings.windowPaddingX)
         paddingXField.target = self
@@ -219,12 +219,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ),
         ]
         for binding in colorBindings {
-            // Divider + status line read regardless of useCustomColors; everything else
-            // stays gated by it so the theme picker can wipe color overrides cleanly.
-            let isChromeAccent = binding.keyPath == \.dividerHex || binding.keyPath == \.statusLineHex
-            let hex = (settings.useCustomColors || isChromeAccent)
-                ? settings[keyPath: binding.keyPath]
-                : nil
+            // Every color is directly editable; an unset (nil) field falls back to
+            // the active theme preset inside the resolver.
+            let hex = settings[keyPath: binding.keyPath]
             binding.field.stringValue = hex ?? ""
             configureLiveAppearanceField(binding.field)
             configureColorWell(binding.well)
@@ -236,7 +233,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         minContrastField.target = self
         minContrastField.action = #selector(appearanceTextDidCommit)
 
-        paletteHexValues = Array(repeating: nil, count: 16)
+        paletteHexValues = HarnessSettings.normalizedPalette(settings.paletteHex)
         buildPaletteWells()
         buildAgentColorWells(settings: settings)
 
@@ -468,21 +465,37 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("", transparentTitlebarToggle),
         ])
 
-        // Chrome accent rows: dividers + status line text. These are colorBindings
-        // indices 7 and 8 since I appended them after the 7 terminal colors.
+        // Terminal colors (full Ghostty parity). colorBindings 0–6 are the terminal
+        // colors; 7–8 are the chrome accents. The selected theme seeds every one of
+        // these; the user can then edit any swatch.
+        let colorsGroup = NSStackView(views: [
+            colorPairRow(colorHexRow(title: "Background", binding: colorBindings[0]),
+                         colorHexRow(title: "Foreground", binding: colorBindings[1])),
+            colorPairRow(colorHexRow(title: "Cursor", binding: colorBindings[2]),
+                         colorHexRow(title: "Cursor text", binding: colorBindings[3])),
+            colorPairRow(colorHexRow(title: "Selection", binding: colorBindings[4]),
+                         colorHexRow(title: "Selection text", binding: colorBindings[5])),
+            colorPairRow(colorHexRow(title: "Bold", binding: colorBindings[6]),
+                         minimumContrastRow()),
+        ])
+        colorsGroup.orientation = .vertical
+        colorsGroup.alignment = .width
+        colorsGroup.spacing = 10
+
+        // Chrome accent rows: dividers + status line text (colorBindings 7 and 8).
         let dividerRow = colorHexRow(title: "Divider lines", binding: colorBindings[7])
         let statusRow = colorHexRow(title: "Status line text", binding: colorBindings[8])
-        let chromeAccents = NSStackView(views: [dividerRow, statusRow])
-        chromeAccents.orientation = .horizontal
-        chromeAccents.spacing = 28
-        chromeAccents.alignment = .top
-        chromeAccents.distribution = .fillEqually
+        let chromeAccents = colorPairRow(dividerRow, statusRow)
 
         let stack = NSStackView(views: [
             header,
             livePreview,
             sectionHeading("Window"),
             windowGroup,
+            sectionHeading("Colors"),
+            colorsGroup,
+            sectionHeading("ANSI Palette"),
+            buildPaletteSection(),
             sectionHeading("Chrome"),
             chromeAccents,
         ])
@@ -708,6 +721,51 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         return row
     }
 
+    /// Two color rows side by side, matching the chrome-accent pair layout.
+    private func colorPairRow(_ first: NSView, _ second: NSView) -> NSStackView {
+        let row = NSStackView(views: [first, second])
+        row.orientation = .horizontal
+        row.spacing = 28
+        row.alignment = .top
+        row.distribution = .fillEqually
+        return row
+    }
+
+    /// Ghostty `minimum-contrast`: 1 disables it, higher forces legible text.
+    private func minimumContrastRow() -> NSView {
+        minContrastField.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        minContrastField.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+        let label = NSTextField(labelWithString: "Min contrast")
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.widthAnchor.constraint(equalToConstant: 110).isActive = true
+        let hint = NSTextField(labelWithString: "1 = off")
+        hint.font = .systemFont(ofSize: 10.5)
+        hint.textColor = .tertiaryLabelColor
+        let row = NSStackView(views: [label, minContrastField, hint])
+        row.orientation = .horizontal
+        row.spacing = 10
+        row.alignment = .centerY
+        return row
+    }
+
+    /// 16 ANSI swatches in two rows of eight plus a reset link.
+    private func buildPaletteSection() -> NSView {
+        let topRow = NSStackView(views: (0 ..< 8).map(paletteCell))
+        topRow.orientation = .horizontal
+        topRow.spacing = 8
+        topRow.alignment = .top
+        let bottomRow = NSStackView(views: (8 ..< 16).map(paletteCell))
+        bottomRow.orientation = .horizontal
+        bottomRow.spacing = 8
+        bottomRow.alignment = .top
+        let resetLink = makeLinkButton("Reset palette", action: #selector(resetPalette))
+        let group = NSStackView(views: [topRow, bottomRow, resetLink])
+        group.orientation = .vertical
+        group.alignment = .leading
+        group.spacing = 10
+        return group
+    }
+
     /// Wraps a page's content stack in a vertical scroll view so it remains
     /// reachable on shorter window heights without forcing every section to
     /// scroll all together.
@@ -862,24 +920,22 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     }
 
     @objc private func themeDidChange() {
-        if themePopup.titleOfSelectedItem == ThemeManager.defaultDisplayName {
-            // "Default" bundles the Ghostty-stock visual baseline. Reset settings,
-            // then mirror every reset value into its control so the subsequent
-            // flushAndApply (which reads controls back) doesn't clobber the reset.
-            SessionCoordinator.shared.settings.applyGhosttyDefaults(imported: GhosttyConfigImporter.load())
-            syncAppearanceControlsFromSettings()
-            flushAndApply()
-            refreshColorPlaceholders()
-            return
-        }
-        clearAllCustomColors()
-        flushAndApply()
+        guard let theme = themePopup.titleOfSelectedItem else { return }
+        // A theme is a starting preset: seed the full editable color set, then
+        // mirror it into the controls so the user edits from the theme's values.
+        SessionCoordinator.shared.setTheme(theme)
+        syncAppearanceControlsFromSettings()
         refreshColorPlaceholders()
+        refreshLivePreview()
     }
 
+    /// Re-seed all colors from the currently selected theme, discarding manual
+    /// edits ("Reset to theme").
     @objc private func useThemeColors() {
-        clearAllCustomColors()
-        flushAndApply()
+        SessionCoordinator.shared.setTheme(SessionCoordinator.shared.snapshot.themeName)
+        syncAppearanceControlsFromSettings()
+        refreshColorPlaceholders()
+        refreshLivePreview()
     }
 
     @objc private func appearanceTextDidCommit() {
@@ -967,6 +1023,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             fontName: s.fontFamily,
             fontSize: CGFloat(s.fontSize),
             opacity: CGFloat(s.backgroundOpacity),
+            blur: CGFloat(s.backgroundBlur),
             cursorStyle: style,
             cursorBlink: s.cursorBlink
         ))
@@ -1014,17 +1071,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         flushAndApply()
     }
 
-    private func clearAllCustomColors() {
-        for binding in colorBindings {
-            binding.field.stringValue = ""
-            refreshColorBinding(binding)
-        }
-        for (index, well) in paletteWells.enumerated() {
-            paletteHexValues[index] = nil
-            well.color = NSColor.fromHex(Self.defaultAnsiPalette[index]) ?? .gray
-        }
-    }
-
     private func syncAppearanceControlsFromSettings() {
         let settings = SessionCoordinator.shared.settings
         opacitySlider.doubleValue = Double(settings.backgroundOpacity)
@@ -1040,12 +1086,10 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
         for binding in colorBindings {
-            let isChromeAccent = binding.keyPath == \.dividerHex || binding.keyPath == \.statusLineHex
-            let hex = isChromeAccent ? settings[keyPath: binding.keyPath] : nil
-            binding.field.stringValue = hex ?? ""
+            binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
         }
-        paletteHexValues = Array(repeating: nil, count: 16)
+        paletteHexValues = HarnessSettings.normalizedPalette(settings.paletteHex)
         for (index, well) in paletteWells.enumerated() {
             well.color = paletteHexValues[index].flatMap(NSColor.fromHex)
                 ?? NSColor.fromHex(Self.defaultAnsiPalette[index]) ?? .gray
@@ -1090,15 +1134,13 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         let coordinator = SessionCoordinator.shared
         coordinator.settings.backgroundOpacity = HarnessSettings.clampedOpacity(Float(opacitySlider.doubleValue))
         coordinator.settings.backgroundBlur = HarnessSettings.clampedBlur(Int(blurSlider.doubleValue.rounded()))
-        coordinator.settings.dividerHex = normalizedHexOrNil(dividerHexField.stringValue)
-        coordinator.settings.statusLineHex = normalizedHexOrNil(statusLineHexField.stringValue)
-        coordinator.settings.useCustomColors = false
-        coordinator.settings.selectionBackgroundHex = nil
-        coordinator.settings.selectionForegroundHex = nil
-        coordinator.settings.boldColorHex = nil
-        coordinator.settings.cursorTextHex = nil
-        coordinator.settings.minimumContrast = 1
-        coordinator.settings.paletteHex = Array(repeating: nil, count: 16)
+        // Read every editable color from its control (bg/fg/cursor/cursor-text/
+        // selection/bold + divider/status accents). nil = fall back to theme preset.
+        for binding in colorBindings {
+            coordinator.settings[keyPath: binding.keyPath] = normalizedHexOrNil(binding.field.stringValue)
+        }
+        coordinator.settings.paletteHex = HarnessSettings.normalizedPalette(paletteHexValues)
+        coordinator.settings.minimumContrast = clampedContrast(minContrastField.stringValue)
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
         coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
         coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
@@ -1113,14 +1155,10 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.systemNotificationsEnabled = systemNotificationsToggle.state == .on
         try? coordinator.settings.save()
 
-        // Only round-trip the theme through the daemon when it has actually changed —
-        // otherwise scrubbing a slider would fire setTheme IPC every tick.
-        if let selectedTheme = themePopup.titleOfSelectedItem,
-           selectedTheme != coordinator.snapshot.themeName {
-            coordinator.setTheme(selectedTheme, clearColorOverrides: false)
-        } else {
-            coordinator.applySettingsToHosts()
-        }
+        // Theme switching (and its color seeding) is handled by themeDidChange, so
+        // flushAndApply only ever pushes the current settings to the live surfaces —
+        // scrubbing a slider never fires a setTheme IPC.
+        coordinator.applySettingsToHosts()
         updateFontReadout()
         refreshLivePreview()
     }

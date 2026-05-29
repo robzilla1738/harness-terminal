@@ -17,6 +17,10 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case selectPane(target: PaneTarget)
     case swapPane(target: PaneTarget)
     case resizePane(direction: ResizeDirection, amount: Int)
+    case markPane(set: Bool)                       // select-pane -m / -M
+    case joinPane(direction: SplitDirection)       // join-pane -h/-v (marked → active)
+    case synchronizePanes(set: Bool?)              // synchronize-panes [on|off] (nil = toggle)
+    case displayPanes                              // display-panes (overlay numbers; digit jumps)
 
     // MARK: Tab / window operations
     case newWindow                                 // new-window
@@ -25,6 +29,8 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case nextWindow
     case previousWindow
     case selectWindow(index: Int)                  // select-window -t :<n>
+    case moveWindow(toIndex: Int)                  // move-window -t :<n> (reorder within session)
+    case swapWindow(withIndex: Int)                // swap-window -t :<n> (swap active tab with tab n)
 
     // MARK: Session / workspace operations
     case newSession(name: String?)
@@ -41,10 +47,11 @@ public indirect enum Command: Codable, Sendable, Equatable {
     // MARK: Scripting
     case sendKeys(keys: [String])
     case displayMessage(format: String)
-    case runShell(shellCommand: String)
+    case runShell(shellCommand: String, captureToBuffer: Bool)
+    case ifShell(condition: String, then: Command, otherwise: Command?)   // if-shell
 
     // MARK: Bindings + config
-    case bindKey(table: String, spec: String, command: Command)
+    case bindKey(table: String, spec: String, command: Command, repeatable: Bool)
     case unbindKey(table: String, spec: String)
     case listKeys(table: String?)
     case sourceConfig                              // re-import Ghostty config
@@ -81,12 +88,18 @@ extension Command {
         case let .selectPane(target): return "select-pane \(target.rawValue)"
         case let .swapPane(target): return "swap-pane \(target.rawValue)"
         case let .resizePane(direction, amount): return "resize-pane -\(direction.rawValue.prefix(1).uppercased()) \(amount)"
+        case let .markPane(set): return set ? "select-pane -m" : "select-pane -M"
+        case let .joinPane(direction): return "join-pane -\(direction == .horizontal ? "v" : "h")"
+        case let .synchronizePanes(set): return "synchronize-panes\(set.map { $0 ? " on" : " off" } ?? "")"
+        case .displayPanes: return "display-panes"
         case .newWindow: return "new-window"
         case .killWindow: return "kill-window"
         case let .renameWindow(name): return "rename-window\(name.map { " \($0)" } ?? "")"
         case .nextWindow: return "next-window"
         case .previousWindow: return "previous-window"
         case let .selectWindow(index): return "select-window -t :\(index)"
+        case let .moveWindow(index): return "move-window -t :\(index)"
+        case let .swapWindow(index): return "swap-window -t :\(index)"
         case let .newSession(name): return "new-session\(name.map { " -s \($0)" } ?? "")"
         case .killSession: return "kill-session"
         case let .renameSession(name): return "rename-session\(name.map { " \($0)" } ?? "")"
@@ -97,8 +110,10 @@ extension Command {
         case .detachClient: return "detach-client"
         case let .sendKeys(keys): return "send-keys \(keys.joined(separator: " "))"
         case let .displayMessage(format): return "display-message \(format)"
-        case let .runShell(cmd): return "run-shell '\(cmd)'"
-        case let .bindKey(table, spec, command): return "bind-key -T \(table) \(spec) \(command.shortDescription)"
+        case let .runShell(cmd, capture): return "run-shell \(capture ? "-b " : "")'\(cmd)'"
+        case let .ifShell(condition, then, otherwise):
+            return "if-shell '\(condition)' '\(then.shortDescription)'" + (otherwise.map { " '\($0.shortDescription)'" } ?? "")
+        case let .bindKey(table, spec, command, repeatable): return "bind-key \(repeatable ? "-r " : "")-T \(table) \(spec) \(command.shortDescription)"
         case let .unbindKey(table, spec): return "unbind-key -T \(table) \(spec)"
         case let .listKeys(table): return "list-keys\(table.map { " -T \($0)" } ?? "")"
         case .sourceConfig: return "source-config"

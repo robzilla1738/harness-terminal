@@ -33,16 +33,20 @@ final class TerminalColorPipelineTests: XCTestCase {
         }
     }
 
-    func testHarnessTerminalBlockIncludesBackgroundBlur() {
-        let config = TerminalConfiguration {
-            ThemeManager.configureBuilder(&$0, themeName: ThemeManager.defaultThemeName)
-            TerminalColorPipeline.apply(to: &$0)
-            $0.withBackgroundBlur(20)
-        }
-        XCTAssertTrue(
-            config.rendered.contains("background-blur = 20"),
-            "Terminal blur must use libghostty background-blur, not window CGS blur"
+    func testTerminalConfigOmitsBackgroundBlurAndKeepsOpacity() {
+        // Blur is applied once at the window level (CGS, MainWindowController), never
+        // per-surface — libghostty's background-blur is a no-op in embedded mode and
+        // would double the chrome blur. The terminal config must carry opacity but
+        // not blur.
+        var settings = HarnessSettings()
+        settings.backgroundBlur = 40
+        settings.backgroundOpacity = 0.8
+        let rendered = TerminalHostView.makeTerminalConfiguration(settings: settings, themeName: "Catppuccin Mocha").rendered
+        XCTAssertFalse(
+            rendered.contains("background-blur ="),
+            "Terminal must not blur per-surface; window-level CGS blur is the single source"
         )
+        XCTAssertTrue(rendered.contains("background-opacity = 0.8"))
     }
 
     func testThemesDoNotSeedTerminalPaletteOrBackground() {
@@ -73,13 +77,17 @@ final class TerminalColorPipelineTests: XCTestCase {
         }
     }
 
-    func testTerminalConfigurationIgnoresSavedPaletteAndBoldOverrides() {
+    func testTerminalConfigurationRendersFullColorOverrides() {
+        // Full Ghostty parity: every saved color must reach libghostty.
         var settings = HarnessSettings()
-        settings.useCustomColors = true
         settings.customBackgroundHex = "#000000"
         settings.customForegroundHex = "#ffffff"
         settings.customCursorHex = "#ffffff"
+        settings.cursorTextHex = "#010101"
+        settings.selectionBackgroundHex = "#222222"
+        settings.selectionForegroundHex = "#eeeeee"
         settings.boldColorHex = "#ff0000"
+        settings.minimumContrast = 1 // off → must NOT render
         settings.paletteHex = [
             "#111111", "#222222", "#333333", "#444444",
             "#555555", "#666666", "#777777", "#888888",
@@ -91,11 +99,52 @@ final class TerminalColorPipelineTests: XCTestCase {
         XCTAssertTrue(config.rendered.contains("background = #000000"))
         XCTAssertTrue(config.rendered.contains("foreground = #ffffff"))
         XCTAssertTrue(config.rendered.contains("cursor-color = #ffffff"))
-        XCTAssertFalse(config.rendered.contains("bold-color ="))
-        XCTAssertFalse(config.rendered.contains("palette ="))
+        XCTAssertTrue(config.rendered.contains("cursor-text = #010101"))
+        XCTAssertTrue(config.rendered.contains("selection-background = #222222"))
+        XCTAssertTrue(config.rendered.contains("selection-foreground = #eeeeee"))
+        XCTAssertTrue(config.rendered.contains("bold-color = #ff0000"))
+        XCTAssertTrue(config.rendered.contains("palette = 0=#111111"))
+        XCTAssertTrue(config.rendered.contains("palette = 15=#ffffff"))
+        XCTAssertFalse(config.rendered.contains("minimum-contrast ="))
         for line in TerminalColorPipeline.requiredRenderedConfigLines {
             XCTAssertTrue(config.rendered.contains(line))
         }
+    }
+
+    func testMinimumContrastRendersOnlyWhenAboveOne() {
+        var settings = HarnessSettings()
+        settings.minimumContrast = 1.5
+        let config = TerminalHostView.makeTerminalConfiguration(settings: settings, themeName: "Catppuccin Mocha")
+        XCTAssertTrue(config.rendered.contains("minimum-contrast = 1.5"))
+    }
+
+    func testThemePresetExposesFullPalette() {
+        // A named theme must surface a complete preset so it can seed settings.
+        let preset = ThemeManager.presetColors(themeName: "Dracula")
+        XCTAssertNotNil(preset.backgroundHex)
+        XCTAssertNotNil(preset.foregroundHex)
+        XCTAssertEqual(preset.paletteHex.count, 16)
+        XCTAssertNotNil(preset.paletteHex[0])
+    }
+
+    func testTerminalBackgroundEqualsResolvedCanvas() {
+        // Single source of truth: the terminal must render exactly the canvas
+        // color the resolver returns (the same value the chrome consumes), so
+        // the sidebar and terminal can never drift into a visible seam.
+        let themeName = "Dracula"
+        let settings = HarnessSettings() // no custom hex → falls back to theme preset
+        let canvas = ThemeManager.resolvedCanvas(
+            themeName: themeName,
+            customBackgroundHex: settings.customBackgroundHex,
+            customForegroundHex: settings.customForegroundHex,
+            customCursorHex: settings.customCursorHex
+        )
+        let rendered = TerminalHostView.makeTerminalConfiguration(settings: settings, themeName: themeName).rendered
+        XCTAssertTrue(
+            rendered.contains("background = \(canvas.backgroundHex)"),
+            "Terminal background must equal the resolved canvas background \(canvas.backgroundHex); got:\n\(rendered)"
+        )
+        XCTAssertTrue(rendered.contains("foreground = \(canvas.foregroundHex)"))
     }
 
     func testGhosttyConfigImporterExistingConfigPathWhenPresent() throws {

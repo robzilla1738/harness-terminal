@@ -40,7 +40,8 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(parsed, .bindKey(
             table: "prefix",
             spec: "S",
-            command: .splitWindow(direction: .horizontal)
+            command: .splitWindow(direction: .horizontal),
+            repeatable: false
         ))
     }
 
@@ -57,10 +58,39 @@ final class CommandParserTests: XCTestCase {
         let original: Command = .sequence([
             .splitWindow(direction: .horizontal),
             .selectPane(target: .left),
-            .bindKey(table: "prefix", spec: "C-x q", command: .detachClient),
+            .bindKey(table: "prefix", spec: "C-x q", command: .detachClient, repeatable: false),
         ])
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(Command.self, from: data)
         XCTAssertEqual(decoded, original)
+    }
+
+    func testBindKeyRepeatableFlag() throws {
+        let parsed = try CommandParser.parse("bind-key -r -T prefix C-j resize-pane -D 5")
+        XCTAssertEqual(parsed, .bindKey(
+            table: "prefix",
+            spec: "C-j",
+            command: .resizePane(direction: .down, amount: 5),
+            repeatable: true
+        ))
+    }
+
+    func testRunShellBackgroundAndIfShell() throws {
+        XCTAssertEqual(
+            try CommandParser.parse("run-shell -b 'echo hi'"),
+            .runShell(shellCommand: "echo hi", captureToBuffer: true)
+        )
+        XCTAssertEqual(
+            try CommandParser.parse("if-shell 'test -f x' 'kill-pane' 'detach-client'"),
+            .ifShell(condition: "test -f x", then: .killPane, otherwise: .detachClient)
+        )
+    }
+
+    func testMarkAndJoinAndMoveWindow() throws {
+        XCTAssertEqual(try CommandParser.parse("select-pane -m"), .markPane(set: true))
+        XCTAssertEqual(try CommandParser.parse("select-pane -M"), .markPane(set: false))
+        XCTAssertEqual(try CommandParser.parse("join-pane -h"), .joinPane(direction: .vertical))
+        XCTAssertEqual(try CommandParser.parse("move-window -t :2"), .moveWindow(toIndex: 2))
+        XCTAssertEqual(try CommandParser.parse("select-pane -l"), .selectPane(target: .last))
     }
 }

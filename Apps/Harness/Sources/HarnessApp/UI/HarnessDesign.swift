@@ -122,7 +122,6 @@ enum HarnessDesign {
 
     enum ChromeRole {
         case sidebar
-        case terminal
         case tabBar
     }
 
@@ -153,10 +152,6 @@ enum HarnessDesign {
 
     static func applySidebarChrome(to view: NSView) {
         installChromeBackground(.sidebar, on: view)
-    }
-
-    static func applyTerminalChrome(to view: NSView) {
-        installChromeBackground(.terminal, on: view)
     }
 
     static func applyTabBarChrome(to view: NSView) {
@@ -462,23 +457,25 @@ final class ChromeBackdrop: NSView {
         let baseColor: NSColor
         switch role {
         case .sidebar: baseColor = chrome.sidebarBackground
-        case .terminal: baseColor = chrome.terminalBackground
         case .tabBar: baseColor = chrome.sidebarBackground
         }
 
-        // Safe Ghostty-style split: terminal panes own their translucency/blur inside
-        // libghostty, while non-terminal chrome can use native glass behind a single
-        // theme tint. Never place AppKit blur over terminal output.
+        // Unified canvas: when the window is translucent, ONE window-wide CGS blur
+        // (MainWindowController) is the single blur source, so the chrome's own
+        // vibrancy/glass material is hidden — the tint alone (bg × opacity) lets the
+        // shared blurred backdrop show through, matching the terminal exactly. When
+        // opaque, the solid tint covers everything, so the material is moot.
+        let translucent = opacity < 0.999
         if #available(macOS 26.0, *), let glass = backdrop as? NSGlassEffectView {
-            glass.isHidden = role == .terminal
+            glass.isHidden = translucent
         } else if let vibrancy = backdrop as? NSVisualEffectView {
             vibrancy.material = material(for: role)
-            vibrancy.isHidden = role == .terminal
+            vibrancy.isHidden = translucent
         }
         tint.layer?.backgroundColor = baseColor.withAlphaComponent(opacity).cgColor
 
         // Tab strip gets a quiet hairline at its bottom edge to anchor the active
-        // pill against the terminal area below. Sidebar/terminal stay clean.
+        // pill against the terminal area below. The sidebar stays clean.
         hairline.isHidden = role != .tabBar
         hairline.backgroundColor = chrome.border.withAlphaComponent(chrome.isDark ? 0.55 : 0.75).cgColor
         needsLayout = true
@@ -490,7 +487,7 @@ final class ChromeBackdrop: NSView {
         // `.underWindowBackground` gives an honest desktop blur that we then
         // dim with our own theme tint on top.
         switch role {
-        case .sidebar, .terminal, .tabBar:
+        case .sidebar, .tabBar:
             return .underWindowBackground
         }
     }

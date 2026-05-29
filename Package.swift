@@ -12,7 +12,10 @@ let package = Package(
         .executable(name: "harness-cli", targets: ["HarnessCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/libghostty-spm.git", from: "1.2.0"),
+        // Local fork carrying the read-cells styled-grid API for the terminal
+        // compositor. Sibling checkout of the harness repo; build its XCFramework
+        // with `Script/build.sh` in that repo before resolving here.
+        .package(path: "../libghostty-spm-fork"),
     ],
     targets: [
         .target(
@@ -23,8 +26,8 @@ let package = Package(
             name: "HarnessTerminalKit",
             dependencies: [
                 "HarnessCore",
-                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
-                .product(name: "GhosttyTheme", package: "libghostty-spm"),
+                .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
+                .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
             path: "Packages/HarnessTerminalKit/Sources/HarnessTerminalKit"
         ),
@@ -50,8 +53,8 @@ let package = Package(
             dependencies: [
                 "HarnessCore",
                 "HarnessTerminalKit",
-                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
-                .product(name: "GhosttyTheme", package: "libghostty-spm"),
+                .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
+                .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
             path: "Apps/Harness/Sources/HarnessApp",
             exclude: ["Resources"]
@@ -66,7 +69,7 @@ let package = Package(
             dependencies: [
                 "HarnessCore",
                 "HarnessTerminalKit",
-                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
             ],
             path: "Tests/HarnessTerminalKitTests"
         ),

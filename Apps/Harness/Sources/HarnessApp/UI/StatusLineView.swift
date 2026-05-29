@@ -124,26 +124,7 @@ final class StatusLineView: NSView {
     }
 
     private func buildContext() -> FormatContext {
-        let snapshot = SessionCoordinator.shared.snapshot
-        let workspace = snapshot.activeWorkspace
-        let session = workspace?.activeSession
-        let tab = workspace?.activeTab
-        let activeSurfaceID = SessionCoordinator.shared.activeSurfaceID
-        return FormatContext(
-            paneID: activeSurfaceID?.uuidString,
-            paneTitle: tab?.title,
-            paneCwd: tab?.cwd,
-            paneActive: activeSurfaceID != nil,
-            paneIndex: nil,
-            sessionName: session?.name.isEmpty == false ? session?.name : nil,
-            tabName: tab?.title,
-            tabIndex: session?.tabs.firstIndex(where: { $0.id == tab?.id }),
-            workspaceName: workspace?.name,
-            agentKind: tab?.agent?.kind.rawValue,
-            agentActivity: tab?.agent?.activity.rawValue,
-            gitBranch: tab?.gitBranch,
-            clientName: "Harness.app"
-        )
+        SessionCoordinator.shared.currentFormatContext()
     }
 }
 

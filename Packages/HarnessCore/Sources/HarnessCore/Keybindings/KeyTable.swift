@@ -21,11 +21,24 @@ public struct Binding: Codable, Sendable, Equatable {
     public let spec: KeySpec
     public var command: Command
     public var note: String?
+    /// When true, after this binding fires the prefix stays "armed" briefly so the
+    /// key can repeat without re-pressing the prefix (`bind-key -r`, e.g. resize).
+    public var repeatable: Bool
 
-    public init(spec: KeySpec, command: Command, note: String? = nil) {
+    public init(spec: KeySpec, command: Command, note: String? = nil, repeatable: Bool = false) {
         self.spec = spec
         self.command = command
         self.note = note
+        self.repeatable = repeatable
+    }
+
+    // Tolerant decode so older keybindings.json files (no `repeatable`) still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        spec = try c.decode(KeySpec.self, forKey: .spec)
+        command = try c.decode(Command.self, forKey: .command)
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        repeatable = try c.decodeIfPresent(Bool.self, forKey: .repeatable) ?? false
     }
 }
 
@@ -143,12 +156,19 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "d"), command: .detachClient, note: "Detach"),
             Binding(spec: KeySpec(key: "?"), command: .showCheatsheet, note: "Cheatsheet"),
             Binding(spec: KeySpec(key: "r"), command: .sourceConfig, note: "Re-import Ghostty"),
-            // Resize (M-/Up Down Left Right would conflict with select-pane; using
-            // shifted variants instead).
-            Binding(spec: KeySpec(key: "Left", modifiers: .shift), command: .resizePane(direction: .left, amount: 5), note: "Resize left"),
-            Binding(spec: KeySpec(key: "Right", modifiers: .shift), command: .resizePane(direction: .right, amount: 5), note: "Resize right"),
-            Binding(spec: KeySpec(key: "Up", modifiers: .shift), command: .resizePane(direction: .up, amount: 3), note: "Resize up"),
-            Binding(spec: KeySpec(key: "Down", modifiers: .shift), command: .resizePane(direction: .down, amount: 3), note: "Resize down"),
+            // Multiplexer power commands.
+            Binding(spec: KeySpec(key: "q"), command: .displayPanes, note: "Show pane numbers"),
+            Binding(spec: KeySpec(key: "l"), command: .selectPane(target: .last), note: "Last pane"),
+            Binding(spec: KeySpec(key: "m"), command: .markPane(set: true), note: "Mark pane (join source)"),
+            Binding(spec: KeySpec(key: "M"), command: .markPane(set: false), note: "Clear marked pane"),
+            Binding(spec: KeySpec(key: "j"), command: .joinPane(direction: .vertical), note: "Join marked pane"),
+            Binding(spec: KeySpec(key: "S"), command: .synchronizePanes(set: nil), note: "Toggle synchronize-panes"),
+            // Resize — repeatable (hold under the prefix to keep nudging). Shifted
+            // arrows avoid conflicting with the select-pane arrows above.
+            Binding(spec: KeySpec(key: "Left", modifiers: .shift), command: .resizePane(direction: .left, amount: 5), note: "Resize left", repeatable: true),
+            Binding(spec: KeySpec(key: "Right", modifiers: .shift), command: .resizePane(direction: .right, amount: 5), note: "Resize right", repeatable: true),
+            Binding(spec: KeySpec(key: "Up", modifiers: .shift), command: .resizePane(direction: .up, amount: 3), note: "Resize up", repeatable: true),
+            Binding(spec: KeySpec(key: "Down", modifiers: .shift), command: .resizePane(direction: .down, amount: 3), note: "Resize down", repeatable: true),
         ])
         // copy-mode bindings are documentation/discoverability today: the
         // CopyModeViewController interprets vim-keys natively. Listing them

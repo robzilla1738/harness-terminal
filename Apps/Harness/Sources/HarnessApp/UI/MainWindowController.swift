@@ -7,9 +7,10 @@ final class MainWindowController: NSWindowController {
         HarnessChrome.update(
             themeName: SessionCoordinator.shared.snapshot.themeName,
             opacity: CGFloat(SessionCoordinator.shared.settings.backgroundOpacity),
-            backgroundHex: SessionCoordinator.shared.settings.useCustomColors ? SessionCoordinator.shared.settings.customBackgroundHex : nil,
-            foregroundHex: SessionCoordinator.shared.settings.useCustomColors ? SessionCoordinator.shared.settings.customForegroundHex : nil,
-            cursorHex: SessionCoordinator.shared.settings.useCustomColors ? SessionCoordinator.shared.settings.customCursorHex : nil
+            blur: SessionCoordinator.shared.settings.backgroundBlur,
+            backgroundHex: SessionCoordinator.shared.settings.customBackgroundHex,
+            foregroundHex: SessionCoordinator.shared.settings.customForegroundHex,
+            cursorHex: SessionCoordinator.shared.settings.customCursorHex
         )
 
         let window = NSWindow(
@@ -57,8 +58,12 @@ final class MainWindowController: NSWindowController {
             content.layer?.masksToBounds = false
         }
 
-        // Terminal translucency + blur: libghostty `background-opacity` / `background-blur`
-        // on each surface (Ghostty.app). No CGSSetWindowBackgroundBlurRadius here — that
-        // blurs the desktop under the whole window and washes TUI truecolor on composite.
+        // One uniform blur for the whole window — the same private CGS surface blur
+        // Ghostty uses on macOS. This is the single blur source: the terminal keeps
+        // only `background-opacity` (color translucency, no libghostty blur), and the
+        // chrome hides its vibrancy material when translucent, so terminal and chrome
+        // share exactly one blurred backdrop. (libghostty's own `background-blur` is a
+        // no-op in embedded mode since it doesn't own this NSWindow.) Opaque → no blur.
+        WindowBlur.apply(radius: isOpaque ? 0 : settings.backgroundBlur, to: window)
     }
 }

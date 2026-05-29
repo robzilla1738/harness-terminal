@@ -9,7 +9,7 @@ Native macOS terminal for organizing AI agents and dev sessions — Ghostty rend
 - Workspaces + sidebar sessions + per-session tabs + horizontal/vertical splits
 - Session layout persistence (daemon-owned JSON)
 - **harness-cli** for automation and agent hooks
-- **tmux-style commands**: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`
+- **Harness command system**: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`
 - **In-app prefix keymap** (default `Ctrl-A`) with cheatsheet (prefix `?`)
 - Agent auto-detection (Codex / Claude Code / Cursor / Pi / Hermes / OpenClaw / Aider / Gemini / Goose) with per-agent dot color + sidebar chip
 - Agent notifications (desktop + sidebar + pane rings), jump-to-waiting (`Cmd+Shift+U`) skips panes still generating
@@ -101,7 +101,7 @@ harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 | Ghostty-config aware (theme/opacity/blur) | Yes | Yes | No | No |
 | Workspaces + agent sidebar | Yes | Limited | Yes | DIY |
 | harness-cli automation | Yes | No | Yes | Yes |
-| tmux-style send-keys / capture-pane / resize-pane | Yes | No | Limited | Yes |
+| Scriptable send-keys / capture-pane / resize-pane | Yes | No | Limited | Yes |
 | In-app prefix keymap (`Ctrl-A`) | Yes | No | No | Yes |
 | Auto-detected agent status (Codex / Claude Code / Cursor / …) | Yes | No | No | No |
 | Live shell detach/reattach | v1.1 | No | Partial | Yes |

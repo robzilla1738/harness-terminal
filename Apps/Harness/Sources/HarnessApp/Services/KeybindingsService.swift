@@ -28,11 +28,11 @@ final class KeybindingsService {
 
     /// Bind a key. Parses the textual spec (`C-a`, `Up`, …) here so callers
     /// (the `:` prompt, hooks, `bind-key` CLI) all share the same parser.
-    func bind(table: KeyTableID, specRaw: String, command: Command) throws {
+    func bind(table: KeyTableID, specRaw: String, command: Command, repeatable: Bool = false) throws {
         guard let spec = KeySpec.parse(specRaw) else {
             throw CommandExecutionError.unsupportedInThisContext("invalid key spec: \(specRaw)")
         }
-        tables.setBinding(table: table, binding: Binding(spec: spec, command: command))
+        tables.setBinding(table: table, binding: Binding(spec: spec, command: command, repeatable: repeatable))
         try KeybindingsStore.save(tables)
     }
 

@@ -136,6 +136,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             commit()
             return .ok
+        case let .swapTab(workspaceID, tabID, withIndex):
+            guard editor.swapTab(workspaceID: workspaceID, tabID: tabID, withIndex: withIndex) else {
+                return .error("Tab not found")
+            }
+            commit()
+            return .ok
         case let .reorderSession(workspaceID, sessionID, toIndex):
             guard editor.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex) else {
                 return .error("Session not found")
