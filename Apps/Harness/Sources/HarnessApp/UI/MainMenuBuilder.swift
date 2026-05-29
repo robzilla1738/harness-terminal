@@ -213,11 +213,7 @@ final class MenuTarget: NSObject {
     }
 
     @objc func openSettings() {
-        if let split = NSApp.keyWindow?.contentViewController as? MainSplitViewController {
-            split.toggleSettings()
-        } else {
-            SettingsWindowController.show()
-        }
+        SettingsWindowController.show()
     }
 
     @objc func toggleSidebar() {

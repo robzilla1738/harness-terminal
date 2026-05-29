@@ -221,11 +221,7 @@ enum CommandPaletteController {
                 shortcut: "⌘,",
                 section: .actions
             ) {
-                if let split = NSApp.keyWindow?.contentViewController as? MainSplitViewController {
-                    split.toggleSettings()
-                } else {
-                    SettingsWindowController.show()
-                }
+                SettingsWindowController.show()
             },
             PaletteAction(
                 id: "action.reimport",

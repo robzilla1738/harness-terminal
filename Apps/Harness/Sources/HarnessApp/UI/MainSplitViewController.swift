@@ -51,9 +51,6 @@ final class MainSplitViewController: NSViewController {
         addChild(sidebar)
         addChild(content)
 
-        // Sidebar Settings affordances toggle the inline panel in the content area.
-        sidebar.onToggleSettings = { [weak self] in self?.toggleSettings() }
-
         split.translatesAutoresizingMaskIntoConstraints = false
         statusLine.translatesAutoresizingMaskIntoConstraints = false
         edgeDivider.wantsLayer = true
@@ -205,17 +202,6 @@ final class MainSplitViewController: NSViewController {
         setSidebarVisible(!SessionCoordinator.shared.settings.sidebarVisible, animated: true)
     }
 
-    // MARK: - Inline Settings
-
-    func toggleSettings() {
-        content.toggleSettings()
-    }
-
-    /// Called by the content area when the inline Settings panel opens/closes, so the
-    /// sidebar's Settings row reflects the active state.
-    func settingsDidChangeVisibility(_ visible: Bool) {
-        sidebar.setSettingsActive(visible)
-    }
 }
 
 @MainActor

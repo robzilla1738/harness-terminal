@@ -11,11 +11,14 @@ public enum ThemeManager {
     public static let defaultDisplayName = "Default"
     public static let defaultBaselineBackgroundHex = "#000000"
     public static let defaultBaselineForegroundHex = "#ffffff"
+    /// The standard, vivid xterm ANSI-16 palette — the de-facto "true" colors programs
+    /// assume. Used for terminal *output* when theme→output recoloring is off (the
+    /// default), so ANSI-16 tools render like a normal terminal rather than washed/pastel.
     public static let defaultBaselinePaletteHex = [
-        "#1D1F21", "#CC6666", "#B5BD68", "#F0C674",
-        "#81A2BE", "#B294BB", "#8ABEB7", "#C5C8C6",
-        "#666666", "#D54E53", "#B9CA4A", "#E7C547",
-        "#7AA6DA", "#C397D8", "#70C0B1", "#EAEAEA",
+        "#000000", "#CD0000", "#00CD00", "#CDCD00",
+        "#0000EE", "#CD00CD", "#00CDCD", "#E5E5E5",
+        "#7F7F7F", "#FF0000", "#00FF00", "#FFFF00",
+        "#5C5CFF", "#FF00FF", "#00FFFF", "#FFFFFF",
     ]
 
     public static let featuredThemes = [

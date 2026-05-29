@@ -9,10 +9,6 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     private var paneContainer: PaneContainerView?
     private var lastStructureKey = ""
     private var pendingReload: Bool?
-    /// Inline Settings panel (Warp-style) layered over the terminal host. Created on
-    /// demand and torn down on hide so each open reflects the current theme/settings.
-    private var settingsVC: SettingsViewController?
-    private(set) var isSettingsVisible = false
     /// Pasteboard change counter captured at left-mouse-down. On mouse-up, if it
     /// has incremented inside the terminal area AND the user has `copy-on-select`
     /// enabled, that means the renderer just copied the selection — surface a brief
@@ -33,20 +29,22 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         refreshTerminalHostFill()
         tabBar.applyChrome()
         paneContainer?.applyChrome()
-        // Repaint the inline Settings backdrop if it's open during a theme switch.
-        if let settingsView = settingsVC?.view {
-            HarnessDesign.installChromeBackground(.sidebar, on: settingsView)
-        }
     }
 
-    /// Back the terminal host with the true terminal color. The terminal surface now
-    /// always renders fully opaque (see TerminalHostView.configureTerminalBuilder), so
-    /// the host is solid too: this fills any resize gap before the renderer repaints and
-    /// guarantees the terminal area shows true rich color rather than the blurred
-    /// desktop. Translucency lives only in the chrome regions, not here.
+    /// Back the terminal host so the canvas reads the same as the rest of the window.
+    /// When the window is **opaque** (opacity ≥ 1) the host is a solid terminal-colored
+    /// fill — this covers any resize gap before the renderer repaints, so the terminal
+    /// shows true rich color. When **translucent** the host is `.clear`: the renderer
+    /// already draws the canvas at `backgroundOpacity` alpha, so a clear host lets that
+    /// single translucent layer composite over the one window-wide blur — exactly like
+    /// the chrome (`sidebarBackground × opacity`). An opaque fill here would block the
+    /// blur and make the terminal look solid while the chrome was see-through.
     private func refreshTerminalHostFill() {
         terminalHost.wantsLayer = true
-        terminalHost.layer?.backgroundColor = HarnessChrome.current.terminalBackground.cgColor
+        let opacity = HarnessSettings.clampedOpacity(SessionCoordinator.shared.settings.backgroundOpacity)
+        terminalHost.layer?.backgroundColor = opacity >= 1
+            ? HarnessChrome.current.terminalBackground.cgColor
+            : NSColor.clear.cgColor
     }
 
     override func viewDidLoad() {
@@ -102,58 +100,6 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         guard let window = event.window, window === view.window else { return false }
         let pointInHost = terminalHost.convert(event.locationInWindow, from: nil)
         return terminalHost.bounds.contains(pointInHost)
-    }
-
-    // MARK: - Inline Settings panel
-
-    func toggleSettings() {
-        if isSettingsVisible { hideSettings() } else { showSettings() }
-    }
-
-    func showSettings() {
-        guard !isSettingsVisible else { return }
-        let vc = SettingsViewController()
-        addChild(vc)
-        let panel = vc.view
-        panel.translatesAutoresizingMaskIntoConstraints = false
-        // Opaque chrome backdrop so the terminal behind never bleeds through.
-        HarnessDesign.installChromeBackground(.sidebar, on: panel)
-        // Above the terminal host (and tab bar), but pinned below the tab strip so
-        // tabs stay visible/clickable while Settings is open (Warp-style).
-        view.addSubview(panel, positioned: .above, relativeTo: terminalHost)
-        NSLayoutConstraint.activate([
-            panel.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
-            panel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            panel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            panel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        vc.onClose = { [weak self] in self?.hideSettings() }
-        settingsVC = vc
-        isSettingsVisible = true
-        notifySettingsActive(true)
-        panel.alphaValue = 0
-        HarnessMotion.animate(HarnessDesign.Motion.fast) { _ in
-            panel.animator().alphaValue = 1
-        }
-    }
-
-    func hideSettings() {
-        guard isSettingsVisible, let vc = settingsVC else { return }
-        isSettingsVisible = false
-        settingsVC = nil
-        notifySettingsActive(false)
-        let panel = vc.view
-        HarnessMotion.animate(HarnessDesign.Motion.fast) { _ in
-            panel.animator().alphaValue = 0
-        } completion: {
-            panel.removeFromSuperview()
-            vc.removeFromParent()
-        }
-    }
-
-    /// Mirror the panel's visibility into the sidebar's Settings row highlight.
-    private func notifySettingsActive(_ active: Bool) {
-        (view.window?.contentViewController as? MainSplitViewController)?.settingsDidChangeVisibility(active)
     }
 
     override func viewDidLayout() {

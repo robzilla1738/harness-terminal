@@ -27,9 +27,6 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private var workspaceDropdownMonitor: Any?
     /// Live filter text from the search field; empty shows all sessions.
     private var sessionFilter = ""
-    /// Set by `MainSplitViewController` so the sidebar's Settings affordances toggle
-    /// the inline Settings panel instead of opening a separate window.
-    var onToggleSettings: (() -> Void)?
 
     /// Sessions after applying the search filter. Drag-reorder is disabled while a
     /// filter is active (see the data source), so callers that reorder still use the
@@ -287,11 +284,6 @@ final class HarnessSidebarPanelViewController: NSViewController {
     @objc private func searchChanged() {
         sessionFilter = searchField.stringValue
         sessionTable.reloadData()
-    }
-
-    /// Reflect the inline Settings panel's visibility in the sidebar row's highlight.
-    func setSettingsActive(_ active: Bool) {
-        settingsRow.setActive(active)
     }
 
     private func setupSessionList() {
@@ -596,13 +588,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
     }
 
     @objc private func openSettings() {
-        // Toggle the inline panel when the host wired it up; fall back to the
-        // standalone window otherwise (e.g. if presented outside the main split).
-        if let onToggleSettings {
-            onToggleSettings()
-        } else {
-            SettingsWindowController.show()
-        }
+        SettingsWindowController.show()
     }
 
     private func selectSessionRow() {

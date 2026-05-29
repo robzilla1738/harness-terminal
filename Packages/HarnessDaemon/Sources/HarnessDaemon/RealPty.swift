@@ -107,6 +107,10 @@ public final class RealPty: @unchecked Sendable {
 
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
+        // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
+        // downgrading to the muted 256-color cube. The renderer passes truecolor through
+        // verbatim, so program output renders exactly as the program intends.
+        environment["COLORTERM"] = "truecolor"
         environment["HARNESS_SURFACE"] = id
         for (key, value) in extraEnvironment { environment[key] = value }
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
@@ -236,6 +240,10 @@ public final class RealPty: @unchecked Sendable {
 
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
+        // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
+        // downgrading to the muted 256-color cube. The renderer passes truecolor through
+        // verbatim, so program output renders exactly as the program intends.
+        environment["COLORTERM"] = "truecolor"
         environment["HARNESS_SURFACE"] = id
         for (key, value) in extraEnvironment { environment[key] = value }
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]

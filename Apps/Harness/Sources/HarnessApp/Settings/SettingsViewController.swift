@@ -1419,24 +1419,29 @@ final class SettingsSidebarButton: NSControl {
     }
 }
 
+/// Settings opens as a standard, movable, closable macOS window on top of the main
+/// window (not embedded). A fresh controller is built on each open so the window always
+/// reflects the current theme/settings; any previously open instance is closed first.
 @MainActor
 enum SettingsWindowController {
     private static var window: NSWindow?
 
     static func show() {
-        if window == nil {
-            let controller = SettingsViewController()
-            let win = NSWindow(contentViewController: controller)
-            win.title = "Harness Settings"
-            win.styleMask = [.titled, .closable, .resizable]
-            win.isRestorable = false
-            win.minSize = NSSize(width: 820, height: 600)
-            win.setContentSize(NSSize(width: 880, height: 660))
-            window = win
-        }
-        window?.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
-        window?.center()
-        window?.makeKeyAndOrderFront(nil)
+        window?.close()
+        let controller = SettingsViewController()
+        let win = NSWindow(contentViewController: controller)
+        win.title = "Harness Settings"
+        win.styleMask = [.titled, .closable, .resizable]
+        win.isRestorable = false
+        win.isReleasedWhenClosed = false
+        win.minSize = NSSize(width: 820, height: 600)
+        win.setContentSize(NSSize(width: 880, height: 660))
+        // `onClose` left nil → SettingsViewController.closeWindow() falls through to
+        // `view.window?.close()`, so Done/Esc dismisses this popup.
+        window = win
+        win.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
+        win.center()
+        win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

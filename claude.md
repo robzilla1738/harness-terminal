@@ -409,7 +409,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 **Terminal config import** (`TerminalConfigImporter`): reads an existing terminal config (the `~/.config/ghostty` paths in On-disk layout) so users migrating in keep their colors/font. **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is parsed for the fingerprint only — not stored in `settings.json`.
 
-**Apply colors (single source of truth):** `ThemeManager.resolvedCanvas(themeName:custom*Hex:)` resolves the canvas bg/fg/cursor (explicit custom > theme preset > baseline). **Both** `TerminalHostView.applyNativeAppearance` (→ `HarnessTerminalSurfaceView.configureAppearance`) and `HarnessChrome.update` consume it, so terminal canvas and chrome paint the **identical** color — no seam. Program **output** keeps untouched/default ANSI colors unless `applyThemeToTerminalOutput` is on. Selecting a theme seeds the full editable color set into `settings.json` (`SessionCoordinator.setTheme` + `ThemeManager.presetColors`); colors flow from settings. **Translucency + blur:** the native canvas honors `backgroundOpacity` (default-bg cells get the alpha so the one window-wide CGS `WindowBlur` shows through), while glyphs and explicit program backgrounds stay opaque so output reads true. Chrome backdrop: `ChromeBackdrop` with `.underWindowBackground` or Liquid Glass — **not** `.sidebar` / `.titlebar` (blue tint).
+**Apply colors (single source of truth):** `ThemeManager.resolvedCanvas(themeName:custom*Hex:)` resolves the canvas bg/fg/cursor (explicit custom > theme preset > baseline). **Both** `TerminalHostView.applyNativeAppearance` (→ `HarnessTerminalSurfaceView.configureAppearance`) and `HarnessChrome.update` consume it, so terminal canvas and chrome paint the **identical** color — no seam. Chrome is **fully flat**: `HarnessChromePalette` paints the resting sidebar/tab/status background as the *exact* terminal color (no lift), so the window reads as one seamless surface — only interaction states (active/hover) blend toward the foreground. Program **output** keeps untouched/default ANSI colors unless `applyThemeToTerminalOutput` is on; the daemon PTY exports `COLORTERM=truecolor` (with `TERM=xterm-256color`, see `RealPty`) so TUIs like Claude Code emit true 24-bit color instead of a washed 256-color fallback, and the off-mode baseline ANSI palette (`ThemeManager.defaultBaselinePaletteHex`) is the standard vivid xterm-16 set. Selecting a theme seeds the full editable color set into `settings.json` (`SessionCoordinator.setTheme` + `ThemeManager.presetColors`); colors flow from settings. **Translucency + blur:** the native canvas honors `backgroundOpacity` (default-bg cells get the alpha so the one window-wide CGS `WindowBlur` shows through), while glyphs and explicit program backgrounds stay opaque so output reads true. Chrome backdrop: `ChromeBackdrop` with `.underWindowBackground` or Liquid Glass — **not** `.sidebar` / `.titlebar` (blue tint).
 
 ---
 
@@ -497,7 +497,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Shell tracker | `SurfaceShellTracker` | cwd polling via proc tree |
 | Daemon fallback | `DaemonLauncher` | Starts daemon when launchd unavailable |
 | Terminal | `TerminalHostView` | Hosts `HarnessTerminalSurfaceView`; daemon I/O |
-| Settings UI | `SettingsViewController`, `KeyRecorderView`, `LiveTerminalPreview` | Full settings + prefix capture |
+| Settings UI | `SettingsViewController`, `KeyRecorderView`, `LiveTerminalPreview` | Standalone window via `SettingsWindowController` (not embedded); rebuilt per open; full settings + prefix capture |
 | Daemon | `SurfaceRegistry`, `RealPty`, `DaemonServer` | Session authority |
 | Core | `SessionEditor`, `CommandParser`, `OptionStore`, `HookRegistry`, `PasteBufferStore`, `FormatString` | |
 
@@ -515,6 +515,16 @@ HARNESS_LIVE_DAEMON_TESTS=1 swift test        # + real shell / socket tests
 `make package` is an alias for `make release`.
 
 Bundle in `Harness.app/Contents/MacOS/`: `Harness`, `HarnessDaemon`, `harness-cli`; icon at `Contents/Resources/Harness.icns`.
+
+**Building in Xcode:** `xcodegen generate` (only after adding/removing files or editing `project.yml`), then `open Harness.xcodeproj`; pick the **`Harness`** scheme + **My Mac** and ⌘B / ⌘R. The app target depends on `HarnessDaemon` + `harness-cli` and a `postBuildScript` copies both into the bundle, so one build refreshes all three.
+
+**Daemon restart (critical, learned the hard way):** `HarnessDaemon` is a separate launchd process (`KeepAlive`) — rebuilding/relaunching the app does **not** restart it. Daemon-code changes (PTY env like `COLORTERM`, IPC, session authority) only take effect after you restart it **and** open a fresh pane (PTY env is applied at shell spawn):
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.robert.harness.daemon
+```
+
+App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The launchd plist points at the build it was installed from (often DerivedData Debug); `make release` users run `harness-cli install` once to repoint it at the release bundle, else the old binary keeps running.
 
 **HarnessCoreTests:** `SessionEditor`, `SessionEditorPhase4`, `IPCCodec`, `KeyTokenParser`, `KeyTable`, `FormatString`, `CommandParser`, `PasteBufferStore`, `LaunchAgentInstaller`, `HarnessSettings`, `AgentDetector`, `DaemonClient`, `HarnessPaths`, `TerminalConfigImporter`, `PaneRectSolver`.
 
@@ -571,7 +581,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 4. Notifications keyed by surface ID string.
 5. Terminal and chrome resolve the canvas through the one `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) so they never drift; a theme seeds the editable colors, colors flow from `settings.json`.
 6. No blue sidebar vibrancy.
-7. Blur is one window-wide CGS `WindowBlur`. The native terminal canvas honors `backgroundOpacity` (translucent over the blur); glyphs and explicit cell backgrounds stay opaque so output reads true.
+7. Blur is one window-wide CGS `WindowBlur`. The native terminal canvas honors `backgroundOpacity` (translucent over the blur); glyphs and explicit cell backgrounds stay opaque so output reads true. The terminal-host fill (`ContentAreaViewController.refreshTerminalHostFill`) goes **`.clear` when opacity < 1** (solid terminal color only when fully opaque) so the single translucent canvas — not an opaque backing layer — composites over the blur, matching the chrome (`sidebarBackground × opacity`) exactly. An opaque host fill here makes the terminal look solid while the chrome is see-through.
 
 ### Playbooks
 
