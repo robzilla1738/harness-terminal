@@ -8,6 +8,22 @@ Agent handbook for the **Harness** repository. Read before architectural or UI c
 
 ---
 
+## ⚠️ Active migration: native renderer (replacing the libghostty fork)
+
+A from-scratch, self-contained terminal stack is being built on branch
+`claude/macos-terminal-colors-N3rKO` to remove the external **libghostty fork**. The engine,
+485-theme catalog, color/Metal renderer, keyboard input encoder, and a `CAMetalLayer` surface
+view are **built and tested**; `harness attach` and the app's theme/chrome already run on the
+native code (the fork is kept only as an A/B test oracle). The remaining step is wiring
+`HarnessTerminalSurfaceView` into `TerminalHostView` behind a `useNativeRenderer` flag, then
+follow-ups (selection, scrollback, theme export UI), then deleting the fork.
+
+**Before touching the terminal renderer, theme system, or `TerminalHostView`, read
+[docs/NATIVE_RENDERER_HANDOFF.md](docs/NATIVE_RENDERER_HANDOFF.md).** New modules under
+`Packages/`: `HarnessTerminalEngine`, `HarnessTheme`, `HarnessTerminalRenderer`.
+
+---
+
 ## What Harness is
 
 Native macOS terminal combining:
