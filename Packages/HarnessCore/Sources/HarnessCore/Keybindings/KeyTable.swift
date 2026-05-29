@@ -157,6 +157,7 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "?"), command: .showCheatsheet, note: "Cheatsheet"),
             Binding(spec: KeySpec(key: "r"), command: .sourceConfig, note: "Re-import Ghostty"),
             // Multiplexer power commands.
+            Binding(spec: KeySpec(key: "Space"), command: .nextLayout, note: "Cycle layouts"),
             Binding(spec: KeySpec(key: "q"), command: .displayPanes, note: "Show pane numbers"),
             Binding(spec: KeySpec(key: "l"), command: .selectPane(target: .last), note: "Last pane"),
             Binding(spec: KeySpec(key: "m"), command: .markPane(set: true), note: "Mark pane (join source)"),

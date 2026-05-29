@@ -88,7 +88,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         dividerHex: String? = nil,
         statusLineHex: String? = nil,
         systemNotificationsEnabled: Bool = true,
-        vividColors: Bool = false,
+        vividColors: Bool = true,
         linearBlending: Bool = false
     ) {
         self.fontSize = fontSize
@@ -235,6 +235,16 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             // Anything below 30% makes the window effectively invisible.
             settings.backgroundOpacity = HarnessSettings.clampedOpacity(settings.backgroundOpacity)
             settings.backgroundBlur = HarnessSettings.clampedBlur(settings.backgroundBlur)
+            // One-shot color-fidelity migration: the previous default rendered in
+            // sRGB, which clamped the renderer's wide gamut and washed out chromatic
+            // colors. Flip existing installs to vivid Display-P3 once (users can
+            // toggle back in Settings ▸ Appearance). Keyed in UserDefaults so it
+            // runs exactly once and never overrides a later explicit choice.
+            let migrationKey = "HarnessColorFidelityMigrationV1"
+            if !UserDefaults.standard.bool(forKey: migrationKey) {
+                UserDefaults.standard.set(true, forKey: migrationKey)
+                settings.vividColors = true
+            }
             // Persist the migration so on next save we don't lose it.
             try? settings.save()
             return settings

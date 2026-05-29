@@ -19,8 +19,31 @@ enum MainMenuBuilder {
         prefs.target = MenuTarget.shared
         app.submenu?.addItem(prefs)
         app.submenu?.addItem(.separator())
+        let hide = NSMenuItem(title: "Hide Harness", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.submenu?.addItem(hide)
+        let hideOthers = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        app.submenu?.addItem(hideOthers)
+        app.submenu?.addItem(NSMenuItem(title: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: ""))
+        app.submenu?.addItem(.separator())
         app.submenu?.addItem(NSMenuItem(title: "Quit Harness", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         main.addItem(app)
+
+        // Edit — standard responder-chain actions so Copy/Paste/Select All work in
+        // the focused terminal (and any text field). Target nil routes through the
+        // responder chain to whichever view is first responder.
+        let edit = NSMenuItem()
+        edit.submenu = NSMenu(title: "Edit")
+        edit.submenu?.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.submenu?.addItem(redo)
+        edit.submenu?.addItem(.separator())
+        edit.submenu?.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.submenu?.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.submenu?.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        edit.submenu?.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        main.addItem(edit)
 
         let workspace = NSMenuItem()
         workspace.submenu = NSMenu(title: "Workspace")
@@ -93,6 +116,30 @@ enum MainMenuBuilder {
         view.submenu?.addItem(zoomOut)
         main.addItem(view)
 
+        // Window — standard macOS window management. Registered as windowsMenu so
+        // AppKit auto-populates the open-windows list and the standard actions work.
+        let window = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        window.submenu = windowMenu
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: ""))
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(NSMenuItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: ""))
+        main.addItem(window)
+        NSApp.windowsMenu = windowMenu
+
+        // Help
+        let help = NSMenuItem()
+        help.submenu = NSMenu(title: "Help")
+        let welcome = NSMenuItem(title: "Welcome to Harness", action: #selector(MenuTarget.showOnboarding), keyEquivalent: "")
+        welcome.target = MenuTarget.shared
+        help.submenu?.addItem(welcome)
+        let shortcuts = NSMenuItem(title: "Keyboard Shortcuts", action: #selector(MenuTarget.showShortcuts), keyEquivalent: "/")
+        shortcuts.keyEquivalentModifierMask = [.command]
+        shortcuts.target = MenuTarget.shared
+        help.submenu?.addItem(shortcuts)
+        main.addItem(help)
+
         return main
     }
 }
@@ -145,6 +192,14 @@ final class MenuTarget: NSObject {
 
     @objc func jumpNotification() {
         SessionCoordinator.shared.jumpToLatestNotification()
+    }
+
+    @objc func showOnboarding() {
+        OnboardingController.present()
+    }
+
+    @objc func showShortcuts() {
+        PrefixCheatsheetWindow.shared.toggle()
     }
 
     @objc func commandPalette() {

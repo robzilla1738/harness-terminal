@@ -961,21 +961,30 @@ final class SessionCoordinator: NSObject {
         }
     }
 
+    private var lastDaemonErrorNotice: Date?
+
     @discardableResult
     func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
         do {
             return try daemon.request(request)
         } catch {
+            // Never block the UI with a modal: a transient miss (e.g. the daemon
+            // is still spawning at launch) must degrade gracefully. Log always,
+            // and surface a non-blocking, throttled toast so the user isn't left
+            // wondering — but the app keeps running and self-heals on the next sync.
             fputs("Harness daemon request failed: \(error)\n", stderr)
-            if NSApp.isActive {
-                let alert = NSAlert()
-                alert.messageText = "HarnessDaemon request failed"
-                alert.informativeText = "\(error)"
-                alert.alertStyle = .warning
-                alert.runModal()
-            }
+            noteDaemonError(error)
             return nil
         }
+    }
+
+    /// A throttled, non-blocking notice that the daemon is unreachable.
+    func noteDaemonError(_ error: Error) {
+        let now = Date()
+        if let last = lastDaemonErrorNotice, now.timeIntervalSince(last) < 8 { return }
+        lastDaemonErrorNotice = now
+        guard let host = (NSApp.keyWindow ?? NSApp.mainWindow)?.contentView else { return }
+        Toast.show("Reconnecting to HarnessDaemon…", in: host)
     }
 
     /// Fire-and-forget metadata update that logs on failure instead of silently

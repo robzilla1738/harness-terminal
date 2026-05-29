@@ -9,8 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureTerminalDiagnostics()
-        DaemonLauncher.shared.ensureRunning()
-        SessionCoordinator.shared.syncFromDaemon()
+
+        // Build the UI immediately so launch never blocks on the daemon. The
+        // coordinator starts from a default snapshot and repopulates the moment
+        // the daemon answers (below) — no frozen window, no modal timeout dialog.
         mainWindowController = MainWindowController()
         mainWindowController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -22,7 +24,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // and silently denies after; doing it eagerly means notifications can
         // start arriving as soon as the first agent transitions to `waiting`.
         DesktopNotifier.requestAuthorizationIfNeeded()
-        FirstRunExperience.offerCLIInstallIfNeeded()
+
+        // Locate/spawn the daemon off the main thread, then sync from real state.
+        DaemonLauncher.shared.ensureRunning { ok in
+            SessionCoordinator.shared.syncFromDaemon()
+            if !ok {
+                SessionCoordinator.shared.noteDaemonError(DaemonClientError.timeout)
+            }
+            FirstRunExperience.offerCLIInstallIfNeeded()
+            OnboardingController.presentIfNeeded()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

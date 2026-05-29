@@ -3,14 +3,18 @@ import Foundation
 import HarnessCore
 
 /// Connects the app to the long-lived `HarnessDaemon` process. The daemon is
-/// owned by launchd (installed by `LaunchAgentInstaller`) so it survives
-/// `Harness.app` quitting, system logout, and even a fresh boot. The launcher's
-/// job is to *find* a running daemon and, on first run only, install the
-/// LaunchAgent so that one exists.
+/// owned by launchd (installed by `LaunchAgentInstaller`) in release builds so it
+/// survives `Harness.app` quitting, logout, and reboot. The launcher's job is to
+/// *find* a running daemon and, if none, start one — fast and without freezing the
+/// UI.
 ///
-/// Direct child-process spawning is a last-resort fallback for DEBUG / preview
-/// builds where the LaunchAgent isn't installed; the app never kills a running
-/// daemon on quit.
+/// **Startup must never block the main thread.** `ensureRunning(then:)` runs the
+/// whole discover→spawn→poll dance on a background queue and calls back on the
+/// main thread once the daemon answers (or gives up). The strategy is
+/// *spawn-first*: if a quick ping fails we immediately spawn the bundled daemon
+/// rather than waiting on launchd, because a stale LaunchAgent (e.g. a DerivedData
+/// path from a previous Xcode build that no longer exists) would otherwise make us
+/// poll for seconds for a daemon that can never come up.
 ///
 /// @unchecked Sendable: launch/poll state is confined to the serial `queue`.
 final class DaemonLauncher: @unchecked Sendable {
@@ -21,20 +25,40 @@ final class DaemonLauncher: @unchecked Sendable {
 
     private init() {}
 
-    func ensureRunning() {
-        queue.sync {
-            if daemonResponds() { return }
-            // Try to install the LaunchAgent (idempotent). If installed, launchd
-            // will start the daemon on the next request to the socket.
-            if installLaunchAgentIfPossible() {
-                if pollUntilResponding(timeoutSeconds: 3) { return }
-            }
-            spawnFallbackProcess()
+    /// Ensure a daemon is reachable, off the main thread. `completion` runs on the
+    /// main thread with `true` if the daemon answers. Safe to call at launch — the
+    /// UI can build immediately and refresh from the callback.
+    func ensureRunning(then completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
+        queue.async { [weak self] in
+            let ok = self?.ensureRunningBlocking() ?? false
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(ok) } }
         }
     }
 
-    private func daemonResponds() -> Bool {
-        guard let response = try? DaemonClient().request(.ping, timeout: 0.5) else { return false }
+    /// Synchronous variant for non-main callers/tests. Never call from the main thread.
+    @discardableResult
+    func ensureRunningBlocking() -> Bool {
+        if daemonResponds(timeout: 0.4) { return true }
+
+        // Spawn-first: get a daemon on the socket right now. In release we also
+        // (re)install the LaunchAgent so the daemon survives app quit, but we do
+        // not *wait* on launchd — the spawned process serves this session.
+        spawnFallbackProcess()
+        if pollUntilResponding(timeoutSeconds: 3) {
+            #if !DEBUG
+            _ = installLaunchAgentIfPossible()
+            #endif
+            return true
+        }
+        // Last resort: maybe a (valid) LaunchAgent can bring one up.
+        #if !DEBUG
+        if installLaunchAgentIfPossible(), pollUntilResponding(timeoutSeconds: 2) { return true }
+        #endif
+        return false
+    }
+
+    private func daemonResponds(timeout: TimeInterval = 0.5) -> Bool {
+        guard let response = try? DaemonClient().request(.ping, timeout: timeout) else { return false }
         if case .pong = response { return true }
         return false
     }
@@ -42,7 +66,7 @@ final class DaemonLauncher: @unchecked Sendable {
     private func pollUntilResponding(timeoutSeconds: Double) -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
-            if daemonResponds() { return true }
+            if daemonResponds(timeout: 0.3) { return true }
             usleep(100_000)
         }
         return false
@@ -54,12 +78,14 @@ final class DaemonLauncher: @unchecked Sendable {
             _ = try LaunchAgentInstaller.install(daemonPath: executable)
             return true
         } catch {
-            fputs("Harness: LaunchAgent install failed: \(error) — falling back to in-process daemon\n", stderr)
+            fputs("Harness: LaunchAgent install failed: \(error) — using in-process daemon\n", stderr)
             return false
         }
     }
 
     private func spawnFallbackProcess() {
+        // Don't stack duplicate spawns if a previous one is still coming up.
+        if let existing = fallbackProcess, existing.isRunning { return }
         guard let executable = daemonExecutableURL() else {
             fputs("Harness: could not locate HarnessDaemon executable\n", stderr)
             return
@@ -72,37 +98,41 @@ final class DaemonLauncher: @unchecked Sendable {
         environment["HARNESS_HOME"] = HarnessPaths.applicationSupport.path
         proc.environment = environment
         try? HarnessPaths.ensureDirectories()
-        try? proc.run()
-        fallbackProcess = proc
-        _ = pollUntilResponding(timeoutSeconds: 3)
+        do {
+            try proc.run()
+            fallbackProcess = proc
+        } catch {
+            fputs("Harness: failed to spawn HarnessDaemon at \(executable.path): \(error)\n", stderr)
+        }
     }
 
+    /// Locate the daemon binary across every layout we ship in:
+    /// 1. inside the app bundle (`Contents/MacOS/HarnessDaemon`, copied by the
+    ///    release packager and the Xcode post-build script),
+    /// 2. next to the app bundle (Xcode `BUILT_PRODUCTS_DIR` sibling),
+    /// 3. the SwiftPM debug build dir (`.build/debug`),
+    /// 4. a system install path.
     private func daemonExecutableURL() -> URL? {
+        let fm = FileManager.default
+        var candidates: [URL] = []
+
         if let executable = Bundle.main.executableURL {
-            let bundled = executable.deletingLastPathComponent().appendingPathComponent("HarnessDaemon")
-            if FileManager.default.fileExists(atPath: bundled.path) {
-                return bundled
-            }
+            candidates.append(executable.deletingLastPathComponent().appendingPathComponent("HarnessDaemon"))
         }
+        // Sibling of Harness.app — where Xcode drops the HarnessDaemon product.
+        candidates.append(Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("HarnessDaemon"))
+
         #if DEBUG
-        let buildDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent(".build/debug/HarnessDaemon")
-        if FileManager.default.fileExists(atPath: buildDir.path) {
-            return buildDir
-        }
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        candidates.append(repoRoot.appendingPathComponent(".build/debug/HarnessDaemon"))
+        candidates.append(repoRoot.appendingPathComponent(".build/release/HarnessDaemon"))
         #endif
-        if let bundle = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent() as URL? {
-            let candidate = bundle.appendingPathComponent("MacOS/HarnessDaemon")
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                return candidate
-            }
-        }
-        return URL(fileURLWithPath: "/usr/local/bin/HarnessDaemon")
+
+        candidates.append(URL(fileURLWithPath: "/usr/local/bin/HarnessDaemon"))
+
+        return candidates.first { fm.isExecutableFile(atPath: $0.path) }
     }
 }

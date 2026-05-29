@@ -87,7 +87,10 @@ final class TerminalColorPipelineTests: XCTestCase {
 
     func testTerminalConfigurationRendersFullColorOverrides() {
         // Full Ghostty parity: every saved color must reach libghostty.
+        // Pin sRGB so this exercises the explicit-sRGB path against
+        // `requiredRenderedConfigLines` (the default is now vivid Display-P3).
         var settings = HarnessSettings()
+        settings.vividColors = false
         settings.customBackgroundHex = "#000000"
         settings.customForegroundHex = "#ffffff"
         settings.customCursorHex = "#ffffff"
@@ -118,10 +121,12 @@ final class TerminalColorPipelineTests: XCTestCase {
         }
     }
 
-    func testDefaultColorRenderingMatchesGhosttySRGB() {
-        // Out of the box: Ghostty.app parity — accurate sRGB + macOS-native blending.
+    func testDefaultColorRenderingIsVividP3() {
+        // Out of the box: vivid Display-P3 so the renderer's wide gamut isn't
+        // clamped (the washed-color fix), with macOS-native blending. Users can
+        // switch to accurate sRGB in Settings ▸ Appearance.
         let rendered = TerminalHostView.makeTerminalConfiguration(settings: HarnessSettings(), themeName: "Catppuccin Mocha").rendered
-        XCTAssertTrue(rendered.contains("window-colorspace = srgb"))
+        XCTAssertTrue(rendered.contains("window-colorspace = display-p3"))
         XCTAssertTrue(rendered.contains("alpha-blending = native"))
     }
 

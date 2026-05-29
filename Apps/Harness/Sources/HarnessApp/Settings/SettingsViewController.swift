@@ -40,6 +40,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         target: nil,
         action: nil
     )
+    private let keepSessionsToggle = NSButton(
+        checkboxWithTitle: "Keep sessions running after the window closes",
+        target: nil,
+        action: nil
+    )
     private let vividColorsToggle = NSButton(
         checkboxWithTitle: "Vivid colors (Display P3) — off = accurate sRGB",
         target: nil,
@@ -257,6 +262,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
         copyOnSelectToggle.target = self
         copyOnSelectToggle.action = #selector(appearanceTextDidCommit)
+        // Daemon-owned (not a HarnessSettings field) — reflects snapshot truth and
+        // commits via IPC on its own action.
+        keepSessionsToggle.state = SessionCoordinator.shared.snapshot.keepSessionsOnQuit ? .on : .off
+        keepSessionsToggle.target = self
+        keepSessionsToggle.action = #selector(toggleKeepSessions)
         vividColorsToggle.state = settings.vividColors ? .on : .off
         vividColorsToggle.target = self
         vividColorsToggle.action = #selector(appearanceTextDidCommit)
@@ -589,6 +599,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("Scrollback", scrollbackField),
             ("", cursorBlinkToggle),
             ("", copyOnSelectToggle),
+            ("", keepSessionsToggle),
         ])
 
         let stack = NSStackView(views: [
@@ -965,6 +976,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         refreshLivePreview()
     }
 
+    @objc private func toggleKeepSessions() {
+        let keep = keepSessionsToggle.state == .on
+        SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep))
+    }
+
     @objc private func appearanceTextDidCommit() {
         flushAndApply()
     }
@@ -1111,6 +1127,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         cursorStylePopup.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
         cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
+        keepSessionsToggle.state = SessionCoordinator.shared.snapshot.keepSessionsOnQuit ? .on : .off
         vividColorsToggle.state = settings.vividColors ? .on : .off
         linearBlendingToggle.state = settings.linearBlending ? .on : .off
         for binding in colorBindings {

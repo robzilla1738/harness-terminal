@@ -204,6 +204,17 @@ public final class TerminalHostView: NSView {
             terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
             terminalView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        applyColorspace(settings: settings)
+    }
+
+    /// Tag the rendering layer's colorspace to match the configured
+    /// `window-colorspace` (Display-P3 when vivid, sRGB otherwise) so Core
+    /// Animation presents the renderer's pixels accurately instead of clamping
+    /// them — the true fix for washed-out chromatic colors.
+    private func applyColorspace(settings: HarnessSettings?) {
+        let vivid = settings?.vividColors ?? cachedSettings?.vividColors ?? true
+        let name: CFString = vivid ? CGColorSpace.displayP3 : CGColorSpace.sRGB
+        terminalView.setColorspace(CGColorSpace(name: name))
     }
 
     public func applyTheme(named name: String) {
@@ -221,6 +232,7 @@ public final class TerminalHostView: NSView {
         // opaque than the sidebar at any opacity < 1.
         layer?.backgroundColor = NSColor.clear.cgColor
         pushConfiguration()
+        applyColorspace(settings: settings)
         terminalView.configuration = TerminalSurfaceOptions(
             backend: .inMemory(memorySession),
             fontSize: settings.fontSize,
