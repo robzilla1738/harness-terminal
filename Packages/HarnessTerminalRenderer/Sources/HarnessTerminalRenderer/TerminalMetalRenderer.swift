@@ -78,7 +78,8 @@ public final class TerminalMetalRenderer {
         let desc = MTLRenderPipelineDescriptor()
         desc.vertexFunction = library.makeFunction(name: vertex)
         desc.fragmentFunction = library.makeFunction(name: fragment)
-        let attachment = desc.colorAttachments[0]
+        // colorAttachments[0] is always present for a configured pipeline.
+        let attachment = desc.colorAttachments[0]!
         attachment.pixelFormat = pixelFormat
         if blending {
             attachment.isBlendingEnabled = true
