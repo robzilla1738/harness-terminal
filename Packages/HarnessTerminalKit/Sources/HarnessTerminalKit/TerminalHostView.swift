@@ -257,6 +257,9 @@ public final class TerminalHostView: NSView {
             guard let self else { return }
             self.hostDelegate?.terminalHostDidRingBell(surfaceID: self.surfaceID)
         }
+        native.onCopy = { [weak self] text in
+            self?.storeCopyBuffer(text)
+        }
         addSubview(native)
         NSLayoutConstraint.activate([
             native.topAnchor.constraint(equalTo: topAnchor),
@@ -293,8 +296,23 @@ public final class TerminalHostView: NSView {
             cursorStyle: settings.cursorStyle,
             cursorBlink: settings.cursorBlink,
             paddingX: CGFloat(settings.windowPaddingX),
-            paddingY: CGFloat(settings.windowPaddingY)
+            paddingY: CGFloat(settings.windowPaddingY),
+            selectionBackgroundHex: settings.selectionBackgroundHex
+                ?? ThemeManager.selectionBackgroundHex(themeName: cachedThemeName),
+            selectionForegroundHex: settings.selectionForegroundHex
+                ?? ThemeManager.selectionForegroundHex(themeName: cachedThemeName),
+            copyOnSelect: settings.copyOnSelect
         )
+    }
+
+    /// Mirror a native-renderer copy into the daemon paste buffer (parity with copy-mode),
+    /// so `paste-buffer` and the buffer list see selections made by mouse.
+    private func storeCopyBuffer(_ text: String) {
+        guard !text.isEmpty else { return }
+        let data = Data(text.utf8)
+        DispatchQueue.global(qos: .utility).async {
+            _ = try? DaemonClient().request(.setBuffer(name: nil, data: data))
+        }
     }
 
     /// The 16 ANSI colors used for terminal *output*. When `applyThemeToTerminalOutput` is

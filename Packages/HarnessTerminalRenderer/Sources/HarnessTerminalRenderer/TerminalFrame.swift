@@ -105,6 +105,33 @@ public struct CursorRender: Equatable, Sendable {
     }
 }
 
+/// A linear (line-wrapping) text selection over the grid, normalized so `start` is at or
+/// before `end` in reading order. Bounds are inclusive cell coordinates.
+public struct TerminalSelection: Equatable, Sendable {
+    public var startRow: Int
+    public var startColumn: Int
+    public var endRow: Int
+    public var endColumn: Int
+
+    /// Build a normalized selection from two arbitrary endpoints (anchor + head).
+    public init(_ a: (row: Int, column: Int), _ b: (row: Int, column: Int)) {
+        if (a.row, a.column) <= (b.row, b.column) {
+            startRow = a.row; startColumn = a.column; endRow = b.row; endColumn = b.column
+        } else {
+            startRow = b.row; startColumn = b.column; endRow = a.row; endColumn = a.column
+        }
+    }
+
+    /// Whether a cell is inside the linear selection (full intermediate rows).
+    public func contains(row: Int, column: Int) -> Bool {
+        if row < startRow || row > endRow { return false }
+        if startRow == endRow { return column >= startColumn && column <= endColumn }
+        if row == startRow { return column >= startColumn }
+        if row == endRow { return column <= endColumn }
+        return true
+    }
+}
+
 /// Turns an engine `TerminalGridSnapshot` into a `TerminalFrame` by resolving every
 /// cell's colors through a `CellColorResolver`. This is the single bridge between the
 /// headless engine and the GPU renderer — keeping it pure means the renderer never has
@@ -120,17 +147,25 @@ public struct FrameBuilder {
     public let canvasOpacity: Float
     /// Cursor shape drawn at the cursor cell.
     public let cursorStyle: CursorStyle
+    /// Highlight colors for selected cells. Background nil = no highlight; foreground nil =
+    /// keep each cell's own foreground.
+    public let selectionBackground: RGBColor?
+    public let selectionForeground: RGBColor?
 
     public init(
         resolver: CellColorResolver,
         cursorColor: RGBColor,
         canvasOpacity: Float = 1,
-        cursorStyle: CursorStyle = .block
+        cursorStyle: CursorStyle = .block,
+        selectionBackground: RGBColor? = nil,
+        selectionForeground: RGBColor? = nil
     ) {
         self.resolver = resolver
         self.cursorColor = cursorColor
         self.canvasOpacity = max(0, min(1, canvasOpacity))
         self.cursorStyle = cursorStyle
+        self.selectionBackground = selectionBackground
+        self.selectionForeground = selectionForeground
     }
 
     /// Convenience builder from a theme: resolver + cursor color in one call.
@@ -138,18 +173,22 @@ public struct FrameBuilder {
         theme: HarnessThemeDefinition,
         boldBrightens: Bool = true,
         canvasOpacity: Float = 1,
-        cursorStyle: CursorStyle = .block
+        cursorStyle: CursorStyle = .block,
+        selectionBackground: RGBColor? = nil,
+        selectionForeground: RGBColor? = nil
     ) {
         let resolver = CellColorResolver(theme: theme, boldBrightens: boldBrightens)
         self.init(
             resolver: resolver,
             cursorColor: theme.cursor ?? theme.foreground,
             canvasOpacity: canvasOpacity,
-            cursorStyle: cursorStyle
+            cursorStyle: cursorStyle,
+            selectionBackground: selectionBackground,
+            selectionForeground: selectionForeground
         )
     }
 
-    public func build(_ snapshot: TerminalGridSnapshot) -> TerminalFrame {
+    public func build(_ snapshot: TerminalGridSnapshot, selection: TerminalSelection? = nil) -> TerminalFrame {
         var cells = [RenderCell]()
         cells.reserveCapacity(snapshot.cols * snapshot.rows)
         for row in 0 ..< snapshot.rows {
@@ -162,14 +201,24 @@ public struct FrameBuilder {
                 // (no explicit SGR bg) and it isn't inverted (which promotes the foreground
                 // into the bg slot). Those — and only those — get the translucent alpha.
                 let isCanvasBackground = cell.background == .none && !cell.inverse
-                let background = isCanvasBackground
-                    ? RenderColor(colors.background, alpha: canvasOpacity)
-                    : RenderColor(colors.background)
+                // Selected cells take the (opaque) selection colors over everything else.
+                let selected = selection?.contains(row: row, column: column) ?? false
+                let foreground: RenderColor
+                let background: RenderColor
+                if selected, let selBg = selectionBackground {
+                    background = RenderColor(selBg)
+                    foreground = selectionForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
+                } else {
+                    background = isCanvasBackground
+                        ? RenderColor(colors.background, alpha: canvasOpacity)
+                        : RenderColor(colors.background)
+                    foreground = RenderColor(colors.foreground)
+                }
                 cells.append(RenderCell(
                     row: row,
                     column: column,
                     codepoint: cell.codepoint,
-                    foreground: RenderColor(colors.foreground),
+                    foreground: foreground,
                     background: background,
                     underlineColor: RenderColor(underline),
                     bold: cell.bold,

@@ -29,6 +29,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onPwd: ((String) -> Void)?
     /// Terminal bell (BEL) — the host forwards this to its delegate.
     public var onBell: (() -> Void)?
+    /// Copied selection text — the host mirrors it into the daemon paste buffer (the
+    /// system pasteboard is written here directly).
+    public var onCopy: ((String) -> Void)?
 
     private let emulator: TerminalEmulator
     private let inputEncoder = InputEncoder()
@@ -62,6 +65,14 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var blinkTimer: Timer?
     /// First-responder state — the cursor only blinks while focused.
     private var focused = false
+    /// Mouse selection endpoints (anchor = where the drag started, head = current). A
+    /// `TerminalSelection` is derived from these for both highlight and text extraction.
+    private var selectionAnchor: (row: Int, column: Int)?
+    private var selectionHead: (row: Int, column: Int)?
+    private var selectionBackground: RGBColor?
+    private var selectionForeground: RGBColor?
+    /// Copy the selection to the pasteboard automatically when a drag ends.
+    private var copyOnSelect = false
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -122,11 +133,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         cursorStyle: String,
         cursorBlink: Bool,
         paddingX: CGFloat,
-        paddingY: CGFloat
+        paddingY: CGFloat,
+        selectionBackgroundHex: String?,
+        selectionForegroundHex: String?,
+        copyOnSelect: Bool
     ) {
         let bg = RGBColor(hex: canvasBackgroundHex) ?? RGBColor(red: 0, green: 0, blue: 0)
         let fg = RGBColor(hex: canvasForegroundHex) ?? RGBColor(red: 255, green: 255, blue: 255)
         let cursor = RGBColor(hex: cursorHex) ?? fg
+        // Selection background: explicit setting/theme value, else a neutral slate.
+        let selBg = selectionBackgroundHex.flatMap { RGBColor(hex: $0) }
+            ?? RGBColor(red: 68, green: 78, blue: 102)
+        let selFg = selectionForegroundHex.flatMap { RGBColor(hex: $0) }
         // 16 ANSI colors for program output; nil slots fall back to the default palette.
         let palette: [RGBColor] = (0 ..< 16).map { i in
             let hex = (i < outputPaletteHex.count ? outputPaletteHex[i] : nil)
@@ -142,6 +160,9 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.cursorBlinkEnabled = cursorBlink
         self.paddingPointsX = max(0, paddingX)
         self.paddingPointsY = max(0, paddingY)
+        self.selectionBackground = selBg
+        self.selectionForeground = selFg
+        self.copyOnSelect = copyOnSelect
         let resolver = CellColorResolver(
             palette: ANSIPalette(base16: palette),
             defaultForeground: fg,
@@ -151,7 +172,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             resolver: resolver,
             cursorColor: cursor,
             canvasOpacity: self.canvasOpacity,
-            cursorStyle: self.cursorStyle
+            cursorStyle: self.cursorStyle,
+            selectionBackground: selBg,
+            selectionForeground: selFg
         )
         restartBlinkTimer()
         // Opaque only when fully opaque; otherwise the layer must be non-opaque so the
@@ -273,7 +296,7 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func renderNow() {
         guard let renderer, let drawable = metalLayer.nextDrawable() else { return }
-        var frame = frameBuilder.build(emulator.readGrid())
+        var frame = frameBuilder.build(emulator.readGrid(), selection: currentSelection)
         // Cursor blink: hide on the off-beat (only while focused + blink enabled). A
         // program-hidden cursor (DECTCEM off) stays hidden regardless.
         if frame.cursor.visible, focused, cursorBlinkEnabled, !cursorBlinkVisible {
@@ -318,6 +341,103 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
+    // MARK: - Selection & copy
+
+    /// The active selection span (nil when nothing is selected).
+    private var currentSelection: TerminalSelection? {
+        guard let a = selectionAnchor, let h = selectionHead else { return nil }
+        return TerminalSelection((a.row, a.column), (h.row, h.column))
+    }
+
+    private func clearSelection() {
+        guard selectionAnchor != nil || selectionHead != nil else { return }
+        selectionAnchor = nil
+        selectionHead = nil
+        scheduleRender()
+    }
+
+    /// Map a window-space point to a grid cell, accounting for padding + backing scale.
+    /// AppKit view coordinates are bottom-left origin, so the row is measured from the top.
+    private func cell(at locationInWindow: NSPoint) -> (row: Int, column: Int)? {
+        guard let renderer, columns > 0, rows > 0 else { return nil }
+        let scale = window?.backingScaleFactor ?? 2.0
+        let cellW = CGFloat(renderer.cellPixelWidth) / scale
+        let cellH = CGFloat(renderer.cellPixelHeight) / scale
+        guard cellW > 0, cellH > 0 else { return nil }
+        let p = convert(locationInWindow, from: nil)
+        let x = p.x - paddingPointsX
+        let yFromTop = bounds.height - p.y - paddingPointsY
+        let col = Int((x / cellW).rounded(.down))
+        let row = Int((yFromTop / cellH).rounded(.down))
+        return (max(0, min(rows - 1, row)), max(0, min(columns - 1, col)))
+    }
+
+    public override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        guard let pos = cell(at: event.locationInWindow) else { return }
+        selectionAnchor = pos
+        selectionHead = pos
+        scheduleRender()
+    }
+
+    public override func mouseDragged(with event: NSEvent) {
+        guard selectionAnchor != nil, let pos = cell(at: event.locationInWindow) else { return }
+        selectionHead = pos
+        scheduleRender()
+    }
+
+    public override func mouseUp(with event: NSEvent) {
+        // A click with no drag clears the selection; a real drag optionally copies.
+        if let a = selectionAnchor, let h = selectionHead, a == h {
+            clearSelection()
+            return
+        }
+        if copyOnSelect { copySelection() }
+    }
+
+    /// Standard responder copy (Edit ▸ Copy / ⌘C via the menu).
+    @objc public func copy(_ sender: Any?) {
+        copySelection()
+    }
+
+    private func copySelection() {
+        guard let sel = currentSelection else { return }
+        let text = selectedText(sel, emulator.readGrid())
+        guard !text.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        onCopy?(text)
+    }
+
+    /// Extract the selected text from the grid: per row, the in-range columns, skipping the
+    /// trailing spacer of wide chars, with trailing whitespace trimmed and rows joined by \n.
+    private func selectedText(_ sel: TerminalSelection, _ snapshot: TerminalGridSnapshot) -> String {
+        var lines: [String] = []
+        for row in sel.startRow ... sel.endRow {
+            let startCol = (row == sel.startRow) ? sel.startColumn : 0
+            let endCol = (row == sel.endRow) ? sel.endColumn : snapshot.cols - 1
+            var line = ""
+            var col = startCol
+            while col <= endCol {
+                let cell = snapshot.cell(row: row, col: col)
+                if cell?.width == .spacerTail {
+                    col += 1
+                    continue
+                }
+                if let codepoint = cell?.codepoint, codepoint != 0, let scalar = Unicode.Scalar(codepoint) {
+                    line.unicodeScalars.append(scalar)
+                } else {
+                    line += " "
+                }
+                col += 1
+            }
+            while line.hasSuffix(" ") { line.removeLast() }
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - Input
 
     public override var acceptsFirstResponder: Bool { true }
@@ -338,10 +458,16 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func keyDown(with event: NSEvent) {
         // Let the app handle Command shortcuts (menus, palette, etc.).
         if event.modifierFlags.contains(.command) {
+            // ⌘C copies the active selection (when no Edit ▸ Copy menu item intercepts it).
+            if event.charactersIgnoringModifiers?.lowercased() == "c", currentSelection != nil {
+                copySelection()
+                return
+            }
             super.keyDown(with: event)
             return
         }
         wakeCursor()
+        clearSelection()
 
         var mods: KeyModifiers = []
         let flags = event.modifierFlags
