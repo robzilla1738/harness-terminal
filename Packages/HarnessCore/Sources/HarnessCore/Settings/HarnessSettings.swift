@@ -11,33 +11,33 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var backgroundBlur: Int
     public var windowPaddingX: Float
     public var windowPaddingY: Float
-    /// Custom hex (`#rrggbb`) overrides imported from Ghostty config when present.
+    /// Custom hex (`#rrggbb`) overrides imported from terminal config when present.
     /// `nil` means "use the active theme color".
     public var customBackgroundHex: String?
     public var customForegroundHex: String?
     public var customCursorHex: String?
-    /// Signature of the Ghostty config last imported into these defaults.
+    /// Signature of the terminal config last imported into these defaults.
     /// Used to migrate stale early settings without overwriting later manual edits.
-    public var ghosttyConfigSignature: String?
+    public var importedConfigSignature: String?
     /// Prefix key (default `ctrl-a`). Format: `mod1-mod2-key`,
     /// where mod is `ctrl|cmd|opt|shift`. Set empty string to disable.
     public var prefixKey: String
     /// Number of lines kept in scrollback per pane (passed to the renderer + RealPty).
     public var scrollbackLines: Int
-    /// Cursor shape: `block`, `bar`, or `underline` (Ghostty `cursor-style`).
+    /// Cursor shape: `block`, `bar`, or `underline` (`cursor-style`).
     public var cursorStyle: String
-    /// Whether the text cursor blinks (Ghostty `cursor-style-blink`).
+    /// Whether the text cursor blinks (`cursor-style-blink`).
     public var cursorBlink: Bool
-    /// Copy a mouse selection to the clipboard automatically (Ghostty `copy-on-select`).
+    /// Copy a mouse selection to the clipboard automatically (`copy-on-select`).
     public var copyOnSelect: Bool
-    /// Terminal color overrides (Ghostty parity). `nil` = derive from the active
+    /// Terminal color overrides (terminal parity). `nil` = derive from the active
     /// theme preset. Applied by the native renderer.
     public var selectionBackgroundHex: String?
     public var selectionForegroundHex: String?
     public var boldColorHex: String?
     public var cursorTextHex: String?
     /// 16 ANSI palette overrides (`palette N=#hex`). `nil` slots fall back to the
-    /// active theme preset. Seeded from a theme, importable from Ghostty config.
+    /// active theme preset. Seeded from a theme, importable from terminal config.
     public var paletteHex: [String?]
     /// Per-agent brand color overrides keyed by `AgentKind.rawValue`.
     /// Missing keys use the built-in agent default.
@@ -52,11 +52,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// in-window bell badge still updates but the OS notification banner is
     /// suppressed.
     public var systemNotificationsEnabled: Bool
-    /// Extra-saturated full Display-P3 gamut when true; accurate sRGB (Ghostty.app
-    /// parity, the default) when false. Maps to Ghostty `window-colorspace`.
+    /// Extra-saturated full Display-P3 gamut when true; accurate sRGB (the source terminal
+    /// parity, the default) when false. Maps to `window-colorspace`.
     public var vividColors: Bool
     /// Gamma-correct ("linear-corrected") alpha blending for text antialiasing when
-    /// true, or macOS-native blending when false. Maps to Ghostty `alpha-blending`.
+    /// true, or macOS-native blending when false. Maps to `alpha-blending`.
     public var linearBlending: Bool
     /// When true, the active theme's 16 ANSI colors recolor terminal *output* too. Default
     /// false: the canvas (default bg/fg/cursor) always follows the
@@ -79,7 +79,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         customBackgroundHex: String? = nil,
         customForegroundHex: String? = nil,
         customCursorHex: String? = nil,
-        ghosttyConfigSignature: String? = nil,
+        importedConfigSignature: String? = nil,
         prefixKey: String = "ctrl-a",
         scrollbackLines: Int = 10_000,
         cursorStyle: String = "block",
@@ -111,7 +111,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.customBackgroundHex = customBackgroundHex
         self.customForegroundHex = customForegroundHex
         self.customCursorHex = customCursorHex
-        self.ghosttyConfigSignature = ghosttyConfigSignature
+        self.importedConfigSignature = importedConfigSignature
         self.prefixKey = prefixKey
         self.scrollbackLines = scrollbackLines
         self.cursorStyle = cursorStyle
@@ -160,10 +160,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         agentColorOverrides[kind.rawValue] ?? "#\(kind.dotHex.uppercased())"
     }
 
-    /// Reset visual fields to either the user's imported Ghostty config or Ghostty's
+    /// Reset visual fields to either the user's imported terminal config or the source terminal's
     /// stock baseline. Preserves shell, cwd, sidebar/titlebar chrome, prefix key, and
     /// agent color overrides so selecting "Default" changes appearance, not behavior.
-    public mutating func applyGhosttyDefaults(imported: GhosttyImportedDefaults? = nil) {
+    public mutating func resetToImportedConfig(imported: ImportedTerminalConfig? = nil) {
         backgroundOpacity = imported?.backgroundOpacity ?? 1
         backgroundBlur = imported?.backgroundBlur ?? 0
         customBackgroundHex = imported?.backgroundHex
@@ -183,13 +183,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         cursorStyle = imported?.cursorStyle ?? "block"
         cursorBlink = imported?.cursorBlink ?? true
         copyOnSelect = imported?.copyOnSelect ?? false
-        ghosttyConfigSignature = imported?.signature
+        importedConfigSignature = imported?.signature
     }
 
     /// Decoder that gracefully accepts older settings files missing the newer fields.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let imported = GhosttyConfigImporter.load()
+        let imported = TerminalConfigImporter.load()
         let fallback = HarnessSettings.makeDefaults(imported: imported)
 
         fontSize = try container.decodeIfPresent(Float.self, forKey: .fontSize) ?? fallback.fontSize
@@ -205,7 +205,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         customBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customBackgroundHex) ?? fallback.customBackgroundHex
         customForegroundHex = try container.decodeIfPresent(String.self, forKey: .customForegroundHex) ?? fallback.customForegroundHex
         customCursorHex = try container.decodeIfPresent(String.self, forKey: .customCursorHex) ?? fallback.customCursorHex
-        ghosttyConfigSignature = try container.decodeIfPresent(String.self, forKey: .ghosttyConfigSignature)
+        importedConfigSignature = try container.decodeIfPresent(String.self, forKey: .importedConfigSignature)
         prefixKey = try container.decodeIfPresent(String.self, forKey: .prefixKey) ?? fallback.prefixKey
         scrollbackLines = try container.decodeIfPresent(Int.self, forKey: .scrollbackLines) ?? fallback.scrollbackLines
         cursorStyle = try container.decodeIfPresent(String.self, forKey: .cursorStyle) ?? fallback.cursorStyle
@@ -227,16 +227,16 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     }
 
     public static func load() -> HarnessSettings {
-        let imported = GhosttyConfigImporter.load()
+        let imported = TerminalConfigImporter.load()
         if FileManager.default.fileExists(atPath: HarnessPaths.settingsURL.path),
            let data = try? Data(contentsOf: HarnessPaths.settingsURL),
            var settings = try? JSONDecoder().decode(HarnessSettings.self, from: data)
         {
             // Schema migration: when the saved file predates a feature (e.g. it
             // was written before customBackgroundHex existed, or before the
-            // user installed Ghostty), backfill from the live Ghostty config so
+            // user installed a source terminal), backfill from the live terminal config so
             // visuals stay in sync without forcing a manual re-import.
-            if let imported, settings.ghosttyConfigSignature != imported.signature {
+            if let imported, settings.importedConfigSignature != imported.signature {
                 settings.applyImportedDefaults(imported)
             }
             // Recover from accidental "background-opacity = 0.05" footgun states.
@@ -258,7 +258,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             try? settings.save()
             return settings
         }
-        // First-run / user nuked the file: seed from Ghostty and persist
+        // First-run / user nuked the file: seed from the imported config and persist
         // immediately so subsequent launches are stable.
         let seeded = HarnessSettings.makeDefaults(imported: imported)
         try? seeded.save()
@@ -287,8 +287,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         try data.write(to: HarnessPaths.settingsURL, options: .atomic)
     }
 
-    /// Builds a default settings instance, layering imported Ghostty values over hardcoded defaults.
-    public static func makeDefaults(imported: GhosttyImportedDefaults?) -> HarnessSettings {
+    /// Builds a default settings instance, layering imported config values over hardcoded defaults.
+    public static func makeDefaults(imported: ImportedTerminalConfig?) -> HarnessSettings {
         var settings = HarnessSettings()
         guard let imported else { return settings }
         if let value = imported.fontFamily { settings.fontFamily = value }
@@ -309,11 +309,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         settings.boldColorHex = imported.boldColorHex
         settings.cursorTextHex = imported.cursorTextHex
         settings.paletteHex = HarnessSettings.normalizedPalette(imported.paletteHex)
-        settings.ghosttyConfigSignature = imported.signature
+        settings.importedConfigSignature = imported.signature
         return settings
     }
 
-    private mutating func applyImportedDefaults(_ imported: GhosttyImportedDefaults) {
+    private mutating func applyImportedDefaults(_ imported: ImportedTerminalConfig) {
         if let value = imported.fontFamily { fontFamily = value }
         if let value = imported.fontSize { fontSize = value }
         if let value = imported.defaultShell { defaultShell = value }
@@ -332,6 +332,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         boldColorHex = imported.boldColorHex
         cursorTextHex = imported.cursorTextHex
         paletteHex = HarnessSettings.normalizedPalette(imported.paletteHex)
-        ghosttyConfigSignature = imported.signature
+        importedConfigSignature = imported.signature
     }
 }

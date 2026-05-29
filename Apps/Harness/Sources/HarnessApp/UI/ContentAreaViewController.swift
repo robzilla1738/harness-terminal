@@ -15,14 +15,14 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     private(set) var isSettingsVisible = false
     /// Pasteboard change counter captured at left-mouse-down. On mouse-up, if it
     /// has incremented inside the terminal area AND the user has `copy-on-select`
-    /// enabled, that means libghostty just copied the selection — surface a brief
+    /// enabled, that means the renderer just copied the selection — surface a brief
     /// "Selection copied" toast.
     private var pasteboardCountAtMouseDown: Int = NSPasteboard.general.changeCount
     private var copySelectionMonitor: Any?
 
     override func loadView() {
         view = NSView()
-        // The terminal area stays visually independent from app chrome. libghostty
+        // The terminal area stays visually independent from app chrome. the renderer
         // owns its own background color, opacity, blur, and color pipeline here;
         // sidebar/tab chrome must not add an AppKit backdrop over or behind it.
         HarnessDesign.makeClear(view)
@@ -41,7 +41,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 
     /// Back the terminal host with the true terminal color. The terminal surface now
     /// always renders fully opaque (see TerminalHostView.configureTerminalBuilder), so
-    /// the host is solid too: this fills any resize gap before libghostty repaints and
+    /// the host is solid too: this fills any resize gap before the renderer repaints and
     /// guarantees the terminal area shows true rich color rather than the blurred
     /// desktop. Translucency lives only in the chrome regions, not here.
     private func refreshTerminalHostFill() {

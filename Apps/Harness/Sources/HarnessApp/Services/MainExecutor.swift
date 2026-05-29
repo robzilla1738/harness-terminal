@@ -145,7 +145,7 @@ final class MainExecutor: CommandExecutor {
         case .listKeys(let table):
             DisplayMessage.show(KeybindingsService.shared.summary(table: table.map { KeyTableID(rawValue: $0) }))
         case .sourceConfig:
-            coordinator.reimportFromGhostty()
+            coordinator.reimportTerminalConfig()
         case .reloadKeybindings:
             KeybindingsService.shared.reload()
             PrefixKeymap.shared.rebuildFromSettings()

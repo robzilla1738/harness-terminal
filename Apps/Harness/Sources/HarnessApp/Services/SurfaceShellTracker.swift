@@ -4,7 +4,7 @@ import HarnessCore
 
 /// Live mapping of surface UUID → shell PID + current working directory.
 ///
-/// Why this exists: libghostty only fires `terminalDidChangeWorkingDirectory`
+/// Why this exists: the renderer only fires `terminalDidChangeWorkingDirectory`
 /// when the shell emits OSC 7. Many shells (notably fish without explicit
 /// integration) never do this, leaving the sidebar stuck on the launch cwd.
 ///

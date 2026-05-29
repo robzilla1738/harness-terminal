@@ -155,7 +155,7 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "["), command: .copyMode, note: "Enter copy mode"),
             Binding(spec: KeySpec(key: "d"), command: .detachClient, note: "Detach"),
             Binding(spec: KeySpec(key: "?"), command: .showCheatsheet, note: "Cheatsheet"),
-            Binding(spec: KeySpec(key: "r"), command: .sourceConfig, note: "Re-import Ghostty"),
+            Binding(spec: KeySpec(key: "r"), command: .sourceConfig, note: "Re-import config"),
             // Multiplexer power commands.
             Binding(spec: KeySpec(key: "Space"), command: .nextLayout, note: "Cycle layouts"),
             Binding(spec: KeySpec(key: "q"), command: .displayPanes, note: "Show pane numbers"),

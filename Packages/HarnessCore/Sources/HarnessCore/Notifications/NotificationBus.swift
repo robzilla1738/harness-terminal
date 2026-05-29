@@ -66,7 +66,7 @@ public final class NotificationBus: @unchecked Sendable {
         }
     }
 
-    /// Register a synchronous capture provider for libghostty surfaces. The
+    /// Register a synchronous capture provider for the renderer surfaces. The
     /// daemon calls `requestCapture` to read scrollback from the running app.
     public func registerCaptureProvider(_ provider: @escaping (String, Bool) -> String?) {
         lock.lock()

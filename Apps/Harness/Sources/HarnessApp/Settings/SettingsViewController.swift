@@ -442,9 +442,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     // MARK: - Page: Appearance
 
     private func buildAppearancePage() -> NSView {
-        // Ghostty config is imported automatically as the default theme on first
+        // terminal config is imported automatically as the default theme on first
         // launch (and whenever its signature changes). No manual button — the
-        // user's Ghostty config IS the default.
+        // user's terminal config IS the default.
         let header = pageHeader(title: "Appearance", trailing: nil)
 
         livePreview.translatesAutoresizingMaskIntoConstraints = false
@@ -504,7 +504,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("", transparentTitlebarToggle),
         ])
 
-        // Terminal colors (full Ghostty parity). colorBindings 0–6 are the terminal
+        // Terminal colors (full terminal parity). colorBindings 0–6 are the terminal
         // colors; 7–8 are the chrome accents. The selected theme seeds every one of
         // these; the user can then edit any swatch.
         let colorsGroup = NSStackView(views: [
@@ -521,7 +521,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         colorsGroup.alignment = .width
         colorsGroup.spacing = 10
 
-        // Color rendering: how libghostty maps colors to the display. Vivid uses the
+        // Color rendering: how the renderer maps colors to the display. Vivid uses the
         // full Display-P3 gamut (brighter, like Terminal.app); off is accurate sRGB.
         let renderingGroup = formGrid(rows: [
             ("", vividColorsToggle),
@@ -1166,7 +1166,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     }
 
     @objc private func resetToDefaults() {
-        SessionCoordinator.shared.settings.applyGhosttyDefaults(imported: GhosttyConfigImporter.load())
+        SessionCoordinator.shared.settings.resetToImportedConfig(imported: TerminalConfigImporter.load())
         syncAppearanceControlsFromSettings()
         flushAndApply()
     }

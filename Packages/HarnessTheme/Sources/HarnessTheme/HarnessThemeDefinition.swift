@@ -2,7 +2,7 @@ import Foundation
 
 /// A named color theme: the canvas colors (background/foreground/cursor), selection
 /// and bold accents, and the 16-entry ANSI palette. This is the native replacement for
-/// the libghostty fork's `GhosttyThemeDefinition`.
+/// the the previous theme model.
 ///
 /// It exposes both typed `RGBColor` values and `…Hex` string accessors so the existing
 /// `ThemeManager` (which speaks `#rrggbb`) can switch over with minimal change.
@@ -43,7 +43,7 @@ public struct HarnessThemeDefinition: Equatable, Sendable, Codable {
 
     public var isDark: Bool { background.isDark }
 
-    // MARK: - Hex accessors (parity with the previous GhosttyThemeDefinition API)
+    // MARK: - Hex accessors (parity with the previous the theme model API)
 
     public var backgroundHex: String { background.hexString }
     public var foregroundHex: String { foreground.hexString }

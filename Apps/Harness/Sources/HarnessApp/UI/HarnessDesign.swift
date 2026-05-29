@@ -370,7 +370,7 @@ final class SoftIconButton: NSButton {
 }
 
 /// Backdrop that blends an NSVisualEffectView with a thin tint overlay so the
-/// chrome feels native (Ghostty/Terminal-style blur) while still respecting the
+/// chrome feels native (Terminal-style blur) while still respecting the
 /// active theme color. When window opacity is fully opaque, the vibrancy view
 /// stays in the tree but is hidden so we get a clean solid look.
 @MainActor
@@ -489,7 +489,7 @@ final class ChromeBackdrop: NSView {
 
     private func material(for role: HarnessDesign.ChromeRole) -> NSVisualEffectView.Material {
         // We deliberately avoid `.sidebar`/`.titlebar` here — those materials
-        // add a noticeable blue tint that breaks the deep-black Ghostty look.
+        // add a noticeable blue tint that breaks the deep-black look.
         // `.underWindowBackground` gives an honest desktop blur that we then
         // dim with our own theme tint on top.
         switch role {

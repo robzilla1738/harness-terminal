@@ -11,7 +11,7 @@ private typealias RGBColor = HarnessTheme.RGBColor
 
 /// The native, self-contained terminal surface: a `CAMetalLayer`-backed `NSView` that
 /// drives a `TerminalEmulator` and draws it with `TerminalMetalRenderer`. This is the
-/// replacement for the libghostty `TerminalView` — bytes in via `receive(_:)`, input out
+/// replacement for the previous renderer's view — bytes in via `receive(_:)`, input out
 /// via `onInput`, grid-size changes via `onResize`.
 ///
 /// Scope (first on-screen cut): GPU rendering with the crisp-color pipeline (Display-P3 /
@@ -49,7 +49,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// 0...1. < 1 makes the canvas translucent (the window blur shows through); program
     /// output backgrounds and glyphs stay opaque.
     private var canvasOpacity: Float
-    /// Window padding in points (Ghostty `window-padding-x/y`); converted to device
+    /// Window padding in points (`window-padding-x/y`); converted to device
     /// pixels and used both as the grid inset and the renderer's draw origin.
     private var paddingPointsX: CGFloat = 0
     private var paddingPointsY: CGFloat = 0
@@ -57,7 +57,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// mouse→cell mapping.
     private var originOffsetX = 0
     private var originOffsetY = 0
-    /// Cursor shape + blink (Ghostty `cursor-style` / `cursor-style-blink`).
+    /// Cursor shape + blink (`cursor-style` / `cursor-style-blink`).
     private var cursorStyle: CursorStyle = .block
     private var cursorBlinkEnabled = true
     /// Blink phase: false hides the cursor on the off-beat. Reset to true on activity.
@@ -359,7 +359,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         blinkTimer = timer
     }
 
-    /// Reset the cursor to solid after activity (typing/output), matching Ghostty.
+    /// Reset the cursor to solid after activity (typing/output), matching common terminals.
     private func wakeCursor() {
         guard cursorBlinkEnabled else { return }
         if !cursorBlinkVisible {

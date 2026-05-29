@@ -7,7 +7,7 @@ import HarnessTheme
 /// - 232–255: the standard 24-step grayscale ramp.
 ///
 /// Indices 16–255 are the xterm-standard values (theme-independent), matching what
-/// Ghostty and every mainstream terminal use — this is a load-bearing part of color
+/// every mainstream terminal use — this is a load-bearing part of color
 /// fidelity for 256-color TUIs.
 public struct ANSIPalette: Equatable, Sendable {
     /// Exactly 256 colors, indexable by ANSI palette number.

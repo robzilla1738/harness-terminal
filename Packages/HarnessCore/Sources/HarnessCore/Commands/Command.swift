@@ -54,7 +54,7 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case bindKey(table: String, spec: String, command: Command, repeatable: Bool)
     case unbindKey(table: String, spec: String)
     case listKeys(table: String?)
-    case sourceConfig                              // re-import Ghostty config
+    case sourceConfig                              // re-import terminal config
     case reloadKeybindings                         // re-read keybindings.json
 
     // MARK: Composition

@@ -19,7 +19,7 @@ public struct ResolvedCellColors: Equatable, Sendable {
 /// GPU code) is how we guarantee the "crisp, correct color" without needing a screen to
 /// verify the rules.
 ///
-/// Resolution order (matches xterm/Ghostty):
+/// Resolution order (matches xterm):
 /// 1. base fg/bg from palette / truecolor / defaults,
 /// 2. bold brightens a low (0–7) palette foreground to its bright (8–15) variant,
 /// 3. faint dims the foreground toward the background,

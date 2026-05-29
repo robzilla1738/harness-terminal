@@ -229,13 +229,13 @@ enum CommandPaletteController {
             },
             PaletteAction(
                 id: "action.reimport",
-                title: "Re-import from Ghostty",
-                subtitle: "Refresh theme + colors from ~/.config/ghostty",
+                title: "Re-import Terminal Config",
+                subtitle: "Reload theme, colors & font from your terminal config",
                 symbol: "arrow.triangle.2.circlepath",
                 shortcut: "Prefix r",
                 section: .actions
             ) {
-                coordinator.reimportFromGhostty()
+                coordinator.reimportTerminalConfig()
             },
         ])
 

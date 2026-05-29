@@ -5,7 +5,7 @@ import XCTest
 /// Behavioral conformance for control functions beyond the basic read-grid contract:
 /// autowrap, scrolling, erase/edit, cursor save/restore, UTF-8, alternate screen, and
 /// PTY responses (DSR/DA). These are the correctness surfaces the A/B oracle (vs the
-/// libghostty fork) will also exercise during cutover.
+/// the renderer fork) will also exercise during cutover.
 final class EngineConformanceTests: XCTestCase {
     private func read(_ bytes: String, cols: Int = 80, rows: Int = 24) -> TerminalGridSnapshot {
         let term = HarnessGridTerminal(cols: cols, rows: rows)!

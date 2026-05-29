@@ -1,6 +1,6 @@
 import Foundation
 
-/// The native theme catalog — replacement for the libghostty fork's `GhosttyThemeCatalog`.
+/// The native theme catalog — replacement for the the previous theme catalog.
 ///
 /// Phase 3 ships the hand-curated featured themes with full, accurate 16-color palettes.
 /// The remaining ~400 community themes will be ported from the fork's data into a bundled

@@ -245,7 +245,7 @@ final class SessionCoordinator: NSObject {
     /// theme preset (overwriting prior color edits) so the whole canvas — terminal
     /// and chrome — adopts the theme. Pass `seedColors: false` for programmatic /
     /// restore paths that must preserve already-resolved colors (e.g. a fresh
-    /// Ghostty re-import, where the imported config colors must win).
+    /// config re-import, where the imported config colors must win).
     func setTheme(_ name: String, seedColors: Bool = true) {
         if seedColors {
             let preset = ThemeManager.presetColors(themeName: name)
@@ -772,11 +772,11 @@ final class SessionCoordinator: NSObject {
         NotificationCenter.default.post(name: NotificationBus.shared.snapshotChanged, object: nil, userInfo: ["beginRenameActiveTab": true])
     }
 
-    func reimportFromGhostty() {
-        if let imported = GhosttyConfigImporter.load() {
+    func reimportTerminalConfig() {
+        if let imported = TerminalConfigImporter.load() {
             settings = HarnessSettings.makeDefaults(imported: imported)
             try? settings.save()
-            // Colors were just seeded from the imported Ghostty config above;
+            // Colors were just seeded from the imported terminal config above;
             // don't let the theme preset overwrite the user's explicit config.
             if let theme = imported.themeName {
                 setTheme(theme, seedColors: false)
@@ -1014,7 +1014,7 @@ extension SessionCoordinator: TerminalHostDelegate {
     /// fallback for shells that don't emit it).
     func surfaceShellTrackerDidUpdateCwd(_ surfaceID: SurfaceID, cwd: String) {
         // Only push if the daemon's stored value is stale — avoids a feedback
-        // loop when libghostty already told us about the same path.
+        // loop when the renderer already told us about the same path.
         let current = snapshot.workspaces
             .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
             .first { $0.rootPane.allSurfaceIDs().contains(surfaceID) }?.cwd

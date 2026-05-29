@@ -80,7 +80,7 @@ public struct TerminalFrame: Equatable, Sendable {
     }
 }
 
-/// Cursor shape, matching the Ghostty `cursor-style` set.
+/// Cursor shape, matching the `cursor-style` set.
 public enum CursorStyle: String, Equatable, Sendable {
     case block
     case bar

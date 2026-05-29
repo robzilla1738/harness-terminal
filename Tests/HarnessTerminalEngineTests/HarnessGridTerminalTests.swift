@@ -1,7 +1,7 @@
 import XCTest
 @testable import HarnessTerminalEngine
 
-/// Mirrors the original libghostty `HeadlessGridReadTests` contract against the native
+/// Mirrors the original the renderer `HeadlessGridReadTests` contract against the native
 /// engine, so the two can be A/B-compared and the engine is held to the same bar:
 /// `readGrid()` must faithfully report codepoints, SGR colors (palette + RGB),
 /// attributes, wide characters, and the cursor.

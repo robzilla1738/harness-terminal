@@ -32,7 +32,7 @@ struct HarnessChromePalette {
     )
 
     /// Build a palette directly from explicit hex strings (used when the user has
-    /// set `background`/`foreground` in their Ghostty config — we want to honor
+    /// set `background`/`foreground` in their terminal config — we want to honor
     /// the exact black-and-white look rather than a named theme's tinted palette).
     static func from(backgroundHex: String, foregroundHex: String, cursorHex: String? = nil) -> HarnessChromePalette {
         let background = color(from: backgroundHex)
@@ -135,7 +135,7 @@ enum HarnessChrome {
     /// Window background opacity (0…1). When < 1, chrome backgrounds gain alpha so
     /// the underlying NSVisualEffectView blur can show through.
     static var backgroundOpacity: CGFloat = 1
-    /// Terminal backdrop blur (0…100) from settings; libghostty applies this on each
+    /// Terminal backdrop blur (0…100) from settings; the renderer applies this on each
     /// terminal surface. Chrome uses this for optional vibrancy tuning only.
     static var backgroundBlur: Int = 0
 
@@ -144,7 +144,7 @@ enum HarnessChrome {
     }
 
     /// Resolve the palette honoring the user's `customBackgroundHex/customForegroundHex`
-    /// overrides — when a Ghostty config explicitly sets `background = #000000`, we
+    /// overrides — when a terminal config explicitly sets `background = #000000`, we
     /// must paint pure black chrome rather than the named theme's tinted bg. Either
     /// override may be present alone; missing slots fall back to the theme so the
     /// chrome (sidebar/tabs/status line) tracks the same color as the terminal canvas.

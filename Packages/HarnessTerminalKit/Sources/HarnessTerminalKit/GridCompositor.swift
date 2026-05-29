@@ -330,7 +330,7 @@ struct RenderCell: Equatable {
 
     /// SGR underline-style codes. Single is the classic `4`; double is `21`; the
     /// curly/dotted/dashed styles use the `4:N` substyle form modern terminals
-    /// (incl. Ghostty) understand.
+    /// (mainstream terminals) understand.
     private static func underlineCodes(_ style: TerminalGridUnderline) -> [String] {
         switch style {
         case .none: return []

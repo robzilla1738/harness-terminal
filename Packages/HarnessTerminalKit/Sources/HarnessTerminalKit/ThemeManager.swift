@@ -5,7 +5,7 @@ import HarnessTheme
 public enum ThemeManager {
     public static let defaultThemeName = "Catppuccin Mocha"
 
-    /// Dropdown entry representing the user's Ghostty-like terminal baseline.
+    /// Dropdown entry representing the user's standard terminal baseline.
     /// Terminal output no longer consumes named theme palettes; themes are for
     /// Harness chrome only, so tools such as Claude Code keep their native colors.
     public static let defaultDisplayName = "Default"
@@ -92,7 +92,7 @@ public enum ThemeManager {
     }
 
     /// 16 ANSI palette colors for settings preview swatches only. TerminalHostView
-    /// does not apply these values to libghostty.
+    /// does not apply these values to the renderer.
     public static func paletteHex(themeName: String) -> [String?] {
         if themeName == defaultDisplayName { return defaultBaselinePaletteHex }
         guard let theme = themed(themeName) else { return Array(repeating: nil, count: 16) }

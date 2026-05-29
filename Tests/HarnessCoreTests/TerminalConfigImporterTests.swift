@@ -1,9 +1,9 @@
 import XCTest
 @testable import HarnessCore
 
-final class GhosttyConfigImporterTests: XCTestCase {
+final class TerminalConfigImporterTests: XCTestCase {
     func testCandidatePathsPreferModernThenLegacyNamesAcrossLocations() {
-        let suffixes = GhosttyConfigImporter.candidatePaths.map { path in
+        let suffixes = TerminalConfigImporter.candidatePaths.map { path in
             path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
         }
 
@@ -15,8 +15,8 @@ final class GhosttyConfigImporterTests: XCTestCase {
         ])
     }
 
-    func testParsesExactGhosttyVisualDefaults() {
-        let imported = GhosttyConfigImporter.parse("""
+    func testParsesExactVisualDefaults() {
+        let imported = TerminalConfigImporter.parse("""
         # comment
         background = #000000
         foreground = #ffffff
@@ -65,36 +65,7 @@ final class GhosttyConfigImporterTests: XCTestCase {
         XCTAssertEqual(imported.defaultShell, "/opt/homebrew/bin/fish")
     }
 
-    func testMergedConfigTemplateIncludesExistingFilesInDiscoveryOrder() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("harness-ghostty-template-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let xdgModern = root.appendingPathComponent("config.ghostty")
-        let missingLegacy = root.appendingPathComponent("config")
-        let appSupportModern = root.appendingPathComponent("app-support-config.ghostty")
-        let appSupportLegacy = root.appendingPathComponent("app-support-config")
-        try "font-size = 15\n".write(to: xdgModern, atomically: true, encoding: .utf8)
-        try "font-size = 16\n".write(to: appSupportModern, atomically: true, encoding: .utf8)
-        try "font-size = 17\n".write(to: appSupportLegacy, atomically: true, encoding: .utf8)
-
-        let template = try XCTUnwrap(GhosttyConfigImporter.mergedConfigTemplate(from: [
-            xdgModern.path,
-            missingLegacy.path,
-            appSupportModern.path,
-            appSupportLegacy.path,
-        ]))
-
-        XCTAssertEqual(template, """
-        config-file = "\(xdgModern.path)"
-        config-file = "\(appSupportModern.path)"
-        config-file = "\(appSupportLegacy.path)"
-
-        """)
-    }
-
-    func testMergesMultipleGhosttyConfigLocations() throws {
+    func testMergesMultipleConfigLocations() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("harness-ghostty-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -115,7 +86,7 @@ final class GhosttyConfigImporterTests: XCTestCase {
         window-padding-y = 14
         """.write(to: appSupport, atomically: true, encoding: .utf8)
 
-        let imported = try XCTUnwrap(GhosttyConfigImporter.load(from: [xdg.path, appSupport.path]))
+        let imported = try XCTUnwrap(TerminalConfigImporter.load(from: [xdg.path, appSupport.path]))
         XCTAssertEqual(imported.backgroundHex, "#000000")
         XCTAssertEqual(imported.foregroundHex, "#FFFFFF")
         XCTAssertEqual(imported.fontFamily, "JetBrainsMono Nerd Font")

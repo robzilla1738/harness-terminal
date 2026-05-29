@@ -21,8 +21,8 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
     }
 
-    func testImportedGhosttyDefaultsKeepFullColorSet() {
-        let imported = GhosttyImportedDefaults(
+    func testImportedDefaultsKeepFullColorSet() {
+        let imported = ImportedTerminalConfig(
             backgroundHex: "#000000",
             foregroundHex: "#ffffff",
             cursorColorHex: "#cccccc",
@@ -42,7 +42,7 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.customBackgroundHex, "#000000")
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
         XCTAssertEqual(settings.customCursorHex, "#cccccc")
-        // Full Ghostty parity: selection/bold/cursor-text/palette are kept.
+        // Full terminal parity: selection/bold/cursor-text/palette are kept.
         XCTAssertEqual(settings.selectionBackgroundHex, "#123456")
         XCTAssertEqual(settings.selectionForegroundHex, "#abcdef")
         XCTAssertEqual(settings.boldColorHex, "#eeeeee")
@@ -95,7 +95,7 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertNil(settings.agentColorOverrides["unknown"])
     }
 
-    func testApplyGhosttyDefaultsResetsVisualFieldsAndPreservesShell() {
+    func testResetToImportedConfigResetsVisualFieldsAndPreservesShell() {
         var s = HarnessSettings()
         s.defaultShell = "/opt/homebrew/bin/fish"
         s.defaultCWD = "/tmp/work"
@@ -104,7 +104,7 @@ final class HarnessSettingsTests: XCTestCase {
         s.customBackgroundHex = "#123456"
         s.paletteHex[0] = "#abcdef"
 
-        s.applyGhosttyDefaults()
+        s.resetToImportedConfig()
 
         XCTAssertEqual(s.backgroundOpacity, 1)
         XCTAssertEqual(s.backgroundBlur, 0)

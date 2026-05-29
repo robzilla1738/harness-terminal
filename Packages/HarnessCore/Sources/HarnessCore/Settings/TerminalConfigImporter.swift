@@ -1,7 +1,7 @@
 import Foundation
 
-/// Snapshot of the bits of the user's Ghostty config we mirror as defaults.
-public struct GhosttyImportedDefaults: Sendable, Equatable {
+/// Snapshot of the bits of an existing terminal config we mirror as defaults.
+public struct ImportedTerminalConfig: Sendable, Equatable {
     // v4: selection/bold/cursor-text/minimum-contrast/palette are now honored
     // (previously imported then discarded), so bump to force a one-time re-import.
     private static let signatureVersion = "v4"
@@ -111,9 +111,9 @@ public struct GhosttyImportedDefaults: Sendable, Equatable {
     }
 }
 
-/// Reads Ghostty config files and pulls values that map cleanly to Harness —
+/// Reads an existing terminal config from disk and pulls values that map cleanly to Harness —
 /// font, opacity, blur, padding, theme/colors.
-public enum GhosttyConfigImporter {
+public enum TerminalConfigImporter {
     public static let candidatePaths: [String] = {
         let home = NSString(string: "~").expandingTildeInPath
         return [
@@ -124,48 +124,35 @@ public enum GhosttyConfigImporter {
         ]
     }()
 
-    /// Existing Ghostty config files in merge order. Later files override earlier
+    /// Existing config files in merge order. Later files override earlier
     /// files for duplicated keys, matching how Harness has historically treated
     /// XDG config plus the macOS app-support fallback on this machine.
     public static func existingConfigPaths(from paths: [String]) -> [String] {
         paths.filter { FileManager.default.fileExists(atPath: $0) }
     }
 
-    /// Existing Ghostty config files in default discovery order.
+    /// Existing config files in default discovery order.
     public static func existingConfigPaths() -> [String] {
         existingConfigPaths(from: candidatePaths)
     }
 
-    /// First existing Ghostty config file from the given paths, if any.
+    /// First existing config file from the given paths, if any.
     public static func existingConfigPath(from paths: [String]) -> String? {
         existingConfigPaths(from: paths).first
     }
 
-    /// First existing Ghostty config file on disk, if any.
+    /// First existing config file on disk, if any.
     public static func existingConfigPath() -> String? {
         existingConfigPath(from: candidatePaths)
     }
 
-    /// Generated Ghostty config template for libghostty. It includes every
-    /// discovered file with an absolute `config-file` directive instead of
-    /// concatenating raw contents, preserving each file's relative include paths.
-    public static func mergedConfigTemplate() -> String? {
-        mergedConfigTemplate(from: candidatePaths)
-    }
-
-    public static func mergedConfigTemplate(from paths: [String]) -> String? {
-        let existing = existingConfigPaths(from: paths)
-        guard !existing.isEmpty else { return nil }
-        return existing.map(renderConfigFileDirective).joined(separator: "\n") + "\n"
-    }
-
     /// Imported defaults for the current user. `nil` when no config was found.
-    public static func load() -> GhosttyImportedDefaults? {
+    public static func load() -> ImportedTerminalConfig? {
         load(from: candidatePaths)
     }
 
-    static func load(from paths: [String]) -> GhosttyImportedDefaults? {
-        var merged: GhosttyImportedDefaults?
+    static func load(from paths: [String]) -> ImportedTerminalConfig? {
+        var merged: ImportedTerminalConfig?
         for path in paths {
             guard FileManager.default.fileExists(atPath: path),
                   let data = try? String(contentsOfFile: path, encoding: .utf8)
@@ -179,7 +166,7 @@ public enum GhosttyConfigImporter {
         return merged
     }
 
-    static func parse(_ text: String) -> GhosttyImportedDefaults {
+    static func parse(_ text: String) -> ImportedTerminalConfig {
         var values: [String: String] = [:]
         var paletteHex: [String?] = Array(repeating: nil, count: 16)
         for rawLine in text.split(separator: "\n") {
@@ -188,9 +175,9 @@ public enum GhosttyConfigImporter {
             guard let eq = line.firstIndex(of: "=") else { continue }
             let key = line[..<eq].trimmingCharacters(in: .whitespaces).lowercased()
             var value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-            // NOTE: do NOT strip `#…` as a trailing comment — Ghostty config
+            // NOTE: do NOT strip `#…` as a trailing comment — config
             // values like `background = #000000` legitimately start with `#`.
-            // Real Ghostty only treats `#` as a comment when it's the first
+            // The config format only treats `#` as a comment when it's the first
             // non-whitespace character on the line, which we already handle
             // above.
             if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
@@ -202,7 +189,7 @@ public enum GhosttyConfigImporter {
             values[key] = String(value)
         }
 
-        var defaults = GhosttyImportedDefaults()
+        var defaults = ImportedTerminalConfig()
         defaults.paletteHex = paletteHex
         if let value = values["font-family"], !value.isEmpty {
             defaults.fontFamily = value
@@ -289,18 +276,11 @@ public enum GhosttyConfigImporter {
         default: return nil
         }
     }
-
-    private static func renderConfigFileDirective(path: String) -> String {
-        let escaped = path
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "config-file = \"\(escaped)\""
-    }
 }
 
-private extension GhosttyImportedDefaults {
-    func merging(_ newer: GhosttyImportedDefaults) -> GhosttyImportedDefaults {
-        GhosttyImportedDefaults(
+private extension ImportedTerminalConfig {
+    func merging(_ newer: ImportedTerminalConfig) -> ImportedTerminalConfig {
+        ImportedTerminalConfig(
             fontFamily: newer.fontFamily ?? fontFamily,
             fontSize: newer.fontSize ?? fontSize,
             defaultShell: newer.defaultShell ?? defaultShell,

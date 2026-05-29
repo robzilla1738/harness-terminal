@@ -1,7 +1,7 @@
 import AppKit
 
 /// Wraps the private CoreGraphics SPI that controls per-window backdrop blur —
-/// the same call Ghostty, Alacritty, and iTerm2 use to blur the desktop behind a
+/// the same call Alacritty, and iTerm2 use to blur the desktop behind a
 /// translucent terminal. Not App-Store-safe, but Harness ships outside the store.
 @MainActor
 enum WindowBlur {

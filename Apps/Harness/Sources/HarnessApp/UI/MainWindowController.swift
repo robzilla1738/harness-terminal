@@ -59,10 +59,10 @@ final class MainWindowController: NSWindowController {
         }
 
         // One uniform blur for the whole window — the same private CGS surface blur
-        // Ghostty uses on macOS. This is the single blur source: the terminal keeps
-        // only `background-opacity` (color translucency, no libghostty blur), and the
+        // modern terminals use on macOS. This is the single blur source: the terminal keeps
+        // only `background-opacity` (color translucency, no the renderer blur), and the
         // chrome hides its vibrancy material when translucent, so terminal and chrome
-        // share exactly one blurred backdrop. (libghostty's own `background-blur` is a
+        // share exactly one blurred backdrop. (the renderer's own `background-blur` is a
         // no-op in embedded mode since it doesn't own this NSWindow.) Opaque → no blur.
         WindowBlur.apply(radius: isOpaque ? 0 : settings.backgroundBlur, to: window)
     }

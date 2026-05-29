@@ -1,7 +1,7 @@
 import Foundation
 
 /// A headless, renderer-free terminal: feed bytes, read a styled grid snapshot. This
-/// is the native replacement for the Ghostty fork's `GridTerminal` and powers the
+/// is Harness's native grid terminal and powers the
 /// `harness attach` compositor. It deliberately mirrors that type's shape
 /// (`init?`, `feed`, `resize`, `readGrid() -> TerminalGridSnapshot?`) so the cutover at
 /// call sites is a type-name swap.

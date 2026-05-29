@@ -43,7 +43,6 @@
 		65F2B3A9B42810F01F1D7E85 /* MainSplitViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 828CC6240A158B83682E2A30 /* MainSplitViewController.swift */; };
 		69E1E0B522D02B059CFE5F6A /* CommandPromptController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3912417CC3E06CEA28B664B /* CommandPromptController.swift */; };
 		7087A9FA512DCAF73C2D4C7B /* HarnessTerminalEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 521BDAE274E325FC8B75908C /* HarnessTerminalEngine */; };
-		7181C113061DF507A79C0187 /* GhosttyConfigImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4AC886400416CACE4A3D0B /* GhosttyConfigImporterTests.swift */; };
 		77455A95D1E79921E852B7B0 /* NotificationBellButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 196C649521C73E076101AF6E /* NotificationBellButton.swift */; };
 		78ADBD37C91092234B4E70DF /* DaemonCommandExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90D14213F469AF001702450A /* DaemonCommandExecutor.swift */; };
 		7ABFF597375885A493A8B65B /* AgentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA141FB5D0A682E459A41536 /* AgentDetectorTests.swift */; };
@@ -54,6 +53,7 @@
 		867C6FE3318AD28393C808F4 /* HarnessSidebarPanelViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E904CB45A4390E27C46DA0BA /* HarnessSidebarPanelViewController.swift */; };
 		87D58E072A730F252BF6BC74 /* HarnessCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8A750F2173FD4FFF51B03D72 /* HarnessCore */; };
 		87EB8777EA8043B7752985B8 /* SurfaceShellTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A0FAADD0C7DE4496F9A776 /* SurfaceShellTracker.swift */; };
+		8B1A56978E26C6722A72365F /* TerminalConfigImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 275F951E6B2787DECD0F1C56 /* TerminalConfigImporterTests.swift */; };
 		8C00D38E0430620212133366 /* Harness.icns in Resources */ = {isa = PBXBuildFile; fileRef = 9CBF9C616141AB5AFCF041D6 /* Harness.icns */; };
 		91572F33CB49E6A8D9B8E691 /* CommandPaletteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 245FF7D7A3A8434F040E6812 /* CommandPaletteController.swift */; };
 		920F928297C458ABDBEF88EC /* PaneRectSolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE940990023268131E49D65 /* PaneRectSolverTests.swift */; };
@@ -136,6 +136,7 @@
 		2025ED6B78DAA6996707D2F7 /* DaemonLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonLauncher.swift; sourceTree = "<group>"; };
 		245FF7D7A3A8434F040E6812 /* CommandPaletteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteController.swift; sourceTree = "<group>"; };
 		26F2AD1D92779527F2E5F14A /* DisplayPanesOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPanesOverlay.swift; sourceTree = "<group>"; };
+		275F951E6B2787DECD0F1C56 /* TerminalConfigImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConfigImporterTests.swift; sourceTree = "<group>"; };
 		29418A46AB7F4FBE7BF700DF /* SessionEditorPhase4Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEditorPhase4Tests.swift; sourceTree = "<group>"; };
 		33CC50B5E96F7A36C8B559D0 /* HarnessSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessSettingsTests.swift; sourceTree = "<group>"; };
 		3AF4631CE23460A1A0A4BEC4 /* AgentScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentScanner.swift; sourceTree = "<group>"; };
@@ -143,7 +144,6 @@
 		41D469BFCF05F3CDA66D3777 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
 		42A46C9D61AB68EF00510185 /* KeyTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTableTests.swift; sourceTree = "<group>"; };
 		48EBC3C7A2C25776245FBF88 /* MainMenuBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainMenuBuilder.swift; sourceTree = "<group>"; };
-		4D4AC886400416CACE4A3D0B /* GhosttyConfigImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyConfigImporterTests.swift; sourceTree = "<group>"; };
 		5074E518A70BAD1B635A6B0A /* HookFiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookFiringTests.swift; sourceTree = "<group>"; };
 		5122A39E062976C92BBDDDB2 /* DaemonServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonServer.swift; sourceTree = "<group>"; };
 		529595B70272EEEC10AF08E4 /* WindowBlur.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowBlur.swift; sourceTree = "<group>"; };
@@ -527,7 +527,6 @@
 				95E00597E6EFB295BF2C5F30 /* DaemonClientTests.swift */,
 				8986DFF2824FC1BCF050FB78 /* EnvironmentStoreTests.swift */,
 				ED3F10448010DA860EE4CF70 /* FormatStringTests.swift */,
-				4D4AC886400416CACE4A3D0B /* GhosttyConfigImporterTests.swift */,
 				F80D994CF018DFCF5AD804CA /* HarnessPathsTests.swift */,
 				33CC50B5E96F7A36C8B559D0 /* HarnessSettingsTests.swift */,
 				C695B1C26A7FA88933015EA9 /* IPCCodecTests.swift */,
@@ -539,6 +538,7 @@
 				0711E05B3BE71410054E6BEE /* Phase67Tests.swift */,
 				29418A46AB7F4FBE7BF700DF /* SessionEditorPhase4Tests.swift */,
 				C98251A71A00B4D1AAD8859A /* SessionEditorTests.swift */,
+				275F951E6B2787DECD0F1C56 /* TerminalConfigImporterTests.swift */,
 			);
 			path = HarnessCoreTests;
 			sourceTree = "<group>";
@@ -873,7 +873,6 @@
 				47102D21BF4044022C7ECC55 /* DaemonClientTests.swift in Sources */,
 				999BB245D67A57F9DD1F6F14 /* EnvironmentStoreTests.swift in Sources */,
 				1FEC3A2A3D056888051A94A3 /* FormatStringTests.swift in Sources */,
-				7181C113061DF507A79C0187 /* GhosttyConfigImporterTests.swift in Sources */,
 				0D772C0B4881D5E7AC6F42B7 /* HarnessPathsTests.swift in Sources */,
 				B1F6ECDB149DB71FFC5E390B /* HarnessSettingsTests.swift in Sources */,
 				45E2642BFD60553E6EA324C2 /* IPCCodecTests.swift in Sources */,
@@ -885,6 +884,7 @@
 				E90605C2B7F2EDE9C662D9D0 /* Phase67Tests.swift in Sources */,
 				EED030532736CB6CEC4FE5BA /* SessionEditorPhase4Tests.swift in Sources */,
 				B014F73FB60BD336C0A05CF7 /* SessionEditorTests.swift in Sources */,
+				8B1A56978E26C6722A72365F /* TerminalConfigImporterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
