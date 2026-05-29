@@ -401,8 +401,10 @@ struct HarnessCLI {
     /// Renders a whole tab (split layout) into the terminal via the compositor.
     static func handleAttachWindow(_ args: [String]) throws -> Int32 {
         let selector: WindowAttachClient.TabSelector
-        if let tabID = flagValue(args, flag: "--tab") {
+        if let tabID = flagValue(args, flag: "--tab") ?? flagValue(args, flag: "--window") {
             selector = .id(tabID)
+        } else if let session = flagValue(args, flag: "--session") {
+            selector = .session(session)
         } else {
             selector = .active
         }

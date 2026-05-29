@@ -19,7 +19,8 @@ import HarnessTerminalKit
 public enum WindowAttachClient {
     public enum TabSelector {
         case active
-        case id(String)
+        case id(String)        // --tab / --window
+        case session(String)   // --session: that session's active tab
     }
 
     public struct Configuration {
@@ -43,11 +44,12 @@ public enum WindowAttachClient {
             fputs("harness-cli attach-window: no matching tab\n", stderr)
             return 1
         }
+        let workspaceID = workspaceID(of: tab.id, in: snapshot) ?? snapshot.activeWorkspaceID
 
         let original = AttachClient.enterRawMode()
         defer { AttachClient.restoreTerminalMode(original) }
 
-        let session = WindowSession(client: client, tab: tab, configuration: configuration)
+        let session = WindowSession(client: client, tab: tab, workspaceID: workspaceID, configuration: configuration)
         do {
             try session.run()
         } catch {
@@ -76,7 +78,24 @@ public enum WindowAttachClient {
                 }
             }
             return nil
+        case let .session(raw):
+            let needle = raw.lowercased()
+            for ws in snapshot.workspaces {
+                for sess in ws.sessions where sess.id.uuidString.lowercased() == needle || sess.name.lowercased() == needle {
+                    return sess.tabs.first { $0.id == sess.activeTabID } ?? sess.tabs.first
+                }
+            }
+            return nil
         }
+    }
+
+    static func workspaceID(of tabID: TabID, in snapshot: SessionSnapshot) -> WorkspaceID? {
+        for ws in snapshot.workspaces {
+            for sess in ws.sessions where sess.tabs.contains(where: { $0.id == tabID }) {
+                return ws.id
+            }
+        }
+        return nil
     }
 }
 
@@ -86,6 +105,7 @@ private final class WindowSession: @unchecked Sendable {
     private let client: DaemonClient
     private let configuration: WindowAttachClient.Configuration
     private var tab: Tab
+    private let workspaceID: WorkspaceID?
 
     /// All pane work — feeding GridTerminals, compositing, writing stdout —
     /// runs on this serial queue. GridTerminal is not thread-safe, so every
@@ -106,9 +126,10 @@ private final class WindowSession: @unchecked Sendable {
     private var sigterm: DispatchSourceSignal?
     private var pollTimer: DispatchSourceTimer?
 
-    init(client: DaemonClient, tab: Tab, configuration: WindowAttachClient.Configuration) {
+    init(client: DaemonClient, tab: Tab, workspaceID: WorkspaceID?, configuration: WindowAttachClient.Configuration) {
         self.client = client
         self.tab = tab
+        self.workspaceID = workspaceID
         self.configuration = configuration
         let size = AttachClient.ttySize()
         self.compositor = GridCompositor(cols: Int(size?.cols ?? 80), rows: Int(size?.rows ?? 24))
@@ -225,15 +246,14 @@ private final class WindowSession: @unchecked Sendable {
 
     private func statusLine() -> String {
         let title = tab.title.isEmpty ? "harness" : tab.title
-        return " harness  \(title)  [\(rects.count) pane\(rects.count == 1 ? "" : "s")]  ^A d detach  ^A o next-pane "
+        let n = rects.count
+        return " harness · \(title) · \(n) pane\(n == 1 ? "" : "s") · ^A: % \" split  x kill  z zoom  hjkl/o nav  c/n/p tab  d detach "
     }
 
     // MARK: Input
 
     private func runInputLoop() {
-        let detachSeq = configuration.detachSequence
         let prefix = configuration.prefix
-        var matched = 0
         var awaitingPrefixCommand = false
         var buffer = [UInt8](repeating: 0, count: 4096)
         var fds: [pollfd] = [
@@ -241,7 +261,7 @@ private final class WindowSession: @unchecked Sendable {
             pollfd(fd: wakeRead, events: Int16(POLLIN), revents: 0),
         ]
 
-        loop: while !shouldExit() {
+        while !shouldExit() {
             let ready = fds.withUnsafeMutableBufferPointer { poll($0.baseAddress, nfds_t($0.count), -1) }
             if ready < 0 { if errno == EINTR { continue }; break }
             if (fds[1].revents & Int16(POLLIN)) != 0 {
@@ -261,25 +281,21 @@ private final class WindowSession: @unchecked Sendable {
 
                 if awaitingPrefixCommand {
                     awaitingPrefixCommand = false
-                    if handlePrefixCommand(byte) { continue }
-                    // Not a recognized command: send the prefix then this byte.
-                    forward.append(prefix)
-                    forward.append(byte)
+                    if byte == prefix {
+                        // prefix prefix → send one literal prefix to the pane.
+                        forward.append(prefix)
+                    } else if handlePrefixCommand(byte) {
+                        // consumed as a command (incl. `d` = detach)
+                    } else {
+                        // Unrecognized: forward prefix + byte unchanged.
+                        forward.append(prefix)
+                        forward.append(byte)
+                    }
                     continue
-                }
-
-                // Detach sequence (prefix + d) takes priority.
-                if byte == detachSeq[matched] {
-                    matched += 1
-                    if matched == detachSeq.count { requestDetach(); break loop }
-                    continue
-                } else if matched > 0 {
-                    matched = 0
                 }
 
                 if byte == prefix {
                     awaitingPrefixCommand = true
-                    matched = 1 // prefix could still start the detach seq
                     continue
                 }
 
@@ -292,23 +308,112 @@ private final class WindowSession: @unchecked Sendable {
         }
     }
 
-    /// Handle the byte after the prefix. Returns true if it was consumed as a
-    /// command. Pane navigation is local to the compositor (which pane gets
-    /// keystrokes + shows the cursor).
+    /// The active pane's id (for IPC ops that target a specific pane).
+    private var activePaneID: PaneID? {
+        guard let activeSurface else { return rects.first?.paneID }
+        return rects.first(where: { $0.surfaceID.uuidString == activeSurface })?.paneID
+    }
+
+    /// Handle the byte after the prefix. Returns true if it was consumed. Maps
+    /// the familiar multiplexer verbs onto daemon IPC, then rebuilds from the
+    /// fresh snapshot so the GUI and the attached terminal stay in sync.
     private func handlePrefixCommand(_ byte: UInt8) -> Bool {
         switch byte {
-        case UInt8(ascii: "o"): // next pane
+        case UInt8(ascii: "%"): // split side-by-side
+            structureOp { pid in .newSplit(tabID: self.tab.id, paneID: pid, direction: .horizontal) }
+            return true
+        case UInt8(ascii: "\""): // split top/bottom
+            structureOp { pid in .newSplit(tabID: self.tab.id, paneID: pid, direction: .vertical) }
+            return true
+        case UInt8(ascii: "x"): // kill active pane
+            structureOp { pid in .killPane(paneID: pid) }
+            return true
+        case UInt8(ascii: "z"): // toggle zoom
+            structureOp { pid in .zoomPane(paneID: pid) }
+            return true
+        case UInt8(ascii: "h"), UInt8(ascii: "j"), UInt8(ascii: "k"), UInt8(ascii: "l"):
+            selectDirectional(byte)
+            return true
+        case UInt8(ascii: "o"): // next pane (local)
             renderQueue.async { [weak self] in self?.cycleActive(+1) }
             return true
-        case UInt8(ascii: ";"): // previous pane
+        case UInt8(ascii: ";"): // previous pane (local)
             renderQueue.async { [weak self] in self?.cycleActive(-1) }
             return true
-        case UInt8(ascii: "d"): // detach (also matched by detachSeq, belt & suspenders)
+        case UInt8(ascii: "c"): // new tab, then follow to it
+            renderQueue.async { [weak self] in
+                guard let self, let ws = self.workspaceID else { return }
+                _ = try? self.client.request(.newTab(workspaceID: ws, cwd: nil), timeout: 2)
+                self.switchToActiveTab()
+            }
+            return true
+        case UInt8(ascii: "n"): // next tab
+            renderQueue.async { [weak self] in self?.stepTab(+1) }
+            return true
+        case UInt8(ascii: "p"): // previous tab
+            renderQueue.async { [weak self] in self?.stepTab(-1) }
+            return true
+        case UInt8(ascii: "d"): // detach
             requestDetach()
             return true
         default:
             return false
         }
+    }
+
+    /// Run a pane-targeted structural IPC op against the active pane, then
+    /// rebuild from the fresh snapshot.
+    private func structureOp(_ make: @escaping @Sendable (PaneID) -> IPCRequest) {
+        renderQueue.async { [weak self] in
+            guard let self, let pid = self.activePaneID else { return }
+            _ = try? self.client.request(make(pid), timeout: 2)
+            self.checkStructure()
+        }
+    }
+
+    private func selectDirectional(_ byte: UInt8) {
+        let axis: DirectionalAxis
+        switch byte {
+        case UInt8(ascii: "h"): axis = .left
+        case UInt8(ascii: "l"): axis = .right
+        case UInt8(ascii: "k"): axis = .up
+        default: axis = .down
+        }
+        renderQueue.async { [weak self] in
+            guard let self, let pid = self.activePaneID else { return }
+            if case let .paneID(neighbor)? = try? self.client.request(.selectPaneDirectional(currentPaneID: pid, direction: axis), timeout: 1),
+               let rect = self.rects.first(where: { $0.paneID == neighbor }) {
+                self.activeSurface = rect.surfaceID.uuidString
+                self.compositor.invalidate()
+                self.composeAndWrite()
+            }
+        }
+    }
+
+    /// Re-resolve the workspace's active tab and rebuild if it changed (used
+    /// after creating a tab). Runs on `renderQueue`.
+    private func switchToActiveTab() {
+        guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1),
+              let ws = snapshot.workspaces.first(where: { $0.id == workspaceID }) ?? snapshot.workspaces.first,
+              let sess = ws.sessions.first(where: { $0.id == ws.activeSessionID }) ?? ws.sessions.first,
+              let active = sess.tabs.first(where: { $0.id == sess.activeTabID }) ?? sess.tabs.first
+        else { return }
+        if active.id != tab.id { tab = active; rebuildLayout(initial: false) }
+    }
+
+    /// Move to the next/previous tab in the active session. Runs on `renderQueue`.
+    private func stepTab(_ delta: Int) {
+        guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1),
+              let ws = snapshot.workspaces.first(where: { $0.id == workspaceID }) ?? snapshot.workspaces.first,
+              let sess = ws.sessions.first(where: { $0.tabs.contains(where: { $0.id == tab.id }) }),
+              let idx = sess.tabs.firstIndex(where: { $0.id == tab.id })
+        else { return }
+        let next = ((idx + delta) % sess.tabs.count + sess.tabs.count) % sess.tabs.count
+        let target = sess.tabs[next]
+        guard target.id != tab.id else { return }
+        _ = try? client.request(.selectTab(workspaceID: ws.id, tabID: target.id), timeout: 1)
+        tab = target
+        rebuildLayout(initial: false)
     }
 
     private func cycleActive(_ delta: Int) {
