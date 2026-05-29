@@ -56,4 +56,54 @@ final class RealPtyLifecycleTests: XCTestCase {
         pty.close()
         pty.close() // must not crash or hang on a second close
     }
+
+    /// Respawn must NOT fire `onExit` (it's a replace, not a death) and must keep the
+    /// surface streaming. Regression test for the generation race where the old
+    /// child's exit-watcher ran `close()` against the freshly respawned shell.
+    func testRespawnDoesNotFireExitAndKeepsStreaming() throws {
+        let pty = try makePty()
+        defer { pty.close() }
+        let exits = AtomicCounter()
+        pty.onExit = { exits.increment() }
+
+        Thread.sleep(forTimeInterval: 0.3) // let the first shell come up
+        pty.respawn(clearHistory: true)
+
+        let marker = "RESPAWN_OK_MARKER"
+        let received = expectation(description: "post-respawn output reaches subscriber")
+        received.assertForOverFulfill = false
+        let acc = OutputAccumulator()
+        _ = pty.subscribe { data, _ in
+            if acc.appendAndContains(String(decoding: data, as: UTF8.self), marker: marker) {
+                received.fulfill()
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { pty.write("echo \(marker)\n") }
+        wait(for: [received], timeout: 8)
+
+        // The old child's SIGTERM death must not have surfaced as an exit event.
+        XCTAssertEqual(exits.value, 0, "respawn must not fire onExit for the replaced shell")
+    }
+
+    /// Hammer write/resize concurrently with a respawn; the generation-guarded
+    /// lifecycle must neither crash nor double-free.
+    func testRespawnUnderConcurrentIODoesNotCrash() throws {
+        let pty = try makePty()
+        defer { pty.close() }
+        let group = DispatchGroup()
+        for i in 0 ..< 50 {
+            group.enter()
+            DispatchQueue.global().async {
+                pty.write("echo \(i)\n")
+                pty.resize(rows: UInt16(20 + (i % 8)), cols: UInt16(80 + (i % 8)))
+                group.leave()
+            }
+        }
+        group.enter()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            pty.respawn(clearHistory: false)
+            group.leave()
+        }
+        XCTAssertEqual(group.wait(timeout: .now() + 8), .success)
+    }
 }

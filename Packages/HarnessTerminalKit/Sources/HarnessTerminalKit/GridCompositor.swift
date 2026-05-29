@@ -237,45 +237,73 @@ struct RenderCell: Equatable {
     var codepoint: UInt32
     var fg: TerminalGridColor
     var bg: TerminalGridColor
+    var underlineColor: TerminalGridColor
     var bold: Bool
+    var dim: Bool
     var italic: Bool
-    var underline: Bool
+    var underline: TerminalGridUnderline
+    var blink: Bool
     var inverse: Bool
+    var invisible: Bool
+    var strikethrough: Bool
+    var overline: Bool
 
     init(
         codepoint: UInt32,
         fg: TerminalGridColor = .none,
         bg: TerminalGridColor = .none,
+        underlineColor: TerminalGridColor = .none,
         bold: Bool = false,
+        dim: Bool = false,
         italic: Bool = false,
-        underline: Bool = false,
-        inverse: Bool = false
+        underline: TerminalGridUnderline = .none,
+        blink: Bool = false,
+        inverse: Bool = false,
+        invisible: Bool = false,
+        strikethrough: Bool = false,
+        overline: Bool = false
     ) {
         self.codepoint = codepoint
         self.fg = fg
         self.bg = bg
+        self.underlineColor = underlineColor
         self.bold = bold
+        self.dim = dim
         self.italic = italic
         self.underline = underline
+        self.blink = blink
         self.inverse = inverse
+        self.invisible = invisible
+        self.strikethrough = strikethrough
+        self.overline = overline
     }
 
     init(_ c: TerminalGridCell) {
         codepoint = c.codepoint
         fg = c.foreground
         bg = c.background
+        underlineColor = c.underlineColor
         bold = c.bold
+        dim = c.faint
         italic = c.italic
-        underline = c.underline != .none
+        underline = c.underline
+        blink = c.blink
         inverse = c.inverse
+        invisible = c.invisible
+        strikethrough = c.strikethrough
+        overline = c.overline
     }
 
     static let blank = RenderCell(codepoint: 0x20)
 
+    /// A guaranteed-valid space scalar; the single audited force-unwrap (U+0020 is
+    /// always a valid scalar) used as the fallback glyph for empty/invalid cells.
+    private static let space = Unicode.Scalar(0x20)!
+
     /// The glyph to draw (empty cells render as a space).
     var scalar: Unicode.Scalar {
-        if codepoint == 0 { return Unicode.Scalar(0x20)! }
-        return Unicode.Scalar(codepoint) ?? Unicode.Scalar(0x20)!
+        guard codepoint != 0, let s = Unicode.Scalar(codepoint) else { return Self.space }
+        return s
     }
 
     /// The SGR sequence that establishes this cell's attributes. Always starts
@@ -284,22 +312,55 @@ struct RenderCell: Equatable {
     var sgr: String {
         var codes: [String] = ["0"]
         if bold { codes.append("1") }
+        if dim { codes.append("2") }
         if italic { codes.append("3") }
-        if underline { codes.append("4") }
+        codes.append(contentsOf: Self.underlineCodes(underline))
+        if blink { codes.append("5") }
         if inverse { codes.append("7") }
-        codes.append(contentsOf: Self.colorCodes(fg, foreground: true))
-        codes.append(contentsOf: Self.colorCodes(bg, foreground: false))
+        if invisible { codes.append("8") }
+        if strikethrough { codes.append("9") }
+        if overline { codes.append("53") }
+        codes.append(contentsOf: Self.colorCodes(fg, kind: .fg))
+        codes.append(contentsOf: Self.colorCodes(bg, kind: .bg))
+        if underline != .none {
+            codes.append(contentsOf: Self.colorCodes(underlineColor, kind: .underline))
+        }
         return "\u{1b}[\(codes.joined(separator: ";"))m"
     }
 
-    private static func colorCodes(_ color: TerminalGridColor, foreground: Bool) -> [String] {
+    /// SGR underline-style codes. Single is the classic `4`; double is `21`; the
+    /// curly/dotted/dashed styles use the `4:N` substyle form modern terminals
+    /// (incl. Ghostty) understand.
+    private static func underlineCodes(_ style: TerminalGridUnderline) -> [String] {
+        switch style {
+        case .none: return []
+        case .single: return ["4"]
+        case .double: return ["21"]
+        case .curly: return ["4:3"]
+        case .dotted: return ["4:4"]
+        case .dashed: return ["4:5"]
+        }
+    }
+
+    private enum ColorKind {
+        case fg, bg, underline
+        var base: Int {
+            switch self {
+            case .fg: return 38
+            case .bg: return 48
+            case .underline: return 58
+            }
+        }
+    }
+
+    private static func colorCodes(_ color: TerminalGridColor, kind: ColorKind) -> [String] {
         switch color {
         case .none:
             return []
         case let .palette(idx):
-            return ["\(foreground ? 38 : 48)", "5", "\(idx)"]
+            return ["\(kind.base)", "5", "\(idx)"]
         case let .rgb(r, g, b):
-            return ["\(foreground ? 38 : 48)", "2", "\(r)", "\(g)", "\(b)"]
+            return ["\(kind.base)", "2", "\(r)", "\(g)", "\(b)"]
         }
     }
 }

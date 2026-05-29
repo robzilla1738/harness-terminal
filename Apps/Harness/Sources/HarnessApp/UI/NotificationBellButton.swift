@@ -19,7 +19,9 @@ final class NotificationBellButton: NSControl {
         layer?.cornerRadius = 6
         layer?.cornerCurve = .continuous
 
-        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        // Weight matches the rest of the header glyphs (workspace pill, chevron,
+        // ellipsis) so the chrome icon set stays one uniform pack.
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
         iconView.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Notifications")?
             .withSymbolConfiguration(config)
         iconView.translatesAutoresizingMaskIntoConstraints = false
@@ -115,7 +117,7 @@ final class NotificationBellButton: NSControl {
         badgeBackground.layer?.backgroundColor = c.danger.cgColor
         // SF Symbol variant: filled when there's an unread notification, outline
         // when idle. Makes the visual state read in a glance.
-        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
         let symbol = hasUnread ? "bell.fill" : "bell"
         iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Notifications")?
             .withSymbolConfiguration(config)

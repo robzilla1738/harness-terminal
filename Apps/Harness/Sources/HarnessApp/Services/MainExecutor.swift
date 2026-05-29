@@ -33,7 +33,11 @@ final class MainExecutor: CommandExecutor {
         let coordinator = SessionCoordinator.shared
         switch command {
         case .splitWindow(let direction):
-            coordinator.splitActivePane(direction: direction)
+            // `Command.SplitDirection` is divider-orientation (`.vertical` =
+            // side-by-side, the CommandParser convention); `splitActivePane`
+            // wants the layout direction. Invert through the one shared rule so
+            // prefix-`%` splits side-by-side, matching the compositor and tmux.
+            coordinator.splitActivePane(direction: CommandIPCTranslator.layoutDirection(for: direction))
         case .killPane:
             coordinator.killActivePane()
         case .zoomPane:

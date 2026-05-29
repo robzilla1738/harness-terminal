@@ -49,6 +49,12 @@ public final class RealPty: @unchecked Sendable {
     private var master: Int32 = -1
     private var childPID: pid_t = -1
     private var isClosed = false
+    /// Monotonic child-generation counter. Bumped on every spawn/respawn/close so a
+    /// stale `watchForExit`/read-source from a prior generation (e.g. the shell we just
+    /// SIGTERM'd during a respawn) bails out instead of tearing down — or firing
+    /// `onExit` for — the child that replaced it. The previous code let the old
+    /// exit-watcher's `close()` kill the freshly respawned shell.
+    private var generation: UInt64 = 0
     private let lifecycleLock = NSLock()
 
     private let readQueue = DispatchQueue(label: "com.robert.harness.realpty.read")
@@ -74,16 +80,22 @@ public final class RealPty: @unchecked Sendable {
     private var subscribers: [UUID: (Data, UInt64) -> Void] = [:]
     private let subscribersLock = NSLock()
 
+    /// Extra environment injected into the child shell on spawn *and* respawn
+    /// (Harness-owned `$HARNESS`/`$HARNESS_SURFACE` plus user `set-environment`).
+    private let extraEnvironment: [String: String]
+
     public init(
         id: DaemonSurfaceID,
         cwd: String,
         shell: String,
         rows: UInt16 = 24,
         cols: UInt16 = 80,
-        scrollbackBytes: Int = 1024 * 1024
+        scrollbackBytes: Int = 1024 * 1024,
+        extraEnvironment: [String: String] = [:]
     ) throws {
         self.id = id
         self.maxScrollbackBytes = scrollbackBytes
+        self.extraEnvironment = extraEnvironment
 
         // Prepare everything the child needs BEFORE forking. Between fork and exec a
         // child may only call async-signal-safe functions, so it must not malloc —
@@ -96,6 +108,7 @@ public final class RealPty: @unchecked Sendable {
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
         environment["HARNESS_SURFACE"] = id
+        for (key, value) in extraEnvironment { environment[key] = value }
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
 
         let cwdC = strdup(cwd)
@@ -126,11 +139,15 @@ public final class RealPty: @unchecked Sendable {
         }
         // Parent: the child holds its own copy-on-write view; free ours.
         freeChildStrings()
+        lifecycleLock.lock()
+        generation &+= 1
+        let gen = generation
         self.master = amaster
         self.childPID = pid
+        lifecycleLock.unlock()
         AgentDetector.registerRootPID(pid, forSurfaceKey: id)
-        startReading()
-        watchForExit()
+        startReading(fd: amaster, generation: gen)
+        watchForExit(pid: pid, generation: gen)
     }
 
     public func write(_ data: Data) {
@@ -178,6 +195,10 @@ public final class RealPty: @unchecked Sendable {
             oldRows = 24
             oldCols = 80
         }
+        // Advance the generation so the old child's exit-watcher and read-source
+        // recognise they've been superseded and bail (instead of running close()/
+        // onExit against the shell we're about to spawn).
+        generation &+= 1
         readSource = nil
         master = -1
         childPID = -1
@@ -216,6 +237,7 @@ public final class RealPty: @unchecked Sendable {
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
         environment["HARNESS_SURFACE"] = id
+        for (key, value) in extraEnvironment { environment[key] = value }
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
         let cwdC = strdup(cwd)
         func freeChildStrings() {
@@ -244,12 +266,14 @@ public final class RealPty: @unchecked Sendable {
         }
         freeChildStrings()
         lifecycleLock.lock()
+        generation &+= 1
+        let gen = generation
         self.master = amaster
         self.childPID = pid
         lifecycleLock.unlock()
         AgentDetector.registerRootPID(pid, forSurfaceKey: id)
-        startReading()
-        watchForExit()
+        startReading(fd: amaster, generation: gen)
+        watchForExit(pid: pid, generation: gen)
     }
 
     public func resize(rows: UInt16, cols: UInt16) {
@@ -272,11 +296,13 @@ public final class RealPty: @unchecked Sendable {
             return
         }
         isClosed = true
+        generation &+= 1
         let pid = childPID
         let source = readSource
         let fd = master
         readSource = nil
         master = -1
+        childPID = -1
         lifecycleLock.unlock()
 
         AgentDetector.unregisterRootPID(forSurfaceKey: id)
@@ -350,13 +376,9 @@ public final class RealPty: @unchecked Sendable {
         cancelSubscription(token: token)
     }
 
-    private func startReading() {
-        lifecycleLock.lock()
-        let fd = master
-        lifecycleLock.unlock()
+    private func startReading(fd: Int32, generation gen: UInt64) {
         guard fd >= 0 else { return }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: readQueue)
-        readSource = source
         source.setEventHandler { [weak self] in
             guard let self else { return }
             var buffer = [UInt8](repeating: 0, count: 8 * 1024)
@@ -364,7 +386,8 @@ public final class RealPty: @unchecked Sendable {
                 Darwin.read(fd, ptr.baseAddress, ptr.count)
             }
             if n <= 0 {
-                self.close()
+                // EOF / error: the shell for this generation ended.
+                self.childEnded(generation: gen)
                 return
             }
             let data = Data(buffer.prefix(n))
@@ -373,7 +396,18 @@ public final class RealPty: @unchecked Sendable {
         source.setCancelHandler {
             Darwin.close(fd)
         }
-        source.resume()
+        // Install only if we're still the current generation; a concurrent
+        // respawn/close may have already advanced past us, in which case cancel
+        // (which closes fd) rather than leaking a live source on a dead surface.
+        lifecycleLock.lock()
+        if generation == gen, !isClosed {
+            readSource = source
+            lifecycleLock.unlock()
+            source.resume()
+        } else {
+            lifecycleLock.unlock()
+            source.cancel()
+        }
     }
 
     private func handleOutput(_ data: Data) {
@@ -397,14 +431,43 @@ public final class RealPty: @unchecked Sendable {
         for handler in handlers { handler(data, sequence) }
     }
 
-    private func watchForExit() {
+    private func watchForExit(pid: pid_t, generation gen: UInt64) {
         DispatchQueue.global().async { [weak self] in
-            guard let self else { return }
+            guard let self, pid > 0 else { return }
             var status: Int32 = 0
-            _ = waitpid(self.childPID, &status, 0)
-            self.close()
-            self.onExit?()
+            _ = waitpid(pid, &status, 0)
+            self.childEnded(generation: gen)
         }
+    }
+
+    /// Called when a child for generation `gen` ends (read EOF or `waitpid`
+    /// returning). Tears down + fires `onExit` exactly once, and only if `gen` is
+    /// still current — a respawn/close that advanced the generation means this is a
+    /// superseded child whose death must NOT touch the live one. The EOF path and
+    /// the `waitpid` path both call this; the `isClosed` guard makes the second a
+    /// no-op so `onExit` fires once.
+    private func childEnded(generation gen: UInt64) {
+        lifecycleLock.lock()
+        guard generation == gen, !isClosed else {
+            lifecycleLock.unlock()
+            return
+        }
+        isClosed = true
+        generation &+= 1
+        let source = readSource
+        let fd = master
+        readSource = nil
+        master = -1
+        childPID = -1
+        lifecycleLock.unlock()
+
+        AgentDetector.unregisterRootPID(forSurfaceKey: id)
+        if let source {
+            source.cancel()
+        } else if fd >= 0 {
+            Darwin.close(fd)
+        }
+        onExit?()
     }
 
     private func deepestReadableDescendant(of pid: pid_t) -> pid_t? {

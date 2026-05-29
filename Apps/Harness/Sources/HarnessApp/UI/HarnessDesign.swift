@@ -63,9 +63,14 @@ enum HarnessDesign {
 
     /// Semantic fonts so sizes/weights live in one place.
     enum Typography {
-        static var rowTitle: NSFont { .systemFont(ofSize: 13, weight: .semibold) }
+        /// The one font every primary chrome label uses — workspace name, search
+        /// field, session titles, tab titles, switcher rows, the Settings row. Keeping
+        /// these identical (size + weight) is what makes the sidebar and tab strip read
+        /// as one consistent surface instead of a mix of sizes/weights.
+        static var sidebarLabel: NSFont { .systemFont(ofSize: 13, weight: .medium) }
+        static var rowTitle: NSFont { sidebarLabel }
         static var rowMeta: NSFont { .monospacedSystemFont(ofSize: 11, weight: .regular) }
-        static var tabTitle: NSFont { .systemFont(ofSize: 12, weight: .medium) }
+        static var tabTitle: NSFont { sidebarLabel }
         static var sectionLabel: NSFont { .systemFont(ofSize: 10.5, weight: .semibold) }
         static var badge: NSFont { .monospacedSystemFont(ofSize: 10.5, weight: .semibold) }
         static var kbd: NSFont { .monospacedSystemFont(ofSize: 12, weight: .semibold) }

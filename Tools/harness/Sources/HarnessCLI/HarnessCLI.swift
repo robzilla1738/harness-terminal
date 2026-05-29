@@ -139,6 +139,10 @@ struct HarnessCLI {
                 try handleSetOption(args, client: client)
             case "show-options":
                 try handleShowOptions(args, client: client)
+            case "set-environment", "setenv":
+                try handleSetEnvironment(args, client: client)
+            case "show-environment", "showenv":
+                try handleShowEnvironment(args, client: client)
             case "bind-hook":
                 try handleBindHook(args, client: client)
             case "unbind-hook":
@@ -427,8 +431,9 @@ struct HarnessCLI {
             } else if let value = UInt8(token) {
                 bytes.append(value)
             } else if token.count == 3, token.hasPrefix("C-") || token.hasPrefix("c-") {
-                let ch = token.last!.uppercased().first!
-                guard let scalar = ch.asciiValue else { return nil }
+                guard let last = token.last,
+                      let ch = last.uppercased().first,
+                      let scalar = ch.asciiValue else { return nil }
                 bytes.append(scalar & 0x1f)
             } else if token.count == 1, let scalar = token.first?.asciiValue {
                 bytes.append(scalar)
@@ -663,6 +668,31 @@ struct HarnessCLI {
         }
     }
 
+    static func handleSetEnvironment(_ args: [String], client: DaemonClient) throws {
+        // Usage: set-environment [-g] [-u] [-s <sessionID>] <key> [value]
+        // -g = global (default when no -s); -u = unset; -s targets a session.
+        let global = args.contains("-g")
+        let unset = args.contains("-u")
+        let sessionRaw = flagValue(args, flag: "-s")
+        let sessionID = (global ? nil : sessionRaw).flatMap(UUID.init(uuidString:))
+        let positional = args.filter { !$0.hasPrefix("-") && $0 != sessionRaw }
+        guard let key = positional.first else {
+            fputs("Usage: harness-cli set-environment [-g] [-u] [-s <sessionID>] <key> [value]\n", stderr)
+            exit(1)
+        }
+        let value = unset ? nil : positional.dropFirst().joined(separator: " ")
+        _ = try checkedRequest(client, .setEnvironment(sessionID: sessionID, key: key, value: value))
+    }
+
+    static func handleShowEnvironment(_ args: [String], client: DaemonClient) throws {
+        let sessionID = args.contains("-g") ? nil : flagValue(args, flag: "-s").flatMap(UUID.init(uuidString:))
+        let response = try checkedRequest(client, .showEnvironment(sessionID: sessionID))
+        guard case let .options(items) = response else { throw DaemonClientError.unexpectedResponse }
+        for item in items {
+            print("\(item.key)=\(item.value)")
+        }
+    }
+
     static func handleBindHook(_ args: [String], client: DaemonClient) throws {
         guard args.count >= 3 else {
             fputs("Usage: harness-cli bind-hook <event> <command...> [--if <format>]\n", stderr)
@@ -837,6 +867,8 @@ struct HarnessCLI {
           select-pane --pane <uuid> --dir L|R|U|D
           set-option [-g|-w|-s|-t|-p] [-T target] <key> <value>
           show-options [-g|-w|-s|-t|-p]
+          set-environment [-g] [-u] [-s <sessionID>] <key> [value]
+          show-environment [-g] [-s <sessionID>]
           bind-hook <event> <command...> [--if <format>]
           unbind-hook --id <uuid>
           list-hooks [--event <event>]

@@ -1,7 +1,10 @@
 import Foundation
 
 public struct SessionSnapshot: Codable, Sendable, Equatable {
-    public static let currentVersion = 2
+    // v3: tabs gained `activePaneID`/`lastActivePaneID` and sessions gained
+    // `lastActiveTabID`. Additive — older files decode via `decodeIfPresent` and are
+    // backfilled (active pane → first leaf) on load, so no destructive migration.
+    public static let currentVersion = 3
 
     public var version: Int
     public var revision: Int

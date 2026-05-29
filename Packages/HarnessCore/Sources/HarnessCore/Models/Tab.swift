@@ -12,6 +12,12 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
     public var sortOrder: Int
     public var agent: AgentSnapshot?
     public var zoomedPaneID: PaneID?
+    /// The focused pane in this tab. Server-authoritative (schema v3): target-less
+    /// commands (`kill-pane`, `split-window`, …) act on it, and every client (GUI +
+    /// attach-window compositor) reads it so focus stays consistent across clients.
+    public var activePaneID: PaneID?
+    /// Most-recently-active pane before `activePaneID`, for `select-pane -l` / `.last`.
+    public var lastActivePaneID: PaneID?
 
     public init(
         id: TabID = UUID(),
@@ -24,7 +30,9 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         rootPane: PaneNode? = nil,
         sortOrder: Int = 0,
         agent: AgentSnapshot? = nil,
-        zoomedPaneID: PaneID? = nil
+        zoomedPaneID: PaneID? = nil,
+        activePaneID: PaneID? = nil,
+        lastActivePaneID: PaneID? = nil
     ) {
         self.id = id
         self.title = title
@@ -33,10 +41,15 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         self.listeningPorts = listeningPorts
         self.notificationText = notificationText
         self.status = status
-        self.rootPane = rootPane ?? .leaf(PaneLeaf())
+        let resolvedRoot = rootPane ?? .leaf(PaneLeaf())
+        self.rootPane = resolvedRoot
         self.sortOrder = sortOrder
         self.agent = agent
         self.zoomedPaneID = zoomedPaneID
+        // Default focus to the first leaf so a freshly built tab always has a
+        // resolvable active pane (target-less commands depend on it).
+        self.activePaneID = activePaneID ?? resolvedRoot.allPaneIDs().first
+        self.lastActivePaneID = lastActivePaneID
     }
 
     public var displaySubtitle: String {
@@ -61,5 +74,10 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
         agent = try container.decodeIfPresent(AgentSnapshot.self, forKey: .agent)
         zoomedPaneID = try container.decodeIfPresent(PaneID.self, forKey: .zoomedPaneID)
+        // v3 fields — absent in v2 layout.json; backfilled to the first leaf so older
+        // files load cleanly with a valid focus.
+        activePaneID = try container.decodeIfPresent(PaneID.self, forKey: .activePaneID)
+            ?? rootPane.allPaneIDs().first
+        lastActivePaneID = try container.decodeIfPresent(PaneID.self, forKey: .lastActivePaneID)
     }
 }

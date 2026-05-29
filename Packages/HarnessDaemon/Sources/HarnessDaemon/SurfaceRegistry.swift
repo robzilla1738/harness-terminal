@@ -10,7 +10,16 @@ public final class SurfaceRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let bufferStore = PasteBufferStore()
     public let optionStore = OptionStore()
+    public let environmentStore = EnvironmentStore()
     public let hookRegistry = HookRegistry()
+    /// Hooks fire fire-and-forget here, never under `lock`, so a hook-bound command
+    /// can re-enter `handle` (which locks) without deadlocking. Serial so hook
+    /// reactions run in the order their events occurred.
+    private let hookQueue = DispatchQueue(label: "com.robert.harness.hooks")
+    private var hookExecutor: DaemonCommandExecutor?
+    /// Invoked after every layout commit with the new revision. `DaemonServer` uses
+    /// this to push `snapshotChanged` to snapshot subscribers (the compositor).
+    public var onSnapshotCommitted: ((Int) -> Void)?
 
     public init() {
         editor.snapshot = store.load()
@@ -19,6 +28,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
             try? store.saveImmediately(editor.snapshot)
         }
         ensureAllSnapshotSurfaces()
+        // Wire hook execution: bound commands run server-side via the registry's own
+        // handlers. `fire` invokes this on `hookQueue` (off-lock), so re-entering
+        // `handle` here is safe.
+        let executor = DaemonCommandExecutor(registry: self)
+        hookExecutor = executor
+        hookRegistry.setExecutor { command, context in
+            executor.execute(command, context: context)
+        }
     }
 
     public var snapshot: SessionSnapshot {
@@ -59,6 +76,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             ensureSessionSurfaces(sessionID: sessionID)
             commit()
+            fireHookLocked(.afterNewSession)
             return .sessionID(sessionID)
         case let .newTab(workspaceID, cwd):
             guard let tabID = editor.addTab(to: workspaceID, cwd: cwd) else {
@@ -66,6 +84,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             ensureTabSurfaces(tabID: tabID)
             commit()
+            fireHookLocked(.afterNewTab)
             return .tabID(tabID)
         case let .newTabInWorkspace(named, cwd):
             guard let workspaceID = editor.resolveWorkspaceID(nameOrID: named) else {
@@ -76,13 +95,16 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             ensureTabSurfaces(tabID: tabID)
             commit()
+            fireHookLocked(.afterNewTab)
             return .tabID(tabID)
         case let .newSplit(tabID, paneID, direction):
             guard let workspace = editor.snapshot.workspaces.first(where: { ws in
                 ws.sessions.contains { session in session.tabs.contains { $0.id == tabID } }
             }) else { return .error("Tab not found") }
             let tab = workspace.sessions.flatMap { $0.tabs }.first { $0.id == tabID }
-            let targetPane = paneID ?? tab?.rootPane.allPaneIDs().first
+            // Target-less split focuses the tab's active pane (falling back to its
+            // first leaf), matching tmux's "split the current pane".
+            let targetPane = paneID ?? tab?.activePaneID ?? tab?.rootPane.allPaneIDs().first
             guard let paneID = targetPane,
                   let newPaneID = editor.splitPane(
                       in: workspace.id,
@@ -106,6 +128,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 )
             }
             commit()
+            fireHookLocked(.afterSplitPane, surfaceKey: editor.surfaceID(forPaneID: newPaneID)?.uuidString)
             return .paneID(newPaneID)
         case let .selectWorkspace(id):
             guard editor.selectWorkspace(id) else { return .error("Workspace not found") }
@@ -159,6 +182,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             closeSurfaces(closedSurfaces)
             ensureAllSnapshotSurfaces()
             commit()
+            fireHookLocked(.afterKillTab)
             return .ok
         case let .closeSession(sessionID):
             let closedSurfaces = editor.snapshot.workspaces
@@ -211,6 +235,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             NotificationBus.shared.post(notification)
             markWaiting(surfaceKey: surfaceID, text: body)
             commit()
+            fireHookLocked(.notificationPosted, surfaceKey: surfaceID)
             return .ok
         case let .clearNotification(surfaceID):
             if let uuid = UUID(uuidString: surfaceID) {
@@ -219,7 +244,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
             commit()
             return .ok
         case let .updateTabTitle(surfaceID, title):
-            if let uuid = UUID(uuidString: surfaceID) {
+            // OSC/program-driven rename. Honor `allow-rename` (global) and the
+            // per-tab `automatic-rename` flag — a manual `rename-tab` turns the
+            // latter off so the chosen name sticks (tmux semantics).
+            if let uuid = UUID(uuidString: surfaceID),
+               optionStore.get("allow-rename")?.boolValue ?? true,
+               automaticRenameEnabled(forSurfaceKey: surfaceID) {
                 editor.updateTabTitle(surfaceID: uuid, title: title)
                 commit()
             }
@@ -275,6 +305,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard editor.killPane(paneID) else { return .error("Pane not found") }
             if let killedSurfaceID { closeSurfaces([killedSurfaceID]) }
             commit()
+            fireHookLocked(.afterKillPane, surfaceKey: killedSurfaceID)
             return .ok
         case let .swapPanes(srcID, dstID):
             guard editor.swapPanes(srcID, dstID) else { return .error("Panes not found") }
@@ -285,6 +316,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .error("Pane not found")
             }
             commit()
+            fireHookLocked(.afterResizePane, surfaceKey: editor.surfaceID(forPaneID: paneID)?.uuidString)
             return .ok
         case let .resizePaneRatio(tabID, firstPaneID, secondPaneID, ratio):
             guard editor.setSplitRatio(
@@ -296,6 +328,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .error("Split not found")
             }
             commit()
+            fireHookLocked(.afterResizePane)
             return .ok
         case let .zoomPane(paneID):
             guard editor.zoomPane(paneID) else { return .error("Pane not found") }
@@ -306,6 +339,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .ok
         case let .renameTab(tabID, name):
             guard editor.renameTab(tabID, name: name) else { return .error("Tab not found") }
+            // A manual rename sticks: turn off automatic-rename for this tab so a
+            // later OSC title doesn't clobber the chosen name.
+            optionStore.set(.bool(false), key: "automatic-rename", scope: .tab, target: tabID.uuidString)
             commit()
             return .ok
         case let .renameSession(sessionID, name):
@@ -320,6 +356,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .agentInfo(AgentDetector.snapshot(forSurfaceKey: surfaceID))
         case let .subscribeSurfaceOutput(surfaceID, _):
             return subscribe(surfaceID: surfaceID)
+        case .subscribeSnapshot:
+            // FD-level streaming, owned by DaemonServer (intercepted before reaching
+            // the registry); the stub keeps the switch exhaustive.
+            return .error("subscribeSnapshot must be handled by DaemonServer")
         case let .cancelSubscription(surfaceID):
             sessions[surfaceID]?.cancelSubscription()
             return .ok
@@ -378,7 +418,22 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard let neighbor = editor.directionalNeighbor(of: currentPaneID, direction: target) else {
                 return .error("No neighbor in that direction")
             }
+            // Persist the new focus server-side so every client agrees on the active
+            // pane (not just the caller). Best-effort: the neighbor is in the same tab.
+            if let loc = editor.tab(containingPaneID: neighbor) {
+                _ = editor.setActivePane(workspaceID: loc.workspaceID, tabID: loc.tabID, paneID: neighbor)
+                commit()
+            }
             return .paneID(neighbor)
+        case let .selectPane(tabID, paneID):
+            guard let loc = editor.tab(containingPaneID: paneID), loc.tabID == tabID else {
+                return .error("Pane not found in tab")
+            }
+            guard editor.setActivePane(workspaceID: loc.workspaceID, tabID: tabID, paneID: paneID) else {
+                return .error("Could not select pane")
+            }
+            commit()
+            return .ok
         case let .applyLayout(tabID, layout, mainPaneID):
             guard let template = LayoutTemplate(rawValue: layout) else {
                 return .error("Unknown layout: \(layout)")
@@ -435,6 +490,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
             let scope = scopeRaw.flatMap(OptionStore.Scope.init(rawValue:))
             let entries = optionStore.snapshot(scope: scope).map { key, value in
                 OptionEntry(scope: key.scope.rawValue, target: key.target, key: key.key, value: value.stringValue)
+            }
+            return .options(entries)
+        case let .setEnvironment(sessionID, key, value):
+            environmentStore.set(value, key: key, sessionID: sessionID?.uuidString)
+            return .ok
+        case let .showEnvironment(sessionID):
+            let entries = environmentStore.entries(sessionID: sessionID?.uuidString).map { entry in
+                OptionEntry(scope: entry.scope, target: sessionID?.uuidString, key: entry.key, value: entry.value)
             }
             return .options(entries)
         case let .bindHook(eventRaw, source, condition):
@@ -498,10 +561,27 @@ public final class SurfaceRegistry: @unchecked Sendable {
     public func applyAgentChanges(_ changes: [String: AgentSnapshot?]) {
         lock.lock()
         defer { lock.unlock() }
+        // Fire agent-state-changed only on an actual activity transition, so a steady
+        // "working" stream of scans doesn't spam the hook.
+        var transitioned: [String] = []
         for (surfaceKey, snapshot) in changes {
+            let before = agentActivityString(forSurfaceKey: surfaceKey)
             editor.setAgent(snapshot, forSurfaceKey: surfaceKey)
+            if before != snapshot?.activity.rawValue { transitioned.append(surfaceKey) }
         }
         commit()
+        for surfaceKey in transitioned { fireHookLocked(.agentStateChanged, surfaceKey: surfaceKey) }
+    }
+
+    /// Current agent activity (raw) for the tab backing `surfaceKey`, or nil. Caller
+    /// must hold `lock`.
+    private func agentActivityString(forSurfaceKey surfaceKey: String) -> String? {
+        guard let match = editor.tab(forSurfaceKey: surfaceKey) else { return nil }
+        return editor.snapshot.workspaces
+            .first(where: { $0.id == match.workspaceID })?
+            .sessions.flatMap { $0.tabs }
+            .first(where: { $0.id == match.tabID })?
+            .agent?.activity.rawValue
     }
 
     public func refreshSurfaceMetadata() {
@@ -529,10 +609,20 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// Build a `FormatContext` from the current snapshot's active selection.
     /// Used by `display-message` and hook firing. Conservative: nil fields
     /// stay nil so format strings render an empty token instead of "(none)".
-    public func buildFormatContext(surfaceKey: String? = nil) -> FormatContext {
+    public func buildFormatContext(surfaceKey: String? = nil, clientName: String? = nil) -> FormatContext {
+        // When the event names a specific surface (split/kill/exit), resolve THAT
+        // pane's tab so tokens like #{pane_cwd} reflect the affected pane; otherwise
+        // fall back to the active selection.
         let workspace = editor.snapshot.activeWorkspace
         let session = workspace?.activeSession
-        let tab = workspace?.activeTab
+        var tab = workspace?.activeTab
+        if let surfaceKey, let match = editor.tab(forSurfaceKey: surfaceKey) {
+            let resolved = editor.snapshot.workspaces
+                .first(where: { $0.id == match.workspaceID })?
+                .sessions.flatMap { $0.tabs }
+                .first(where: { $0.id == match.tabID })
+            if let resolved { tab = resolved }
+        }
         return FormatContext(
             paneID: surfaceKey,
             paneTitle: tab?.title,
@@ -546,8 +636,92 @@ public final class SurfaceRegistry: @unchecked Sendable {
             agentKind: tab?.agent?.kind.rawValue,
             agentActivity: tab?.agent?.activity.rawValue,
             gitBranch: tab?.gitBranch,
-            clientName: nil
+            clientName: clientName
         )
+    }
+
+    // MARK: - Hook firing
+
+    /// Schedule the hooks bound to `event`. MUST be called with `lock` held: it reads
+    /// the locked snapshot to build the context, then fires on `hookQueue` so the
+    /// commands run after the current mutation commits and the lock is released.
+    private func fireHookLocked(_ event: HookEvent, surfaceKey: String? = nil) {
+        let context = buildFormatContext(surfaceKey: surfaceKey)
+        hookQueue.async { [weak self] in self?.hookRegistry.fire(event, context: context) }
+    }
+
+    /// Client attach/detach originate in `DaemonServer` (which owns FDs), outside the
+    /// registry lock — these acquire the lock to build a consistent context.
+    public func fireClientAttached(label: String?) {
+        lock.lock(); let context = buildFormatContext(clientName: label); lock.unlock()
+        hookQueue.async { [weak self] in self?.hookRegistry.fire(.clientAttached, context: context) }
+    }
+
+    public func fireClientDetached(label: String?) {
+        lock.lock(); let context = buildFormatContext(clientName: label); lock.unlock()
+        hookQueue.async { [weak self] in self?.hookRegistry.fire(.clientDetached, context: context) }
+    }
+
+    // MARK: - Hook target resolution + shell execution
+
+    /// Active-selection resolvers used by `DaemonCommandExecutor` for target-less hook
+    /// commands. Best-effort first-leaf until Phase 2 adds a server-side active pane.
+    func activeWorkspaceID() -> WorkspaceID? {
+        lock.lock(); defer { lock.unlock() }
+        return editor.snapshot.activeWorkspaceID
+    }
+
+    func activeTabID() -> TabID? {
+        lock.lock(); defer { lock.unlock() }
+        return editor.snapshot.activeWorkspace?.activeTab?.id
+    }
+
+    func activePaneID() -> PaneID? {
+        lock.lock(); defer { lock.unlock() }
+        return editor.snapshot.activeWorkspace?.activeTab?.rootPane.allPaneIDs().first
+    }
+
+    func activePaneSurfaceKey() -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard let pane = editor.snapshot.activeWorkspace?.activeTab?.rootPane.allPaneIDs().first else { return nil }
+        return editor.surfaceID(forPaneID: pane)?.uuidString
+    }
+
+    /// Run `command` via `/bin/sh -c` for a `run-shell` hook. Async (fire-and-forget);
+    /// when `captureToBuffer` is set, stdout is stored in a paste buffer on completion.
+    func runShellForHook(_ command: String, captureToBuffer: Bool) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let pipe = captureToBuffer ? Pipe() : nil
+        if let pipe { process.standardOutput = pipe }
+        process.terminationHandler = { [weak self] _ in
+            guard captureToBuffer, let pipe, let self else { return }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if !data.isEmpty {
+                _ = self.handle(.setBuffer(name: nil, data: data))
+            }
+        }
+        do { try process.run() } catch {
+            fputs("HarnessDaemon: run-shell hook failed: \(error)\n", stderr)
+        }
+    }
+
+    /// Run `command` via `/bin/sh -c` synchronously and report exit-0 for `if-shell`.
+    /// Called on `hookQueue`, never under the registry lock.
+    func evaluateShellCondition(_ command: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     private func markWaiting(surfaceKey: String, text: String) {
@@ -568,6 +742,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             fputs("HarnessDaemon snapshot save failed: \(error)\n", stderr)
         }
         NotificationBus.shared.postSnapshotChanged(revision: revision)
+        onSnapshotCommitted?(revision)
     }
 
     private func createOrEnsureSurface(
@@ -591,7 +766,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 shell: shellPath,
                 rows: rows,
                 cols: cols,
-                scrollbackBytes: scrollbackBytes ?? 1024 * 1024
+                scrollbackBytes: scrollbackBytes ?? 1024 * 1024,
+                extraEnvironment: extraEnvironment(forSurfaceKey: surfaceID)
             )
             session.onExit = { [weak self, weak session] in
                 self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session)
@@ -695,11 +871,46 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
     }
 
+    /// Whether OSC/program title auto-rename is enabled for the tab owning
+    /// `surfaceKey` (per-tab `automatic-rename`, defaulting on).
+    private func automaticRenameEnabled(forSurfaceKey surfaceKey: String) -> Bool {
+        guard let match = editor.tab(forSurfaceKey: surfaceKey) else { return true }
+        return optionStore.get("automatic-rename", scope: .tab, target: match.tabID.uuidString)?.boolValue ?? true
+    }
+
+    /// The extra environment a pane's shell receives: Harness-owned vars (so
+    /// nested tools detect Harness, the `$TMUX` analog) plus the resolved
+    /// `set-environment` map for the surface's owning session.
+    private func extraEnvironment(forSurfaceKey surfaceKey: String) -> [String: String] {
+        var env: [String: String] = [
+            "HARNESS": HarnessPaths.socketURL.path,
+            "HARNESS_SOCK": HarnessPaths.socketURL.path,
+        ]
+        let session = sessionID(forSurfaceKey: surfaceKey)
+        for (key, value) in environmentStore.resolved(sessionID: session) { env[key] = value }
+        return env
+    }
+
+    private func sessionID(forSurfaceKey surfaceKey: String) -> String? {
+        guard let uuid = UUID(uuidString: surfaceKey) else { return nil }
+        for ws in editor.snapshot.workspaces {
+            for session in ws.sessions {
+                for tab in session.tabs where tab.rootPane.allSurfaceIDs().contains(uuid) {
+                    return session.id.uuidString
+                }
+            }
+        }
+        return nil
+    }
+
     private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?) {
         lock.lock()
         defer { lock.unlock() }
         guard let session, sessions[surfaceID] === session else { return }
         sessions.removeValue(forKey: surfaceID)
         AgentDetector.unregisterRootPID(forSurfaceKey: surfaceID)
+        // The layout leaf survives the shell's death (until remain-on-exit handling in
+        // Phase 4 / an explicit kill), so the surfaceKey still resolves for the hook.
+        fireHookLocked(.paneExited, surfaceKey: surfaceID)
     }
 }

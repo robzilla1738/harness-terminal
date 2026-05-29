@@ -79,9 +79,44 @@ public struct SessionEditor: Sendable {
         guard let newPaneID = split(node: &tab.rootPane, targetPaneID: paneID, direction: direction) else {
             return nil
         }
+        // Focus follows the split, tmux-style: the new pane becomes active.
+        tab.lastActivePaneID = tab.activePaneID
+        tab.activePaneID = newPaneID
         snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
         bumpRevision()
         return newPaneID
+    }
+
+    /// Commit the active pane for a tab server-side, rolling the previous active pane
+    /// into `lastActivePaneID` (MRU) for `select-pane -l`. Validates membership.
+    @discardableResult
+    public mutating func setActivePane(workspaceID: WorkspaceID, tabID: TabID, paneID: PaneID) -> Bool {
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return false }
+        var tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        guard tab.rootPane.allPaneIDs().contains(paneID) else { return false }
+        if tab.activePaneID == paneID { return true }
+        tab.lastActivePaneID = tab.activePaneID
+        tab.activePaneID = paneID
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
+        bumpRevision()
+        return true
+    }
+
+    /// Resolve a tab's active pane, falling back to the first leaf when unset (older
+    /// snapshots / freshly built tabs). Used by target-less commands.
+    public func activePaneID(workspaceID: WorkspaceID, tabID: TabID) -> PaneID? {
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return nil }
+        let tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        return tab.activePaneID ?? tab.rootPane.allPaneIDs().first
+    }
+
+    /// The active pane of the active tab in the active workspace, if any.
+    public func activePaneInActiveTab() -> (workspaceID: WorkspaceID, tabID: TabID, paneID: PaneID)? {
+        guard let workspace = snapshot.activeWorkspace,
+              let tab = workspace.activeTab,
+              let pane = tab.activePaneID ?? tab.rootPane.allPaneIDs().first
+        else { return nil }
+        return (workspace.id, tab.id, pane)
     }
 
     private func split(node: inout PaneNode, targetPaneID: PaneID, direction: SplitDirection) -> PaneID? {
@@ -320,6 +355,18 @@ public struct SessionEditor: Sendable {
         return nil
     }
 
+    /// The workspace + tab that contains `paneID`, if any.
+    public func tab(containingPaneID paneID: PaneID) -> (workspaceID: WorkspaceID, tabID: TabID)? {
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.rootPane.allPaneIDs().contains(paneID) {
+                    return (workspace.id, tab.id)
+                }
+            }
+        }
+        return nil
+    }
+
     private func surfaceID(forPaneID paneID: PaneID, in node: PaneNode) -> SurfaceID? {
         switch node {
         case let .leaf(leaf) where leaf.id == paneID:
@@ -375,6 +422,7 @@ public struct SessionEditor: Sendable {
                     var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
                     if tab.rootPane.allPaneIDs().contains(paneID), removePane(&tab.rootPane, target: paneID) {
                         if tab.zoomedPaneID == paneID { tab.zoomedPaneID = nil }
+                        repairActivePane(&tab, removed: paneID)
                         snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
                         bumpRevision()
                         return true
@@ -383,6 +431,19 @@ public struct SessionEditor: Sendable {
             }
         }
         return false
+    }
+
+    /// After a pane leaves a tab (kill / break / join-source), ensure the tab still
+    /// has a valid focus: keep the current active pane if it survived, else promote
+    /// the MRU pane, else the first remaining leaf.
+    private func repairActivePane(_ tab: inout Tab, removed paneID: PaneID) {
+        let remaining = tab.rootPane.allPaneIDs()
+        if let last = tab.lastActivePaneID, last == paneID || !remaining.contains(last) {
+            tab.lastActivePaneID = nil
+        }
+        if let active = tab.activePaneID, active != paneID, remaining.contains(active) { return }
+        tab.activePaneID = tab.lastActivePaneID ?? remaining.first
+        tab.lastActivePaneID = nil
     }
 
     private func removePane(_ node: inout PaneNode, target: PaneID) -> Bool {
@@ -712,7 +773,9 @@ public struct SessionEditor: Sendable {
                     guard tab.rootPane.allPaneIDs().count > 1 else { return nil }
                     _ = removePane(&tab.rootPane, target: paneID)
                     if tab.zoomedPaneID == paneID { tab.zoomedPaneID = nil }
+                    repairActivePane(&tab, removed: paneID)
                     snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
+                    // New tab's Tab.init defaults activePaneID to its only leaf.
                     let newTab = Tab(cwd: tab.cwd, rootPane: .leaf(leaf))
                     snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.append(newTab)
                     bumpRevision()
@@ -742,6 +805,7 @@ public struct SessionEditor: Sendable {
                         if tab.rootPane.allPaneIDs().count > 1 {
                             _ = removePane(&tab.rootPane, target: sourcePaneID)
                             if tab.zoomedPaneID == sourcePaneID { tab.zoomedPaneID = nil }
+                            repairActivePane(&tab, removed: sourcePaneID)
                             snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
                         } else {
                             // Source pane is the only one in its tab — joining
@@ -760,6 +824,9 @@ public struct SessionEditor: Sendable {
                     guard tab.rootPane.allPaneIDs().contains(destPaneID) else { continue }
                     let newLeaf = PaneLeaf(id: UUID(), surfaceID: leaf.surfaceID, daemonSurfaceID: leaf.daemonSurfaceID)
                     insertSplit(&tab.rootPane, at: destPaneID, with: newLeaf, direction: direction)
+                    // Focus follows the joined pane into the destination tab.
+                    tab.lastActivePaneID = tab.activePaneID
+                    tab.activePaneID = newLeaf.id
                     snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
                     bumpRevision()
                     return newLeaf.id

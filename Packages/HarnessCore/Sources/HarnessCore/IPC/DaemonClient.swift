@@ -34,6 +34,33 @@ public final class DaemonClient: @unchecked Sendable {
         return subscription
     }
 
+    /// Long-lived snapshot subscription: invokes `onRevision` each time the daemon
+    /// pushes a `snapshotChanged(revision:)` frame (i.e. the layout committed). Replaces
+    /// the compositor's structure poll.
+    @discardableResult
+    public func subscribeSnapshot(
+        label: String? = nil,
+        onRevision: @escaping @Sendable (Int) -> Void,
+        onEnd: (@Sendable () -> Void)? = nil
+    ) throws -> DaemonSubscription {
+        let fd = try connectSocket()
+        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSnapshot(label: label)))
+        try payload.withUnsafeBytes { raw in
+            guard write(fd, raw.baseAddress, raw.count) == raw.count else {
+                close(fd)
+                throw DaemonClientError.writeFailed
+            }
+        }
+        let subscription = DaemonSubscription(fd: fd)
+        subscription.start(
+            onResponse: { response in
+                if case let .snapshotChanged(revision) = response { onRevision(revision) }
+            },
+            onEnd: onEnd
+        )
+        return subscription
+    }
+
     private func performRequest(_ ipcRequest: IPCRequest, timeout: TimeInterval) throws -> IPCResponse {
         let fd = try connectSocket()
         defer { close(fd) }
@@ -154,8 +181,21 @@ public final class DaemonSubscription: @unchecked Sendable {
         shutdown(fd, SHUT_RDWR)
     }
 
+    /// Output-stream convenience: forwards `.data` frames to `onData`.
     func start(
         onData: @escaping @Sendable (Data, UInt64) -> Void,
+        onEnd: (@Sendable () -> Void)?
+    ) {
+        start(
+            onResponse: { if case let .data(data, sequence) = $0 { onData(data, sequence) } },
+            onEnd: onEnd
+        )
+    }
+
+    /// Generic read loop: decodes every pushed reply and forwards its response. Used by
+    /// both output (`.data`) and snapshot (`.snapshotChanged`) subscriptions.
+    func start(
+        onResponse: @escaping @Sendable (IPCResponse) -> Void,
         onEnd: (@Sendable () -> Void)?
     ) {
         queue.async { [weak self, fd] in
@@ -166,9 +206,7 @@ public final class DaemonSubscription: @unchecked Sendable {
                 if count <= 0 { break }
                 buffer.append(contentsOf: temp.prefix(count))
                 while let reply = IPCCodec.decodeReply(from: &buffer) {
-                    if case let .data(data, sequence) = reply.response {
-                        onData(data, sequence)
-                    }
+                    onResponse(reply.response)
                 }
             }
             if let self {

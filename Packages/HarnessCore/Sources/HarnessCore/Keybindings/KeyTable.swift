@@ -187,8 +187,12 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "n"), command: .displayMessage(format: "search-next"), note: "Next match"),
             Binding(spec: KeySpec(key: "q"), command: .displayMessage(format: "exit-copy-mode"), note: "Exit copy mode"),
         ])
-        let root = KeyTable(id: .root)
-        let command = KeyTable(id: .command)
-        return KeyTableSet(tables: [prefix, copyMode, root, command])
+        // The `root` (no-prefix / mouse) and `command` (command-prompt editing)
+        // tables are introduced — and actually consulted — in later phases. They are
+        // intentionally NOT seeded as empty tables here: an empty-but-unconsulted
+        // table is a misleading rebindable surface (`bind-key -T root …` would appear
+        // to work yet do nothing). `.root`/`.command` IDs still exist for when those
+        // phases wire them up.
+        return KeyTableSet(tables: [prefix, copyMode])
     }
 }

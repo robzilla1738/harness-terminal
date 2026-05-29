@@ -76,6 +76,37 @@ final class GridCompositorTests: XCTestCase {
         XCTAssertTrue(out.contains("harness"), "status text should appear")
     }
 
+    func testEmitsExtendedAttributeSGR() {
+        let comp = GridCompositor(cols: 80, rows: 24)
+        // Strikethrough (9), faint/dim (2), blink (5), curly underline (4:3) — each
+        // isolated so the changed cell re-emits a self-contained SGR from reset.
+        for (seq, expect) in [("\u{1b}[9mX", "0;9m"),
+                              ("\u{1b}[2mX", "0;2m"),
+                              ("\u{1b}[5mX", "0;5m"),
+                              ("\u{1b}[4:3mX", "0;4:3m")] {
+            let fresh = GridCompositor(cols: 80, rows: 24)
+            let grid = snapshot(80, 24, seq)
+            let out = fresh.render(panes: [pane(0, 0, 80, 24, grid)])
+            XCTAssertTrue(out.contains(expect), "expected SGR \(expect) for sequence \(seq); got none")
+        }
+        _ = comp
+    }
+
+    func testRenderCellScalarFallsBackToSpace() {
+        XCTAssertEqual(RenderCell(codepoint: 0).scalar, Unicode.Scalar(0x20))
+        // 0xD800 is a lone surrogate — not a valid scalar — must fall back to space.
+        XCTAssertEqual(RenderCell(codepoint: 0xD800).scalar, Unicode.Scalar(0x20))
+    }
+
+    func testRenderCellSGRComposesAllAttributes() {
+        let cell = RenderCell(
+            codepoint: UInt32(UInt8(ascii: "X")),
+            bold: true, dim: true, italic: true, underline: .single,
+            blink: true, inverse: true, invisible: true, strikethrough: true, overline: true
+        )
+        XCTAssertEqual(cell.sgr, "\u{1b}[0;1;2;3;4;5;7;8;9;53m")
+    }
+
     func testResizeForcesFullRepaint() {
         let comp = GridCompositor(cols: 80, rows: 24)
         let grid = snapshot(80, 24, "Hello")

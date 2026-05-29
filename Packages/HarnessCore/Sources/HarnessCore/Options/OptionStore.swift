@@ -102,6 +102,11 @@ public final class OptionStore: @unchecked Sendable {
         "mode-keys": .string("vi"),
         "set-clipboard": .bool(true),
         "history-limit": .int(10_000),
+        // Title behavior: `allow-rename` (global) lets a program set the title via
+        // OSC; `automatic-rename` (per-tab, defaults on) is turned off by a manual
+        // `rename-tab` so the chosen name sticks.
+        "allow-rename": .bool(true),
+        "automatic-rename": .bool(true),
     ]
 
     /// Values that shipped as defaults in an earlier build and have since been

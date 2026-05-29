@@ -35,6 +35,11 @@ public enum WindowAttachClient {
             fputs("harness-cli attach-window: stdin/stdout must be a TTY\n", stderr)
             return 64
         }
+        if ProcessInfo.processInfo.environment["HARNESS"] != nil {
+            // The `$TMUX` analog: this is running inside a Harness pane. Allowed
+            // (handy for testing), but warn so accidental nesting is visible.
+            fputs("harness-cli attach-window: already inside Harness ($HARNESS set); nesting — detach with the prefix.\n", stderr)
+        }
         let client = DaemonClient()
         guard case let .snapshot(snapshot) = try client.request(.getSnapshot) else {
             fputs("harness-cli attach-window: could not read session snapshot\n", stderr)
@@ -44,12 +49,25 @@ public enum WindowAttachClient {
             fputs("harness-cli attach-window: no matching tab\n", stderr)
             return 1
         }
-        let workspaceID = workspaceID(of: tab.id, in: snapshot) ?? snapshot.activeWorkspaceID
+        guard let location = locate(tabID: tab.id, in: snapshot) else {
+            fputs("harness-cli attach-window: tab is not in any session\n", stderr)
+            return 1
+        }
+        // Make the requested tab the session's active window, then follow the
+        // session: like a multiplexer client, this view tracks whichever window
+        // the session has focused (GUI tab switches move it too).
+        _ = try? client.request(.selectTab(workspaceID: location.workspaceID, tabID: tab.id), timeout: 1)
 
         let original = AttachClient.enterRawMode()
         defer { AttachClient.restoreTerminalMode(original) }
 
-        let session = WindowSession(client: client, tab: tab, workspaceID: workspaceID, configuration: configuration)
+        let session = WindowSession(
+            client: client,
+            tab: tab,
+            workspaceID: location.workspaceID,
+            sessionID: location.sessionID,
+            configuration: configuration
+        )
         do {
             try session.run()
         } catch {
@@ -89,10 +107,10 @@ public enum WindowAttachClient {
         }
     }
 
-    static func workspaceID(of tabID: TabID, in snapshot: SessionSnapshot) -> WorkspaceID? {
+    static func locate(tabID: TabID, in snapshot: SessionSnapshot) -> (workspaceID: WorkspaceID, sessionID: SessionID)? {
         for ws in snapshot.workspaces {
             for sess in ws.sessions where sess.tabs.contains(where: { $0.id == tabID }) {
-                return ws.id
+                return (ws.id, sess.id)
             }
         }
         return nil
@@ -106,6 +124,24 @@ private final class WindowSession: @unchecked Sendable {
     private let configuration: WindowAttachClient.Configuration
     private var tab: Tab
     private let workspaceID: WorkspaceID?
+    private let sessionID: SessionID
+    /// Merged prefix/copy-mode key tables (defaults + `keybindings.json`), so the
+    /// compositor honors the exact same bindings — and user overrides — as the GUI.
+    private let keyTables: KeyTableSet
+    /// Marked pane (join-pane source); client-tracked like `select-pane -m`.
+    private var markedPaneID: PaneID?
+    /// Latest snapshot, refreshed on every structure check — the translator
+    /// resolves targets against it.
+    private var latestSnapshot: SessionSnapshot?
+    /// Resolved status options (`status`, `status-left`, `status-right`),
+    /// refreshed from the daemon so the status line matches the GUI's.
+    private var statusOptions: [String: String] = [:]
+    /// A transient status override (e.g. `display-message`), shown briefly.
+    private var statusOverride: String?
+    private var statusOverrideToken = 0
+    /// Current composited dimensions (kept for status-line right-alignment).
+    private var cols = 80
+    private var rows = 24
 
     /// All pane work — feeding GridTerminals, compositing, writing stdout —
     /// runs on this serial queue. GridTerminal is not thread-safe, so every
@@ -124,13 +160,15 @@ private final class WindowSession: @unchecked Sendable {
     private var wakeWrite: Int32 = -1
     private var sigwinch: DispatchSourceSignal?
     private var sigterm: DispatchSourceSignal?
-    private var pollTimer: DispatchSourceTimer?
+    private var snapshotSubscription: DaemonSubscription?
 
-    init(client: DaemonClient, tab: Tab, workspaceID: WorkspaceID?, configuration: WindowAttachClient.Configuration) {
+    init(client: DaemonClient, tab: Tab, workspaceID: WorkspaceID?, sessionID: SessionID, configuration: WindowAttachClient.Configuration) {
         self.client = client
         self.tab = tab
         self.workspaceID = workspaceID
+        self.sessionID = sessionID
         self.configuration = configuration
+        self.keyTables = KeybindingsStore.load()
         let size = AttachClient.ttySize()
         self.compositor = GridCompositor(cols: Int(size?.cols ?? 80), rows: Int(size?.rows ?? 24))
     }
@@ -138,8 +176,14 @@ private final class WindowSession: @unchecked Sendable {
     func run() throws {
         try installWakePipe()
         installSignalHandlers()
-        renderQueue.sync { rebuildLayout(initial: true) }
-        installStructurePoll()
+        renderQueue.sync {
+            if case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1) {
+                latestSnapshot = snapshot
+            }
+            refreshStatusOptions()
+            rebuildLayout(initial: true)
+        }
+        installSnapshotSubscription()
         runInputLoop()
         teardown()
     }
@@ -152,6 +196,8 @@ private final class WindowSession: @unchecked Sendable {
         let size = AttachClient.ttySize()
         let cols = Int(size?.cols ?? 80)
         let rows = Int(size?.rows ?? 24)
+        self.cols = cols
+        self.rows = rows
         compositor.resize(cols: cols, rows: rows)
 
         let contentRows = max(1, rows - 1) // reserve a status row
@@ -196,7 +242,14 @@ private final class WindowSession: @unchecked Sendable {
             }
         }
 
-        if activeSurface == nil || !wanted.contains(activeSurface!) {
+        // Focus follows the daemon's authoritative active pane so the compositor agrees
+        // with the GUI and other clients; fall back to the first rect.
+        let serverActive = tab.activePaneID.flatMap { pid in
+            rects.first(where: { $0.paneID == pid })?.surfaceID.uuidString
+        }
+        if let serverActive {
+            activeSurface = serverActive
+        } else if activeSurface == nil || !wanted.contains(activeSurface!) {
             activeSurface = rects.first?.surfaceID.uuidString
         }
         compositor.invalidate()
@@ -244,17 +297,102 @@ private final class WindowSession: @unchecked Sendable {
         writeOut(ansi)
     }
 
-    private func statusLine() -> String {
-        let title = tab.title.isEmpty ? "harness" : tab.title
-        let n = rects.count
-        return " harness · \(title) · \(n) pane\(n == 1 ? "" : "s") · ^A: % \" split  x kill  z zoom  hjkl/o nav  c/n/p tab  d detach "
+    /// The status row, evaluated through `FormatString` against the daemon's
+    /// `status-left`/`status-right` options (same tokens as the GUI status line),
+    /// right-aligning the right segment. A transient `display-message` override
+    /// wins while active. Returns nil to hide the row when `status off`.
+    private func statusLine() -> String? {
+        if let statusOverride { return clip(statusOverride, to: cols) }
+        if (statusOptions["status"] ?? "on") == "off" { return nil }
+        let ctx = formatContext(target: currentTarget())
+        let left = FormatString.evaluate(statusOptions["status-left"] ?? "", context: ctx)
+        let right = FormatString.evaluate(statusOptions["status-right"] ?? "", context: ctx)
+        return composeStatus(left: left, right: right, width: cols)
+    }
+
+    private func currentTarget() -> CommandTarget {
+        CommandTarget(
+            snapshot: latestSnapshot ?? SessionSnapshot(),
+            focusedWorkspaceID: workspaceID,
+            focusedTabID: tab.id,
+            focusedPaneID: activePaneID,
+            markedPaneID: markedPaneID
+        )
+    }
+
+    private func formatContext(target: CommandTarget) -> FormatContext {
+        let order = target.paneOrder
+        let paneIndex = activePaneID.flatMap { order.firstIndex(of: $0) }
+        let tabIndex = target.session?.tabs.firstIndex(where: { $0.id == tab.id })
+        return FormatContext(
+            paneID: activePaneID?.uuidString,
+            paneTitle: tab.title,
+            paneCwd: tab.cwd,
+            paneActive: true,
+            paneIndex: paneIndex,
+            sessionName: target.session?.name,
+            tabName: tab.title,
+            tabIndex: tabIndex,
+            workspaceName: target.workspace?.name,
+            agentKind: tab.agent?.kind.rawValue,
+            gitBranch: tab.gitBranch,
+            clientName: configuration.label
+        )
+    }
+
+    /// Left text + right text on one row of `width`, right segment flush-right,
+    /// truncated to fit (left wins if they would collide).
+    private func composeStatus(left: String, right: String, width: Int) -> String {
+        guard width > 0 else { return "" }
+        let l = Array(left.unicodeScalars)
+        let r = Array(right.unicodeScalars)
+        if l.count + r.count >= width {
+            return clip(left, to: width)
+        }
+        let gap = String(repeating: " ", count: width - l.count - r.count)
+        return left + gap + right
+    }
+
+    private func clip(_ string: String, to width: Int) -> String {
+        let scalars = Array(string.unicodeScalars)
+        guard scalars.count > width else { return string }
+        return String(String.UnicodeScalarView(scalars.prefix(max(0, width))))
+    }
+
+    /// Show a transient message on the status row for ~2s, then revert.
+    private func flashStatus(_ message: String) {
+        statusOverrideToken += 1
+        let token = statusOverrideToken
+        statusOverride = message
+        compositor.invalidate()
+        composeAndWrite()
+        renderQueue.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.statusOverrideToken == token else { return }
+            self.statusOverride = nil
+            self.compositor.invalidate()
+            self.composeAndWrite()
+        }
+    }
+
+    /// Pull the status options the status line needs from the daemon.
+    private func refreshStatusOptions() {
+        guard case let .options(entries)? = try? client.request(.showOptions(scope: nil), timeout: 1) else { return }
+        var resolved: [String: String] = [:]
+        for entry in entries where ["status", "status-left", "status-right"].contains(entry.key) {
+            // Prefer a global value; any scope is acceptable as a fallback.
+            if resolved[entry.key] == nil || entry.scope == "global" {
+                resolved[entry.key] = entry.value
+            }
+        }
+        statusOptions = resolved
     }
 
     // MARK: Input
 
     private func runInputLoop() {
         let prefix = configuration.prefix
-        var awaitingPrefixCommand = false
+        var pending: [UInt8] = []   // bytes captured after the prefix, awaiting a full KeySpec
+        var inPrefix = false
         var buffer = [UInt8](repeating: 0, count: 4096)
         var fds: [pollfd] = [
             pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0),
@@ -279,23 +417,31 @@ private final class WindowSession: @unchecked Sendable {
             while i < n {
                 let byte = buffer[i]; i += 1
 
-                if awaitingPrefixCommand {
-                    awaitingPrefixCommand = false
-                    if byte == prefix {
-                        // prefix prefix → send one literal prefix to the pane.
+                if inPrefix {
+                    pending.append(byte)
+                    switch Self.decodeKeySpec(pending) {
+                    case .incomplete:
+                        continue   // escape sequence still arriving (handles split reads)
+                    case .literalPrefix:
+                        forward.append(prefix)   // prefix prefix → one literal prefix
+                        pending.removeAll(keepingCapacity: true); inPrefix = false
+                    case let .complete(spec):
+                        if !handleBoundKey(spec) {
+                            forward.append(prefix)            // unbound → pass through verbatim
+                            forward.append(contentsOf: pending)
+                        }
+                        pending.removeAll(keepingCapacity: true); inPrefix = false
+                    case .invalid:
                         forward.append(prefix)
-                    } else if handlePrefixCommand(byte) {
-                        // consumed as a command (incl. `d` = detach)
-                    } else {
-                        // Unrecognized: forward prefix + byte unchanged.
-                        forward.append(prefix)
-                        forward.append(byte)
+                        forward.append(contentsOf: pending)
+                        pending.removeAll(keepingCapacity: true); inPrefix = false
                     }
                     continue
                 }
 
                 if byte == prefix {
-                    awaitingPrefixCommand = true
+                    inPrefix = true
+                    pending.removeAll(keepingCapacity: true)
                     continue
                 }
 
@@ -314,142 +460,184 @@ private final class WindowSession: @unchecked Sendable {
         return rects.first(where: { $0.surfaceID.uuidString == activeSurface })?.paneID
     }
 
-    /// Handle the byte after the prefix. Returns true if it was consumed. Maps
-    /// the familiar multiplexer verbs onto daemon IPC, then rebuilds from the
-    /// fresh snapshot so the GUI and the attached terminal stay in sync.
-    private func handlePrefixCommand(_ byte: UInt8) -> Bool {
-        switch byte {
-        case UInt8(ascii: "%"): // split side-by-side
-            structureOp { pid in .newSplit(tabID: self.tab.id, paneID: pid, direction: .horizontal) }
-            return true
-        case UInt8(ascii: "\""): // split top/bottom
-            structureOp { pid in .newSplit(tabID: self.tab.id, paneID: pid, direction: .vertical) }
-            return true
-        case UInt8(ascii: "x"): // kill active pane
-            structureOp { pid in .killPane(paneID: pid) }
-            return true
-        case UInt8(ascii: "z"): // toggle zoom
-            structureOp { pid in .zoomPane(paneID: pid) }
-            return true
-        case UInt8(ascii: "h"), UInt8(ascii: "j"), UInt8(ascii: "k"), UInt8(ascii: "l"):
-            selectDirectional(byte)
-            return true
-        case UInt8(ascii: "o"): // next pane (local)
-            renderQueue.async { [weak self] in self?.cycleActive(+1) }
-            return true
-        case UInt8(ascii: ";"): // previous pane (local)
-            renderQueue.async { [weak self] in self?.cycleActive(-1) }
-            return true
-        case UInt8(ascii: "c"): // new tab, then follow to it
-            renderQueue.async { [weak self] in
-                guard let self, let ws = self.workspaceID else { return }
-                _ = try? self.client.request(.newTab(workspaceID: ws, cwd: nil), timeout: 2)
-                self.switchToActiveTab()
+    // MARK: Prefix → KeySpec → Command → IPC
+
+    enum KeySpecDecode: Equatable {
+        case complete(KeySpec)
+        case incomplete
+        case literalPrefix
+        case invalid
+    }
+
+    /// Decode the bytes captured after the prefix into a single `KeySpec`. Handles
+    /// printable keys, `C-<letter>` control bytes, `M-<key>` (ESC-prefixed), and the
+    /// CSI/SS3 arrow keys with xterm modifier encodings — so the prefix table's
+    /// `Up`/`S-Left`/… bindings resolve over a raw TTY, including split reads.
+    static func decodeKeySpec(_ bytes: [UInt8]) -> KeySpecDecode {
+        guard let first = bytes.first else { return .incomplete }
+        if first == 0x01 && bytes.count == 1 { return .literalPrefix }
+
+        if first == 0x1b { // ESC
+            if bytes.count == 1 { return .incomplete }
+            let second = bytes[1]
+            if second == UInt8(ascii: "[") || second == UInt8(ascii: "O") {
+                return decodeCSI(bytes)
             }
-            return true
-        case UInt8(ascii: "n"): // next tab
-            renderQueue.async { [weak self] in self?.stepTab(+1) }
-            return true
-        case UInt8(ascii: "p"): // previous tab
-            renderQueue.async { [weak self] in self?.stepTab(-1) }
-            return true
-        case UInt8(ascii: "d"): // detach
+            if let scalar = printableScalar(second) {
+                return .complete(KeySpec(key: String(scalar), modifiers: .option))
+            }
+            return .invalid
+        }
+
+        // Control bytes 0x01–0x1a → C-a … C-z. (A leading prefix byte is consumed
+        // before we ever get here, so 0x01 only reaches this as a command key.)
+        if first >= 0x01 && first <= 0x1a {
+            let letter = Character(UnicodeScalar(first + 0x60))
+            return .complete(KeySpec(key: String(letter), modifiers: .control))
+        }
+        if first == 0x7f { return .complete(KeySpec(key: "BSpace")) }
+        if let scalar = printableScalar(first) {
+            return .complete(KeySpec(key: String(scalar)))
+        }
+        return .invalid
+    }
+
+    private static func decodeCSI(_ bytes: [UInt8]) -> KeySpecDecode {
+        // Forms: ESC [ A  |  ESC O A  |  ESC [ 1 ; <mod> <letter>
+        guard bytes.count >= 3 else { return .incomplete }
+        func arrowKey(_ b: UInt8) -> String? {
+            switch b {
+            case UInt8(ascii: "A"): return "Up"
+            case UInt8(ascii: "B"): return "Down"
+            case UInt8(ascii: "C"): return "Right"
+            case UInt8(ascii: "D"): return "Left"
+            default: return nil
+            }
+        }
+        let third = bytes[2]
+        if let key = arrowKey(third) { return .complete(KeySpec(key: key)) }
+        if third == UInt8(ascii: "1") {
+            guard bytes.count >= 4 else { return .incomplete }
+            guard bytes[3] == UInt8(ascii: ";") else { return .invalid }
+            guard bytes.count >= 6 else { return .incomplete }
+            guard let key = arrowKey(bytes[5]) else { return .invalid }
+            return .complete(KeySpec(key: key, modifiers: modifiers(fromXtermCode: bytes[4])))
+        }
+        return .invalid
+    }
+
+    private static func modifiers(fromXtermCode code: UInt8) -> KeySpec.Modifiers {
+        // xterm: code = 1 + (shift=1 | alt=2 | ctrl=4). "2"=shift, "3"=alt, "5"=ctrl, "6"=ctrl+shift.
+        let value = Int(code) - Int(UInt8(ascii: "0")) - 1
+        var mods = KeySpec.Modifiers()
+        if value & 1 != 0 { mods.insert(.shift) }
+        if value & 2 != 0 { mods.insert(.option) }
+        if value & 4 != 0 { mods.insert(.control) }
+        return mods
+    }
+
+    private static func printableScalar(_ byte: UInt8) -> Unicode.Scalar? {
+        (byte >= 0x20 && byte < 0x7f) ? Unicode.Scalar(byte) : nil
+    }
+
+    /// Look a `KeySpec` up in the merged prefix table and run its `Command`.
+    /// Returns false if nothing is bound (caller forwards the bytes verbatim).
+    private func handleBoundKey(_ spec: KeySpec) -> Bool {
+        guard let binding = keyTables.table(.prefix)?.lookup(spec) else { return false }
+        let command = binding.command
+        renderQueue.async { [weak self] in self?.execute(command) }
+        return true
+    }
+
+    /// Translate a `Command` to IPC through the shared `CommandIPCTranslator` and
+    /// run it, or handle the client-local verbs here. Runs on `renderQueue`.
+    private func execute(_ command: Command) {
+        if case let .sequence(commands) = command {
+            for sub in commands { execute(sub) }
+            return
+        }
+        guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1) else { return }
+        latestSnapshot = snapshot
+        let target = CommandTarget(
+            snapshot: snapshot,
+            focusedWorkspaceID: workspaceID,
+            focusedTabID: tab.id,
+            focusedPaneID: activePaneID,
+            markedPaneID: markedPaneID
+        )
+        switch CommandIPCTranslator.translate(command, target: target) {
+        case let .requests(requests):
+            for request in requests { _ = try? client.request(request, timeout: 2) }
+            checkStructure()
+        case let .clientLocal(local):
+            handleLocalCommand(local, target: target)
+        case .unresolved:
+            break
+        }
+    }
+
+    /// The client-local verbs the translator hands back: detach, marked-pane
+    /// tracking, and a transient status message. Modes the compositor renders in
+    /// later phases (copy-mode/synchronize/display-panes) are intentional no-ops
+    /// here rather than leaking stray bytes to the focused pane.
+    private func handleLocalCommand(_ command: Command, target: CommandTarget) {
+        switch command {
+        case .detachClient:
             requestDetach()
-            return true
+        case let .markPane(set):
+            markedPaneID = set ? activePaneID : nil
+            flashStatus(set ? "marked pane" : "marked pane cleared")
+        case let .displayMessage(format):
+            flashStatus(FormatString.evaluate(format, context: formatContext(target: target)))
+        case .copyMode, .synchronizePanes, .displayPanes, .showCheatsheet,
+             .sourceConfig, .reloadKeybindings, .bindKey, .unbindKey, .listKeys,
+             .renameWindow, .renameSession, .runShell, .ifShell:
+            break
         default:
-            return false
+            break
         }
-    }
-
-    /// Run a pane-targeted structural IPC op against the active pane, then
-    /// rebuild from the fresh snapshot.
-    private func structureOp(_ make: @escaping @Sendable (PaneID) -> IPCRequest) {
-        renderQueue.async { [weak self] in
-            guard let self, let pid = self.activePaneID else { return }
-            _ = try? self.client.request(make(pid), timeout: 2)
-            self.checkStructure()
-        }
-    }
-
-    private func selectDirectional(_ byte: UInt8) {
-        let axis: DirectionalAxis
-        switch byte {
-        case UInt8(ascii: "h"): axis = .left
-        case UInt8(ascii: "l"): axis = .right
-        case UInt8(ascii: "k"): axis = .up
-        default: axis = .down
-        }
-        renderQueue.async { [weak self] in
-            guard let self, let pid = self.activePaneID else { return }
-            if case let .paneID(neighbor)? = try? self.client.request(.selectPaneDirectional(currentPaneID: pid, direction: axis), timeout: 1),
-               let rect = self.rects.first(where: { $0.paneID == neighbor }) {
-                self.activeSurface = rect.surfaceID.uuidString
-                self.compositor.invalidate()
-                self.composeAndWrite()
-            }
-        }
-    }
-
-    /// Re-resolve the workspace's active tab and rebuild if it changed (used
-    /// after creating a tab). Runs on `renderQueue`.
-    private func switchToActiveTab() {
-        guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1),
-              let ws = snapshot.workspaces.first(where: { $0.id == workspaceID }) ?? snapshot.workspaces.first,
-              let sess = ws.sessions.first(where: { $0.id == ws.activeSessionID }) ?? ws.sessions.first,
-              let active = sess.tabs.first(where: { $0.id == sess.activeTabID }) ?? sess.tabs.first
-        else { return }
-        if active.id != tab.id { tab = active; rebuildLayout(initial: false) }
-    }
-
-    /// Move to the next/previous tab in the active session. Runs on `renderQueue`.
-    private func stepTab(_ delta: Int) {
-        guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1),
-              let ws = snapshot.workspaces.first(where: { $0.id == workspaceID }) ?? snapshot.workspaces.first,
-              let sess = ws.sessions.first(where: { $0.tabs.contains(where: { $0.id == tab.id }) }),
-              let idx = sess.tabs.firstIndex(where: { $0.id == tab.id })
-        else { return }
-        let next = ((idx + delta) % sess.tabs.count + sess.tabs.count) % sess.tabs.count
-        let target = sess.tabs[next]
-        guard target.id != tab.id else { return }
-        _ = try? client.request(.selectTab(workspaceID: ws.id, tabID: target.id), timeout: 1)
-        tab = target
-        rebuildLayout(initial: false)
-    }
-
-    private func cycleActive(_ delta: Int) {
-        guard !rects.isEmpty else { return }
-        let ids = rects.map { $0.surfaceID.uuidString }
-        let cur = activeSurface.flatMap { ids.firstIndex(of: $0) } ?? 0
-        let next = ((cur + delta) % ids.count + ids.count) % ids.count
-        activeSurface = ids[next]
-        compositor.invalidate()
-        composeAndWrite()
     }
 
     // MARK: Structure changes
 
-    private func installStructurePoll() {
-        let timer = DispatchSource.makeTimerSource(queue: renderQueue)
-        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
-        timer.setEventHandler { [weak self] in self?.checkStructure() }
-        timer.resume()
-        pollTimer = timer
+    /// Subscribe to daemon snapshot pushes — re-check structure on every layout commit,
+    /// instead of the old 0.5s poll. The push is the mechanism; `onEnd` (daemon gone /
+    /// socket closed) falls through to detach via the next structure check.
+    private func installSnapshotSubscription() {
+        snapshotSubscription = try? client.subscribeSnapshot(
+            label: "attach-window",
+            onRevision: { [weak self] _ in self?.scheduleStructureCheck() },
+            onEnd: { [weak self] in self?.scheduleStructureCheck() }
+        )
     }
 
     private func scheduleStructureCheck() {
         renderQueue.async { [weak self] in self?.checkStructure() }
     }
 
-    /// Re-fetch the tab; if its split tree changed, rebuild the layout. Runs on
-    /// `renderQueue`.
+    /// Re-fetch the snapshot and follow the session's active window. If the
+    /// session focuses a different tab (GUI switch, `next-window`, new tab) we
+    /// re-pin to it; otherwise we rebuild only when the focused tab's structure,
+    /// zoom, title, or active pane changed. Runs on `renderQueue`.
     private func checkStructure() {
         guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1) else { return }
-        guard let latest = WindowAttachClient.resolveTabByID(snapshot, id: tab.id) else {
-            // Tab is gone — detach.
-            requestDetach()
+        latestSnapshot = snapshot
+        guard let session = WindowAttachClient.session(snapshot, id: sessionID) else {
+            requestDetach()   // session destroyed
             return
         }
-        if latest.rootPane != tab.rootPane || latest.zoomedPaneID != tab.zoomedPaneID || latest.title != tab.title {
+        // Follow the session's focused window (or fall back to its first tab).
+        let focused = session.tabs.first(where: { $0.id == session.activeTabID }) ?? session.tabs.first
+        guard let latest = focused else {
+            requestDetach()   // session has no tabs left
+            return
+        }
+        let changed = latest.id != tab.id
+            || latest.rootPane != tab.rootPane
+            || latest.zoomedPaneID != tab.zoomedPaneID
+            || latest.title != tab.title
+            || latest.activePaneID != tab.activePaneID
+        if changed {
             tab = latest
             rebuildLayout(initial: false)
         }
@@ -510,7 +698,7 @@ private final class WindowSession: @unchecked Sendable {
     }
 
     private func teardown() {
-        pollTimer?.cancel()
+        snapshotSubscription?.cancel()
         sigwinch?.cancel()
         sigterm?.cancel()
         for sub in subscriptions { sub.cancel() }
@@ -530,6 +718,13 @@ extension WindowAttachClient {
             for sess in ws.sessions {
                 if let t = sess.tabs.first(where: { $0.id == id }) { return t }
             }
+        }
+        return nil
+    }
+
+    static func session(_ snapshot: SessionSnapshot, id: SessionID) -> SessionGroup? {
+        for ws in snapshot.workspaces {
+            if let s = ws.sessions.first(where: { $0.id == id }) { return s }
         }
         return nil
     }

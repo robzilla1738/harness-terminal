@@ -19,6 +19,9 @@ final class SessionCoordinator: NSObject {
     /// Most-recently-active pane within the current tab, for `select-pane -l`
     /// (last-pane). Updated only on genuine intra-tab pane switches.
     private(set) var lastActiveSurfaceID: SurfaceID?
+    /// Set while reflecting the daemon's `activePaneID` into local focus, so the
+    /// `setActiveSurface` push doesn't echo back to the daemon (feedback loop).
+    private var suppressActivePaneSync = false
     /// The marked pane (`select-pane -m`) — implicit source for `join-pane`.
     private(set) var markedSurfaceID: SurfaceID?
     /// Tabs with `synchronize-panes` on — input typed in any pane mirrors to all.
@@ -88,6 +91,7 @@ final class SessionCoordinator: NSObject {
         }
         syncWaitingRings()
         updateDockBadge(from: remote)
+        reflectRemoteActivePane()
         NotificationCenter.default.post(
             name: NotificationBus.shared.snapshotChanged,
             object: nil,
@@ -536,6 +540,48 @@ final class SessionCoordinator: NSObject {
         let showBorder = surfaceID.map { paneCount(forSurface: $0) > 1 } ?? false
         for host in terminalHosts.allHosts() {
             host.showsActiveBorder = showBorder && host.surfaceID == surfaceID
+        }
+        // Push focus to the daemon (single source of truth) so other clients —
+        // attach-window compositors, target-less CLI commands — agree on the active
+        // pane. Suppressed while reflecting a remote change to avoid a feedback loop.
+        if !suppressActivePaneSync, let surfaceID, let loc = tabAndPane(forSurface: surfaceID) {
+            _ = requestDaemon(.selectPane(tabID: loc.tabID, paneID: loc.paneID))
+        }
+    }
+
+    /// Resolve the owning tab + pane IDs for a surface, for daemon focus sync.
+    private func tabAndPane(forSurface surfaceID: SurfaceID) -> (tabID: TabID, paneID: PaneID)? {
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if let pane = paneID(for: surfaceID, in: tab.rootPane) {
+                        return (tab.id, pane)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Reflect the daemon's authoritative `activePaneID` (e.g. changed by another
+    /// client) into local focus, without echoing the change back to the daemon.
+    private func reflectRemoteActivePane() {
+        guard let tab = snapshot.activeWorkspace?.activeTab,
+              let paneID = tab.activePaneID,
+              let surfaceID = surfaceID(forPaneID: paneID, in: tab.rootPane),
+              surfaceID != activeSurfaceID
+        else { return }
+        suppressActivePaneSync = true
+        setActiveSurface(surfaceID)
+        suppressActivePaneSync = false
+    }
+
+    /// Surface backing a pane within a node (inverse of `paneID(for:in:)`).
+    private func surfaceID(forPaneID paneID: PaneID, in node: PaneNode) -> SurfaceID? {
+        switch node {
+        case let .leaf(leaf): return leaf.id == paneID ? leaf.surfaceID : nil
+        case let .branch(_, _, first, second):
+            return surfaceID(forPaneID: paneID, in: first) ?? surfaceID(forPaneID: paneID, in: second)
         }
     }
 

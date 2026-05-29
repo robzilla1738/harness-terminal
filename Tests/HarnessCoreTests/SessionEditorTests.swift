@@ -22,6 +22,67 @@ final class SessionEditorTests: XCTestCase {
         XCTAssertEqual(updated.activeSessionID, secondSessionID)
     }
 
+    // MARK: - Server-side active pane (Phase 2)
+
+    func testSplitFocusesNewPane() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab = try XCTUnwrap(ws.activeTab)
+        let firstPane = try XCTUnwrap(tab.rootPane.allPaneIDs().first)
+        let newPane = try XCTUnwrap(editor.splitPane(in: ws.id, tabID: tab.id, paneID: firstPane, direction: .vertical))
+        let updated = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
+        XCTAssertEqual(updated.activePaneID, newPane, "focus follows the split")
+        XCTAssertEqual(updated.lastActivePaneID, firstPane, "previous pane becomes MRU")
+    }
+
+    func testKillActivePanePromotesMRU() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab = try XCTUnwrap(ws.activeTab)
+        let firstPane = try XCTUnwrap(tab.rootPane.allPaneIDs().first)
+        let newPane = try XCTUnwrap(editor.splitPane(in: ws.id, tabID: tab.id, paneID: firstPane, direction: .vertical))
+        XCTAssertTrue(editor.killPane(newPane))
+        let updated = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
+        XCTAssertEqual(updated.activePaneID, firstPane, "killing the active pane promotes the MRU pane")
+        XCTAssertNil(updated.lastActivePaneID)
+    }
+
+    func testSetActivePaneTracksMRUAndValidatesMembership() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab = try XCTUnwrap(ws.activeTab)
+        let a = try XCTUnwrap(tab.rootPane.allPaneIDs().first)
+        let b = try XCTUnwrap(editor.splitPane(in: ws.id, tabID: tab.id, paneID: a, direction: .horizontal))
+
+        XCTAssertTrue(editor.setActivePane(workspaceID: ws.id, tabID: tab.id, paneID: a))
+        var t = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
+        XCTAssertEqual(t.activePaneID, a)
+        XCTAssertEqual(t.lastActivePaneID, b)
+
+        XCTAssertTrue(editor.setActivePane(workspaceID: ws.id, tabID: tab.id, paneID: b))
+        t = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
+        XCTAssertEqual(t.activePaneID, b)
+        XCTAssertEqual(t.lastActivePaneID, a)
+
+        XCTAssertFalse(editor.setActivePane(workspaceID: ws.id, tabID: tab.id, paneID: UUID()),
+                       "a pane not in the tab is rejected")
+    }
+
+    /// v2 layout.json had no `activePaneID`/`lastActivePaneID`; decoding must backfill
+    /// the focus to the first leaf so older files load with a valid active pane.
+    func testTabDecodeBackfillsActivePaneFromV2() throws {
+        let tab = Tab(title: "t", cwd: "/tmp")
+        let data = try JSONEncoder().encode(tab)
+        var dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        dict.removeValue(forKey: "activePaneID")
+        dict.removeValue(forKey: "lastActivePaneID")
+        let stripped = try JSONSerialization.data(withJSONObject: dict)
+        let decoded = try JSONDecoder().decode(Tab.self, from: stripped)
+        XCTAssertNotNil(decoded.activePaneID)
+        XCTAssertEqual(decoded.activePaneID, decoded.rootPane.allPaneIDs().first)
+        XCTAssertNil(decoded.lastActivePaneID)
+    }
+
     func testNewTabFallsBackToExistingParentDirectory() throws {
         var editor = SessionEditor()
         let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)

@@ -128,11 +128,13 @@ final class HarnessSidebarPanelViewController: NSViewController {
             workspaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             workspaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             workspaceBar.heightAnchor.constraint(equalToConstant: HarnessDesign.workspaceBarHeight),
-            workspacePill.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.horizontalInset - 4),
+            // Left/right edges line up exactly with the search field below
+            // (both at horizontalInset) so the header reads as one aligned column.
+            workspacePill.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.horizontalInset),
             workspacePill.trailingAnchor.constraint(equalTo: notificationBell.leadingAnchor, constant: -6),
             workspacePill.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
             workspacePill.heightAnchor.constraint(equalToConstant: 30),
-            notificationBell.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
+            notificationBell.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -HarnessDesign.horizontalInset),
             notificationBell.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
             notificationBell.widthAnchor.constraint(equalToConstant: 30),
             notificationBell.heightAnchor.constraint(equalToConstant: 30),
@@ -213,7 +215,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         sectionHeader.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.makeClear(sectionHeader)
 
-        sectionLabel.font = .systemFont(ofSize: 10.5, weight: .semibold)
+        sectionLabel.font = HarnessDesign.Typography.sectionLabel
         sectionLabel.stringValue = "SESSIONS"
         sectionLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -244,8 +246,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         searchField.isBezeled = false
         searchField.isBordered = false
         searchField.drawsBackground = false
-        searchField.placeholderString = "Search sessions…"
-        searchField.font = .systemFont(ofSize: 12)
+        searchField.font = HarnessDesign.Typography.sidebarLabel
         searchField.focusRingType = .none
         searchField.sendsSearchStringImmediately = true
         searchField.sendsWholeSearchString = false
@@ -270,6 +271,17 @@ final class HarnessSidebarPanelViewController: NSViewController {
         let c = HarnessChrome.current
         searchContainer.layer?.backgroundColor = c.surfaceElevated.cgColor
         searchContainer.layer?.borderColor = c.border.cgColor
+        // Typed text + placeholder share the standardized label font, and the
+        // placeholder uses the same resting color as the workspace name so the two
+        // header rows read as identical type.
+        searchField.textColor = c.textPrimary
+        searchField.placeholderAttributedString = NSAttributedString(
+            string: "Search sessions…",
+            attributes: [
+                .foregroundColor: c.textSecondary,
+                .font: HarnessDesign.Typography.sidebarLabel,
+            ]
+        )
     }
 
     @objc private func searchChanged() {
@@ -624,10 +636,11 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
     // MARK: - Session kebab menu
 
-    /// Per-session actions popped from the card's ⋮ button (Warp-style). Items map
-    /// to existing capabilities — rename via the `renameSession` IPC, close via
-    /// `closeSession`, and clipboard copies handled locally.
-    private func showSessionActions(for session: SessionGroup, anchor: NSView) {
+    /// Per-session actions shown on right-click of a session card (Warp-style).
+    /// Items map to existing capabilities — rename via the `renameSession` IPC,
+    /// close via `closeSession`, and clipboard copies handled locally. Returned for
+    /// AppKit to position at the cursor (no manual `popUp`).
+    private func sessionActionsMenu(for session: SessionGroup) -> NSMenu {
         let menu = NSMenu()
 
         let rename = NSMenuItem(title: "Rename session…", action: #selector(renameSessionFromMenu(_:)), keyEquivalent: "")
@@ -659,8 +672,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             menu.addItem(closeOthers)
         }
 
-        let point = NSPoint(x: 0, y: anchor.bounds.height + 4)
-        menu.popUp(positioning: nil, at: point, in: anchor)
+        return menu
     }
 
     private func session(for id: SessionID) -> SessionGroup? {
@@ -785,11 +797,8 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
             session: session,
             isSelected: session.id == SessionCoordinator.shared.snapshot.activeWorkspace?.activeSessionID
         )
-        cell.onClose = { [weak self] in
-            self?.confirmCloseSession(session)
-        }
-        cell.onMore = { [weak self] anchor in
-            self?.showSessionActions(for: session, anchor: anchor)
+        cell.onContextMenu = { [weak self] in
+            self?.sessionActionsMenu(for: session)
         }
         return cell
     }
@@ -941,7 +950,7 @@ private final class WorkspaceSwitcherRow: NSView {
         icon.imageScaling = .scaleProportionallyUpOrDown
 
         titleLabel.stringValue = title
-        titleLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        titleLabel.font = HarnessDesign.Typography.sidebarLabel
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         toolTip = title
@@ -1062,11 +1071,13 @@ final class WorkspacePillButton: NSButton {
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.imageScaling = .scaleProportionallyUpOrDown
 
-        nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        nameLabel.font = HarnessDesign.Typography.sidebarLabel
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let chevronConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        // All header glyphs share one weight (.medium) so the icon set reads as a
+        // single uniform pack rather than a mix of semibold/medium symbols.
+        let chevronConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
         chevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
             .withSymbolConfiguration(chevronConfig)
         chevron.translatesAutoresizingMaskIntoConstraints = false
@@ -1074,7 +1085,7 @@ final class WorkspacePillButton: NSButton {
         // Ellipsis: quick actions (rename, delete) without opening the workspace
         // dropdown first. Its own NSButton so the click is captured here instead
         // of falling through to the pill's primary action.
-        let moreConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        let moreConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
         moreButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Workspace actions")?
             .withSymbolConfiguration(moreConfig)
         moreButton.imagePosition = .imageOnly
@@ -1091,7 +1102,7 @@ final class WorkspacePillButton: NSButton {
         addSubview(chevron)
 
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 16),
             icon.heightAnchor.constraint(equalToConstant: 16),
@@ -1152,7 +1163,9 @@ final class WorkspacePillButton: NSButton {
         let resting = c.surfaceElevated
         let hover = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.12)
         layer?.backgroundColor = (isHovered ? hover : resting).cgColor
-        nameLabel.textColor = c.textPrimary
+        // Resting color matches the search placeholder (textSecondary); brightens to
+        // primary on hover — same resting/active rule used by every other label.
+        nameLabel.textColor = isHovered ? c.textPrimary : c.textSecondary
         icon.contentTintColor = isHovered ? c.textPrimary : c.textSecondary
         chevron.contentTintColor = isHovered ? c.textSecondary : c.textTertiary
         moreButton.contentTintColor = isHovered ? c.textSecondary : c.textTertiary
@@ -1163,16 +1176,14 @@ final class WorkspacePillButton: NSButton {
 
 @MainActor
 final class SessionCardRowView: NSView {
-    var onClose: (() -> Void)?
-    /// Fired by the ⋮ kebab — the anchor is the button, for menu positioning.
-    var onMore: ((NSView) -> Void)?
+    /// Builds the right-click actions menu for this row (rename, close, …). Shown
+    /// via `menu(for:)` — the row no longer carries inline ⋮ / × buttons.
+    var onContextMenu: (() -> NSMenu?)?
 
     private let fill = NSView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let agentChip = AgentChipView()
-    private let moreButton = HoverIconButton()
-    private let closeButton = HoverIconButton()
     private var isSelected = false
     private var isHovered = false
     private var trackingArea: NSTrackingArea?
@@ -1188,7 +1199,7 @@ final class SessionCardRowView: NSView {
         fill.layer?.masksToBounds = false
         fill.translatesAutoresizingMaskIntoConstraints = false
 
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.font = HarnessDesign.Typography.sidebarLabel
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         // The agent chip now carries the full tool name; let the title truncate to
@@ -1202,42 +1213,10 @@ final class SessionCardRowView: NSView {
         agentChip.translatesAutoresizingMaskIntoConstraints = false
         agentChip.isHidden = true
 
-        let xConfig = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close session")?
-            .withSymbolConfiguration(xConfig)
-        closeButton.imagePosition = .imageOnly
-        closeButton.isBordered = false
-        closeButton.bezelStyle = .smallSquare
-        closeButton.setButtonType(.momentaryChange)
-        closeButton.target = self
-        closeButton.action = #selector(closeClicked)
-        closeButton.translatesAutoresizingMaskIntoConstraints = false
-        closeButton.alphaValue = 0
-        closeButton.wantsLayer = true
-        closeButton.layer?.cornerRadius = 8
-        closeButton.layer?.cornerCurve = .continuous
-
-        let kebabConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
-        moreButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Session actions")?
-            .withSymbolConfiguration(kebabConfig)
-        moreButton.imagePosition = .imageOnly
-        moreButton.isBordered = false
-        moreButton.bezelStyle = .smallSquare
-        moreButton.setButtonType(.momentaryChange)
-        moreButton.target = self
-        moreButton.action = #selector(moreClicked)
-        moreButton.translatesAutoresizingMaskIntoConstraints = false
-        moreButton.alphaValue = 0
-        moreButton.wantsLayer = true
-        moreButton.layer?.cornerRadius = 8
-        moreButton.layer?.cornerCurve = .continuous
-
         addSubview(fill)
         fill.addSubview(titleLabel)
         fill.addSubview(metaLabel)
         fill.addSubview(agentChip)
-        fill.addSubview(moreButton)
-        fill.addSubview(closeButton)
 
         NSLayoutConstraint.activate([
             fill.topAnchor.constraint(equalTo: topAnchor, constant: 2),
@@ -1249,20 +1228,12 @@ final class SessionCardRowView: NSView {
             titleLabel.topAnchor.constraint(equalTo: fill.topAnchor, constant: 10),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: agentChip.leadingAnchor, constant: -6),
 
-            closeButton.trailingAnchor.constraint(equalTo: fill.trailingAnchor, constant: -8),
-            closeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 16),
-            closeButton.heightAnchor.constraint(equalToConstant: 16),
-
-            moreButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -2),
-            moreButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            moreButton.widthAnchor.constraint(equalToConstant: 16),
-            moreButton.heightAnchor.constraint(equalToConstant: 16),
-
-            agentChip.trailingAnchor.constraint(lessThanOrEqualTo: moreButton.leadingAnchor, constant: -6),
+            // No inline controls anymore — the agent chip sits flush to the card's
+            // trailing edge (actions moved to the right-click menu).
+            agentChip.trailingAnchor.constraint(equalTo: fill.trailingAnchor, constant: -10),
             agentChip.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             agentChip.heightAnchor.constraint(equalToConstant: 18),
-            agentChip.widthAnchor.constraint(lessThanOrEqualToConstant: 120),
+            agentChip.widthAnchor.constraint(lessThanOrEqualToConstant: 140),
 
             metaLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             metaLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
@@ -1314,12 +1285,8 @@ final class SessionCardRowView: NSView {
         setSelected(isSelected)
     }
 
-    @objc private func closeClicked() {
-        onClose?()
-    }
-
-    @objc private func moreClicked() {
-        onMore?(moreButton)
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onContextMenu?()
     }
 
     private func setSelected(_ selected: Bool) {
@@ -1351,12 +1318,6 @@ final class SessionCardRowView: NSView {
             HarnessDesign.applyShadow(.none, to: fill.layer)
             titleLabel.textColor = c.textSecondary
         }
-        // Controls appear only while the row is hovered (not merely selected); each
-        // button then carries its own hover highlight via HoverIconButton.
-        closeButton.alphaValue = isHovered ? 1 : 0
-        closeButton.contentTintColor = c.textTertiary
-        moreButton.alphaValue = isHovered ? 1 : 0
-        moreButton.contentTintColor = c.textTertiary
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -1403,7 +1364,7 @@ final class SidebarSettingsRow: NSView {
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.imageScaling = .scaleProportionallyUpOrDown
 
-        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.font = HarnessDesign.Typography.sidebarLabel
         label.translatesAutoresizingMaskIntoConstraints = false
         toolTip = "Settings (⌘,)"
 
@@ -1469,52 +1430,6 @@ final class SidebarSettingsRow: NSView {
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if bounds.contains(point) { onClick?() }
-    }
-}
-
-// MARK: - Hover icon button
-
-/// Tiny borderless icon button that highlights its own background when hovered —
-/// used for the session card's ⋮ and × controls so hovering each gives feedback.
-@MainActor
-final class HoverIconButton: NSButton {
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false { didSet { updateBackground() } }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 4
-        layer?.cornerCurve = .continuous
-        isBordered = false
-        bezelStyle = .smallSquare
-        setButtonType(.momentaryChange)
-        imagePosition = .imageOnly
-        updateBackground()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-
-    private func updateBackground() {
-        let c = HarnessDesign.chrome
-        layer?.backgroundColor = (isHovered ? c.iconHoverFill : .clear).cgColor
     }
 }
 

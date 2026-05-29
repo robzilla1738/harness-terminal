@@ -179,7 +179,17 @@ final class MainSplitViewController: NSViewController {
         let raw = min(1, max(0, (CACurrentMediaTime() - t0) / duration))
         // easeInOutQuad — smooth start and settle.
         let eased = raw < 0.5 ? 2 * raw * raw : 1 - pow(-2 * raw + 2, 2) / 2
+        // Drive the divider inside a transaction with implicit actions OFF and lay
+        // out synchronously each frame. Without this, the manual per-frame
+        // setPosition lets the sidebar's vibrancy/glass backdrop animate its bounds
+        // a frame behind the divider — it re-samples at the stale width and smears
+        // into the banding seen mid-collapse. Disabling actions + an immediate
+        // layout keeps the backdrop locked to the divider every step.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         split.setPosition(start + (target - start) * CGFloat(eased), ofDividerAt: 0)
+        split.layoutSubtreeIfNeeded()
+        CATransaction.commit()
         if raw >= 1 {
             if !visible { panel.isHidden = true }
             return

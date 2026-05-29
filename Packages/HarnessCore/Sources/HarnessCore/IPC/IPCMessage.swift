@@ -68,6 +68,14 @@ public enum IPCRequest: Codable, Sendable {
     case pasteBuffer(surfaceID: String, name: String?)
     // Phase 4: layouts + pane ops
     case selectPaneDirectional(currentPaneID: UUID, direction: DirectionalAxis)
+    /// Commit the active (focused) pane for a tab, server-side. Distinct from
+    /// `selectPaneDirectional`, which only computes a neighbor.
+    case selectPane(tabID: UUID, paneID: UUID)
+    /// Long-lived subscription: the daemon pushes `snapshotChanged(revision:)` on every
+    /// layout commit so clients (the attach-window compositor) re-render on structure
+    /// changes without polling. Intercepted by `DaemonServer` (FD-level), like
+    /// `subscribeSurfaceOutput`.
+    case subscribeSnapshot(label: String?)
     case applyLayout(tabID: UUID, layout: String, mainPaneID: UUID?)
     case nextLayout(tabID: UUID)
     case previousLayout(tabID: UUID)
@@ -78,6 +86,9 @@ public enum IPCRequest: Codable, Sendable {
     // Phase 6: options + hooks + display
     case setOption(scope: String, target: String?, key: String, rawValue: String)
     case showOptions(scope: String?)
+    /// Environment for spawned shells. `sessionID == nil` → global; `value == nil` → unset.
+    case setEnvironment(sessionID: UUID?, key: String, value: String?)
+    case showEnvironment(sessionID: UUID?)
     case bindHook(event: String, source: String, condition: String?)
     case unbindHook(id: UUID)
     case listHooks(event: String?)
@@ -113,6 +124,8 @@ public enum IPCResponse: Codable, Sendable {
     case snapshot(SessionSnapshot)
     case text(String)
     case data(Data, sequence: UInt64)
+    /// Pushed on a `subscribeSnapshot` channel when the layout commits at `revision`.
+    case snapshotChanged(revision: Int)
     case agentInfo(AgentSnapshot?)
     case clients([ClientSummary])
     case daemonStats(DaemonStats)

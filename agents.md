@@ -125,24 +125,28 @@ harness/
 ├── Harness.xcodeproj/             # generated via xcodegen
 ├── claude.md / agents.md          # this handbook
 ├── Apps/Harness/
-│   ├── Resources/Assets.xcassets
+│   ├── Resources/Assets.xcassets, Harness.icns (generated)
 │   └── Sources/HarnessApp/
-│       ├── AppDelegate.swift, main.swift
+│       ├── AppDelegate.swift, main.swift, Resources/Info.plist
 │       ├── Services/              # SessionCoordinator, MainExecutor, KeybindingsService,
-│       │                          # TerminalPaneRegistry, SurfaceShellTracker, CLIInstaller,
-│       │                          # DaemonLauncher
+│       │                          # TerminalPaneRegistry, TerminalPaneRegistryAccess,
+│       │                          # SurfaceShellTracker, CLIInstaller, DaemonLauncher
 │       ├── Settings/              # SettingsViewController, KeyRecorderView, LiveTerminalPreview
 │       └── UI/                    # MainSplit, sidebar, tabs, PrefixKeymap, CommandPrompt,
-│                                  # CopyMode, StatusLine, notifications, CommandPalette, Chrome
+│                                  # CopyMode, StatusLine, notifications, CommandPalette, Chrome,
+│                                  # DisplayPanesOverlay, AboutPanelController
 ├── Packages/
 │   ├── HarnessCore/               # Models, IPC, SessionEditor, Commands, Keybindings,
 │   │                              # Options, Events, Format, Layouts, Buffers, Agents,
 │   │                              # Session/PaneRectSolver (compositor pane layout)
-│   ├── HarnessTerminalKit/        # TerminalHostView, ThemeManager, GridCompositor
+│   ├── HarnessTerminalKit/        # TerminalHostView, ThemeManager, GridCompositor,
+│   │                              # TerminalColorPipeline, TerminalColorspace
 │   └── HarnessDaemon/
-│       ├── Sources/HarnessDaemon/ # HarnessDaemonCore: SurfaceRegistry, DaemonServer, RealPty
+│       ├── Sources/HarnessDaemon/ # HarnessDaemonCore: SurfaceRegistry, DaemonServer,
+│       │                          # RealPty, AgentScanner
 │       └── Sources/HarnessDaemonMain/main.swift
-├── Tools/harness/Sources/HarnessCLI/  # HarnessCLI, AttachClient, WindowAttachClient
+├── Tools/harness/Sources/HarnessCLI/  # HarnessCLI, AttachClient, WindowAttachClient,
+│                                      # AgentHookInstaller
 ├── Tests/
 │   ├── HarnessCoreTests/
 │   ├── HarnessDaemonTests/
@@ -241,7 +245,7 @@ Under `~/Library/Application Support/Harness/` (or `HARNESS_HOME`):
 
 ## Command system
 
-GUI actions — prefix key, `:` prompt, palette picks, menu items, daemon hooks — resolve to a **`Command`** ([`Command.swift`](Packages/HarnessCore/Sources/HarnessCore/Commands/Command.swift)), parsed by **`CommandParser`**. Many **`harness-cli` subcommands bypass `Command`** and call `DaemonClient` IPC directly (`notify`, `attach`, buffers, hooks, options, `detect-agent`, `join-pane`, layout ops with explicit `--tab`, etc.).
+GUI actions — prefix key, `:` prompt, palette picks, menu items, daemon hooks — resolve to a **`Command`** ([`Command.swift`](Packages/HarnessCore/Sources/HarnessCore/Commands/Command.swift)), parsed by **`CommandParser`**. Marked `join-pane -h/-v` (prefix `j` after `m`/`M`) is a normal `Command`. Many **`harness-cli` subcommands bypass `Command`** and call `DaemonClient` IPC directly (`notify`, `attach`, buffers, hooks, options, `detect-agent`, explicit `join-pane --src/--dst`, layout ops with explicit `--tab`, etc.).
 
 | Layer | Role |
 |-------|------|
@@ -268,7 +272,7 @@ Extend in [`IPCMessage.swift`](Packages/HarnessCore/Sources/HarnessCore/IPC/IPCM
 |-------|---------------------------|
 | **Health / query** | `ping`, `getSnapshot`, `listWorkspaces`, `listSurfaces`, `daemonStats`, `listClients` |
 | **Layout** | `newWorkspace`, `newSession`, `newTab`, `newTabInWorkspace`, `newSplit`, `closeTab/Session/Workspace`, `killPane`, `swapPanes`, `resizePane`, `resizePaneRatio`, `zoomPane`, `breakPane`, `joinPane`, `rotatePanes`, `applyLayout`, `nextLayout`, `previousLayout`, `selectPaneDirectional`, `respawnPane` |
-| **Selection** | `selectWorkspace`, `selectWorkspaceByName`, `selectSession`, `selectTab`, `reorderTab`, `reorderSession`, renames |
+| **Selection** | `selectWorkspace`, `selectWorkspaceByName`, `selectSession`, `selectTab`, `reorderTab`, `swapTab`, `reorderSession`, renames |
 | **Metadata** | `updateTabTitle/Cwd/GitBranch`, `setTheme`, `setKeepSessionsOnQuit`, `notify`, `clearNotification` |
 | **PTY I/O** | `createSurface`, `ensureSurface`, `attachSurface`, `sendData`, `send`/`sendKeys`, `capturePane`, `setCopyMode`, `resizeSurface` |
 | **Streaming** | `subscribeSurfaceOutput`, `cancelSubscription`, `replayScrollback`, `detachSurface`, `identifyClient`, `detachClient` |
@@ -276,9 +280,9 @@ Extend in [`IPCMessage.swift`](Packages/HarnessCore/Sources/HarnessCore/IPC/IPCM
 | **Options / hooks / UI** | `setOption`, `showOptions`, `bindHook`, `unbindHook`, `listHooks`, `displayMessage` |
 | **Agents** | `detectAgent` |
 
-**Responses:** `ok`, `pong`, typed IDs, `snapshot`, `text`, `data`, `agentInfo`, `clients`, `daemonStats`, `buffers`, `options`, `hooks`, `workspaces`, `surfaces`, `error`.
+**Responses:** `ok`, `pong`, typed IDs, `clientID`, `snapshot`, `text`, `data`, `agentInfo`, `clients`, `daemonStats`, `buffer`, `buffers`, `options`, `hooks`, `workspaces`, `surfaces`, `error`.
 
-**IPC-only (no CLI subcommand):** `closeWorkspace`, `reorderTab`, `reorderSession`, `resizePaneRatio`, `setTheme`, `setKeepSessionsOnQuit`, `clearNotification`, tab metadata updates (`updateTabTitle/Cwd/GitBranch`), streaming internals (`subscribeSurfaceOutput`, `ensureSurface`, etc.).
+**IPC-only (no CLI subcommand):** `closeWorkspace`, `reorderTab`, `swapTab`, `reorderSession`, `resizePaneRatio`, `setTheme`, `setKeepSessionsOnQuit`, `clearNotification`, tab metadata updates (`updateTabTitle/Cwd/GitBranch`), streaming internals (`subscribeSurfaceOutput`, `ensureSurface`, etc.).
 
 **markWaiting (invariant):** `notify` must resolve tab by **surface ID string** only — never mark all tabs waiting.
 
@@ -308,6 +312,7 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 | **Bindings** | `bind-key` (`bind`), `unbind-key` (`unbind`), `list-keys` (local `keybindings.json`) |
 | **Buffers** | `set-buffer`, `list-buffers`, `show-buffer`, `delete-buffer`, `paste-buffer --surface <uuid>` |
 | **Options** | `set-option` (`setw`) `-g status on`, `show-options -g` |
+| **Environment** | `set-environment [-g] [-u] [-s <sessionID>] <key> [value]` (`setenv`), `show-environment [-g] [-s <sessionID>]` (`showenv`) — injected into pane shells on spawn/respawn |
 | **Hooks** | `bind-hook after-new-tab 'display-message "new tab"'`, `list-hooks`, `unbind-hook --id <uuid>` |
 | **Agents** | `notify --surface "$HARNESS_SURFACE" --body "…"` (`--message` alias), `detect-agent`, `install-hooks claude-code` |
 | **Display** | `display-message '#{cwd_basename}'` |
@@ -316,7 +321,7 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 
 **Key tokens** (`KeyTokenParser`): `C-c`, `C-a`, `Enter`, `Up`, `M-x`, etc.
 
-**Note:** `join-pane` is CLI-only — not in the `Command` enum (no prefix/`: prompt` binding unless added).
+**Note:** Marked `join-pane -h/-v` is a normal `Command` (prefix `j`). The explicit `harness-cli join-pane --src --dst --direction` form bypasses `CommandParser` and calls IPC directly.
 
 ---
 
@@ -344,13 +349,19 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `TerminalGridSnapshot` | fork `…/TerminalGridSnapshot.swift` | Value snapshot of a viewport (codepoints, SGR-source colors, attrs, wide, cursor) |
 | `PaneRectSolver` | `HarnessCore/Session/PaneRectSolver.swift` | `PaneNode` + cols×rows → interior `[PaneRect]` with 1-cell dividers |
 | `GridCompositor` | `HarnessTerminalKit/GridCompositor.swift` | Panes → ANSI frame: box-drawing borders, SGR re-emit, back-buffer diff, status, cursor |
-| `WindowAttachClient` | `HarnessCLI/WindowAttachClient.swift` | Live wiring: subscribe/seed/composite, raw TTY (reuses `AttachClient`), SIGWINCH, prefix routing, 0.5s snapshot poll |
+| `WindowAttachClient` | `HarnessCLI/WindowAttachClient.swift` | Live wiring: subscribe/seed/composite, raw TTY (reuses `AttachClient`), SIGWINCH, **snapshot-push** structure tracking, prefix bytes → `KeyTable` → `CommandIPCTranslator`, follows the session's active tab |
 
-**Geometry invariant:** `.horizontal` = side-by-side (first = left), `.vertical` = stacked (first = top), `ratio` = first child's fraction — matches the GUI's `split.isVertical = direction == .horizontal`. **Surface-key invariant:** `PaneLeaf.surfaceID.uuidString` is the daemon surface key (used directly for `subscribeSurfaceOutput`/`sendData`/`resizeSurface`). **Active pane** is client-local today (cycle/select don't yet sync a server-side active pane — the model has no `activePaneID`).
+**Geometry invariant:** `.horizontal` = side-by-side (first = left), `.vertical` = stacked (first = top), `ratio` = first child's fraction — matches the GUI's `split.isVertical = direction == .horizontal`. **Surface-key invariant:** `PaneLeaf.surfaceID.uuidString` is the daemon surface key (used directly for `subscribeSurfaceOutput`/`sendData`/`resizeSurface`). **Active pane is server-authoritative** (`Tab.activePaneID`/`lastActivePaneID`, schema v3): cycle/directional select commit via `selectPane`/`selectPaneDirectional` IPC and the GUI + compositor mirror it.
 
-**Tests:** `HeadlessGridReadTests` (GridTerminal fidelity), `GridCompositorTests` (borders/SGR/diff), `PaneRectSolverTests` (layout). Run the AppKit-linked grid suite via `xcrun xctest` if `swift test`'s parallel runner is flaky.
+**Prefix routing:** the compositor decodes post-prefix bytes (printable / `C-x` / `M-x` / CSI+SS3 arrows with xterm mod codes, tolerant of split reads) into a `KeySpec`, looks it up in the merged prefix `KeyTable` (`KeybindingsStore.load` — user `keybindings.json` overrides apply), and runs the resulting `Command` through the shared **`CommandIPCTranslator`** (the same mapping the GUI `MainExecutor` and the daemon hook executor use). Status line is `FormatString` over `status`/`status-left`/`status-right` from `showOptions`.
 
-**Not yet (optional):** `subscribeSnapshot` push (replace the poll), multi-client smallest-wins sizing, server-side active-pane sync, prefix→full `CommandParser` routing + copy-mode in the compositor.
+**`CommandIPCTranslator`** (`HarnessCore/Commands`): pure `Command` + `CommandTarget` → `.requests([IPCRequest])` / `.clientLocal(Command)` / `.unresolved`. The **one** home of the split-direction inversion (`Command.SplitDirection` is divider-orientation — `.vertical` = side-by-side per `CommandParser`; the layout `SplitDirection` is the opposite, so `layoutDirection(for:)` inverts). Adopted by the GUI, the compositor, and `DaemonCommandExecutor` so a prefix verb, a `keybindings.json` override, and a hook-fired command behave identically.
+
+**Multi-client sizing:** `DaemonServer` records each client's requested PTY size per surface and resizes to the **smallest** (tmux `window-size smallest`); a surface grows back when a small client detaches.
+
+**Tests:** `HeadlessGridReadTests` (GridTerminal fidelity), `GridCompositorTests` (borders/SGR/diff), `PaneRectSolverTests` (layout), `CommandIPCTranslatorTests` (verb mapping + split inversion). Run the AppKit-linked grid suite via `xcrun xctest` if `swift test`'s parallel runner is flaky.
+
+**Roadmap (see [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md)):** copy-mode + SGR mouse in the compositor; control mode (`-CC`); `command-prompt %%`/`choose-*`; `-t session:window.pane` target parsing.
 
 ---
 
@@ -362,10 +373,11 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 |-------|---------|
 | `fontSize`, `fontFamily`, `defaultShell`, `defaultCWD` | Terminal defaults |
 | `customBackgroundHex`, `customForegroundHex`, `customCursorHex` | Canvas colors; resolved via `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) for terminal **and** chrome |
-| `windowPaddingX/Y`, `backgroundOpacity` (0.05–1), `backgroundBlur` (0–100) | Window translucency; one uniform CGS `WindowBlur` for the whole window |
+| `windowPaddingX/Y`, `backgroundOpacity` (0.05–1), `backgroundBlur` (0–100) | Chrome translucency; one uniform CGS `WindowBlur` for the whole window (terminal stays opaque) |
+| `vividColors`, `linearBlending` | Display-P3 vs sRGB colorspace; native vs gamma-correct alpha blending (`TerminalColorPipeline`) |
 | `prefixKey` | Prefix binding (`ctrl-a`; empty disables); edited via `KeyRecorderView` in Settings |
 | `scrollbackLines` | Scrollback size |
-| `cursorStyle`, `cursorBlink`, `copyOnSelect`, `minimumContrast` | Terminal behavior / contrast (Ghostty parity) |
+| `cursorStyle`, `cursorBlink`, `copyOnSelect` | Terminal behavior (Ghostty parity) |
 | `dividerHex`, `statusLineHex` | Chrome accents (nil → derive from theme) |
 | `selection*Hex`, `boldColorHex`, `cursorTextHex`, `paletteHex[16]` | Terminal colors (Ghostty parity); seeded by theme preset, pushed to libghostty |
 | `agentColorOverrides` | Per-agent brand color overrides |
@@ -373,9 +385,9 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `ghosttyConfigSignature` | Fingerprint of last Ghostty import (migration) |
 | `transparentTitlebar`, `sidebarVisible` | Chrome |
 
-**Ghostty import** (`GhosttyConfigImporter`): tries four candidate paths (see On-disk layout). **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`.
+**Ghostty import** (`GhosttyConfigImporter`): tries four candidate paths (see On-disk layout). **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is parsed on import for fingerprint only — not stored in `settings.json`.
 
-**Apply colors (single source of truth):** `ThemeManager.resolvedCanvas(themeName:custom*Hex:)` resolves bg/fg/cursor (explicit custom > theme preset > baseline). **Both** `TerminalHostView.configureTerminalBuilder` and `HarnessChrome.update` consume it, so terminal and chrome paint the **identical** canvas — no seam. Selecting a theme seeds the full editable color set into `settings.json` (`SessionCoordinator.setTheme` + `ThemeManager.presetColors`); colors then flow from settings, never the libghostty theme slot (kept empty via `emptyControllerTheme`). Selection/bold/cursor-text/16-ANSI-palette/min-contrast are pushed to libghostty in `configureTerminalBuilder`. **Translucency + blur:** libghostty `background-opacity` for per-pixel color translucency + ONE window-wide CGS `WindowBlur` for the whole window (the private API Ghostty uses); chrome hides its vibrancy material when translucent so the single blur is uniform across terminal + chrome (no double-composite). Chrome backdrop: `ChromeBackdrop` with `.underWindowBackground` or Liquid Glass — **not** `.sidebar` / `.titlebar` (blue tint).
+**Apply colors (single source of truth):** `ThemeManager.resolvedCanvas(themeName:custom*Hex:)` resolves bg/fg/cursor (explicit custom > theme preset > baseline). **Both** `TerminalHostView.configureTerminalBuilder` and `HarnessChrome.update` consume it, so terminal and chrome paint the **identical** canvas — no seam. Selecting a theme seeds the full editable color set into `settings.json` (`SessionCoordinator.setTheme` + `ThemeManager.presetColors`); colors then flow from settings, never the libghostty theme slot (kept empty via `emptyControllerTheme`). Selection/bold/cursor-text/16-ANSI-palette are pushed to libghostty in `configureTerminalBuilder`. **Translucency + blur:** The terminal surface is always fully opaque (`withBackgroundOpacity(1.0)`) so colors stay true-Ghostty rich. `backgroundOpacity` and the one window-wide CGS `WindowBlur` apply to **chrome** (sidebar, tab strip, status line) via `HarnessChrome` — not per-pixel libghostty terminal opacity. Chrome hides its vibrancy material when translucent so the single blur is uniform (no double-composite). Chrome backdrop: `ChromeBackdrop` with `.underWindowBackground` or Liquid Glass — **not** `.sidebar` / `.titlebar` (blue tint).
 
 ---
 
@@ -399,6 +411,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 - Cheatsheet (`prefix ?`): generated from live `prefix` table
 - Command prompt: `Cmd+;` or `prefix :` — history, any `Command` string
 - Directional nav: `select-pane -L/-R/-U/-D` via daemon tree walk (not simple cycle)
+- GUI prefix pane nav uses **arrow keys** (`Up`/`Down`/`Left`/`Right`). The `attach-window` compositor uses **`hjkl`** instead.
 
 **Default bindings:** [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md)
 
@@ -421,7 +434,7 @@ harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 
 Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.json`): `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted` (full list in [docs/COMMANDS.md](docs/COMMANDS.md)).
 
-**UI:** `SessionCardRowView`, `TabPillView`, agent dot when `working`, `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated by `systemNotificationsEnabled`.
+**UI:** `SessionCardRowView`, `TabPillView`, **`AgentChipView`** in sidebar/session rows when agent kind is detected or inferred (static chip, not activity-gated), `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated by `systemNotificationsEnabled`.
 
 ---
 
@@ -447,6 +460,8 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Copy mode | `CopyModeViewController` | Vim-style; yank to pasteboard + buffer |
 | Status line | `StatusLineView` | `OptionStore` + `FormatString` |
 | Notifications | `NotificationBellButton`, `NotificationDropdownPanelView` | Waiting-tab badge + dropdown |
+| Display panes | `DisplayPanesOverlay` | Prefix `q` / `display-panes` — tmux-style numbered overlay |
+| About | `AboutPanelController` | Menu → About Harness |
 | Prefix / prompt | `PrefixKeymap`, `CommandPromptController` | |
 | Palette | `CommandPaletteController` | `Cmd+K`, MRU; featured themes only |
 | Design / chrome | `HarnessDesign`, `HarnessChrome` | Tokens, `ChromeBackdrop`, Liquid Glass |
@@ -456,6 +471,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Executor | `MainExecutor` | `Command` → coordinator |
 | Keybindings | `KeybindingsService` | Load/merge `keybindings.json` |
 | Pane registry | `TerminalPaneRegistry` | Reuse `TerminalHostView` by `SurfaceID` |
+| Pane lookup | `TerminalPaneRegistryAccess` | `@MainActor` lookup by `SurfaceID` |
 | Shell tracker | `SurfaceShellTracker` | cwd polling via proc tree |
 | Daemon fallback | `DaemonLauncher` | Starts daemon when launchd unavailable |
 | Terminal | `TerminalHostView` | In-memory ghostty, daemon I/O |
@@ -476,13 +492,13 @@ HARNESS_LIVE_DAEMON_TESTS=1 swift test        # + real shell / socket tests
 
 `make package` is an alias for `make release`.
 
-Bundle in `Harness.app/Contents/MacOS/`: `Harness`, `HarnessDaemon`, `harness-cli`, `Harness.icns`.
+Bundle in `Harness.app/Contents/MacOS/`: `Harness`, `HarnessDaemon`, `harness-cli`; icon at `Contents/Resources/Harness.icns`.
 
-**HarnessCoreTests:** `SessionEditor`, `SessionEditorPhase4`, `IPCCodec`, `KeyTokenParser`, `KeyTable`, `FormatString`, `CommandParser`, `PasteBufferStore`, `LaunchAgentInstaller`, `HarnessSettings`, `AgentDetector`, `DaemonClient`, `HarnessPaths`, `GhosttyConfigImporter`.
+**HarnessCoreTests:** `SessionEditor`, `SessionEditorPhase4`, `IPCCodec`, `KeyTokenParser`, `KeyTable`, `FormatString`, `CommandParser`, `PasteBufferStore`, `LaunchAgentInstaller`, `HarnessSettings`, `AgentDetector`, `DaemonClient`, `HarnessPaths`, `GhosttyConfigImporter`, `PaneRectSolver`.
 
-**HarnessDaemonTests:** `SurfaceRegistry`, `ShellLaunchProfile`, `DaemonRoundTrip`, `RealPtyLifecycle` (live PTY/socket opt-in via env var).
+**HarnessDaemonTests:** `SurfaceRegistry`, `ShellLaunchProfile`, `DaemonRoundTrip`, `RealPtyLifecycle` (`DaemonRoundTrip` and `RealPtyLifecycle` opt-in via `HARNESS_LIVE_DAEMON_TESTS=1`).
 
-**HarnessTerminalKitTests:** `TerminalColorPipeline`.
+**HarnessTerminalKitTests:** `TerminalColorPipeline`, `GridCompositorTests`, `HeadlessGridReadTests`.
 
 **Smoke:**
 
@@ -529,11 +545,11 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 4. Notifications keyed by surface ID string.
 5. Terminal and chrome resolve the canvas through the one `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) so they never drift; a theme seeds the editable colors, colors flow from `settings.json`.
 6. No blue sidebar vibrancy.
-7. Blur is one window-wide CGS `WindowBlur`; libghostty `background-blur` is never used (no-op in embedded mode). Terminal gets `background-opacity` only.
+7. Blur is one window-wide CGS `WindowBlur` on chrome; libghostty `background-blur` is never used (no-op in embedded mode). The terminal surface is always opaque; translucency is chrome-only via `HarnessChrome.backgroundOpacity`.
 
 ### Playbooks
 
-**Colors not matching Ghostty:** Check config `#` parsing → `settings.json` hex fields → `HarnessSettings.load()` → `ThemeManager.resolvedCanvas` (one resolver for terminal **and** chrome) → `configureTerminalBuilder` (pushes bg/fg/cursor/selection/bold/palette/contrast). Seam between sidebar and terminal ⇒ a caller bypassing `resolvedCanvas`.
+**Colors not matching Ghostty:** Check config `#` parsing → `settings.json` hex fields → `HarnessSettings.load()` → `ThemeManager.resolvedCanvas` (one resolver for terminal **and** chrome) → `configureTerminalBuilder` (pushes bg/fg/cursor/selection/bold/palette). Seam between sidebar and terminal ⇒ a caller bypassing `resolvedCanvas`.
 
 **cwd stuck on `Shell`:** `harness-cli get-snapshot` → `SurfaceShellTracker` → `metadataOnly` + `refreshMetadata()` → `displayTitle` logic.
 
@@ -554,7 +570,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Session authority | Daemon-owned layout + IPC; launchd `KeepAlive` |
 | PTY / attach | `RealPty` + GUI in-memory ghostty; `harness-cli attach` (single pane) with detach keys |
 | Terminal compositor | `harness-cli attach-window` renders a tab's full split layout in any plain terminal (incl. ssh): client-side `GridTerminal` emulation per pane + `PaneRectSolver` + `GridCompositor` (borders, SGR, diff, status); prefix (`Ctrl-A`) routes `%`/`"` split, `x` kill, `z` zoom, `hjkl` select, `o`/`;` cycle, `c` new-tab, `n`/`p` tab, `d` detach |
-| Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key` |
+| Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key`; display panes (`prefix q`) |
 | Copy mode | Vim-style viewer; paste buffers in `buffers.json` |
 | Layouts | `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, `tiled`; break/join/rotate/respawn |
 | Options / status | `OptionStore`; `StatusLineView` + `FormatString` tokens |
@@ -584,7 +600,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | All tabs waiting | `markWaiting` bug | Filter by surface key |
 | Terminal colors wrong | Stale hex or import path | Re-import Ghostty; check `ThemeManager.resolvedCanvas` + `configureTerminalBuilder` |
 | Seam: sidebar ≠ terminal | A caller bypassed `resolvedCanvas` | Route bg/fg/cursor through `ThemeManager.resolvedCanvas` |
-| Blur does nothing | Expecting libghostty blur | Blur is window-wide CGS `WindowBlur` (`applyTransparency`); only shows when opacity < 1 |
+| Blur does nothing | Expecting libghostty blur or terminal translucency | Blur is window-wide CGS `WindowBlur` on chrome (`applyTransparency`); terminal is always opaque; chrome opacity < 1 shows blur through sidebar/tab strip/status |
 | No agent chip | Proc-tree miss | `AgentTitleInference` |
 | Xcode build fails | Stale project | `xcodegen generate` |
 
@@ -594,6 +610,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 
 - [README.md](README.md) — user overview
 - [docs/COMMANDS.md](docs/COMMANDS.md) — command reference
+- [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md) — tmux capability parity ledger (done / Harness-equivalent / roadmap)
 - [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md) — bindings + format tokens
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — short summary (may lag; this handbook is authoritative)
 - [docs/agent-hooks/README.md](docs/agent-hooks/README.md) — hook examples

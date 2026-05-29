@@ -10,6 +10,12 @@ public final class DaemonServer: @unchecked Sendable {
     private var clientBuffers: [Int32: Data] = [:]
     private var clientSources: [Int32: DispatchSourceRead] = [:]
     private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
+    /// FDs subscribed to layout-change pushes (`subscribeSnapshot`).
+    private var snapshotSubscribers: Set<Int32> = []
+    /// Per-client requested PTY size per surface. Each surface is sized to the
+    /// **smallest** request across attached clients (tmux `window-size smallest`),
+    /// so a small ssh client never truncates a larger one's view and vice versa.
+    private var clientSurfaceSizes: [Int32: [String: (rows: UInt16, cols: UInt16)]] = [:]
 
     private struct ClientRecord {
         let id: UUID
@@ -20,7 +26,20 @@ public final class DaemonServer: @unchecked Sendable {
     private var clientFDsByID: [UUID: Int32] = [:]
     private let startedAt = Date()
 
-    public init() {}
+    public init() {
+        // Push layout changes to snapshot subscribers (the attach-window compositor),
+        // replacing its old 0.5s poll. Hop onto the serial queue for FD-safe sends.
+        registry.onSnapshotCommitted = { [weak self] revision in
+            guard let self else { return }
+            self.queue.async { [weak self] in self?.pushSnapshotRevision(revision) }
+        }
+    }
+
+    private func pushSnapshotRevision(_ revision: Int) {
+        for fd in snapshotSubscribers {
+            send(.snapshotChanged(revision: revision), to: fd)
+        }
+    }
 
     public func start() throws {
         try HarnessPaths.ensureDirectories()
@@ -86,6 +105,7 @@ public final class DaemonServer: @unchecked Sendable {
             guard let self else { close(clientFD); return }
             if let removed = self.clients.removeValue(forKey: clientFD) {
                 self.clientFDsByID.removeValue(forKey: removed.id)
+                self.registry.fireClientDetached(label: removed.label)
             }
             self.clientBuffers.removeValue(forKey: clientFD)
             self.clientSources.removeValue(forKey: clientFD)
@@ -112,6 +132,15 @@ public final class DaemonServer: @unchecked Sendable {
             guard let request = envelope.request else { continue }
             if case let .subscribeSurfaceOutput(surfaceID, label) = request {
                 handleSubscribe(surfaceID: surfaceID, label: label, fd: fd)
+                continue
+            }
+            if case let .subscribeSnapshot(label) = request {
+                handleSubscribeSnapshot(label: label, fd: fd)
+                continue
+            }
+            if case let .resizeSurface(surfaceID, rows, cols) = request {
+                handleResize(surfaceID: surfaceID, rows: rows, cols: cols, fd: fd)
+                send(.ok, to: fd)
                 continue
             }
             if let intercepted = handleClientLifecycle(request, fd: fd) {
@@ -142,6 +171,7 @@ public final class DaemonServer: @unchecked Sendable {
             let record = ClientRecord(id: UUID(), label: label, connectedAt: Date())
             clients[fd] = record
             clientFDsByID[record.id] = fd
+            registry.fireClientAttached(label: label)
             return .clientID(record.id)
         case .listClients:
             let summaries = clients
@@ -227,11 +257,51 @@ public final class DaemonServer: @unchecked Sendable {
         send(.ok, to: fd)
     }
 
+    /// Record this client's requested size for a surface and resize the PTY to the
+    /// smallest request across all clients currently sizing it.
+    private func handleResize(surfaceID: String, rows: UInt16, cols: UInt16, fd: Int32) {
+        clientSurfaceSizes[fd, default: [:]][surfaceID] = (rows, cols)
+        applyEffectiveSize(surfaceID: surfaceID)
+    }
+
+    private func applyEffectiveSize(surfaceID: String) {
+        var minRows: UInt16 = .max
+        var minCols: UInt16 = .max
+        var found = false
+        for sizes in clientSurfaceSizes.values {
+            guard let size = sizes[surfaceID] else { continue }
+            found = true
+            minRows = min(minRows, size.rows)
+            minCols = min(minCols, size.cols)
+        }
+        guard found, minRows > 0, minCols > 0 else { return }
+        _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: minRows, cols: minCols))
+    }
+
+    private func handleSubscribeSnapshot(label: String?, fd: Int32) {
+        snapshotSubscribers.insert(fd)
+        // Register as a real client (like output subscriptions) so list-clients/stats
+        // reflect it rather than treating it as ephemeral RPC.
+        if var record = clients[fd] {
+            if let label, label != record.label { record.label = label; clients[fd] = record }
+        } else {
+            let record = ClientRecord(id: UUID(), label: label ?? "snapshot-subscriber", connectedAt: Date())
+            clients[fd] = record
+            clientFDsByID[record.id] = fd
+        }
+        send(.ok, to: fd)
+    }
+
     private func cancelSubscriptions(for fd: Int32) {
         let subscriptions = outputSubscriptions.removeValue(forKey: fd) ?? []
         for subscription in subscriptions {
             registry.cancelSubscription(surfaceID: subscription.surfaceID, token: subscription.token)
         }
+        snapshotSubscribers.remove(fd)
+        // Drop this client's size requests and let the remaining clients' smallest
+        // size take over (a surface can grow back when a small client detaches).
+        let droppedSizes = clientSurfaceSizes.removeValue(forKey: fd) ?? [:]
+        for surfaceID in droppedSizes.keys { applyEffectiveSize(surfaceID: surfaceID) }
     }
 
     public func runLoop() {

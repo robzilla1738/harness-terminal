@@ -14,6 +14,7 @@ final class IPCCodecTests: XCTestCase {
             .sendData(surfaceID: "surface-1", data: Data([0, 1, 2, 254, 255])),
             .notify(surfaceID: "surface-1", title: "Agent", body: "Needs approval"),
             .newSplit(tabID: UUID(), paneID: UUID(), direction: .vertical),
+            .selectPane(tabID: UUID(), paneID: UUID()),
             .identifyClient(label: "harness-cli attach"),
             .listClients,
             .detachClient(clientID: UUID()),

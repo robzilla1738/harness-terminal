@@ -79,4 +79,23 @@ final class DaemonRoundTripTests: XCTestCase {
         _ = try client.request(.sendData(surfaceID: target.surfaceID, data: Data("echo \(marker)\n".utf8)))
         wait(for: [streamed], timeout: 8)
     }
+
+    /// The `subscribeSnapshot` push: a layout mutation must deliver a `snapshotChanged`
+    /// revision to subscribers (replaces the compositor's old 0.5s poll).
+    func testSnapshotSubscriptionPushesRevisionOnMutation() throws {
+        let client = DaemonClient()
+        let pushed = expectation(description: "snapshot revision pushed")
+        pushed.assertForOverFulfill = false
+        let seen = AtomicCounter()
+        let subscription = try client.subscribeSnapshot(label: "test") { _ in
+            seen.increment()
+            pushed.fulfill()
+        }
+        defer { subscription.cancel() }
+
+        usleep(200_000) // let the subscription register
+        _ = try client.request(.newWorkspace(name: "push"))
+        wait(for: [pushed], timeout: 5)
+        XCTAssertGreaterThan(seen.value, 0)
+    }
 }

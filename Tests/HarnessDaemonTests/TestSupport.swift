@@ -28,3 +28,18 @@ final class OutputAccumulator: @unchecked Sendable {
         return text.contains(marker)
     }
 }
+
+/// Thread-safe integer counter for asserting how many times an off-thread callback
+/// (e.g. `RealPty.onExit`) fired.
+final class AtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock(); count += 1; lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock(); defer { lock.unlock() }; return count
+    }
+}
