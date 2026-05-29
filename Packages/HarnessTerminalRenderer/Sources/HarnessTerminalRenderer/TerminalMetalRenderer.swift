@@ -1,0 +1,184 @@
+import Metal
+import simd
+
+/// GPU instance layouts — must match the structs in `MetalShaders.source`.
+private struct BgInstance {
+    var origin: SIMD2<Float>
+    var size: SIMD2<Float>
+    var color: SIMD4<Float>
+}
+
+private struct GlyphInstance {
+    var origin: SIMD2<Float>
+    var size: SIMD2<Float>
+    var uvOrigin: SIMD2<Float>
+    var uvSize: SIMD2<Float>
+    var color: SIMD4<Float>
+}
+
+/// Renders a `TerminalFrame` with Metal: a solid background pass over every cell, then a
+/// texture-sampled glyph pass, then the cursor. Pixel sizes derive from the font's cell
+/// metrics × display scale. Designed to draw into either an offscreen texture (tests) or a
+/// `CAMetalLayer` drawable (the live view, added next).
+public final class TerminalMetalRenderer {
+    public let device: MTLDevice
+    public let cellPixelWidth: Int
+    public let cellPixelHeight: Int
+
+    private let commandQueue: MTLCommandQueue
+    private let bgPipeline: MTLRenderPipelineState
+    private let glyphPipeline: MTLRenderPipelineState
+    private let sampler: MTLSamplerState
+    private let atlas: GlyphAtlas
+    private let ascentPixels: Int
+    /// The render-target pixel format both pipelines are built for.
+    public static let pixelFormat: MTLPixelFormat = .rgba8Unorm
+
+    public init?(device: MTLDevice, fontFamily: String, fontSize: CGFloat, scale: CGFloat) {
+        guard let queue = device.makeCommandQueue() else { return nil }
+        let rasterizer = GlyphRasterizer(fontFamily: fontFamily, size: fontSize, scale: scale)
+        guard let atlas = GlyphAtlas(device: device, rasterizer: rasterizer) else { return nil }
+
+        let metrics = rasterizer.metrics()
+        self.cellPixelWidth = max(1, Int((metrics.width * scale).rounded()))
+        self.cellPixelHeight = max(1, Int((metrics.height * scale).rounded()))
+        self.ascentPixels = Int((metrics.ascent * scale).rounded())
+
+        do {
+            let library = try device.makeLibrary(source: MetalShaders.source, options: nil)
+            bgPipeline = try Self.makePipeline(
+                device: device, library: library,
+                vertex: "bg_vertex", fragment: "bg_fragment", blending: false
+            )
+            glyphPipeline = try Self.makePipeline(
+                device: device, library: library,
+                vertex: "glyph_vertex", fragment: "glyph_fragment", blending: true
+            )
+        } catch {
+            return nil
+        }
+
+        let sd = MTLSamplerDescriptor()
+        sd.minFilter = .linear
+        sd.magFilter = .linear
+        sd.sAddressMode = .clampToEdge
+        sd.tAddressMode = .clampToEdge
+        guard let sampler = device.makeSamplerState(descriptor: sd) else { return nil }
+
+        self.device = device
+        self.commandQueue = queue
+        self.atlas = atlas
+        self.sampler = sampler
+    }
+
+    private static func makePipeline(
+        device: MTLDevice, library: MTLLibrary,
+        vertex: String, fragment: String, blending: Bool
+    ) throws -> MTLRenderPipelineState {
+        let desc = MTLRenderPipelineDescriptor()
+        desc.vertexFunction = library.makeFunction(name: vertex)
+        desc.fragmentFunction = library.makeFunction(name: fragment)
+        let attachment = desc.colorAttachments[0]
+        attachment.pixelFormat = pixelFormat
+        if blending {
+            attachment.isBlendingEnabled = true
+            attachment.rgbBlendOperation = .add
+            attachment.alphaBlendOperation = .add
+            attachment.sourceRGBBlendFactor = .sourceAlpha
+            attachment.sourceAlphaBlendFactor = .sourceAlpha
+            attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        }
+        return try device.makeRenderPipelineState(descriptor: desc)
+    }
+
+    /// Pixel dimensions of the surface needed to draw a frame of the given grid size.
+    public func surfacePixelSize(columns: Int, rows: Int) -> (width: Int, height: Int) {
+        (max(1, columns) * cellPixelWidth, max(1, rows) * cellPixelHeight)
+    }
+
+    /// Render `frame` into `target`, clearing to `clearColor` first. Synchronous: the
+    /// command buffer is committed and waited on (suitable for offscreen capture; the
+    /// live view will use a presenting variant).
+    public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor) {
+        let viewport = SIMD2<Float>(Float(target.width), Float(target.height))
+
+        var backgrounds: [BgInstance] = []
+        backgrounds.reserveCapacity(frame.cells.count + 1)
+        var glyphs: [GlyphInstance] = []
+
+        for cell in frame.cells {
+            let originX = Float(cell.column * cellPixelWidth)
+            let originY = Float(cell.row * cellPixelHeight)
+            backgrounds.append(BgInstance(
+                origin: SIMD2(originX, originY),
+                size: SIMD2(Float(cellPixelWidth), Float(cellPixelHeight)),
+                color: vector(cell.background)
+            ))
+
+            guard cell.hasGlyph,
+                  let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
+            else { continue }
+
+            let gx = originX + Float(entry.bearingX)
+            let gy = originY + Float(ascentPixels - entry.bearingY)
+            glyphs.append(GlyphInstance(
+                origin: SIMD2(gx, gy),
+                size: SIMD2(Float(entry.pixelWidth), Float(entry.pixelHeight)),
+                uvOrigin: entry.uvOrigin,
+                uvSize: entry.uvSize,
+                color: vector(cell.foreground)
+            ))
+        }
+
+        // Block cursor: paint over its cell's background (glyphs still draw on top).
+        if frame.cursor.visible {
+            backgrounds.append(BgInstance(
+                origin: SIMD2(Float(frame.cursor.column * cellPixelWidth), Float(frame.cursor.row * cellPixelHeight)),
+                size: SIMD2(Float(cellPixelWidth), Float(cellPixelHeight)),
+                color: vector(frame.cursor.color)
+            ))
+        }
+
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(
+            red: Double(clearColor.red), green: Double(clearColor.green),
+            blue: Double(clearColor.blue), alpha: Double(clearColor.alpha)
+        )
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass)
+        else { return }
+
+        var vp = viewport
+        // Background pass.
+        if let buffer = device.makeBuffer(bytes: backgrounds, length: backgrounds.count * MemoryLayout<BgInstance>.stride, options: .storageModeShared) {
+            encoder.setRenderPipelineState(bgPipeline)
+            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: backgrounds.count)
+        }
+
+        // Glyph pass.
+        if !glyphs.isEmpty,
+           let buffer = device.makeBuffer(bytes: glyphs, length: glyphs.count * MemoryLayout<GlyphInstance>.stride, options: .storageModeShared) {
+            encoder.setRenderPipelineState(glyphPipeline)
+            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            encoder.setFragmentTexture(atlas.texture, index: 0)
+            encoder.setFragmentSamplerState(sampler, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: glyphs.count)
+        }
+
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+    }
+
+    private func vector(_ c: RenderColor) -> SIMD4<Float> {
+        SIMD4(c.red, c.green, c.blue, c.alpha)
+    }
+}
