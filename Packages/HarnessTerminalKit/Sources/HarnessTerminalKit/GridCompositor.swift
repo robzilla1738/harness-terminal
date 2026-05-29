@@ -1,6 +1,6 @@
 import Foundation
-import GhosttyTerminal
 import HarnessCore
+import HarnessTerminalEngine
 
 /// One pane to composite: where it sits (`rect`, in the pane area) and its
 /// current screen contents (`grid`). `isActive` selects the highlighted border

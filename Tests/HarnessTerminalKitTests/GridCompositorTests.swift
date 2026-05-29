@@ -1,14 +1,14 @@
 import Foundation
-import GhosttyTerminal
 import HarnessCore
+import HarnessTerminalEngine
 @testable import HarnessTerminalKit
 import XCTest
 
 final class GridCompositorTests: XCTestCase {
     /// Build a snapshot by feeding bytes to a real renderer-free terminal.
     private func snapshot(_ cols: Int, _ rows: Int, _ bytes: String) -> TerminalGridSnapshot {
-        guard let term = GridTerminal(cols: cols, rows: rows) else {
-            fatalError("GridTerminal create failed")
+        guard let term = HarnessGridTerminal(cols: cols, rows: rows) else {
+            fatalError("HarnessGridTerminal create failed")
         }
         term.feed(bytes)
         return term.readGrid()!

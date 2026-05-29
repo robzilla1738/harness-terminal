@@ -7,9 +7,11 @@ protocol VTParserHandler: AnyObject {
     func parserPrint(_ scalar: UInt32)
     /// A C0/C1 control byte to execute (BS, HT, LF, CR, BEL, …).
     func parserExecute(_ control: UInt8)
-    /// A final CSI byte with its decoded numeric parameters, intermediate bytes, and
-    /// whether a DEC-private marker (`?`) was present.
-    func parserCSI(final: UInt8, params: [Int], intermediates: [UInt8], isPrivate: Bool)
+    /// A final CSI byte with its decoded parameters, intermediate bytes, and whether a
+    /// DEC-private marker (`?`) was present. Parameters are grouped: the outer array is
+    /// semicolon-separated parameters; each inner array holds that parameter's
+    /// colon-separated sub-parameters (e.g. `4:3` → `[[4, 3]]`, `1;31` → `[[1], [31]]`).
+    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool)
     /// A final ESC byte (non-CSI) with any intermediate bytes (e.g. `ESC ( B`, `ESC M`).
     func parserESC(final: UInt8, intermediates: [UInt8])
     /// A complete OSC string payload (without the introducer or terminator).
@@ -20,9 +22,9 @@ protocol VTParserHandler: AnyObject {
 /// (Paul Williams). It is byte-oriented with an inline UTF-8 decoder in the ground
 /// state, and dispatches structured events to a `VTParserHandler`.
 ///
-/// Phase 1 scope: ground/escape/CSI/OSC plus DCS/PM/APC/SOS string *consumption*
-/// (their payloads are skipped until the string terminator). DCS device-control
-/// handling and CSI sub-parameter (`4:3`) decoding are tracked as follow-ups.
+/// Scope: ground/escape/CSI (with colon sub-parameters, e.g. `4:3`)/OSC, plus
+/// DCS/PM/APC/SOS string *consumption* (their payloads are skipped until the string
+/// terminator). Acting on DCS device-control payloads is tracked as a follow-up.
 final class VTParser {
     private enum State {
         case ground
@@ -39,9 +41,12 @@ final class VTParser {
     private weak var handler: VTParserHandler?
     private var state: State = .ground
 
-    // CSI accumulation
-    private var params: [Int] = []
-    private var currentParam: Int? = nil
+    // CSI accumulation. Parameters are grouped (semicolon-separated), each holding its
+    // colon-separated sub-parameters. `currentGroup` accumulates the in-progress group
+    // and `currentNumber` the in-progress digits.
+    private var paramGroups: [[Int]] = []
+    private var currentGroup: [Int] = []
+    private var currentNumber: Int? = nil
     private var intermediates: [UInt8] = []
     private var csiPrivate = false
     private var csiOverflow = false
@@ -198,10 +203,10 @@ final class VTParser {
         switch byte {
         case 0x30 ... 0x39: // digit
             pushDigit(byte); state = .csiParam
-        case 0x3B: // ';'
+        case 0x3B: // ';' — next parameter
             pushParamSeparator(); state = .csiParam
-        case 0x3A: // ':' subparameter — folded to ';' in Phase 1 (TODO: 4:3 styles)
-            pushParamSeparator(); state = .csiParam
+        case 0x3A: // ':' — next sub-parameter of the current parameter
+            pushSubparamSeparator(); state = .csiParam
         case 0x3C ... 0x3F: // private markers < = > ?
             csiPrivate = (byte == 0x3F) || csiPrivate
             state = .csiParam
@@ -220,8 +225,10 @@ final class VTParser {
         switch byte {
         case 0x30 ... 0x39:
             pushDigit(byte)
-        case 0x3B, 0x3A:
+        case 0x3B:
             pushParamSeparator()
+        case 0x3A:
+            pushSubparamSeparator()
         case 0x3C ... 0x3F:
             state = .csiIgnore // private marker after params is malformed
         case 0x20 ... 0x2F:
@@ -259,11 +266,11 @@ final class VTParser {
     }
 
     private func dispatchCSI(_ final: UInt8) {
-        flushCurrentParam()
+        finalizeCurrentGroup()
         if !csiOverflow {
             handler?.parserCSI(
                 final: final,
-                params: params,
+                params: paramGroups,
                 intermediates: intermediates,
                 isPrivate: csiPrivate
             )
@@ -274,27 +281,43 @@ final class VTParser {
 
     private func pushDigit(_ byte: UInt8) {
         let digit = Int(byte - 0x30)
-        let value = (currentParam ?? 0) * 10 + digit
+        let value = (currentNumber ?? 0) * 10 + digit
         if value > 65_535 { csiOverflow = true; return }
-        currentParam = value
+        currentNumber = value
     }
 
+    /// End the current sub-parameter (`:`), staying within the same parameter group.
+    private func pushSubparamSeparator() {
+        currentGroup.append(currentNumber ?? 0)
+        currentNumber = nil
+    }
+
+    /// End the current parameter (`;`), opening a new group.
     private func pushParamSeparator() {
-        flushCurrentParam()
-        currentParam = nil
-        if params.count >= maxParams { csiOverflow = true }
+        currentGroup.append(currentNumber ?? 0)
+        currentNumber = nil
+        appendGroup(currentGroup)
+        currentGroup = []
     }
 
-    private func flushCurrentParam() {
-        if params.count < maxParams {
-            params.append(currentParam ?? 0)
-        }
-        currentParam = nil
+    /// Flush the in-progress number + group at dispatch time so a trailing parameter is
+    /// always emitted (e.g. `CSI m` → `[[0]]`, matching the prior flat `[0]`).
+    private func finalizeCurrentGroup() {
+        currentGroup.append(currentNumber ?? 0)
+        currentNumber = nil
+        appendGroup(currentGroup)
+        currentGroup = []
+    }
+
+    private func appendGroup(_ group: [Int]) {
+        if paramGroups.count >= maxParams { csiOverflow = true; return }
+        paramGroups.append(group)
     }
 
     private func clearCSI() {
-        params.removeAll(keepingCapacity: true)
-        currentParam = nil
+        paramGroups.removeAll(keepingCapacity: true)
+        currentGroup.removeAll(keepingCapacity: true)
+        currentNumber = nil
         intermediates.removeAll(keepingCapacity: true)
         csiPrivate = false
         csiOverflow = false

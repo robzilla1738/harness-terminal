@@ -49,6 +49,7 @@ let package = Package(
             name: "HarnessTerminalKit",
             dependencies: [
                 "HarnessCore",
+                "HarnessTerminalEngine",
                 .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
                 .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
@@ -68,7 +69,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "HarnessCLI",
-            dependencies: ["HarnessCore", "HarnessTerminalKit"],
+            dependencies: ["HarnessCore", "HarnessTerminalEngine", "HarnessTerminalKit"],
             path: "Tools/harness/Sources/HarnessCLI"
         ),
         .executableTarget(
@@ -101,7 +102,10 @@ let package = Package(
             name: "HarnessTerminalKitTests",
             dependencies: [
                 "HarnessCore",
+                "HarnessTerminalEngine",
                 "HarnessTerminalKit",
+                // Still present so HeadlessGridReadTests can A/B the new engine against
+                // the libghostty GridTerminal oracle until the fork is removed (Phase 8).
                 .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
             ],
             path: "Tests/HarnessTerminalKitTests"

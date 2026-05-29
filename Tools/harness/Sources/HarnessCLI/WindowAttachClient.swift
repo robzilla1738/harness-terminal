@@ -1,18 +1,18 @@
 import Darwin
 import Foundation
-import GhosttyTerminal
 import HarnessCore
+import HarnessTerminalEngine
 import HarnessTerminalKit
 
 /// Renders a daemon-owned **window** (a tab's full split layout) into a plain
 /// terminal — the headline `harness attach` compositor. Unlike `AttachClient`
 /// (single-pane passthrough), this lays out every pane with borders, emulates
-/// each pane's screen locally with a renderer-free `GridTerminal`, and paints a
-/// composited frame via `GridCompositor`.
+/// each pane's screen locally with a renderer-free `HarnessGridTerminal`, and paints
+/// a composited frame via `GridCompositor`.
 ///
 /// Architecture (client-side emulation, the same shape the GUI uses): the
 /// daemon stays a dumb PTY byte pipe. Per pane we `subscribeSurfaceOutput` +
-/// `replayScrollback`, feed the bytes into a `GridTerminal`, read its styled
+/// `replayScrollback`, feed the bytes into a `HarnessGridTerminal`, read its styled
 /// grid, and composite. Input is forwarded to the active pane; the prefix key
 /// drives local pane navigation and detach. SIGWINCH re-lays-out; a snapshot
 /// poll rebuilds when the split structure changes.
@@ -143,11 +143,11 @@ private final class WindowSession: @unchecked Sendable {
     private var cols = 80
     private var rows = 24
 
-    /// All pane work — feeding GridTerminals, compositing, writing stdout —
-    /// runs on this serial queue. GridTerminal is not thread-safe, so every
+    /// All pane work — feeding HarnessGridTerminals, compositing, writing stdout —
+    /// runs on this serial queue. HarnessGridTerminal is not thread-safe, so every
     /// access is funneled here.
     private let renderQueue = DispatchQueue(label: "harness.window.render")
-    private var terminals: [String: GridTerminal] = [:]
+    private var terminals: [String: HarnessGridTerminal] = [:]
     private var subscriptions: [DaemonSubscription] = []
     private var rects: [PaneRect] = []
     private var compositor: GridCompositor
@@ -223,7 +223,7 @@ private final class WindowSession: @unchecked Sendable {
             if let term = terminals[sid] {
                 term.resize(cols: rect.cols, rows: rect.rows)
             } else {
-                guard let term = GridTerminal(cols: rect.cols, rows: rect.rows) else { continue }
+                guard let term = HarnessGridTerminal(cols: rect.cols, rows: rect.rows) else { continue }
                 terminals[sid] = term
                 // Tell the daemon this pane's PTY size, seed with scrollback,
                 // then stream live output into the terminal.

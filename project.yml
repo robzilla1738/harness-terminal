@@ -102,6 +102,8 @@ targets:
       - package: Harness
         product: HarnessCore
       - package: Harness
+        product: HarnessTerminalEngine
+      - package: Harness
         product: HarnessTerminalKit
       - package: libghostty-spm-fork
         product: GhosttyTerminal
@@ -145,6 +147,8 @@ targets:
     dependencies:
       - package: Harness
         product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalEngine
       - package: Harness
         product: HarnessTerminalKit
       - package: libghostty-spm-fork

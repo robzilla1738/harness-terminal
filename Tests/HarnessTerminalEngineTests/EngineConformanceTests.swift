@@ -137,6 +137,40 @@ final class EngineConformanceTests: XCTestCase {
         XCTAssertTrue(rang)
     }
 
+    func testCurlyUnderlineSubparam() {
+        // SGR 4:3 = curly underline (colon sub-parameter form).
+        let grid = read("\u{1b}[4:3mA")
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.underline, .curly)
+    }
+
+    func testDottedAndDashedUnderlineSubparams() {
+        XCTAssertEqual(read("\u{1b}[4:4mA").cell(row: 0, col: 0)?.underline, .dotted)
+        XCTAssertEqual(read("\u{1b}[4:5mA").cell(row: 0, col: 0)?.underline, .dashed)
+    }
+
+    func testColonForm256Color() {
+        let grid = read("\u{1b}[38:5:208mO")
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.foreground, .palette(208))
+    }
+
+    func testColonFormTrueColor() {
+        // 38:2:r:g:b (no colorspace id slot).
+        let grid = read("\u{1b}[38:2:10:20:30mX")
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.foreground, .rgb(r: 10, g: 20, b: 30))
+    }
+
+    func testColonFormTrueColorWithColorspaceSlot() {
+        // 38:2::r:g:b (empty colorspace id) -> group [38,2,0,10,20,30].
+        let grid = read("\u{1b}[38:2::10:20:30mX")
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.foreground, .rgb(r: 10, g: 20, b: 30))
+    }
+
+    func testUnderlineColorSemicolon() {
+        let grid = read("\u{1b}[4;58;5;9mU")
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.underline, .single)
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.underlineColor, .palette(9))
+    }
+
     func testScrollRegionConstrainsLineFeed() {
         // Set region rows 1..2 (1-based 2;3), fill, ensure scroll stays inside region.
         let term = HarnessGridTerminal(cols: 10, rows: 4)!

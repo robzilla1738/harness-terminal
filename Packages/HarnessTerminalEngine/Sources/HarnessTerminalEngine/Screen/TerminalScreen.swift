@@ -374,76 +374,123 @@ final class TerminalScreen {
 
     func resetPen() { pen = Pen() }
 
-    /// Apply a decoded SGR parameter list to the pen. Handles 16/256/truecolor for
-    /// fg (38), bg (48), and underline color (58), plus all standard attribute toggles.
-    func applySGR(_ params: [Int]) {
-        // Empty == reset (CSI m).
-        guard !params.isEmpty else { resetPen(); return }
+    /// Apply decoded SGR parameter groups to the pen. Each group is one semicolon-separated
+    /// parameter with its colon sub-parameters. Handles all standard attribute toggles,
+    /// 16/256/truecolor for fg (38), bg (48), and underline color (58) in BOTH the
+    /// semicolon form (`38;5;n`, `38;2;r;g;b`) and the colon form (`38:5:n`, `38:2::r:g:b`),
+    /// and `4:N` underline styles (curly/dotted/dashed).
+    func applySGR(groups: [[Int]]) {
+        guard !groups.isEmpty else { resetPen(); return }
         var i = 0
-        while i < params.count {
-            let p = params[i]
-            switch p {
-            case 0: resetPen()
-            case 1: pen.bold = true
-            case 2: pen.faint = true
-            case 3: pen.italic = true
-            case 4: pen.underline = .single
-            case 5, 6: pen.blink = true
-            case 7: pen.inverse = true
-            case 8: pen.invisible = true
-            case 9: pen.strikethrough = true
-            case 21: pen.underline = .double
-            case 22: pen.bold = false; pen.faint = false
-            case 23: pen.italic = false
-            case 24: pen.underline = .none
-            case 25: pen.blink = false
-            case 27: pen.inverse = false
-            case 28: pen.invisible = false
-            case 29: pen.strikethrough = false
-            case 30 ... 37: pen.foreground = .palette(p - 30)
-            case 38:
-                if let (color, consumed) = parseExtendedColor(params, from: i) {
-                    pen.foreground = color
-                    i += consumed
+        while i < groups.count {
+            let group = groups[i]
+            let code = group.first ?? 0
+            if group.count > 1 {
+                // Colon sub-parameter form: the whole spec lives in this one group.
+                switch code {
+                case 4: pen.underline = Self.underlineStyle(group[1])
+                case 38: if let c = Self.colonColor(group) { pen.foreground = c }
+                case 48: if let c = Self.colonColor(group) { pen.background = c }
+                case 58: if let c = Self.colonColor(group) { pen.underlineColor = c }
+                default: applySingleCode(code)
                 }
-            case 39: pen.foreground = .none
-            case 40 ... 47: pen.background = .palette(p - 40)
-            case 48:
-                if let (color, consumed) = parseExtendedColor(params, from: i) {
-                    pen.background = color
-                    i += consumed
+                i += 1
+            } else {
+                switch code {
+                case 38:
+                    if let (c, used) = Self.semicolonColor(groups, from: i) { pen.foreground = c; i += used } else { i += 1 }
+                case 48:
+                    if let (c, used) = Self.semicolonColor(groups, from: i) { pen.background = c; i += used } else { i += 1 }
+                case 58:
+                    if let (c, used) = Self.semicolonColor(groups, from: i) { pen.underlineColor = c; i += used } else { i += 1 }
+                default:
+                    applySingleCode(code); i += 1
                 }
-            case 49: pen.background = .none
-            case 53: pen.overline = true
-            case 55: pen.overline = false
-            case 58:
-                if let (color, consumed) = parseExtendedColor(params, from: i) {
-                    pen.underlineColor = color
-                    i += consumed
-                }
-            case 59: pen.underlineColor = .none
-            case 90 ... 97: pen.foreground = .palette(p - 90 + 8)
-            case 100 ... 107: pen.background = .palette(p - 100 + 8)
-            default: break // unknown SGR codes are ignored
             }
-            i += 1
         }
     }
 
-    /// Parse `38;5;n` / `38;2;r;g;b` (and 48/58) starting at the base index. Returns
-    /// the color and how many *extra* params it consumed beyond the base code.
-    private func parseExtendedColor(_ params: [Int], from base: Int) -> (TerminalGridColor, Int)? {
-        guard base + 1 < params.count else { return nil }
-        switch params[base + 1] {
+    /// Apply a single (non-color, non-grouped) SGR code to the pen.
+    private func applySingleCode(_ code: Int) {
+        switch code {
+        case 0: resetPen()
+        case 1: pen.bold = true
+        case 2: pen.faint = true
+        case 3: pen.italic = true
+        case 4: pen.underline = .single
+        case 5, 6: pen.blink = true
+        case 7: pen.inverse = true
+        case 8: pen.invisible = true
+        case 9: pen.strikethrough = true
+        case 21: pen.underline = .double
+        case 22: pen.bold = false; pen.faint = false
+        case 23: pen.italic = false
+        case 24: pen.underline = .none
+        case 25: pen.blink = false
+        case 27: pen.inverse = false
+        case 28: pen.invisible = false
+        case 29: pen.strikethrough = false
+        case 30 ... 37: pen.foreground = .palette(code - 30)
+        case 39: pen.foreground = .none
+        case 40 ... 47: pen.background = .palette(code - 40)
+        case 49: pen.background = .none
+        case 53: pen.overline = true
+        case 55: pen.overline = false
+        case 59: pen.underlineColor = .none
+        case 90 ... 97: pen.foreground = .palette(code - 90 + 8)
+        case 100 ... 107: pen.background = .palette(code - 100 + 8)
+        default: break // unknown / unsupported SGR codes are ignored
+        }
+    }
+
+    private static func underlineStyle(_ n: Int) -> TerminalGridUnderline {
+        switch n {
+        case 0: return .none
+        case 1: return .single
+        case 2: return .double
+        case 3: return .curly
+        case 4: return .dotted
+        case 5: return .dashed
+        default: return .single
+        }
+    }
+
+    private static func clampByte(_ v: Int) -> UInt8 { UInt8(min(max(v, 0), 255)) }
+
+    /// Colon form within one group: `[38, 5, n]` palette, `[38, 2, r, g, b]` or
+    /// `[38, 2, colorspace, r, g, b]` truecolor.
+    private static func colonColor(_ group: [Int]) -> TerminalGridColor? {
+        guard group.count >= 2 else { return nil }
+        switch group[1] {
         case 5:
-            guard base + 2 < params.count else { return nil }
-            return (.palette(clamp(params[base + 2], 0, 255)), 2)
+            guard group.count >= 3 else { return nil }
+            return .palette(min(max(group[2], 0), 255))
         case 2:
-            guard base + 4 < params.count else { return nil }
-            let r = UInt8(clamp(params[base + 2], 0, 255))
-            let g = UInt8(clamp(params[base + 3], 0, 255))
-            let b = UInt8(clamp(params[base + 4], 0, 255))
-            return (.rgb(r: r, g: g, b: b), 4)
+            if group.count >= 6 {
+                return .rgb(r: clampByte(group[3]), g: clampByte(group[4]), b: clampByte(group[5]))
+            } else if group.count >= 5 {
+                return .rgb(r: clampByte(group[2]), g: clampByte(group[3]), b: clampByte(group[4]))
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    /// Semicolon form across groups: `38;5;n` or `38;2;r;g;b`. Returns the color and how
+    /// many groups it consumed (including the `38`/`48`/`58` lead group).
+    private static func semicolonColor(_ groups: [[Int]], from base: Int) -> (TerminalGridColor, Int)? {
+        guard base + 1 < groups.count else { return nil }
+        switch groups[base + 1].first ?? 0 {
+        case 5:
+            guard base + 2 < groups.count else { return nil }
+            return (.palette(min(max(groups[base + 2].first ?? 0, 0), 255)), 3)
+        case 2:
+            guard base + 4 < groups.count else { return nil }
+            let r = clampByte(groups[base + 2].first ?? 0)
+            let g = clampByte(groups[base + 3].first ?? 0)
+            let b = clampByte(groups[base + 4].first ?? 0)
+            return (.rgb(r: r, g: g, b: b), 5)
         default:
             return nil
         }

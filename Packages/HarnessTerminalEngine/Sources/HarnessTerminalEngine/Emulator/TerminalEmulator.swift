@@ -93,38 +93,42 @@ public final class TerminalEmulator: VTParserHandler {
         }
     }
 
-    func parserCSI(final: UInt8, params: [Int], intermediates: [UInt8], isPrivate: Bool) {
+    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool) {
+        // Most control functions use one value per parameter; flatten by taking each
+        // group's first sub-parameter. SGR is the exception — it needs the full groups
+        // (for `4:3` underline styles and colon-form colors).
+        let flat = params.map { $0.first ?? 0 }
         if isPrivate {
-            handlePrivateMode(final: final, params: params)
+            handlePrivateMode(final: final, params: flat)
             return
         }
         guard intermediates.isEmpty else { return }
         switch final {
-        case 0x41: current.moveCursorRelative(dRow: -arg(params, 0, 1), dCol: 0) // CUU
-        case 0x42: current.moveCursorRelative(dRow: arg(params, 0, 1), dCol: 0)  // CUD
-        case 0x43: current.moveCursorRelative(dRow: 0, dCol: arg(params, 0, 1))  // CUF
-        case 0x44: current.moveCursorRelative(dRow: 0, dCol: -arg(params, 0, 1)) // CUB
-        case 0x45: cursorNextLine(arg(params, 0, 1))   // CNL
-        case 0x46: cursorPrevLine(arg(params, 0, 1))   // CPL
-        case 0x47: current.moveCursorCol(arg(params, 0, 1) - 1) // CHA
+        case 0x41: current.moveCursorRelative(dRow: -arg(flat, 0, 1), dCol: 0) // CUU
+        case 0x42: current.moveCursorRelative(dRow: arg(flat, 0, 1), dCol: 0)  // CUD
+        case 0x43: current.moveCursorRelative(dRow: 0, dCol: arg(flat, 0, 1))  // CUF
+        case 0x44: current.moveCursorRelative(dRow: 0, dCol: -arg(flat, 0, 1)) // CUB
+        case 0x45: cursorNextLine(arg(flat, 0, 1))   // CNL
+        case 0x46: cursorPrevLine(arg(flat, 0, 1))   // CPL
+        case 0x47: current.moveCursorCol(arg(flat, 0, 1) - 1) // CHA
         case 0x48, 0x66: // CUP / HVP
-            current.moveCursor(row: arg(params, 0, 1) - 1, col: arg(params, 1, 1) - 1)
-        case 0x4A: current.eraseInDisplay(mode: argRaw(params, 0, 0)) // ED
-        case 0x4B: current.eraseInLine(mode: argRaw(params, 0, 0))    // EL
-        case 0x4C: current.insertLines(arg(params, 0, 1))   // IL
-        case 0x4D: current.deleteLines(arg(params, 0, 1))   // DL
-        case 0x40: current.insertCharacters(arg(params, 0, 1)) // ICH
-        case 0x50: current.deleteCharacters(arg(params, 0, 1)) // DCH
-        case 0x58: current.eraseCharacters(arg(params, 0, 1))  // ECH
-        case 0x53: current.scrollUp(arg(params, 0, 1))   // SU
-        case 0x54: current.scrollDown(arg(params, 0, 1)) // SD
-        case 0x64: current.moveCursorRow(arg(params, 0, 1) - 1) // VPA
-        case 0x6D: current.applySGR(params)              // SGR
-        case 0x72: setScrollRegion(params)               // DECSTBM
-        case 0x73: current.saveCursor()                  // ANSI save cursor
-        case 0x75: current.restoreCursor()               // ANSI restore cursor
-        case 0x6E: deviceStatusReport(argRaw(params, 0, 0)) // DSR
-        case 0x63: deviceAttributes()                    // DA
+            current.moveCursor(row: arg(flat, 0, 1) - 1, col: arg(flat, 1, 1) - 1)
+        case 0x4A: current.eraseInDisplay(mode: argRaw(flat, 0, 0)) // ED
+        case 0x4B: current.eraseInLine(mode: argRaw(flat, 0, 0))    // EL
+        case 0x4C: current.insertLines(arg(flat, 0, 1))   // IL
+        case 0x4D: current.deleteLines(arg(flat, 0, 1))   // DL
+        case 0x40: current.insertCharacters(arg(flat, 0, 1)) // ICH
+        case 0x50: current.deleteCharacters(arg(flat, 0, 1)) // DCH
+        case 0x58: current.eraseCharacters(arg(flat, 0, 1))  // ECH
+        case 0x53: current.scrollUp(arg(flat, 0, 1))   // SU
+        case 0x54: current.scrollDown(arg(flat, 0, 1)) // SD
+        case 0x64: current.moveCursorRow(arg(flat, 0, 1) - 1) // VPA
+        case 0x6D: current.applySGR(groups: params)    // SGR
+        case 0x72: setScrollRegion(flat)               // DECSTBM
+        case 0x73: current.saveCursor()                // ANSI save cursor
+        case 0x75: current.restoreCursor()             // ANSI restore cursor
+        case 0x6E: deviceStatusReport(argRaw(flat, 0, 0)) // DSR
+        case 0x63: deviceAttributes()                  // DA
         default: break
         }
     }
