@@ -498,7 +498,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 |-----------|------|-------|
 | Window shell | `MainWindowController` | Root window, chrome palette |
 | Main menu | `MainMenuBuilder` | Global shortcuts (Cmd+T, Cmd+K, …) |
-| Main split | `MainSplitViewController` | Snapshot observer |
+| Main split | `MainSplitViewController` | Snapshot observer; sidebar collapse via `SplitChromeDelegate.allowFullCollapse` (divider min drops to 0 for a programmatic collapse, stays 200 for user drags) + a tab-strip toggle button + a traffic-light leading inset on the tab bar when collapsed |
 | Sidebar | `HarnessSidebarPanelViewController` | Sessions, agents |
 | Tab bar | `TerminalTabBarView` | `SoftIconButton`: `isBordered = false` for `+` |
 | Terminals | `ContentAreaViewController` | Pane mount on structure change |
@@ -507,9 +507,10 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Notifications | `NotificationBellButton`, `NotificationDropdownPanelView` | Waiting-tab badge + dropdown |
 | Display panes | `DisplayPanesOverlay` | Prefix `q` / `display-panes` — tmux-style numbered overlay |
 | About | `AboutPanelController` | Menu → About Harness |
+| Onboarding | `OnboardingController` | First-run + Help → Welcome; Liquid-Glass panel, app-logo hero in a glass tile, SF-Symbol badge tiles, grid-aligned shortcut bullets, monochrome buttons |
 | Prefix / prompt | `PrefixKeymap`, `CommandPromptController` | |
 | Palette | `CommandPaletteController` | `Cmd+K`, MRU; featured themes only |
-| Design / chrome | `HarnessDesign`, `HarnessChrome` | Tokens, `ChromeBackdrop`, Liquid Glass |
+| Design / chrome | `HarnessDesign`, `HarnessChrome` | Tokens, `ChromeBackdrop`, `HarnessPillButton` (theme-aware monochrome primary/secondary — used by onboarding + settings instead of system-blue bezels), Liquid Glass |
 | Toast / blur | `Toast`, `WindowBlur` | Transient feedback, backdrop blur |
 | App launch | `AppDelegate` | Daemon, prefix keymap, shell tracker |
 | Coordinator | `SessionCoordinator` | IPC, registry, themes |
@@ -520,7 +521,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Shell tracker | `SurfaceShellTracker` | cwd polling via proc tree |
 | Daemon fallback | `DaemonLauncher` | Starts daemon when launchd unavailable |
 | Terminal | `TerminalHostView` | Hosts `HarnessTerminalSurfaceView`; daemon I/O |
-| Settings UI | `SettingsViewController`, `KeyRecorderView`, `LiveTerminalPreview` | Standalone window via `SettingsWindowController` (not embedded); rebuilt per open; full settings + prefix capture |
+| Settings UI | `SettingsViewController`, `KeyRecorderView`, `LiveTerminalPreview` | Standalone window via `SettingsWindowController` (not embedded); rebuilt per open; theme-aware glass shell, pages **Appearance · Colors · Terminal · Keys · Agents** as grouped `sectionCard`s; monochrome accents (no system-blue); full settings + prefix capture |
 | Daemon | `SurfaceRegistry`, `RealPty`, `DaemonServer` | Session authority |
 | Core | `SessionEditor`, `CommandParser`, `OptionStore`, `HookRegistry`, `PasteBufferStore`, `FormatString` | |
 
@@ -604,7 +605,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 4. Notifications keyed by surface ID string.
 5. Terminal and chrome resolve the canvas through the one `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) so they never drift; a theme seeds the editable colors, colors flow from `settings.json`.
 6. No blue sidebar vibrancy.
-7. Blur is one window-wide CGS `WindowBlur`. The native terminal canvas honors `backgroundOpacity` (translucent over the blur); glyphs and explicit cell backgrounds stay opaque so output reads true. The terminal-host fill (`ContentAreaViewController.refreshTerminalHostFill`) goes **`.clear` when opacity < 1** (solid terminal color only when fully opaque) so the single translucent canvas — not an opaque backing layer — composites over the blur, matching the chrome (`sidebarBackground × opacity`) exactly. An opaque host fill here makes the terminal look solid while the chrome is see-through.
+7. Blur is one window-wide CGS `WindowBlur`. The native terminal canvas honors `backgroundOpacity` (translucent over the blur); glyphs and explicit cell backgrounds stay opaque so output reads true. The terminal-host fill (`ContentAreaViewController.refreshTerminalHostFill`) goes **`.clear` when opacity < 1** (solid terminal color only when fully opaque) so the single translucent canvas — not an opaque backing layer — composites over the blur, matching the chrome (`sidebarBackground × opacity`) exactly. An opaque host fill here makes the terminal look solid while the chrome is see-through. When translucent, the window `contentView` is clipped to the system corner radius (`MainWindowController.systemWindowCornerRadius` — reads the theme-frame layer, falls back to ~10pt classic / ~16pt on macOS 26) so the rectangular CGS blur can't bleed past the window's rounded corners; opaque windows skip the clip (`cornerRadius = 0`, `masksToBounds = false`).
 
 ### Playbooks
 
@@ -661,6 +662,8 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Terminal colors wrong | Stale hex or import path | Re-import terminal config; check `ThemeManager.resolvedCanvas` + `applyNativeAppearance` |
 | Seam: sidebar ≠ terminal | A caller bypassed `resolvedCanvas` | Route bg/fg/cursor through `ThemeManager.resolvedCanvas` |
 | Blur does nothing | Window opaque | Blur is a window-wide CGS `WindowBlur`; set `backgroundOpacity` < 1 so the canvas + chrome show it |
+| Blur bleeds past rounded corners | contentView not clipped when translucent | `applyTransparency` clips `contentView` to `systemWindowCornerRadius` (continuous) when opacity < 1 |
+| Sidebar won't fully collapse | Divider min clamped at 200 | Set `SplitChromeDelegate.allowFullCollapse` during the programmatic collapse so the divider can reach 0 |
 | No agent chip | Proc-tree miss | `AgentTitleInference` |
 | Xcode build fails | Stale project | `xcodegen generate` |
 
