@@ -353,8 +353,8 @@ final class SoftIconButton: NSButton {
         let c = HarnessDesign.chrome
         layer?.borderWidth = 1
         layer?.borderColor = (isHovered ? c.textPrimary.withAlphaComponent(0.20) : c.textPrimary.withAlphaComponent(0.12)).cgColor
-        let base = c.terminalBackground.blended(withFraction: c.isDark ? 0.045 : 0.035, of: c.textPrimary) ?? c.terminalBackground
-        let hover = c.terminalBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
+        let base = c.sidebarBackground.blended(withFraction: c.isDark ? 0.045 : 0.035, of: c.textPrimary) ?? c.sidebarBackground
+        let hover = c.sidebarBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
         layer?.backgroundColor = (isHovered ? hover : base).withAlphaComponent(c.isDark ? 0.96 : 0.86).cgColor
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = isHovered ? 0.20 : 0.08
@@ -474,9 +474,10 @@ final class ChromeBackdrop: NSView {
         }
         tint.layer?.backgroundColor = baseColor.withAlphaComponent(opacity).cgColor
 
-        // Tab strip gets a quiet hairline at its bottom edge to anchor the active
-        // pill against the terminal area below. The sidebar stays clean.
-        hairline.isHidden = role != .tabBar
+        // No drawn hairline anywhere: the tab strip / sidebar / status line now read
+        // as distinct from the terminal purely by their elevated chrome background
+        // (see HarnessChromePalette.build), so a hard divider line is redundant noise.
+        hairline.isHidden = true
         hairline.backgroundColor = chrome.border.withAlphaComponent(chrome.isDark ? 0.55 : 0.75).cgColor
         needsLayout = true
     }
@@ -641,15 +642,10 @@ final class StatusDotView: NSView {
         dot.backgroundColor = color.cgColor
         halo.backgroundColor = color.withAlphaComponent(0.20).cgColor
         halo.isHidden = style == .idle
-        // The halo gently pulses when the dot signals live activity (agent working
-        // or a waiting notification). Idle/error/accent are static so the strip
-        // doesn't feel busy.
-        switch style {
-        case .agent, .waiting:
-            HarnessMotion.startPulse(halo, minScale: 0.92, maxScale: 1.45, duration: 1.25)
-        case .idle, .error, .accent:
-            HarnessMotion.stopPulse(halo)
-        }
+        // The dot stays static for every state — the halo is a quiet ring for live
+        // activity (agent working / waiting), but no breathing pulse. The animation
+        // read as busy/distracting, so we always clear any in-flight pulse.
+        HarnessMotion.stopPulse(halo)
     }
 }
 

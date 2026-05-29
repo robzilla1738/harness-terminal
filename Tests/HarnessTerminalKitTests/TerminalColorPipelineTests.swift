@@ -33,11 +33,12 @@ final class TerminalColorPipelineTests: XCTestCase {
         }
     }
 
-    func testTerminalConfigOmitsBackgroundBlurAndKeepsOpacity() {
-        // Blur is applied once at the window level (CGS, MainWindowController), never
-        // per-surface — libghostty's background-blur is a no-op in embedded mode and
-        // would double the chrome blur. The terminal config must carry opacity but
-        // not blur.
+    func testTerminalRendersOpaqueAndOmitsBlur() {
+        // The terminal surface ALWAYS renders fully opaque so its colors are true-Ghostty
+        // rich and never washed — translucency/blur is a chrome-only effect applied at the
+        // window level (CGS, MainWindowController). So the terminal config must (a) never
+        // carry per-surface blur, and (b) force opacity 1.0 regardless of the user's
+        // window-translucency setting.
         var settings = HarnessSettings()
         settings.backgroundBlur = 40
         settings.backgroundOpacity = 0.8
@@ -46,7 +47,14 @@ final class TerminalColorPipelineTests: XCTestCase {
             rendered.contains("background-blur ="),
             "Terminal must not blur per-surface; window-level CGS blur is the single source"
         )
-        XCTAssertTrue(rendered.contains("background-opacity = 0.8"))
+        XCTAssertFalse(
+            rendered.contains("background-opacity = 0.8"),
+            "Terminal must not inherit window translucency — it renders opaque for color fidelity"
+        )
+        XCTAssertTrue(
+            rendered.contains("background-opacity = 1"),
+            "Terminal opacity is forced to 1.0; got:\n\(rendered)"
+        )
     }
 
     func testThemesDoNotSeedTerminalPaletteOrBackground() {
@@ -87,7 +95,6 @@ final class TerminalColorPipelineTests: XCTestCase {
         settings.selectionBackgroundHex = "#222222"
         settings.selectionForegroundHex = "#eeeeee"
         settings.boldColorHex = "#ff0000"
-        settings.minimumContrast = 1 // off → must NOT render
         settings.paletteHex = [
             "#111111", "#222222", "#333333", "#444444",
             "#555555", "#666666", "#777777", "#888888",
@@ -111,11 +118,21 @@ final class TerminalColorPipelineTests: XCTestCase {
         }
     }
 
-    func testMinimumContrastRendersOnlyWhenAboveOne() {
+    func testDefaultColorRenderingMatchesGhosttySRGB() {
+        // Out of the box: Ghostty.app parity — accurate sRGB + macOS-native blending.
+        let rendered = TerminalHostView.makeTerminalConfiguration(settings: HarnessSettings(), themeName: "Catppuccin Mocha").rendered
+        XCTAssertTrue(rendered.contains("window-colorspace = srgb"))
+        XCTAssertTrue(rendered.contains("alpha-blending = native"))
+    }
+
+    func testColorRenderingSettingsDriveConfig() {
+        // The Settings picker must reach libghostty: accurate sRGB + gamma-correct blending.
         var settings = HarnessSettings()
-        settings.minimumContrast = 1.5
-        let config = TerminalHostView.makeTerminalConfiguration(settings: settings, themeName: "Catppuccin Mocha")
-        XCTAssertTrue(config.rendered.contains("minimum-contrast = 1.5"))
+        settings.vividColors = false
+        settings.linearBlending = true
+        let rendered = TerminalHostView.makeTerminalConfiguration(settings: settings, themeName: "Catppuccin Mocha").rendered
+        XCTAssertTrue(rendered.contains("window-colorspace = srgb"))
+        XCTAssertTrue(rendered.contains("alpha-blending = linear-corrected"))
     }
 
     func testThemePresetExposesFullPalette() {

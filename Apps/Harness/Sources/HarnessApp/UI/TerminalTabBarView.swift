@@ -295,20 +295,18 @@ final class TerminalTabBarView: NSView {
     }
 }
 
-/// Display label shared by pills and the overflow menu. Leads with where the tab is
-/// (folder, or shell title as a fallback) and appends what's running there (the agent)
-/// so a glance at the strip reads e.g. "harness · Claude Code".
+/// Display label shared by pills and the overflow menu. When an agent is running,
+/// the tab reads as just the agent name (e.g. "Codex") — the leading cwd + "·" was
+/// noise. Otherwise it falls back to the folder, then a custom shell title.
 @MainActor
 private func tabDisplayTitle(_ tab: Tab) -> String {
+    if let kind = tabAgentKind(for: tab) {
+        return kind.displayName
+    }
     let folder = HarnessDesign.pathDisplayName(tab.cwd)
-    let inferred = tabAgentKind(for: tab)
     let titleIsAgentBranding = !tab.title.isEmpty && AgentTitleInference.kind(from: tab.title) != nil
     let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell" && !titleIsAgentBranding
-    let base = !folder.isEmpty ? folder : (hasCustomTitle ? tab.title : "Terminal")
-    if let kind = inferred {
-        return "\(base) · \(kind.displayName)"
-    }
-    return base
+    return !folder.isEmpty ? folder : (hasCustomTitle ? tab.title : "Terminal")
 }
 
 /// Effective agent kind for the tab — daemon-detected first, then a permissive
@@ -503,8 +501,10 @@ private final class TabPillView: NSView {
 
         // Selected tabs get a modest rounded highlight: softer than a square box,
         // but not a full capsule/pill.
-        let activeFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.rowSelectedFill
-        let hoverFill = c.terminalBackground.blended(withFraction: c.isDark ? 0.060 : 0.05, of: c.textPrimary) ?? c.iconHoverFill
+        // Blend off the (elevated) chrome strip, not the terminal bg, so the active
+        // pill keeps its lift above the tab strip now that chrome sits above terminal.
+        let activeFill = c.sidebarBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.rowSelectedFill
+        let hoverFill = c.sidebarBackground.blended(withFraction: c.isDark ? 0.060 : 0.05, of: c.textPrimary) ?? c.iconHoverFill
 
         if isActive {
             layer?.backgroundColor = activeFill.withAlphaComponent(c.isDark ? 0.92 : 0.85).cgColor

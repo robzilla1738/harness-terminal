@@ -42,12 +42,11 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.customBackgroundHex, "#000000")
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
         XCTAssertEqual(settings.customCursorHex, "#cccccc")
-        // Full Ghostty parity: selection/bold/cursor-text/contrast/palette are kept.
+        // Full Ghostty parity: selection/bold/cursor-text/palette are kept.
         XCTAssertEqual(settings.selectionBackgroundHex, "#123456")
         XCTAssertEqual(settings.selectionForegroundHex, "#abcdef")
         XCTAssertEqual(settings.boldColorHex, "#eeeeee")
         XCTAssertEqual(settings.cursorTextHex, "#000000")
-        XCTAssertEqual(settings.minimumContrast, 1.5)
         XCTAssertEqual(settings.paletteHex[0], "#111111")
         XCTAssertEqual(settings.paletteHex.count, 16)
         XCTAssertEqual(settings.cursorStyle, "bar")
@@ -104,7 +103,6 @@ final class HarnessSettingsTests: XCTestCase {
         s.backgroundBlur = 20
         s.customBackgroundHex = "#123456"
         s.paletteHex[0] = "#abcdef"
-        s.minimumContrast = 7
 
         s.applyGhosttyDefaults()
 
@@ -112,7 +110,6 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(s.backgroundBlur, 0)
         XCTAssertNil(s.customBackgroundHex)
         XCTAssertNil(s.paletteHex[0])
-        XCTAssertEqual(s.minimumContrast, 1)
         // Behavior fields are untouched.
         XCTAssertEqual(s.defaultShell, "/opt/homebrew/bin/fish")
         XCTAssertEqual(s.defaultCWD, "/tmp/work")

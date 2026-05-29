@@ -40,6 +40,16 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         target: nil,
         action: nil
     )
+    private let vividColorsToggle = NSButton(
+        checkboxWithTitle: "Vivid colors (Display P3) — off = accurate sRGB",
+        target: nil,
+        action: nil
+    )
+    private let linearBlendingToggle = NSButton(
+        checkboxWithTitle: "Gamma-correct text blending",
+        target: nil,
+        action: nil
+    )
     private let selectionBgHexField = NSTextField()
     private let selectionFgHexField = NSTextField()
     private let boldHexField = NSTextField()
@@ -53,7 +63,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     private let dividerWell = NSColorWell()
     private let statusLineWell = NSColorWell()
     private let systemNotificationsToggle = NSButton()
-    private let minContrastField = NSTextField()
     private let livePreview = LiveTerminalPreview()
     private let pageContainer = NSView()
     private var pages: [Int: NSView] = [:]
@@ -229,10 +238,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             refreshColorBinding(binding)
         }
 
-        minContrastField.stringValue = String(format: "%.1f", settings.minimumContrast)
-        minContrastField.target = self
-        minContrastField.action = #selector(appearanceTextDidCommit)
-
         paletteHexValues = HarnessSettings.normalizedPalette(settings.paletteHex)
         buildPaletteWells()
         buildAgentColorWells(settings: settings)
@@ -252,6 +257,12 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
         copyOnSelectToggle.target = self
         copyOnSelectToggle.action = #selector(appearanceTextDidCommit)
+        vividColorsToggle.state = settings.vividColors ? .on : .off
+        vividColorsToggle.target = self
+        vividColorsToggle.action = #selector(appearanceTextDidCommit)
+        linearBlendingToggle.state = settings.linearBlending ? .on : .off
+        linearBlendingToggle.target = self
+        linearBlendingToggle.action = #selector(appearanceTextDidCommit)
 
         transparentTitlebarToggle.state = settings.transparentTitlebar ? .on : .off
         transparentTitlebarToggle.target = self
@@ -425,10 +436,14 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         useThemeColorsButton.title = "Use theme colors"
         styleAsLink(useThemeColorsButton)
         let resetDefaults = makeLinkButton("Reset to defaults", action: #selector(resetToDefaults))
-        let themeRow = NSStackView(views: [themePopup, useThemeColorsButton, resetDefaults])
-        themeRow.orientation = .horizontal
-        themeRow.spacing = 14
-        themeRow.alignment = .centerY
+        // The theme row is just the popup; the two link actions live on their own row
+        // below so they never get squeezed into wrapping (the old single-row layout
+        // collapsed the links to a few px wide on narrow content widths).
+        for link in [useThemeColorsButton, resetDefaults] {
+            link.lineBreakMode = .byClipping
+            link.setContentCompressionResistancePriority(.required, for: .horizontal)
+            link.setContentHuggingPriority(.required, for: .horizontal)
+        }
         themePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
 
         let opacityRow = NSStackView(views: [opacitySlider, opacityLabel])
@@ -457,8 +472,14 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         paddingRow.spacing = 6
         paddingRow.alignment = .centerY
 
+        let themeActions = NSStackView(views: [useThemeColorsButton, resetDefaults])
+        themeActions.orientation = .horizontal
+        themeActions.spacing = 16
+        themeActions.alignment = .centerY
+
         let windowGroup = formGrid(rows: [
-            ("Theme", themeRow),
+            ("Theme", themePopup),
+            ("", themeActions),
             ("Opacity", opacityRow),
             ("Blur", blurRow),
             ("Padding", paddingRow),
@@ -476,11 +497,18 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             colorPairRow(colorHexRow(title: "Selection", binding: colorBindings[4]),
                          colorHexRow(title: "Selection text", binding: colorBindings[5])),
             colorPairRow(colorHexRow(title: "Bold", binding: colorBindings[6]),
-                         minimumContrastRow()),
+                         NSView()),
         ])
         colorsGroup.orientation = .vertical
         colorsGroup.alignment = .width
         colorsGroup.spacing = 10
+
+        // Color rendering: how libghostty maps colors to the display. Vivid uses the
+        // full Display-P3 gamut (brighter, like Terminal.app); off is accurate sRGB.
+        let renderingGroup = formGrid(rows: [
+            ("", vividColorsToggle),
+            ("", linearBlendingToggle),
+        ])
 
         // Chrome accent rows: dividers + status line text (colorBindings 7 and 8).
         let dividerRow = colorHexRow(title: "Divider lines", binding: colorBindings[7])
@@ -494,6 +522,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             windowGroup,
             sectionHeading("Colors"),
             colorsGroup,
+            sectionHeading("Color rendering"),
+            renderingGroup,
             sectionHeading("ANSI Palette"),
             buildPaletteSection(),
             sectionHeading("Chrome"),
@@ -681,15 +711,29 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         let label = NSTextField(labelWithString: text.uppercased())
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textColor = .tertiaryLabelColor
-        return label
+        label.alignment = .left
+        label.lineBreakMode = .byClipping
+        label.translatesAutoresizingMaskIntoConstraints = false
+        // Pin the label to the leading edge in its own container so the heading is
+        // always flush-left, with a little breathing room above to separate sections.
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        return container
     }
 
     /// Right-aligned label column + control column, like macOS System Settings.
     private func formGrid(rows: [(String, NSView)]) -> NSView {
         let grid = NSGridView()
         grid.translatesAutoresizingMaskIntoConstraints = false
-        grid.rowSpacing = 10
-        grid.columnSpacing = 14
+        grid.rowSpacing = 13
+        grid.columnSpacing = 16
         for (title, control) in rows {
             let label = NSTextField(labelWithString: title)
             label.font = .systemFont(ofSize: 12)
@@ -698,7 +742,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             grid.addRow(with: [label, control])
         }
         grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 0).width = 130
+        grid.column(at: 0).width = 140
         grid.column(at: 1).xPlacement = .leading
         return grid
     }
@@ -728,23 +772,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         row.spacing = 28
         row.alignment = .top
         row.distribution = .fillEqually
-        return row
-    }
-
-    /// Ghostty `minimum-contrast`: 1 disables it, higher forces legible text.
-    private func minimumContrastRow() -> NSView {
-        minContrastField.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        minContrastField.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
-        let label = NSTextField(labelWithString: "Min contrast")
-        label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.widthAnchor.constraint(equalToConstant: 110).isActive = true
-        let hint = NSTextField(labelWithString: "1 = off")
-        hint.font = .systemFont(ofSize: 10.5)
-        hint.textColor = .tertiaryLabelColor
-        let row = NSStackView(views: [label, minContrastField, hint])
-        row.orientation = .horizontal
-        row.spacing = 10
-        row.alignment = .centerY
         return row
     }
 
@@ -1079,12 +1106,13 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         blurLabel.stringValue = formatBlur(settings.backgroundBlur)
         paddingXField.stringValue = String(Int(settings.windowPaddingX.rounded()))
         paddingYField.stringValue = String(Int(settings.windowPaddingY.rounded()))
-        minContrastField.stringValue = String(format: "%.1f", settings.minimumContrast)
         fontFamilyField.stringValue = settings.fontFamily
         fontSizeField.stringValue = String(Int(settings.fontSize.rounded()))
         cursorStylePopup.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
         cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
+        vividColorsToggle.state = settings.vividColors ? .on : .off
+        linearBlendingToggle.state = settings.linearBlending ? .on : .off
         for binding in colorBindings {
             binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
@@ -1140,7 +1168,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             coordinator.settings[keyPath: binding.keyPath] = normalizedHexOrNil(binding.field.stringValue)
         }
         coordinator.settings.paletteHex = HarnessSettings.normalizedPalette(paletteHexValues)
-        coordinator.settings.minimumContrast = clampedContrast(minContrastField.stringValue)
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
         coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
         coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
@@ -1153,6 +1180,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.cursorBlink = cursorBlinkToggle.state == .on
         coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on
         coordinator.settings.systemNotificationsEnabled = systemNotificationsToggle.state == .on
+        coordinator.settings.vividColors = vividColorsToggle.state == .on
+        coordinator.settings.linearBlending = linearBlendingToggle.state == .on
         try? coordinator.settings.save()
 
         // Theme switching (and its color seeding) is handled by themeDidChange, so
@@ -1163,15 +1192,17 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         refreshLivePreview()
     }
 
-    private func clampedContrast(_ raw: String) -> Double {
-        guard let value = Double(raw) else { return 1 }
-        return min(21, max(1, value))
-    }
-
+    /// When presented inline (as a panel inside the main window) the host sets this
+    /// so "Done"/Esc dismisses the panel instead of closing the whole window.
+    var onClose: (() -> Void)?
 
     @objc private func closeWindow() {
         flushAndApply()
-        view.window?.close()
+        if let onClose {
+            onClose()
+        } else {
+            view.window?.close()
+        }
     }
 
     // MARK: - Font picker (Terminal page)

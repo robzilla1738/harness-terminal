@@ -36,8 +36,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var selectionForegroundHex: String?
     public var boldColorHex: String?
     public var cursorTextHex: String?
-    /// Ghostty `minimum-contrast` (1 = off, up to 21). Applied only when > 1.
-    public var minimumContrast: Double
     /// 16 ANSI palette overrides (`palette N=#hex`). `nil` slots fall back to the
     /// active theme preset. Seeded from a theme, importable from Ghostty config.
     public var paletteHex: [String?]
@@ -54,6 +52,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// in-window bell badge still updates but the OS notification banner is
     /// suppressed.
     public var systemNotificationsEnabled: Bool
+    /// Extra-saturated full Display-P3 gamut when true; accurate sRGB (Ghostty.app
+    /// parity, the default) when false. Maps to Ghostty `window-colorspace`.
+    public var vividColors: Bool
+    /// Gamma-correct ("linear-corrected") alpha blending for text antialiasing when
+    /// true, or macOS-native blending when false. Maps to Ghostty `alpha-blending`.
+    public var linearBlending: Bool
 
     public init(
         fontSize: Float = 14,
@@ -79,12 +83,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         selectionForegroundHex: String? = nil,
         boldColorHex: String? = nil,
         cursorTextHex: String? = nil,
-        minimumContrast: Double = 1,
         paletteHex: [String?] = Array(repeating: nil, count: 16),
         agentColorOverrides: [String: String] = [:],
         dividerHex: String? = nil,
         statusLineHex: String? = nil,
-        systemNotificationsEnabled: Bool = true
+        systemNotificationsEnabled: Bool = true,
+        vividColors: Bool = false,
+        linearBlending: Bool = false
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -109,12 +114,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.selectionForegroundHex = selectionForegroundHex
         self.boldColorHex = boldColorHex
         self.cursorTextHex = cursorTextHex
-        self.minimumContrast = minimumContrast
         self.paletteHex = HarnessSettings.normalizedPalette(paletteHex)
         self.agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColorOverrides)
         self.dividerHex = dividerHex
         self.statusLineHex = statusLineHex
         self.systemNotificationsEnabled = systemNotificationsEnabled
+        self.vividColors = vividColors
+        self.linearBlending = linearBlending
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -162,7 +168,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         dividerHex = nil
         statusLineHex = nil
         paletteHex = HarnessSettings.normalizedPalette(imported?.paletteHex ?? Array(repeating: nil, count: 16))
-        minimumContrast = imported?.minimumContrast ?? 1
         fontFamily = imported?.fontFamily ?? "JetBrains Mono"
         fontSize = imported?.fontSize ?? 14
         windowPaddingX = imported?.windowPaddingX ?? 12
@@ -202,13 +207,14 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         selectionForegroundHex = try container.decodeIfPresent(String.self, forKey: .selectionForegroundHex) ?? fallback.selectionForegroundHex
         boldColorHex = try container.decodeIfPresent(String.self, forKey: .boldColorHex) ?? fallback.boldColorHex
         cursorTextHex = try container.decodeIfPresent(String.self, forKey: .cursorTextHex) ?? fallback.cursorTextHex
-        minimumContrast = try container.decodeIfPresent(Double.self, forKey: .minimumContrast) ?? fallback.minimumContrast
         paletteHex = HarnessSettings.normalizedPalette(try container.decodeIfPresent([String?].self, forKey: .paletteHex) ?? fallback.paletteHex)
         let agentColors = try container.decodeIfPresent([String: String].self, forKey: .agentColorOverrides) ?? fallback.agentColorOverrides
         agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColors)
         dividerHex = try container.decodeIfPresent(String.self, forKey: .dividerHex)
         statusLineHex = try container.decodeIfPresent(String.self, forKey: .statusLineHex)
         systemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? true
+        vividColors = try container.decodeIfPresent(Bool.self, forKey: .vividColors) ?? fallback.vividColors
+        linearBlending = try container.decodeIfPresent(Bool.self, forKey: .linearBlending) ?? fallback.linearBlending
     }
 
     public static func load() -> HarnessSettings {
@@ -283,7 +289,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         settings.selectionForegroundHex = imported.selectionForegroundHex
         settings.boldColorHex = imported.boldColorHex
         settings.cursorTextHex = imported.cursorTextHex
-        if let value = imported.minimumContrast { settings.minimumContrast = value }
         settings.paletteHex = HarnessSettings.normalizedPalette(imported.paletteHex)
         settings.ghosttyConfigSignature = imported.signature
         return settings
@@ -307,7 +312,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         selectionForegroundHex = imported.selectionForegroundHex
         boldColorHex = imported.boldColorHex
         cursorTextHex = imported.cursorTextHex
-        if let value = imported.minimumContrast { minimumContrast = value }
         paletteHex = HarnessSettings.normalizedPalette(imported.paletteHex)
         ghosttyConfigSignature = imported.signature
     }

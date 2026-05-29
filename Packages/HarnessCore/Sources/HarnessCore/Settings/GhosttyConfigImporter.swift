@@ -21,6 +21,8 @@ public struct GhosttyImportedDefaults: Sendable, Equatable {
     public var selectionForegroundHex: String?
     public var boldColorHex: String?
     public var cursorTextHex: String?
+    /// Parsed for the config fingerprint only — Harness no longer surfaces a
+    /// minimum-contrast setting, so this value is not applied to `HarnessSettings`.
     public var minimumContrast: Double?
     public var paletteHex: [String?]
     public var cursorStyle: String?

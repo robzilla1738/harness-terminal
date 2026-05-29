@@ -8,9 +8,14 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private let workspaceBar = NSView()
     private let workspacePill = WorkspacePillButton()
     private let notificationBell = NotificationBellButton()
+    private let searchField = NSSearchField()
+    /// Wraps the search field so it gets the same radius-7 elevated-surface chrome as
+    /// the workspace pill and session cards (the bare NSSearchField is a capsule).
+    private let searchContainer = NSView()
     private let sectionHeader = NSView()
     private let sectionLabel = NSTextField(labelWithString: "Sessions")
     private let sessionTable = NSTableView()
+    private let settingsRow = SidebarSettingsRow()
     private let footer = NSView()
     private var sessionScroll: NSScrollView?
     private var workspaces: [Workspace] = []
@@ -20,6 +25,30 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private var isProgrammaticSelection = false
     private var workspaceDropdown: WorkspaceSwitcherPanelView?
     private var workspaceDropdownMonitor: Any?
+    /// Live filter text from the search field; empty shows all sessions.
+    private var sessionFilter = ""
+    /// Set by `MainSplitViewController` so the sidebar's Settings affordances toggle
+    /// the inline Settings panel instead of opening a separate window.
+    var onToggleSettings: (() -> Void)?
+
+    /// Sessions after applying the search filter. Drag-reorder is disabled while a
+    /// filter is active (see the data source), so callers that reorder still use the
+    /// unfiltered `sessions`.
+    private var displayedSessions: [SessionGroup] {
+        let q = sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return sessions }
+        return sessions.filter { sessionMatches($0, query: q) }
+    }
+
+    private func sessionMatches(_ session: SessionGroup, query: String) -> Bool {
+        if session.name.lowercased().contains(query) { return true }
+        for tab in session.tabs {
+            if tab.title.lowercased().contains(query) { return true }
+            if tab.cwd.lowercased().contains(query) { return true }
+            if HarnessDesign.pathDisplayName(tab.cwd).lowercased().contains(query) { return true }
+        }
+        return false
+    }
 
     override func loadView() {
         let root = NSView()
@@ -31,6 +60,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         super.viewDidLoad()
         setupChromeHeader()
         setupWorkspaceBar()
+        setupSearchField()
         setupSectionHeader()
         setupFooter()
         setupSessionList()
@@ -57,6 +87,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
         for case let button as SoftIconButton in footer.subviews {
             button.applyChrome()
         }
+        settingsRow.applyChrome()
+        applySearchChrome()
         sessionTable.reloadData()
     }
 
@@ -189,13 +221,65 @@ final class HarnessSidebarPanelViewController: NSViewController {
         view.addSubview(sectionHeader)
 
         NSLayoutConstraint.activate([
-            sectionHeader.topAnchor.constraint(equalTo: workspaceBar.bottomAnchor),
+            sectionHeader.topAnchor.constraint(equalTo: searchContainer.bottomAnchor),
             sectionHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sectionHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             sectionHeader.heightAnchor.constraint(equalToConstant: 24),
             sectionLabel.leadingAnchor.constraint(equalTo: sectionHeader.leadingAnchor, constant: HarnessDesign.horizontalInset),
             sectionLabel.bottomAnchor.constraint(equalTo: sectionHeader.bottomAnchor, constant: -4),
         ])
+    }
+
+    /// Warp-style "Search sessions…" field; filters the list live by name / cwd.
+    private func setupSearchField() {
+        searchContainer.wantsLayer = true
+        searchContainer.layer?.cornerRadius = HarnessDesign.Radius.card
+        searchContainer.layer?.cornerCurve = .continuous
+        searchContainer.layer?.borderWidth = 1
+        searchContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        // Borderless/clear field inside; the container owns the rounded-rect chrome so
+        // the magnifier + text sit on our standardized surface (matching the pill).
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        searchField.isBezeled = false
+        searchField.isBordered = false
+        searchField.drawsBackground = false
+        searchField.placeholderString = "Search sessions…"
+        searchField.font = .systemFont(ofSize: 12)
+        searchField.focusRingType = .none
+        searchField.sendsSearchStringImmediately = true
+        searchField.sendsWholeSearchString = false
+        searchField.target = self
+        searchField.action = #selector(searchChanged)
+
+        searchContainer.addSubview(searchField)
+        view.addSubview(searchContainer)
+        NSLayoutConstraint.activate([
+            searchContainer.topAnchor.constraint(equalTo: workspaceBar.bottomAnchor, constant: 2),
+            searchContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: HarnessDesign.horizontalInset),
+            searchContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -HarnessDesign.horizontalInset),
+            searchContainer.heightAnchor.constraint(equalToConstant: 30),
+
+            searchField.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 6),
+            searchField.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -6),
+            searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+        ])
+    }
+
+    private func applySearchChrome() {
+        let c = HarnessChrome.current
+        searchContainer.layer?.backgroundColor = c.surfaceElevated.cgColor
+        searchContainer.layer?.borderColor = c.border.cgColor
+    }
+
+    @objc private func searchChanged() {
+        sessionFilter = searchField.stringValue
+        sessionTable.reloadData()
+    }
+
+    /// Reflect the inline Settings panel's visibility in the sidebar row's highlight.
+    func setSettingsActive(_ active: Bool) {
+        settingsRow.setActive(active)
     }
 
     private func setupSessionList() {
@@ -235,9 +319,15 @@ final class HarnessSidebarPanelViewController: NSViewController {
         ])
     }
 
+    /// One footer row: "⚙ Settings" (text + icon) on the left, a trimmed set of quick
+    /// icons on the right — all on the same baseline. The redundant settings slider and
+    /// the help icon were removed (Settings is now the labeled button).
     private func setupFooter() {
         footer.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.makeClear(footer)
+
+        settingsRow.translatesAutoresizingMaskIntoConstraints = false
+        settingsRow.onClick = { [weak self] in self?.openSettings() }
 
         let newSession = HarnessDesign.softIconButton(symbol: "plus", tooltip: "New session")
         newSession.target = self
@@ -251,36 +341,29 @@ final class HarnessSidebarPanelViewController: NSViewController {
         palette.target = self
         palette.action = #selector(openPalette)
 
-        let settings = HarnessDesign.softIconButton(symbol: "slider.horizontal.3", tooltip: "Settings (⌘,)")
-        settings.target = self
-        settings.action = #selector(openSettings)
-
-        let help = HarnessDesign.softIconButton(symbol: "questionmark.circle", tooltip: "Agent hooks documentation")
-        help.target = self
-        help.action = #selector(openDocs)
-
+        footer.addSubview(settingsRow)
         footer.addSubview(newSession)
         footer.addSubview(newWS)
         footer.addSubview(palette)
-        footer.addSubview(settings)
-        footer.addSubview(help)
         view.addSubview(footer)
 
         NSLayoutConstraint.activate([
             footer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            footer.heightAnchor.constraint(equalToConstant: HarnessDesign.footerHeight),
-            newSession.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: HarnessDesign.horizontalInset - 4),
+            footer.heightAnchor.constraint(equalToConstant: HarnessDesign.footerHeight + 6),
+
+            settingsRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: HarnessDesign.horizontalInset - 4),
+            settingsRow.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            settingsRow.heightAnchor.constraint(equalToConstant: 32),
+            settingsRow.trailingAnchor.constraint(lessThanOrEqualTo: palette.leadingAnchor, constant: -8),
+
+            palette.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
+            palette.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            newWS.trailingAnchor.constraint(equalTo: palette.leadingAnchor, constant: -2),
+            newWS.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            newSession.trailingAnchor.constraint(equalTo: newWS.leadingAnchor, constant: -2),
             newSession.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            newWS.leadingAnchor.constraint(equalTo: newSession.trailingAnchor, constant: 2),
-            newWS.centerYAnchor.constraint(equalTo: newSession.centerYAnchor),
-            palette.leadingAnchor.constraint(equalTo: newWS.trailingAnchor, constant: 2),
-            palette.centerYAnchor.constraint(equalTo: newSession.centerYAnchor),
-            settings.trailingAnchor.constraint(equalTo: help.leadingAnchor, constant: -2),
-            settings.centerYAnchor.constraint(equalTo: newSession.centerYAnchor),
-            help.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
-            help.centerYAnchor.constraint(equalTo: newSession.centerYAnchor),
         ])
     }
 
@@ -295,7 +378,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         sessionTable.reloadData()
 
         if let activeSessionID,
-           let row = sessions.firstIndex(where: { $0.id == activeSessionID })
+           let row = displayedSessions.firstIndex(where: { $0.id == activeSessionID })
         {
             isProgrammaticSelection = true
             sessionTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -321,9 +404,10 @@ final class HarnessSidebarPanelViewController: NSViewController {
         workspaces = snap.workspaces
         let name = snap.activeWorkspace?.name ?? "Workspace"
         workspacePill.configure(name: name, count: sessions.count)
-        for row in 0 ..< sessions.count {
+        let displayed = displayedSessions
+        for row in 0 ..< displayed.count {
             if let cell = sessionTable.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCardRowView {
-                cell.configure(session: sessions[row], isSelected: sessions[row].id == activeID)
+                cell.configure(session: displayed[row], isSelected: displayed[row].id == activeID)
             }
         }
     }
@@ -493,12 +577,6 @@ final class HarnessSidebarPanelViewController: NSViewController {
         return min(preferred, max(120, available))
     }
 
-    @objc private func openDocs() {
-        if let url = URL(string: "https://github.com/robert/harness/blob/main/docs/agent-hooks/README.md") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
     @objc private func openPalette() {
         if let window = view.window {
             CommandPaletteController.present(relativeTo: window)
@@ -506,13 +584,20 @@ final class HarnessSidebarPanelViewController: NSViewController {
     }
 
     @objc private func openSettings() {
-        SettingsWindowController.show()
+        // Toggle the inline panel when the host wired it up; fall back to the
+        // standalone window otherwise (e.g. if presented outside the main split).
+        if let onToggleSettings {
+            onToggleSettings()
+        } else {
+            SettingsWindowController.show()
+        }
     }
 
     private func selectSessionRow() {
         let row = sessionTable.selectedRow
-        guard row >= 0, row < sessions.count, let activeWorkspaceID else { return }
-        SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: sessions[row].id)
+        let displayed = displayedSessions
+        guard row >= 0, row < displayed.count, let activeWorkspaceID else { return }
+        SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: displayed[row].id)
     }
 
     private func confirmCloseSession(_ session: SessionGroup) {
@@ -536,18 +621,123 @@ final class HarnessSidebarPanelViewController: NSViewController {
         guard let tab = session.activeTab ?? session.tabs.first else { return "Session" }
         return HarnessDesign.pathDisplayName(tab.cwd)
     }
+
+    // MARK: - Session kebab menu
+
+    /// Per-session actions popped from the card's ⋮ button (Warp-style). Items map
+    /// to existing capabilities — rename via the `renameSession` IPC, close via
+    /// `closeSession`, and clipboard copies handled locally.
+    private func showSessionActions(for session: SessionGroup, anchor: NSView) {
+        let menu = NSMenu()
+
+        let rename = NSMenuItem(title: "Rename session…", action: #selector(renameSessionFromMenu(_:)), keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = session.id
+        menu.addItem(rename)
+
+        let copyCwd = NSMenuItem(title: "Copy working directory", action: #selector(copySessionCwd(_:)), keyEquivalent: "")
+        copyCwd.target = self
+        copyCwd.representedObject = session.id
+        menu.addItem(copyCwd)
+
+        let copyTitle = NSMenuItem(title: "Copy session title", action: #selector(copySessionTitle(_:)), keyEquivalent: "")
+        copyTitle.target = self
+        copyTitle.representedObject = session.id
+        menu.addItem(copyTitle)
+
+        menu.addItem(.separator())
+
+        let close = NSMenuItem(title: "Close session", action: #selector(closeSessionFromMenu(_:)), keyEquivalent: "")
+        close.target = self
+        close.representedObject = session.id
+        menu.addItem(close)
+
+        if sessions.count > 1 {
+            let closeOthers = NSMenuItem(title: "Close other sessions", action: #selector(closeOtherSessionsFromMenu(_:)), keyEquivalent: "")
+            closeOthers.target = self
+            closeOthers.representedObject = session.id
+            menu.addItem(closeOthers)
+        }
+
+        let point = NSPoint(x: 0, y: anchor.bounds.height + 4)
+        menu.popUp(positioning: nil, at: point, in: anchor)
+    }
+
+    private func session(for id: SessionID) -> SessionGroup? {
+        sessions.first { $0.id == id }
+    }
+
+    @objc private func renameSessionFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? SessionID, let session = session(for: id) else { return }
+        let current = session.name.isEmpty ? sessionTitle(for: session) : session.name
+        let alert = NSAlert()
+        alert.messageText = "Rename session"
+        alert.informativeText = "Enter a new name for this session."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 22))
+        input.stringValue = current
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != session.name else { return }
+        SessionCoordinator.shared.requestDaemon(.renameSession(sessionID: id, name: trimmed))
+        SessionCoordinator.shared.syncFromDaemon()
+    }
+
+    @objc private func copySessionCwd(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? SessionID, let session = session(for: id),
+              let tab = session.activeTab ?? session.tabs.first else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(tab.cwd, forType: .string)
+    }
+
+    @objc private func copySessionTitle(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? SessionID, let session = session(for: id) else { return }
+        let title = session.name.isEmpty ? sessionTitle(for: session) : session.name
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(title, forType: .string)
+    }
+
+    @objc private func closeSessionFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? SessionID, let session = session(for: id) else { return }
+        confirmCloseSession(session)
+    }
+
+    @objc private func closeOtherSessionsFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? SessionID, let activeWorkspaceID else { return }
+        let others = sessions.filter { $0.id != id }
+        guard !others.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "Close \(others.count) other session\(others.count == 1 ? "" : "s")?"
+        alert.informativeText = "Their tabs and running shells will be closed. This can't be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Others")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        for session in others {
+            SessionCoordinator.shared.requestDaemon(.closeSession(sessionID: session.id))
+        }
+        SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: id)
+        SessionCoordinator.shared.syncFromDaemon()
+    }
 }
 
 extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewDelegate {
     fileprivate static let sessionRowPasteboardType = NSPasteboard.PasteboardType("com.robert.harness.session-row")
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        sessions.count
+        displayedSessions.count
     }
 
     // MARK: - Drag to reorder
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        // Reorder maps to the unfiltered list, so it's only meaningful with no
+        // active filter (displayed rows == sessions then).
+        guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let item = NSPasteboardItem()
         item.setString(String(row), forType: Self.sessionRowPasteboardType)
         return item
@@ -560,6 +750,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
         guard dropOperation == .above else { return [] }
+        guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         return .move
     }
 
@@ -588,7 +779,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let session = sessions[row]
+        let session = displayedSessions[row]
         let cell = SessionCardRowView()
         cell.configure(
             session: session,
@@ -596,6 +787,9 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         )
         cell.onClose = { [weak self] in
             self?.confirmCloseSession(session)
+        }
+        cell.onMore = { [weak self] anchor in
+            self?.showSessionActions(for: session, anchor: anchor)
         }
         return cell
     }
@@ -639,7 +833,7 @@ private final class WorkspaceSwitcherPanelView: NSView {
         // sublayer instead of clipping the whole view.
         layer?.masksToBounds = false
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = (c.terminalBackground.blended(withFraction: c.isDark ? 0.06 : 0.04, of: c.textPrimary) ?? c.sidebarBackground).cgColor
+        layer?.backgroundColor = (c.sidebarBackground.blended(withFraction: c.isDark ? 0.06 : 0.04, of: c.textPrimary) ?? c.sidebarBackground).cgColor
         layer?.borderWidth = 1
         layer?.borderColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.14).cgColor
         HarnessDesign.applyShadow(.overlay, to: layer)
@@ -970,13 +1164,15 @@ final class WorkspacePillButton: NSButton {
 @MainActor
 final class SessionCardRowView: NSView {
     var onClose: (() -> Void)?
+    /// Fired by the ⋮ kebab — the anchor is the button, for menu positioning.
+    var onMore: ((NSView) -> Void)?
 
     private let fill = NSView()
-    private let statusDot = StatusDotView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let agentChip = AgentChipView()
-    private let closeButton = NSButton()
+    private let moreButton = HoverIconButton()
+    private let closeButton = HoverIconButton()
     private var isSelected = false
     private var isHovered = false
     private var trackingArea: NSTrackingArea?
@@ -1021,11 +1217,26 @@ final class SessionCardRowView: NSView {
         closeButton.layer?.cornerRadius = 8
         closeButton.layer?.cornerCurve = .continuous
 
+        let kebabConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        moreButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Session actions")?
+            .withSymbolConfiguration(kebabConfig)
+        moreButton.imagePosition = .imageOnly
+        moreButton.isBordered = false
+        moreButton.bezelStyle = .smallSquare
+        moreButton.setButtonType(.momentaryChange)
+        moreButton.target = self
+        moreButton.action = #selector(moreClicked)
+        moreButton.translatesAutoresizingMaskIntoConstraints = false
+        moreButton.alphaValue = 0
+        moreButton.wantsLayer = true
+        moreButton.layer?.cornerRadius = 8
+        moreButton.layer?.cornerCurve = .continuous
+
         addSubview(fill)
-        fill.addSubview(statusDot)
         fill.addSubview(titleLabel)
         fill.addSubview(metaLabel)
         fill.addSubview(agentChip)
+        fill.addSubview(moreButton)
         fill.addSubview(closeButton)
 
         NSLayoutConstraint.activate([
@@ -1034,10 +1245,7 @@ final class SessionCardRowView: NSView {
             fill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.horizontalInset - 4),
             fill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
 
-            statusDot.leadingAnchor.constraint(equalTo: fill.leadingAnchor, constant: 10),
-            statusDot.topAnchor.constraint(equalTo: fill.topAnchor, constant: 13),
-
-            titleLabel.leadingAnchor.constraint(equalTo: statusDot.trailingAnchor, constant: 6),
+            titleLabel.leadingAnchor.constraint(equalTo: fill.leadingAnchor, constant: 12),
             titleLabel.topAnchor.constraint(equalTo: fill.topAnchor, constant: 10),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: agentChip.leadingAnchor, constant: -6),
 
@@ -1046,14 +1254,21 @@ final class SessionCardRowView: NSView {
             closeButton.widthAnchor.constraint(equalToConstant: 16),
             closeButton.heightAnchor.constraint(equalToConstant: 16),
 
-            agentChip.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -6),
+            moreButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -2),
+            moreButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            moreButton.widthAnchor.constraint(equalToConstant: 16),
+            moreButton.heightAnchor.constraint(equalToConstant: 16),
+
+            agentChip.trailingAnchor.constraint(lessThanOrEqualTo: moreButton.leadingAnchor, constant: -6),
             agentChip.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             agentChip.heightAnchor.constraint(equalToConstant: 18),
             agentChip.widthAnchor.constraint(lessThanOrEqualToConstant: 120),
 
             metaLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             metaLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
-            metaLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
+            // Meta sits on its own line below the title/controls, so it gets the full
+            // card width — the cwd path was being clipped early against the close button.
+            metaLabel.trailingAnchor.constraint(equalTo: fill.trailingAnchor, constant: -10),
             metaLabel.bottomAnchor.constraint(lessThanOrEqualTo: fill.bottomAnchor, constant: -10),
         ])
     }
@@ -1089,20 +1304,6 @@ final class SessionCardRowView: NSView {
         metaParts.append(folder)
         metaLabel.stringValue = metaParts.joined(separator: "  •  ")
 
-        switch tab.status {
-        case .idle:
-            // When the agent is generating, paint the dot with the agent's brand
-            // color so users can scan a workspace for "what's running where" at
-            // a glance.
-            if let agent = tab.agent, agent.activity == .working {
-                statusDot.style = .agent(hex: SessionCoordinator.shared.settings.agentColorHex(for: agent.kind))
-            } else {
-                statusDot.style = .idle
-            }
-        case .waiting: statusDot.style = .waiting
-        case .error: statusDot.style = .error
-        }
-
         if let kind = displayedAgentKind {
             agentChip.configure(text: kind.displayName, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
             agentChip.isHidden = false
@@ -1115,6 +1316,10 @@ final class SessionCardRowView: NSView {
 
     @objc private func closeClicked() {
         onClose?()
+    }
+
+    @objc private func moreClicked() {
+        onMore?(moreButton)
     }
 
     private func setSelected(_ selected: Bool) {
@@ -1146,10 +1351,12 @@ final class SessionCardRowView: NSView {
             HarnessDesign.applyShadow(.none, to: fill.layer)
             titleLabel.textColor = c.textSecondary
         }
-        statusDot.applyStyle()
-        closeButton.alphaValue = (isHovered || isSelected) ? 1 : 0
+        // Controls appear only while the row is hovered (not merely selected); each
+        // button then carries its own hover highlight via HoverIconButton.
+        closeButton.alphaValue = isHovered ? 1 : 0
         closeButton.contentTintColor = c.textTertiary
-        closeButton.layer?.backgroundColor = (isHovered ? c.iconHoverFill : NSColor.clear).cgColor
+        moreButton.alphaValue = isHovered ? 1 : 0
+        moreButton.contentTintColor = c.textTertiary
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -1165,6 +1372,149 @@ final class SessionCardRowView: NSView {
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             refresh()
         }
+    }
+}
+
+// MARK: - Settings row
+
+/// Pinned "Settings" entry at the bottom of the sidebar (Warp-style). A plain view
+/// (not NSButton — same reasoning as WorkspaceSwitcherRow: the bezel insets shift the
+/// fill). Highlights while the inline Settings panel is showing.
+@MainActor
+final class SidebarSettingsRow: NSView {
+    var onClick: (() -> Void)?
+
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: "Settings")
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false { didSet { applyChrome() } }
+    private var isActive = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = HarnessDesign.cornerRadius
+        layer?.cornerCurve = .continuous
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        icon.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.imageScaling = .scaleProportionallyUpOrDown
+
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        toolTip = "Settings (⌘,)"
+
+        addSubview(icon)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            icon.heightAnchor.constraint(equalToConstant: 16),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // Equality (not <=) so the row sizes to its content and reads as a compact
+            // button in the footer rather than stretching the full sidebar width.
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+        ])
+        setContentHuggingPriority(.required, for: .horizontal)
+        applyChrome()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setActive(_ active: Bool) {
+        isActive = active
+        applyChrome()
+    }
+
+    func applyChrome() {
+        let c = HarnessDesign.chrome
+        layer?.cornerRadius = HarnessDesign.cornerRadius
+        if isActive {
+            layer?.backgroundColor = c.accent.withAlphaComponent(c.isDark ? 0.13 : 0.10).cgColor
+            icon.contentTintColor = c.accent
+            label.textColor = c.textPrimary
+        } else if isHovered {
+            layer?.backgroundColor = c.rowHoverFill.cgColor
+            icon.contentTintColor = c.textPrimary
+            label.textColor = c.textPrimary
+        } else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            icon.contentTintColor = c.textTertiary
+            label.textColor = c.textSecondary
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if bounds.contains(point) { onClick?() }
+    }
+}
+
+// MARK: - Hover icon button
+
+/// Tiny borderless icon button that highlights its own background when hovered —
+/// used for the session card's ⋮ and × controls so hovering each gives feedback.
+@MainActor
+final class HoverIconButton: NSButton {
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false { didSet { updateBackground() } }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        layer?.cornerCurve = .continuous
+        isBordered = false
+        bezelStyle = .smallSquare
+        setButtonType(.momentaryChange)
+        imagePosition = .imageOnly
+        updateBackground()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    private func updateBackground() {
+        let c = HarnessDesign.chrome
+        layer?.backgroundColor = (isHovered ? c.iconHoverFill : .clear).cgColor
     }
 }
 

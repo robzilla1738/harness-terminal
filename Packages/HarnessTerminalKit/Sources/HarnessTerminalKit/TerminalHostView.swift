@@ -128,14 +128,26 @@ public final class TerminalHostView: NSView {
     ) {
         builder.withCustom("shell-integration", "detect")
         builder.withCustom("shell-integration-features", "sudo,title")
-        TerminalColorPipeline.apply(to: &builder)
+        // Color rendering is user-selectable (Settings ▸ Appearance): vivid full
+        // Display-P3 vs accurate sRGB, and native vs gamma-correct blending.
+        TerminalColorPipeline.apply(
+            to: &builder,
+            colorspace: (settings?.vividColors ?? false) ? .displayP3 : .srgb,
+            alphaBlending: (settings?.linearBlending ?? false)
+                ? TerminalColorPipeline.linearAlphaBlending
+                : TerminalColorPipeline.nativeAlphaBlending
+        )
         guard let settings else { return }
         builder.withFontSize(settings.fontSize)
         builder.withFontFamily(settings.fontFamily)
-        // Color translucency only. Blur is applied once at the window level (CGS),
-        // not per-surface: libghostty's background-blur is a no-op in embedded mode
-        // (it doesn't own the NSWindow) and would otherwise double the chrome blur.
-        builder.withBackgroundOpacity(Double(settings.backgroundOpacity))
+        // The terminal ALWAYS renders fully opaque so its colors are true-Ghostty rich
+        // and never washed. Translucency/blur is a CHROME-only effect (sidebar / tab
+        // strip / status line) driven by `backgroundOpacity` at the window/CGS level —
+        // compositing a translucent terminal over the blurred desktop is exactly what
+        // desaturated the output. Keeping the terminal surface opaque isolates it from
+        // the glass so it shows the renderer's full-gamut color. (The window-wide CGS
+        // blur then only shows through the translucent chrome regions.)
+        builder.withBackgroundOpacity(1.0)
         builder.withWindowPaddingX(Int(settings.windowPaddingX.rounded()))
         builder.withWindowPaddingY(Int(settings.windowPaddingY.rounded()))
         // Canvas bg/fg/cursor come from the one shared resolver so the terminal
@@ -156,7 +168,6 @@ public final class TerminalHostView: NSView {
         if let value = settings.selectionBackgroundHex { builder.withSelectionBackground(value) }
         if let value = settings.selectionForegroundHex { builder.withSelectionForeground(value) }
         if let value = settings.boldColorHex { builder.withBoldColor(value) }
-        if settings.minimumContrast > 1 { builder.withMinimumContrast(settings.minimumContrast) }
         for (index, hex) in settings.paletteHex.enumerated() {
             if let hex { builder.withPalette(index, color: hex) }
         }

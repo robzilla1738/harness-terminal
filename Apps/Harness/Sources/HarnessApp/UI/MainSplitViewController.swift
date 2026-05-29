@@ -1,5 +1,6 @@
 import AppKit
 import HarnessCore
+import QuartzCore
 
 @MainActor
 final class MainSplitViewController: NSViewController {
@@ -10,6 +11,9 @@ final class MainSplitViewController: NSViewController {
     /// 1px hairline along the inner edge of the sidebar — adds quiet definition
     /// between sidebar/terminal without resorting to a draggable divider line.
     private let edgeDivider = NSView()
+    /// Bumped each time a sidebar collapse/expand starts so any in-flight animation
+    /// frame bails out — prevents two toggles from fighting over the divider position.
+    private var sidebarAnimToken = 0
 
     override func loadView() {
         let root = NSView()
@@ -46,6 +50,9 @@ final class MainSplitViewController: NSViewController {
         split.addSubview(content.view)
         addChild(sidebar)
         addChild(content)
+
+        // Sidebar Settings affordances toggle the inline panel in the content area.
+        sidebar.onToggleSettings = { [weak self] in self?.toggleSettings() }
 
         split.translatesAutoresizingMaskIntoConstraints = false
         statusLine.translatesAutoresizingMaskIntoConstraints = false
@@ -137,14 +144,67 @@ final class MainSplitViewController: NSViewController {
     }
 
     func setSidebarVisible(_ visible: Bool) {
-        split.subviews.first?.isHidden = !visible
+        setSidebarVisible(visible, animated: false)
+    }
+
+    /// Collapse/expand the sidebar. `NSSplitView.setPosition` is not animatable via the
+    /// animator proxy, so for a genuinely fluid slide we drive the divider ourselves
+    /// with an eased per-frame stepper. A token cancels any in-flight animation.
+    func setSidebarVisible(_ visible: Bool, animated: Bool) {
         SessionCoordinator.shared.settings.sidebarVisible = visible
         try? SessionCoordinator.shared.settings.save()
-        if visible {
-            split.setPosition(HarnessDesign.sidebarWidth, ofDividerAt: 0)
-        } else {
-            split.setPosition(0, ofDividerAt: 0)
+        sidebarAnimToken &+= 1
+        let target = visible ? HarnessDesign.sidebarWidth : 0
+
+        guard animated, let panel = split.subviews.first else {
+            split.subviews.first?.isHidden = !visible
+            split.setPosition(target, ofDividerAt: 0)
+            return
         }
+
+        // Expanding: unhide before the slide so the panel is visible as it grows.
+        panel.isHidden = false
+        let start = panel.frame.width
+        guard abs(target - start) > 0.5 else {
+            split.setPosition(target, ofDividerAt: 0)
+            if !visible { panel.isHidden = true }
+            return
+        }
+        animateSidebar(from: start, to: target, t0: CACurrentMediaTime(), visible: visible, token: sidebarAnimToken)
+    }
+
+    private func animateSidebar(from start: CGFloat, to target: CGFloat, t0: CFTimeInterval, visible: Bool, token: Int) {
+        guard token == sidebarAnimToken, let panel = split.subviews.first else { return }
+        let duration = HarnessDesign.Motion.standard
+        let raw = min(1, max(0, (CACurrentMediaTime() - t0) / duration))
+        // easeInOutQuad — smooth start and settle.
+        let eased = raw < 0.5 ? 2 * raw * raw : 1 - pow(-2 * raw + 2, 2) / 2
+        split.setPosition(start + (target - start) * CGFloat(eased), ofDividerAt: 0)
+        if raw >= 1 {
+            if !visible { panel.isHidden = true }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.animateSidebar(from: start, to: target, t0: t0, visible: visible, token: token)
+            }
+        }
+    }
+
+    func toggleSidebar() {
+        setSidebarVisible(!SessionCoordinator.shared.settings.sidebarVisible, animated: true)
+    }
+
+    // MARK: - Inline Settings
+
+    func toggleSettings() {
+        content.toggleSettings()
+    }
+
+    /// Called by the content area when the inline Settings panel opens/closes, so the
+    /// sidebar's Settings row reflects the active state.
+    func settingsDidChangeVisibility(_ visible: Bool) {
+        sidebar.setSettingsActive(visible)
     }
 }
 

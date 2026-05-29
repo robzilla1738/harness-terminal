@@ -92,10 +92,13 @@ struct HarnessChromePalette {
         idle: NSColor
     ) -> HarnessChromePalette {
         let isDark = perceivedBrightness(of: background) < 0.5
-        // Keep the sidebar and tab strip rooted in the terminal background. The
-        // surrounding controls add their own elevation; shifting the whole sidebar
-        // hue made named themes feel broken.
-        let sidebar = background
+        // Lift the chrome (sidebar, tab strip, status line, overlays) a few percent
+        // off the terminal background so the terminal pane reads as its own bounded,
+        // true-color surface rather than one flat sheet — the terminal then shows
+        // ghostty's rich colors without the surrounding chrome washing into it.
+        // This stays a *pure function* of the resolved canvas (terminalBackground is
+        // unchanged below), so the single-source-of-truth contract holds.
+        let sidebar = blend(background, toward: foreground, fraction: isDark ? 0.05 : 0.045)
         // Light themes need firmer separation/fills — at the dark-mode alphas the
         // borders and hover states are effectively invisible on a bright surface.
         let elevated = foreground.withAlphaComponent(isDark ? 0.07 : 0.08)
