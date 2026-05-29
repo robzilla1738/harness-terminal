@@ -97,6 +97,10 @@ targets:
     dependencies:
       - package: Harness
         product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalKit
+      - package: libghostty-spm-fork
+        product: GhosttyTerminal
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.cli
       PRODUCT_NAME: harness-cli

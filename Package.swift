@@ -45,7 +45,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "HarnessCLI",
-            dependencies: ["HarnessCore"],
+            dependencies: ["HarnessCore", "HarnessTerminalKit"],
             path: "Tools/harness/Sources/HarnessCLI"
         ),
         .executableTarget(

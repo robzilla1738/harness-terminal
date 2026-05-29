@@ -94,6 +94,9 @@ struct HarnessCLI {
             case "attach":
                 let code = try handleAttach(args)
                 exit(code)
+            case "attach-window":
+                let code = try handleAttachWindow(args)
+                exit(code)
             case "daemon-stats":
                 try printDaemonStats(client)
             case "list-clients":
@@ -393,6 +396,22 @@ struct HarnessCLI {
             configuration.detachSequence = parsed
         }
         return try AttachClient.run(surfaceID: surface, configuration: configuration)
+    }
+
+    /// Renders a whole tab (split layout) into the terminal via the compositor.
+    static func handleAttachWindow(_ args: [String]) throws -> Int32 {
+        let selector: WindowAttachClient.TabSelector
+        if let tabID = flagValue(args, flag: "--tab") {
+            selector = .id(tabID)
+        } else {
+            selector = .active
+        }
+        var configuration = WindowAttachClient.Configuration()
+        if let raw = flagValue(args, flag: "--detach-keys"),
+           let parsed = parseDetachSequence(raw) {
+            configuration.detachSequence = parsed
+        }
+        return try WindowAttachClient.run(tab: selector, configuration: configuration)
     }
 
     /// Parse `C-a d`, `0x01 0x64`, or comma-separated decimal bytes into a raw
