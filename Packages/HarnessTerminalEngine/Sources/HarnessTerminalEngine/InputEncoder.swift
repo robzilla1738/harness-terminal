@@ -20,6 +20,22 @@ public enum SpecialKey: Sendable {
     case f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12
 }
 
+/// Mouse buttons the terminal can report.
+public enum MouseButton: Int, Sendable {
+    case left = 0
+    case middle = 1
+    case right = 2
+    case wheelUp = 64
+    case wheelDown = 65
+}
+
+/// The kind of mouse event being reported.
+public enum MouseEventKind: Sendable {
+    case press
+    case release
+    case drag
+}
+
 /// Encodes keyboard input into the bytes a terminal application expects, honoring the
 /// terminal's current modes (DECCKM application-cursor keys, etc.). Pure VT logic with no
 /// AppKit dependency — the NSView host maps `NSEvent` to these calls, which keeps the
@@ -79,6 +95,45 @@ public struct InputEncoder: Sendable {
             bytes.insert(0x1B, at: 0)
         }
         return bytes
+    }
+
+    // MARK: - Mouse
+
+    /// Encode a mouse event for the active tracking mode. Uses SGR 1006 when the app
+    /// enabled it (the modern, coordinate-unbounded form), otherwise the legacy X10/normal
+    /// byte form. `column`/`row` are 0-based; the wire protocol is 1-based. Returns empty
+    /// when no mouse-tracking mode is active.
+    public func encodeMouse(
+        button: MouseButton,
+        kind: MouseEventKind,
+        column: Int,
+        row: Int,
+        modifiers: KeyModifiers = [],
+        modes: TerminalModes
+    ) -> [UInt8] {
+        guard modes.mouseTrackingEnabled else { return [] }
+        // Base button + xterm mouse modifier bits (shift 4, meta/alt 8, control 16) +
+        // motion bit (32) for drags.
+        var code = button.rawValue
+        if modifiers.contains(.shift) { code += 4 }
+        if modifiers.contains(.option) { code += 8 }
+        if modifiers.contains(.control) { code += 16 }
+        if kind == .drag { code += 32 }
+        let col = column + 1
+        let line = row + 1
+
+        if modes.mouseSGR {
+            let final: Character = (kind == .release) ? "m" : "M"
+            return esc("[<\(code);\(col);\(line)\(final)")
+        }
+
+        // Legacy X10: CSI M Cb Cx Cy, each value offset by 32; release reports button 3.
+        var legacy = code
+        if kind == .release { legacy = (legacy & ~0b11) | 3 }
+        let cb = UInt8(clamping: legacy + 32)
+        let cx = UInt8(clamping: min(col, 223) + 32)
+        let cy = UInt8(clamping: min(line, 223) + 32)
+        return [0x1B, 0x5B, 0x4D, cb, cx, cy] // ESC [ M …
     }
 
     /// Wrap pasted text in bracketed-paste markers when the mode is enabled.

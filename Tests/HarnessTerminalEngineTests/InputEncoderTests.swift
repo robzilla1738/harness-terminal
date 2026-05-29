@@ -95,4 +95,41 @@ final class InputEncoderTests: XCTestCase {
         modes.bracketedPaste = true
         XCTAssertEqual(encoder.encodePaste("hi", modes: modes), bytes("\u{1b}[200~hi\u{1b}[201~"))
     }
+
+    // MARK: Mouse
+
+    func testMouseReturnsEmptyWhenTrackingOff() {
+        XCTAssertEqual(encoder.encodeMouse(button: .left, kind: .press, column: 0, row: 0, modes: TerminalModes()), [])
+    }
+
+    func testMouseSGRPressAndRelease() {
+        var modes = TerminalModes()
+        modes.mouseClick = true
+        modes.mouseSGR = true
+        // 0-based (4,9) -> 1-based (5,10); left = 0; press = M, release = m.
+        XCTAssertEqual(encoder.encodeMouse(button: .left, kind: .press, column: 4, row: 9, modes: modes),
+                       bytes("\u{1b}[<0;5;10M"))
+        XCTAssertEqual(encoder.encodeMouse(button: .left, kind: .release, column: 4, row: 9, modes: modes),
+                       bytes("\u{1b}[<0;5;10m"))
+    }
+
+    func testMouseSGRDragModifiersAndWheel() {
+        var modes = TerminalModes()
+        modes.mouseAny = true
+        modes.mouseSGR = true
+        // Drag adds 32, control adds 16 -> 0 + 16 + 32 = 48.
+        XCTAssertEqual(encoder.encodeMouse(button: .left, kind: .drag, column: 0, row: 0, modifiers: .control, modes: modes),
+                       bytes("\u{1b}[<48;1;1M"))
+        // Wheel up = 64.
+        XCTAssertEqual(encoder.encodeMouse(button: .wheelUp, kind: .press, column: 2, row: 3, modes: modes),
+                       bytes("\u{1b}[<64;3;4M"))
+    }
+
+    func testMouseLegacyX10() {
+        var modes = TerminalModes()
+        modes.mouseClick = true // no SGR -> legacy byte form
+        // ESC [ M, then Cb=0+32, Cx=(0+1)+32, Cy=(0+1)+32.
+        XCTAssertEqual(encoder.encodeMouse(button: .left, kind: .press, column: 0, row: 0, modes: modes),
+                       [0x1B, 0x5B, 0x4D, 32, 33, 33])
+    }
 }

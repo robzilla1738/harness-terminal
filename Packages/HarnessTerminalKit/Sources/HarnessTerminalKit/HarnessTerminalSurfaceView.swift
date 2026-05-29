@@ -372,8 +372,36 @@ public final class HarnessTerminalSurfaceView: NSView {
         return (max(0, min(rows - 1, row)), max(0, min(columns - 1, col)))
     }
 
+    /// Mouse goes to the program when it enabled tracking — unless Shift is held, which
+    /// always forces local selection (the standard terminal override).
+    private func isMouseReporting(_ event: NSEvent) -> Bool {
+        emulator.modes.mouseTrackingEnabled && !event.modifierFlags.contains(.shift)
+    }
+
+    private func mouseModifiers(_ event: NSEvent) -> KeyModifiers {
+        var mods: KeyModifiers = []
+        let flags = event.modifierFlags
+        if flags.contains(.shift) { mods.insert(.shift) }
+        if flags.contains(.option) { mods.insert(.option) }
+        if flags.contains(.control) { mods.insert(.control) }
+        return mods
+    }
+
+    private func reportMouse(_ event: NSEvent, button: MouseButton, kind: MouseEventKind) {
+        guard let pos = cell(at: event.locationInWindow) else { return }
+        emit(inputEncoder.encodeMouse(
+            button: button, kind: kind,
+            column: pos.column, row: pos.row,
+            modifiers: mouseModifiers(event), modes: emulator.modes
+        ))
+    }
+
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        if isMouseReporting(event) {
+            reportMouse(event, button: .left, kind: .press)
+            return
+        }
         guard let pos = cell(at: event.locationInWindow) else { return }
         selectionAnchor = pos
         selectionHead = pos
@@ -381,18 +409,58 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func mouseDragged(with event: NSEvent) {
+        if isMouseReporting(event) {
+            // Only report motion when the app asked for drag / any-motion tracking.
+            if emulator.modes.mouseDrag || emulator.modes.mouseAny {
+                reportMouse(event, button: .left, kind: .drag)
+            }
+            return
+        }
         guard selectionAnchor != nil, let pos = cell(at: event.locationInWindow) else { return }
         selectionHead = pos
         scheduleRender()
     }
 
     public override func mouseUp(with event: NSEvent) {
+        if isMouseReporting(event) {
+            reportMouse(event, button: .left, kind: .release)
+            return
+        }
         // A click with no drag clears the selection; a real drag optionally copies.
         if let a = selectionAnchor, let h = selectionHead, a == h {
             clearSelection()
             return
         }
         if copyOnSelect { copySelection() }
+    }
+
+    public override func rightMouseDown(with event: NSEvent) {
+        if isMouseReporting(event) { reportMouse(event, button: .right, kind: .press) }
+        else { super.rightMouseDown(with: event) }
+    }
+
+    public override func rightMouseUp(with event: NSEvent) {
+        if isMouseReporting(event) { reportMouse(event, button: .right, kind: .release) }
+        else { super.rightMouseUp(with: event) }
+    }
+
+    public override func otherMouseDown(with event: NSEvent) {
+        if isMouseReporting(event) { reportMouse(event, button: .middle, kind: .press) }
+        else { super.otherMouseDown(with: event) }
+    }
+
+    public override func otherMouseUp(with event: NSEvent) {
+        if isMouseReporting(event) { reportMouse(event, button: .middle, kind: .release) }
+        else { super.otherMouseUp(with: event) }
+    }
+
+    public override func scrollWheel(with event: NSEvent) {
+        if isMouseReporting(event) {
+            let button: MouseButton = event.scrollingDeltaY > 0 ? .wheelUp : .wheelDown
+            if event.scrollingDeltaY != 0 { reportMouse(event, button: button, kind: .press) }
+            return
+        }
+        super.scrollWheel(with: event)
     }
 
     /// Standard responder copy (Edit ▸ Copy / ⌘C via the menu).
