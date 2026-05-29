@@ -1,5 +1,4 @@
 import AppKit
-import GhosttyTheme
 import HarnessTerminalKit
 
 @MainActor
@@ -31,33 +30,6 @@ struct HarnessChromePalette {
         foregroundHex: ThemeManager.defaultBaselineForegroundHex,
         cursorHex: ThemeManager.defaultBaselineForegroundHex
     )
-
-    static func from(themeName: String) -> HarnessChromePalette {
-        let theme = GhosttyThemeCatalog.theme(named: themeName)
-            ?? GhosttyThemeCatalog.theme(named: ThemeManager.defaultThemeName)
-            ?? GhosttyThemeCatalog.allThemes.first!
-        return from(theme: theme)
-    }
-
-    static func from(theme: GhosttyThemeDefinition) -> HarnessChromePalette {
-        let background = color(from: theme.background)
-        let foreground = color(from: theme.foreground)
-        let accentHex = theme.palette[4] ?? theme.palette[12] ?? theme.cursorColor ?? "89b4fa"
-        let accent = color(from: accentHex)
-        let waiting = color(from: theme.palette[12] ?? theme.palette[4] ?? "89b4fa")
-        let danger = color(from: theme.palette[1] ?? "f38ba8")
-        let success = color(from: theme.palette[2] ?? "a6e3a1")
-        let idle = color(from: theme.palette[8] ?? theme.palette[0] ?? "585b70")
-        return build(
-            background: background,
-            foreground: foreground,
-            accent: accent,
-            waiting: waiting,
-            danger: danger,
-            success: success,
-            idle: idle
-        )
-    }
 
     /// Build a palette directly from explicit hex strings (used when the user has
     /// set `background`/`foreground` in their Ghostty config — we want to honor

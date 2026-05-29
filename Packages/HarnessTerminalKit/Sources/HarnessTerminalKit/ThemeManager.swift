@@ -1,6 +1,6 @@
 import Foundation
 import GhosttyTerminal
-import GhosttyTheme
+import HarnessTheme
 
 @MainActor
 public enum ThemeManager {
@@ -19,16 +19,6 @@ public enum ThemeManager {
         "#7AA6DA", "#C397D8", "#70C0B1", "#EAEAEA",
     ]
 
-    /// Black/white baseline used by older callers. It deliberately does not set
-    /// ANSI palette entries; libghostty/Ghostty should own terminal tool colors.
-    private static func defaultBaselineTheme() -> TerminalTheme {
-        let config = TerminalConfiguration {
-            $0.withBackground(defaultBaselineBackgroundHex)
-            $0.withForeground(defaultBaselineForegroundHex)
-        }
-        return TerminalTheme(light: config, dark: config)
-    }
-
     public static let featuredThemes = [
         "Catppuccin Mocha",
         "Dracula",
@@ -41,20 +31,6 @@ public enum ThemeManager {
         "GitHub Dark",
     ]
 
-    public static func apply(themeName: String, to controller: TerminalController) {
-        if themeName == defaultDisplayName {
-            _ = controller.setTheme(defaultBaselineTheme())
-            return
-        }
-        if let theme = GhosttyThemeCatalog.theme(named: themeName) {
-            _ = controller.setTheme(theme.toTerminalTheme())
-            return
-        }
-        if let theme = GhosttyThemeCatalog.theme(named: defaultThemeName) {
-            _ = controller.setTheme(theme.toTerminalTheme())
-        }
-    }
-
     /// Terminal output intentionally ignores Harness themes. Themes may style
     /// chrome previews, tabs, sidebar, etc.; libghostty/Ghostty own ANSI and
     /// truecolor rendering so terminal tools are not retinted by Harness.
@@ -62,18 +38,18 @@ public enum ThemeManager {
 
     public static func backgroundHex(themeName: String) -> String? {
         if themeName == defaultDisplayName { return defaultBaselineBackgroundHex }
-        return themed(themeName)?.background.normalizedHashedHex
+        return themed(themeName)?.backgroundHex
     }
 
     public static func foregroundHex(themeName: String) -> String? {
         if themeName == defaultDisplayName { return defaultBaselineForegroundHex }
-        return themed(themeName)?.foreground.normalizedHashedHex
+        return themed(themeName)?.foregroundHex
     }
 
     public static func cursorHex(themeName: String) -> String? {
         if themeName == defaultDisplayName { return defaultBaselineForegroundHex }
-        return themed(themeName)?.cursorColor?.normalizedHashedHex
-            ?? themed(themeName)?.foreground.normalizedHashedHex
+        return themed(themeName)?.cursorHex
+            ?? themed(themeName)?.foregroundHex
     }
 
     /// The background/foreground/cursor that define the shared canvas. The
@@ -101,23 +77,23 @@ public enum ThemeManager {
 
     public static func cursorTextHex(themeName: String) -> String? {
         if themeName == defaultDisplayName { return defaultBaselineBackgroundHex }
-        return themed(themeName)?.cursorText?.normalizedHashedHex
-            ?? themed(themeName)?.background.normalizedHashedHex
+        return themed(themeName)?.cursorTextHex
+            ?? themed(themeName)?.backgroundHex
     }
 
     public static func selectionBackgroundHex(themeName: String) -> String? {
-        themed(themeName)?.selectionBackground?.normalizedHashedHex
+        themed(themeName)?.selectionBackgroundHex
     }
 
     public static func selectionForegroundHex(themeName: String) -> String? {
-        themed(themeName)?.selectionForeground?.normalizedHashedHex
+        themed(themeName)?.selectionForegroundHex
     }
 
-    /// Bold color is rarely set in themes; fall back to the foreground so the
-    /// preview swatch in Settings never reads as "missing".
+    /// Bold color is rarely set in themes; fall back to bright-white (palette 15) then
+    /// the foreground so the preview swatch in Settings never reads as "missing".
     public static func boldHex(themeName: String) -> String? {
-        themed(themeName)?.palette[15]?.normalizedHashedHex
-            ?? themed(themeName)?.foreground.normalizedHashedHex
+        guard let theme = themed(themeName) else { return nil }
+        return theme.paletteHex[15] ?? theme.foregroundHex
     }
 
     /// 16 ANSI palette colors for settings preview swatches only. TerminalHostView
@@ -125,7 +101,7 @@ public enum ThemeManager {
     public static func paletteHex(themeName: String) -> [String?] {
         if themeName == defaultDisplayName { return defaultBaselinePaletteHex }
         guard let theme = themed(themeName) else { return Array(repeating: nil, count: 16) }
-        return (0 ..< 16).map { theme.palette[$0]?.normalizedHashedHex }
+        return theme.paletteHex
     }
 
     /// The complete editable color set a named theme contributes. Selecting a
@@ -158,20 +134,12 @@ public enum ThemeManager {
     public static func allThemeNames() -> [String] {
         [defaultDisplayName]
             + featuredThemes
-            + GhosttyThemeCatalog.search("").map(\.name)
+            + HarnessThemeCatalog.allThemes.map(\.name)
                 .filter { !featuredThemes.contains($0) && $0 != defaultDisplayName }
     }
 
-    private static func themed(_ name: String) -> GhosttyThemeDefinition? {
+    private static func themed(_ name: String) -> HarnessThemeDefinition? {
         let resolved = (name == defaultDisplayName) ? defaultThemeName : name
-        return GhosttyThemeCatalog.theme(named: resolved) ?? GhosttyThemeCatalog.theme(named: defaultThemeName)
-    }
-}
-
-private extension String {
-    /// Ghostty themes store hexes without a leading `#`; settings/UI standardize on `#rrggbb`.
-    var normalizedHashedHex: String {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.hasPrefix("#") ? trimmed.lowercased() : "#" + trimmed.lowercased()
+        return HarnessThemeCatalog.theme(named: resolved) ?? HarnessThemeCatalog.theme(named: defaultThemeName)
     }
 }

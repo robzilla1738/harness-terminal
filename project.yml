@@ -39,6 +39,8 @@ targets:
         product: HarnessCore
       - package: Harness
         product: HarnessTerminalKit
+      - package: Harness
+        product: HarnessTheme
       - package: libghostty-spm-fork
         product: GhosttyTerminal
       - package: libghostty-spm-fork

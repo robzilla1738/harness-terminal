@@ -61,6 +61,7 @@ let package = Package(
             dependencies: [
                 "HarnessCore",
                 "HarnessTerminalEngine",
+                "HarnessTheme",
                 .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
                 .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
@@ -88,6 +89,7 @@ let package = Package(
             dependencies: [
                 "HarnessCore",
                 "HarnessTerminalKit",
+                "HarnessTheme",
                 .product(name: "GhosttyTerminal", package: "libghostty-spm-fork"),
                 .product(name: "GhosttyTheme", package: "libghostty-spm-fork"),
             ],
