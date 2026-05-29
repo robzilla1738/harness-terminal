@@ -129,8 +129,8 @@ public final class TerminalMetalRenderer {
     /// Render `frame` into `target`, clearing to `clearColor` first. Synchronous: the
     /// command buffer is committed and waited on (suitable for offscreen capture).
     /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
-    public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1) {
-        guard let commandBuffer = encode(frame, target: target, clearColor: clearColor, origin: origin, gamma: gamma) else { return }
+    public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1, ligatures: Bool = false) {
+        guard let commandBuffer = encode(frame, target: target, clearColor: clearColor, origin: origin, gamma: gamma, ligatures: ligatures) else { return }
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
     }
@@ -138,15 +138,16 @@ public final class TerminalMetalRenderer {
     /// Render `frame` into a layer drawable and present it. Used by the live view.
     /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
     /// `gamma` > 1 applies gamma-correct (linear) text coverage; 1 = native blending.
-    public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1) {
-        guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor, origin: origin, gamma: gamma) else { return }
+    /// `ligatures` enables CoreText run shaping (programming-font ligatures).
+    public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1, ligatures: Bool = false) {
+        guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor, origin: origin, gamma: gamma, ligatures: ligatures) else { return }
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
 
     /// Build the instance buffers and encode the background, glyph, and decoration passes
     /// into a fresh command buffer. Caller decides whether to wait (offscreen) or present.
-    private func encode(_ frame: TerminalFrame, target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int), gamma: Float) -> MTLCommandBuffer? {
+    private func encode(_ frame: TerminalFrame, target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int), gamma: Float, ligatures: Bool) -> MTLCommandBuffer? {
         let viewport = SIMD2<Float>(Float(target.width), Float(target.height))
         let ox = Float(origin.x)
         let oy = Float(origin.y)
@@ -182,24 +183,17 @@ public final class TerminalMetalRenderer {
                               cellSize: SIMD2(cellW, cellH),
                               thickness: thickness, underlineY: underlineY,
                               strikeY: strikeY, overlineY: overlineY, into: &decorations)
+        }
 
-            guard cell.hasGlyph,
-                  let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
-            else { continue }
-
-            // The glyph under a block cursor flips to the cursor-text color for legibility.
-            let fg = (invertCursorGlyph && cell.row == cursorRow && cell.column == cursorCol)
-                ? vector(frame.cursor.textColor)
-                : vector(cell.foreground)
-            let gx = originX + Float(entry.bearingX)
-            let gy = originY + Float(ascentPixels - entry.bearingY)
-            glyphs.append(GlyphInstance(
-                origin: SIMD2(gx, gy),
-                size: SIMD2(Float(entry.pixelWidth), Float(entry.pixelHeight)),
-                uvOrigin: entry.uvOrigin,
-                uvSize: entry.uvSize,
-                color: fg
-            ))
+        // Glyphs: ligated CoreText run shaping when enabled, else the fast per-cell path.
+        // Both place each glyph on its source cell so the monospace grid stays aligned.
+        let cursorCell = invertCursorGlyph ? (row: cursorRow, column: cursorCol) : nil
+        if ligatures {
+            emitLigatedGlyphs(frame, ox: ox, oy: oy, cursorCell: cursorCell,
+                              cursorTextColor: frame.cursor.textColor, into: &glyphs)
+        } else {
+            emitPerCellGlyphs(frame, ox: ox, oy: oy, cursorCell: cursorCell,
+                              cursorTextColor: frame.cursor.textColor, into: &glyphs)
         }
 
         // Cursor: block fills the cell (glyphs still draw on top); bar is a thin left
@@ -317,6 +311,111 @@ public final class TerminalMetalRenderer {
                 origin: origin, size: cellSize, kind: DecoKind.solid.rawValue
             ))
         }
+    }
+
+    /// Fast path: one atlas glyph per cell (no shaping). Each glyph sits on its own cell;
+    /// the cursor cell flips to the cursor-text color.
+    private func emitPerCellGlyphs(
+        _ frame: TerminalFrame, ox: Float, oy: Float,
+        cursorCell: (row: Int, column: Int)?, cursorTextColor: RenderColor,
+        into glyphs: inout [GlyphInstance]
+    ) {
+        for cell in frame.cells {
+            guard cell.hasGlyph,
+                  let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
+            else { continue }
+            let isCursor = cursorCell.map { $0.row == cell.row && $0.column == cell.column } ?? false
+            let color = isCursor ? vector(cursorTextColor) : vector(cell.foreground)
+            glyphs.append(glyphInstance(
+                entry,
+                originX: ox + Float(cell.column * cellPixelWidth),
+                originY: oy + Float(cell.row * cellPixelHeight),
+                color: color
+            ))
+        }
+    }
+
+    /// Ligature path: shape each maximal same-style/same-color run with CoreText, then place
+    /// every shaped glyph on its *source* cell so the monospace grid stays aligned (a
+    /// ligature spanning N cells lands on its first cell). The cursor cell is shaped alone.
+    private func emitLigatedGlyphs(
+        _ frame: TerminalFrame, ox: Float, oy: Float,
+        cursorCell: (row: Int, column: Int)?, cursorTextColor: RenderColor,
+        into glyphs: inout [GlyphInstance]
+    ) {
+        let cols = frame.columns
+        for row in 0 ..< frame.rows {
+            var col = 0
+            while col < cols {
+                guard let cell = frame.cell(row: row, column: col), cell.hasGlyph else {
+                    col += 1
+                    continue
+                }
+                if let cur = cursorCell, cur.row == row, cur.column == col {
+                    emitSingleGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                                    color: vector(cursorTextColor), into: &glyphs)
+                    col += 1
+                    continue
+                }
+                // Accumulate a run of contiguous, same-style, same-color glyph cells.
+                var runText = ""
+                var utf16ToColumn: [Int] = []
+                let bold = cell.bold, italic = cell.italic, fg = cell.foreground
+                var c = col
+                while c < cols, let rc = frame.cell(row: row, column: c) {
+                    if rc.width == .spacerTail { c += 1; continue } // wide-char tail
+                    if !rc.hasGlyph { break }
+                    if let cur = cursorCell, cur.row == row, cur.column == c { break }
+                    if rc.bold != bold || rc.italic != italic || rc.foreground != fg { break }
+                    let scalar = Unicode.Scalar(rc.codepoint) ?? " "
+                    let before = runText.utf16.count
+                    runText.unicodeScalars.append(scalar)
+                    for _ in before ..< runText.utf16.count { utf16ToColumn.append(c) }
+                    c += 1
+                }
+                if utf16ToColumn.isEmpty { col += 1; continue }
+                let color = vector(fg)
+                for shaped in atlas.shape(runText, bold: bold, italic: italic) {
+                    guard let entry = atlas.entry(forShaped: shaped.glyph, font: shaped.font) else { continue }
+                    let idx = min(max(0, shaped.utf16Index), utf16ToColumn.count - 1)
+                    let cellColumn = utf16ToColumn[idx]
+                    glyphs.append(glyphInstance(
+                        entry,
+                        originX: ox + Float(cellColumn * cellPixelWidth),
+                        originY: oy + Float(row * cellPixelHeight),
+                        color: color
+                    ))
+                }
+                col = c
+            }
+        }
+    }
+
+    private func emitSingleGlyph(
+        _ cell: RenderCell, row: Int, col: Int, ox: Float, oy: Float,
+        color: SIMD4<Float>, into glyphs: inout [GlyphInstance]
+    ) {
+        guard cell.hasGlyph,
+              let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
+        else { return }
+        glyphs.append(glyphInstance(
+            entry,
+            originX: ox + Float(col * cellPixelWidth),
+            originY: oy + Float(row * cellPixelHeight),
+            color: color
+        ))
+    }
+
+    private func glyphInstance(_ entry: AtlasEntry, originX: Float, originY: Float, color: SIMD4<Float>) -> GlyphInstance {
+        let gx = originX + Float(entry.bearingX)
+        let gy = originY + Float(ascentPixels - entry.bearingY)
+        return GlyphInstance(
+            origin: SIMD2(gx, gy),
+            size: SIMD2(Float(entry.pixelWidth), Float(entry.pixelHeight)),
+            uvOrigin: entry.uvOrigin,
+            uvSize: entry.uvSize,
+            color: color
+        )
     }
 
     private func vector(_ c: RenderColor) -> SIMD4<Float> {

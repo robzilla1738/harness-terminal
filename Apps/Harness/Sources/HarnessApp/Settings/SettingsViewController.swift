@@ -60,6 +60,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         target: nil,
         action: nil
     )
+    private let ligaturesToggle = NSButton(
+        checkboxWithTitle: "Programming ligatures (=>, !=, ->) for fonts that have them",
+        target: nil,
+        action: nil
+    )
     private let selectionBgHexField = NSTextField()
     private let selectionFgHexField = NSTextField()
     private let boldHexField = NSTextField()
@@ -281,6 +286,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         themeTerminalOutputToggle.target = self
         themeTerminalOutputToggle.action = #selector(appearanceTextDidCommit)
+        ligaturesToggle.state = settings.ligatures ? .on : .off
+        ligaturesToggle.target = self
+        ligaturesToggle.action = #selector(appearanceTextDidCommit)
 
         transparentTitlebarToggle.state = settings.transparentTitlebar ? .on : .off
         transparentTitlebarToggle.target = self
@@ -527,6 +535,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("", vividColorsToggle),
             ("", linearBlendingToggle),
             ("", themeTerminalOutputToggle),
+            ("", ligaturesToggle),
         ])
 
         // Chrome accent rows: dividers + status line text (colorBindings 7 and 8).
@@ -1140,6 +1149,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         vividColorsToggle.state = settings.vividColors ? .on : .off
         linearBlendingToggle.state = settings.linearBlending ? .on : .off
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
+        ligaturesToggle.state = settings.ligatures ? .on : .off
         for binding in colorBindings {
             binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
@@ -1210,6 +1220,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.vividColors = vividColorsToggle.state == .on
         coordinator.settings.linearBlending = linearBlendingToggle.state == .on
         coordinator.settings.applyThemeToTerminalOutput = themeTerminalOutputToggle.state == .on
+        coordinator.settings.ligatures = ligaturesToggle.state == .on
         try? coordinator.settings.save()
 
         // Theme switching (and its color seeding) is handled by themeDidChange, so

@@ -100,7 +100,7 @@ public final class GlyphRasterizer {
     public func rasterize(codepoint: UInt32, bold isBold: Bool = false, italic isItalic: Bool = false) -> RasterizedGlyph? {
         guard let scalar = Unicode.Scalar(codepoint) else { return nil }
         var chosenFont = font(bold: isBold, italic: isItalic)
-        var glyph: CGGlyph
+        let glyph: CGGlyph
         if let g = glyphID(for: codepoint, in: chosenFont) {
             glyph = g
         } else {
@@ -111,11 +111,59 @@ public final class GlyphRasterizer {
             chosenFont = fallback
             glyph = fg
         }
+        return render(glyph: glyph, font: chosenFont)
+    }
 
-        // Glyph bounding box in points → pixels.
+    /// Rasterize a specific glyph id in a specific font — used by the shaping (ligature)
+    /// path, where CoreText already resolved glyph ids + fonts for a run.
+    public func rasterize(glyph: CGGlyph, font: CTFont) -> RasterizedGlyph? {
+        guard glyph != 0 else { return nil }
+        return render(glyph: glyph, font: font)
+    }
+
+    /// One shaped glyph from `shape(_:)`: a glyph id in a resolved font, plus the UTF-16
+    /// index of the source character (so the renderer can place it on the right cell).
+    /// Not `Sendable` — `CTFont` isn't; shaped glyphs are consumed synchronously per frame.
+    public struct ShapedGlyph {
+        public let glyph: CGGlyph
+        public let font: CTFont
+        public let utf16Index: Int
+    }
+
+    /// Shape a string with CoreText so contextual ligatures (e.g. `=>`, `!=`, `->` in
+    /// programming fonts) collapse into their ligature glyphs. Returns the run's glyphs in
+    /// visual order with the source UTF-16 index of each, so a ligature spanning N cells is
+    /// placed on its first cell and grid alignment is preserved.
+    public func shape(_ text: String, bold isBold: Bool, italic isItalic: Bool) -> [ShapedGlyph] {
+        guard !text.isEmpty else { return [] }
+        let base = font(bold: isBold, italic: isItalic)
+        let fontKey = NSAttributedString.Key(kCTFontAttributeName as String)
+        let attributed = NSAttributedString(string: text, attributes: [fontKey: base])
+        let line = CTLineCreateWithAttributedString(attributed)
+        guard let runs = CTLineGetGlyphRuns(line) as? [CTRun] else { return [] }
+        var out: [ShapedGlyph] = []
+        for run in runs {
+            let count = CTRunGetGlyphCount(run)
+            guard count > 0 else { continue }
+            var glyphs = [CGGlyph](repeating: 0, count: count)
+            var indices = [CFIndex](repeating: 0, count: count)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: count), &glyphs)
+            CTRunGetStringIndices(run, CFRange(location: 0, length: count), &indices)
+            let attrs = CTRunGetAttributes(run) as NSDictionary
+            let runFont = (attrs[kCTFontAttributeName as String] as! CTFont)
+            for i in 0 ..< count {
+                out.append(ShapedGlyph(glyph: glyphs[i], font: runFont, utf16Index: indices[i]))
+            }
+        }
+        return out
+    }
+
+    /// Render a resolved glyph id in a font into an alpha-coverage bitmap. Returns nil when
+    /// the glyph has no ink.
+    private func render(glyph: CGGlyph, font: CTFont) -> RasterizedGlyph? {
         var g = glyph
         var bounds = CGRect.zero
-        CTFontGetBoundingRectsForGlyphs(chosenFont, .horizontal, &g, &bounds, 1)
+        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &g, &bounds, 1)
         guard bounds.width > 0, bounds.height > 0 else { return nil }
 
         let pxW = Int((bounds.width * scale).rounded(.up)) + 2  // +2px padding to avoid clipping AA edges
@@ -141,7 +189,7 @@ public final class GlyphRasterizer {
         // Position so the glyph's bbox maps into the bitmap, with 1px (pre-scale) padding.
         let pad = 1.0 / scale
         var position = CGPoint(x: -bounds.minX + pad, y: -bounds.minY + pad)
-        CTFontDrawGlyphs(chosenFont, &g, &position, 1, ctx)
+        CTFontDrawGlyphs(font, &g, &position, 1, ctx)
 
         let coverage = readCoverage(ctx, width: pxW, height: pxH)
         return RasterizedGlyph(

@@ -81,6 +81,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var markedText = ""
     /// Glyph coverage gamma: 1 = native blending; < 1 = gamma-correct (thicker) text.
     private var glyphGamma: Float = 1
+    /// Programming-font ligatures via CoreText run shaping.
+    private var ligaturesEnabled = true
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -153,11 +155,13 @@ public final class HarnessTerminalSurfaceView: NSView {
         selectionForegroundHex: String?,
         copyOnSelect: Bool,
         scrollbackLines: Int,
-        linearBlending: Bool
+        linearBlending: Bool,
+        ligatures: Bool
     ) {
         emulator.maxScrollbackLines = scrollbackLines
         // Gamma-correct ("linear") blending thickens light-on-dark antialiasing slightly.
         glyphGamma = linearBlending ? 0.8 : 1.0
+        ligaturesEnabled = ligatures
         let bg = RGBColor(hex: canvasBackgroundHex) ?? RGBColor(red: 0, green: 0, blue: 0)
         let fg = RGBColor(hex: canvasForegroundHex) ?? RGBColor(red: 255, green: 255, blue: 255)
         let cursor = RGBColor(hex: cursorHex) ?? fg
@@ -336,7 +340,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             to: drawable,
             clearColor: RenderColor(canvasBackground, alpha: canvasOpacity),
             origin: (originOffsetX, originOffsetY),
-            gamma: glyphGamma
+            gamma: glyphGamma,
+            ligatures: ligaturesEnabled
         )
     }
 

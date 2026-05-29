@@ -1,3 +1,5 @@
+import CoreGraphics
+import CoreText
 import Metal
 import simd
 
@@ -6,6 +8,12 @@ struct GlyphKey: Hashable {
     let codepoint: UInt32
     let bold: Bool
     let italic: Bool
+}
+
+/// Identifies a shaped glyph (ligature path): a glyph id within a specific font.
+struct ShapedGlyphKey: Hashable {
+    let glyph: UInt16
+    let fontName: String
 }
 
 /// A packed glyph's location in the atlas (normalized UV) plus its pixel placement.
@@ -27,6 +35,7 @@ final class GlyphAtlas {
 
     private let rasterizer: GlyphRasterizer
     private var cache: [GlyphKey: AtlasEntry?] = [:]
+    private var shapedCache: [ShapedGlyphKey: AtlasEntry?] = [:]
 
     // Shelf packer cursor.
     private var penX = 0
@@ -54,15 +63,30 @@ final class GlyphAtlas {
     /// the glyph has no ink or the atlas is full.
     func entry(for key: GlyphKey) -> AtlasEntry? {
         if let cached = cache[key] { return cached }
-        let entry = pack(key)
+        let entry = rasterizer.rasterize(codepoint: key.codepoint, bold: key.bold, italic: key.italic)
+            .flatMap(place)
         cache[key] = entry
         return entry
     }
 
-    private func pack(_ key: GlyphKey) -> AtlasEntry? {
-        guard let glyph = rasterizer.rasterize(codepoint: key.codepoint, bold: key.bold, italic: key.italic),
-              glyph.width > 0, glyph.height > 0
-        else { return nil }
+    /// Atlas entry for a shaped glyph id (ligature path), keyed by glyph id + font.
+    func entry(forShaped glyph: CGGlyph, font: CTFont) -> AtlasEntry? {
+        let key = ShapedGlyphKey(glyph: glyph, fontName: CTFontCopyPostScriptName(font) as String)
+        if let cached = shapedCache[key] { return cached }
+        let entry = rasterizer.rasterize(glyph: glyph, font: font).flatMap(place)
+        shapedCache[key] = entry
+        return entry
+    }
+
+    /// Shape a run for ligatures (delegates to the rasterizer's CoreText shaper).
+    func shape(_ text: String, bold: Bool, italic: Bool) -> [GlyphRasterizer.ShapedGlyph] {
+        rasterizer.shape(text, bold: bold, italic: italic)
+    }
+
+    /// Pack a rasterized glyph into the shelf and upload it. Returns nil when the glyph has
+    /// no ink or the atlas is full.
+    private func place(_ glyph: RasterizedGlyph) -> AtlasEntry? {
+        guard glyph.width > 0, glyph.height > 0 else { return nil }
 
         // Advance to a new shelf if this glyph won't fit on the current row.
         if penX + glyph.width > size {

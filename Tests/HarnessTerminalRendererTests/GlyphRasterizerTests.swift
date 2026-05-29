@@ -48,4 +48,21 @@ final class GlyphRasterizerTests: XCTestCase {
     func testInvalidScalarReturnsNil() {
         XCTAssertNil(rasterizer.rasterize(codepoint: 0xD800)) // lone surrogate
     }
+
+    // MARK: Shaping (ligature path)
+
+    func testShapeEmptyIsEmpty() {
+        XCTAssertTrue(rasterizer.shape("", bold: false, italic: false).isEmpty)
+    }
+
+    func testShapePlainTextMapsOneGlyphPerCharacterInOrder() {
+        // No ligatures in Menlo: "ab" shapes to 2 glyphs whose source indices are 0 and 1,
+        // so each lands on its own cell (grid alignment preserved).
+        let shaped = rasterizer.shape("ab", bold: false, italic: false)
+        XCTAssertEqual(shaped.count, 2)
+        XCTAssertEqual(shaped.map(\.utf16Index), [0, 1])
+        for sg in shaped {
+            XCTAssertNotNil(rasterizer.rasterize(glyph: sg.glyph, font: sg.font))
+        }
+    }
 }

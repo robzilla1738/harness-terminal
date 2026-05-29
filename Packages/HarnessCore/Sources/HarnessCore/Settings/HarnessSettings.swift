@@ -64,6 +64,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// colors — programs render their true colors over a themed, optionally translucent
     /// canvas.
     public var applyThemeToTerminalOutput: Bool
+    /// Programming-font ligatures (e.g. `=>`, `!=`, `->`) via CoreText run shaping. On by
+    /// default; turn off for the fastest one-glyph-per-cell path.
+    public var ligatures: Bool
 
     public init(
         fontSize: Float = 14,
@@ -96,7 +99,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         systemNotificationsEnabled: Bool = true,
         vividColors: Bool = true,
         linearBlending: Bool = false,
-        applyThemeToTerminalOutput: Bool = false
+        applyThemeToTerminalOutput: Bool = false,
+        ligatures: Bool = true
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -129,6 +133,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.vividColors = vividColors
         self.linearBlending = linearBlending
         self.applyThemeToTerminalOutput = applyThemeToTerminalOutput
+        self.ligatures = ligatures
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -224,6 +229,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         vividColors = try container.decodeIfPresent(Bool.self, forKey: .vividColors) ?? fallback.vividColors
         linearBlending = try container.decodeIfPresent(Bool.self, forKey: .linearBlending) ?? fallback.linearBlending
         applyThemeToTerminalOutput = try container.decodeIfPresent(Bool.self, forKey: .applyThemeToTerminalOutput) ?? fallback.applyThemeToTerminalOutput
+        ligatures = try container.decodeIfPresent(Bool.self, forKey: .ligatures) ?? fallback.ligatures
     }
 
     public static func load() -> HarnessSettings {

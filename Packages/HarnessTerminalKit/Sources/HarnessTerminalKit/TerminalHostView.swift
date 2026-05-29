@@ -161,7 +161,8 @@ public final class TerminalHostView: NSView {
                 ?? ThemeManager.selectionForegroundHex(themeName: cachedThemeName),
             copyOnSelect: settings.copyOnSelect,
             scrollbackLines: settings.scrollbackLines,
-            linearBlending: settings.linearBlending
+            linearBlending: settings.linearBlending,
+            ligatures: settings.ligatures
         )
     }
 
