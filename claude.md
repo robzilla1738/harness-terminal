@@ -44,6 +44,10 @@ The only remaining "ghostty" is the **opt-in config import** (`TerminalConfigImp
   a per-row wrap flag, re-wrap to the new width (wide chars never split), map the cursor; the
   alternate screen just clamps (TUIs redraw on SIGWINCH). The PTY env sets `COLORTERM=truecolor`.
 - **Decorations** (underline/strike/overline) are pixel-snapped for crisp 1–2px lines.
+- **Glyph baseline** is pixel-snapped at rasterization: `GlyphRasterizer.render` draws each glyph
+  with its pen origin (baseline + left edge) on integer device pixels, so every glyph shares the
+  exact same baseline row. Drawing at a fractional position while rounding the bearing
+  independently (the old path) left a sub-pixel residual per glyph — a wavy / "squiggly" baseline.
 
 ---
 
