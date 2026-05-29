@@ -71,6 +71,14 @@ struct HarnessCLI {
                 try handleSendKeys(args, client: client)
             case "capture-pane":
                 try handleCapturePane(args, client: client)
+            case "pipe-pane":
+                try handlePipePane(args, client: client)
+            case "link-window":
+                try handleLinkWindow(args, client: client)
+            case "unlink-window":
+                try handleUnlinkWindow(args, client: client)
+            case "control-mode", "-CC":
+                exit(try ControlModeClient.run(client: client))
             case "kill-pane":
                 try handlePaneCommand(args, client: client) { paneID in .killPane(paneID: paneID) }
             case "swap-pane":
@@ -283,14 +291,47 @@ struct HarnessCLI {
 
     static func handleCapturePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback]\n", stderr)
+            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-p]\n", stderr)
             exit(1)
         }
-        let scrollback = args.contains("--scrollback")
-        let response = try checkedRequest(client, .capturePane(surfaceID: surface, includeScrollback: scrollback))
-        if case let .text(text) = response {
-            print(text)
+        // -S/-E request an ANSI-stripped line range (tmux `-p` prints to stdout,
+        // which is the default here). Negative numbers count back from the bottom.
+        let start = flagValue(args, flag: "-S").flatMap(Int.init)
+        let end = flagValue(args, flag: "-E").flatMap(Int.init)
+        let response: IPCResponse
+        if args.contains("-S") || args.contains("-E") {
+            response = try checkedRequest(client, .capturePaneRange(surfaceID: surface, start: start, end: end))
+        } else {
+            response = try checkedRequest(client, .capturePane(surfaceID: surface, includeScrollback: args.contains("--scrollback")))
         }
+        if case let .text(text) = response { print(text) }
+    }
+
+    static func handlePipePane(_ args: [String], client: DaemonClient) throws {
+        guard let surface = flagValue(args, flag: "--surface") else {
+            fputs("Usage: harness-cli pipe-pane --surface <id> [<shell-command>]   (omit command to stop)\n", stderr)
+            exit(1)
+        }
+        let command = args.first { !$0.hasPrefix("-") && $0 != surface }
+        _ = try checkedRequest(client, .pipePane(surfaceID: surface, shellCommand: command))
+    }
+
+    static func handleLinkWindow(_ args: [String], client: DaemonClient) throws {
+        guard let tabRaw = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabRaw),
+              let sessionRaw = flagValue(args, flag: "--target-session"), let sessionID = UUID(uuidString: sessionRaw) else {
+            fputs("Usage: harness-cli link-window --tab <uuid> --target-session <uuid>\n", stderr)
+            exit(1)
+        }
+        let response = try checkedRequest(client, .linkWindow(tabID: tabID, targetSessionID: sessionID))
+        if case let .tabID(id) = response { print(id.uuidString) }
+    }
+
+    static func handleUnlinkWindow(_ args: [String], client: DaemonClient) throws {
+        guard let tabRaw = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabRaw) else {
+            fputs("Usage: harness-cli unlink-window --tab <uuid>\n", stderr)
+            exit(1)
+        }
+        _ = try checkedRequest(client, .unlinkWindow(tabID: tabID))
     }
 
     static func handlePaneCommand(_ args: [String], client: DaemonClient, _ make: (UUID) -> IPCRequest) throws {
@@ -835,6 +876,11 @@ struct HarnessCLI {
           send-keys --surface <uuid> --keys "C-c Up Enter ..."
           capture-pane --surface <uuid> [--scrollback]
           kill-pane --pane <uuid>
+          capture-pane --surface <uuid> [--scrollback] [-S <start>] [-E <end>] [-p]
+          pipe-pane --surface <uuid> [<shell-command>]   (omit to stop)
+          link-window --tab <uuid> --target-session <uuid>
+          unlink-window --tab <uuid>
+          control-mode | -CC                             (tmux control protocol over stdio)
           swap-pane --src <uuid> --dst <uuid>
           resize-pane --pane <uuid> --dir L|R|U|D [--amount N]
           zoom-pane --pane <uuid>

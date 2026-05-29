@@ -59,6 +59,25 @@ final class CommandPromptController: NSObject, NSTextFieldDelegate {
         }
     }
 
+    /// `command-prompt -p … "<template>"`: open the prompt seeded with the
+    /// template so the user fills in any `%%`/`%1…` placeholders before running.
+    func presentTemplate(prompts: [String], template: String) {
+        present()
+        field.stringValue = template
+        // Select the first placeholder if present, else place the caret at the end.
+        if let editor = field.currentEditor() {
+            let ns = template as NSString
+            let placeholder = ns.range(of: "%%").location != NSNotFound
+                ? ns.range(of: "%%")
+                : ns.range(of: "%1")
+            if placeholder.location != NSNotFound {
+                editor.selectedRange = placeholder
+            } else {
+                editor.selectedRange = NSRange(location: ns.length, length: 0)
+            }
+        }
+    }
+
     func dismiss() {
         guard let window else { return }
         HarnessMotion.animate(HarnessDesign.Motion.fast, timing: HarnessDesign.Motion.exit) { _ in

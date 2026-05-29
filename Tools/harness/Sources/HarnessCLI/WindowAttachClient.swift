@@ -336,8 +336,17 @@ private final class WindowSession: @unchecked Sendable {
             workspaceName: target.workspace?.name,
             agentKind: tab.agent?.kind.rawValue,
             gitBranch: tab.gitBranch,
-            clientName: configuration.label
+            clientName: configuration.label,
+            windowFlags: windowFlags()
         )
+    }
+
+    private func windowFlags() -> String {
+        var flags = ""
+        if tab.zoomedPaneID != nil { flags += "Z" }
+        if markedPaneID != nil { flags += "M" }
+        if tab.status == .waiting { flags += "!" }
+        return flags
     }
 
     /// Left text + right text on one row of `width`, right segment flush-right,
@@ -589,6 +598,10 @@ private final class WindowSession: @unchecked Sendable {
             flashStatus(set ? "marked pane" : "marked pane cleared")
         case let .displayMessage(format):
             flashStatus(FormatString.evaluate(format, context: formatContext(target: target)))
+        case .sendPrefix:
+            if let active = activeSurface {
+                _ = try? client.request(.sendData(surfaceID: active, data: Data([configuration.prefix])), timeout: 1)
+            }
         case .copyMode, .synchronizePanes, .displayPanes, .showCheatsheet,
              .sourceConfig, .reloadKeybindings, .bindKey, .unbindKey, .listKeys,
              .renameWindow, .renameSession, .runShell, .ifShell:

@@ -32,9 +32,21 @@ public enum IPCRequest: Codable, Sendable {
     case createSurface(cwd: String?, shell: String?)
     case ensureSurface(surfaceID: String, cwd: String?, shell: String?, rows: UInt16, cols: UInt16, scrollbackBytes: Int?)
     case attachSurface(surfaceID: String)
+    /// Close a bare surface not owned by the layout (e.g. a `display-popup` shell).
+    case closeSurface(surfaceID: String)
     // Pane + key commands
     case sendKeys(surfaceID: String, keys: [String])
     case capturePane(surfaceID: String, includeScrollback: Bool)
+    /// `capture-pane -S <start> -E <end>`: a line range from scrollback+screen,
+    /// negative numbers counting back from the bottom (tmux semantics). Returns `.text`.
+    case capturePaneRange(surfaceID: String, start: Int?, end: Int?)
+    /// `pipe-pane`: tee the pane's live output to a spawned shell command's stdin.
+    /// `shellCommand == nil` stops an active pipe (toggle off).
+    case pipePane(surfaceID: String, shellCommand: String?)
+    /// `link-window`: make `tabID`'s panes appear as a new linked tab in another
+    /// session (shared surfaces). `unlinkWindow` removes the linked copy.
+    case linkWindow(tabID: UUID, targetSessionID: UUID)
+    case unlinkWindow(tabID: UUID)
     case killPane(paneID: UUID)
     case swapPanes(srcPaneID: UUID, dstPaneID: UUID)
     case resizePane(paneID: UUID, direction: ResizeDirection, amount: Int)

@@ -170,7 +170,81 @@ final class MainExecutor: CommandExecutor {
         case .respawnPane(let keepHistory):
             guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
             coordinator.requestDaemon(.respawnPane(surfaceID: sid.uuidString, keepHistory: keepHistory))
+
+        // MARK: Phase 6/7
+        case .lastWindow:
+            guard let workspace = coordinator.snapshot.activeWorkspace,
+                  let session = workspace.activeSession,
+                  let last = session.lastActiveTabID,
+                  session.tabs.contains(where: { $0.id == last })
+            else { return }
+            coordinator.selectTab(workspaceID: workspace.id, tabID: last)
+        case .sendPrefix:
+            sendPrefix(coordinator: coordinator)
+        case .sourceFile(let path):
+            try sourceFile(path: path)
+        case .commandPrompt(let prompts, let template):
+            CommandPromptController.shared.presentTemplate(prompts: prompts, template: template)
+        case .confirmBefore(let prompt, let inner):
+            Phase67UI.confirmBefore(prompt: prompt) { try? MainExecutor.shared.execute(inner) }
+        case .choose(let scope):
+            Phase67UI.presentChoose(scope: scope, coordinator: coordinator)
+        case .pipePane(let shellCommand):
+            guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
+            coordinator.requestDaemon(.pipePane(surfaceID: sid.uuidString, shellCommand: shellCommand))
+        case .lockClient:
+            Phase67UI.lock()
+        case .clockMode:
+            Phase67UI.toggleClock()
+        case .linkWindow(let targetSessionName):
+            linkWindow(targetSessionName: targetSessionName, coordinator: coordinator)
+        case .unlinkWindow:
+            if let tabID = coordinator.snapshot.activeWorkspace?.activeTab?.id {
+                coordinator.requestDaemon(.unlinkWindow(tabID: tabID))
+                coordinator.syncFromDaemon()
+            }
+        case .displayPopup(let command):
+            Phase67UI.presentPopup(command: command, coordinator: coordinator)
+        case .displayMenu(let items):
+            Phase67UI.presentMenu(items: items)
         }
+    }
+
+    // MARK: Phase 6/7 helpers
+
+    @MainActor
+    private func sendPrefix(coordinator: SessionCoordinator) {
+        guard let sid = coordinator.activeSurfaceID else { return }
+        // Send the configured prefix as a raw byte (C-<letter> → control code).
+        guard let spec = KeySpec.parse(coordinator.settings.prefixKey),
+              spec.modifiers.contains(.control),
+              let letter = spec.key.lowercased().unicodeScalars.first,
+              letter.value >= 0x61, letter.value <= 0x7a
+        else { return }
+        let byte = UInt8(letter.value - 0x60)
+        coordinator.requestDaemon(.sendData(surfaceID: sid.uuidString, data: Data([byte])))
+    }
+
+    @MainActor
+    private func sourceFile(path: String) throws {
+        let expanded = (path as NSString).expandingTildeInPath
+        let contents = try String(contentsOfFile: expanded, encoding: .utf8)
+        for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            try? executeSource(line)
+        }
+    }
+
+    @MainActor
+    private func linkWindow(targetSessionName: String, coordinator: SessionCoordinator) {
+        guard let tabID = coordinator.snapshot.activeWorkspace?.activeTab?.id else { return }
+        let match = coordinator.snapshot.workspaces.flatMap { $0.sessions }.first {
+            $0.name == targetSessionName || $0.id.uuidString == targetSessionName
+        }
+        guard let session = match else { return }
+        coordinator.requestDaemon(.linkWindow(tabID: tabID, targetSessionID: session.id))
+        coordinator.syncFromDaemon()
     }
 
     @MainActor

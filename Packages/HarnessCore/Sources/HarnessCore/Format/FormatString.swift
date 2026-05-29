@@ -186,6 +186,8 @@ public enum FormatString {
         case "agent_activity": return context.agentActivity ?? ""
         case "git_branch": return context.gitBranch ?? ""
         case "client_name": return context.clientName ?? ""
+        case "window_flags": return context.windowFlags ?? ""
+        case "window_zoomed_flag": return (context.windowFlags?.contains("Z") ?? false) ? "1" : ""
         case "host", "hostname": return ProcessInfo.processInfo.hostName
         case "user", "username": return NSUserName()
         default: return ""
@@ -210,6 +212,8 @@ public struct FormatContext: Sendable {
     public var agentActivity: String?
     public var gitBranch: String?
     public var clientName: String?
+    /// tmux-style window flags: `Z` zoomed, `*` active, `#` activity, `!` bell, `M` marked.
+    public var windowFlags: String?
     public var now: Date
 
     public init(
@@ -226,6 +230,7 @@ public struct FormatContext: Sendable {
         agentActivity: String? = nil,
         gitBranch: String? = nil,
         clientName: String? = nil,
+        windowFlags: String? = nil,
         now: Date = Date()
     ) {
         self.paneID = paneID
@@ -241,6 +246,7 @@ public struct FormatContext: Sendable {
         self.agentActivity = agentActivity
         self.gitBranch = gitBranch
         self.clientName = clientName
+        self.windowFlags = windowFlags
         self.now = now
     }
 }

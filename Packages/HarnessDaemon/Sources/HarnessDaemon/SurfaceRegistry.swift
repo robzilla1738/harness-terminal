@@ -300,6 +300,36 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .text(text)
             }
             return .error("Surface not found")
+        case let .closeSurface(surfaceID):
+            closeSurfaces([surfaceID])
+            return .ok
+        case let .capturePaneRange(surfaceID, start, end):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            return .text(session.captureRange(start: start, end: end))
+        case let .pipePane(surfaceID, shellCommand):
+            guard sessions[surfaceID] != nil else { return .error("Surface not found") }
+            if let shellCommand, !shellCommand.isEmpty {
+                startPipe(surfaceID: surfaceID, shellCommand: shellCommand)
+            } else {
+                stopPipe(surfaceID: surfaceID)
+            }
+            return .ok
+        case let .linkWindow(tabID, targetSessionID):
+            guard let newTabID = editor.linkWindow(tabID, toSessionID: targetSessionID) else {
+                return .error("Could not link window (tab or target session not found)")
+            }
+            ensureAllSnapshotSurfaces()
+            commit()
+            return .tabID(newTabID)
+        case let .unlinkWindow(tabID):
+            let removed = editor.snapshot.workspaces
+                .flatMap { $0.sessions }.flatMap { $0.tabs }
+                .first(where: { $0.id == tabID })?
+                .rootPane.allSurfaceIDs().map(\.uuidString) ?? []
+            guard editor.unlinkWindow(tabID) else { return .error("Window is not linked") }
+            closeSurfaces(removed)   // ref-counted: shared surfaces survive
+            commit()
+            return .ok
         case let .killPane(paneID):
             let killedSurfaceID = editor.surfaceID(forPaneID: paneID)?.uuidString
             guard editor.killPane(paneID) else { return .error("Pane not found") }
@@ -865,10 +895,62 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
     }
 
+    /// Close PTYs for the given surfaces — but only those no longer referenced by
+    /// any surviving tab. Linked windows (`link-window`) share surfaces across
+    /// tabs/sessions, so a surface lives until its last referencing tab is gone.
+    /// Called after the editor mutation, so `editor.snapshot` reflects survivors.
     private func closeSurfaces(_ surfaceIDs: [String]) {
-        for surfaceID in surfaceIDs {
+        let stillReferenced = Set(
+            editor.snapshot.workspaces
+                .flatMap { $0.sessions }
+                .flatMap { $0.tabs }
+                .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) }
+        )
+        for surfaceID in surfaceIDs where !stillReferenced.contains(surfaceID) {
             sessions.removeValue(forKey: surfaceID)?.close()
+            stopPipe(surfaceID: surfaceID)
         }
+    }
+
+    // MARK: pipe-pane
+
+    /// Active `pipe-pane` taps: a surface's live output is tee'd to a spawned
+    /// shell command's stdin until toggled off (or the surface closes).
+    private struct PanePipe {
+        let process: Process
+        let stdin: FileHandle
+        let token: UUID
+    }
+    private var pipes: [String: PanePipe] = [:]
+
+    /// Caller holds `lock` (invoked from `handle`/`closeSurfaces`), so this talks to
+    /// the `RealPty` directly rather than the locking `subscribe` wrappers.
+    private func startPipe(surfaceID: String, shellCommand: String) {
+        stopPipe(surfaceID: surfaceID)   // one pipe per surface
+        guard let session = sessions[surfaceID] else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", shellCommand]
+        let stdin = Pipe()
+        process.standardInput = stdin
+        process.environment = ProcessInfo.processInfo.environment
+        guard (try? process.run()) != nil else {
+            fputs("HarnessDaemon: pipe-pane failed to launch: \(shellCommand)\n", stderr)
+            return
+        }
+        let writer = stdin.fileHandleForWriting
+        let token = session.subscribe { data, _ in
+            // Best-effort: a broken pipe (consumer exited) just drops bytes.
+            _ = try? writer.write(contentsOf: data)
+        }
+        pipes[surfaceID] = PanePipe(process: process, stdin: writer, token: token)
+    }
+
+    private func stopPipe(surfaceID: String) {
+        guard let pipe = pipes.removeValue(forKey: surfaceID) else { return }
+        sessions[surfaceID]?.cancelSubscription(token: pipe.token)
+        try? pipe.stdin.close()
+        if pipe.process.isRunning { pipe.process.terminate() }
     }
 
     /// Whether OSC/program title auto-rename is enabled for the tab owning

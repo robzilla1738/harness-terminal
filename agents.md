@@ -306,7 +306,8 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 | **Health** | `ping`, `daemon-stats`, `list-clients`, `detach-client --client <uuid>` |
 | **Query** | `list-workspaces`, `list-surfaces`, `get-snapshot` |
 | **Layout** | `new-workspace --name api`, `new-session --workspace Default --cwd ~`, `new-tab --workspace Default`, `new-split --tab <uuid> --direction horizontal`, `select-workspace/tab/session`, `rename-tab/session`, `rename-workspace --id <uuid> --name "…"`, `close-tab/session` |
-| **Pane** | `send-keys --surface <uuid> --keys "C-c Enter"`, `capture-pane`, `kill-pane`, `swap-pane`, `resize-pane --dir L`, `zoom-pane`, `select-pane --pane <uuid> --dir L`, `break-pane`, `join-pane --src --dst --direction`, `respawn-pane --clear-history`, `copy-mode` |
+| **Pane** | `send-keys --surface <uuid> --keys "C-c Enter"`, `capture-pane [-S <n> -E <n>]`, `pipe-pane --surface <uuid> "<cmd>"`, `kill-pane`, `swap-pane`, `resize-pane --dir L`, `zoom-pane`, `select-pane --pane <uuid> --dir L`, `break-pane`, `join-pane --src --dst --direction`, `respawn-pane --clear-history`, `copy-mode` |
+| **Window link / control** | `link-window --tab <uuid> --target-session <uuid>`, `unlink-window --tab <uuid>`, `control-mode` / `-CC` (tmux control protocol over stdio) |
 | **Layouts** | `select-layout --tab <uuid> --layout tiled`, `next-layout --tab <uuid>`, `previous-layout --tab <uuid>`, `rotate-window --tab <uuid> [--reverse]` |
 | **Attach** | `attach --surface <uuid> [--detach-keys "C-a d"]` (single pane); `attach-window [--tab <id> \| --session <id\|name> \| --window <id>] [--detach-keys …]` (full split layout — the compositor) |
 | **Bindings** | `bind-key` (`bind`), `unbind-key` (`unbind`), `list-keys` (local `keybindings.json`) |
@@ -361,7 +362,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 **Tests:** `HeadlessGridReadTests` (GridTerminal fidelity), `GridCompositorTests` (borders/SGR/diff), `PaneRectSolverTests` (layout), `CommandIPCTranslatorTests` (verb mapping + split inversion). Run the AppKit-linked grid suite via `xcrun xctest` if `swift test`'s parallel runner is flaky.
 
-**Roadmap (see [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md)):** copy-mode + SGR mouse in the compositor; control mode (`-CC`); `command-prompt %%`/`choose-*`; `-t session:window.pane` target parsing.
+**Roadmap (see [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md)):** copy-mode + SGR mouse in the compositor (GUI has both natively); explicit `-t session:window.pane` target parsing; grouped sessions; `wait-for`. The rest of the tmux verb surface — control mode (`-CC`), `link-window`, `display-popup`/`-menu`, `lock`/`clock-mode`, `command-prompt`, `choose-*`, `confirm-before`, `pipe-pane`, `capture-pane -S/-E`, command aliases — is implemented.
 
 ---
 

@@ -39,7 +39,24 @@ public enum CommandParser {
         return try buildCommand(name: name, tokens: tokens)
     }
 
-    private static func buildCommand(name: String, tokens: [String]) throws -> Command {
+    /// tmux command-name aliases (the short forms in muscle memory) → canonical
+    /// Harness verb, so `neww`, `splitw`, `killp`, `selectp`, `resizep`, … all work.
+    private static let aliases: [String: String] = [
+        "neww": "new-window", "splitw": "split-window", "killp": "kill-pane",
+        "killw": "kill-window", "selectp": "select-pane", "selectw": "select-window",
+        "resizep": "resize-pane", "swapp": "swap-pane", "swapw": "swap-window",
+        "movew": "move-window", "rotatew": "rotate-window", "breakp": "break-pane",
+        "joinp": "join-pane", "respawnp": "respawn-pane",
+        "renamew": "rename-window", "rename": "rename-window",
+        "renames": "rename-session", "news": "new-session", "kills": "kill-session",
+        "nextl": "next-layout", "prevl": "previous-layout", "selectl": "select-layout",
+        "lockc": "lock-client", "lock-server": "lock-client",
+    ]
+
+    private static func resolveAlias(_ name: String) -> String? { aliases[name] }
+
+    private static func buildCommand(name rawName: String, tokens: [String]) throws -> Command {
+        let name = resolveAlias(rawName) ?? rawName
         switch name {
         case "split-window":
             // Convention here mirrors the rest of Harness: `.vertical` means
@@ -204,9 +221,83 @@ public enum CommandParser {
             return .breakPane
         case "respawn-pane":
             return .respawnPane(keepHistory: !tokens.contains("-k"))
+
+        // MARK: Phase 6 — command completeness
+        case "last-window", "last-tab":
+            return .lastWindow
+        case "send-prefix":
+            return .sendPrefix
+        case "source-file", "source-keys":
+            guard let path = tokens.first(where: { !$0.hasPrefix("-") }) else {
+                throw CommandParseError.missingArgument("source-file requires a path")
+            }
+            return .sourceFile(path: (path as NSString).expandingTildeInPath)
+        case "command-prompt":
+            // command-prompt [-p prompt1,prompt2] "<template with %% / %1 …>"
+            let prompts = stringValue(for: "-p", in: tokens)?
+                .split(separator: ",").map(String.init) ?? []
+            let template = tokens.last { !$0.hasPrefix("-") && $0 != stringValue(for: "-p", in: tokens) } ?? ""
+            return .commandPrompt(prompts: prompts, template: template)
+        case "confirm-before", "confirm":
+            let prompt = stringValue(for: "-p", in: tokens)
+            let positional = tokens.filter { !$0.hasPrefix("-") && $0 != prompt }
+            guard let cmd = positional.first else {
+                throw CommandParseError.missingArgument("confirm-before requires a command")
+            }
+            return .confirmBefore(prompt: prompt, command: try parse(cmd))
+        case "choose-tree":
+            return .choose(scope: .tree)
+        case "choose-session":
+            return .choose(scope: .session)
+        case "choose-window":
+            return .choose(scope: .window)
+        case "choose-buffer":
+            return .choose(scope: .buffer)
+        case "choose-client":
+            return .choose(scope: .client)
+        case "pipe-pane", "pipep":
+            let cmd = tokens.first { !$0.hasPrefix("-") }
+            return .pipePane(shellCommand: cmd)
+
+        // MARK: Phase 7 — server admin & integration
+        case "lock-client", "lock-session", "lock-server", "lock":
+            return .lockClient
+        case "clock-mode":
+            return .clockMode
+        case "link-window", "linkw":
+            guard let target = stringValue(for: "-t", in: tokens) ?? tokens.first(where: { !$0.hasPrefix("-") }) else {
+                throw CommandParseError.missingArgument("link-window requires a target session (-t <session>)")
+            }
+            return .linkWindow(targetSessionName: target)
+        case "unlink-window", "unlinkw":
+            return .unlinkWindow
+        case "display-popup", "popup":
+            let command = stringValue(for: "-E", in: tokens) ?? tokens.first { !$0.hasPrefix("-") }
+            return .displayPopup(command: command)
+        case "display-menu", "menu":
+            return .displayMenu(items: try parseMenuItems(tokens))
+
         default:
-            throw CommandParseError.unknownCommand(name)
+            throw CommandParseError.unknownCommand(resolveAlias(name) ?? name)
         }
+    }
+
+    /// `display-menu … <title> <key> <command>` triples (key may be empty as `""`).
+    private static func parseMenuItems(_ tokens: [String]) throws -> [Command.MenuItem] {
+        let positional = tokens.enumerated().filter { idx, tok in
+            !tok.hasPrefix("-") && !(idx > 0 && (tokens[idx - 1] == "-T" || tokens[idx - 1] == "-t"))
+        }.map(\.element)
+        var items: [Command.MenuItem] = []
+        var i = 0
+        while i + 2 < positional.count + 1, i + 2 <= positional.count {
+            // Need at least title, key, command (3 tokens).
+            guard i + 2 < positional.count + 0 || i + 3 <= positional.count else { break }
+            if i + 3 > positional.count { break }
+            let title = positional[i], key = positional[i + 1], cmd = positional[i + 2]
+            items.append(.init(title: title, key: key.isEmpty ? nil : key, command: (try? parse(cmd)) ?? .displayMessage(format: cmd)))
+            i += 3
+        }
+        return items
     }
 
     private static func paneTarget(from tokens: [String], defaultValue: Command.PaneTarget) throws -> Command.PaneTarget {

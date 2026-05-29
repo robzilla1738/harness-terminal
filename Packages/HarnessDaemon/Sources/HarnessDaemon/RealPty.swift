@@ -345,6 +345,61 @@ public final class RealPty: @unchecked Sendable {
         return String(data: combined, encoding: .utf8) ?? ""
     }
 
+    /// `capture-pane -S <start> -E <end> -p`: ANSI-stripped display lines in the
+    /// given range. Negative indices count back from the last line (tmux semantics);
+    /// nil start = first line, nil end = last line.
+    public func captureRange(start: Int?, end: Int?) -> String {
+        let stripped = Self.stripANSI(captureScrollback(includeHistory: true))
+        var lines = stripped.components(separatedBy: "\n")
+        if lines.last == "" { lines.removeLast() }
+        let count = lines.count
+        guard count > 0 else { return "" }
+        func resolve(_ value: Int?, fallback: Int) -> Int {
+            guard let value else { return fallback }
+            return value < 0 ? max(0, count + value) : min(value, count - 1)
+        }
+        let lo = resolve(start, fallback: 0)
+        let hi = resolve(end, fallback: count - 1)
+        guard lo <= hi else { return "" }
+        return lines[lo ... hi].joined(separator: "\n")
+    }
+
+    /// Strip CSI/OSC escape sequences and stray control bytes (keeping `\n`/`\t`)
+    /// so captured scrollback is plain text.
+    static func stripANSI(_ input: String) -> String {
+        var out = String()
+        out.reserveCapacity(input.count)
+        let buffer = Array(input.unicodeScalars)
+        var i = 0
+        while i < buffer.count {
+            let scalar = buffer[i]
+            if scalar == "\u{1b}" { // ESC
+                let next = i + 1 < buffer.count ? buffer[i + 1] : nil
+                if next == "[" { // CSI … final byte 0x40–0x7e
+                    i += 2
+                    while i < buffer.count, !(buffer[i].value >= 0x40 && buffer[i].value <= 0x7e) { i += 1 }
+                    i += 1
+                    continue
+                } else if next == "]" { // OSC … terminated by BEL or ESC \
+                    i += 2
+                    while i < buffer.count {
+                        if buffer[i] == "\u{07}" { i += 1; break }
+                        if buffer[i] == "\u{1b}", i + 1 < buffer.count, buffer[i + 1] == "\\" { i += 2; break }
+                        i += 1
+                    }
+                    continue
+                } else {
+                    i += 2 // ESC + one byte (e.g. charset select)
+                    continue
+                }
+            }
+            if scalar.value < 0x20, scalar != "\n", scalar != "\t" { i += 1; continue }
+            out.unicodeScalars.append(scalar)
+            i += 1
+        }
+        return out
+    }
+
     public func replay(fromSequence: UInt64?) -> String {
         scrollbackLock.lock()
         let entries: [ScrollbackEntry]

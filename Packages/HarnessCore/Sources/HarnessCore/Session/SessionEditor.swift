@@ -249,6 +249,56 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    /// `link-window`: add a linked copy of `tabID` to `targetSessionID`. The copy
+    /// gets fresh pane IDs but **shares the same surface IDs** (live PTYs), so both
+    /// tabs show the same content; the daemon ref-counts surfaces so closing one
+    /// linked tab keeps the surfaces alive for the other. Returns the new tab ID.
+    @discardableResult
+    public mutating func linkWindow(_ tabID: TabID, toSessionID targetSessionID: SessionID) -> TabID? {
+        guard let match = tabIndex(tabID: tabID) else { return nil }
+        let source = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        guard let targetLocation = sessionIndex(sessionID: targetSessionID) else { return nil }
+
+        var linked = source
+        linked.id = UUID()
+        linked.rootPane = Self.cloneWithFreshPaneIDs(source.rootPane)
+        linked.zoomedPaneID = nil
+        linked.activePaneID = linked.rootPane.allPaneIDs().first
+        linked.lastActivePaneID = nil
+        linked.sortOrder = (snapshot.workspaces[targetLocation.workspaceIndex]
+            .sessions[targetLocation.sessionIndex].tabs.map(\.sortOrder).max() ?? 0) + 1
+
+        snapshot.workspaces[targetLocation.workspaceIndex].sessions[targetLocation.sessionIndex].tabs.append(linked)
+        snapshot.workspaces[targetLocation.workspaceIndex].sessions[targetLocation.sessionIndex].setActiveTab(linked.id)
+        bumpRevision()
+        return linked.id
+    }
+
+    /// `unlink-window`: remove `tabID` only if it is a link (its surfaces are also
+    /// referenced by another tab). Returns false if it isn't linked.
+    @discardableResult
+    public mutating func unlinkWindow(_ tabID: TabID) -> Bool {
+        guard let match = tabIndex(tabID: tabID) else { return false }
+        let tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        let surfaces = Set(tab.rootPane.allSurfaceIDs())
+        let sharedElsewhere = snapshot.workspaces
+            .flatMap { $0.sessions }.flatMap { $0.tabs }
+            .contains { $0.id != tabID && !surfaces.isDisjoint(with: Set($0.rootPane.allSurfaceIDs())) }
+        guard sharedElsewhere else { return false }
+        return closeTab(tabID)
+    }
+
+    /// Clone a pane tree keeping surface IDs but assigning fresh pane IDs.
+    static func cloneWithFreshPaneIDs(_ node: PaneNode) -> PaneNode {
+        switch node {
+        case let .leaf(leaf):
+            return .leaf(PaneLeaf(id: UUID(), surfaceID: leaf.surfaceID, daemonSurfaceID: leaf.daemonSurfaceID))
+        case let .branch(direction, ratio, first, second):
+            return .branch(direction: direction, ratio: ratio,
+                           first: cloneWithFreshPaneIDs(first), second: cloneWithFreshPaneIDs(second))
+        }
+    }
+
     public mutating func closeSession(_ sessionID: SessionID) -> Bool {
         for workspaceIndex in snapshot.workspaces.indices {
             guard let sessionIndex = snapshot.workspaces[workspaceIndex].sessions.firstIndex(where: { $0.id == sessionID })
@@ -666,6 +716,15 @@ public struct SessionEditor: Sendable {
                 if let tabIndex = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.firstIndex(where: { $0.id == tabID }) {
                     return (workspaceIndex, sessionIndex, tabIndex)
                 }
+            }
+        }
+        return nil
+    }
+
+    private func sessionIndex(sessionID: SessionID) -> (workspaceIndex: Int, sessionIndex: Int)? {
+        for workspaceIndex in snapshot.workspaces.indices {
+            if let sessionIndex = snapshot.workspaces[workspaceIndex].sessions.firstIndex(where: { $0.id == sessionID }) {
+                return (workspaceIndex, sessionIndex)
             }
         }
         return nil

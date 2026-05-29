@@ -37,8 +37,9 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `select-layout` + named layouts | even-h/v, main-h/v, tiled; next/previous-layout | ✅ |
 | `respawn-pane` | `respawn-pane [-k]` (generation-guarded restart) | ✅ |
 | `display-panes` | prefix `q` numbered overlay | ✅ (GUI) / 🛣️ (compositor) |
-| `last-window` / `last-pane` | last-pane (`select-pane -l`) done; last-window | 🟡 |
-| `link-window` / `unlink-window` / grouped sessions | — | 🛣️ |
+| `last-window` / `last-pane` | `last-window` (MRU tab) + `select-pane -l` | ✅ |
+| `link-window` / `unlink-window` | linked window shares the source's surfaces (live PTYs) across sessions; ref-counted surface GC | ✅ |
+| grouped sessions (`new-session -t base`) | — (link-window covers cross-session sharing) | 🛣️ |
 
 ## Attach / multi-client
 
@@ -52,7 +53,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `window-size smallest` (multi-client) | smallest-wins per-surface sizing in `DaemonServer` | ✅ |
 | `detach-client` / `list-clients` | same verbs | ✅ |
 | mouse in the attach client (SGR) | — (GUI mouse is native via libghostty) | 🛣️ |
-| control mode (`-CC`) | — | 🛣️ |
+| control mode (`-CC`) | `harness-cli -CC` / `control-mode`: `%begin/%end/%output/%layout-change/%exit`, stdin commands bridged to IPC | ✅ |
 
 ## Copy mode & buffers
 
@@ -70,7 +71,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 |------|---------|--------|
 | scoped options (server/session/window/pane) | `OptionStore` (pane→tab→session→workspace→global inheritance) | ✅ |
 | `set-option` / `show-options` | same verbs (`setw` = window/tab) | ✅ |
-| `status-left`/`status-right` + format strings | `FormatString`; GUI status line **and** compositor status line | ✅ |
+| `status-left`/`status-right` + format strings | `FormatString` (pane/session/window/agent/git/time/`window_flags`/…); GUI **and** compositor status lines | ✅ |
 | hooks (`set-hook` / `bind-hook`) | `HookRegistry` + `bind-hook`; fires at real mutation sites via `DaemonCommandExecutor` | ✅ |
 | `allow-rename` / `automatic-rename` | OSC title gated; manual `rename-tab` makes the name sticky | ✅ |
 | `set-environment` / `show-environment` | `EnvironmentStore` (global + per-session), injected on spawn/respawn | ✅ |
@@ -91,39 +92,48 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | one verb vocabulary across front-ends | `Command` + shared `CommandIPCTranslator` (GUI, compositor, hooks) | ✅ |
 | `if-shell` / `run-shell` | same verbs (server-side for hooks) | ✅ |
 | `display-message` (+ format tokens) | same verb; GUI toast / compositor status flash | ✅ |
-| `command-prompt %% / %1…` arg expansion | — | 🛣️ |
-| `confirm-before` / `command-alias` | — | 🛣️ |
-| `choose-tree` / `choose-session` / `choose-buffer` | command palette (`Cmd+K`) covers themes/actions; tree pickers | 🛣️ |
-| `capture-pane -S/-E -p` (ranges to stdout) | `capture-pane` (full/scrollback) | 🟡 |
-| `pipe-pane` / `wait-for` / `source-file` | — | 🛣️ |
-| tmux `-t session:window.pane` target syntax | directional + active-target resolution done; index/`!`/`~` parsing | 🛣️ |
+| `command-prompt %% / %1…` arg expansion | `command-prompt -p … "<template>"` opens the prompt seeded with the template/placeholders | ✅ |
+| `confirm-before` | `confirm-before -p "…" "<cmd>"` → NSAlert, runs on OK | ✅ |
+| `command-alias` (short forms) | `neww`/`splitw`/`killp`/`selectp`/`resizep`/… resolve in `CommandParser` | ✅ |
+| `choose-tree` / `-session` / `-window` / `-buffer` / `-client` | GUI menu picker (`choose-*`); palette (`Cmd+K`) for themes/actions | ✅ |
+| `capture-pane -S/-E -p` (ANSI-stripped line ranges to stdout) | `capture-pane -S <n> -E <n>` (negative = from bottom) | ✅ |
+| `pipe-pane` | tee a pane's live output to a shell command (`pipe-pane "<cmd>"`, omit to stop) | ✅ |
+| `source-file` | run a file of Harness commands (`source-file <path>`) | ✅ |
+| `send-prefix` | send the configured prefix key to the pane | ✅ |
+| `wait-for` (named semaphores) | — | 🛣️ |
+| tmux `-t session:window.pane` target syntax | directional + active-target resolution; explicit index/`!`/`~` parsing | 🛣️ |
 
 ## Server admin & integration
 
 | tmux | Harness | Status |
 |------|---------|--------|
-| `lock-server` / `lock-session` + `clock-mode` | — | 🛣️ |
-| `display-popup` / `display-menu` | command palette is the menu surface; floating popup terminal | 🛣️ |
-| control mode (`-CC`) protocol | — | 🛣️ |
+| `lock-server` / `lock-session` / `lock-client` | `lock-client` → full-screen lock overlay (Enter to unlock) | ✅ |
+| `clock-mode` | `clock-mode` → live full-screen clock overlay | ✅ |
+| `display-popup [-E cmd]` | floating panel hosting a real terminal surface (ref-counted cleanup) | ✅ |
+| `display-menu` | `display-menu <title> <key> <command> …` → native menu | ✅ |
+| control mode (`-CC`) protocol | `harness-cli -CC` (see Attach section) | ✅ |
 
 ---
 
-## Roadmap rationale
+## Remaining roadmap
 
-The 🛣️ items are intentionally **not** shipped half-wired (that would be the tech
-debt this project forbids). Each needs a self-contained subsystem:
+The large majority of tmux's capability surface is now implemented across the GUI,
+the CLI/compositor, and control mode. The remaining 🛣️ items are intentionally
+**not** shipped half-wired (that would be the tech debt this project forbids):
 
-- **Control mode (`-CC`)** — a control-protocol front-end + per-client notification
-  stream; large and isolated.
-- **link-window / grouped sessions** — a shared-`Tab`-by-link-set model and a second
-  additive schema bump with careful kill/GC semantics.
 - **Compositor copy-mode + SGR mouse** — a scrollback overlay and mouse demux in
-  `WindowAttachClient`; the GUI already has native copy-mode and mouse.
-- **`base-index` / target syntax / `command-prompt %%` / `choose-*`** — gated on the
-  `-t session:window.pane` target parser, which several of them share.
-- **`monitor-*` / `destroy-unattached` / `pane-border-status`** — option-driven
-  behaviors that hang off new daemon lifecycle events.
+  `WindowAttachClient`; the GUI already has native copy-mode and mouse, so this is
+  a second-surface port, not a missing capability.
+- **Explicit `-t session:window.pane` target syntax** — directional and active-target
+  resolution already work; this adds index/`!`/`~` addressing. `base-index` /
+  `pane-base-index` are gated on it.
+- **Grouped sessions (`new-session -t base`)** — `link-window` already provides
+  cross-session shared windows (the underlying capability); grouped sessions add the
+  auto-shared window-list convenience on top.
+- **`wait-for`** (named semaphores) and **`monitor-*` / `destroy-unattached` /
+  `pane-border-status`** — option/event-driven behaviors that hang off new daemon
+  lifecycle hooks.
 
-The foundation they build on — daemon authority, the shared translator, scoped
-options, hooks, server-side active pane, snapshot push, the compositor — is in
-place, so each is additive rather than a rewrite.
+Everything they build on — daemon authority, the shared translator, scoped options,
+hooks, server-side active pane, snapshot push, the compositor, control mode, linked
+windows — is in place, so each is additive rather than a rewrite.

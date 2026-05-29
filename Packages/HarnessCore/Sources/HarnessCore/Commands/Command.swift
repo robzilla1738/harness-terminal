@@ -71,9 +71,41 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case breakPane                                 // break-pane
     case respawnPane(keepHistory: Bool)            // respawn-pane [-k]
 
+    // MARK: Phase 6 — command completeness
+    case lastWindow                                // last-window (MRU tab in the session)
+    case sendPrefix                                // send-prefix (send the prefix key to the pane)
+    case sourceFile(path: String)                  // source-file <path> (run a file of commands)
+    case commandPrompt(prompts: [String], template: String)  // command-prompt -p … "<cmd with %%>"
+    case confirmBefore(prompt: String?, command: Command)    // confirm-before -p "…" "<cmd>"
+    case choose(scope: ChooseScope)                // choose-tree / choose-session / choose-window / …
+    case pipePane(shellCommand: String?)           // pipe-pane "<cmd>" (nil → toggle off)
+
+    // MARK: Phase 7 — server admin & integration
+    case lockClient                                // lock-client / lock-session
+    case clockMode                                 // clock-mode
+    case linkWindow(targetSessionName: String)     // link-window -t <session>
+    case unlinkWindow                              // unlink-window
+    case displayPopup(command: String?)            // display-popup [-E <command>]
+    case displayMenu(items: [MenuItem])            // display-menu -T title <name> <key> <command> …
+
     public enum PaneTarget: String, Codable, Sendable, Equatable {
         case left, right, up, down
         case next, previous, last
+    }
+
+    public enum ChooseScope: String, Codable, Sendable, Equatable {
+        case tree, session, window, buffer, client
+    }
+
+    public struct MenuItem: Codable, Sendable, Equatable {
+        public var title: String
+        public var key: String?
+        public var command: Command
+        public init(title: String, key: String? = nil, command: Command) {
+            self.title = title
+            self.key = key
+            self.command = command
+        }
     }
 }
 
@@ -126,6 +158,19 @@ extension Command {
         case let .rotateWindow(forward): return forward ? "rotate-window" : "rotate-window -D"
         case .breakPane: return "break-pane"
         case let .respawnPane(keep): return keep ? "respawn-pane" : "respawn-pane -k"
+        case .lastWindow: return "last-window"
+        case .sendPrefix: return "send-prefix"
+        case let .sourceFile(path): return "source-file \(path)"
+        case let .commandPrompt(_, template): return "command-prompt \(template)"
+        case let .confirmBefore(_, command): return "confirm-before '\(command.shortDescription)'"
+        case let .choose(scope): return "choose-\(scope.rawValue)"
+        case let .pipePane(cmd): return cmd.map { "pipe-pane '\($0)'" } ?? "pipe-pane"
+        case .lockClient: return "lock-client"
+        case .clockMode: return "clock-mode"
+        case let .linkWindow(target): return "link-window -t \(target)"
+        case .unlinkWindow: return "unlink-window"
+        case let .displayPopup(command): return command.map { "display-popup -E '\($0)'" } ?? "display-popup"
+        case let .displayMenu(items): return "display-menu (\(items.count) items)"
         }
     }
 }

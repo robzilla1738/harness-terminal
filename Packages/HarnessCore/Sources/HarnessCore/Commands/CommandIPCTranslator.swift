@@ -261,10 +261,36 @@ public enum CommandIPCTranslator {
             guard let pane = target.paneID, let surface = target.surfaceID(of: pane) else { return .unresolved }
             return .requests([.sendKeys(surfaceID: surface, keys: keys)])
 
+        // MARK: Phase 6/7 — verbs that resolve to IPC
+        case .lastWindow:
+            guard let ws = target.workspace, let session = target.session,
+                  let last = session.lastActiveTabID,
+                  session.tabs.contains(where: { $0.id == last })
+            else { return .unresolved }
+            return .requests([.selectTab(workspaceID: ws.id, tabID: last)])
+
+        case let .pipePane(shellCommand):
+            guard let pane = target.paneID, let surface = target.surfaceID(of: pane) else { return .unresolved }
+            return .requests([.pipePane(surfaceID: surface, shellCommand: shellCommand)])
+
+        case let .linkWindow(targetSessionName):
+            guard let tab = target.tab else { return .unresolved }
+            let match = target.snapshot.workspaces.flatMap { $0.sessions }.first {
+                $0.name == targetSessionName || $0.id.uuidString == targetSessionName
+            }
+            guard let session = match else { return .unresolved }
+            return .requests([.linkWindow(tabID: tab.id, targetSessionID: session.id)])
+
+        case .unlinkWindow:
+            guard let tab = target.tab else { return .unresolved }
+            return .requests([.unlinkWindow(tabID: tab.id)])
+
         // MARK: Client-local (UI overlays, modes, file/shell, composition)
         case .markPane, .synchronizePanes, .displayPanes, .copyMode, .detachClient,
              .displayMessage, .runShell, .ifShell, .bindKey, .unbindKey, .listKeys,
-             .sourceConfig, .reloadKeybindings, .showCheatsheet, .sequence:
+             .sourceConfig, .reloadKeybindings, .showCheatsheet, .sequence,
+             .sendPrefix, .sourceFile, .commandPrompt, .confirmBefore, .choose,
+             .lockClient, .clockMode, .displayPopup, .displayMenu:
             return .clientLocal(command)
         }
     }
