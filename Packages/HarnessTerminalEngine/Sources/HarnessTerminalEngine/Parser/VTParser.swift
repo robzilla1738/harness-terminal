@@ -8,7 +8,9 @@ protocol VTParserHandler: AnyObject {
     /// A C0/C1 control byte to execute (BS, HT, LF, CR, BEL, …).
     func parserExecute(_ control: UInt8)
     /// A final CSI byte with its decoded parameters, intermediate bytes, and whether a
-    /// DEC-private marker (`?`) was present. Parameters are grouped: the outer array is
+    /// private-parameter introducer (`<` `=` `>` `?`) was present — a private-use sequence
+    /// (DEC modes, XTMODKEYS, …) that standard functions like SGR are never part of, so the
+    /// handler can refuse to misread it. Parameters are grouped: the outer array is
     /// semicolon-separated parameters; each inner array holds that parameter's
     /// colon-separated sub-parameters (e.g. `4:3` → `[[4, 3]]`, `1;31` → `[[1], [31]]`).
     func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool)
@@ -207,8 +209,11 @@ final class VTParser {
             pushParamSeparator(); state = .csiParam
         case 0x3A: // ':' — next sub-parameter of the current parameter
             pushSubparamSeparator(); state = .csiParam
-        case 0x3C ... 0x3F: // private markers < = > ?
-            csiPrivate = (byte == 0x3F) || csiPrivate
+        case 0x3C ... 0x3F: // private-parameter introducers  <  =  >  ?
+            // ANY of these marks the whole CSI as a private-use sequence (DEC modes `?…h/l`,
+            // XTMODKEYS `>…m`, XTVERSION `>…q`, etc.). SGR and other standard functions are
+            // never private, so the handler must not treat e.g. `\e[>4;1m` as SGR `4;1m`.
+            csiPrivate = true
             state = .csiParam
         case 0x20 ... 0x2F: // intermediate
             intermediates.append(byte); state = .csiIntermediate

@@ -153,10 +153,12 @@ public final class TerminalMetalRenderer {
         let oy = Float(origin.y)
         let cellW = Float(cellPixelWidth)
         let cellH = Float(cellPixelHeight)
-        // Decoration geometry (px): line thickness, underline baseline offset, etc.
-        let thickness = max(1, Float(cellPixelHeight) / 16)
-        let underlineY = min(cellH - thickness, Float(ascentPixels) + max(1, cellH * 0.08))
-        let strikeY = Float(ascentPixels) * 0.65
+        // Decoration geometry (px): line thickness, underline baseline offset, etc. Snap to
+        // whole device pixels so solid underline/strike/overline render as sharp 1–2px lines
+        // instead of being AA-smeared across a half-pixel (the fuzzy-underline artifact).
+        let thickness = max(1, (Float(cellPixelHeight) / 16).rounded())
+        let underlineY = min(cellH - thickness, Float(ascentPixels) + max(1, cellH * 0.08)).rounded()
+        let strikeY = (Float(ascentPixels) * 0.65).rounded()
         let overlineY = thickness
 
         // Cursor cell + whether the glyph there should flip to the cursor-text color.
@@ -177,6 +179,23 @@ public final class TerminalMetalRenderer {
                 size: SIMD2(cellW, cellH),
                 color: vector(cell.background)
             ))
+
+            // Block-element characters (█ ▀ ▄ ▌ quadrants …) are drawn as exact-fill rects in
+            // the foreground color rather than as font glyphs — font glyphs leave sub-pixel
+            // gaps that show as grid seams in block art (the Codex/Claude mascots). The fills
+            // share the background pass (opaque, painter-ordered after the cell bg).
+            if let rects = Self.blockElementRects(cell.codepoint) {
+                let fill = vector(cell.foreground)
+                for r in rects {
+                    let x0 = originX + (r.0 * cellW).rounded()
+                    let y0 = originY + (r.1 * cellH).rounded()
+                    let x1 = originX + ((r.0 + r.2) * cellW).rounded()
+                    let y1 = originY + ((r.1 + r.3) * cellH).rounded()
+                    backgrounds.append(BgInstance(
+                        origin: SIMD2(x0, y0), size: SIMD2(x1 - x0, y1 - y0), color: fill
+                    ))
+                }
+            }
 
             // Line decorations sit on top of the glyph; emit for the full cell.
             appendDecorations(cell, originX: originX, originY: originY,
@@ -321,7 +340,7 @@ public final class TerminalMetalRenderer {
         into glyphs: inout [GlyphInstance]
     ) {
         for cell in frame.cells {
-            guard cell.hasGlyph,
+            guard cell.hasGlyph, !Self.isBlockElement(cell.codepoint),
                   let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
             else { continue }
             let isCursor = cursorCell.map { $0.row == cell.row && $0.column == cell.column } ?? false
@@ -347,7 +366,8 @@ public final class TerminalMetalRenderer {
         for row in 0 ..< frame.rows {
             var col = 0
             while col < cols {
-                guard let cell = frame.cell(row: row, column: col), cell.hasGlyph else {
+                guard let cell = frame.cell(row: row, column: col), cell.hasGlyph,
+                      !Self.isBlockElement(cell.codepoint) else {
                     col += 1
                     continue
                 }
@@ -365,6 +385,7 @@ public final class TerminalMetalRenderer {
                 while c < cols, let rc = frame.cell(row: row, column: c) {
                     if rc.width == .spacerTail { c += 1; continue } // wide-char tail
                     if !rc.hasGlyph { break }
+                    if Self.isBlockElement(rc.codepoint) { break } // drawn procedurally
                     if let cur = cursorCell, cur.row == row, cur.column == c { break }
                     if rc.bold != bold || rc.italic != italic || rc.foreground != fg { break }
                     let scalar = Unicode.Scalar(rc.codepoint) ?? " "
@@ -395,7 +416,7 @@ public final class TerminalMetalRenderer {
         _ cell: RenderCell, row: Int, col: Int, ox: Float, oy: Float,
         color: SIMD4<Float>, into glyphs: inout [GlyphInstance]
     ) {
-        guard cell.hasGlyph,
+        guard cell.hasGlyph, !Self.isBlockElement(cell.codepoint),
               let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
         else { return }
         glyphs.append(glyphInstance(
@@ -420,6 +441,52 @@ public final class TerminalMetalRenderer {
 
     private func vector(_ c: RenderColor) -> SIMD4<Float> {
         SIMD4(c.red, c.green, c.blue, c.alpha)
+    }
+
+    /// True for the block-element codepoints we render procedurally (U+2580–U+259F, excluding
+    /// the shade blocks U+2591–2593, which keep their dithered font glyph). Used by the glyph
+    /// emitters to skip these cells — they're filled in the background pass instead.
+    static func isBlockElement(_ cp: UInt32) -> Bool {
+        (0x2580 ... 0x259F).contains(cp) && !(0x2591 ... 0x2593).contains(cp)
+    }
+
+    /// Sub-cell rectangles (x, y, w, h as 0…1 fractions, y from the top) that fill a block
+    /// element exactly, or nil for non-block codepoints. Drawing these as solid rects (instead
+    /// of font glyphs) tiles seamlessly the way Ghostty/kitty render block art.
+    static func blockElementRects(_ cp: UInt32) -> [(Float, Float, Float, Float)]? {
+        let e = Float(1) / 8
+        switch cp {
+        case 0x2588: return [(0, 0, 1, 1)]                                   // █ full
+        case 0x2580: return [(0, 0, 1, 0.5)]                                 // ▀ upper half
+        case 0x2584: return [(0, 0.5, 1, 0.5)]                               // ▄ lower half
+        case 0x258C: return [(0, 0, 0.5, 1)]                                 // ▌ left half
+        case 0x2590: return [(0.5, 0, 0.5, 1)]                               // ▐ right half
+        case 0x2581: return [(0, 7 * e, 1, e)]                               // ▁ lower 1/8
+        case 0x2582: return [(0, 6 * e, 1, 2 * e)]                           // ▂
+        case 0x2583: return [(0, 5 * e, 1, 3 * e)]                           // ▃
+        case 0x2585: return [(0, 3 * e, 1, 5 * e)]                           // ▅
+        case 0x2586: return [(0, 2 * e, 1, 6 * e)]                           // ▆
+        case 0x2587: return [(0, e, 1, 7 * e)]                               // ▇
+        case 0x2589: return [(0, 0, 7 * e, 1)]                               // ▉ left 7/8
+        case 0x258A: return [(0, 0, 6 * e, 1)]                               // ▊
+        case 0x258B: return [(0, 0, 5 * e, 1)]                               // ▋
+        case 0x258D: return [(0, 0, 3 * e, 1)]                               // ▍
+        case 0x258E: return [(0, 0, 2 * e, 1)]                               // ▎
+        case 0x258F: return [(0, 0, e, 1)]                                   // ▏ left 1/8
+        case 0x2594: return [(0, 0, 1, e)]                                   // ▔ upper 1/8
+        case 0x2595: return [(7 * e, 0, e, 1)]                               // ▕ right 1/8
+        case 0x2596: return [(0, 0.5, 0.5, 0.5)]                             // ▖ LL
+        case 0x2597: return [(0.5, 0.5, 0.5, 0.5)]                           // ▗ LR
+        case 0x2598: return [(0, 0, 0.5, 0.5)]                               // ▘ UL
+        case 0x2599: return [(0, 0, 0.5, 1), (0.5, 0.5, 0.5, 0.5)]           // ▙ UL+LL+LR
+        case 0x259A: return [(0, 0, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5)]         // ▚ UL+LR
+        case 0x259B: return [(0, 0, 1, 0.5), (0, 0.5, 0.5, 0.5)]             // ▛ UL+UR+LL
+        case 0x259C: return [(0, 0, 1, 0.5), (0.5, 0.5, 0.5, 0.5)]           // ▜ UL+UR+LR
+        case 0x259D: return [(0.5, 0, 0.5, 0.5)]                             // ▝ UR
+        case 0x259E: return [(0.5, 0, 0.5, 0.5), (0, 0.5, 0.5, 0.5)]         // ▞ UR+LL
+        case 0x259F: return [(0.5, 0, 0.5, 0.5), (0, 0.5, 1, 0.5)]           // ▟ UR+LL+LR
+        default: return nil
+        }
     }
 }
 

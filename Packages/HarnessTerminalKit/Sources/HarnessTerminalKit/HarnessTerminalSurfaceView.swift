@@ -280,8 +280,15 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     public override func layout() {
         super.layout()
+        // Resize the drawable and repaint in the SAME turn, with implicit animations off, so a
+        // resize never shows a stale frame stretched to the new bounds (the flicker). Drawing
+        // synchronously here (not via the async `scheduleRender`) closes the gap where the
+        // drawable has the new size but the old grid is still presented.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         updateGridSize()
-        scheduleRender()
+        renderNow()
+        CATransaction.commit()
     }
 
     /// Recompute columns/rows from the view size and resize the emulator + drawable.
@@ -289,8 +296,11 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard let renderer else { return }
         let scale = window?.backingScaleFactor ?? 2.0
         metalLayer.contentsScale = scale
-        let pixelWidth = max(1, Int(bounds.width * scale))
-        let pixelHeight = max(1, Int(bounds.height * scale))
+        // Round (not floor) so the drawable exactly covers the layer's pixel area. With
+        // `contentsGravity = .topLeft`, a floored (sub-pixel-short) drawable leaves a
+        // transparent sliver at the right/bottom edge — a thin seam showing the blur through.
+        let pixelWidth = max(1, Int((bounds.width * scale).rounded()))
+        let pixelHeight = max(1, Int((bounds.height * scale).rounded()))
         metalLayer.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
 
         // Inset the grid by the window padding (in device pixels); the same offset is the
@@ -524,6 +534,46 @@ public final class HarnessTerminalSurfaceView: NSView {
         copySelection()
     }
 
+    /// Standard responder paste (Edit ▸ Paste / ⌘V). Sends the clipboard text to the PTY,
+    /// wrapped in bracketed-paste markers when the program enabled DECSET 2004 (so shells and
+    /// editors treat it as a literal paste, not typed input). Newlines normalize to CR (the
+    /// Enter byte) so multi-line pastes run line by line.
+    @objc public func paste(_ sender: Any?) {
+        guard let raw = NSPasteboard.general.string(forType: .string), !raw.isEmpty else { return }
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\r")
+            .replacingOccurrences(of: "\n", with: "\r")
+        snapToBottom()
+        clearSelection()
+        emit(inputEncoder.encodePaste(normalized, modes: emulator.modes))
+    }
+
+    /// Select the entire visible viewport (Edit ▸ Select All / ⌘A).
+    @objc public override func selectAll(_ sender: Any?) {
+        guard rows > 0, columns > 0 else { return }
+        selectionAnchor = (row: 0, column: 0)
+        selectionHead = (row: rows - 1, column: columns - 1)
+        scheduleRender()
+    }
+
+    /// Right-click context menu (Copy / Paste / Select All). Suppressed while the program is
+    /// capturing the mouse (unless Shift forces local handling), matching the selection rules.
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        guard !isMouseReporting(event) else { return nil }
+        let menu = NSMenu()
+        let copyItem = NSMenuItem(title: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        copyItem.target = self
+        menu.addItem(copyItem)
+        let pasteItem = NSMenuItem(title: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
+        pasteItem.target = self
+        menu.addItem(pasteItem)
+        menu.addItem(.separator())
+        let selectAllItem = NSMenuItem(title: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
+        selectAllItem.target = self
+        menu.addItem(selectAllItem)
+        return menu
+    }
+
     private func copySelection() {
         guard let sel = currentSelection else { return }
         let text = selectedText(sel, emulator.readGrid())
@@ -612,13 +662,20 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func keyDown(with event: NSEvent) {
         // Let the app handle Command shortcuts (menus, palette, etc.).
         if event.modifierFlags.contains(.command) {
-            // ⌘C copies the active selection (when no Edit ▸ Copy menu item intercepts it).
-            if event.charactersIgnoringModifiers?.lowercased() == "c", currentSelection != nil {
+            // ⌘C copies the active selection, ⌘V pastes. These also work via the Edit menu's
+            // key equivalents (which fire copy:/paste: on the first responder before keyDown);
+            // handling them here keeps copy/paste working even without the menu.
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "c" where currentSelection != nil:
                 copySelection()
                 return
+            case "v":
+                paste(nil)
+                return
+            default:
+                super.keyDown(with: event)
+                return
             }
-            super.keyDown(with: event)
-            return
         }
         wakeCursor()
         // Shift+PageUp/PageDown page through scrollback instead of going to the app.

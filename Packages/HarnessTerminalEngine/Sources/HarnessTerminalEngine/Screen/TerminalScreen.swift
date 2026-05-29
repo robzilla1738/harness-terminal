@@ -35,7 +35,14 @@ final class TerminalScreen {
     /// Lines that have scrolled off the top of the screen, oldest first. Only the primary
     /// screen records history (the alternate screen is for full-screen TUIs). Each entry is
     /// one row of cells captured at its width when evicted; the reader pads/truncates.
-    private var history: [[TerminalGridCell]] = []
+    /// One scrolled-off line plus whether it ended by a soft autowrap (so reflow can re-join
+    /// it with its continuation) rather than a hard line break.
+    private struct HistoryLine { var cells: [TerminalGridCell]; var wrapped: Bool }
+    private var history: [HistoryLine] = []
+    /// Per-row soft-wrap flag, parallel to the `rows` viewport rows: true when that row
+    /// continues onto the next (set on autowrap in `wrapLine`), so reflow knows which physical
+    /// rows form one logical line. Kept in sync with every row move (scroll/insert/delete/erase).
+    private var rowWrapped: [Bool]
     /// Whether this screen accumulates scrollback (primary = true, alternate = false).
     let recordsHistory: Bool
     /// Cap on retained scrollback lines.
@@ -52,6 +59,7 @@ final class TerminalScreen {
         self.scrollBottom = r - 1
         self.recordsHistory = recordsHistory
         self.cells = Array(repeating: .blank, count: c * r)
+        self.rowWrapped = Array(repeating: false, count: r)
     }
 
     // MARK: - Snapshot
@@ -79,7 +87,7 @@ final class TerminalScreen {
         for i in 0 ..< rows {
             let idx = topIndex + i
             if idx < history.count {
-                let line = history[idx]
+                let line = history[idx].cells
                 for c in 0 ..< cols { out.append(c < line.count ? line[c] : .blank) }
             } else {
                 let viewportRow = idx - history.count
@@ -100,29 +108,173 @@ final class TerminalScreen {
 
     // MARK: - Resize
 
-    /// Resize to a new geometry. Content is preserved top-left; the cursor is clamped.
-    /// (Reflow/rewrap is a later refinement — daemon owns history, so a hard reflow
-    /// here is acceptable for Phase 1 and matches many terminals' simple resize.)
+    /// Resize to a new geometry. The primary screen *reflows*: physical rows are re-joined
+    /// into logical lines (following soft-wrap flags), re-wrapped to the new width, and the
+    /// cursor is mapped to its new position. The alternate screen just clamps (full-screen
+    /// TUIs redraw on SIGWINCH, so reflowing them would corrupt their layout).
     func resize(cols newCols: Int, rows newRows: Int) {
         let nc = max(1, newCols)
         let nr = max(1, newRows)
         guard nc != cols || nr != rows else { return }
-        var next = Array(repeating: TerminalGridCell.blank, count: nc * nr)
-        let copyRows = min(rows, nr)
-        let copyCols = min(cols, nc)
-        for r in 0 ..< copyRows {
-            for c in 0 ..< copyCols {
-                next[r * nc + c] = cells[r * cols + c]
+
+        if recordsHistory {
+            reflow(toCols: nc, rows: nr)
+        } else {
+            var next = Array(repeating: TerminalGridCell.blank, count: nc * nr)
+            let copyRows = min(rows, nr)
+            let copyCols = min(cols, nc)
+            for r in 0 ..< copyRows {
+                for c in 0 ..< copyCols {
+                    next[r * nc + c] = cells[r * cols + c]
+                }
             }
+            cells = next
+            cols = nc
+            rows = nr
+            rowWrapped = Array(repeating: false, count: nr)
+            cursorRow = min(cursorRow, nr - 1)
+            cursorCol = min(cursorCol, nc - 1)
         }
-        cells = next
-        cols = nc
-        rows = nr
         scrollTop = 0
         scrollBottom = nr - 1
-        cursorRow = min(cursorRow, nr - 1)
-        cursorCol = min(cursorCol, nc - 1)
         pendingWrap = false
+    }
+
+    /// True when a cell is the default blank (no glyph, default bg, no attributes) — used to
+    /// trim trailing padding so reflow doesn't manufacture spurious blank rows.
+    private func isBlank(_ cell: TerminalGridCell) -> Bool { cell == .blank }
+
+    /// Reflow the primary screen to `nc × nr`: rebuild logical lines from history + viewport
+    /// (joining rows whose predecessor soft-wrapped), trim each line's trailing blanks, re-wrap
+    /// to `nc` (keeping wide chars whole), then split the result into scrollback + viewport with
+    /// the cursor mapped to its new physical position.
+    private func reflow(toCols nc: Int, rows nr: Int) {
+        // 1) Gather source rows (history ++ viewport) with their wrap flags, and the absolute
+        //    index of the cursor's row in that sequence.
+        var srcRows: [(cells: [TerminalGridCell], wrapped: Bool)] = []
+        srcRows.reserveCapacity(history.count + rows)
+        for h in history { srcRows.append((h.cells, h.wrapped)) }
+        for r in 0 ..< rows {
+            srcRows.append((Array(cells[r * cols ..< (r + 1) * cols]), rowWrapped[r]))
+        }
+        let cursorAbsRow = history.count + min(cursorRow, rows - 1)
+
+        // 2) Build logical lines by joining a row onto the previous when it soft-wrapped.
+        //    Record the cursor's (logical line index, column within that line).
+        var logicals: [[TerminalGridCell]] = []
+        var current: [TerminalGridCell] = []
+        var building = false
+        var prevWrapped = false
+        var cursorLogical = 0
+        var cursorLogicalCol = 0
+        for (i, row) in srcRows.enumerated() {
+            if building, !prevWrapped {
+                // The previous logical line ended with a hard break — finalize it.
+                logicals.append(current)
+                current = []
+            }
+            building = true
+            if i == cursorAbsRow {
+                cursorLogical = logicals.count
+                cursorLogicalCol = current.count + min(cursorCol, cols - 1)
+            }
+            current.append(contentsOf: row.cells)
+            prevWrapped = row.wrapped
+        }
+        if building { logicals.append(current) }
+
+        // 3) Trim each logical line's trailing blank cells (but never below the cursor column on
+        //    the cursor's own line, so the cursor keeps its place). Empty lines are preserved.
+        for i in logicals.indices {
+            var end = logicals[i].count
+            let floorCol = (i == cursorLogical) ? min(cursorLogicalCol, logicals[i].count) : 0
+            while end > floorCol, isBlank(logicals[i][end - 1]) { end -= 1 }
+            logicals[i] = Array(logicals[i].prefix(end))
+        }
+        cursorLogicalCol = min(cursorLogicalCol, logicals.indices.contains(cursorLogical) ? logicals[cursorLogical].count : 0)
+
+        // 4) Re-wrap each logical line into rows of width `nc` (wide chars never split). Each
+        //    logical line yields at least one row (preserving blank lines). Map the cursor.
+        var out: [[TerminalGridCell]] = []
+        var outWrapped: [Bool] = []
+        var cursorOutRow = 0
+        var cursorOutCol = 0
+        let blank = TerminalGridCell.blank
+        for (li, line) in logicals.enumerated() {
+            var rowBuf = Array(repeating: blank, count: nc)
+            var col = 0
+            func flush(soft: Bool) {
+                out.append(rowBuf)
+                outWrapped.append(soft)
+                rowBuf = Array(repeating: blank, count: nc)
+                col = 0
+            }
+            var k = 0
+            while k < line.count {
+                let cell = line[k]
+                if cell.width == .spacerTail { k += 1; continue } // emitted with its wide head
+                let wcols = (cell.width == .wide) ? 2 : 1
+                if col + wcols > nc { flush(soft: true) }
+                if li == cursorLogical, k == cursorLogicalCol {
+                    cursorOutRow = out.count
+                    cursorOutCol = col
+                }
+                rowBuf[col] = cell
+                if cell.width == .wide, col + 1 < nc {
+                    rowBuf[col + 1] = TerminalGridCell(width: .spacerTail)
+                }
+                col += wcols
+                k += 1
+            }
+            // Cursor at end-of-line (past the last cell).
+            if li == cursorLogical, cursorLogicalCol >= line.count {
+                cursorOutRow = out.count
+                cursorOutCol = min(col, nc - 1)
+            }
+            flush(soft: false) // hard end of this logical line
+        }
+
+        // 5) Drop trailing blank rows that sit *below* the cursor (a terminal doesn't keep empty
+        //    space under the cursor as scrollback), then split into scrollback + viewport.
+        var total = out.count
+        while total - 1 > cursorOutRow, isRowBlank(out[total - 1]) { total -= 1 }
+        out = Array(out.prefix(total))
+        outWrapped = Array(outWrapped.prefix(total))
+
+        let viewportTop = max(0, total - nr)
+        // Scrollback = rows above the viewport.
+        var newHistory: [HistoryLine] = []
+        if viewportTop > 0 {
+            for i in 0 ..< viewportTop { newHistory.append(HistoryLine(cells: out[i], wrapped: outWrapped[i])) }
+            if newHistory.count > maxHistoryLines { newHistory.removeFirst(newHistory.count - maxHistoryLines) }
+        }
+        // Viewport = the next `nr` rows, blank-padded at the bottom if content is shorter.
+        var newCells = [TerminalGridCell]()
+        newCells.reserveCapacity(nc * nr)
+        var newWrapped = [Bool](repeating: false, count: nr)
+        for r in 0 ..< nr {
+            let srcIdx = viewportTop + r
+            if srcIdx < total {
+                newCells.append(contentsOf: out[srcIdx])
+                newWrapped[r] = outWrapped[srcIdx]
+            } else {
+                newCells.append(contentsOf: Array(repeating: blank, count: nc))
+            }
+        }
+
+        history = newHistory
+        cells = newCells
+        rowWrapped = newWrapped
+        cols = nc
+        rows = nr
+        cursorRow = clamp(cursorOutRow - viewportTop, 0, nr - 1)
+        cursorCol = clamp(cursorOutCol, 0, nc - 1)
+    }
+
+    /// Whether an output row (a `[TerminalGridCell]`) is entirely default-blank.
+    private func isRowBlank(_ row: [TerminalGridCell]) -> Bool {
+        for cell in row where !isBlank(cell) { return false }
+        return true
     }
 
     // MARK: - Printing
@@ -196,6 +348,9 @@ final class TerminalScreen {
     /// Move to column 0 of the next line, scrolling within the region if at the bottom.
     private func wrapLine() {
         pendingWrap = false
+        // The row we're leaving continues onto the next (a soft wrap) — record it so resize
+        // reflow re-joins the logical line. `lineFeed` may scroll; `scrollUp` carries the flag.
+        if cursorRow >= 0, cursorRow < rowWrapped.count { rowWrapped[cursorRow] = true }
         cursorCol = 0
         lineFeed()
     }
@@ -275,9 +430,10 @@ final class TerminalScreen {
         let count = max(1, n)
         let blank = erasedCell()
         for _ in 0 ..< count {
-            // A line leaving the very top of the screen (not a sub-region) is scrollback.
+            // A line leaving the very top of the screen (not a sub-region) is scrollback —
+            // carry its soft-wrap flag so reflow can re-join it with its continuation.
             if recordsHistory, scrollTop == 0 {
-                history.append(Array(cells[0 ..< cols]))
+                history.append(HistoryLine(cells: Array(cells[0 ..< cols]), wrapped: rowWrapped[scrollTop]))
                 if history.count > maxHistoryLines {
                     history.removeFirst(history.count - maxHistoryLines)
                 }
@@ -287,10 +443,12 @@ final class TerminalScreen {
                 for c in 0 ..< cols {
                     cells[r * cols + c] = cells[(r + 1) * cols + c]
                 }
+                rowWrapped[r] = rowWrapped[r + 1]
             }
             for c in 0 ..< cols {
                 cells[scrollBottom * cols + c] = blank
             }
+            rowWrapped[scrollBottom] = false
         }
     }
 
@@ -303,11 +461,13 @@ final class TerminalScreen {
                 for c in 0 ..< cols {
                     cells[r * cols + c] = cells[(r - 1) * cols + c]
                 }
+                rowWrapped[r] = rowWrapped[r - 1]
                 r -= 1
             }
             for c in 0 ..< cols {
                 cells[scrollTop * cols + c] = blank
             }
+            rowWrapped[scrollTop] = false
         }
     }
 
@@ -319,27 +479,33 @@ final class TerminalScreen {
         TerminalGridCell(background: pen.background)
     }
 
-    /// ED — erase in display. mode 0: cursor→end, 1: start→cursor, 2/3: all.
+    /// ED — erase in display. mode 0: cursor→end, 1: start→cursor, 2/3: all. Cleared full rows
+    /// no longer continue a wrapped line, so their soft-wrap flags reset.
     func eraseInDisplay(mode: Int) {
         let blank = erasedCell()
         switch mode {
         case 1:
             for r in 0 ..< cursorRow {
                 for c in 0 ..< cols { cells[r * cols + c] = blank }
+                rowWrapped[r] = false
             }
             for c in 0 ... cursorCol where c < cols { cells[cursorRow * cols + c] = blank }
         case 2, 3:
             for i in 0 ..< cells.count { cells[i] = blank }
+            for r in 0 ..< rows { rowWrapped[r] = false }
         default: // 0
             for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
+            rowWrapped[cursorRow] = false
             for r in (cursorRow + 1) ..< rows {
                 for c in 0 ..< cols { cells[r * cols + c] = blank }
+                rowWrapped[r] = false
             }
         }
         pendingWrap = false
     }
 
-    /// EL — erase in line. mode 0: cursor→end, 1: start→cursor, 2: whole line.
+    /// EL — erase in line. mode 0: cursor→end, 1: start→cursor, 2: whole line. Erasing to the
+    /// end of the line (0 or 2) clears its soft-wrap continuation.
     func eraseInLine(mode: Int) {
         let blank = erasedCell()
         switch mode {
@@ -347,8 +513,10 @@ final class TerminalScreen {
             for c in 0 ... cursorCol where c < cols { cells[cursorRow * cols + c] = blank }
         case 2:
             for c in 0 ..< cols { cells[cursorRow * cols + c] = blank }
+            rowWrapped[cursorRow] = false
         default:
             for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
+            rowWrapped[cursorRow] = false
         }
         pendingWrap = false
     }
@@ -397,10 +565,12 @@ final class TerminalScreen {
         var r = scrollBottom
         while r >= cursorRow + count {
             for c in 0 ..< cols { cells[r * cols + c] = cells[(r - count) * cols + c] }
+            rowWrapped[r] = rowWrapped[r - count]
             r -= 1
         }
         for r in cursorRow ..< (cursorRow + count) {
             for c in 0 ..< cols { cells[r * cols + c] = blank }
+            rowWrapped[r] = false
         }
         pendingWrap = false
     }
@@ -413,10 +583,12 @@ final class TerminalScreen {
         var r = cursorRow
         while r + count <= scrollBottom {
             for c in 0 ..< cols { cells[r * cols + c] = cells[(r + count) * cols + c] }
+            rowWrapped[r] = rowWrapped[r + count]
             r += 1
         }
         while r <= scrollBottom {
             for c in 0 ..< cols { cells[r * cols + c] = blank }
+            rowWrapped[r] = false
             r += 1
         }
         pendingWrap = false
@@ -580,6 +752,7 @@ final class TerminalScreen {
         pen = Pen()
         history.removeAll()
         cells = Array(repeating: .blank, count: cols * rows)
+        rowWrapped = Array(repeating: false, count: rows)
         cursorRow = 0
         cursorCol = 0
         pendingWrap = false
