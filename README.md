@@ -18,7 +18,7 @@ See [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ## Features
 
-- GPU-accelerated terminals rendered by **Harness's own terminal engine** — crisp Display-P3 / sRGB color, themed translucent canvas with untouched program output (a libghostty path remains as the proven fallback during rollout)
+- GPU-accelerated terminals rendered by **Harness's own terminal engine** — crisp Display-P3 / sRGB color, themed translucent canvas with untouched program output, no external dependencies (`swift build` resolves zero packages)
 - Optional Ghostty config import — match your existing colors, opacity, blur, font, and padding
 - Workspaces + sidebar sessions + per-session tabs + horizontal/vertical splits
 - Session layout persistence (daemon-owned JSON)

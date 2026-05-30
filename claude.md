@@ -8,7 +8,7 @@ Agent handbook for the **Harness** repository. Read before architectural or UI c
 
 ---
 
-## Native renderer (libghostty fork removed)
+## Native terminal renderer
 
 Harness renders terminals with its **own** self-contained stack — there is **no Ghostty/
 libghostty dependency** (`swift build` resolves zero external packages). `TerminalHostView`
@@ -25,7 +25,7 @@ The only remaining "ghostty" is the **opt-in config import** (`TerminalConfigImp
 `~/.config/ghostty` so Ghostty.app users keep their colors/font) — kept by product decision.
 
 **Before touching the terminal renderer or theme system, read
-[docs/NATIVE_RENDERER_HANDOFF.md](docs/NATIVE_RENDERER_HANDOFF.md).** Modules under `Packages/`:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).** Modules under `Packages/`:
 `HarnessTerminalEngine`, `HarnessTheme`, `HarnessTerminalRenderer`, `HarnessTerminalKit`.
 
 **Renderer/engine invariants** (recently hardened — keep these):
