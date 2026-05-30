@@ -82,6 +82,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var scrollOffset = 0
     /// Canvas foreground — used to draw IME preedit (marked) text over the grid.
     private var canvasForeground: RGBColor = RGBColor(red: 255, green: 255, blue: 255)
+    /// Resolved cursor + 16-color palette, surfaced to programs via OSC 10/11/12/4 *queries*
+    /// (`emulator.colorProvider`) for light/dark theme detection.
+    private var canvasCursor: RGBColor = RGBColor(red: 255, green: 255, blue: 255)
+    private var ansiPalette16: [RGBColor] = []
     /// In-progress IME composition (preedit). Empty when not composing.
     private var markedText = ""
     /// Glyph coverage gamma: 1 = native blending; < 1 = gamma-correct (thicker) text.
@@ -92,6 +96,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var columns: Int = 80
     private var rows: Int = 24
     private var renderScheduled = false
+    /// Safety valve for DEC 2026 synchronized output: a program that enters a synchronized
+    /// frame but never ends it must not freeze the display, so we force-present after this.
+    private var syncTimeout: DispatchWorkItem?
+    private let syncTimeoutInterval: TimeInterval = 0.15
 
     // MARK: Copy mode (in-pane overlay)
     /// Active copy-mode model (nil = not in copy mode). Driven by the shared
@@ -144,7 +152,26 @@ public final class HarnessTerminalSurfaceView: NSView {
             if added > 0 { scrollOffset = min(emulator.historyCount, scrollOffset + added) }
         }
         wakeCursor()
-        scheduleRender()
+        // DEC 2026 synchronized output: hold the last presented frame while the program is
+        // mid-update (no tearing), and present atomically the moment it ends the batch — which
+        // is exactly when this chunk leaves `synchronizedOutput` false. A timeout guards a
+        // program that never closes the update.
+        if emulator.modes.synchronizedOutput {
+            armSyncTimeout()
+        } else {
+            syncTimeout?.cancel(); syncTimeout = nil
+            scheduleRender()
+        }
+    }
+
+    private func armSyncTimeout() {
+        guard syncTimeout == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.syncTimeout = nil
+            self?.scheduleRender() // force-present even if the program left 2026 set
+        }
+        syncTimeout = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + syncTimeoutInterval, execute: work)
     }
 
     public func receive(_ text: String) { receive(Data(text.utf8)) }
@@ -198,6 +225,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.vivid = vivid
         self.canvasBackground = bg
         self.canvasForeground = fg
+        self.canvasCursor = cursor
+        self.ansiPalette16 = palette
         self.canvasOpacity = max(0, min(1, canvasOpacity))
         self.cursorStyle = CursorStyle(rawValue: cursorStyle) ?? .block
         self.cursorBlinkEnabled = cursorBlink
@@ -267,6 +296,20 @@ public final class HarnessTerminalSurfaceView: NSView {
             pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
             self.onCopy?(text)   // mirror into the daemon paste buffer, like a yank
+        }
+        // Answer OSC 10/11/12/4 color queries from the resolved theme (light/dark detection).
+        emulator.colorProvider = { [weak self] role in
+            guard let self else { return nil }
+            let c: RGBColor
+            switch role {
+            case .foreground: c = self.canvasForeground
+            case .background: c = self.canvasBackground
+            case .cursor: c = self.canvasCursor
+            case let .palette(i):
+                guard i >= 0, i < self.ansiPalette16.count else { return nil }
+                c = self.ansiPalette16[i]
+            }
+            return (c.red, c.green, c.blue)
         }
     }
 
@@ -364,9 +407,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         if !markedText.isEmpty, scrollOffset == 0 {
             overlayPreedit(into: &frame)
         }
-        // Cursor blink: hide on the off-beat (only while focused + blink enabled). A
-        // program-hidden cursor (DECTCEM off) stays hidden regardless.
-        if frame.cursor.visible, focused, cursorBlinkEnabled, !cursorBlinkVisible {
+        // DECSCUSR: a program-requested cursor shape (vim/nvim/fish per-mode) overrides the
+        // user's `cursorStyle` setting; `.default` keeps the setting.
+        switch grid.cursor.shape {
+        case .block: frame.cursor.style = .block
+        case .bar: frame.cursor.style = .bar
+        case .underline: frame.cursor.style = .underline
+        case .default: break
+        }
+        // Cursor blink: hide on the off-beat (only while focused + blink enabled). The program's
+        // DECSCUSR blink preference overrides the setting; a program-hidden cursor stays hidden.
+        let blinkEnabled = grid.cursor.blinking ?? cursorBlinkEnabled
+        if frame.cursor.visible, focused, blinkEnabled, !cursorBlinkVisible {
             frame.cursor.visible = false
         }
         // Clear to the canvas color at canvas opacity so any cell-rounding remainder reads
@@ -487,6 +539,13 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         if copyMode != nil { return } // copy mode is keyboard-driven; ignore clicks
+        // ⌘-click opens an OSC 8 hyperlink or an auto-detected URL (like Ghostty/Terminal.app).
+        // ⌘ overrides mouse reporting, the same way Shift overrides it for selection.
+        if event.modifierFlags.contains(.command), let pos = cell(at: event.locationInWindow),
+           let url = linkURL(atRow: pos.row, column: pos.column) {
+            openLink(url)
+            return
+        }
         if isMouseReporting(event) {
             reportMouse(event, button: .left, kind: .press)
             return
@@ -495,6 +554,32 @@ public final class HarnessTerminalSurfaceView: NSView {
         selectionAnchor = pos
         selectionHead = pos
         scheduleRender()
+    }
+
+    /// The clickable URL at a grid cell: an OSC 8 hyperlink first, else an auto-detected URL in
+    /// the row text. The row is built one character per cell so `column` maps directly.
+    private func linkURL(atRow row: Int, column col: Int) -> String? {
+        let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
+        guard row >= 0, row < grid.rows, col >= 0, col < grid.cols else { return nil }
+        if let cell = grid.cell(row: row, col: col), cell.hyperlinkID != 0,
+           let url = emulator.hyperlinkURL(id: cell.hyperlinkID) {
+            return url
+        }
+        var line = ""
+        line.reserveCapacity(grid.cols)
+        for c in 0 ..< grid.cols {
+            guard let cell = grid.cell(row: row, col: c), cell.width != .spacerTail else { line.append(" "); continue }
+            line.unicodeScalars.append(cell.codepoint == 0 ? " " : (Unicode.Scalar(cell.codepoint) ?? " "))
+        }
+        return URLDetection.url(in: line, at: col)
+    }
+
+    /// Open a clicked link, restricted to safe schemes so terminal output can't trigger a
+    /// surprising handler (e.g. a custom app scheme) on ⌘-click.
+    private func openLink(_ string: String) {
+        guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
+              ["http", "https", "mailto", "ftp", "ftps", "file"].contains(scheme) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     public override func mouseDragged(with event: NSEvent) {

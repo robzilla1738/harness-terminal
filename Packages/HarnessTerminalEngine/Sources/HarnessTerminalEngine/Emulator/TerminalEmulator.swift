@@ -38,6 +38,10 @@ public final class TerminalEmulator: VTParserHandler {
     public var onSetClipboard: ((String) -> Void)?
     /// Bytes the terminal must write back to the PTY (DSR cursor report, DA, etc.).
     public var onResponse: ((Data) -> Void)?
+    /// Resolves the terminal's current colors so the engine can answer OSC 10/11/12/4 *queries*
+    /// (e.g. a TUI reading the background to pick a light/dark theme). The host supplies it from
+    /// the resolved theme; nil roles get no reply.
+    public var colorProvider: ((TerminalColorRole) -> (r: UInt8, g: UInt8, b: UInt8)?)?
 
     public init(cols: Int, rows: Int) {
         let c = max(1, cols)
@@ -129,7 +133,12 @@ public final class TerminalEmulator: VTParserHandler {
         // (for `4:3` underline styles and colon-form colors).
         let flat = params.map { $0.first ?? 0 }
         if isPrivate {
-            handlePrivateMode(final: final, params: flat)
+            handlePrivateMode(final: final, intermediates: intermediates, params: flat)
+            return
+        }
+        // DECSCUSR — `CSI Ps SP q` (intermediate space) sets the cursor shape/blink.
+        if intermediates == [0x20], final == 0x71 {
+            current.setCursorStyle(argRaw(flat, 0, 0))
             return
         }
         guard intermediates.isEmpty else { return }
@@ -171,9 +180,67 @@ public final class TerminalEmulator: VTParserHandler {
         switch code {
         case "0", "2": onTitleChange?(payload)            // icon+title / title
         case "7": handleWorkingDirectoryOSC(payload)       // cwd as file:// URL
+        case "8": handleHyperlinkOSC(payload)              // OSC 8 hyperlinks
+        case "10": handleColorQuery(code: "10", role: .foreground, payload: payload)
+        case "11": handleColorQuery(code: "11", role: .background, payload: payload)
+        case "12": handleColorQuery(code: "12", role: .cursor, payload: payload)
+        case "4": handlePaletteColorQuery(payload)         // OSC 4 ; index ; ?
         case "52": handleClipboardOSC(payload)             // clipboard set (OSC 52)
-        default: break                                     // 8 (hyperlinks) — later
+        default: break
         }
+    }
+
+    /// OSC 10/11/12 `?`: report the current fg/bg/cursor color (8→16-bit, `rgb:RRRR/GGGG/BBBB`).
+    /// A non-`?` payload is a *set*, which Harness ignores — the theme owns the canvas colors.
+    private func handleColorQuery(code: String, role: TerminalColorRole, payload: String) {
+        guard payload.hasPrefix("?"), let rgb = colorProvider?(role) else { return }
+        respond("\u{1b}]\(code);\(Self.xtermColor(rgb))\u{1b}\\")
+    }
+
+    /// OSC 4 `index ; ?`: report a palette color. A spec instead of `?` is a set (ignored).
+    private func handlePaletteColorQuery(_ payload: String) {
+        let parts = payload.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2, let index = Int(parts[0]), parts[1].hasPrefix("?"),
+              let rgb = colorProvider?(.palette(index)) else { return }
+        respond("\u{1b}]4;\(index);\(Self.xtermColor(rgb))\u{1b}\\")
+    }
+
+    /// xterm color reply form: each 8-bit channel widened to 16-bit (`v * 0x101`).
+    private static func xtermColor(_ c: (r: UInt8, g: UInt8, b: UInt8)) -> String {
+        func h(_ v: UInt8) -> String { String(format: "%04x", UInt16(v) &* 0x101) }
+        return "rgb:\(h(c.r))/\(h(c.g))/\(h(c.b))"
+    }
+
+    // OSC 8 hyperlink registry: cell `hyperlinkID` → URL. Global across both screens.
+    private var hyperlinks: [UInt32: String] = [:]
+    private var hyperlinkKeys: [String: UInt32] = [:]
+    private var nextHyperlinkID: UInt32 = 1
+
+    /// Resolve a cell's `hyperlinkID` to its URL (nil for 0 / unknown).
+    public func hyperlinkURL(id: UInt32) -> String? { id == 0 ? nil : hyperlinks[id] }
+
+    /// OSC 8: `params ; URI` — open a hyperlink over subsequently-printed cells; an empty URI
+    /// (`OSC 8 ; ; ST`) ends it. An `id=<name>` param lets split runs of the same link share an
+    /// id (so a wrapped URL highlights as one).
+    private func handleHyperlinkOSC(_ payload: String) {
+        guard let semi = payload.firstIndex(of: ";") else { return }
+        let params = payload[payload.startIndex ..< semi]
+        let uri = String(payload[payload.index(after: semi)...])
+        guard !uri.isEmpty else { current.setHyperlink(0); return }
+        let explicitID = params.split(separator: ":").first { $0.hasPrefix("id=") }.map { String($0.dropFirst(3)) }
+        let key = explicitID.map { "id=\($0)\u{1}\(uri)" } ?? "uri=\(uri)"
+        let id: UInt32
+        if let existing = hyperlinkKeys[key] {
+            id = existing
+        } else {
+            // Bound the registry against hostile floods of unique links.
+            if hyperlinks.count >= 16_384 { hyperlinks.removeAll(); hyperlinkKeys.removeAll(); nextHyperlinkID = 1 }
+            id = nextHyperlinkID
+            nextHyperlinkID &+= 1
+            hyperlinks[id] = uri
+            hyperlinkKeys[key] = id
+        }
+        current.setHyperlink(id)
     }
 
     /// OSC 52: `Pc ; Pd` where `Pd` is base64 text to copy (or `?` to query). We
@@ -222,7 +289,12 @@ public final class TerminalEmulator: VTParserHandler {
         current.setScrollRegion(top: top, bottom: bottom)
     }
 
-    private func handlePrivateMode(final: UInt8, params: [Int]) {
+    private func handlePrivateMode(final: UInt8, intermediates: [UInt8], params: [Int]) {
+        // DECRQM: `CSI ? Ps $ p` — report a private mode's current state.
+        if final == 0x70, intermediates == [0x24] { // '$' then 'p'
+            for p in params { reportPrivateMode(p) }
+            return
+        }
         let set = (final == 0x68) // 'h' set, 'l' reset
         guard final == 0x68 || final == 0x6C else { return }
         for p in params {
@@ -235,12 +307,33 @@ public final class TerminalEmulator: VTParserHandler {
             case 1006: modes.mouseSGR = set                // SGR extended coordinates
             case 1004: modes.focusReporting = set          // focus in/out reporting
             case 2004: modes.bracketedPaste = set          // bracketed paste
+            case 2026: modes.synchronizedOutput = set      // synchronized output (no tearing)
             case 1: modes.cursorKeysApplication = set      // DECCKM
             case 47, 1047: switchAlternate(set, clearOnEnter: true, saveCursor: false)
             case 1049: switchAlternate(set, clearOnEnter: true, saveCursor: true)
             default: break
             }
         }
+    }
+
+    /// DECRPM reply `CSI ? Ps ; Pm $ y` — Pm: 0 not recognized, 1 set, 2 reset. Lets a program
+    /// detect support (e.g. `?2026$p` for synchronized output) before using it.
+    private func reportPrivateMode(_ p: Int) {
+        let state: Int
+        switch p {
+        case 7: state = current.autowrap ? 1 : 2
+        case 25: state = current.cursorVisible ? 1 : 2
+        case 1000: state = modes.mouseClick ? 1 : 2
+        case 1002: state = modes.mouseDrag ? 1 : 2
+        case 1003: state = modes.mouseAny ? 1 : 2
+        case 1006: state = modes.mouseSGR ? 1 : 2
+        case 1004: state = modes.focusReporting ? 1 : 2
+        case 2004: state = modes.bracketedPaste ? 1 : 2
+        case 2026: state = modes.synchronizedOutput ? 1 : 2
+        case 1: state = modes.cursorKeysApplication ? 1 : 2
+        default: state = 0 // not recognized
+        }
+        respond("\u{1b}[?\(p);\(state)$y")
     }
 
     private func switchAlternate(_ enable: Bool, clearOnEnter: Bool, saveCursor: Bool) {
@@ -298,6 +391,9 @@ public final class TerminalEmulator: VTParserHandler {
             current = primary
         }
         modes = TerminalModes()
+        hyperlinks.removeAll()
+        hyperlinkKeys.removeAll()
+        nextHyperlinkID = 1
         parser.reset()
     }
 }
@@ -313,6 +409,10 @@ public struct TerminalModes: Sendable, Equatable {
     public var mouseDrag = false
     public var mouseAny = false
     public var mouseSGR = false
+    /// DEC private mode 2026 (synchronized output): while set, the program is mid-frame and the
+    /// renderer should hold the last presented frame rather than paint partial updates — no
+    /// tearing in TUIs (vim, fzf, btop, …). Cleared by the program (or a renderer-side timeout).
+    public var synchronizedOutput = false
 
     public init() {}
 

@@ -165,6 +165,8 @@ private final class WindowSession: @unchecked Sendable {
     private var compositor: GridCompositor
     private var activeSurface: String?
     private var renderScheduled = false
+    /// DEC 2026 synchronized-output safety valve (force a present if a pane never ends a frame).
+    private var syncTimeout: DispatchWorkItem?
     /// Status-band rows reserved by the last `rebuildLayout` (so a copy-mode/flash toggle that
     /// changes the band can re-solve the pane rects instead of overpainting them).
     private var reservedStatus = 1
@@ -308,8 +310,25 @@ private final class WindowSession: @unchecked Sendable {
         renderQueue.async { [weak self] in
             guard let self, let term = self.terminals[surface] else { return }
             term.feed(data)
-            self.scheduleRender()
+            // DEC 2026 synchronized output: hold the repaint while this pane is mid-frame, then
+            // present atomically when it ends; a timeout guards a program that never closes it.
+            if term.modes.synchronizedOutput {
+                self.armSyncTimeout()
+            } else {
+                self.syncTimeout?.cancel(); self.syncTimeout = nil
+                self.scheduleRender()
+            }
         }
+    }
+
+    private func armSyncTimeout() {
+        guard syncTimeout == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.syncTimeout = nil
+            self?.scheduleRender()
+        }
+        syncTimeout = work
+        renderQueue.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     /// Coalesce renders to ~120fps so a burst of output is one repaint.

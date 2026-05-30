@@ -633,7 +633,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 |------|--------|
 | Session authority | Daemon-owned layout + IPC; launchd `KeepAlive` |
 | PTY / attach | `RealPty` (PTY env sets `COLORTERM=truecolor`) + GUI native renderer; `harness-cli attach` (single pane) with detach keys |
-| Rendering | Native Metal renderer: themed translucent canvas, ligatures, pixel-snapped decorations; **block elements + box-drawing drawn procedurally** (seamless, font-independent); reflow on resize; copy / paste / right-click menu |
+| Rendering | Native Metal renderer: themed translucent canvas, ligatures, pixel-snapped decorations; **block elements + box-drawing drawn procedurally** (seamless, font-independent); reflow on resize; copy / paste / right-click menu. **Ghostty-class terminal features:** synchronized output (DEC 2026, frame-hold), DECSCUSR cursor shape, OSC 8 hyperlinks + URL auto-detect (⌘-click opens), dynamic-color queries (OSC 10/11/12/4). See [docs/GHOSTTY_COMPARISON.md](docs/GHOSTTY_COMPARISON.md) |
 | Terminal compositor | `harness-cli attach-window` renders a tab's full split layout in any plain terminal (incl. ssh): client-side `HarnessGridTerminal` emulation per pane + `PaneRectSolver` + `GridCompositor` (borders, SGR, diff, status); prefix (`Ctrl-A`) routes `%`/`"` split, `x` kill, `z` zoom, `hjkl` select, `o`/`;` cycle, `c` new-tab, `n`/`p` tab, `d` detach |
 | Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key`, `bind -n` root table, `switch-client -T` modal tables; display panes (`prefix q`); universal `-t session:window.pane` targets (`TargetSpec` → `CommandIPCTranslator`) + `base-index`/`pane-base-index`; `move-pane`, `renumber-windows` |
 | Copy mode | Vim-style viewer; paste buffers in `buffers.json` |
@@ -678,6 +678,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 - [README.md](README.md) — user overview
 - [docs/COMMANDS.md](docs/COMMANDS.md) — command reference
 - [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md) — tmux capability parity ledger (done / Harness-equivalent / roadmap)
+- [docs/GHOSTTY_COMPARISON.md](docs/GHOSTTY_COMPARISON.md) — Ghostty ↔ Harness terminal-feature side-by-side
 - [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md) — bindings + format tokens
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — short summary (may lag; this handbook is authoritative)
 - [docs/agent-hooks/README.md](docs/agent-hooks/README.md) — hook examples

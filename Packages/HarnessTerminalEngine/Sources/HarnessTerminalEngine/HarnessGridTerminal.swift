@@ -23,6 +23,14 @@ public final class HarnessGridTerminal {
         set { emulator.onSetClipboard = newValue }
     }
 
+    /// Bytes the emulator wants written back to the PTY (DA/DSR/DECRQM replies, …). Left
+    /// unwired by the compositor today (a second attached client would double-reply); the GUI
+    /// surface owns the authoritative response path.
+    public var onResponse: ((Data) -> Void)? {
+        get { emulator.onResponse }
+        set { emulator.onResponse = newValue }
+    }
+
     public func feed(_ data: Data) { emulator.feed(data) }
     public func feed(_ text: String) { emulator.feed(text) }
     public func feed(_ bytes: [UInt8]) { emulator.feed(bytes) }
@@ -62,6 +70,9 @@ public final class HarnessGridTerminal {
     /// The full buffer as plain-text lines for `capture-pane`; `joinWrapped` (tmux `-J`)
     /// joins soft-wrapped physical rows into their logical line.
     public func captureLines(joinWrapped: Bool) -> [String] { emulator.captureLines(joinWrapped: joinWrapped) }
+
+    /// Resolve a cell's OSC 8 `hyperlinkID` to its URL (nil for 0 / unknown).
+    public func hyperlinkURL(id: UInt32) -> String? { emulator.hyperlinkURL(id: id) }
 
     /// The pane's active terminal modes (mouse tracking, bracketed paste, …) — read by the
     /// compositor to encode forwarded mouse events correctly.

@@ -49,6 +49,9 @@ public struct TerminalGridCell: Equatable, Sendable {
     public var strikethrough: Bool
     public var overline: Bool
     public var width: TerminalCellWidth
+    /// OSC 8 hyperlink id (0 = none). Resolved to a URL via `TerminalEmulator.hyperlinkURL(id:)`.
+    /// Survives SGR reset (it's not a pen attribute) — only OSC 8 changes it.
+    public var hyperlinkID: UInt32
 
     public init(
         codepoint: UInt32 = 0,
@@ -64,7 +67,8 @@ public struct TerminalGridCell: Equatable, Sendable {
         invisible: Bool = false,
         strikethrough: Bool = false,
         overline: Bool = false,
-        width: TerminalCellWidth = .normal
+        width: TerminalCellWidth = .normal,
+        hyperlinkID: UInt32 = 0
     ) {
         self.codepoint = codepoint
         self.foreground = foreground
@@ -80,22 +84,45 @@ public struct TerminalGridCell: Equatable, Sendable {
         self.strikethrough = strikethrough
         self.overline = overline
         self.width = width
+        self.hyperlinkID = hyperlinkID
     }
 
     /// An empty default-styled cell (a space-equivalent with no attributes).
     public static let blank = TerminalGridCell()
 }
 
-/// Cursor state in a snapshot: 0-based grid position + visibility.
+/// A terminal color an OSC 10/11/12/4 query can read (for dynamic-color / theme detection).
+public enum TerminalColorRole: Sendable, Equatable {
+    case foreground
+    case background
+    case cursor
+    case palette(Int) // OSC 4 index (0–255)
+}
+
+/// Program-requested cursor shape (DECSCUSR `CSI Ps SP q`). `.default` honors the user's
+/// `cursorStyle` setting; the others override it (so vim/nvim/fish can switch shape per mode).
+public enum TerminalCursorShape: Sendable, Equatable {
+    case `default`
+    case block
+    case underline
+    case bar
+}
+
+/// Cursor state in a snapshot: 0-based grid position + visibility + the program-requested
+/// shape/blink (DECSCUSR). `shape == .default` / `blinking == nil` mean "honor the setting".
 public struct TerminalCursor: Equatable, Sendable {
     public var row: Int
     public var col: Int
     public var visible: Bool
+    public var shape: TerminalCursorShape
+    public var blinking: Bool?
 
-    public init(row: Int = 0, col: Int = 0, visible: Bool = true) {
+    public init(row: Int = 0, col: Int = 0, visible: Bool = true, shape: TerminalCursorShape = .default, blinking: Bool? = nil) {
         self.row = row
         self.col = col
         self.visible = visible
+        self.shape = shape
+        self.blinking = blinking
     }
 }
 

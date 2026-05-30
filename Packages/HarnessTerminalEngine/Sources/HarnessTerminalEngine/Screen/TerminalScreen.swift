@@ -23,6 +23,9 @@ final class TerminalScreen {
     private var pendingWrap = false
 
     var cursorVisible = true
+    /// Program-requested cursor shape/blink (DECSCUSR); `.default`/nil honor the user setting.
+    var cursorShape: TerminalCursorShape = .default
+    var cursorBlinking: Bool? = nil
     var autowrap = true
 
     /// Inclusive scroll region (DECSTBM). Defaults to the whole screen.
@@ -31,6 +34,9 @@ final class TerminalScreen {
 
     /// Current graphic rendition applied to newly printed cells.
     private var pen = Pen()
+    /// Active OSC 8 hyperlink id (0 = none) stamped onto printed cells. Deliberately *not* part
+    /// of `Pen` — OSC 8 links must survive an SGR reset; only OSC 8 (or RIS) changes this.
+    private var currentHyperlink: UInt32 = 0
 
     /// Lines that have scrolled off the top of the screen, oldest first. Only the primary
     /// screen records history (the alternate screen is for full-screen TUIs). Each entry is
@@ -70,8 +76,22 @@ final class TerminalScreen {
             cols: cols,
             rows: rows,
             cells: cells,
-            cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: cursorVisible)
+            cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: cursorVisible, shape: cursorShape, blinking: cursorBlinking)
         )
+    }
+
+    /// DECSCUSR `CSI Ps SP q`: 0/1 blink block, 2 steady block, 3 blink underline, 4 steady
+    /// underline, 5 blink bar, 6 steady bar. Out-of-range resets to the user default.
+    func setCursorStyle(_ ps: Int) {
+        switch ps {
+        case 0, 1: cursorShape = .block; cursorBlinking = true
+        case 2: cursorShape = .block; cursorBlinking = false
+        case 3: cursorShape = .underline; cursorBlinking = true
+        case 4: cursorShape = .underline; cursorBlinking = false
+        case 5: cursorShape = .bar; cursorBlinking = true
+        case 6: cursorShape = .bar; cursorBlinking = false
+        default: cursorShape = .default; cursorBlinking = nil
+        }
     }
 
     /// A snapshot scrolled `offset` lines up into history (0 = the live viewport). The
@@ -397,9 +417,13 @@ final class TerminalScreen {
             invisible: pen.invisible,
             strikethrough: pen.strikethrough,
             overline: pen.overline,
-            width: width
+            width: width,
+            hyperlinkID: currentHyperlink
         )
     }
+
+    /// Set the active OSC 8 hyperlink id stamped onto subsequently-printed cells (0 = none).
+    func setHyperlink(_ id: UInt32) { currentHyperlink = id }
 
     private func writeCell(_ cell: TerminalGridCell, at col: Int) {
         guard col >= 0, col < cols, cursorRow >= 0, cursorRow < rows else { return }
@@ -824,6 +848,9 @@ final class TerminalScreen {
     /// RIS — full reset: clear, home cursor, default pen and modes, and drop scrollback.
     func fullReset() {
         pen = Pen()
+        currentHyperlink = 0
+        cursorShape = .default
+        cursorBlinking = nil
         history.removeAll()
         cells = Array(repeating: .blank, count: cols * rows)
         rowWrapped = Array(repeating: false, count: rows)

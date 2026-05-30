@@ -22,6 +22,65 @@ final class EngineConformanceTests: XCTestCase {
         XCTAssertEqual(grid.cursor.col, 1)
     }
 
+    func testOSC11BackgroundColorQuery() {
+        let term = TerminalEmulator(cols: 10, rows: 2)
+        var responses = Data()
+        term.onResponse = { responses.append($0) }
+        term.colorProvider = { role in role == .background ? (0x1e, 0x1e, 0x2e) : nil }
+        term.feed(Array("\u{1b}]11;?\u{1b}\\".utf8))
+        // 8-bit → 16-bit reply (v*0x101): 0x1e→0x1e1e, 0x2e→0x2e2e.
+        XCTAssertEqual(String(decoding: responses, as: UTF8.self), "\u{1b}]11;rgb:1e1e/1e1e/2e2e\u{1b}\\")
+    }
+
+    func testDECSCUSRCursorShape() {
+        let term = HarnessGridTerminal(cols: 10, rows: 2)!
+        term.feed("\u{1b}[5 q") // blinking bar
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .bar)
+        XCTAssertEqual(term.readGrid()!.cursor.blinking, true)
+        term.feed("\u{1b}[2 q") // steady block
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .block)
+        XCTAssertEqual(term.readGrid()!.cursor.blinking, false)
+        term.feed("\u{1b}[0 q") // 0 = blinking block (DEC default cursor), not a reset
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .block)
+        XCTAssertEqual(term.readGrid()!.cursor.blinking, true)
+        // The honor-user-setting state is the initial one (before any program sets a shape).
+        XCTAssertEqual(HarnessGridTerminal(cols: 4, rows: 1)!.readGrid()!.cursor.shape, .default)
+    }
+
+    func testOSC8HyperlinkStampsCellsAndSurvivesSGRReset() {
+        let term = HarnessGridTerminal(cols: 20, rows: 2)!
+        // Open a link, print text (with an SGR reset mid-link), then close it.
+        term.feed("\u{1b}]8;;https://example.com\u{1b}\\A\u{1b}[0mB\u{1b}]8;;\u{1b}\\C")
+        let grid = term.readGrid()!
+        let idA = grid.cell(row: 0, col: 0)!.hyperlinkID
+        let idB = grid.cell(row: 0, col: 1)!.hyperlinkID
+        XCTAssertNotEqual(idA, 0, "A is inside the link")
+        XCTAssertEqual(idB, idA, "SGR reset must NOT clear the OSC 8 link")
+        XCTAssertEqual(term.hyperlinkURL(id: idA), "https://example.com")
+        XCTAssertEqual(grid.cell(row: 0, col: 2)!.hyperlinkID, 0, "C is after OSC 8 ;; — no link")
+    }
+
+    func testURLAutoDetection() {
+        let line = "see https://foo.com/x now"
+        let start = line.distance(from: line.startIndex, to: line.range(of: "https")!.lowerBound)
+        XCTAssertEqual(URLDetection.url(in: line, at: start + 3), "https://foo.com/x")
+        XCTAssertNil(URLDetection.url(in: line, at: 0), "the leading 'see' is not a URL")
+    }
+
+    func testSynchronizedOutputModeAndDECRQM() {
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        var responses = Data()
+        term.onResponse = { responses.append($0) }
+        XCTAssertFalse(term.modes.synchronizedOutput)
+        term.feed("\u{1b}[?2026h")
+        XCTAssertTrue(term.modes.synchronizedOutput, "CSI ?2026h begins a synchronized frame")
+        // DECRQM query while set → reports state 1 (set).
+        term.feed("\u{1b}[?2026$p")
+        XCTAssertEqual(String(decoding: responses, as: UTF8.self), "\u{1b}[?2026;1$y")
+        term.feed("\u{1b}[?2026l")
+        XCTAssertFalse(term.modes.synchronizedOutput, "CSI ?2026l ends the frame")
+    }
+
     /// A pathological unterminated OSC (and a flood of intermediates) must be bounded by the
     /// parser caps and must not wedge it — normal output after the sequence still renders.
     func testParserBoundsHostileSequencesAndRecovers() {
