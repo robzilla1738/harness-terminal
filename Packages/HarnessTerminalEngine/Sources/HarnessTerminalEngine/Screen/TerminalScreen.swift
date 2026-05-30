@@ -26,8 +26,11 @@ final class TerminalScreen {
     private var tabStops: [Bool] = []
 
     // MARK: - Inline images
-    /// One placed image, in viewport-cell coordinates. Pixels live in `imageStore` keyed by id.
-    private struct ImagePlacement { var id: Int; var row: Int; var col: Int; var cols: Int; var rows: Int; var z: Int }
+    /// One placed image. `absRow` is the row in the virtual `[history ++ viewport]` sequence
+    /// (the same coordinate space as `bufferLine` and prompt marks), so an image rides scrollback
+    /// and reflow with the line it sits on instead of being dropped. Pixels live in `imageStore`
+    /// keyed by id.
+    private struct ImagePlacement { var id: Int; var absRow: Int; var col: Int; var cols: Int; var rows: Int; var z: Int }
     private var placements: [ImagePlacement] = []
     private var imageStore: [Int: DecodedImage] = [:]
     private var nextImageID = 1
@@ -103,7 +106,7 @@ final class TerminalScreen {
             rows: rows,
             cells: cells,
             cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: cursorVisible, shape: cursorShape, blinking: cursorBlinking),
-            images: imageSnapshots(rowOffset: 0),
+            images: imageSnapshots(topIndex: history.count),
             marks: markSnapshot(topIndex: history.count)
         )
     }
@@ -127,11 +130,12 @@ final class TerminalScreen {
         return out
     }
 
-    /// Placements mapped into the snapshot's viewport (shifted by `rowOffset` for scrollback
-    /// views); only those still overlapping the viewport are emitted.
-    private func imageSnapshots(rowOffset: Int) -> [ImagePlacementSnapshot] {
+    /// Placements mapped into the `rows`-tall window whose top sits at `topIndex` in the virtual
+    /// `[history ++ viewport]` sequence (`history.count` for the live view, less for a scrollback
+    /// view); only those still overlapping the window are emitted.
+    private func imageSnapshots(topIndex: Int) -> [ImagePlacementSnapshot] {
         placements.compactMap { p in
-            let row = p.row + rowOffset
+            let row = p.absRow - topIndex
             guard row + p.rows > 0, row < rows else { return nil }
             return ImagePlacementSnapshot(id: p.id, row: row, col: p.col, cols: p.cols, rows: p.rows, z: p.z)
         }
@@ -148,7 +152,7 @@ final class TerminalScreen {
         let id = nextImageID; nextImageID += 1
         imageStore[id] = image
         imageByteTotal += image.byteCount
-        placements.append(ImagePlacement(id: id, row: cursorRow, col: cursorCol, cols: fCols, rows: fRows, z: z))
+        placements.append(ImagePlacement(id: id, absRow: history.count + cursorRow, col: cursorCol, cols: fCols, rows: fRows, z: z))
         evictImagesIfNeeded()
         // Move the cursor below the image so following output doesn't overlap it (the placement
         // rides along if these line feeds scroll the screen).
@@ -163,12 +167,33 @@ final class TerminalScreen {
         }
     }
 
-    /// Shift placements as the screen scrolls; drop any fully scrolled out of the viewport.
+    /// Shift placements when content moves without history growing (a scroll *region* scroll, or
+    /// the alternate screen) — their absolute anchors track the moved rows. Drop any pushed fully
+    /// out of the viewport (region/alt scrolls don't accrue scrollback). A full-screen scroll that
+    /// grows history needs no shift: the anchor is invariant because `history.count` grew to match.
     private func shiftPlacements(by delta: Int) {
         guard !placements.isEmpty else { return }
-        for i in placements.indices { placements[i].row += delta }
+        for i in placements.indices { placements[i].absRow += delta }
         placements.removeAll { p in
-            if p.row + p.rows <= 0 || p.row >= rows {
+            let row = p.absRow - history.count
+            if row + p.rows <= 0 || row >= rows {
+                if let bytes = imageStore.removeValue(forKey: p.id)?.byteCount { imageByteTotal -= bytes }
+                return true
+            }
+            return false
+        }
+    }
+
+    /// Trim `n` oldest history lines and keep image anchors consistent: every absolute row shifts
+    /// down by `n`, and placements that fall entirely above the retained buffer are evicted (their
+    /// pixels with them). The single funnel for dropping scrollback so images evict alongside it.
+    private func dropHistoryHead(_ n: Int) {
+        guard n > 0 else { return }
+        history.removeFirst(min(n, history.count))
+        guard !placements.isEmpty else { return }
+        for i in placements.indices { placements[i].absRow -= n }
+        placements.removeAll { p in
+            if p.absRow + p.rows <= 0 {
                 if let bytes = imageStore.removeValue(forKey: p.id)?.byteCount { imageByteTotal -= bytes }
                 return true
             }
@@ -225,8 +250,8 @@ final class TerminalScreen {
             rows: rows,
             cells: out,
             cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: false),
-            // Images are viewport-anchored; scrolling back `clamped` lines moves them down.
-            images: imageSnapshots(rowOffset: clamped),
+            // Images are anchored in `[history ++ viewport]` space; this window starts at topIndex.
+            images: imageSnapshots(topIndex: topIndex),
             marks: markSnapshot(topIndex: topIndex)
         )
     }
@@ -360,6 +385,8 @@ final class TerminalScreen {
         guard nc != cols || nr != rows else { return }
 
         if recordsHistory {
+            // The primary screen reflows; image anchors are re-mapped onto their logical line so
+            // they survive the geometry change (see `reflow`).
             reflow(toCols: nc, rows: nr)
         } else {
             var next = Array(repeating: TerminalGridCell.blank, count: nc * nr)
@@ -377,14 +404,14 @@ final class TerminalScreen {
             rowMarks = Array(repeating: nil, count: nr)
             cursorRow = min(cursorRow, nr - 1)
             cursorCol = min(cursorCol, nc - 1)
+            // The alternate screen has no logical-line model to reflow against (full-screen TUIs
+            // redraw on SIGWINCH), so its images can't be repositioned — drop them.
+            clearImages()
         }
         scrollTop = 0
         scrollBottom = nr - 1
         pendingWrap = false
         ensureTabStopsSized()   // tab stops are column-absolute; keep the array sized to `cols`
-        // Images don't reflow; drop them on a geometry change rather than mispositioning pixels
-        // (a documented limitation matching most terminals).
-        clearImages()
     }
 
     /// True when a cell is the default blank (no glyph, default bg, no attributes) — used to
@@ -416,6 +443,9 @@ final class TerminalScreen {
         //    Record the cursor's (logical line index, column within that line).
         var logicals: [[TerminalGridCell]] = []
         var logicalMarks: [SemanticMark?] = []
+        // Source-row index → the logical line it joins into, so an image anchored on that source
+        // row can be re-anchored to the logical line's first re-wrapped row below.
+        var logicalOf = [Int](repeating: 0, count: srcRows.count)
         var current: [TerminalGridCell] = []
         var currentMark: SemanticMark? = nil
         var building = false
@@ -432,6 +462,7 @@ final class TerminalScreen {
             }
             // A logical line's mark is the mark of its first physical row.
             if current.isEmpty { currentMark = srcMarks[i] }
+            logicalOf[i] = logicals.count   // the index this logical line will occupy
             building = true
             if i == cursorAbsRow {
                 cursorLogical = logicals.count
@@ -457,10 +488,13 @@ final class TerminalScreen {
         var out: [[TerminalGridCell]] = []
         var outWrapped: [Bool] = []
         var outMarks: [SemanticMark?] = []
+        // Logical line index → index of its first re-wrapped output row (for image re-anchoring).
+        var logicalFirstOutRow = [Int](repeating: 0, count: logicals.count)
         var cursorOutRow = 0
         var cursorOutCol = 0
         let blank = TerminalGridCell.blank
         for (li, line) in logicals.enumerated() {
+            logicalFirstOutRow[li] = out.count
             var rowBuf = Array(repeating: blank, count: nc)
             var col = 0
             var firstRowOfLogical = true
@@ -537,6 +571,29 @@ final class TerminalScreen {
         rows = nr
         cursorRow = clamp(cursorOutRow - viewportTop, 0, nr - 1)
         cursorCol = clamp(cursorOutCol, 0, nc - 1)
+
+        // Re-anchor inline images: each placement was anchored to a source-row index; map that
+        // row → its logical line → that line's first re-wrapped output row, then into the final
+        // [history ++ viewport] index (history may have been trimmed off the front). Placements
+        // whose row fell out of the buffer (or off the retained scrollback) are evicted with
+        // their pixels. Columns are re-clamped; the cell footprint is preserved.
+        if !placements.isEmpty {
+            let trimmedFront = viewportTop - history.count   // rows dropped by the maxHistory cap
+            for i in placements.indices {
+                let src = placements[i].absRow
+                guard src >= 0, src < logicalOf.count else { placements[i].absRow = -1; continue }
+                let outRow = logicalFirstOutRow[logicalOf[src]]
+                placements[i].absRow = (outRow < total) ? outRow - trimmedFront : -1
+                placements[i].col = min(placements[i].col, nc - 1)
+            }
+            placements.removeAll { p in
+                if p.absRow < 0 {
+                    if let bytes = imageStore.removeValue(forKey: p.id)?.byteCount { imageByteTotal -= bytes }
+                    return true
+                }
+                return false
+            }
+        }
     }
 
     /// Whether an output row (a `[TerminalGridCell]`) is entirely default-blank.
@@ -757,10 +814,15 @@ final class TerminalScreen {
     func scrollUp(_ n: Int) {
         let count = max(1, n)
         let blank = erasedCell()
+        // A full-screen scroll (top of the screen, history on) accrues scrollback: image anchors
+        // are invariant because `history.count` grows in step, so they ride into scrollback rather
+        // than being dropped. A region/alternate scroll moves content without history, so anchors
+        // shift (handled after the loop).
+        let growsHistory = recordsHistory && scrollTop == 0
         for _ in 0 ..< count {
             // A line leaving the very top of the screen (not a sub-region) is scrollback —
             // carry its soft-wrap flag so reflow can re-join it with its continuation.
-            if recordsHistory, scrollTop == 0 {
+            if growsHistory {
                 history.append(HistoryLine(cells: Array(cells[0 ..< cols]), wrapped: rowWrapped[scrollTop], mark: rowMarks[scrollTop]))
                 // `removeFirst` is O(history.count) — doing it every scrolled line makes a
                 // terminal at full scrollback pay O(maxHistoryLines) per output line (the
@@ -771,7 +833,7 @@ final class TerminalScreen {
                 // scrollback — never less than configured. Slack is 0 when scrollback is off.
                 let slack = min(1024, maxHistoryLines / 4)
                 if history.count > maxHistoryLines + slack {
-                    history.removeFirst(history.count - maxHistoryLines)
+                    dropHistoryHead(history.count - maxHistoryLines)
                 }
             }
             // Drop the top region line; shift the rest up; blank the bottom line.
@@ -788,7 +850,9 @@ final class TerminalScreen {
             rowWrapped[scrollBottom] = false
             rowMarks[scrollBottom] = nil
         }
-        shiftPlacements(by: -count)   // images ride the scroll; off-screen ones drop
+        // Only region/alternate scrolls move anchors; a history-growing scroll leaves them
+        // invariant (the image scrolls into scrollback instead of being dropped).
+        if !growsHistory { shiftPlacements(by: -count) }
     }
 
     func scrollDown(_ n: Int) {

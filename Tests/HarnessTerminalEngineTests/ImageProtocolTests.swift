@@ -43,6 +43,9 @@ final class ImageProtocolTests: XCTestCase {
     // MARK: Placement (through the emulator)
 
     private func placements(_ term: TerminalEmulator) -> [ImagePlacementSnapshot] { term.readGrid().images }
+    private func scrollbackPlacements(_ term: TerminalEmulator, offset: Int) -> [ImagePlacementSnapshot] {
+        term.readGrid(scrollbackOffset: offset).images
+    }
 
     func testSixelPlacesImageInSnapshot() throws {
         let term = TerminalEmulator(cols: 20, rows: 10)
@@ -79,12 +82,28 @@ final class ImageProtocolTests: XCTestCase {
         XCTAssertEqual(placements(term).count, 1)
     }
 
-    func testImageScrollsThenDropsOffScreen() {
+    func testImageScrollsIntoScrollbackAndPersists() {
         let term = TerminalEmulator(cols: 20, rows: 6)
         term.feed("\u{1b}Pq#0;2;100;0;0~\u{1b}\\")  // places at row 0 (1 cell tall)
         XCTAssertEqual(placements(term).count, 1)
-        term.feed(String(repeating: "\r\n", count: 20)) // scroll well past it
-        XCTAssertTrue(placements(term).isEmpty, "image fully scrolled off the top is dropped")
+        term.feed(String(repeating: "\r\nline", count: 20)) // scroll it up into scrollback
+        XCTAssertGreaterThan(term.historyCount, 0)
+        // It's gone from the live viewport but NOT dropped — it lives in scrollback.
+        XCTAssertTrue(placements(term).isEmpty, "scrolled-off image leaves the live viewport")
+        let back = scrollbackPlacements(term, offset: term.historyCount)
+        XCTAssertEqual(back.count, 1, "scrolling back reveals the persisted image")
+        XCTAssertNotNil(term.image(for: back[0].id), "its pixels are retained")
+    }
+
+    func testImageEvictsWhenScrolledPastScrollbackCap() {
+        let term = TerminalEmulator(cols: 20, rows: 6)
+        term.maxScrollbackLines = 5
+        term.feed("\u{1b}Pq#0;2;100;0;0~\u{1b}\\")
+        XCTAssertEqual(placements(term).count, 1)
+        term.feed(String(repeating: "\r\nline", count: 50)) // push it past the tiny cap
+        XCTAssertTrue(placements(term).isEmpty)
+        XCTAssertTrue(scrollbackPlacements(term, offset: term.historyCount).isEmpty,
+                      "an image evicted with its scrollback line is gone everywhere")
     }
 
     func testAltScreenIsolatesImages() {
@@ -97,11 +116,23 @@ final class ImageProtocolTests: XCTestCase {
         XCTAssertEqual(placements(term).count, 1)
     }
 
-    func testResizeClearsImages() {
+    func testReflowPreservesImageOnPrimaryScreen() {
         let term = TerminalEmulator(cols: 20, rows: 6)
         term.feed("\u{1b}Pq#0;2;100;0;0~\u{1b}\\")
         XCTAssertEqual(placements(term).count, 1)
+        // The primary screen reflows on resize; the image is re-anchored, not dropped.
         term.resize(cols: 30, rows: 8)
-        XCTAssertTrue(placements(term).isEmpty)
+        XCTAssertEqual(placements(term).count, 1, "image survives a primary-screen reflow")
+        term.resize(cols: 12, rows: 5)
+        XCTAssertEqual(placements(term).count, 1)
+    }
+
+    func testResizeClearsImagesOnAlternateScreen() {
+        let term = TerminalEmulator(cols: 20, rows: 6)
+        term.feed("\u{1b}[?1049h")                 // alt screen (full-screen TUIs redraw)
+        term.feed("\u{1b}Pq#0;2;100;0;0~\u{1b}\\")
+        XCTAssertEqual(placements(term).count, 1)
+        term.resize(cols: 30, rows: 8)
+        XCTAssertTrue(placements(term).isEmpty, "alt-screen images can't reflow → dropped")
     }
 }
