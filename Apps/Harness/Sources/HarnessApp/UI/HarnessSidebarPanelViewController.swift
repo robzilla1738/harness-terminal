@@ -680,6 +680,18 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
         menu.addItem(.separator())
 
+        // Pin a session to survive a clean quit even in Plain mode (and the reverse). When
+        // keep-on-quit is globally on this is moot — everything survives — so only offer it
+        // when the global switch is off, otherwise the checkmark would lie.
+        if !SessionCoordinator.shared.snapshot.keepSessionsOnQuit {
+            let pin = NSMenuItem(title: "Keep running after quit", action: #selector(toggleSessionPersistent(_:)), keyEquivalent: "")
+            pin.target = self
+            pin.representedObject = session.id
+            pin.state = session.persistent ? .on : .off
+            menu.addItem(pin)
+            menu.addItem(.separator())
+        }
+
         let close = NSMenuItem(title: "Close session", action: #selector(closeSessionFromMenu(_:)), keyEquivalent: "")
         close.target = self
         close.representedObject = session.id
@@ -731,6 +743,12 @@ final class HarnessSidebarPanelViewController: NSViewController {
         let title = session.name.isEmpty ? sessionTitle(for: session) : session.name
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(title, forType: .string)
+    }
+
+    @objc private func toggleSessionPersistent(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? SessionID, let session = session(for: id) else { return }
+        SessionCoordinator.shared.requestDaemon(.setSessionPersistent(sessionID: id, persistent: !session.persistent))
+        SessionCoordinator.shared.syncFromDaemon()
     }
 
     @objc private func closeSessionFromMenu(_ sender: NSMenuItem) {
