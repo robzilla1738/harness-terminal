@@ -91,6 +91,14 @@ enum MainMenuBuilder {
         splitVItem.keyEquivalentModifierMask = [.command, .shift]
         splitVItem.target = MenuTarget.shared
         view.submenu?.addItem(splitVItem)
+        view.submenu?.addItem(.separator())
+        let detachItem = NSMenuItem(title: "Detach Pane", action: #selector(MenuTarget.detachPane), keyEquivalent: "")
+        detachItem.target = MenuTarget.shared
+        view.submenu?.addItem(detachItem)
+        let reattachItem = NSMenuItem(title: "Reattach Pane", action: #selector(MenuTarget.reattachPane), keyEquivalent: "")
+        reattachItem.target = MenuTarget.shared
+        view.submenu?.addItem(reattachItem)
+        view.submenu?.addItem(.separator())
         let jumpItem = NSMenuItem(title: "Jump to Notification", action: #selector(MenuTarget.jumpNotification), keyEquivalent: "u")
         jumpItem.keyEquivalentModifierMask = [.command, .shift]
         jumpItem.target = MenuTarget.shared
@@ -149,8 +157,18 @@ enum MainMenuBuilder {
 }
 
 @MainActor
-final class MenuTarget: NSObject {
+final class MenuTarget: NSObject, NSMenuItemValidation {
     static let shared = MenuTarget()
+
+    /// Enable Detach only when the active pane is attached, Reattach only when it's released.
+    /// Every other MenuTarget item stays enabled (default true), preserving prior behavior.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(detachPane): return !SessionCoordinator.shared.activePaneIsDetached
+        case #selector(reattachPane): return SessionCoordinator.shared.activePaneIsDetached
+        default: return true
+        }
+    }
 
     @objc func newWorkspace() {
         SessionCoordinator.shared.addWorkspace(
@@ -190,6 +208,14 @@ final class MenuTarget: NSObject {
 
     @objc func splitV() {
         SessionCoordinator.shared.splitActivePane(direction: .vertical)
+    }
+
+    @objc func detachPane() {
+        SessionCoordinator.shared.detachActiveSurface()
+    }
+
+    @objc func reattachPane() {
+        SessionCoordinator.shared.reattachActiveSurface()
     }
 
     @objc func jumpNotification() {

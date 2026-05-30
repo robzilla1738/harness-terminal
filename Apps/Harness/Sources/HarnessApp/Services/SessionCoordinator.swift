@@ -936,6 +936,14 @@ final class SessionCoordinator: NSObject {
         host.reattachToDaemonSurface()
     }
 
+    /// True when the active pane has been released from the daemon (its detach overlay is up) —
+    /// drives Detach/Reattach menu-item enablement.
+    var activePaneIsDetached: Bool {
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return false }
+        return host.isDetachedFromDaemon
+    }
+
     /// Scroll the active pane's viewport to the previous OSC 133 shell prompt (no-op without marks).
     func jumpToPreviousPrompt() {
         guard let surfaceID = activeSurfaceID,

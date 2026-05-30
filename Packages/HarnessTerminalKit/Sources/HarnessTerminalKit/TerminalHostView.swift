@@ -75,6 +75,13 @@ public final class TerminalHostView: NSView {
     private var borderLabelTop: NSLayoutConstraint?
     private var borderLabelBottom: NSLayoutConstraint?
 
+    /// Shown over the pane while it is detached from the daemon (output subscription dropped):
+    /// a dimmed "released — click to re-grab" affordance. nil while attached.
+    private var detachedOverlay: DetachedPaneOverlay?
+    /// True while the user has explicitly released this pane (overlay visible) — distinct from a
+    /// transient "not yet subscribed" state. Drives menu-item enablement.
+    public var isDetachedFromDaemon: Bool { detachedOverlay != nil }
+
     /// Show a `pane-border-format` label at the top (or bottom) edge, or hide it (nil/empty).
     public func setPaneBorderLabel(_ text: String?, atTop: Bool) {
         let trimmed = text?.trimmingCharacters(in: .whitespaces)
@@ -369,15 +376,40 @@ public final class TerminalHostView: NSView {
     /// client's hold (subscription + size vote) on the surface while the PTY keeps running. The
     /// session stays alive for `reattachToDaemonSurface()` (or another client) to re-grab.
     public func detachFromDaemonSurface() {
+        guard outputSubscription != nil else { return }   // already detached — keep one overlay
         outputSubscription?.cancel()
         outputSubscription = nil
+        showDetachedOverlay()
     }
 
     /// Re-grab a surface released with `detachFromDaemonSurface()`: resubscribe and replay
     /// scrollback so the pane catches up. No-op if still attached.
     public func reattachToDaemonSurface() {
         guard outputSubscription == nil else { return }
+        hideDetachedOverlay()
         startDaemonOutput()
+    }
+
+    /// Drop a dimmed "released — click to re-grab" affordance over the frozen pane. Topmost so it
+    /// captures the click; re-grabbing tears it down. Idempotent.
+    private func showDetachedOverlay() {
+        guard detachedOverlay == nil else { return }
+        let overlay = DetachedPaneOverlay(frame: bounds)
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.onReattach = { [weak self] in self?.reattachToDaemonSurface() }
+        addSubview(overlay, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: topAnchor),
+            overlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        detachedOverlay = overlay
+    }
+
+    private func hideDetachedOverlay() {
+        detachedOverlay?.removeFromSuperview()
+        detachedOverlay = nil
     }
 
     /// Scroll the viewport to the previous/next OSC 133 shell prompt (no-op without shell
@@ -434,6 +466,44 @@ public final class TerminalHostView: NSView {
     deinit {
         outputSubscription?.cancel()
     }
+}
+
+/// A dimmed overlay shown over a pane that has been released from the daemon (`detach-client`):
+/// the pane stops updating, and this banner makes the state visible and offers a one-click
+/// re-grab. It captures mouse events so a click anywhere on the frozen pane re-attaches rather
+/// than reaching the stale surface underneath.
+@MainActor
+private final class DetachedPaneOverlay: NSView {
+    var onReattach: (() -> Void)?
+    private let label = NSTextField(labelWithString: "Pane released — click to re-grab")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        label.textColor = .white
+        label.alignment = .center
+        label.maximumNumberOfLines = 2
+        label.lineBreakMode = .byWordWrapping
+        label.isSelectable = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -24),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// A click anywhere re-grabs the surface.
+    override func mouseDown(with event: NSEvent) { onReattach?() }
+    /// Re-grab even when the window isn't key (the first click also focuses).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    /// Swallow scroll so the frozen pane underneath doesn't react to wheel events.
+    override func scrollWheel(with event: NSEvent) {}
 }
 
 /// Serializes a surface's PTY input/resize onto one ordered background queue with a
