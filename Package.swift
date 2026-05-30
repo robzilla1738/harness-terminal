@@ -134,5 +134,17 @@ let package = Package(
             dependencies: ["HarnessDaemonCore", "HarnessCore"],
             path: "Tests/HarnessDaemonTests"
         ),
+        // Performance baselines for the hot paths (VT parse, IPC codec, scrollback,
+        // compositor). Gated behind HARNESS_BENCHMARKS=1 so a normal `swift test` stays fast;
+        // run with `HARNESS_BENCHMARKS=1 swift test --filter HarnessBenchmarks`.
+        .testTarget(
+            name: "HarnessBenchmarks",
+            dependencies: [
+                "HarnessCore",
+                "HarnessTerminalEngine",
+                "HarnessTerminalKit",
+            ],
+            path: "Tests/HarnessBenchmarks"
+        ),
     ]
 )

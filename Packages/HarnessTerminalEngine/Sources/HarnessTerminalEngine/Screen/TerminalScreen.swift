@@ -532,7 +532,15 @@ final class TerminalScreen {
             // carry its soft-wrap flag so reflow can re-join it with its continuation.
             if recordsHistory, scrollTop == 0 {
                 history.append(HistoryLine(cells: Array(cells[0 ..< cols]), wrapped: rowWrapped[scrollTop]))
-                if history.count > maxHistoryLines {
+                // `removeFirst` is O(history.count) — doing it every scrolled line makes a
+                // terminal at full scrollback pay O(maxHistoryLines) per output line (the
+                // steady-state hot path for any long-running shell). Amortize it: let the
+                // buffer overshoot by a bounded slack, then trim back to the cap in one batch,
+                // so the O(n) shift fires once per `slack` lines (≈O(1) amortized). Readers
+                // clamp to `history.count`, so the transient margin just exposes a little extra
+                // scrollback — never less than configured. Slack is 0 when scrollback is off.
+                let slack = min(1024, maxHistoryLines / 4)
+                if history.count > maxHistoryLines + slack {
                     history.removeFirst(history.count - maxHistoryLines)
                 }
             }
