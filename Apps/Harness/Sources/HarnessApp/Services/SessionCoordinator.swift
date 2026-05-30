@@ -119,9 +119,11 @@ final class SessionCoordinator: NSObject {
             foregroundHex: settings.customForegroundHex,
             cursorHex: settings.customCursorHex
         )
+        let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
         for host in terminalHosts.allHosts() {
             host.applyTheme(named: snapshot.themeName)
             host.applySettings(settings)
+            host.allowProgramClipboardAccess = allowClipboard
             pushBorderColors(to: host)
         }
         refreshSyncSiblings()
@@ -202,9 +204,11 @@ final class SessionCoordinator: NSObject {
             foregroundHex: settings.customForegroundHex,
             cursorHex: settings.customCursorHex
         )
+        let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
         for host in terminalHosts.allHosts() {
             host.applyTheme(named: snapshot.themeName)
             host.applySettings(settings)
+            host.allowProgramClipboardAccess = allowClipboard
             pushBorderColors(to: host)
         }
         NotificationCenter.default.post(

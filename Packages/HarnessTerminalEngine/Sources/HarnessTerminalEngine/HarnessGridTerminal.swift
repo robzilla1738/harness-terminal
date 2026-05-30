@@ -16,6 +16,13 @@ public final class HarnessGridTerminal {
         emulator = TerminalEmulator(cols: cols, rows: rows)
     }
 
+    /// Clipboard text set by the program via OSC 52 (base64-decoded). Used by the
+    /// GUI surface and the attach-window compositor to set the client clipboard.
+    public var onSetClipboard: ((String) -> Void)? {
+        get { emulator.onSetClipboard }
+        set { emulator.onSetClipboard = newValue }
+    }
+
     public func feed(_ data: Data) { emulator.feed(data) }
     public func feed(_ text: String) { emulator.feed(text) }
     public func feed(_ bytes: [UInt8]) { emulator.feed(bytes) }

@@ -32,6 +32,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Copied selection text — the host mirrors it into the daemon paste buffer (the
     /// system pasteboard is written here directly).
     public var onCopy: ((String) -> Void)?
+    /// Whether a program may set the system clipboard via OSC 52 (tmux
+    /// `set-clipboard`). The host sets this from the option; default on.
+    public var allowProgramClipboardAccess = true
 
     private let emulator: TerminalEmulator
     private let inputEncoder = InputEncoder()
@@ -242,6 +245,13 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
         emulator.onBell = { [weak self] in
             self?.onBell?()
+        }
+        emulator.onSetClipboard = { [weak self] text in
+            guard let self, self.allowProgramClipboardAccess, !text.isEmpty else { return }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            self.onCopy?(text)   // mirror into the daemon paste buffer, like a yank
         }
     }
 

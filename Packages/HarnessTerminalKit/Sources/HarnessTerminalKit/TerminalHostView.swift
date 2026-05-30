@@ -198,6 +198,14 @@ public final class TerminalHostView: NSView {
         applyNativeAppearance()
     }
 
+    /// Honor tmux `set-clipboard`: when false, programs cannot set the system
+    /// clipboard via OSC 52. Default on (tmux's default); the app sets it from the
+    /// daemon option.
+    public var allowProgramClipboardAccess: Bool {
+        get { nativeView.allowProgramClipboardAccess }
+        set { nativeView.allowProgramClipboardAccess = newValue }
+    }
+
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window?.firstResponder !== nativeView {

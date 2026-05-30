@@ -32,6 +32,10 @@ public final class TerminalEmulator: VTParserHandler {
     public var onWorkingDirectoryChange: ((String) -> Void)?
     /// Terminal bell (BEL / `\a`).
     public var onBell: (() -> Void)?
+    /// Clipboard text set by a program via OSC 52 (already base64-decoded). The
+    /// consumer gates this on the `set-clipboard` option before writing the system
+    /// pasteboard; the engine only decodes.
+    public var onSetClipboard: ((String) -> Void)?
     /// Bytes the terminal must write back to the PTY (DSR cursor report, DA, etc.).
     public var onResponse: ((Data) -> Void)?
 
@@ -155,8 +159,22 @@ public final class TerminalEmulator: VTParserHandler {
         switch code {
         case "0", "2": onTitleChange?(payload)            // icon+title / title
         case "7": handleWorkingDirectoryOSC(payload)       // cwd as file:// URL
-        default: break                                     // 8 (links), 52 (clipboard) — Phase 6+
+        case "52": handleClipboardOSC(payload)             // clipboard set (OSC 52)
+        default: break                                     // 8 (hyperlinks) — later
         }
+    }
+
+    /// OSC 52: `Pc ; Pd` where `Pd` is base64 text to copy (or `?` to query). We
+    /// support *setting* the clipboard; a query is ignored (the engine never blocks
+    /// on a pasteboard read). The consumer honors the `set-clipboard` option.
+    private func handleClipboardOSC(_ payload: String) {
+        guard let semi = payload.firstIndex(of: ";") else { return }
+        let encoded = String(payload[payload.index(after: semi)...])
+        guard encoded != "?", !encoded.isEmpty,
+              let data = Data(base64Encoded: encoded),
+              let text = String(data: data, encoding: .utf8)
+        else { return }
+        onSetClipboard?(text)
     }
 
     // MARK: - Helpers
