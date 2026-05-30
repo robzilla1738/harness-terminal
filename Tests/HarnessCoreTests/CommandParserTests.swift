@@ -70,6 +70,23 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("renumber-windows"), .renumberWindows)
     }
 
+    func testCopyModeActionParsing() throws {
+        XCTAssertEqual(try CommandParser.parse("copy-mode"), .copyMode)
+        XCTAssertEqual(try CommandParser.parse("copy-mode -X cursor-left"), .copyModeCommand(.cursorLeft))
+        XCTAssertEqual(try CommandParser.parse("copy-mode -X begin-selection"), .copyModeCommand(.beginSelection))
+        XCTAssertEqual(try CommandParser.parse("copy-mode -X rectangle-toggle"), .copyModeCommand(.rectangleToggle))
+        XCTAssertEqual(try CommandParser.parse("send-keys -X cursor-up"), .copyModeCommand(.cursorUp))
+        XCTAssertEqual(try CommandParser.parse(#"copy-mode -X copy-pipe "pbcopy""#), .copyModeCommand(.copyPipe("pbcopy")))
+    }
+
+    func testCopyModeKeyTableIsRebindableVocabulary() {
+        let copyTable = KeyTableSet.defaults.table(.copyMode)
+        // Real copy-mode commands, not display-message placeholders.
+        XCTAssertEqual(copyTable?.lookup(KeySpec(key: "v"))?.command, .copyModeCommand(.beginSelection))
+        XCTAssertEqual(copyTable?.lookup(KeySpec(key: "v", modifiers: .control))?.command, .copyModeCommand(.rectangleToggle))
+        XCTAssertEqual(copyTable?.lookup(KeySpec(key: "y"))?.command, .copyModeCommand(.copySelectionAndCancel))
+    }
+
     func testParsesSequences() throws {
         let parsed = try CommandParser.parse("split-window -h ; copy-mode")
         XCTAssertEqual(parsed, .sequence([

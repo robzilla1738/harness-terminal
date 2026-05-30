@@ -119,6 +119,8 @@ final class MainExecutor: CommandExecutor {
             cycleActiveWorkspace(coordinator: coordinator, forward: command == .nextWorkspace)
         case .copyMode:
             coordinator.toggleCopyMode()
+        case let .copyModeCommand(action):
+            CopyModeViewController.shared.perform(action)
         case .detachClient:
             coordinator.detachActiveSurface()
         case .sendKeys(let keys):

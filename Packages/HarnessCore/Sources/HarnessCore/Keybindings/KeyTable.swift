@@ -171,22 +171,38 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "Up", modifiers: .shift), command: .resizePane(direction: .up, amount: 3), note: "Resize up", repeatable: true),
             Binding(spec: KeySpec(key: "Down", modifiers: .shift), command: .resizePane(direction: .down, amount: 3), note: "Resize down", repeatable: true),
         ])
-        // copy-mode bindings are documentation/discoverability today: the
-        // CopyModeViewController interprets vim-keys natively. Listing them
-        // here means `list-keys -T copy-mode` shows what's available and a
-        // future inline-overlay rewrite can rebind them via `bind-key`.
+        // copy-mode bindings are real, rebindable commands: the copy-mode view
+        // resolves each keystroke against this table (merged with user overrides
+        // from keybindings.json) and runs the resulting `copy-mode -X` action, so
+        // `bind-key -T copy-mode <key> <command>` customizes copy mode. Defaults
+        // follow `mode-keys vi`.
         let copyMode = KeyTable(id: .copyMode, bindings: [
-            Binding(spec: KeySpec(key: "h"), command: .selectPane(target: .left), note: "Cursor left"),
-            Binding(spec: KeySpec(key: "l"), command: .selectPane(target: .right), note: "Cursor right"),
-            Binding(spec: KeySpec(key: "j"), command: .selectPane(target: .down), note: "Cursor down"),
-            Binding(spec: KeySpec(key: "k"), command: .selectPane(target: .up), note: "Cursor up"),
-            Binding(spec: KeySpec(key: "v"), command: .displayMessage(format: "char selection"), note: "Start char selection"),
-            Binding(spec: KeySpec(key: "V"), command: .displayMessage(format: "line selection"), note: "Start line selection"),
-            Binding(spec: KeySpec(key: "y"), command: .displayMessage(format: "yank"), note: "Yank to buffer"),
-            Binding(spec: KeySpec(key: "/"), command: .displayMessage(format: "search-forward"), note: "Search forward"),
-            Binding(spec: KeySpec(key: "?"), command: .displayMessage(format: "search-backward"), note: "Search backward"),
-            Binding(spec: KeySpec(key: "n"), command: .displayMessage(format: "search-next"), note: "Next match"),
-            Binding(spec: KeySpec(key: "q"), command: .displayMessage(format: "exit-copy-mode"), note: "Exit copy mode"),
+            Binding(spec: KeySpec(key: "h"), command: .copyModeCommand(.cursorLeft), note: "Cursor left"),
+            Binding(spec: KeySpec(key: "l"), command: .copyModeCommand(.cursorRight), note: "Cursor right"),
+            Binding(spec: KeySpec(key: "j"), command: .copyModeCommand(.cursorDown), note: "Cursor down"),
+            Binding(spec: KeySpec(key: "k"), command: .copyModeCommand(.cursorUp), note: "Cursor up"),
+            Binding(spec: KeySpec(key: "0"), command: .copyModeCommand(.startOfLine), note: "Start of line"),
+            Binding(spec: KeySpec(key: "$"), command: .copyModeCommand(.endOfLine), note: "End of line"),
+            Binding(spec: KeySpec(key: "w"), command: .copyModeCommand(.nextWord), note: "Next word"),
+            Binding(spec: KeySpec(key: "b"), command: .copyModeCommand(.previousWord), note: "Previous word"),
+            Binding(spec: KeySpec(key: "g"), command: .copyModeCommand(.top), note: "Top of history"),
+            Binding(spec: KeySpec(key: "G"), command: .copyModeCommand(.bottom), note: "Bottom of history"),
+            Binding(spec: KeySpec(key: "PageUp"), command: .copyModeCommand(.pageUp), note: "Page up"),
+            Binding(spec: KeySpec(key: "PageDown"), command: .copyModeCommand(.pageDown), note: "Page down"),
+            Binding(spec: KeySpec(key: "u", modifiers: .control), command: .copyModeCommand(.halfPageUp), note: "Half page up"),
+            Binding(spec: KeySpec(key: "d", modifiers: .control), command: .copyModeCommand(.halfPageDown), note: "Half page down"),
+            Binding(spec: KeySpec(key: "v"), command: .copyModeCommand(.beginSelection), note: "Begin selection"),
+            Binding(spec: KeySpec(key: "V"), command: .copyModeCommand(.selectLine), note: "Line selection"),
+            Binding(spec: KeySpec(key: "v", modifiers: .control), command: .copyModeCommand(.rectangleToggle), note: "Toggle rectangle selection"),
+            Binding(spec: KeySpec(key: "y"), command: .copyModeCommand(.copySelectionAndCancel), note: "Copy selection"),
+            Binding(spec: KeySpec(key: "Enter"), command: .copyModeCommand(.copySelectionAndCancel), note: "Copy selection"),
+            Binding(spec: KeySpec(key: "/"), command: .copyModeCommand(.searchForward), note: "Search forward"),
+            Binding(spec: KeySpec(key: "?"), command: .copyModeCommand(.searchBackward), note: "Search backward"),
+            Binding(spec: KeySpec(key: "n"), command: .copyModeCommand(.searchAgain), note: "Next match"),
+            Binding(spec: KeySpec(key: "N"), command: .copyModeCommand(.searchReverse), note: "Previous match"),
+            Binding(spec: KeySpec(key: "p"), command: .copyModeCommand(.paste), note: "Paste buffer"),
+            Binding(spec: KeySpec(key: "q"), command: .copyModeCommand(.cancel), note: "Exit copy mode"),
+            Binding(spec: KeySpec(key: "Escape"), command: .copyModeCommand(.cancel), note: "Exit copy mode"),
         ])
         // The `root` (no-prefix / mouse) and `command` (command-prompt editing)
         // tables are introduced — and actually consulted — in later phases. They are

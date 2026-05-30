@@ -319,7 +319,7 @@ public enum CommandIPCTranslator {
             return .requests([.unlinkWindow(tabID: tab.id)])
 
         // MARK: Client-local (UI overlays, modes, file/shell, composition)
-        case .markPane, .synchronizePanes, .displayPanes, .copyMode, .detachClient,
+        case .markPane, .synchronizePanes, .displayPanes, .copyMode, .copyModeCommand, .detachClient,
              .displayMessage, .runShell, .ifShell, .bindKey, .unbindKey, .listKeys,
              .sourceConfig, .reloadKeybindings, .showCheatsheet, .sequence,
              .sendPrefix, .sourceFile, .commandPrompt, .confirmBefore, .choose,

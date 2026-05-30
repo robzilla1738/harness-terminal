@@ -19,7 +19,7 @@ final class CopyModeViewController: NSViewController, NSTextViewDelegate {
     private let statusLabel = NSTextField(labelWithString: "")
     private let searchField = NSSearchField()
 
-    private enum SelectionMode { case none, char, line }
+    private enum SelectionMode { case none, char, line, block }
     private var selection: SelectionMode = .none
     private var anchor: Int = 0
     private var lastSearch: String?
@@ -128,49 +128,105 @@ final class CopyModeViewController: NSViewController, NSTextViewDelegate {
             }
             return false
         }
-        switch characters {
-        case "q", "\u{1B}":
-            close()
-            return true
-        case "h": move(by: -1, extend: selection != .none); return true
-        case "l": move(by: 1, extend: selection != .none); return true
-        case "j": moveLine(by: 1); return true
-        case "k": moveLine(by: -1); return true
-        case "0": moveToLineStart(); return true
-        case "$": moveToLineEnd(); return true
-        case "g": moveToTop(); return true
-        case "G": moveToBottom(); return true
-        case "w": moveByWord(forward: true); return true
-        case "b": moveByWord(forward: false); return true
-        case "v":
+        // Data-driven: resolve the keystroke against the (rebindable) copy-mode
+        // table and run the resulting `copy-mode -X` action. Users customize copy
+        // mode with `bind-key -T copy-mode <key> <command>`.
+        guard let spec = Self.keySpec(from: event),
+              let binding = KeybindingsService.shared.lookup(table: .copyMode, spec: spec),
+              case let .copyModeCommand(action) = binding.command
+        else { return false }
+        perform(action)
+        return true
+    }
+
+    /// Run a copy-mode action (dispatched from the key table or `copy-mode -X`).
+    func perform(_ action: CopyModeAction) {
+        switch action {
+        case .cursorLeft: move(by: -1, extend: selection != .none)
+        case .cursorRight: move(by: 1, extend: selection != .none)
+        case .cursorDown: moveLine(by: 1)
+        case .cursorUp: moveLine(by: -1)
+        case .nextWord: moveByWord(forward: true)
+        case .previousWord: moveByWord(forward: false)
+        case .startOfLine: moveToLineStart()
+        case .endOfLine: moveToLineEnd()
+        case .top: moveToTop()
+        case .bottom: moveToBottom()
+        case .pageUp: moveLine(by: -visibleLineCount())
+        case .pageDown: moveLine(by: visibleLineCount())
+        case .halfPageUp: moveLine(by: -max(1, visibleLineCount() / 2))
+        case .halfPageDown: moveLine(by: max(1, visibleLineCount() / 2))
+        case .beginSelection:
             selection = (selection == .char) ? .none : .char
             anchor = textView.selectedRange().location
             updateStatus()
-            return true
-        case "V":
+        case .selectLine:
             selection = (selection == .line) ? .none : .line
-            extendToFullLine()
+            if selection == .line { extendToFullLine() } else { applyCursor(textView.selectedRange().location) }
             updateStatus()
-            return true
-        case "y", "\r":
-            yankSelection()
-            return true
-        case "/":
-            beginSearch(reverse: false); return true
-        case "?":
-            beginSearch(reverse: true); return true
-        case "n":
-            if let q = lastSearch { findNext(q, reverse: lastSearchReverse) }
-            return true
-        case "N":
-            if let q = lastSearch { findNext(q, reverse: !lastSearchReverse) }
-            return true
-        case "p":
-            pasteMostRecentBufferIntoSurface()
-            return true
-        default:
-            return false
+        case .rectangleToggle:
+            if selection == .block {
+                selection = .char
+            } else {
+                if selection == .none { anchor = textView.selectedRange().location }
+                selection = .block
+            }
+            applyCursor(textView.selectedRange().location)
+            updateStatus()
+        case .clearSelection:
+            selection = .none
+            applyCursor(textView.selectedRange().location)
+            updateStatus()
+        case .searchForward: beginSearch(reverse: false)
+        case .searchBackward: beginSearch(reverse: true)
+        case .searchAgain: if let q = lastSearch { findNext(q, reverse: lastSearchReverse) }
+        case .searchReverse: if let q = lastSearch { findNext(q, reverse: !lastSearchReverse) }
+        case .copySelection: yankSelection(cancel: false)
+        case .copySelectionAndCancel: yankSelection(cancel: true)
+        case let .copyPipe(command): copyPipe(command)
+        case .paste: pasteMostRecentBufferIntoSurface()
+        case .cancel: close()
         }
+    }
+
+    /// Number of fully visible text lines, for page motions.
+    private func visibleLineCount() -> Int {
+        let lineHeight = max(1, textView.font?.boundingRectForFont.height ?? 16)
+        let height = scroll.contentView.bounds.height
+        return max(1, Int(height / lineHeight))
+    }
+
+    /// Convert an `NSEvent` to a `KeySpec` for copy-mode table lookup (mirrors the
+    /// prefix keymap's mapping; kept local so the working prefix path is untouched).
+    static func keySpec(from event: NSEvent) -> KeySpec? {
+        guard let chars = event.charactersIgnoringModifiers else { return nil }
+        let key: String
+        if chars.count == 1, let scalar = chars.unicodeScalars.first {
+            switch scalar.value {
+            case 0x1B: key = "Escape"
+            case 0x09: key = "Tab"
+            case 0x0D: key = "Enter"
+            case 0x7F: key = "Backspace"
+            case 0xF700: key = "Up"
+            case 0xF701: key = "Down"
+            case 0xF702: key = "Left"
+            case 0xF703: key = "Right"
+            case 0xF729: key = "Home"
+            case 0xF72B: key = "End"
+            case 0xF72C: key = "PageUp"
+            case 0xF72D: key = "PageDown"
+            default: key = chars
+            }
+        } else {
+            key = chars
+        }
+        var modifiers: KeySpec.Modifiers = []
+        let mask = event.modifierFlags
+        if mask.contains(.control) { modifiers.insert(.control) }
+        if mask.contains(.option) { modifiers.insert(.option) }
+        if mask.contains(.command) { modifiers.insert(.command) }
+        if mask.contains(.shift), key.count > 1 { modifiers.insert(.shift) }
+        return KeySpec(key: key, modifiers: modifiers)
     }
 
     // MARK: - Motion
@@ -251,20 +307,83 @@ final class CopyModeViewController: NSViewController, NSTextViewDelegate {
     private func applyCursor(_ location: Int) {
         let length = (sourceText as NSString).length
         let clamped = max(0, min(length, location))
-        let range: NSRange
-        if selection == .none {
-            range = NSRange(location: clamped, length: 0)
-        } else if selection == .line {
+        switch selection {
+        case .line:
             extendLineSelection(at: clamped)
             return
-        } else {
+        case .block:
+            applyBlockHighlight(to: clamped)
+            textView.scrollRangeToVisible(NSRange(location: clamped, length: 0))
+            updateStatus()
+            return
+        case .none:
+            textView.setSelectedRange(NSRange(location: clamped, length: 0))
+        case .char:
             let lo = min(anchor, clamped)
             let hi = max(anchor, clamped)
-            range = NSRange(location: lo, length: hi - lo)
+            textView.setSelectedRange(NSRange(location: lo, length: hi - lo))
         }
-        textView.setSelectedRange(range)
         textView.scrollRangeToVisible(NSRange(location: clamped, length: 0))
         updateStatus()
+    }
+
+    // MARK: - Rectangle (block) selection
+
+    /// Character offset where each line starts (line 0 at 0, then after each \n).
+    private func lineStartOffsets() -> [Int] {
+        let ns = sourceText as NSString
+        var starts = [0]
+        var i = 0
+        while i < ns.length {
+            if ns.character(at: i) == 0x0A { starts.append(i + 1) }
+            i += 1
+        }
+        return starts
+    }
+
+    private func rowCol(_ loc: Int) -> (row: Int, col: Int) {
+        let starts = lineStartOffsets()
+        let clamped = max(0, min((sourceText as NSString).length, loc))
+        var row = 0
+        for (i, start) in starts.enumerated() where start <= clamped { row = i }
+        return (row, clamped - starts[row])
+    }
+
+    /// Highlight the rectangle between `anchor` and the cursor as one range per row.
+    private func applyBlockHighlight(to location: Int) {
+        let ns = sourceText as NSString
+        let starts = lineStartOffsets()
+        let a = rowCol(anchor), c = rowCol(location)
+        let r0 = min(a.row, c.row), r1 = max(a.row, c.row)
+        let c0 = min(a.col, c.col), c1 = max(a.col, c.col)
+        var ranges: [NSValue] = []
+        for r in r0...r1 where r < starts.count {
+            let start = starts[r]
+            let lineEnd = (r + 1 < starts.count) ? starts[r + 1] - 1 : ns.length
+            let lineLen = max(0, lineEnd - start)
+            let lo = min(c0, lineLen), hi = min(c1, lineLen)
+            ranges.append(NSValue(range: NSRange(location: start + lo, length: max(0, hi - lo))))
+        }
+        if ranges.isEmpty { ranges = [NSValue(range: NSRange(location: location, length: 0))] }
+        textView.selectedRanges = ranges
+    }
+
+    /// Text of the current block selection: per row, the column slice, joined by \n.
+    private func blockSelectedText() -> String {
+        let ns = sourceText as NSString
+        let starts = lineStartOffsets()
+        let a = rowCol(anchor), c = rowCol(textView.selectedRange().location)
+        let r0 = min(a.row, c.row), r1 = max(a.row, c.row)
+        let c0 = min(a.col, c.col), c1 = max(a.col, c.col)
+        var out: [String] = []
+        for r in r0...r1 where r < starts.count {
+            let start = starts[r]
+            let lineEnd = (r + 1 < starts.count) ? starts[r + 1] - 1 : ns.length
+            let lineLen = max(0, lineEnd - start)
+            let lo = min(c0, lineLen), hi = min(c1, lineLen)
+            out.append(hi > lo ? ns.substring(with: NSRange(location: start + lo, length: hi - lo)) : "")
+        }
+        return out.joined(separator: "\n")
     }
 
     private func extendToFullLine() {
@@ -341,19 +460,42 @@ final class CopyModeViewController: NSViewController, NSTextViewDelegate {
 
     // MARK: - Yank / paste
 
-    private func yankSelection() {
+    /// Currently selected text, honoring rectangle (block) mode.
+    private func currentSelectionText() -> String {
+        if selection == .block { return blockSelectedText() }
         let range = textView.selectedRange()
-        guard range.length > 0 else {
+        guard range.length > 0 else { return "" }
+        return (sourceText as NSString).substring(with: range)
+    }
+
+    private func yankSelection(cancel: Bool) {
+        let snippet = currentSelectionText()
+        guard !snippet.isEmpty else {
             updateStatus(extra: "no selection")
             return
         }
-        let nsText = sourceText as NSString
-        let snippet = nsText.substring(with: range)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet, forType: .string)
         // Also push to the daemon's buffer store so other clients see it.
         if let data = snippet.data(using: .utf8) {
             _ = try? DaemonClient().request(.setBuffer(name: nil, data: data), timeout: 1)
+        }
+        if cancel { close() } else { updateStatus(extra: "copied") }
+    }
+
+    /// `copy-pipe`: pipe the selected text to a shell command's stdin (the command
+    /// runs detached; e.g. `pbcopy`, `tmux load-buffer -`). Then cancel, like tmux.
+    private func copyPipe(_ command: String) {
+        let snippet = currentSelectionText()
+        guard !snippet.isEmpty, !command.isEmpty else { close(); return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let pipe = Pipe()
+        process.standardInput = pipe
+        if (try? process.run()) != nil {
+            pipe.fileHandleForWriting.write(Data(snippet.utf8))
+            try? pipe.fileHandleForWriting.close()
         }
         close()
     }
@@ -379,9 +521,10 @@ final class CopyModeViewController: NSViewController, NSTextViewDelegate {
         case .none: modeName = "NORMAL"
         case .char: modeName = "VISUAL"
         case .line: modeName = "V-LINE"
+        case .block: modeName = "V-BLOCK"
         }
         let summary = extra.isEmpty ? "" : " · \(extra)"
-        statusLabel.stringValue = "-- \(modeName) --  \(row):\(col)\(summary)  ·  hjkl move  v select  /  search  y yank  p paste  q quit"
+        statusLabel.stringValue = "-- \(modeName) --  \(row):\(col)\(summary)  ·  hjkl move  v/V/C-v select  /  search  y yank  p paste  q quit"
     }
 }
 

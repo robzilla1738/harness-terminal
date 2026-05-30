@@ -186,10 +186,27 @@ public enum CommandParser {
             return .selectWorkspace(index: index)
         case "next-workspace": return .nextWorkspace
         case "previous-workspace": return .previousWorkspace
-        case "copy-mode": return .copyMode
+        case "copy-mode":
+            // `copy-mode -X <action> [arg]` is an in-mode command; bare is "enter".
+            if let xi = tokens.firstIndex(of: "-X"), xi + 1 < tokens.count {
+                let actionName = tokens[xi + 1]
+                let arg = xi + 2 < tokens.count ? tokens[xi + 2] : nil
+                if let action = CopyModeAction(tmuxName: actionName, argument: arg) {
+                    return .copyModeCommand(action)
+                }
+            }
+            return .copyMode
         case "display-panes", "displayp": return .displayPanes
         case "detach", "detach-client": return .detachClient
         case "send-keys":
+            // `send-keys -X <action> [arg]` dispatches a copy-mode command.
+            if let xi = tokens.firstIndex(of: "-X"), xi + 1 < tokens.count {
+                let actionName = tokens[xi + 1]
+                let arg = xi + 2 < tokens.count ? tokens[xi + 2] : nil
+                if let action = CopyModeAction(tmuxName: actionName, argument: arg) {
+                    return .copyModeCommand(action)
+                }
+            }
             return .sendKeys(keys: tokens.filter { !$0.hasPrefix("-") })
         case "display-message":
             let format = tokens.first { !$0.hasPrefix("-") } ?? ""
