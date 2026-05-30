@@ -49,25 +49,34 @@ See the full capability ledger in [TMUX_PARITY.md](TMUX_PARITY.md).
 
 ### Bringing your `.tmux.conf` over
 
-Most `.tmux.conf` lines are valid Harness commands. Put the ones you want in a file and source
-it (each line runs through the same parser as the command prompt; `#` comments are skipped):
+Two mechanisms, split by what the line *is* (verified by `TmuxMigrationTests`):
+
+**Commands and bindings** run through the same parser as the command prompt. Put your `bind`
+lines (and any one-shot commands) in a file and `source-file` it — `#` comments are skipped:
 
 ```tmux
-# ~/.harness.conf
-set -g status-left  " #{session_name} "
-set -g status-right " #{cwd_basename} #{time:%H:%M} "
-set -g base-index 1
-bind-key | split-window -h
-bind-key - split-window -v
+# ~/.harness.conf  — commands + bindings only
+bind | split-window -h
+bind - split-window -v
+bind -r H resize-pane -L 2
 ```
+
+```
+:source-file ~/.harness.conf      # from the command prompt (prefix :)
+```
+
+Persistent key bindings also live in `keybindings.json` (merged over the defaults); set them
+with `harness-cli bind-key` / `unbind-key`, or edit the file directly.
+
+**Options** (`status-left`, `base-index`, mouse, …) are *not* commands — set them with
+`harness-cli set-option` (`setw` for window scope), which is the same store the Settings ▸
+Advanced page edits:
 
 ```bash
-harness-cli new-session ...        # or from the command prompt:
-:source-file ~/.harness.conf
+harness-cli set-option -g status-left  " #{session_name} "
+harness-cli set-option -g status-right " #{cwd_basename} #{time:%H:%M} "
+harness-cli set-option -g base-index 1
 ```
-
-Persistent key bindings live in `keybindings.json` (merged over the defaults); set them with
-`harness-cli bind-key` / `unbind-key`, or edit the file directly.
 
 ### Deliberate divergences
 
