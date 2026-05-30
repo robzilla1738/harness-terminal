@@ -35,4 +35,24 @@ public final class HarnessGridTerminal {
     public func readGrid() -> TerminalGridSnapshot? {
         emulator.readGrid()
     }
+
+    /// Read the viewport scrolled `offset` lines up into scrollback (0 = live bottom).
+    /// Powers the compositor's copy-mode overlay (it renders history the same way the GUI
+    /// surface does).
+    public func readGrid(scrollbackOffset offset: Int) -> TerminalGridSnapshot? {
+        emulator.readGrid(scrollbackOffset: offset)
+    }
+
+    /// Grid geometry + scrollback metrics (for copy-mode navigation and mouse demux).
+    public var columns: Int { emulator.cols }
+    public var rowCount: Int { emulator.rows }
+    public var historyCount: Int { emulator.historyCount }
+
+    /// Total lines addressable by copy-mode (history + viewport) and a single virtual line.
+    public var bufferLineCount: Int { emulator.bufferLineCount }
+    public func bufferLine(_ index: Int) -> [TerminalGridCell] { emulator.bufferLine(index) }
+
+    /// The pane's active terminal modes (mouse tracking, bracketed paste, …) — read by the
+    /// compositor to encode forwarded mouse events correctly.
+    public var modes: TerminalModes { emulator.modes }
 }

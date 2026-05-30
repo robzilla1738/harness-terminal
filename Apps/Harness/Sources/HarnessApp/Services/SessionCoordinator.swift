@@ -754,12 +754,24 @@ final class SessionCoordinator: NSObject {
         }
     }
 
+    /// Toggle the in-pane copy-mode overlay on the active pane. The native surface owns the
+    /// scrollback and drives the shared `CopyModeReducer`, so no daemon text capture is needed.
     func toggleCopyMode() {
-        guard let surfaceID = activeSurfaceID else { return }
-        let response = requestDaemon(.capturePane(surfaceID: surfaceID.uuidString, includeScrollback: true))
-        if case let .text(text) = response {
-            CopyModeViewController.shared.present(surfaceID: surfaceID, text: text)
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
+        if host.isInCopyMode {
+            host.exitCopyMode()
+        } else {
+            let modeKeys = HarnessOptions.shared.get("mode-keys", scope: .global)?.stringValue ?? "vi"
+            host.enterCopyMode(modeKeys: modeKeys)
         }
+    }
+
+    /// Forward a `copy-mode -X` action (from the `:` prompt / `send-keys -X`) to the active pane.
+    func performCopyModeAction(_ action: CopyModeAction) {
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
+        host.performCopyModeAction(action)
     }
 
     func detachActiveSurface() {

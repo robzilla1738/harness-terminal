@@ -111,16 +111,65 @@ final class StatusLineView: NSView {
         isHidden = !visible
         guard visible else { return }
         let context = buildContext()
-        leftLabel.stringValue = FormatString.evaluate(
-            options.get("status-left", scope: .global)?.stringValue ?? "",
-            context: context
-        )
-        rightLabel.stringValue = FormatString.evaluate(
-            options.get("status-right", scope: .global)?.stringValue ?? "",
-            context: context
-        )
-        let centerFormat = options.get("status-center", scope: .global)?.stringValue ?? ""
-        centerLabel.stringValue = FormatString.evaluate(centerFormat, context: context)
+        leftLabel.attributedStringValue = styledAttributed(options.get("status-left", scope: .global)?.stringValue ?? "", context: context)
+        rightLabel.attributedStringValue = styledAttributed(options.get("status-right", scope: .global)?.stringValue ?? "", context: context, alignment: .right)
+        centerLabel.attributedStringValue = styledAttributed(options.get("status-center", scope: .global)?.stringValue ?? "", context: context, alignment: .center)
+    }
+
+    /// Render a status format to an attributed string, honoring `#[fg=…,bg=…,attrs]` style
+    /// spans (the shared `StyledSegment` intermediate the compositor also consumes).
+    private func styledAttributed(_ format: String, context: FormatContext, alignment: NSTextAlignment = .left) -> NSAttributedString {
+        let def = HarnessChrome.current.textSecondary
+        let para = NSMutableParagraphStyle()
+        para.alignment = alignment
+        para.lineBreakMode = .byTruncatingTail
+        let out = NSMutableAttributedString()
+        for seg in FormatString.evaluateStyled(format, context: context) {
+            let fg = seg.fg.map { Self.nsColor($0, default: def) } ?? def
+            var attrs: [NSAttributedString.Key: Any] = [.paragraphStyle: para]
+            if seg.reverse {
+                attrs[.foregroundColor] = seg.bg.map { Self.nsColor($0, default: .clear) } ?? HarnessChrome.current.terminalBackground
+                attrs[.backgroundColor] = fg
+            } else {
+                attrs[.foregroundColor] = fg
+                if let bg = seg.bg { attrs[.backgroundColor] = Self.nsColor(bg, default: .clear) }
+            }
+            var font = NSFont.monospacedSystemFont(ofSize: 12, weight: seg.bold ? .bold : .regular)
+            if seg.italic { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
+            attrs[.font] = font
+            if seg.underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+            out.append(NSAttributedString(string: seg.text, attributes: attrs))
+        }
+        return out
+    }
+
+    /// Map a `FormatColor` to an `NSColor` via the standard xterm-256 palette.
+    private static func nsColor(_ color: FormatColor, default def: NSColor) -> NSColor {
+        switch color {
+        case .none: return def
+        case let .palette(i): return paletteColor(i)
+        case let .rgb(r, g, b):
+            return NSColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
+        }
+    }
+
+    private static let base16: [(Int, Int, Int)] = [
+        (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229),
+        (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+    ]
+
+    private static func paletteColor(_ index: Int) -> NSColor {
+        func rgb(_ r: Int, _ g: Int, _ b: Int) -> NSColor {
+            NSColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
+        }
+        if index >= 0, index < 16 { let c = base16[index]; return rgb(c.0, c.1, c.2) }
+        if index >= 16, index < 232 {
+            let i = index - 16
+            func level(_ v: Int) -> Int { v == 0 ? 0 : 55 + v * 40 }
+            return rgb(level(i / 36), level((i / 6) % 6), level(i % 6))
+        }
+        if index >= 232, index < 256 { let v = 8 + (index - 232) * 10; return rgb(v, v, v) }
+        return .secondaryLabelColor
     }
 
     private func buildContext() -> FormatContext {

@@ -20,6 +20,17 @@ public enum KeyTokenParser {
         return out
     }
 
+    /// `send-keys -H`: each token is a hex byte (`1b`, `0x5b`, `41`). Non-hex tokens are
+    /// skipped. Lets scripts inject raw byte sequences a terminal program expects.
+    public static func hexBytes(_ keys: [String]) -> Data {
+        var out = Data()
+        for token in keys {
+            let t = token.hasPrefix("0x") || token.hasPrefix("0X") ? String(token.dropFirst(2)) : token
+            if let byte = UInt8(t, radix: 16) { out.append(byte) }
+        }
+        return out
+    }
+
     public static func encode(token: String) -> Data {
         let trimmed = token.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return Data() }

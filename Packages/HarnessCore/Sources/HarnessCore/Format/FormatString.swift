@@ -11,23 +11,49 @@ import Foundation
 /// user-customized status line with a typo still renders.
 public enum FormatString {
     public static func evaluate(_ source: String, context: FormatContext) -> String {
-        var result = ""
+        evaluateStyled(source, context: context).map(\.text).joined()
+    }
+
+    /// Evaluate to styled segments: `#{…}` tokens expand to text in the current style, and
+    /// `#[fg=…,bg=…,attrs]` directives change the style for following text. `evaluate(_:)` is
+    /// just this joined — for input without any `#[…]` it returns a single default-styled
+    /// segment, so the plain path is byte-identical.
+    public static func evaluateStyled(_ source: String, context: FormatContext) -> [StyledSegment] {
+        var segments: [StyledSegment] = []
+        var style = FormatStyle()
+        var current = ""
+        func flush() {
+            guard !current.isEmpty else { return }
+            segments.append(style.applied(to: current))
+            current = ""
+        }
         var i = source.startIndex
         while i < source.endIndex {
             let ch = source[i]
-            if ch == "#", source.index(after: i) < source.endIndex, source[source.index(after: i)] == "{" {
-                let start = source.index(i, offsetBy: 2)
-                if let end = matchBrace(in: source, from: start) {
-                    let body = String(source[start..<end])
-                    result += evaluateToken(body, context: context)
-                    i = source.index(after: end)
-                    continue
+            if ch == "#" {
+                let after = source.index(after: i)
+                if after < source.endIndex, source[after] == "{" {
+                    let start = source.index(i, offsetBy: 2)
+                    if let end = matchBrace(in: source, from: start) {
+                        current += evaluateToken(String(source[start..<end]), context: context)
+                        i = source.index(after: end)
+                        continue
+                    }
+                } else if after < source.endIndex, source[after] == "[" {
+                    let start = source.index(i, offsetBy: 2)
+                    if let end = source[start...].firstIndex(of: "]") {
+                        flush()
+                        applyStyleDirective(String(source[start..<end]), to: &style)
+                        i = source.index(after: end)
+                        continue
+                    }
                 }
             }
-            result.append(ch)
+            current.append(ch)
             i = source.index(after: i)
         }
-        return result
+        flush()
+        return segments
     }
 
     private static func matchBrace(in source: String, from start: String.Index) -> String.Index? {
@@ -72,7 +98,138 @@ public enum FormatString {
             formatter.dateFormat = strftimeToICU(format)
             return formatter.string(from: context.now)
         }
+        // Operators (tmux): equality, regex match, regex substitution, arithmetic.
+        if body.hasPrefix("==:") { return operatorEquals(String(body.dropFirst(3)), context: context) }
+        if body.hasPrefix("m:") { return operatorMatch(String(body.dropFirst(2)), context: context) }
+        if body.hasPrefix("s/") { return operatorSubstitute(body, context: context) }
+        if body.hasPrefix("e|") { return operatorMath(body, context: context) }
         return resolve(token: body, context: context)
+    }
+
+    // MARK: - Operators
+
+    private static func operatorEquals(_ body: String, context: FormatContext) -> String {
+        let parts = topLevelSplit(body, on: ",")
+        guard parts.count >= 2 else { return "" }
+        let a = evaluate(wrapInline(parts[0]), context: context)
+        let b = evaluate(wrapInline(parts[1]), context: context)
+        return a == b ? "1" : ""
+    }
+
+    private static func operatorMatch(_ body: String, context: FormatContext) -> String {
+        let parts = topLevelSplit(body, on: ",")
+        guard parts.count >= 2 else { return "" }
+        let pattern = evaluate(wrapInline(parts[0]), context: context)
+        let str = evaluate(wrapInline(parts[1]), context: context)
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return "" }
+        return regex.firstMatch(in: str, range: NSRange(str.startIndex..., in: str)) != nil ? "1" : ""
+    }
+
+    /// `#{s/RE/REP/[flags]:STRING}` — regex substitution (all matches; REP is literal). `i`
+    /// flag = case-insensitive. Invalid regex → the unmodified string.
+    private static func operatorSubstitute(_ body: String, context: FormatContext) -> String {
+        guard body.count > 1 else { return "" }
+        let delim = body[body.index(after: body.startIndex)] // char after 's'
+        let pieces = splitTop(String(body.dropFirst(2)), by: delim, max: 3)
+        guard pieces.count == 3, let colon = pieces[2].firstIndex(of: ":") else { return "" }
+        let re = pieces[0], rep = pieces[1]
+        let flags = String(pieces[2][pieces[2].startIndex..<colon])
+        let target = evaluate(wrapInline(String(pieces[2][pieces[2].index(after: colon)...])), context: context)
+        var options: NSRegularExpression.Options = []
+        if flags.contains("i") { options.insert(.caseInsensitive) }
+        guard let regex = try? NSRegularExpression(pattern: re, options: options) else { return target }
+        let template = NSRegularExpression.escapedTemplate(for: rep)
+        return regex.stringByReplacingMatches(in: target, range: NSRange(target.startIndex..., in: target), withTemplate: template)
+    }
+
+    /// `#{e|OP|A|B}` — arithmetic (`+ - * / %`) on two evaluated operands.
+    private static func operatorMath(_ body: String, context: FormatContext) -> String {
+        let parts = topLevelSplit(String(body.dropFirst(2)), on: "|")
+        guard parts.count >= 3 else { return "" }
+        let op = parts[0].first.map(String.init) ?? "+"
+        let a = Double(evaluate(wrapInline(parts[1]), context: context).trimmingCharacters(in: .whitespaces)) ?? 0
+        let b = Double(evaluate(wrapInline(parts[2]), context: context).trimmingCharacters(in: .whitespaces)) ?? 0
+        let result: Double
+        switch op {
+        case "-": result = a - b
+        case "*": result = a * b
+        case "/": result = b == 0 ? 0 : a / b
+        case "%": result = b == 0 ? 0 : a.truncatingRemainder(dividingBy: b)
+        default: result = a + b
+        }
+        return result == result.rounded() ? String(Int(result)) : String(result)
+    }
+
+    /// Split into at most `max` pieces by `delim` (no nesting awareness — for `s///` parts).
+    private static func splitTop(_ s: String, by delim: Character, max: Int) -> [String] {
+        var result: [String] = []
+        var current = ""
+        for ch in s {
+            if ch == delim, result.count < max - 1 {
+                result.append(current); current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        result.append(current)
+        return result
+    }
+
+    // MARK: - Style directives (`#[…]`)
+
+    private struct FormatStyle {
+        var fg: FormatColor?
+        var bg: FormatColor?
+        var bold = false, italic = false, underline = false, reverse = false, dim = false
+        func applied(to text: String) -> StyledSegment {
+            StyledSegment(text: text, fg: fg, bg: bg, bold: bold, italic: italic, underline: underline, reverse: reverse, dim: dim)
+        }
+    }
+
+    private static func applyStyleDirective(_ body: String, to style: inout FormatStyle) {
+        for raw in body.split(separator: ",") {
+            let p = raw.trimmingCharacters(in: .whitespaces)
+            if p == "default" || p == "none" { style = FormatStyle(); continue }
+            if p.hasPrefix("fg=") { style.fg = parseFormatColor(String(p.dropFirst(3))); continue }
+            if p.hasPrefix("bg=") { style.bg = parseFormatColor(String(p.dropFirst(3))); continue }
+            switch p {
+            case "bold", "bright": style.bold = true
+            case "nobold", "nobright": style.bold = false
+            case "italics", "italic": style.italic = true
+            case "noitalics": style.italic = false
+            case "underscore", "underline": style.underline = true
+            case "nounderscore": style.underline = false
+            case "reverse", "inverse": style.reverse = true
+            case "noreverse": style.reverse = false
+            case "dim": style.dim = true
+            case "nodim": style.dim = false
+            default: break
+            }
+        }
+    }
+
+    private static let ansiColorNames: [String: Int] = [
+        "black": 0, "red": 1, "green": 2, "yellow": 3, "blue": 4, "magenta": 5, "cyan": 6, "white": 7,
+        "brightblack": 8, "brightred": 9, "brightgreen": 10, "brightyellow": 11,
+        "brightblue": 12, "brightmagenta": 13, "brightcyan": 14, "brightwhite": 15,
+    ]
+
+    private static func parseFormatColor(_ raw: String) -> FormatColor? {
+        let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        if s.isEmpty { return nil }
+        if s == "default" || s == "none" { return FormatColor.none }
+        if let idx = ansiColorNames[s] { return .palette(idx) }
+        if s.hasPrefix("#"), s.count == 7 {
+            let hex = s.dropFirst()
+            guard let r = UInt8(hex.prefix(2), radix: 16),
+                  let g = UInt8(hex.dropFirst(2).prefix(2), radix: 16),
+                  let b = UInt8(hex.dropFirst(4).prefix(2), radix: 16) else { return nil }
+            return .rgb(r: r, g: g, b: b)
+        }
+        if s.hasPrefix("colour"), let n = Int(s.dropFirst(6)) { return .palette(n) }
+        if s.hasPrefix("color"), let n = Int(s.dropFirst(5)) { return .palette(n) }
+        if let n = Int(s) { return .palette(n) }
+        return nil
     }
 
     /// Wrap a bare body in #{…} so nested truncation can re-use the evaluator.

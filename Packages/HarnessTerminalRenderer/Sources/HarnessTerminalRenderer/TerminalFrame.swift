@@ -143,6 +143,39 @@ public struct TerminalSelection: Equatable, Sendable {
     }
 }
 
+/// A rectangle (block / column) selection: every cell within the row AND column bounds, as
+/// opposed to a linear selection's full intermediate rows. Used by copy-mode `C-v`.
+public struct BlockSelection: Equatable, Sendable {
+    public var startRow: Int
+    public var startColumn: Int
+    public var endRow: Int
+    public var endColumn: Int
+
+    /// Normalized from two arbitrary corners (inclusive bounds).
+    public init(_ a: (row: Int, column: Int), _ b: (row: Int, column: Int)) {
+        startRow = min(a.row, b.row); endRow = max(a.row, b.row)
+        startColumn = min(a.column, b.column); endColumn = max(a.column, b.column)
+    }
+
+    public func contains(row: Int, column: Int) -> Bool {
+        row >= startRow && row <= endRow && column >= startColumn && column <= endColumn
+    }
+}
+
+/// A selection region — either line-wrapping (`linear`) or rectangular (`block`). Lets the
+/// renderer apply one selection-shading path to both, instead of special-casing rectangle.
+public enum SelectionRegion: Equatable, Sendable {
+    case linear(TerminalSelection)
+    case block(BlockSelection)
+
+    public func contains(row: Int, column: Int) -> Bool {
+        switch self {
+        case let .linear(s): return s.contains(row: row, column: column)
+        case let .block(b): return b.contains(row: row, column: column)
+        }
+    }
+}
+
 /// Turns an engine `TerminalGridSnapshot` into a `TerminalFrame` by resolving every
 /// cell's colors through a `CellColorResolver`. This is the single bridge between the
 /// headless engine and the GPU renderer — keeping it pure means the renderer never has
@@ -164,6 +197,10 @@ public struct FrameBuilder {
     /// keep each cell's own foreground.
     public let selectionBackground: RGBColor?
     public let selectionForeground: RGBColor?
+    /// Highlight colors for copy-mode search hits (cells matched by the active query that are
+    /// not also inside the primary selection). Background nil = no search highlight.
+    public let searchBackground: RGBColor?
+    public let searchForeground: RGBColor?
 
     public init(
         resolver: CellColorResolver,
@@ -172,7 +209,9 @@ public struct FrameBuilder {
         canvasOpacity: Float = 1,
         cursorStyle: CursorStyle = .block,
         selectionBackground: RGBColor? = nil,
-        selectionForeground: RGBColor? = nil
+        selectionForeground: RGBColor? = nil,
+        searchBackground: RGBColor? = nil,
+        searchForeground: RGBColor? = nil
     ) {
         self.resolver = resolver
         self.cursorColor = cursorColor
@@ -181,6 +220,8 @@ public struct FrameBuilder {
         self.cursorStyle = cursorStyle
         self.selectionBackground = selectionBackground
         self.selectionForeground = selectionForeground
+        self.searchBackground = searchBackground
+        self.searchForeground = searchForeground
     }
 
     /// Convenience builder from a theme: resolver + cursor color in one call.
@@ -190,7 +231,9 @@ public struct FrameBuilder {
         canvasOpacity: Float = 1,
         cursorStyle: CursorStyle = .block,
         selectionBackground: RGBColor? = nil,
-        selectionForeground: RGBColor? = nil
+        selectionForeground: RGBColor? = nil,
+        searchBackground: RGBColor? = nil,
+        searchForeground: RGBColor? = nil
     ) {
         let resolver = CellColorResolver(theme: theme, boldBrightens: boldBrightens)
         self.init(
@@ -200,11 +243,28 @@ public struct FrameBuilder {
             canvasOpacity: canvasOpacity,
             cursorStyle: cursorStyle,
             selectionBackground: selectionBackground,
-            selectionForeground: selectionForeground
+            selectionForeground: selectionForeground,
+            searchBackground: searchBackground,
+            searchForeground: searchForeground
         )
     }
 
+    /// Build a frame with an optional linear selection. The original entry point — kept so
+    /// existing callers (mouse selection, search-free render) are byte-identical.
     public func build(_ snapshot: TerminalGridSnapshot, selection: TerminalSelection? = nil) -> TerminalFrame {
+        build(snapshot, region: selection.map(SelectionRegion.linear), searchHighlights: [], copyModeCursor: nil)
+    }
+
+    /// Build a frame with a selection region (linear or block), copy-mode search highlights,
+    /// and an optional copy-mode cursor that renders even when the program cursor is hidden
+    /// (e.g. scrolled into history). Shading precedence per cell: primary selection > search
+    /// hit > normal.
+    public func build(
+        _ snapshot: TerminalGridSnapshot,
+        region: SelectionRegion?,
+        searchHighlights: [TerminalSelection] = [],
+        copyModeCursor: (row: Int, column: Int)? = nil
+    ) -> TerminalFrame {
         var cells = [RenderCell]()
         cells.reserveCapacity(snapshot.cols * snapshot.rows)
         for row in 0 ..< snapshot.rows {
@@ -217,13 +277,18 @@ public struct FrameBuilder {
                 // (no explicit SGR bg) and it isn't inverted (which promotes the foreground
                 // into the bg slot). Those — and only those — get the translucent alpha.
                 let isCanvasBackground = cell.background == .none && !cell.inverse
-                // Selected cells take the (opaque) selection colors over everything else.
-                let selected = selection?.contains(row: row, column: column) ?? false
+                // Precedence: primary selection (opaque) > search hit > normal.
+                let selected = region?.contains(row: row, column: column) ?? false
+                let isSearchHit = !selected && !searchHighlights.isEmpty
+                    && searchHighlights.contains { $0.contains(row: row, column: column) }
                 let foreground: RenderColor
                 let background: RenderColor
                 if selected, let selBg = selectionBackground {
                     background = RenderColor(selBg)
                     foreground = selectionForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
+                } else if isSearchHit, let searchBg = searchBackground {
+                    background = RenderColor(searchBg)
+                    foreground = searchForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
                 } else {
                     background = isCanvasBackground
                         ? RenderColor(colors.background, alpha: canvasOpacity)
@@ -246,18 +311,22 @@ public struct FrameBuilder {
                 ))
             }
         }
-        return TerminalFrame(
-            columns: snapshot.cols,
-            rows: snapshot.rows,
-            cells: cells,
-            cursor: CursorRender(
-                row: snapshot.cursor.row,
-                column: snapshot.cursor.col,
-                visible: snapshot.cursor.visible,
-                color: RenderColor(cursorColor),
-                textColor: RenderColor(cursorTextColor),
+        // The copy-mode cursor overrides the program cursor's position and forces it visible
+        // (history snapshots hide the program cursor); otherwise the program cursor stands.
+        let cursor: CursorRender
+        if let cm = copyModeCursor {
+            cursor = CursorRender(
+                row: cm.row, column: cm.column, visible: true,
+                color: RenderColor(cursorColor), textColor: RenderColor(cursorTextColor),
                 style: cursorStyle
             )
-        )
+        } else {
+            cursor = CursorRender(
+                row: snapshot.cursor.row, column: snapshot.cursor.col, visible: snapshot.cursor.visible,
+                color: RenderColor(cursorColor), textColor: RenderColor(cursorTextColor),
+                style: cursorStyle
+            )
+        }
+        return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells, cursor: cursor)
     }
 }

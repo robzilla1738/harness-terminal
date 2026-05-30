@@ -14,7 +14,15 @@ public struct KeyTableID: RawRepresentable, Hashable, Codable, Sendable {
     public static let root = KeyTableID(rawValue: "root")
     public static let prefix = KeyTableID(rawValue: "prefix")
     public static let copyMode = KeyTableID(rawValue: "copy-mode")
+    /// Emacs copy-mode bindings, selected when `mode-keys` is `emacs`.
+    public static let copyModeEmacs = KeyTableID(rawValue: "copy-mode-emacs")
     public static let command = KeyTableID(rawValue: "command")
+
+    /// The copy-mode key table for a `mode-keys` option value — the single place both the
+    /// GUI overlay and the ssh compositor map `mode-keys` to a table, so they never diverge.
+    public static func copyMode(modeKeys: String) -> KeyTableID {
+        modeKeys.lowercased() == "emacs" ? .copyModeEmacs : .copyMode
+    }
 }
 
 public struct Binding: Codable, Sendable, Equatable {
@@ -204,12 +212,38 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "q"), command: .copyModeCommand(.cancel), note: "Exit copy mode"),
             Binding(spec: KeySpec(key: "Escape"), command: .copyModeCommand(.cancel), note: "Exit copy mode"),
         ])
-        // The `root` (no-prefix / mouse) and `command` (command-prompt editing)
-        // tables are introduced — and actually consulted — in later phases. They are
-        // intentionally NOT seeded as empty tables here: an empty-but-unconsulted
-        // table is a misleading rebindable surface (`bind-key -T root …` would appear
-        // to work yet do nothing). `.root`/`.command` IDs still exist for when those
-        // phases wire them up.
-        return KeyTableSet(tables: [prefix, copyMode])
+        // Emacs copy-mode defaults (`mode-keys emacs`), mirroring tmux's `copy-mode` table.
+        // Selected via `KeyTableID.copyMode(modeKeys:)`; equally rebindable.
+        let copyModeEmacs = KeyTable(id: .copyModeEmacs, bindings: [
+            Binding(spec: KeySpec(key: "b", modifiers: .control), command: .copyModeCommand(.cursorLeft), note: "Cursor left"),
+            Binding(spec: KeySpec(key: "f", modifiers: .control), command: .copyModeCommand(.cursorRight), note: "Cursor right"),
+            Binding(spec: KeySpec(key: "n", modifiers: .control), command: .copyModeCommand(.cursorDown), note: "Cursor down"),
+            Binding(spec: KeySpec(key: "p", modifiers: .control), command: .copyModeCommand(.cursorUp), note: "Cursor up"),
+            Binding(spec: KeySpec(key: "a", modifiers: .control), command: .copyModeCommand(.startOfLine), note: "Start of line"),
+            Binding(spec: KeySpec(key: "e", modifiers: .control), command: .copyModeCommand(.endOfLine), note: "End of line"),
+            Binding(spec: KeySpec(key: "f", modifiers: .option), command: .copyModeCommand(.nextWord), note: "Next word"),
+            Binding(spec: KeySpec(key: "b", modifiers: .option), command: .copyModeCommand(.previousWord), note: "Previous word"),
+            Binding(spec: KeySpec(key: "<", modifiers: .option), command: .copyModeCommand(.top), note: "Top of history"),
+            Binding(spec: KeySpec(key: ">", modifiers: .option), command: .copyModeCommand(.bottom), note: "Bottom of history"),
+            Binding(spec: KeySpec(key: "PageUp"), command: .copyModeCommand(.pageUp), note: "Page up"),
+            Binding(spec: KeySpec(key: "PageDown"), command: .copyModeCommand(.pageDown), note: "Page down"),
+            Binding(spec: KeySpec(key: "v", modifiers: .option), command: .copyModeCommand(.pageUp), note: "Page up"),
+            Binding(spec: KeySpec(key: "v", modifiers: .control), command: .copyModeCommand(.pageDown), note: "Page down"),
+            Binding(spec: KeySpec(key: "Space", modifiers: .control), command: .copyModeCommand(.beginSelection), note: "Begin selection"),
+            Binding(spec: KeySpec(key: "w", modifiers: .option), command: .copyModeCommand(.copySelectionAndCancel), note: "Copy selection"),
+            Binding(spec: KeySpec(key: "Enter"), command: .copyModeCommand(.copySelectionAndCancel), note: "Copy selection"),
+            Binding(spec: KeySpec(key: "s", modifiers: .control), command: .copyModeCommand(.searchForward), note: "Search forward"),
+            Binding(spec: KeySpec(key: "r", modifiers: .control), command: .copyModeCommand(.searchBackward), note: "Search backward"),
+            Binding(spec: KeySpec(key: "y", modifiers: .control), command: .copyModeCommand(.paste), note: "Paste buffer"),
+            Binding(spec: KeySpec(key: "g", modifiers: .control), command: .copyModeCommand(.cancel), note: "Exit copy mode"),
+            Binding(spec: KeySpec(key: "Escape"), command: .copyModeCommand(.cancel), note: "Exit copy mode"),
+        ])
+        // The `root` table holds no-prefix (`bind -n`) bindings: it is seeded empty here AND
+        // consulted on every keystroke (GUI `PrefixKeymap`), so `bind-key -T root <key> <cmd>`
+        // is a real, working surface — not a misleading no-op. It ships empty (tmux's default);
+        // users add global bindings. The `command` table (command-prompt editing) is not seeded
+        // until its consumer is wired, to avoid a rebindable-but-unconsulted surface.
+        let root = KeyTable(id: .root, bindings: [])
+        return KeyTableSet(tables: [prefix, copyMode, copyModeEmacs, root])
     }
 }

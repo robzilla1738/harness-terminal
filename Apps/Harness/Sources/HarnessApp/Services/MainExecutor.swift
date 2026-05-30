@@ -120,7 +120,7 @@ final class MainExecutor: CommandExecutor {
         case .copyMode:
             coordinator.toggleCopyMode()
         case let .copyModeCommand(action):
-            CopyModeViewController.shared.perform(action)
+            coordinator.performCopyModeAction(action)
         case .detachClient:
             coordinator.detachActiveSurface()
         case .sendKeys(let keys):

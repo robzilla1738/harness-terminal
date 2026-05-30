@@ -18,6 +18,19 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
     public var activePaneID: PaneID?
     /// Most-recently-active pane before `activePaneID`, for `select-pane -l` / `.last`.
     public var lastActivePaneID: PaneID?
+    /// Monitoring alerts (Phase 5), set by the daemon when a watched pane produces output
+    /// (`activity`), goes silent (`silence`), or rings the bell (`bell`); cleared when the tab
+    /// is viewed. Surfaced as `#`/`~`/`!` in `#{window_flags}`.
+    public var activity: Bool
+    public var silence: Bool
+    public var bell: Bool
+    /// Non-nil once the pane's process exits while `remain-on-exit` keeps the dead pane.
+    public var exitStatus: Int?
+
+    /// The tmux activity/silence/bell portion of `#{window_flags}`.
+    public var alertFlags: String {
+        (activity ? "#" : "") + (silence ? "~" : "") + (bell ? "!" : "")
+    }
 
     public init(
         id: TabID = UUID(),
@@ -32,7 +45,11 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         agent: AgentSnapshot? = nil,
         zoomedPaneID: PaneID? = nil,
         activePaneID: PaneID? = nil,
-        lastActivePaneID: PaneID? = nil
+        lastActivePaneID: PaneID? = nil,
+        activity: Bool = false,
+        silence: Bool = false,
+        bell: Bool = false,
+        exitStatus: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -50,6 +67,10 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         // resolvable active pane (target-less commands depend on it).
         self.activePaneID = activePaneID ?? resolvedRoot.allPaneIDs().first
         self.lastActivePaneID = lastActivePaneID
+        self.activity = activity
+        self.silence = silence
+        self.bell = bell
+        self.exitStatus = exitStatus
     }
 
     public var displaySubtitle: String {
@@ -79,5 +100,10 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         activePaneID = try container.decodeIfPresent(PaneID.self, forKey: .activePaneID)
             ?? rootPane.allPaneIDs().first
         lastActivePaneID = try container.decodeIfPresent(PaneID.self, forKey: .lastActivePaneID)
+        // Monitoring fields — absent in older layout.json; default to no alert.
+        activity = try container.decodeIfPresent(Bool.self, forKey: .activity) ?? false
+        silence = try container.decodeIfPresent(Bool.self, forKey: .silence) ?? false
+        bell = try container.decodeIfPresent(Bool.self, forKey: .bell) ?? false
+        exitStatus = try container.decodeIfPresent(Int.self, forKey: .exitStatus)
     }
 }

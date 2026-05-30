@@ -102,7 +102,8 @@ final class TargetSpecTests: XCTestCase {
     func testResolvePaneByIndex() {
         let (snap, ids) = makeSnapshot()
         let base = CommandTarget(snapshot: snap)
-        let r = base.resolving(TargetSpec.parse("api:2.1"), command: .killPane)
+        // The split tab is window index 1 (base-index 0); t2 (window 2) is single-pane.
+        let r = base.resolving(TargetSpec.parse("api:1.1"), command: .killPane)
         XCTAssertEqual(r.tab?.id, ids["t1"])
         XCTAssertEqual(r.paneID, ids["p2"]) // pane index 1 = second leaf
     }
@@ -110,9 +111,9 @@ final class TargetSpecTests: XCTestCase {
     func testResolvePaneMarkersLeftRight() {
         let (snap, ids) = makeSnapshot()
         let base = CommandTarget(snapshot: snap)
-        let left = base.resolving(TargetSpec.parse("api:2.{left}"), command: .killPane)
+        let left = base.resolving(TargetSpec.parse("api:1.{left}"), command: .killPane)
         XCTAssertEqual(left.paneID, ids["p1"])
-        let right = base.resolving(TargetSpec.parse("api:2.{right}"), command: .killPane)
+        let right = base.resolving(TargetSpec.parse("api:1.{right}"), command: .killPane)
         XCTAssertEqual(right.paneID, ids["p2"])
     }
 

@@ -114,6 +114,12 @@ public final class OptionStore: @unchecked Sendable {
         // `rename-tab` so the chosen name sticks.
         "allow-rename": .bool(true),
         "automatic-rename": .bool(true),
+        // Monitoring (Phase 5) — read by the daemon's per-surface output monitor. `activity`
+        // flags a non-current window on output (`#`); `silence` flags it after N seconds of no
+        // output (0 = off, `~`); `bell` flags it on a terminal bell (`!`).
+        "monitor-activity": .bool(false),
+        "monitor-silence": .int(0),
+        "monitor-bell": .bool(true),
     ]
 
     /// Values that shipped as defaults in an earlier build and have since been

@@ -21,6 +21,15 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// this to push `snapshotChanged` to snapshot subscribers (the compositor).
     public var onSnapshotCommitted: ((Int) -> Void)?
 
+    // MARK: Monitoring (Phase 5)
+    /// Cheap per-surface output state, updated on the PTY read thread and drained by
+    /// `processMonitors` on a timer. Kept off `lock` (its own tiny lock) so the hot output
+    /// path never contends with layout mutations.
+    private struct SurfaceMonitor { var sawOutput = false; var sawBell = false; var lastOutput = Date() }
+    private var monitors: [String: SurfaceMonitor] = [:]
+    private let monitorLock = NSLock()
+    private var monitorTimer: DispatchSourceTimer?
+
     public init() {
         editor.snapshot = store.load()
         if editor.snapshot.workspaces.isEmpty {
@@ -36,6 +45,73 @@ public final class SurfaceRegistry: @unchecked Sendable {
         hookRegistry.setExecutor { command, context in
             executor.execute(command, context: context)
         }
+        startMonitorTimer()
+    }
+
+    // MARK: - Output monitoring (activity / silence / bell)
+
+    private func startMonitorTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: hookQueue)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.setEventHandler { [weak self] in self?.processMonitors() }
+        timer.resume()
+        monitorTimer = timer
+    }
+
+    /// Record output for a surface — runs on the PTY read thread, so it must stay cheap
+    /// (no `lock`, no snapshot walk): just flag output / bell and stamp the time.
+    private func noteSurfaceOutput(surfaceKey: String, data: Data) {
+        let bell = data.contains(0x07)
+        monitorLock.lock()
+        var m = monitors[surfaceKey] ?? SurfaceMonitor()
+        m.sawOutput = true
+        m.lastOutput = Date()
+        if bell { m.sawBell = true }
+        monitors[surfaceKey] = m
+        monitorLock.unlock()
+    }
+
+    /// Drain the monitor state (timer) and raise activity/silence/bell alerts on non-current
+    /// windows, gated on the matching option. Sets the tab flag (surfaced as `#`/`~`/`!` in
+    /// `#{window_flags}`) and fires the hook — both only on a real transition.
+    private func processMonitors() {
+        monitorLock.lock()
+        let now = Date()
+        var drained: [String: (sawOutput: Bool, sawBell: Bool, idle: TimeInterval)] = [:]
+        for (key, m) in monitors {
+            drained[key] = (m.sawOutput, m.sawBell, now.timeIntervalSince(m.lastOutput))
+            monitors[key]?.sawOutput = false
+            monitors[key]?.sawBell = false
+        }
+        monitorLock.unlock()
+        guard !drained.isEmpty else { return }
+
+        lock.lock()
+        defer { lock.unlock() }
+        let wantActivity = optionStore.get("monitor-activity")?.boolValue ?? false
+        let wantBell = optionStore.get("monitor-bell")?.boolValue ?? true
+        let silenceSeconds = optionStore.get("monitor-silence")?.intValue ?? 0
+        guard wantActivity || wantBell || silenceSeconds > 0 else { return }
+        var changed = false
+        var fired: [(HookEvent, String)] = []
+        for (key, st) in drained {
+            guard let match = editor.tab(forSurfaceKey: key),
+                  !editor.tabIsCurrent(workspaceID: match.workspaceID, tabID: match.tabID) else { continue }
+            if wantActivity, st.sawOutput,
+               editor.setTabAlerts(workspaceID: match.workspaceID, tabID: match.tabID, activity: true) {
+                changed = true; fired.append((.paneActivity, key))
+            }
+            if wantBell, st.sawBell,
+               editor.setTabAlerts(workspaceID: match.workspaceID, tabID: match.tabID, bell: true) {
+                changed = true; fired.append((.paneBell, key))
+            }
+            if silenceSeconds > 0, !st.sawOutput, st.idle >= Double(silenceSeconds),
+               editor.setTabAlerts(workspaceID: match.workspaceID, tabID: match.tabID, silence: true) {
+                changed = true; fired.append((.paneSilence, key))
+            }
+        }
+        if changed { commit() }
+        for (event, key) in fired { fireHookLocked(event, surfaceKey: key) }
     }
 
     public var snapshot: SessionSnapshot {
@@ -688,7 +764,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             agentKind: tab?.agent?.kind.rawValue,
             agentActivity: tab?.agent?.activity.rawValue,
             gitBranch: tab?.gitBranch,
-            clientName: clientName
+            clientName: clientName,
+            windowFlags: tab.map { ($0.zoomedPaneID != nil ? "Z" : "") + $0.alertFlags }
         )
     }
 
@@ -824,6 +901,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
             session.onExit = { [weak self, weak session] in
                 self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session)
             }
+            // Internal monitor subscription (Phase 5): cheap output/bell/idle tracking, drained
+            // by `processMonitors`. Lives for the surface's lifetime (cleared on teardown).
+            _ = session.subscribe { [weak self] data, _ in self?.noteSurfaceOutput(surfaceKey: surfaceID, data: data) }
             sessions[surfaceID] = session
             return surfaceID
         } catch {
@@ -1012,6 +1092,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         defer { lock.unlock() }
         guard let session, sessions[surfaceID] === session else { return }
         sessions.removeValue(forKey: surfaceID)
+        monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
         AgentDetector.unregisterRootPID(forSurfaceKey: surfaceID)
         // The layout leaf survives the shell's death (until remain-on-exit handling in
         // Phase 4 / an explicit kill), so the surfaceKey still resolves for the hook.

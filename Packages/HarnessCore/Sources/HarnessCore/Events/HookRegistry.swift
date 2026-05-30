@@ -15,6 +15,12 @@ public enum HookEvent: String, Codable, Sendable, CaseIterable {
     case clientDetached = "client-detached"
     case agentStateChanged = "agent-state-changed"
     case notificationPosted = "notification-posted"
+    // Monitoring (Phase 5): fired by the daemon when a watched pane produces output after
+    // being idle (`alert-activity`), goes quiet for `monitor-silence` seconds
+    // (`alert-silence`), or emits a bell (`alert-bell`). Gated on the matching option.
+    case paneActivity = "alert-activity"
+    case paneSilence = "alert-silence"
+    case paneBell = "alert-bell"
 }
 
 /// One binding: event → command (with an optional `if` condition format).

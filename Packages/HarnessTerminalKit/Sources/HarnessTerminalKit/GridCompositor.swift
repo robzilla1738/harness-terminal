@@ -1,19 +1,38 @@
 import Foundation
+import HarnessCopyMode
 import HarnessCore
 import HarnessTerminalEngine
 
 /// One pane to composite: where it sits (`rect`, in the pane area) and its
 /// current screen contents (`grid`). `isActive` selects the highlighted border
-/// and where the real cursor is placed.
+/// and where the real cursor is placed. The copy-mode fields, when set, overlay a
+/// selection / search-hit highlight and place the copy-mode cursor — the same
+/// `CopyModeState` projection the GUI overlay uses, so both surfaces agree.
 public struct CompositorPane: Sendable {
     public var rect: PaneRect
     public var grid: TerminalGridSnapshot
     public var isActive: Bool
+    /// Copy-mode selection in viewport coordinates (nil = none).
+    public var selection: CopyModeViewportSelection?
+    /// Copy-mode search hits, `line` rebased to a viewport row.
+    public var searchHits: [CopyModeMatch]
+    /// Copy-mode cursor in viewport coordinates (overrides the program cursor).
+    public var copyModeCursor: (row: Int, column: Int)?
 
-    public init(rect: PaneRect, grid: TerminalGridSnapshot, isActive: Bool) {
+    public init(
+        rect: PaneRect,
+        grid: TerminalGridSnapshot,
+        isActive: Bool,
+        selection: CopyModeViewportSelection? = nil,
+        searchHits: [CopyModeMatch] = [],
+        copyModeCursor: (row: Int, column: Int)? = nil
+    ) {
         self.rect = rect
         self.grid = grid
         self.isActive = isActive
+        self.selection = selection
+        self.searchHits = searchHits
+        self.copyModeCursor = copyModeCursor
     }
 }
 
@@ -52,8 +71,9 @@ public final class GridCompositor {
     /// Render `panes` plus an optional `status` line (drawn on the bottom row)
     /// into ANSI. Pane rects are expected to be laid out within the top
     /// `rows - (status == nil ? 0 : 1)` rows.
-    public func render(panes: [CompositorPane], status: String? = nil) -> String {
-        let statusRow: Int? = status == nil ? nil : rows - 1
+    public func render(panes: [CompositorPane], status: String? = nil, statusSegments: [StyledSegment]? = nil) -> String {
+        let hasStatus = status != nil || statusSegments != nil
+        let statusRow: Int? = hasStatus ? rows - 1 : nil
         var buffer = [RenderCell](repeating: .blank, count: cols * rows)
 
         // 1) Borders: fill the pane area with box-drawing lines, then panes
@@ -68,9 +88,13 @@ public final class GridCompositor {
             paint(pane: pane, into: &buffer, into: &cursor)
         }
 
-        // 3) Status line.
-        if let statusRow, let status {
-            paintStatus(status, row: statusRow, into: &buffer)
+        // 3) Status line — styled segments (with `#[…]` spans) take precedence over plain.
+        if let statusRow {
+            if let statusSegments {
+                paintStatusSegments(statusSegments, row: statusRow, into: &buffer)
+            } else if let status {
+                paintStatus(status, row: statusRow, into: &buffer)
+            }
         }
 
         // 4) Emit a diff (or full frame) and position the real cursor.
@@ -100,18 +124,37 @@ public final class GridCompositor {
                 // Skip the spacer that follows a wide character: the wide glyph
                 // already spans two columns when emitted.
                 if cell.width == .spacerTail { continue }
-                buffer[by * cols + bx] = RenderCell(cell)
+                var rc = RenderCell(cell)
+                // Copy-mode shading (palette indices, so the client terminal themes them):
+                // primary selection > search hit > normal.
+                if pane.selection?.contains(row: gy, column: gx) == true {
+                    rc.bg = Self.selectionBg; rc.fg = Self.selectionFg
+                } else if pane.searchHits.contains(where: { $0.line == gy && gx >= $0.startColumn && gx < $0.endColumn }) {
+                    rc.bg = Self.searchBg; rc.fg = Self.searchFg
+                }
+                buffer[by * cols + bx] = rc
             }
         }
 
-        if pane.isActive, grid.cursor.visible {
-            let cx = rect.x + grid.cursor.col
-            let cy = rect.y + grid.cursor.row
-            if cx >= 0, cx < cols, cy >= 0, cy < rows {
-                cursor = (cx, cy)
+        if pane.isActive {
+            // The copy-mode cursor overrides the (hidden) program cursor while active.
+            if let cm = pane.copyModeCursor {
+                let cx = rect.x + cm.column, cy = rect.y + cm.row
+                if cx >= 0, cx < cols, cy >= 0, cy < rows { cursor = (cx, cy) }
+            } else if grid.cursor.visible {
+                let cx = rect.x + grid.cursor.col
+                let cy = rect.y + grid.cursor.row
+                if cx >= 0, cx < cols, cy >= 0, cy < rows { cursor = (cx, cy) }
             }
         }
     }
+
+    /// Copy-mode highlight palette (ANSI indices so the client's theme renders them):
+    /// selection on blue, search hits on yellow.
+    private static let selectionBg: TerminalGridColor = .palette(4)
+    private static let selectionFg: TerminalGridColor = .palette(15)
+    private static let searchBg: TerminalGridColor = .palette(3)
+    private static let searchFg: TerminalGridColor = .palette(0)
 
     private func paintStatus(_ status: String, row: Int, into buffer: inout [RenderCell]) {
         var x = 0
@@ -123,6 +166,42 @@ public final class GridCompositor {
         while x < cols {
             buffer[row * cols + x] = RenderCell(codepoint: 0x20, inverse: true)
             x += 1
+        }
+    }
+
+    /// Paint styled status segments. A fully-default segment (no fg/bg/attrs) renders as the
+    /// classic inverse status band; styled spans honor their `#[fg=…,bg=…,attrs]`.
+    private func paintStatusSegments(_ segments: [StyledSegment], row: Int, into buffer: inout [RenderCell]) {
+        var x = 0
+        for seg in segments {
+            let plain = seg.fg == nil && seg.bg == nil && !seg.bold && !seg.italic && !seg.underline && !seg.reverse && !seg.dim
+            for scalar in seg.text.unicodeScalars {
+                guard x < cols else { break }
+                buffer[row * cols + x] = RenderCell(
+                    codepoint: scalar.value,
+                    fg: Self.gridColor(seg.fg),
+                    bg: Self.gridColor(seg.bg),
+                    bold: seg.bold,
+                    dim: seg.dim,
+                    italic: seg.italic,
+                    underline: seg.underline ? .single : .none,
+                    inverse: plain ? true : seg.reverse
+                )
+                x += 1
+            }
+            if x >= cols { break }
+        }
+        while x < cols {
+            buffer[row * cols + x] = RenderCell(codepoint: 0x20, inverse: true)
+            x += 1
+        }
+    }
+
+    private static func gridColor(_ color: FormatColor?) -> TerminalGridColor {
+        switch color {
+        case nil, .some(.none): return .none
+        case let .some(.palette(i)): return .palette(i)
+        case let .some(.rgb(r, g, b)): return .rgb(r: r, g: g, b: b)
         }
     }
 

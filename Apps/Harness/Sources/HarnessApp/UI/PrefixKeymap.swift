@@ -43,6 +43,14 @@ final class PrefixKeymap {
             arm()
             return nil
         }
+        // Root table (`bind -n`): no-prefix global bindings, consulted on every key. Empty by
+        // default so normal typing passes straight through; only an explicitly-bound key is
+        // swallowed and run.
+        if let spec = makeSpec(from: event),
+           let binding = KeybindingsService.shared.lookup(table: .root, spec: spec) {
+            executeBinding(binding)
+            return nil
+        }
         return event
     }
 

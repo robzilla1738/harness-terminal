@@ -163,9 +163,18 @@ public struct SessionEditor: Sendable {
     @discardableResult
     public mutating func selectTab(workspaceID: WorkspaceID, tabID: TabID) -> Bool {
         guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return false }
+        // Viewing a tab clears its monitoring alerts.
+        let tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        let hadAlerts = tab.activity || tab.silence || tab.bell
+        if hadAlerts {
+            snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].activity = false
+            snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].silence = false
+            snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].bell = false
+        }
         if snapshot.workspaces[match.workspaceIndex].activeSessionID == snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].id,
            snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].activeTabID == tabID
         {
+            if hadAlerts { bumpRevision() }
             return true
         }
         snapshot.workspaces[match.workspaceIndex].activeSessionID = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].id
@@ -367,6 +376,49 @@ public struct SessionEditor: Sendable {
         snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].status = .idle
         snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].notificationText = nil
         bumpRevision()
+    }
+
+    /// Set monitoring alert flags on a tab (only the provided flags change). Returns whether
+    /// anything actually changed, so the daemon commits/fires only on a real transition.
+    @discardableResult
+    public mutating func setTabAlerts(workspaceID: WorkspaceID, tabID: TabID, activity: Bool? = nil, silence: Bool? = nil, bell: Bool? = nil) -> Bool {
+        guard let match = tabIndex(workspaceID: workspaceID, tabID: tabID) else { return false }
+        var changed = false
+        func apply(_ kp: WritableKeyPath<Tab, Bool>, _ value: Bool?) {
+            guard let value else { return }
+            if snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex][keyPath: kp] != value {
+                snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex][keyPath: kp] = value
+                changed = true
+            }
+        }
+        apply(\.activity, activity)
+        apply(\.silence, silence)
+        apply(\.bell, bell)
+        if changed { bumpRevision() }
+        return changed
+    }
+
+    @discardableResult
+    public mutating func clearTabAlerts(workspaceID: WorkspaceID, tabID: TabID) -> Bool {
+        setTabAlerts(workspaceID: workspaceID, tabID: tabID, activity: false, silence: false, bell: false)
+    }
+
+    /// Set/clear a dead pane's exit status (`remain-on-exit`).
+    public mutating func setTabExitStatus(surfaceID: SurfaceID, status: Int?) {
+        guard let match = tabIndex(surfaceID: surfaceID) else { return }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].exitStatus = status
+        bumpRevision()
+    }
+
+    /// Whether `tabID` is the currently-viewed tab (active tab of the active session in the
+    /// active workspace) — output on a viewed tab does not raise an activity alert.
+    public func tabIsCurrent(workspaceID: WorkspaceID, tabID: TabID) -> Bool {
+        guard snapshot.activeWorkspaceID == workspaceID,
+              let ws = snapshot.workspaces.first(where: { $0.id == workspaceID }),
+              let sess = ws.sessions.first(where: { $0.tabs.contains { $0.id == tabID } }),
+              ws.activeSessionID == sess.id
+        else { return false }
+        return sess.activeTabID == tabID
     }
 
     public mutating func updateTabMetadata(

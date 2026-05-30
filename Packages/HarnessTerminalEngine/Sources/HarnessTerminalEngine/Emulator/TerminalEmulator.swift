@@ -77,6 +77,14 @@ public final class TerminalEmulator: VTParserHandler {
         current.snapshot()
     }
 
+    /// Total lines addressable by copy-mode / scrollback navigation on the current screen
+    /// (retained history + the live viewport rows). 0 history on the alternate screen.
+    public var bufferLineCount: Int { current.bufferLineCount }
+
+    /// One line in copy-mode view space (`[history ++ viewport]`, 0 = oldest), padded to
+    /// the current width. O(cols) random access — for copy-mode motion/search.
+    public func bufferLine(_ index: Int) -> [TerminalGridCell] { current.bufferLine(index) }
+
     // MARK: - VTParserHandler
 
     func parserPrint(_ scalar: UInt32) {

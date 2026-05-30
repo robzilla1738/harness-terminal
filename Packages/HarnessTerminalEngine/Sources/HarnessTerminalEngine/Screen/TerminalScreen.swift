@@ -106,6 +106,31 @@ final class TerminalScreen {
         )
     }
 
+    // MARK: - Random-access line read (copy-mode / scrollback navigation)
+
+    /// Total addressable lines in scrollback-view space: retained history + the live
+    /// viewport rows. Copy-mode addresses cells in this `[history ++ viewport]` virtual
+    /// sequence, exactly as `snapshot(scrollbackOffset:)` windows it.
+    var bufferLineCount: Int { history.count + rows }
+
+    /// One virtual line (0 = oldest retained history line; the last `rows` indices are the
+    /// live viewport rows), padded/truncated to the current width. O(cols), so copy-mode
+    /// search and motion can scan scrollback without rebuilding a whole snapshot per line.
+    func bufferLine(_ index: Int) -> [TerminalGridCell] {
+        guard index >= 0, index < bufferLineCount else {
+            return Array(repeating: .blank, count: cols)
+        }
+        if index < history.count {
+            let line = history[index].cells
+            if line.count == cols { return line }
+            var out = Array(repeating: TerminalGridCell.blank, count: cols)
+            for c in 0 ..< min(cols, line.count) { out[c] = line[c] }
+            return out
+        }
+        let row = index - history.count
+        return Array(cells[row * cols ..< (row + 1) * cols])
+    }
+
     // MARK: - Resize
 
     /// Resize to a new geometry. The primary screen *reflows*: physical rows are re-joined

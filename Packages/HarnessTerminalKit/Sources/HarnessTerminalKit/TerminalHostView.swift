@@ -262,6 +262,24 @@ public final class TerminalHostView: NSView {
         hostDelegate?.terminalHostDidChangeFocus(true, surfaceID: surfaceID)
     }
 
+    // MARK: - Copy mode (in-pane overlay)
+
+    public var isInCopyMode: Bool { nativeView.isInCopyMode }
+
+    /// Enter copy mode on this pane's native surface, using the `mode-keys` table.
+    public func enterCopyMode(modeKeys: String) {
+        nativeView.copyModeKeys = modeKeys
+        nativeView.enterCopyMode()
+        window?.makeFirstResponder(nativeView)
+    }
+
+    public func exitCopyMode() { nativeView.exitCopyMode() }
+
+    /// Run a `copy-mode -X` action (from the `:` prompt / `send-keys -X`); no-op if inactive.
+    public func performCopyModeAction(_ action: CopyModeAction) {
+        nativeView.performCopyModeAction(action)
+    }
+
     /// `synchronize-panes`: the surface-id strings (excluding this pane) that this
     /// pane's input should also be mirrored to. Empty = normal single-pane input.
     public func setSyncSiblings(_ surfaceIDStrings: [String]) {

@@ -63,7 +63,9 @@ public enum CommandParser {
         "kill-window", "kill-tab", "rename-window", "rename-tab",
         "new-window", "new-tab", "rotate-window", "select-layout",
         "new-session", "kill-session", "rename-session",
-        "link-window", "unlink-window",
+        // `link-window` is excluded: its leaf parser interprets `-t` itself as the
+        // target session to link into, so stripping it here would leave it empty.
+        "unlink-window",
     ]
 
     private static func removingFlagPair(_ flag: String, in tokens: [String]) -> [String] {

@@ -1,4 +1,6 @@
 import AppKit
+import HarnessCopyMode
+import HarnessCore
 import HarnessTerminalEngine
 import HarnessTerminalRenderer
 import HarnessTheme
@@ -90,6 +92,19 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var columns: Int = 80
     private var rows: Int = 24
     private var renderScheduled = false
+
+    // MARK: Copy mode (in-pane overlay)
+    /// Active copy-mode model (nil = not in copy mode). Driven by the shared
+    /// `CopyModeReducer` over this view's own emulator (which holds the full scrollback), so
+    /// the GUI overlay and the ssh compositor share one implementation.
+    private var copyMode: CopyModeState?
+    /// Merged copy-mode key tables (defaults + user `keybindings.json`), loaded on entry.
+    private var copyModeTables: KeyTableSet?
+    /// In-progress search query (nil = not entering a search). Shown in the status row.
+    private var copyModeSearchEntry: String?
+    /// `mode-keys` option value (`vi` / `emacs`); the host sets it from the daemon option.
+    public var copyModeKeys: String = "vi"
+    public var isInCopyMode: Bool { copyMode != nil }
 
     public init(
         themeName: String = ThemeManager.defaultThemeName,
@@ -341,6 +356,8 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func renderNow() {
         guard let renderer, let drawable = metalLayer.nextDrawable() else { return }
+        // Copy mode owns the whole surface while active (its own scroll offset + overlay).
+        if renderCopyMode(renderer: renderer, drawable: drawable) { return }
         let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
         var frame = frameBuilder.build(grid, selection: currentSelection)
         // IME preedit: draw the in-progress composition over the grid at the cursor.
@@ -469,6 +486,7 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        if copyMode != nil { return } // copy mode is keyboard-driven; ignore clicks
         if isMouseReporting(event) {
             reportMouse(event, button: .left, kind: .press)
             return
@@ -480,6 +498,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func mouseDragged(with event: NSEvent) {
+        if copyMode != nil { return }
         if isMouseReporting(event) {
             // Only report motion when the app asked for drag / any-motion tracking.
             if emulator.modes.mouseDrag || emulator.modes.mouseAny {
@@ -493,6 +512,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func mouseUp(with event: NSEvent) {
+        if copyMode != nil { return }
         if isMouseReporting(event) {
             reportMouse(event, button: .left, kind: .release)
             return
@@ -526,6 +546,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func scrollWheel(with event: NSEvent) {
+        // In copy mode, the wheel moves the copy-mode cursor through scrollback.
+        if copyMode != nil, let renderer, event.scrollingDeltaY != 0 {
+            let scale = window?.backingScaleFactor ?? 2.0
+            let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
+            let steps = max(1, Int((abs(event.scrollingDeltaY) / cellH).rounded()))
+            let action: CopyModeAction = event.scrollingDeltaY > 0 ? .cursorUp : .cursorDown
+            for _ in 0 ..< steps { handleCopyModeAction(action) }
+            return
+        }
         if isMouseReporting(event) {
             let button: MouseButton = event.scrollingDeltaY > 0 ? .wheelUp : .wheelDown
             if event.scrollingDeltaY != 0 { reportMouse(event, button: button, kind: .press) }
@@ -670,6 +699,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func keyDown(with event: NSEvent) {
+        // Copy mode is modal: it consumes every key (motions, search entry, copy/cancel)
+        // and nothing reaches the PTY. ⌘ shortcuts still fall through to the app.
+        if copyMode != nil, !event.modifierFlags.contains(.command) {
+            handleCopyModeKey(event)
+            return
+        }
         // Let the app handle Command shortcuts (menus, palette, etc.).
         if event.modifierFlags.contains(.command) {
             // ⌘C copies the active selection, ⌘V pastes. These also work via the Edit menu's
@@ -756,6 +791,210 @@ public final class HarnessTerminalSurfaceView: NSView {
         case 0x1B: return .escape
         case 0x09: return .tab
         default: return nil
+        }
+    }
+
+    // MARK: - Copy mode
+
+    /// Enter copy mode, seeding the cursor at the live terminal cursor. The view's own
+    /// emulator holds the scrollback, so no daemon text capture is needed.
+    public func enterCopyMode() {
+        guard copyMode == nil else { return }
+        copyModeTables = KeybindingsStore.load()
+        copyModeSearchEntry = nil
+        let live = emulator.readGrid()
+        let cursorLine = emulator.historyCount + live.cursor.row
+        copyMode = CopyModeReducer.initialState(grid: emulator, cursorLine: cursorLine, cursorColumn: live.cursor.col)
+        scrollOffset = 0
+        scheduleRender()
+    }
+
+    /// Exit copy mode and return to the live bottom.
+    public func exitCopyMode() {
+        guard copyMode != nil else { return }
+        copyMode = nil
+        copyModeSearchEntry = nil
+        scrollOffset = 0
+        scheduleRender()
+    }
+
+    /// Run a copy-mode action from outside the view (the `:` prompt, `send-keys -X`,
+    /// `copy-mode -X`). No-op when not in copy mode.
+    public func performCopyModeAction(_ action: CopyModeAction) {
+        guard copyMode != nil else { return }
+        handleCopyModeAction(action)
+    }
+
+    private func handleCopyModeKey(_ event: NSEvent) {
+        // Interactive search-query entry captures raw keys until Enter / Escape.
+        if copyModeSearchEntry != nil {
+            handleSearchEntryKey(event)
+            return
+        }
+        guard let spec = Self.copyModeKeySpec(from: event),
+              let table = copyModeTables?.table(KeyTableID.copyMode(modeKeys: copyModeKeys)),
+              case let .copyModeCommand(action) = table.lookup(spec)?.command
+        else { return } // unbound keys are swallowed (copy mode is modal)
+        handleCopyModeAction(action)
+    }
+
+    private func handleCopyModeAction(_ action: CopyModeAction) {
+        guard let state = copyMode else { return }
+        let (next, effect) = CopyModeReducer.reduce(state, action, grid: emulator)
+        copyMode = next
+        switch effect {
+        case .none:
+            scheduleRender()
+        case let .copy(text):
+            writeCopyModeSelection(text)
+            scheduleRender()
+        case let .copyAndCancel(text):
+            writeCopyModeSelection(text)
+            exitCopyMode()
+        case let .pipe(text, command):
+            copyModePipe(text: text, command: command)
+            exitCopyMode()
+        case .paste:
+            exitCopyMode()
+            paste(nil) // paste the most-recent buffer (mirrored to the system pasteboard on yank)
+        case .cancel:
+            exitCopyMode()
+        case .beginSearchEntry:
+            copyModeSearchEntry = ""
+            scheduleRender()
+        }
+    }
+
+    private func handleSearchEntryKey(_ event: NSEvent) {
+        let chars = event.charactersIgnoringModifiers ?? ""
+        let scalar = chars.unicodeScalars.first?.value ?? 0
+        switch scalar {
+        case 0x1B: // Escape — abandon the search
+            copyModeSearchEntry = nil
+            scheduleRender()
+        case 0x0D, 0x03: // Enter — commit
+            let query = copyModeSearchEntry ?? ""
+            copyModeSearchEntry = nil
+            if let state = copyMode, !query.isEmpty {
+                copyMode = CopyModeReducer.applySearch(state, query: query, reverse: state.search.reverse, grid: emulator)
+            }
+            scheduleRender()
+        case 0x7F, 0x08: // Backspace
+            if var q = copyModeSearchEntry, !q.isEmpty { q.removeLast(); copyModeSearchEntry = q }
+            scheduleRender()
+        default:
+            if scalar >= 0x20, !chars.isEmpty { copyModeSearchEntry = (copyModeSearchEntry ?? "") + chars }
+            scheduleRender()
+        }
+    }
+
+    private func writeCopyModeSelection(_ text: String) {
+        guard !text.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        onCopy?(text) // mirror into the daemon paste buffer
+    }
+
+    /// `copy-pipe`: feed the selected text to a shell command's stdin (detached), like tmux.
+    private func copyModePipe(text: String, command: String) {
+        guard !text.isEmpty, !command.isEmpty else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let pipe = Pipe()
+        process.standardInput = pipe
+        if (try? process.run()) != nil {
+            pipe.fileHandleForWriting.write(Data(text.utf8))
+            try? pipe.fileHandleForWriting.close()
+        }
+    }
+
+    /// Convert an `NSEvent` to a `KeySpec` for copy-mode table lookup (mirrors the prefix
+    /// keymap's mapping; kept local so the live-input path is untouched).
+    private static func copyModeKeySpec(from event: NSEvent) -> KeySpec? {
+        guard let chars = event.charactersIgnoringModifiers else { return nil }
+        let key: String
+        if chars.count == 1, let scalar = chars.unicodeScalars.first {
+            switch scalar.value {
+            case 0x1B: key = "Escape"
+            case 0x09: key = "Tab"
+            case 0x0D, 0x03: key = "Enter"
+            case 0x7F: key = "Backspace"
+            case 0x20: key = "Space"
+            case 0xF700: key = "Up"
+            case 0xF701: key = "Down"
+            case 0xF702: key = "Left"
+            case 0xF703: key = "Right"
+            case 0xF729: key = "Home"
+            case 0xF72B: key = "End"
+            case 0xF72C: key = "PageUp"
+            case 0xF72D: key = "PageDown"
+            default: key = chars
+            }
+        } else {
+            key = chars
+        }
+        var modifiers: KeySpec.Modifiers = []
+        let mask = event.modifierFlags
+        if mask.contains(.control) { modifiers.insert(.control) }
+        if mask.contains(.option) { modifiers.insert(.option) }
+        if mask.contains(.command) { modifiers.insert(.command) }
+        if mask.contains(.shift), key.count > 1 { modifiers.insert(.shift) }
+        return KeySpec(key: key, modifiers: modifiers)
+    }
+
+    /// Render copy mode: the grid at the model's scroll offset, with selection / search
+    /// highlights and the copy-mode cursor, plus a status row. Returns false when not in
+    /// copy mode so `renderNow` falls through to the normal path.
+    private func renderCopyMode(renderer: TerminalMetalRenderer, drawable: CAMetalDrawable) -> Bool {
+        guard let cm = copyMode else { return false }
+        let offset = cm.scrollbackOffset(historyCount: emulator.historyCount)
+        let grid = emulator.readGrid(scrollbackOffset: offset)
+        let region: SelectionRegion? = cm.viewportSelection(rows: rows, columns: columns).map { vs in
+            switch vs.kind {
+            case .linear:
+                return .linear(TerminalSelection((vs.startRow, vs.startColumn), (vs.endRow, vs.endColumn)))
+            case .block:
+                return .block(BlockSelection((vs.startRow, vs.startColumn), (vs.endRow, vs.endColumn)))
+            }
+        }
+        let hits = cm.viewportSearchHits(rows: rows).map { m in
+            TerminalSelection((m.line, m.startColumn), (m.line, max(m.startColumn, m.endColumn - 1)))
+        }
+        var frame = frameBuilder.build(grid, region: region, searchHighlights: hits, copyModeCursor: cm.viewportCursor(rows: rows))
+        let statusText = copyModeSearchEntry.map { (cm.search.reverse ? "?" : "/") + $0 } ?? cm.statusLine()
+        overlayCopyModeStatus(into: &frame, text: statusText)
+        renderer.present(
+            frame, to: drawable,
+            clearColor: RenderColor(canvasBackground, alpha: canvasOpacity),
+            origin: (originOffsetX, originOffsetY), gamma: glyphGamma, ligatures: ligaturesEnabled
+        )
+        return true
+    }
+
+    /// Draw the copy-mode status into the bottom frame row (mode, position, match count, or
+    /// the live search query) on an inverted band.
+    private func overlayCopyModeStatus(into frame: inout TerminalFrame, text: String) {
+        let row = frame.rows - 1
+        guard row >= 0, frame.columns > 0 else { return }
+        let bandBg = RenderColor(selectionBackground ?? canvasForeground)
+        let bandFg = RenderColor(canvasBackground)
+        for col in 0 ..< frame.columns {
+            let idx = row * frame.columns + col
+            frame.cells[idx].codepoint = 0x20
+            frame.cells[idx].foreground = bandFg
+            frame.cells[idx].background = bandBg
+            frame.cells[idx].underlineColor = bandFg
+            frame.cells[idx].bold = false
+            frame.cells[idx].italic = false
+            frame.cells[idx].underline = .none
+            frame.cells[idx].strikethrough = false
+            frame.cells[idx].overline = false
+            frame.cells[idx].width = .normal
+        }
+        for (i, scalar) in text.unicodeScalars.enumerated() where i < frame.columns {
+            frame.cells[row * frame.columns + i].codepoint = scalar.value
         }
     }
 }

@@ -38,7 +38,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `zoom` (`resize-pane -Z`) | `zoom-pane` / prefix `z` | ✅ |
 | `select-layout` + named layouts | even-h/v, main-h/v, tiled; next/previous-layout | ✅ |
 | `respawn-pane` | `respawn-pane [-k]` (generation-guarded restart) | ✅ |
-| `display-panes` | prefix `q` numbered overlay | ✅ (GUI) / 🛣️ (compositor) |
+| `display-panes` | prefix `q` numbered overlay (GUI + compositor; digit selects) | ✅ |
 | `last-window` / `last-pane` | `last-window` (MRU tab) + `select-pane -l` | ✅ |
 | `link-window` / `unlink-window` | linked window shares the source's surfaces (live PTYs) across sessions; ref-counted surface GC | ✅ |
 | grouped sessions (`new-session -t base`) | — (link-window covers cross-session sharing) | 🛣️ |
@@ -54,19 +54,19 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | layout changes pushed (no poll) | `subscribeSnapshot` → `snapshotChanged(revision)` push | ✅ |
 | `window-size smallest` (multi-client) | smallest-wins per-surface sizing in `DaemonServer` | ✅ |
 | `detach-client` / `list-clients` | same verbs | ✅ |
-| mouse in the attach client (SGR) | — (GUI mouse is native via libghostty) | 🛣️ |
+| mouse in the attach client (SGR) | SGR 1006 demux: parse `CSI < b;x;y M/m`, map to a pane via `PaneRectSolver`, re-base + forward via `InputEncoder.encodeMouse`; click focuses the pane (gated on `mouse`) | ✅ |
 | control mode (`-CC`) | `harness-cli -CC` / `control-mode`: `%begin/%end/%output/%layout-change/%exit`, stdin commands bridged to IPC | ✅ |
 
 ## Copy mode & buffers
 
 | tmux | Harness | Status |
 |------|---------|--------|
-| copy-mode (vi motions, search, yank) | `CopyModeViewController` — `hjkl`/word/line/`g`/`G`, page/half-page, `/ ? n N`, yank, paste | ✅ (GUI) |
+| copy-mode (vi motions, search, yank) | **in-pane Metal overlay** over the live scrollback (no separate window) — `hjkl`/word/line/`g`/`G`, page/half-page, `/ ? n N` (all matches highlighted), yank, paste; one shared `CopyModeReducer` (`HarnessCopyMode`) | ✅ (GUI) |
 | multiple paste buffers (+ `save`/`load-buffer`, `paste-buffer -p`) | `PasteBufferStore`; file I/O CLI; bracketed paste | ✅ |
 | rectangle selection + `copy-pipe` | block mode (`C-v`) + `copy-pipe` (yank → shell command) | ✅ (GUI) |
-| rebindable copy-mode key table | copy-mode `KeyTable` binds real `copy-mode -X` commands; `bind-key -T copy-mode <key> <cmd>` works (`mode-keys vi` defaults) | ✅ |
+| rebindable copy-mode key table (+ `mode-keys`) | copy-mode `KeyTable` binds real `copy-mode -X` commands; `bind-key -T copy-mode <key> <cmd>` works; `mode-keys vi` **and** `emacs` default tables, selected by one helper | ✅ |
 | `set-clipboard` (OSC 52) | engine decodes OSC 52 → pasteboard + paste buffer, gated by `set-clipboard` | ✅ |
-| copy-mode in the attach client | — (reuses the rebindable vocabulary; Phase 3 overlay) | 🛣️ |
+| copy-mode in the attach client | the **same** `CopyModeReducer` over the pane's scrollback, rendered by `GridCompositor` (selection/search highlights, copy-mode cursor, status row); `synchronize-panes` + OSC 52 in the compositor too | ✅ |
 
 ## Options, hooks, status, environment
 
@@ -75,6 +75,8 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | scoped options (server/session/window/pane) | `OptionStore` (pane→tab→session→workspace→global inheritance) | ✅ |
 | `set-option` / `show-options` | same verbs (`setw` = window/tab) | ✅ |
 | `status-left`/`status-right` + format strings | `FormatString` (pane/session/window/agent/git/time/`window_flags`/…); GUI **and** compositor status lines | ✅ |
+| `#[fg=…,bg=…,attrs]` style spans + operators | one `StyledSegment` intermediate (GUI attributed text + compositor SGR); `#{==:}` `#{m:}` (regex) `#{s/re/rep/:}` `#{e\|op\|a\|b}` | ✅ |
+| multi-line `status` / `pane-border-status` / `window-style` | — | 🛣️ |
 | hooks (`set-hook` / `bind-hook`) | `HookRegistry` + `bind-hook`; fires at real mutation sites via `DaemonCommandExecutor` | ✅ |
 | `allow-rename` / `automatic-rename` | OSC title gated; manual `rename-tab` makes the name sticky | ✅ |
 | `set-environment` / `show-environment` | `EnvironmentStore` (global + per-session), injected on spawn/respawn | ✅ |
@@ -82,7 +84,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | agent `install-hooks` (Codex/Claude/Cursor/…) | `harness-cli install-hooks <agent>` | ✅ (Harness extension) |
 | `remain-on-exit` | Harness keeps the dead leaf; `respawn-pane` revives (safe default) | 🟡 |
 | `base-index` / `pane-base-index` | `base-index` / `pane-base-index` options, applied to `-t` indices, `select-window`, and index display | ✅ |
-| `monitor-activity` / `-silence` / `-bell` | — | 🛣️ |
+| `monitor-activity` / `-silence` / `-bell` | daemon per-surface output monitor → tab `activity`/`silence`/`bell` flags (`#`/`~`/`!` in `#{window_flags}`, cleared on view) + `alert-activity`/`-silence`/`-bell` hooks | ✅ |
 | `destroy-unattached` / `detach-on-destroy` | — | 🛣️ |
 | `repeat-time` / `escape-time` | repeatable bindings exist; tunable timing | 🛣️ |
 
@@ -91,6 +93,8 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | tmux | Harness | Status |
 |------|---------|--------|
 | prefix keymap + `bind-key`/`unbind-key` | `PrefixKeymap`, `KeyTable`, `keybindings.json` (merged defaults + overrides) | ✅ |
+| no-prefix bindings (`bind -n` / `-T root`) | seeded, consulted `root` key table (GUI); `bind-key -T root <key> <cmd>` runs without the prefix | ✅ (GUI) / 🛣️ (compositor) |
+| `send-keys -l` (literal) / `-H` (hex) | literal text / hex bytes sent raw via `sendData` (`KeyTokenParser.hexBytes`) | ✅ |
 | command prompt (`:`) | `Cmd+;` / prefix `:` (`CommandPromptController`) | ✅ |
 | one verb vocabulary across front-ends | `Command` + shared `CommandIPCTranslator` (GUI, compositor, hooks) | ✅ |
 | `if-shell` / `run-shell` | same verbs (server-side for hooks) | ✅ |

@@ -290,10 +290,20 @@ struct HarnessCLI {
         guard let surface = flagValue(args, flag: "--surface"),
               let keys = flagValue(args, flag: "--keys")
         else {
-            fputs("Usage: harness-cli send-keys --surface <id> --keys \"C-c Up Enter ...\"\n", stderr)
+            fputs("Usage: harness-cli send-keys --surface <id> [-l|-H] --keys \"C-c Up Enter ...\"\n", stderr)
             exit(1)
         }
+        // `-l` (literal): send the keys text verbatim, no key-name interpretation.
+        // `-H` (hex): each token is a hex byte. Both go through `sendData` (raw bytes).
+        if args.contains("-l") || args.contains("--literal") {
+            _ = try checkedRequest(client, .sendData(surfaceID: surface, data: Data(keys.utf8)))
+            return
+        }
         let tokens = keys.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        if args.contains("-H") || args.contains("--hex") {
+            _ = try checkedRequest(client, .sendData(surfaceID: surface, data: KeyTokenParser.hexBytes(tokens)))
+            return
+        }
         _ = try checkedRequest(client, .sendKeys(surfaceID: surface, keys: tokens))
     }
 

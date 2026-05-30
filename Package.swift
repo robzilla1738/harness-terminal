@@ -9,6 +9,9 @@ let package = Package(
         // Self-contained native terminal engine (VT parser + screen/grid model). Pure
         // Swift, no Metal/AppKit.
         .library(name: "HarnessTerminalEngine", targets: ["HarnessTerminalEngine"]),
+        // Shared, UI-agnostic copy-mode model (state + pure reducer over the engine grid),
+        // driving copy mode in both the GUI overlay and the ssh compositor. Pure Swift.
+        .library(name: "HarnessCopyMode", targets: ["HarnessCopyMode"]),
         // Native theme catalog + the shareable `.harnesstheme` document format. Pure Swift.
         .library(name: "HarnessTheme", targets: ["HarnessTheme"]),
         // Native terminal renderer: pure-Swift color resolution + a Metal glyph/draw layer.
@@ -30,6 +33,13 @@ let package = Package(
             name: "HarnessTerminalEngine",
             path: "Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine"
         ),
+        // Shared copy-mode model — pure Swift over Core (action vocabulary) + the engine
+        // (grid types). Both the GUI surface and the compositor drive this one reducer.
+        .target(
+            name: "HarnessCopyMode",
+            dependencies: ["HarnessCore", "HarnessTerminalEngine"],
+            path: "Packages/HarnessCopyMode/Sources/HarnessCopyMode"
+        ),
         // Native theme system — pure Swift, no external dependencies.
         .target(
             name: "HarnessTheme",
@@ -48,6 +58,7 @@ let package = Package(
             dependencies: [
                 "HarnessCore",
                 "HarnessTerminalEngine",
+                "HarnessCopyMode",
                 "HarnessTerminalRenderer",
                 "HarnessTheme",
             ],
@@ -67,7 +78,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "HarnessCLI",
-            dependencies: ["HarnessCore", "HarnessTerminalEngine", "HarnessTerminalKit"],
+            dependencies: ["HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTerminalKit"],
             path: "Tools/harness/Sources/HarnessCLI"
         ),
         .executableTarget(
@@ -91,6 +102,11 @@ let package = Package(
             path: "Tests/HarnessTerminalEngineTests"
         ),
         .testTarget(
+            name: "HarnessCopyModeTests",
+            dependencies: ["HarnessCopyMode", "HarnessCore", "HarnessTerminalEngine"],
+            path: "Tests/HarnessCopyModeTests"
+        ),
+        .testTarget(
             name: "HarnessThemeTests",
             dependencies: ["HarnessTheme"],
             path: "Tests/HarnessThemeTests"
@@ -105,6 +121,7 @@ let package = Package(
             dependencies: [
                 "HarnessCore",
                 "HarnessTerminalEngine",
+                "HarnessCopyMode",
                 "HarnessTerminalKit",
                 "HarnessTheme",
             ],

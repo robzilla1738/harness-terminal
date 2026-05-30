@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import HarnessCopyMode
 import HarnessCore
 import HarnessTerminalEngine
 import HarnessTerminalKit
@@ -158,6 +159,21 @@ private final class WindowSession: @unchecked Sendable {
     private var activeSurface: String?
     private var renderScheduled = false
 
+    // MARK: Copy mode / mouse / synchronize (Phase 3)
+    /// Copy mode over the focused pane — the same shared `CopyModeReducer` the GUI drives.
+    private var copyMode: CopyModeState?
+    private var copyModeSurface: String?
+    private var copyModeSearchEntry: String?
+    /// `synchronize-panes`: mirror forwarded input to every pane in the window.
+    private var synchronize = false
+    /// `display-panes`: overlay pane numbers until the next key / timeout.
+    private var showPaneNumbers = false
+    private var displayPanesToken = 0
+    /// Options the input/clipboard paths read (refreshed with the status options).
+    private var modeKeys = "vi"
+    private var mouseEnabled = false
+    private var allowClipboard = true
+
     private let detachLock = NSLock()
     private var detachRequested = false
     private var wakeRead: Int32 = -1
@@ -229,6 +245,9 @@ private final class WindowSession: @unchecked Sendable {
             } else {
                 guard let term = HarnessGridTerminal(cols: rect.cols, rows: rect.rows) else { continue }
                 terminals[sid] = term
+                // OSC 52 from a pane → set the client's own clipboard (gated on set-clipboard)
+                // and mirror into the daemon buffer so other clients see it.
+                term.onSetClipboard = { [weak self] text in self?.handleProgramClipboard(text, surface: sid) }
                 // Tell the daemon this pane's PTY size, seed with scrollback,
                 // then stream live output into the terminal.
                 _ = try? client.request(.resizeSurface(surfaceID: sid, rows: UInt16(rect.rows), cols: UInt16(rect.cols)), timeout: 1)
@@ -294,24 +313,63 @@ private final class WindowSession: @unchecked Sendable {
         panes.reserveCapacity(rects.count)
         for rect in rects {
             let sid = rect.surfaceID.uuidString
-            guard let grid = terminals[sid]?.readGrid() else { continue }
-            panes.append(CompositorPane(rect: rect, grid: grid, isActive: sid == activeSurface))
+            guard let term = terminals[sid] else { continue }
+            if let cm = copyMode, sid == copyModeSurface {
+                // The copy-mode pane renders at the model's scroll offset with selection /
+                // search highlights and the copy-mode cursor (the shared projection).
+                let offset = cm.scrollbackOffset(historyCount: term.historyCount)
+                guard let grid = term.readGrid(scrollbackOffset: offset) else { continue }
+                panes.append(CompositorPane(
+                    rect: rect, grid: grid, isActive: true,
+                    selection: cm.viewportSelection(rows: rect.rows, columns: rect.cols),
+                    searchHits: cm.viewportSearchHits(rows: rect.rows),
+                    copyModeCursor: cm.viewportCursor(rows: rect.rows)
+                ))
+            } else {
+                guard let grid = term.readGrid() else { continue }
+                panes.append(CompositorPane(rect: rect, grid: grid, isActive: sid == activeSurface))
+            }
         }
-        let ansi = compositor.render(panes: panes, status: statusLine())
+        var ansi = compositor.render(panes: panes, statusSegments: statusSegments())
+        if showPaneNumbers { ansi += paneNumbersOverlay() }
         writeOut(ansi)
     }
 
-    /// The status row, evaluated through `FormatString` against the daemon's
-    /// `status-left`/`status-right` options (same tokens as the GUI status line),
-    /// right-aligning the right segment. A transient `display-message` override
-    /// wins while active. Returns nil to hide the row when `status off`.
-    private func statusLine() -> String? {
-        if let statusOverride { return clip(statusOverride, to: cols) }
+    /// The status row as styled segments (same `#[…]`/`#{…}` grammar + tokens as the GUI),
+    /// right-aligning the right segment. A `display-message` override and copy-mode status win
+    /// while active. Returns nil to hide the row when `status off`.
+    private func statusSegments() -> [StyledSegment]? {
+        if let statusOverride { return [StyledSegment(text: clip(statusOverride, to: cols))] }
+        if let cm = copyModeStatusLine() { return [StyledSegment(text: cm)] }
         if (statusOptions["status"] ?? "on") == "off" { return nil }
         let ctx = formatContext(target: currentTarget())
-        let left = FormatString.evaluate(statusOptions["status-left"] ?? "", context: ctx)
-        let right = FormatString.evaluate(statusOptions["status-right"] ?? "", context: ctx)
-        return composeStatus(left: left, right: right, width: cols)
+        let leftSegs = FormatString.evaluateStyled(statusOptions["status-left"] ?? "", context: ctx)
+        let rightSegs = FormatString.evaluateStyled(statusOptions["status-right"] ?? "", context: ctx)
+        let leftWidth = leftSegs.reduce(0) { $0 + $1.text.unicodeScalars.count }
+        let rightWidth = rightSegs.reduce(0) { $0 + $1.text.unicodeScalars.count }
+        if leftWidth + rightWidth >= cols { return clipSegments(leftSegs, to: cols) }
+        var out = leftSegs
+        out.append(StyledSegment(text: String(repeating: " ", count: cols - leftWidth - rightWidth)))
+        out.append(contentsOf: rightSegs)
+        return out
+    }
+
+    /// Truncate styled segments to a total scalar `width`, cutting the last that overflows.
+    private func clipSegments(_ segs: [StyledSegment], to width: Int) -> [StyledSegment] {
+        var out: [StyledSegment] = []
+        var used = 0
+        for seg in segs {
+            let count = seg.text.unicodeScalars.count
+            if used + count <= width { out.append(seg); used += count; continue }
+            let remain = width - used
+            if remain > 0 {
+                var s = seg
+                s.text = String(String.UnicodeScalarView(seg.text.unicodeScalars.prefix(remain)))
+                out.append(s)
+            }
+            break
+        }
+        return out
     }
 
     private func currentTarget() -> CommandTarget {
@@ -349,21 +407,11 @@ private final class WindowSession: @unchecked Sendable {
         var flags = ""
         if tab.zoomedPaneID != nil { flags += "Z" }
         if markedPaneID != nil { flags += "M" }
-        if tab.status == .waiting { flags += "!" }
+        if synchronize { flags += "S" }
+        if tab.activity { flags += "#" }
+        if tab.silence { flags += "~" }
+        if tab.bell || tab.status == .waiting { flags += "!" }
         return flags
-    }
-
-    /// Left text + right text on one row of `width`, right segment flush-right,
-    /// truncated to fit (left wins if they would collide).
-    private func composeStatus(left: String, right: String, width: Int) -> String {
-        guard width > 0 else { return "" }
-        let l = Array(left.unicodeScalars)
-        let r = Array(right.unicodeScalars)
-        if l.count + r.count >= width {
-            return clip(left, to: width)
-        }
-        let gap = String(repeating: " ", count: width - l.count - r.count)
-        return left + gap + right
     }
 
     private func clip(_ string: String, to width: Int) -> String {
@@ -400,14 +448,30 @@ private final class WindowSession: @unchecked Sendable {
         statusOptions = resolved
         for entry in entries where entry.key == "base-index" { baseIndex = Int(entry.value) ?? baseIndex }
         for entry in entries where entry.key == "pane-base-index" { paneBaseIndex = Int(entry.value) ?? paneBaseIndex }
+        for entry in entries where entry.key == "mode-keys" { modeKeys = entry.value }
+        for entry in entries where entry.key == "set-clipboard" { allowClipboard = entry.value != "off" && entry.value != "false" }
+        for entry in entries where entry.key == "mouse" {
+            let on = entry.value == "on" || entry.value == "true" || entry.value == "1"
+            if on != mouseEnabled { mouseEnabled = on; setOuterMouseTracking(on) }
+        }
+    }
+
+    /// Enable/disable SGR mouse tracking on the *outer* terminal so the compositor receives
+    /// mouse reports it can demux to panes (tmux `mouse on`). Off restores normal selection.
+    private func setOuterMouseTracking(_ on: Bool) {
+        writeOut(on ? "\u{1b}[?1000h\u{1b}[?1002h\u{1b}[?1006h" : "\u{1b}[?1000l\u{1b}[?1002l\u{1b}[?1006l")
     }
 
     // MARK: Input
 
+    // Input state, held across reads so split escape/mouse sequences decode correctly.
+    private var inPrefix = false
+    private var prefixPending: [UInt8] = []
+    private var copyModePending: [UInt8] = []
+    private var mouseSeq: [UInt8] = []
+    private var collectingMouse = false
+
     private func runInputLoop() {
-        let prefix = configuration.prefix
-        var pending: [UInt8] = []   // bytes captured after the prefix, awaiting a full KeySpec
-        var inPrefix = false
         var buffer = [UInt8](repeating: 0, count: 4096)
         var fds: [pollfd] = [
             pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0),
@@ -429,43 +493,95 @@ private final class WindowSession: @unchecked Sendable {
 
             var forward = Data()
             var i = 0
-            while i < n {
-                let byte = buffer[i]; i += 1
+            while i < n { consumeInput(buffer[i], forward: &forward); i += 1 }
 
-                if inPrefix {
-                    pending.append(byte)
-                    switch Self.decodeKeySpec(pending) {
-                    case .incomplete:
-                        continue   // escape sequence still arriving (handles split reads)
-                    case .literalPrefix:
-                        forward.append(prefix)   // prefix prefix → one literal prefix
-                        pending.removeAll(keepingCapacity: true); inPrefix = false
-                    case let .complete(spec):
-                        if !handleBoundKey(spec) {
-                            forward.append(prefix)            // unbound → pass through verbatim
-                            forward.append(contentsOf: pending)
-                        }
-                        pending.removeAll(keepingCapacity: true); inPrefix = false
-                    case .invalid:
-                        forward.append(prefix)
-                        forward.append(contentsOf: pending)
-                        pending.removeAll(keepingCapacity: true); inPrefix = false
-                    }
-                    continue
+            if !forward.isEmpty { dispatchForward(forward) }
+        }
+    }
+
+    /// Process one input byte: prefix machine → copy mode → SGR mouse → pane forward.
+    private func consumeInput(_ byte: UInt8, forward: inout Data) {
+        let prefix = configuration.prefix
+
+        if inPrefix {
+            prefixPending.append(byte)
+            switch Self.decodeKeySpec(prefixPending) {
+            case .incomplete:
+                return
+            case .literalPrefix:
+                forward.append(prefix)
+                prefixPending.removeAll(keepingCapacity: true); inPrefix = false
+            case let .complete(spec):
+                if !handleBoundKey(spec) {
+                    forward.append(prefix)
+                    forward.append(contentsOf: prefixPending)
                 }
+                prefixPending.removeAll(keepingCapacity: true); inPrefix = false
+            case .invalid:
+                forward.append(prefix)
+                forward.append(contentsOf: prefixPending)
+                prefixPending.removeAll(keepingCapacity: true); inPrefix = false
+            }
+            return
+        }
+        if byte == prefix {
+            inPrefix = true
+            prefixPending.removeAll(keepingCapacity: true)
+            return
+        }
 
-                if byte == prefix {
-                    inPrefix = true
-                    pending.removeAll(keepingCapacity: true)
-                    continue
+        // Copy mode consumes everything except the prefix.
+        if copyMode != nil {
+            renderQueue.async { [weak self] in self?.handleCopyModeByte(byte) }
+            return
+        }
+
+        // SGR mouse reports (`ESC [ < … M/m`) from the outer terminal, when mouse is on.
+        if mouseEnabled {
+            if collectingMouse {
+                mouseSeq.append(byte)
+                if byte == UInt8(ascii: "M") || byte == UInt8(ascii: "m") {
+                    let seq = mouseSeq; mouseSeq.removeAll(keepingCapacity: true); collectingMouse = false
+                    renderQueue.async { [weak self] in self?.handleMouse(seq) }
+                } else if mouseSeq.count > 32 {
+                    mouseSeq.removeAll(keepingCapacity: true); collectingMouse = false
                 }
-
-                forward.append(byte)
+                return
             }
-
-            if !forward.isEmpty, let active = activeSurface {
-                _ = try? client.request(.sendData(surfaceID: active, data: forward), timeout: 1)
+            if !mouseSeq.isEmpty {
+                mouseSeq.append(byte)
+                if Array(SGRMouse.prefix.prefix(mouseSeq.count)) == mouseSeq {
+                    if mouseSeq.count == SGRMouse.prefix.count { collectingMouse = true }
+                    return
+                }
+                forward.append(contentsOf: mouseSeq) // not a mouse sequence after all
+                mouseSeq.removeAll(keepingCapacity: true)
+                return
             }
+            if byte == 0x1b { mouseSeq = [byte]; return }
+        }
+
+        // display-panes overlay: a digit selects that pane; any other key dismisses it.
+        if showPaneNumbers {
+            if byte >= UInt8(ascii: "0"), byte <= UInt8(ascii: "9") {
+                let digit = Int(byte - UInt8(ascii: "0"))
+                renderQueue.async { [weak self] in self?.selectPaneByDisplayIndex(digit) }
+                return
+            }
+            renderQueue.async { [weak self] in self?.dismissPaneNumbers() }
+        }
+
+        forward.append(byte)
+    }
+
+    /// Send forwarded bytes to the focused pane — or to every pane when synchronized.
+    private func dispatchForward(_ data: Data) {
+        if synchronize {
+            for rect in rects {
+                _ = try? client.request(.sendData(surfaceID: rect.surfaceID.uuidString, data: data), timeout: 1)
+            }
+        } else if let active = activeSurface {
+            _ = try? client.request(.sendData(surfaceID: active, data: data), timeout: 1)
         }
     }
 
@@ -473,6 +589,244 @@ private final class WindowSession: @unchecked Sendable {
     private var activePaneID: PaneID? {
         guard let activeSurface else { return rects.first?.paneID }
         return rects.first(where: { $0.surfaceID.uuidString == activeSurface })?.paneID
+    }
+
+    // MARK: Copy mode (compositor) — runs on renderQueue
+
+    private func enterCopyMode() {
+        guard let surface = activeSurface, let term = terminals[surface] else { return }
+        copyModeSurface = surface
+        let live = term.readGrid()
+        let cursorLine = term.historyCount + (live?.cursor.row ?? 0)
+        copyMode = CopyModeReducer.initialState(grid: term, cursorLine: cursorLine, cursorColumn: live?.cursor.col ?? 0)
+        copyModePending.removeAll(); copyModeSearchEntry = nil
+        compositor.invalidate(); composeAndWrite()
+    }
+
+    private func exitCopyMode() {
+        copyMode = nil; copyModeSurface = nil; copyModeSearchEntry = nil; copyModePending.removeAll()
+        compositor.invalidate(); composeAndWrite()
+    }
+
+    private func focusedCopyGrid() -> HarnessGridTerminal? {
+        guard let s = copyModeSurface else { return nil }
+        return terminals[s]
+    }
+
+    private func handleCopyModeByte(_ byte: UInt8) {
+        guard copyMode != nil else { return }
+        if copyModeSearchEntry != nil { handleCopyModeSearchByte(byte); return }
+        copyModePending.append(byte)
+        switch copyModeDecode(copyModePending) {
+        case .incomplete:
+            return
+        case let .complete(spec):
+            copyModePending.removeAll(keepingCapacity: true)
+            if let table = keyTables.table(KeyTableID.copyMode(modeKeys: modeKeys)),
+               case let .copyModeCommand(action)? = table.lookup(spec)?.command {
+                performCopyMode(action)
+            }
+        case .literalPrefix, .invalid:
+            copyModePending.removeAll(keepingCapacity: true)
+        }
+    }
+
+    private func handleCopyModeSearchByte(_ byte: UInt8) {
+        switch byte {
+        case 0x0d, 0x03: // Enter — commit the search
+            let query = copyModeSearchEntry ?? ""
+            copyModeSearchEntry = nil
+            if let cm = copyMode, let grid = focusedCopyGrid(), !query.isEmpty {
+                copyMode = CopyModeReducer.applySearch(cm, query: query, reverse: cm.search.reverse, grid: grid)
+            }
+            compositor.invalidate(); composeAndWrite()
+        case 0x1b: // Escape — abandon
+            copyModeSearchEntry = nil
+            compositor.invalidate(); composeAndWrite()
+        case 0x7f, 0x08: // Backspace
+            if var q = copyModeSearchEntry, !q.isEmpty { q.removeLast(); copyModeSearchEntry = q }
+            composeAndWrite()
+        default:
+            if byte >= 0x20, byte < 0x7f {
+                copyModeSearchEntry = (copyModeSearchEntry ?? "") + String(Unicode.Scalar(byte))
+            }
+            composeAndWrite()
+        }
+    }
+
+    /// Decode copy-mode input bytes into a `KeySpec` — like `decodeKeySpec` but mapping the
+    /// special single bytes (Enter / Backspace / Tab / Space) to their named keys.
+    private func copyModeDecode(_ bytes: [UInt8]) -> KeySpecDecode {
+        if bytes.count == 1 {
+            switch bytes[0] {
+            case 0x0d, 0x03: return .complete(KeySpec(key: "Enter"))
+            case 0x7f, 0x08: return .complete(KeySpec(key: "Backspace"))
+            case 0x09: return .complete(KeySpec(key: "Tab"))
+            case 0x20: return .complete(KeySpec(key: "Space"))
+            case 0x1b: return .incomplete // may begin a CSI/arrow sequence
+            default: break
+            }
+        }
+        return Self.decodeKeySpec(bytes)
+    }
+
+    private func performCopyMode(_ action: CopyModeAction) {
+        guard let cm = copyMode, let grid = focusedCopyGrid() else { return }
+        let (next, effect) = CopyModeReducer.reduce(cm, action, grid: grid)
+        copyMode = next
+        switch effect {
+        case .none:
+            compositor.invalidate(); composeAndWrite()
+        case let .copy(text):
+            writeCopyBuffer(text); compositor.invalidate(); composeAndWrite()
+        case let .copyAndCancel(text):
+            writeCopyBuffer(text); exitCopyMode()
+        case let .pipe(text, command):
+            runCopyPipe(text: text, command: command); exitCopyMode()
+        case .paste:
+            exitCopyMode(); pasteBufferIntoActive()
+        case .cancel:
+            exitCopyMode()
+        case .beginSearchEntry:
+            copyModeSearchEntry = ""; composeAndWrite()
+        }
+    }
+
+    private func copyModeStatusLine() -> String? {
+        guard let cm = copyMode else { return nil }
+        if let entry = copyModeSearchEntry { return clip((cm.search.reverse ? "?" : "/") + entry, to: cols) }
+        return clip(cm.statusLine() + (synchronize ? "  [sync]" : ""), to: cols)
+    }
+
+    /// Yank: set the client's own clipboard via OSC 52 (gated on `set-clipboard`) and mirror
+    /// into the daemon buffer so the GUI and other clients see the same yank.
+    private func writeCopyBuffer(_ text: String) {
+        guard !text.isEmpty else { return }
+        if allowClipboard {
+            writeOut("\u{1b}]52;c;\(Data(text.utf8).base64EncodedString())\u{07}")
+        }
+        if let data = text.data(using: .utf8) {
+            _ = try? client.request(.setBuffer(name: nil, data: data), timeout: 1)
+        }
+    }
+
+    private func runCopyPipe(text: String, command: String) {
+        guard !text.isEmpty, !command.isEmpty else { return }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", command]
+        let pipe = Pipe()
+        p.standardInput = pipe
+        if (try? p.run()) != nil {
+            pipe.fileHandleForWriting.write(Data(text.utf8))
+            try? pipe.fileHandleForWriting.close()
+        }
+    }
+
+    private func pasteBufferIntoActive() {
+        guard let active = activeSurface else { return }
+        _ = try? client.request(.pasteBuffer(surfaceID: active, name: nil, bracketed: false), timeout: 1)
+    }
+
+    /// OSC 52 from a pane's program → the client's clipboard + the daemon buffer. Already on
+    /// `renderQueue` (fired synchronously while feeding the terminal).
+    private func handleProgramClipboard(_ text: String, surface: String) {
+        guard allowClipboard, !text.isEmpty else { return }
+        writeOut("\u{1b}]52;c;\(Data(text.utf8).base64EncodedString())\u{07}")
+        if let data = text.data(using: .utf8) {
+            _ = try? client.request(.setBuffer(name: nil, data: data), timeout: 1)
+        }
+    }
+
+    // MARK: Mouse (SGR 1006) — runs on renderQueue
+
+    private func handleMouse(_ seq: [UInt8]) {
+        guard let e = SGRMouse.parse(seq),
+              let route = SGRMouse.route(column: e.column, row: e.row, rects: rects),
+              route.index < rects.count else { return }
+        let rect = rects[route.index]
+        let sid = rect.surfaceID.uuidString
+        // A non-wheel press focuses the pane (server-authoritative).
+        if !e.release, !e.motion, !e.wheel, sid != activeSurface {
+            activeSurface = sid
+            _ = try? client.request(.selectPane(tabID: tab.id, paneID: rect.paneID), timeout: 1)
+            compositor.invalidate(); composeAndWrite()
+        }
+        // Forward re-based to the pane only if its program enabled mouse tracking.
+        guard let term = terminals[sid], term.modes.mouseTrackingEnabled else { return }
+        let bytes = InputEncoder().encodeMouse(
+            button: mouseButton(e), kind: mouseKind(e),
+            column: route.localColumn, row: route.localRow,
+            modifiers: mouseModifiers(e), modes: term.modes
+        )
+        if !bytes.isEmpty { _ = try? client.request(.sendData(surfaceID: sid, data: Data(bytes)), timeout: 1) }
+    }
+
+    private func mouseButton(_ e: SGRMouseEvent) -> MouseButton {
+        if e.wheel { return e.button == 0 ? .wheelUp : .wheelDown }
+        switch e.button { case 1: return .middle; case 2: return .right; default: return .left }
+    }
+
+    private func mouseKind(_ e: SGRMouseEvent) -> MouseEventKind {
+        if e.release { return .release }
+        if e.motion { return .drag }
+        return .press
+    }
+
+    private func mouseModifiers(_ e: SGRMouseEvent) -> KeyModifiers {
+        var m: KeyModifiers = []
+        if e.shift { m.insert(.shift) }
+        if e.meta { m.insert(.option) }
+        if e.control { m.insert(.control) }
+        return m
+    }
+
+    // MARK: synchronize-panes / display-panes — runs on renderQueue
+
+    private func toggleSynchronize(_ set: Bool?) {
+        synchronize = set ?? !synchronize
+        flashStatus(synchronize ? "synchronize-panes on" : "synchronize-panes off")
+    }
+
+    private func showDisplayPanes() {
+        showPaneNumbers = true
+        displayPanesToken += 1
+        let token = displayPanesToken
+        compositor.invalidate(); composeAndWrite()
+        renderQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, self.displayPanesToken == token else { return }
+            self.dismissPaneNumbers()
+        }
+    }
+
+    private func dismissPaneNumbers() {
+        guard showPaneNumbers else { return }
+        showPaneNumbers = false
+        compositor.invalidate(); composeAndWrite()
+    }
+
+    private func selectPaneByDisplayIndex(_ index: Int) {
+        showPaneNumbers = false
+        let pos = index - paneBaseIndex
+        if pos >= 0, pos < rects.count {
+            let rect = rects[pos]
+            activeSurface = rect.surfaceID.uuidString
+            _ = try? client.request(.selectPane(tabID: tab.id, paneID: rect.paneID), timeout: 1)
+        }
+        compositor.invalidate(); composeAndWrite()
+    }
+
+    /// Pane-number labels drawn at each pane's center (emitted after the composited frame).
+    private func paneNumbersOverlay() -> String {
+        var out = ""
+        for (i, rect) in rects.enumerated() {
+            let label = "\(paneBaseIndex + i)"
+            let cx = rect.x + max(0, rect.cols / 2 - label.count / 2)
+            let cy = rect.y + rect.rows / 2
+            guard cx >= 0, cx < cols, cy >= 0, cy < rows else { continue }
+            out += "\u{1b}[\(cy + 1);\(cx + 1)H\u{1b}[1;7m\(label)\u{1b}[0m"
+        }
+        return out
     }
 
     // MARK: Prefix → KeySpec → Command → IPC
@@ -608,8 +962,15 @@ private final class WindowSession: @unchecked Sendable {
             if let active = activeSurface {
                 _ = try? client.request(.sendData(surfaceID: active, data: Data([configuration.prefix])), timeout: 1)
             }
-        case .copyMode, .synchronizePanes, .displayPanes, .showCheatsheet,
-             .sourceConfig, .reloadKeybindings, .bindKey, .unbindKey, .listKeys,
+        case .copyMode:
+            if copyMode != nil { exitCopyMode() } else { enterCopyMode() }
+        case let .copyModeCommand(action):
+            if copyMode != nil { performCopyMode(action) }
+        case let .synchronizePanes(set):
+            toggleSynchronize(set)
+        case .displayPanes:
+            showDisplayPanes()
+        case .showCheatsheet, .sourceConfig, .reloadKeybindings, .bindKey, .unbindKey, .listKeys,
              .renameWindow, .renameSession, .runShell, .ifShell:
             break
         default:
@@ -717,6 +1078,7 @@ private final class WindowSession: @unchecked Sendable {
     }
 
     private func teardown() {
+        if mouseEnabled { setOuterMouseTracking(false) }
         snapshotSubscription?.cancel()
         sigwinch?.cancel()
         sigterm?.cancel()
