@@ -49,6 +49,30 @@ final class KeyTableTests: XCTestCase {
         XCTAssertEqual(prefix?.lookup(KeySpec(key: "d"))?.command, .detachClient)
     }
 
+    func testCopyModePromptJumpBindings() {
+        let defaults = KeyTableSet.defaults
+        // vi copy-mode: bare [ / ] jump between OSC 133 prompts (free keys — no prior binding).
+        let vi = defaults.table(.copyMode)
+        XCTAssertEqual(vi?.lookup(KeySpec(key: "["))?.command, .copyModeCommand(.previousPrompt))
+        XCTAssertEqual(vi?.lookup(KeySpec(key: "]"))?.command, .copyModeCommand(.nextPrompt))
+        // emacs copy-mode: M-[ / M-] (the bare brackets stay free there).
+        let emacs = defaults.table(.copyModeEmacs)
+        XCTAssertEqual(emacs?.lookup(KeySpec(key: "[", modifiers: .option))?.command, .copyModeCommand(.previousPrompt))
+        XCTAssertEqual(emacs?.lookup(KeySpec(key: "]", modifiers: .option))?.command, .copyModeCommand(.nextPrompt))
+        XCTAssertNil(emacs?.lookup(KeySpec(key: "[")), "bare [ is unbound in emacs copy-mode")
+    }
+
+    func testNoDuplicateKeySpecsInDefaultTables() {
+        // Each default table must map every KeySpec at most once — guards against a new binding
+        // silently shadowing an existing one (e.g. the copy-mode prompt-jump keys).
+        for table in [KeyTableSet.defaults.table(.prefix),
+                      KeyTableSet.defaults.table(.copyMode),
+                      KeyTableSet.defaults.table(.copyModeEmacs)].compactMap({ $0 }) {
+            let specs = table.bindings.map(\.spec)
+            XCTAssertEqual(Set(specs).count, specs.count, "duplicate KeySpec in table \(table.id.rawValue)")
+        }
+    }
+
     func testKeyTableSetJSONRoundTripPreservesBindings() throws {
         var set = KeyTableSet.defaults
         set.setBinding(
