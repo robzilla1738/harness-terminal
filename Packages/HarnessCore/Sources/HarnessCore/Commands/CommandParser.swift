@@ -58,7 +58,7 @@ public enum CommandParser {
     /// (not in the alias table) are listed explicitly.
     private static let universalTargetCommands: Set<String> = [
         "split-window", "kill-pane", "zoom-pane", "resize-pane", "break-pane",
-        "respawn-pane", "send-keys", "pipe-pane", "copy-mode", "display-panes",
+        "respawn-pane", "send-keys", "pipe-pane",
         "synchronize-panes", "synchronize-pane", "setw-synchronize",
         "kill-window", "kill-tab", "rename-window", "rename-tab",
         "new-window", "new-tab", "rotate-window", "select-layout",
