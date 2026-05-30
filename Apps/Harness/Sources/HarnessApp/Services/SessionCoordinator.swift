@@ -783,6 +783,11 @@ final class SessionCoordinator: NSObject {
         guard !surfaces.isEmpty else { return }
         let target = activeSurfaceID.flatMap { surfaces.contains($0) ? $0 : nil } ?? surfaces.first
         setActiveSurface(target)
+        // Focus the active pane's terminal so typing + copy/paste target it immediately.
+        // Reused host views don't re-fire `viewDidMoveToWindow`, so this mount path (run on
+        // every tab/pane switch) must re-assert first responder explicitly — otherwise the
+        // first responder can linger on the previous tab's view and ⌘C/⌘V miss.
+        if let target { terminalHosts.host(for: target)?.focusTerminal() }
     }
 
     /// Persist a divider drag. Metadata-only sync: ratio isn't part of the structure
@@ -1139,9 +1144,16 @@ struct NotificationEntry: Identifiable, Equatable {
 
 enum DesktopNotifier {
     /// Call once at app launch. macOS only shows the system prompt the first
-    /// time; subsequent calls are no-ops, so it's safe to call eagerly.
+    /// time; subsequent calls are no-ops, so it's safe to call eagerly. Also
+    /// installs the foreground-presentation delegate (see `ForegroundPresenter`).
     static func requestAuthorizationIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let center = UNUserNotificationCenter.current()
+        // Without a delegate that opts in, macOS suppresses banners while Harness is
+        // the *frontmost* app — so an agent notification fired while you're looking at
+        // another tab would silently no-op. The presenter forces banner + sound + list
+        // even in the foreground, so agent alerts always land.
+        center.delegate = ForegroundPresenter.shared
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     static func show(title: String, body: String) {
@@ -1155,6 +1167,18 @@ enum DesktopNotifier {
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
+    }
+}
+
+/// Presents agent notifications as banners even when Harness is frontmost (the OS
+/// default is to swallow them). Retained for the process lifetime as the UN delegate.
+private final class ForegroundPresenter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    static let shared = ForegroundPresenter()
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .list])
     }
 }
 

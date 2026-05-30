@@ -35,6 +35,7 @@
 		45E2642BFD60553E6EA324C2 /* IPCCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C695B1C26A7FA88933015EA9 /* IPCCodecTests.swift */; };
 		462BFDEBB8E6FFEFF10D6894 /* MainExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0BE46A5684BB96C3AA6A5B7 /* MainExecutor.swift */; };
 		47102D21BF4044022C7ECC55 /* DaemonClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95E00597E6EFB295BF2C5F30 /* DaemonClientTests.swift */; };
+		48096D7AA18CB188888E9DBE /* AgentIconArt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37A1E77B9A17BCCE6E3A73CE /* AgentIconArt.swift */; };
 		4DC7CBA5BF35736A11DC6E09 /* SettingsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3795E2DEFD632939D5189F1 /* SettingsViewController.swift */; };
 		500DF187BF0BAC34536AD11D /* DaemonRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CF685349756C2A772058EB5 /* DaemonRoundTripTests.swift */; };
 		54C8A46E825AC07DDBD53041 /* GridCompositorCopyModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D719192EF917E6990605D1 /* GridCompositorCopyModeTests.swift */; };
@@ -44,6 +45,7 @@
 		596F02748B0B7021508AC3EE /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B7B1A021E55C4A6011748BE /* main.swift */; };
 		5A68F3B2BD936068C04B9EAD /* HarnessCore in Frameworks */ = {isa = PBXBuildFile; productRef = F84CE2E92D80B7A9BDA443D8 /* HarnessCore */; };
 		5B0C9250EA8AE2DF9037D1CF /* WindowAttachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 810B898B2D70CB86701434A2 /* WindowAttachClient.swift */; };
+		63A7BB255C20C0417076524A /* AgentIconRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EF7E2D845AA0AA644F588C /* AgentIconRenderer.swift */; };
 		63C7CD099AACC03EB1AFC50B /* TabAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BACA7ED813936C9B469999C /* TabAlertTests.swift */; };
 		65F2B3A9B42810F01F1D7E85 /* MainSplitViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 828CC6240A158B83682E2A30 /* MainSplitViewController.swift */; };
 		69E1E0B522D02B059CFE5F6A /* CommandPromptController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3912417CC3E06CEA28B664B /* CommandPromptController.swift */; };
@@ -63,6 +65,7 @@
 		8C2F7C87968A67B3CD5047EB /* WaitForRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5FB4C8179560E786F5B2B4 /* WaitForRegistry.swift */; };
 		91572F33CB49E6A8D9B8E691 /* CommandPaletteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 245FF7D7A3A8434F040E6812 /* CommandPaletteController.swift */; };
 		920F928297C458ABDBEF88EC /* PaneRectSolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE940990023268131E49D65 /* PaneRectSolverTests.swift */; };
+		92C279BDB914554A462FEDAE /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDDF46E038BBABC664D2CB1A /* MenuBarController.swift */; };
 		935E07FA27015FDA59C248B3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D745FE112DC4440236DABA22 /* Assets.xcassets */; };
 		943AD084AA6FBB7491B4F789 /* TargetSpecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 198091B7F721046BA174F52D /* TargetSpecTests.swift */; };
 		969DF05AF1093B44B62120CD /* TerminalTabBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB39A88BC9BC722B53472CB4 /* TerminalTabBarView.swift */; };
@@ -94,6 +97,7 @@
 		DA2D4A06C95D60F7ECE577C1 /* Phase67UI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B6EE4051D1702BE7F6D1AC /* Phase67UI.swift */; };
 		DBDA5C22F9B1EC5F6B0F170B /* HarnessTerminalEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 71AA2E606C228A77FE9CB2A7 /* HarnessTerminalEngine */; };
 		DD59B3A79B69AF4E1B5E03D1 /* SGRMouseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7772697307FDEA3BF08C4EF /* SGRMouseTests.swift */; };
+		DE626E15C6B2794EC4787132 /* HarnessLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = DE9E43E8439F63774978C118 /* HarnessLogo.png */; };
 		E90605C2B7F2EDE9C662D9D0 /* Phase67Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0711E05B3BE71410054E6BEE /* Phase67Tests.swift */; };
 		EA3D4454CC7EEF45E59580C9 /* HarnessCore in Frameworks */ = {isa = PBXBuildFile; productRef = 15F6BDB0D66F28E216C388F0 /* HarnessCore */; };
 		EB5A603F04A122C4B8CEC6BF /* CopyModeReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC26C5F0BC01F83A6FCD844 /* CopyModeReducerTests.swift */; };
@@ -160,6 +164,7 @@
 		275F951E6B2787DECD0F1C56 /* TerminalConfigImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConfigImporterTests.swift; sourceTree = "<group>"; };
 		29418A46AB7F4FBE7BF700DF /* SessionEditorPhase4Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEditorPhase4Tests.swift; sourceTree = "<group>"; };
 		33CC50B5E96F7A36C8B559D0 /* HarnessSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessSettingsTests.swift; sourceTree = "<group>"; };
+		37A1E77B9A17BCCE6E3A73CE /* AgentIconArt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentIconArt.swift; sourceTree = "<group>"; };
 		3AF4631CE23460A1A0A4BEC4 /* AgentScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentScanner.swift; sourceTree = "<group>"; };
 		41B78BE3F3AF6A844038EF95 /* HarnessCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessCLI.swift; sourceTree = "<group>"; };
 		41D469BFCF05F3CDA66D3777 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
@@ -215,11 +220,14 @@
 		C98251A71A00B4D1AAD8859A /* SessionEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEditorTests.swift; sourceTree = "<group>"; };
 		CA12DE19711C76D4DAF36509 /* NotificationDropdownPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDropdownPanel.swift; sourceTree = "<group>"; };
 		CCC26C5F0BC01F83A6FCD844 /* CopyModeReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyModeReducerTests.swift; sourceTree = "<group>"; };
+		CDDF46E038BBABC664D2CB1A /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
 		D3E473950CF7C898DE998767 /* Harness.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Harness.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D63DA77DC70E5E962937FB27 /* harness */ = {isa = PBXFileReference; lastKnownFileType = folder; name = harness; path = .; sourceTree = SOURCE_ROOT; };
 		D745FE112DC4440236DABA22 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D798A050D3824B4FEA80EA3A /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
+		D7EF7E2D845AA0AA644F588C /* AgentIconRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentIconRenderer.swift; sourceTree = "<group>"; };
 		DC8B874CE39031F096488994 /* libHarnessDaemonCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libHarnessDaemonCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		DE9E43E8439F63774978C118 /* HarnessLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = HarnessLogo.png; sourceTree = "<group>"; };
 		DF3E79EFC3E74BAE469D8CA0 /* AttachClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachClient.swift; sourceTree = "<group>"; };
 		E8302E3F990CA380E0BEBB7A /* ShellLaunchProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellLaunchProfileTests.swift; sourceTree = "<group>"; };
 		E87D766FA02E02860C0BAC11 /* PrefixKeymap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrefixKeymap.swift; sourceTree = "<group>"; };
@@ -346,6 +354,8 @@
 			isa = PBXGroup;
 			children = (
 				95A58F250B6A8AE811D9CE25 /* AboutPanelController.swift */,
+				37A1E77B9A17BCCE6E3A73CE /* AgentIconArt.swift */,
+				D7EF7E2D845AA0AA644F588C /* AgentIconRenderer.swift */,
 				245FF7D7A3A8434F040E6812 /* CommandPaletteController.swift */,
 				F3912417CC3E06CEA28B664B /* CommandPromptController.swift */,
 				5A0B5969E6A4582978144B11 /* ContentAreaViewController.swift */,
@@ -356,6 +366,7 @@
 				48EBC3C7A2C25776245FBF88 /* MainMenuBuilder.swift */,
 				828CC6240A158B83682E2A30 /* MainSplitViewController.swift */,
 				D798A050D3824B4FEA80EA3A /* MainWindowController.swift */,
+				CDDF46E038BBABC664D2CB1A /* MenuBarController.swift */,
 				196C649521C73E076101AF6E /* NotificationBellButton.swift */,
 				CA12DE19711C76D4DAF36509 /* NotificationDropdownPanel.swift */,
 				86FAF41DBA8B11C7DD568780 /* OnboardingController.swift */,
@@ -504,6 +515,7 @@
 			children = (
 				D745FE112DC4440236DABA22 /* Assets.xcassets */,
 				9CBF9C616141AB5AFCF041D6 /* Harness.icns */,
+				DE9E43E8439F63774978C118 /* HarnessLogo.png */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -821,6 +833,7 @@
 			files = (
 				935E07FA27015FDA59C248B3 /* Assets.xcassets in Resources */,
 				8C00D38E0430620212133366 /* Harness.icns in Resources */,
+				DE626E15C6B2794EC4787132 /* HarnessLogo.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -857,6 +870,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				96B5B80B9642C56442FC024D /* AboutPanelController.swift in Sources */,
+				48096D7AA18CB188888E9DBE /* AgentIconArt.swift in Sources */,
+				63A7BB255C20C0417076524A /* AgentIconRenderer.swift in Sources */,
 				4562647C37E383D4146761CE /* AppDelegate.swift in Sources */,
 				D45EFB29397B90EF2E46C35D /* CLIInstaller.swift in Sources */,
 				91572F33CB49E6A8D9B8E691 /* CommandPaletteController.swift in Sources */,
@@ -874,6 +889,7 @@
 				A284F16041A5DCFDB4AD94F4 /* MainMenuBuilder.swift in Sources */,
 				65F2B3A9B42810F01F1D7E85 /* MainSplitViewController.swift in Sources */,
 				CD1734C04213D881E6A943EA /* MainWindowController.swift in Sources */,
+				92C279BDB914554A462FEDAE /* MenuBarController.swift in Sources */,
 				77455A95D1E79921E852B7B0 /* NotificationBellButton.swift in Sources */,
 				9D85B25DAE578F41F445768E /* NotificationDropdownPanel.swift in Sources */,
 				9C6DEF330BAF774917666A83 /* OnboardingController.swift in Sources */,

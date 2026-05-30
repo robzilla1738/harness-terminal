@@ -29,6 +29,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         target: nil,
         action: nil
     )
+    private let showStatusLineToggle = NSButton(
+        checkboxWithTitle: "Show status line (bottom bar)",
+        target: nil,
+        action: nil
+    )
     private let cursorStylePopup = NSPopUpButton()
     private let cursorBlinkToggle = NSButton(
         checkboxWithTitle: "Blinking cursor",
@@ -294,6 +299,10 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         transparentTitlebarToggle.target = self
         transparentTitlebarToggle.action = #selector(appearanceTextDidCommit)
 
+        showStatusLineToggle.state = settings.showStatusLine ? .on : .off
+        showStatusLineToggle.target = self
+        showStatusLineToggle.action = #selector(appearanceTextDidCommit)
+
         useThemeColorsButton.title = "Use Theme Colors"
         useThemeColorsButton.target = self
         useThemeColorsButton.action = #selector(useThemeColors)
@@ -514,6 +523,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("Blur", blurRow),
             ("Padding", paddingRow),
             ("", transparentTitlebarToggle),
+            ("", showStatusLineToggle),
         ])
 
         let stack = NSStackView(views: [
@@ -970,8 +980,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         let preview = AgentChipView()
         preview.translatesAutoresizingMaskIntoConstraints = false
         preview.heightAnchor.constraint(equalToConstant: 18).isActive = true
-        preview.widthAnchor.constraint(equalToConstant: 126).isActive = true
-        preview.configure(text: kind.displayName, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
+        preview.widthAnchor.constraint(lessThanOrEqualToConstant: 126).isActive = true
+        preview.configure(kind: kind, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
         agentColorPreviews[kind] = preview
 
         let row = NSStackView(views: [agentColorWells[kind] ?? NSView(), label, preview])
@@ -1157,7 +1167,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         let coordinator = SessionCoordinator.shared
         coordinator.settings.agentColorOverrides[kind.rawValue] = hexString(sender.color)
         coordinator.settings.agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(coordinator.settings.agentColorOverrides)
-        agentColorPreviews[kind]?.configure(text: kind.displayName, hex: coordinator.settings.agentColorHex(for: kind))
+        agentColorPreviews[kind]?.configure(kind: kind, hex: coordinator.settings.agentColorHex(for: kind))
         try? coordinator.settings.save()
         coordinator.applySettingsToHosts()
     }
@@ -1167,7 +1177,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.agentColorOverrides.removeAll()
         for (kind, well) in agentColorWells {
             well.color = NSColor.fromHex(coordinator.settings.agentColorHex(for: kind)) ?? .gray
-            agentColorPreviews[kind]?.configure(text: kind.displayName, hex: coordinator.settings.agentColorHex(for: kind))
+            agentColorPreviews[kind]?.configure(kind: kind, hex: coordinator.settings.agentColorHex(for: kind))
         }
         try? coordinator.settings.save()
         coordinator.applySettingsToHosts()
@@ -1199,6 +1209,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         linearBlendingToggle.state = settings.linearBlending ? .on : .off
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         ligaturesToggle.state = settings.ligatures ? .on : .off
+        showStatusLineToggle.state = settings.showStatusLine ? .on : .off
         for binding in colorBindings {
             binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
@@ -1255,6 +1266,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         }
         coordinator.settings.paletteHex = HarnessSettings.normalizedPalette(paletteHexValues)
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
+        coordinator.settings.showStatusLine = showStatusLineToggle.state == .on
         coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
         coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
         coordinator.settings.fontSize = Float(fontSizeField.stringValue) ?? 14

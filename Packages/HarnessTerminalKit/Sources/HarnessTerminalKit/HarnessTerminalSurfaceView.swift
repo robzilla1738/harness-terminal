@@ -96,6 +96,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var columns: Int = 80
     private var rows: Int = 24
     private var renderScheduled = false
+    /// True once the grid has been sized from a real layout — the first sizing commits
+    /// immediately (so the terminal opens at the right size); later changes coalesce.
+    private var hasSizedGrid = false
+    /// Pending coalesced grid+PTY resize. A sidebar slide / window drag calls `layout()`
+    /// every frame; committing the grid reflow + PTY `SIGWINCH` each time storms the shell
+    /// (fish/zsh redraw their prompt faster than they coalesce → overlapping garbage). The
+    /// drawable still updates every frame for a smooth visual; the grid + PTY commit once the
+    /// size settles.
+    private var resizeCommitWork: DispatchWorkItem?
     /// Safety valve for DEC 2026 synchronized output: a program that enters a synchronized
     /// frame but never ends it must not freeze the display, so we force-present after this.
     private var syncTimeout: DispatchWorkItem?
@@ -380,12 +389,38 @@ public final class HarnessTerminalSurfaceView: NSView {
 
         let newCols = max(1, usableWidth / renderer.cellPixelWidth)
         let newRows = max(1, usableHeight / renderer.cellPixelHeight)
-        if newCols != columns || newRows != rows {
-            columns = newCols
-            rows = newRows
-            emulator.resize(cols: columns, rows: rows)
-            onResize?(columns, rows)
+        guard newCols != columns || newRows != rows else { return }
+        if !hasSizedGrid {
+            // First real layout: size immediately so the terminal opens correct (no flash).
+            hasSizedGrid = true
+            commitGridSize(cols: newCols, rows: newRows)
+        } else {
+            // Coalesce: the drawable already resized above (smooth); defer the grid reflow + PTY
+            // SIGWINCH until the size settles so a sidebar slide / window drag can't storm the
+            // shell. Each layout reschedules, so the commit fires once after the last frame.
+            scheduleResizeCommit(cols: newCols, rows: newRows)
         }
+    }
+
+    private func scheduleResizeCommit(cols: Int, rows: Int) {
+        resizeCommitWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.commitGridSize(cols: cols, rows: rows) }
+        resizeCommitWork = work
+        // ~60ms outlasts a frame cadence so it lands once the animation/drag stops, while
+        // staying snappy enough that a deliberate resize feels immediate.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+    }
+
+    /// Commit the settled size to the emulator grid (reflow) and the PTY (one SIGWINCH),
+    /// keeping the two in lockstep, then repaint.
+    private func commitGridSize(cols: Int, rows newRows: Int) {
+        resizeCommitWork = nil
+        guard cols != columns || newRows != rows else { return }
+        columns = cols
+        rows = newRows
+        emulator.resize(cols: cols, rows: newRows)
+        onResize?(cols, newRows)
+        renderNow()
     }
 
     private func scheduleRender() {
@@ -658,6 +693,12 @@ public final class HarnessTerminalSurfaceView: NSView {
         copySelection()
     }
 
+    /// Standard responder cut (Edit ▸ Cut / ⌘X). A terminal's scrollback is read-only, so cut
+    /// behaves as copy — without this, the Edit-menu Cut item (which targets `cut:`) no-ops.
+    @objc public func cut(_ sender: Any?) {
+        copySelection()
+    }
+
     /// Standard responder paste (Edit ▸ Paste / ⌘V). Sends the clipboard text to the PTY,
     /// wrapped in bracketed-paste markers when the program enabled DECSET 2004 (so shells and
     /// editors treat it as a literal paste, not typed input). Newlines normalize to CR (the
@@ -792,12 +833,34 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
         // Let the app handle Command shortcuts (menus, palette, etc.).
         if event.modifierFlags.contains(.command) {
-            // ⌘C copies the active selection, ⌘V pastes. These also work via the Edit menu's
-            // key equivalents (which fire copy:/paste: on the first responder before keyDown);
-            // handling them here keeps copy/paste working even without the menu.
+            // ⌘ + an editing key drives readline line-editing (⌘ is otherwise reserved for the
+            // app), matching Terminal.app/Ghostty: ⌘⌫ = delete to line start (^U), ⌘← / ⌘→ =
+            // line start / end (^A / ^E). Other ⌘ keys keep falling through to the app.
+            if let special = Self.specialKey(for: event) {
+                let lineEdit: [UInt8]?
+                switch special {
+                case .backspace: lineEdit = [0x15] // ^U
+                case .left: lineEdit = [0x01]      // ^A
+                case .right: lineEdit = [0x05]     // ^E
+                default: lineEdit = nil
+                }
+                if let bytes = lineEdit {
+                    wakeCursor()
+                    snapToBottom()
+                    clearSelection()
+                    emit(bytes)
+                    return
+                }
+            }
+            // ⌘C / ⌘X copy the active selection (a read-only terminal can't truly cut, so ⌘X
+            // behaves as copy), ⌘V pastes. These also work via the Edit menu's key equivalents
+            // (which fire copy:/cut:/paste: on the first responder before keyDown); handling them
+            // here keeps copy/paste working even without the menu.
             switch event.charactersIgnoringModifiers?.lowercased() {
-            case "c" where currentSelection != nil:
-                copySelection()
+            case "c", "x":
+                // Copy/cut the selection; with no selection, let the app handle ⌘C/⌘X.
+                if currentSelection != nil { copySelection(); return }
+                super.keyDown(with: event)
                 return
             case "v":
                 paste(nil)

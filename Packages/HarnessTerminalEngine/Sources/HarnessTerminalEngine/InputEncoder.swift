@@ -52,14 +52,22 @@ public struct InputEncoder: Sendable {
         switch key {
         case .up: return cursor("A", modifiers, modes)
         case .down: return cursor("B", modifiers, modes)
-        case .right: return cursor("C", modifiers, modes)
-        case .left: return cursor("D", modifiers, modes)
+        // Option-only Left/Right send the readline/zsh-native word motions (ESC b / ESC f) —
+        // the Terminal.app & Ghostty default that shell line editors understand out of the box.
+        // Every other modifier combo keeps the xterm CSI form so TUIs that read modified arrows
+        // are unaffected.
+        case .right:
+            return modifiers == [.option] ? esc("f") : cursor("C", modifiers, modes)
+        case .left:
+            return modifiers == [.option] ? esc("b") : cursor("D", modifiers, modes)
         case .home: return cursor("H", modifiers, modes)
         case .end: return cursor("F", modifiers, modes)
         case .pageUp: return tilde(5, modifiers)
         case .pageDown: return tilde(6, modifiers)
         case .insert: return tilde(2, modifiers)
-        case .deleteForward: return tilde(3, modifiers)
+        // Option+forward-delete deletes the next word (ESC d); otherwise the CSI 3~ form.
+        case .deleteForward:
+            return modifiers == [.option] ? esc("d") : tilde(3, modifiers)
         case .f1: return ss3("P", modifiers)
         case .f2: return ss3("Q", modifiers)
         case .f3: return ss3("R", modifiers)
@@ -74,7 +82,12 @@ public struct InputEncoder: Sendable {
         case .f12: return tilde(24, modifiers)
         case .escape: return [0x1B]
         case .enter: return [0x0D]
-        case .backspace: return [0x7F]
+        // Option+Backspace deletes the previous word (ESC DEL), matching Terminal.app/Ghostty;
+        // Ctrl+Backspace sends ^H (a common word-erase). Plain Backspace stays DEL (0x7F).
+        case .backspace:
+            if modifiers.contains(.option) { return [0x1B, 0x7F] }
+            if modifiers.contains(.control) { return [0x08] }
+            return [0x7F]
         case .tab:
             return modifiers.contains(.shift) ? esc("[Z") : [0x09]
         }

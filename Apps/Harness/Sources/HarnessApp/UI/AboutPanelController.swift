@@ -37,7 +37,7 @@ enum AboutPanelController {
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        if let icon = NSApp.applicationIconImage {
+        if let icon = HarnessDesign.brandLogo() {
             let iconView = NSImageView(image: icon)
             iconView.imageScaling = .scaleProportionallyUpOrDown
             iconView.translatesAutoresizingMaskIntoConstraints = false

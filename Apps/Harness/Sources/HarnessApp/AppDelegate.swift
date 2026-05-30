@@ -5,6 +5,7 @@ import HarnessCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
+    private var menuBarController: MenuBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Build the UI immediately so launch never blocks on the daemon. The
@@ -14,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         NSApp.mainMenu = MainMenuBuilder.build()
+        // Menu-bar status item: workspaces + active agents, read from the daemon
+        // (shell-agnostic). Lives for the app's lifetime.
+        menuBarController = MenuBarController()
         PrefixKeymap.shared.install()
         SurfaceShellTracker.shared.start()
         // Request notification authorization once at launch instead of on every

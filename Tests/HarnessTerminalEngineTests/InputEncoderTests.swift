@@ -59,6 +59,28 @@ final class InputEncoderTests: XCTestCase {
         XCTAssertEqual(encoder.encode(.deleteForward), bytes("\u{1b}[3~"))
     }
 
+    // MARK: macOS line-editing keys (Terminal.app / Ghostty parity)
+
+    func testBackspaceModifiers() {
+        XCTAssertEqual(encoder.encode(.backspace), [0x7F])                      // plain → DEL
+        XCTAssertEqual(encoder.encode(.backspace, modifiers: .option), [0x1B, 0x7F]) // word delete
+        XCTAssertEqual(encoder.encode(.backspace, modifiers: .control), [0x08]) // ^H
+    }
+
+    func testOptionWordMotion() {
+        // Option-only Left/Right → readline word motions; app cursor mode irrelevant here.
+        XCTAssertEqual(encoder.encode(.left, modifiers: .option), bytes("\u{1b}b"))
+        XCTAssertEqual(encoder.encode(.right, modifiers: .option), bytes("\u{1b}f"))
+        XCTAssertEqual(encoder.encode(.deleteForward, modifiers: .option), bytes("\u{1b}d"))
+    }
+
+    func testOtherModifierArrowsStayCSI() {
+        // Anything beyond Option-only keeps the xterm CSI form (TUIs depend on it).
+        XCTAssertEqual(encoder.encode(.left, modifiers: [.option, .shift]), bytes("\u{1b}[1;4D"))
+        XCTAssertEqual(encoder.encode(.right, modifiers: .control), bytes("\u{1b}[1;5C"))
+        XCTAssertEqual(encoder.encode(.deleteForward, modifiers: .shift), bytes("\u{1b}[3;2~"))
+    }
+
     // MARK: Simple keys
 
     func testSimpleControlKeys() {

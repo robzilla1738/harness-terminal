@@ -22,6 +22,7 @@ targets:
     sources:
       - Apps/Harness/Sources/HarnessApp
       - Apps/Harness/Resources/Harness.icns
+      - Apps/Harness/Resources/HarnessLogo.png
       - Apps/Harness/Resources/Assets.xcassets
     dependencies:
       - target: HarnessDaemon

@@ -8,14 +8,23 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private let workspaceBar = NSView()
     private let workspacePill = WorkspacePillButton()
     private let notificationBell = NotificationBellButton()
-    private let searchField = NSSearchField()
+    /// Collapses the sidebar (⌘\). Lives at the sidebar's top-trailing edge, against
+    /// the divider; when the sidebar is collapsed it's gone with it (re-open via ⌘\).
+    /// Flat `.plain` style + 30×30 so it matches the neighbouring notification bell.
+    private let sidebarToggleButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 30, height: 30))
+    /// Plain editable field (not `NSSearchField`): a borderless `NSSearchField` collapses
+    /// its built-in search-button cell when it becomes first responder, which shifts the
+    /// text/insertion-point left over the placeholder and drops the magnifier — the
+    /// "messes up on click" glitch. A bare `NSTextField` + a static magnifier image view
+    /// has no such cell to collapse, so focus is rock-steady.
+    private let searchField = NSTextField()
+    private let searchIcon = NSImageView()
     /// Wraps the search field so it gets the same radius-7 elevated-surface chrome as
-    /// the workspace pill and session cards (the bare NSSearchField is a capsule).
+    /// the workspace pill and session cards.
     private let searchContainer = NSView()
     private let sectionHeader = NSView()
     private let sectionLabel = NSTextField(labelWithString: "Sessions")
     private let sessionTable = NSTableView()
-    private let settingsRow = SidebarSettingsRow()
     private let footer = NSView()
     private var sessionScroll: NSScrollView?
     private var workspaces: [Workspace] = []
@@ -80,11 +89,11 @@ final class HarnessSidebarPanelViewController: NSViewController {
         HarnessDesign.makeClear(footer)
         sectionLabel.textColor = HarnessDesign.chrome.textTertiary
         workspacePill.applyChrome()
+        sidebarToggleButton.applyChrome()
         dismissWorkspaceDropdown()
         for case let button as SoftIconButton in footer.subviews {
             button.applyChrome()
         }
-        settingsRow.applyChrome()
         applySearchChrome()
         sessionTable.reloadData()
     }
@@ -101,23 +110,26 @@ final class HarnessSidebarPanelViewController: NSViewController {
         ])
     }
 
+    /// The sidebar header row: the search field with the notification bell + sidebar toggle
+    /// to its right. Workspaces are deliberately not surfaced here (single active workspace);
+    /// the switcher machinery stays dormant so it can be re-enabled later. The search field
+    /// itself is added in `setupSearchField` (it slots into the leading space of this row).
     private func setupWorkspaceBar() {
         workspaceBar.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.makeClear(workspaceBar)
-
-        workspacePill.target = self
-        workspacePill.action = #selector(showWorkspaceMenu)
-        workspacePill.onMoreClick = { [weak self] anchor in
-            self?.showActiveWorkspaceActions(from: anchor)
-        }
-        workspacePill.translatesAutoresizingMaskIntoConstraints = false
 
         notificationBell.translatesAutoresizingMaskIntoConstraints = false
         notificationBell.target = self
         notificationBell.action = #selector(notificationBellClicked)
 
-        workspaceBar.addSubview(workspacePill)
+        sidebarToggleButton.setSymbol("sidebar.left", accessibilityDescription: "Toggle sidebar", pointSize: 13, weight: .medium)
+        sidebarToggleButton.toolTip = "Hide sidebar (⌘\\)"
+        sidebarToggleButton.target = self
+        sidebarToggleButton.action = #selector(sidebarToggleClicked)
+        sidebarToggleButton.translatesAutoresizingMaskIntoConstraints = false
+
         workspaceBar.addSubview(notificationBell)
+        workspaceBar.addSubview(sidebarToggleButton)
         view.addSubview(workspaceBar)
 
         NSLayoutConstraint.activate([
@@ -125,17 +137,20 @@ final class HarnessSidebarPanelViewController: NSViewController {
             workspaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             workspaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             workspaceBar.heightAnchor.constraint(equalToConstant: HarnessDesign.workspaceBarHeight),
-            // Left/right edges line up exactly with the search field below
-            // (both at horizontalInset) so the header reads as one aligned column.
-            workspacePill.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.horizontalInset),
-            workspacePill.trailingAnchor.constraint(equalTo: notificationBell.leadingAnchor, constant: -6),
-            workspacePill.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
-            workspacePill.heightAnchor.constraint(equalToConstant: 30),
-            notificationBell.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -HarnessDesign.horizontalInset),
+            // Toggle pinned to the trailing edge (against the divider); 30×30 like the bell.
+            sidebarToggleButton.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -HarnessDesign.horizontalInset),
+            sidebarToggleButton.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
+            sidebarToggleButton.widthAnchor.constraint(equalToConstant: 30),
+            sidebarToggleButton.heightAnchor.constraint(equalToConstant: 30),
+            notificationBell.trailingAnchor.constraint(equalTo: sidebarToggleButton.leadingAnchor, constant: -6),
             notificationBell.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
             notificationBell.widthAnchor.constraint(equalToConstant: 30),
             notificationBell.heightAnchor.constraint(equalToConstant: 30),
         ])
+    }
+
+    @objc private func sidebarToggleClicked() {
+        (view.window?.contentViewController as? MainSplitViewController)?.toggleSidebar()
     }
 
     @objc private func notificationBellClicked() {
@@ -220,7 +235,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         view.addSubview(sectionHeader)
 
         NSLayoutConstraint.activate([
-            sectionHeader.topAnchor.constraint(equalTo: searchContainer.bottomAnchor),
+            sectionHeader.topAnchor.constraint(equalTo: workspaceBar.bottomAnchor),
             sectionHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sectionHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             sectionHeader.heightAnchor.constraint(equalToConstant: 24),
@@ -237,28 +252,49 @@ final class HarnessSidebarPanelViewController: NSViewController {
         searchContainer.layer?.borderWidth = 1
         searchContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        // Borderless/clear field inside; the container owns the rounded-rect chrome so
-        // the magnifier + text sit on our standardized surface (matching the pill).
+        // Static magnifier accessory; the container owns the rounded-rect chrome so the
+        // icon + text sit on our standardized surface (matching the pill).
+        searchIcon.translatesAutoresizingMaskIntoConstraints = false
+        searchIcon.image = NSImage(
+            systemSymbolName: "magnifyingglass", accessibilityDescription: nil
+        )
+        searchIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
+        searchIcon.imageScaling = .scaleProportionallyDown
+        searchIcon.contentTintColor = HarnessChrome.current.textSecondary
+
+        // Borderless/clear single-line editable field; live filtering via the delegate
+        // (`controlTextDidChange`), not a target/action (which only fires on Enter).
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.isBezeled = false
         searchField.isBordered = false
         searchField.drawsBackground = false
+        searchField.isEditable = true
+        searchField.isSelectable = true
+        searchField.usesSingleLineMode = true
+        searchField.lineBreakMode = .byTruncatingTail
+        searchField.cell?.isScrollable = true
+        searchField.cell?.wraps = false
         searchField.font = HarnessDesign.Typography.sidebarLabel
         searchField.focusRingType = .none
-        searchField.sendsSearchStringImmediately = true
-        searchField.sendsWholeSearchString = false
-        searchField.target = self
-        searchField.action = #selector(searchChanged)
+        searchField.delegate = self
 
+        searchContainer.addSubview(searchIcon)
         searchContainer.addSubview(searchField)
-        view.addSubview(searchContainer)
+        // The search field lives in the header row, expanding from the leading edge up to the
+        // notification bell + sidebar toggle on the right.
+        workspaceBar.addSubview(searchContainer)
         NSLayoutConstraint.activate([
-            searchContainer.topAnchor.constraint(equalTo: workspaceBar.bottomAnchor, constant: 2),
-            searchContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: HarnessDesign.horizontalInset),
-            searchContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -HarnessDesign.horizontalInset),
+            searchContainer.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.horizontalInset),
+            searchContainer.trailingAnchor.constraint(equalTo: notificationBell.leadingAnchor, constant: -8),
+            searchContainer.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
             searchContainer.heightAnchor.constraint(equalToConstant: 30),
 
-            searchField.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 6),
+            searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 8),
+            searchIcon.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+            searchIcon.widthAnchor.constraint(equalToConstant: 14),
+            searchIcon.heightAnchor.constraint(equalToConstant: 14),
+
+            searchField.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 6),
             searchField.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -6),
             searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
         ])
@@ -267,11 +303,13 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private func applySearchChrome() {
         let c = HarnessChrome.current
         searchContainer.layer?.backgroundColor = c.surfaceElevated.cgColor
-        searchContainer.layer?.borderColor = c.border.cgColor
+        // Defined card rim to match the workspace pill + session cards (one component family).
+        searchContainer.layer?.borderColor = c.borderStrong.cgColor
         // Typed text + placeholder share the standardized label font, and the
         // placeholder uses the same resting color as the workspace name so the two
         // header rows read as identical type.
         searchField.textColor = c.textPrimary
+        searchIcon.contentTintColor = c.textSecondary
         searchField.placeholderAttributedString = NSAttributedString(
             string: "Search sessions…",
             attributes: [
@@ -281,7 +319,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         )
     }
 
-    @objc private func searchChanged() {
+    private func searchChanged() {
         sessionFilter = searchField.stringValue
         sessionTable.reloadData()
     }
@@ -330,24 +368,23 @@ final class HarnessSidebarPanelViewController: NSViewController {
         footer.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.makeClear(footer)
 
-        settingsRow.translatesAutoresizingMaskIntoConstraints = false
-        settingsRow.onClick = { [weak self] in self?.openSettings() }
+        // Settings is now just a gear icon button, identical in style to the +/⌘ buttons.
+        let settings = HarnessDesign.softIconButton(symbol: "gearshape", tooltip: "Settings (⌘,)")
+        settings.target = self
+        settings.action = #selector(openSettings)
 
         let newSession = HarnessDesign.softIconButton(symbol: "plus", tooltip: "New session")
         newSession.target = self
         newSession.action = #selector(addSession)
 
-        let newWS = HarnessDesign.softIconButton(symbol: "folder.badge.plus", tooltip: "New workspace")
-        newWS.target = self
-        newWS.action = #selector(addWorkspace)
-
+        // No "new workspace" control: the app runs a single workspace for now, and without a
+        // switcher a second workspace would strand the user with no way back.
         let palette = HarnessDesign.softIconButton(symbol: "command", tooltip: "Command palette (⌘K)")
         palette.target = self
         palette.action = #selector(openPalette)
 
-        footer.addSubview(settingsRow)
+        footer.addSubview(settings)
         footer.addSubview(newSession)
-        footer.addSubview(newWS)
         footer.addSubview(palette)
         view.addSubview(footer)
 
@@ -357,16 +394,13 @@ final class HarnessSidebarPanelViewController: NSViewController {
             footer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: HarnessDesign.footerHeight + 6),
 
-            settingsRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: HarnessDesign.horizontalInset - 4),
-            settingsRow.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            settingsRow.heightAnchor.constraint(equalToConstant: 32),
-            settingsRow.trailingAnchor.constraint(lessThanOrEqualTo: palette.leadingAnchor, constant: -8),
+            // Settings on the leading edge; the new-session + palette actions on the trailing.
+            settings.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: HarnessDesign.horizontalInset),
+            settings.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
 
             palette.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
             palette.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            newWS.trailingAnchor.constraint(equalTo: palette.leadingAnchor, constant: -2),
-            newWS.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            newSession.trailingAnchor.constraint(equalTo: newWS.leadingAnchor, constant: -2),
+            newSession.trailingAnchor.constraint(equalTo: palette.leadingAnchor, constant: -2),
             newSession.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
         ])
     }
@@ -720,6 +754,13 @@ final class HarnessSidebarPanelViewController: NSViewController {
         }
         SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: id)
         SessionCoordinator.shared.syncFromDaemon()
+    }
+}
+
+extension HarnessSidebarPanelViewController: NSTextFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSTextField) === searchField else { return }
+        searchChanged()
     }
 }
 
@@ -1145,7 +1186,9 @@ final class WorkspacePillButton: NSButton {
         let c = HarnessDesign.chrome
         layer?.cornerRadius = HarnessDesign.Radius.card
         layer?.borderWidth = 1
-        layer?.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
+        // Defined card rim (matches the session-card "side tab" look) rather than the
+        // near-invisible hairline; brightens further on hover.
+        layer?.borderColor = (isHovered ? c.focusRing.withAlphaComponent(c.isDark ? 0.45 : 0.50) : c.borderStrong).cgColor
         let resting = c.surfaceElevated
         let hover = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.12)
         layer?.backgroundColor = (isHovered ? hover : resting).cgColor
@@ -1262,7 +1305,7 @@ final class SessionCardRowView: NSView {
         metaLabel.stringValue = metaParts.joined(separator: "  •  ")
 
         if let kind = displayedAgentKind {
-            agentChip.configure(text: kind.displayName, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
+            agentChip.configure(kind: kind, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
             agentChip.isHidden = false
         } else {
             agentChip.isHidden = true
@@ -1322,100 +1365,4 @@ final class SessionCardRowView: NSView {
     }
 }
 
-// MARK: - Settings row
-
-/// Pinned "Settings" entry at the bottom of the sidebar (Warp-style). A plain view
-/// (not NSButton — same reasoning as WorkspaceSwitcherRow: the bezel insets shift the
-/// fill). Highlights while the inline Settings panel is showing.
-@MainActor
-final class SidebarSettingsRow: NSView {
-    var onClick: (() -> Void)?
-
-    private let icon = NSImageView()
-    private let label = NSTextField(labelWithString: "Settings")
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false { didSet { applyChrome() } }
-    private var isActive = false
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = HarnessDesign.cornerRadius
-        layer?.cornerCurve = .continuous
-        translatesAutoresizingMaskIntoConstraints = false
-
-        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-        icon.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)?
-            .withSymbolConfiguration(config)
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.imageScaling = .scaleProportionallyUpOrDown
-
-        label.font = HarnessDesign.Typography.sidebarLabel
-        label.translatesAutoresizingMaskIntoConstraints = false
-        toolTip = "Settings (⌘,)"
-
-        addSubview(icon)
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16),
-            icon.heightAnchor.constraint(equalToConstant: 16),
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            // Equality (not <=) so the row sizes to its content and reads as a compact
-            // button in the footer rather than stretching the full sidebar width.
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-        ])
-        setContentHuggingPriority(.required, for: .horizontal)
-        applyChrome()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    func setActive(_ active: Bool) {
-        isActive = active
-        applyChrome()
-    }
-
-    func applyChrome() {
-        let c = HarnessDesign.chrome
-        layer?.cornerRadius = HarnessDesign.cornerRadius
-        if isActive {
-            layer?.backgroundColor = c.accent.withAlphaComponent(c.isDark ? 0.13 : 0.10).cgColor
-            icon.contentTintColor = c.accent
-            label.textColor = c.textPrimary
-        } else if isHovered {
-            layer?.backgroundColor = c.rowHoverFill.cgColor
-            icon.contentTintColor = c.textPrimary
-            label.textColor = c.textPrimary
-        } else {
-            layer?.backgroundColor = NSColor.clear.cgColor
-            icon.contentTintColor = c.textTertiary
-            label.textColor = c.textSecondary
-        }
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-    override func mouseDown(with event: NSEvent) {}
-    override func mouseUp(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if bounds.contains(point) { onClick?() }
-    }
-}
 

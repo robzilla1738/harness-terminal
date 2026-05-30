@@ -62,19 +62,19 @@ enum CommandPaletteController {
         panel.contentViewController = controller
         panel.delegate = controller
 
-        // Centered on the parent window (Spotlight-style — slightly above
-        // center so it doesn't feel buried under text the user is reading).
-        // Falling back to screen center when there is no parent window keeps
-        // the palette usable from an empty-app launch.
+        // Centered on the parent window — exactly, both axes (no vertical bias).
+        // Falling back to screen center when there is no parent window keeps the
+        // palette usable from an empty-app launch. Origins are rounded so the
+        // borderless panel lands on whole points (no half-pixel blur on its text).
         if let frame = parent?.frame {
             panel.setFrameOrigin(NSPoint(
-                x: frame.midX - panel.frame.width / 2,
-                y: frame.midY - panel.frame.height / 2 + frame.height * 0.10
+                x: (frame.midX - panel.frame.width / 2).rounded(),
+                y: (frame.midY - panel.frame.height / 2).rounded()
             ))
         } else if let screenFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
             panel.setFrameOrigin(NSPoint(
-                x: screenFrame.midX - panel.frame.width / 2,
-                y: screenFrame.midY - panel.frame.height / 2 + screenFrame.height * 0.10
+                x: (screenFrame.midX - panel.frame.width / 2).rounded(),
+                y: (screenFrame.midY - panel.frame.height / 2).rounded()
             ))
         } else {
             panel.center()

@@ -43,6 +43,7 @@ roadmap (documented, not shipped half-wired) · ➖ n/a.
 | OSC 52 clipboard | ✅ | ✅ (gated on `set-clipboard`) |
 | OSC 7 cwd, OSC 0/2 title | ✅ | ✅ (drives the sidebar/tab labels) |
 | DSR / DA / cursor reports | ✅ | ✅ |
+| **macOS line-editing keys** (Option-as-Meta) | ✅ | ✅ Option+⌫ → ESC DEL (word), Option+←/→ → ESC b/f (word), ⌘⌫ → ^U, ⌘←/→ → ^A/^E |
 | **Kitty keyboard protocol** | ✅ | 🛣️ (see "Deliberate roadmap") |
 | Shell integration / semantic prompts (OSC 133) | ✅ | 🛣️ (Harness uses agent hooks + OSC 7 for the same UI today) |
 

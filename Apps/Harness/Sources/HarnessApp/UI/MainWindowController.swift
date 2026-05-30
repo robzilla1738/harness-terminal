@@ -21,7 +21,9 @@ final class MainWindowController: NSWindowController {
         )
         window.title = "Harness"
         window.isRestorable = false
-        window.minSize = NSSize(width: 960, height: 600)
+        // Allow a genuinely narrow window (single-pane / sidebar-collapsed use). The
+        // sidebar can be hidden (⌘\), so we don't reserve room for it in the floor.
+        window.minSize = NSSize(width: 480, height: 400)
         window.titlebarAppearsTransparent = SessionCoordinator.shared.settings.transparentTitlebar
         window.titleVisibility = .hidden
         if #available(macOS 11.0, *) {
@@ -29,6 +31,11 @@ final class MainWindowController: NSWindowController {
         }
         window.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
         window.contentViewController = MainSplitViewController()
+        // Assigning `contentViewController` resizes the window to the split view's
+        // fitting size (~sidebar width). Re-assert the intended default explicitly —
+        // otherwise the window opens tiny (previously `minSize` masked this; lowering
+        // the floor exposed it).
+        window.setContentSize(NSSize(width: 1280, height: 820))
         self.init(window: window)
         window.center()
         applyTransparency()
@@ -51,25 +58,16 @@ final class MainWindowController: NSWindowController {
         window.isOpaque = isOpaque
         window.backgroundColor = isOpaque ? HarnessChrome.current.terminalBackground : .clear
 
-        if let content = window.contentView {
-            content.wantsLayer = true
-            content.layer?.backgroundColor = NSColor.clear.cgColor
-            if isOpaque {
-                // Opaque: the system window mask crops the solid fill cleanly, and
-                // leaving clipping off keeps the Metal terminal layer un-masked.
-                content.layer?.cornerRadius = 0
-                content.layer?.masksToBounds = false
-            } else {
-                // Translucent: clip the whole composited stack (chrome + terminal + the
-                // CGS blur showing through) to the system corner radius. The rectangular
-                // CGS backdrop blur is otherwise masked only by the square contentView,
-                // so it pokes a light fringe past the window's rounded corners. Clipping
-                // makes the corners transparent, so the server blur isn't shown there.
-                content.layer?.cornerRadius = Self.systemWindowCornerRadius(for: window)
-                content.layer?.cornerCurve = .continuous
-                content.layer?.masksToBounds = true
-            }
-        }
+        // Do NOT force the window's `contentView` to be a layer-backed, clear rectangle.
+        // Forcing `wantsLayer` on the contentView makes the whole window layer-backed, and a
+        // layer-backed window clips the private CGS background blur to the contentView's
+        // RECTANGULAR bounds instead of the system's rounded titled-window frame — squaring the
+        // corners whenever blur is on. Left non-layer-backed (a plain `NSView` is transparent by
+        // default, so the blur still shows through), the window server rounds the blur together
+        // with the frame — exactly how Ghostty keeps the same CGS blur rounded. Chrome/terminal
+        // subviews keep their own layer backing as needed; the root contentView must not.
+        // `MainSplitViewController.loadView` creates the root as a plain non-layer-backed view, so
+        // simply not touching it here keeps it that way.
 
         // One uniform blur for the whole window — the same private CGS surface blur
         // modern terminals use on macOS. This is the single blur source: the terminal keeps
@@ -78,19 +76,5 @@ final class MainWindowController: NSWindowController {
         // share exactly one blurred backdrop. (the renderer's own `background-blur` is a
         // no-op in embedded mode since it doesn't own this NSWindow.) Opaque → no blur.
         WindowBlur.apply(radius: isOpaque ? 0 : settings.backgroundBlur, to: window)
-    }
-
-    /// Best-effort system window corner radius. There's no public API, and macOS 26
-    /// (Liquid Glass) rounds windows more than classic macOS — so read the theme frame
-    /// view's backing-layer radius when it's realized, falling back to a per-OS constant
-    /// (bias slightly large: over-rounding hides under the system mask, under-rounding
-    /// reintroduces the fringe).
-    static func systemWindowCornerRadius(for window: NSWindow) -> CGFloat {
-        if let frameLayer = window.contentView?.superview?.layer,
-           frameLayer.cornerRadius > 0.5 {
-            return frameLayer.cornerRadius
-        }
-        if #available(macOS 26.0, *) { return 16 }
-        return 10
     }
 }

@@ -40,9 +40,14 @@ The only remaining "ghostty" is the **opt-in config import** (`TerminalConfigImp
   permanently bold + underlined prompt). SGR is never a private sequence.
 - **Resize:** `HarnessTerminalSurfaceView.updateGridSize` *rounds* the drawable (no edge seam
   under `.topLeft`) and `layout()` renders synchronously inside a `CATransaction` (no stretch
-  flicker). `TerminalScreen.resize` *reflows* the primary screen — rejoin soft-wrapped rows via
-  a per-row wrap flag, re-wrap to the new width (wide chars never split), map the cursor; the
-  alternate screen just clamps (TUIs redraw on SIGWINCH). The PTY env sets `COLORTERM=truecolor`.
+  flicker). The drawable resizes every frame, but the **grid reflow + PTY `SIGWINCH` are
+  coalesced** (`scheduleResizeCommit`, ~60ms debounce, kept in lockstep via `commitGridSize`):
+  a sidebar slide / window drag calls `layout()` per frame, and firing the reflow + SIGWINCH
+  each time storms the shell — fish/zsh redraw their prompt faster than they coalesce, leaving
+  overlapping garbage in the pane. The first sizing commits immediately (no open-flash).
+  `TerminalScreen.resize` *reflows* the primary screen — rejoin soft-wrapped rows via a per-row
+  wrap flag, re-wrap to the new width (wide chars never split), map the cursor; the alternate
+  screen just clamps (TUIs redraw on SIGWINCH). The PTY env sets `COLORTERM=truecolor`.
 - **Decorations** (underline/strike/overline) are pixel-snapped for crisp 1–2px lines.
 - **Glyph baseline** is pixel-snapped at rasterization: `GlyphRasterizer.render` draws each glyph
   with its pen origin (baseline + left edge) on integer device pixels, so every glyph shares the
@@ -433,6 +438,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `systemNotificationsEnabled` | macOS banners when agent → `waiting` (in-window bell still updates) |
 | `importedConfigSignature` | Fingerprint of last imported terminal config (migration) |
 | `transparentTitlebar`, `sidebarVisible` | Chrome |
+| `showStatusLine` | GUI hard override for the bottom status band (independent of the tmux `status` option); off collapses the band height to 0 |
 
 **Terminal config import** (`TerminalConfigImporter`): reads an existing terminal config (the `~/.config/ghostty` paths in On-disk layout) so users migrating in keep their colors/font. **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is parsed for the fingerprint only — not stored in `settings.json`.
 
@@ -483,7 +489,9 @@ harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 
 Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.json`): `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted` (full list in [docs/COMMANDS.md](docs/COMMANDS.md)).
 
-**UI:** `SessionCardRowView`, `TabPillView`, **`AgentChipView`** in sidebar/session rows when agent kind is detected or inferred (static chip, not activity-gated), `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated by `systemNotificationsEnabled`.
+**UI:** `SessionCardRowView`, `TabPillView`, **`AgentChipView`** in sidebar/session rows when agent kind is detected or inferred (static chip, not activity-gated), `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated by `systemNotificationsEnabled` and presented even in-foreground via `DesktopNotifier`'s `ForegroundPresenter` (`UNUserNotificationCenterDelegate`).
+
+**Brand icons:** `AgentChipView`, `TabPillView`, the `MenuBarController` menu, and Settings ▸ Agents render each agent's mark from **`AgentIconArt`** (SVG path data, generated from the skillz-macos icons — attribution in [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)) via **`SVGPathParser`** → `CGPath` and **`AgentIconRenderer`** (`templateImage` tintable by `contentTintColor`; `coloredImage` baked for `NSMenuItem`). No bundled raster assets — vector, crisp at any size, the same procedural approach as the box-drawing. Agents without a mark fall back to the name pill; the per-agent color override tints the icon.
 
 ---
 
@@ -491,12 +499,17 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Workspace pill │ Tab bar (pills +)                      │
+│ Search 🔔 ▢   │ Tab bar (pills +)                      │
 │ Session cards  ├────────────────────────────────────────┤
 │                │ Terminal panes (native renderer)       │
 │ Footer         │ Status line (FormatString)             │
 └────────────────┴────────────────────────────────────────┘
 ```
+
+> Sidebar header is **search field + notification bell + sidebar toggle** (single active
+> workspace — the workspace pill / switcher and footer "new workspace" button are dormant,
+> not wired into the UI; `WorkspacePillButton` / `WorkspaceSwitcherPanelView` stay in
+> `HarnessSidebarPanelViewController` for easy re-enable).
 
 | Component | File | Notes |
 |-----------|------|-------|
@@ -514,6 +527,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Onboarding | `OnboardingController` | First-run + Help → Welcome; Liquid-Glass panel, app-logo hero in a glass tile, SF-Symbol badge tiles, grid-aligned shortcut bullets, monochrome buttons |
 | Prefix / prompt | `PrefixKeymap`, `CommandPromptController` | |
 | Palette | `CommandPaletteController` | `Cmd+K`, MRU; featured themes only |
+| Menu bar | `MenuBarController` | `NSStatusItem` (Harness mark, template); menu lists active agent sessions + every workspace's sessions from the daemon snapshot (shell-agnostic); rebuilt on open |
 | Design / chrome | `HarnessDesign`, `HarnessChrome` | Tokens, `ChromeBackdrop`, `HarnessPillButton` (theme-aware monochrome primary/secondary — used by onboarding + settings instead of system-blue bezels), Liquid Glass |
 | Toast / blur | `Toast`, `WindowBlur` | Transient feedback, backdrop blur |
 | App launch | `AppDelegate` | Daemon, prefix keymap, shell tracker |
@@ -609,7 +623,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 4. Notifications keyed by surface ID string.
 5. Terminal and chrome resolve the canvas through the one `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) so they never drift; a theme seeds the editable colors, colors flow from `settings.json`.
 6. No blue sidebar vibrancy.
-7. Blur is one window-wide CGS `WindowBlur`. The native terminal canvas honors `backgroundOpacity` (translucent over the blur); glyphs and explicit cell backgrounds stay opaque so output reads true. The terminal-host fill (`ContentAreaViewController.refreshTerminalHostFill`) goes **`.clear` when opacity < 1** (solid terminal color only when fully opaque) so the single translucent canvas — not an opaque backing layer — composites over the blur, matching the chrome (`sidebarBackground × opacity`) exactly. An opaque host fill here makes the terminal look solid while the chrome is see-through. When translucent, the window `contentView` is clipped to the system corner radius (`MainWindowController.systemWindowCornerRadius` — reads the theme-frame layer, falls back to ~10pt classic / ~16pt on macOS 26) so the rectangular CGS blur can't bleed past the window's rounded corners; opaque windows skip the clip (`cornerRadius = 0`, `masksToBounds = false`).
+7. Blur is one window-wide CGS `WindowBlur`. The native terminal canvas honors `backgroundOpacity` (translucent over the blur); glyphs and explicit cell backgrounds stay opaque so output reads true. The terminal-host fill (`ContentAreaViewController.refreshTerminalHostFill`) goes **`.clear` when opacity < 1** (solid terminal color only when fully opaque) so the single translucent canvas — not an opaque backing layer — composites over the blur, matching the chrome (`sidebarBackground × opacity`) exactly. An opaque host fill here makes the terminal look solid while the chrome is see-through. **Rounded corners with blur:** the rectangular CGS blur is rounded by the *system's titled-window frame* — but only if the window is **not** layer-backed. So `applyTransparency` must **never force `wantsLayer` on the root `contentView`** (`MainSplitViewController.loadView` makes it a plain non-layer-backed `NSView`; leave it that way — it's transparent by default, so the blur still shows through). Layer-backing the contentView makes the whole window layer-backed, which clips the CGS blur to the contentView's *rectangle* instead of the rounded frame — squaring the corners whenever blur is on (Ghostty keeps the same CGS blur rounded the same way: its window stays non-layer-backed). Deep `NSVisualEffectView`/`CAMetalLayer` subviews are layer-backing *islands* and do **not** force the ancestor contentView to be layer-backed. Likewise never corner-clip the contentView (`cornerRadius`/`masksToBounds`): a clip makes the corners transparent and *reveals* the rectangular blur behind them.
 
 ### Playbooks
 
@@ -666,7 +680,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Terminal colors wrong | Stale hex or import path | Re-import terminal config; check `ThemeManager.resolvedCanvas` + `applyNativeAppearance` |
 | Seam: sidebar ≠ terminal | A caller bypassed `resolvedCanvas` | Route bg/fg/cursor through `ThemeManager.resolvedCanvas` |
 | Blur does nothing | Window opaque | Blur is a window-wide CGS `WindowBlur`; set `backgroundOpacity` < 1 so the canvas + chrome show it |
-| Blur bleeds past rounded corners | contentView not clipped when translucent | `applyTransparency` clips `contentView` to `systemWindowCornerRadius` (continuous) when opacity < 1 |
+| Blur squares the corners | the root `contentView` was forced layer-backed (`wantsLayer`), making the window layer-backed → CGS blur clipped to the contentView rectangle, not the rounded frame | `applyTransparency` must not touch the root contentView's layer/`wantsLayer` (and never corner-clip it); leave it non-layer-backed so the system rounds the frame + blur (Ghostty's approach) |
 | Sidebar won't fully collapse | Divider min clamped at 200 | Set `SplitChromeDelegate.allowFullCollapse` during the programmatic collapse so the divider can reach 0 |
 | No agent chip | Proc-tree miss | `AgentTitleInference` |
 | Xcode build fails | Stale project | `xcodegen generate` |

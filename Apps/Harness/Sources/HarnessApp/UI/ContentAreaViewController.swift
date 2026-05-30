@@ -50,9 +50,6 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     override func viewDidLoad() {
         super.viewDidLoad()
         tabBar.delegate = self
-        tabBar.onToggleSidebar = { [weak self] in
-            (self?.view.window?.contentViewController as? MainSplitViewController)?.toggleSidebar()
-        }
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         terminalHost.translatesAutoresizingMaskIntoConstraints = false
         refreshTerminalHostFill()

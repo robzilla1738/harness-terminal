@@ -1,9 +1,20 @@
 import AppKit
+import HarnessCore
 import QuartzCore
 
 /// Layout metrics and chrome helpers; colors come from `HarnessChrome.current`.
 @MainActor
 enum HarnessDesign {
+    /// The transparent brand mark (`HarnessLogo.png`, bundled into the app) for hero tiles in
+    /// onboarding + the About panel. Falls back to the (opaque) app icon if absent.
+    static func brandLogo() -> NSImage? {
+        if let url = Bundle.main.url(forResource: "HarnessLogo", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+        return NSApp.applicationIconImage
+    }
+
     static let sidebarWidth: CGFloat = 264
     static let titlebarChromeHeight: CGFloat = 44
     static let tabBarHeight: CGFloat = 34
@@ -754,51 +765,86 @@ final class StatusDotView: NSView {
 /// faint brand-tinted fill.
 @MainActor
 final class AgentChipView: NSView {
-    private let dot = CALayer()
     private let label = NSTextField(labelWithString: "")
+    private let iconView = NSImageView()
+    /// Icon edge length when a brand mark is shown.
+    private let iconSize: CGFloat = 16
+    private var showingIcon = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.cornerCurve = .continuous
-        layer?.addSublayer(dot)
 
         label.font = .systemFont(ofSize: 10.5, weight: .semibold)
         label.alignment = .left
         label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.isHidden = true
+        addSubview(iconView)
         addSubview(label)
         NSLayoutConstraint.activate([
-            // Leading room reserves space for the dot drawn in layout().
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 17),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: iconSize),
+            iconView.heightAnchor.constraint(equalToConstant: iconSize),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func layout() {
-        super.layout()
-        // Capsule, with a 5px dot vertically centered against the leading inset.
-        layer?.cornerRadius = bounds.height / 2
-        let size: CGFloat = 5
-        dot.frame = CGRect(x: 8, y: (bounds.height - size) / 2, width: size, height: size)
-        dot.cornerRadius = size / 2
+    override var intrinsicContentSize: NSSize {
+        showingIcon
+            ? NSSize(width: iconSize, height: iconSize)
+            : NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
 
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = showingIcon ? 0 : bounds.height / 2
+    }
+
+    /// Brand identity for an agent: the tinted vector icon when one exists, else a
+    /// hairline-outlined name pill. The dot was removed; the icon carries the brand.
+    func configure(kind: AgentKind, hex: String) {
+        let tint = NSColor.fromHex(hex) ?? HarnessDesign.chrome.accent
+        if let icon = AgentIconRenderer.templateImage(for: kind, size: iconSize) {
+            showingIcon = true
+            iconView.image = icon
+            iconView.contentTintColor = tint
+            iconView.isHidden = false
+            label.isHidden = true
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderWidth = 0
+            toolTip = kind.displayName
+        } else {
+            configure(text: kind.displayName, hex: hex)
+        }
+        invalidateIntrinsicContentSize()
+        needsLayout = true
+    }
+
+    /// Outline-only name pill (no washed fill) — used for agents without a brand mark.
     func configure(text: String, hex: String) {
+        showingIcon = false
+        iconView.isHidden = true
+        label.isHidden = false
         label.stringValue = text
+        toolTip = text
         let tint = NSColor.fromHex(hex) ?? HarnessDesign.chrome.accent
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = tint.withAlphaComponent(c.isDark ? 0.16 : 0.13).cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 1
-        layer?.borderColor = tint.withAlphaComponent(c.isDark ? 0.22 : 0.20).cgColor
-        dot.backgroundColor = tint.cgColor
-        // Brand color reads poorly as text on dark fills for some agents, so lean on
-        // a bright, legible label and let the dot carry the brand hue.
+        layer?.borderColor = tint.withAlphaComponent(c.isDark ? 0.55 : 0.45).cgColor
         label.textColor = c.textPrimary.withAlphaComponent(0.94)
+        invalidateIntrinsicContentSize()
+        needsLayout = true
     }
 }
 

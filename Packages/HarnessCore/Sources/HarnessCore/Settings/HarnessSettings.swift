@@ -67,6 +67,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Programming-font ligatures (e.g. `=>`, `!=`, `->`) via CoreText run shaping. On by
     /// default; turn off for the fastest one-glyph-per-cell path.
     public var ligatures: Bool
+    /// Show the bottom status line (workspace · git · clock). When false the band is
+    /// hidden and the terminal split extends to the window bottom. Read by
+    /// `StatusLineView.refresh` (alongside the tmux `status` option).
+    public var showStatusLine: Bool
 
     public init(
         fontSize: Float = 14,
@@ -100,7 +104,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         vividColors: Bool = true,
         linearBlending: Bool = false,
         applyThemeToTerminalOutput: Bool = false,
-        ligatures: Bool = true
+        ligatures: Bool = true,
+        showStatusLine: Bool = true
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -134,6 +139,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.linearBlending = linearBlending
         self.applyThemeToTerminalOutput = applyThemeToTerminalOutput
         self.ligatures = ligatures
+        self.showStatusLine = showStatusLine
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -230,6 +236,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         linearBlending = try container.decodeIfPresent(Bool.self, forKey: .linearBlending) ?? fallback.linearBlending
         applyThemeToTerminalOutput = try container.decodeIfPresent(Bool.self, forKey: .applyThemeToTerminalOutput) ?? fallback.applyThemeToTerminalOutput
         ligatures = try container.decodeIfPresent(Bool.self, forKey: .ligatures) ?? fallback.ligatures
+        showStatusLine = try container.decodeIfPresent(Bool.self, forKey: .showStatusLine) ?? fallback.showStatusLine
     }
 
     public static func load() -> HarnessSettings {

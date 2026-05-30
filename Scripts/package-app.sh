@@ -20,6 +20,12 @@ if [[ ! -f "$ICON" ]]; then
 fi
 cp "$ICON" "$APP/Contents/Resources/Harness.icns"
 
+# Transparent brand logo for onboarding + settings (loaded via Bundle.main).
+LOGO="$ROOT/Apps/Harness/Resources/HarnessLogo.png"
+if [[ -f "$LOGO" ]]; then
+  cp "$LOGO" "$APP/Contents/Resources/HarnessLogo.png"
+fi
+
 chmod +x "$APP/Contents/MacOS/"*
 
 echo "Created $APP"

@@ -16,7 +16,7 @@ final class NotificationBellButton: NSControl {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 6
+        // Circular soft-button chrome (set in applyChrome/layout) to match SoftIconButton.
         layer?.cornerCurve = .continuous
 
         // Weight matches the rest of the header glyphs (workspace pill, chevron,
@@ -72,6 +72,11 @@ final class NotificationBellButton: NSControl {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    override func layout() {
+        super.layout()
+        applyChrome() // keep the circular corner radius correct once bounds are known
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
@@ -109,11 +114,20 @@ final class NotificationBellButton: NSControl {
 
     func applyChrome() {
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = isHovered
-            ? c.textPrimary.withAlphaComponent(0.08).cgColor
-            : NSColor.clear.cgColor
+        // Raised circular soft-button chrome — identical to `SoftIconButton` so the bell
+        // matches the sidebar toggle + footer +/⌘ buttons.
+        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
+        layer?.borderWidth = 1
+        layer?.borderColor = (isHovered ? c.textPrimary.withAlphaComponent(0.20) : c.textPrimary.withAlphaComponent(0.12)).cgColor
+        let base = c.sidebarBackground.blended(withFraction: c.isDark ? 0.045 : 0.035, of: c.textPrimary) ?? c.sidebarBackground
+        let hover = c.sidebarBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
+        layer?.backgroundColor = (isHovered ? hover : base).withAlphaComponent(c.isDark ? 0.96 : 0.86).cgColor
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = isHovered ? 0.20 : 0.08
+        layer?.shadowRadius = isHovered ? 6 : 3
+        layer?.shadowOffset = NSSize(width: 0, height: -1)
         let hasUnread = waitingCount > 0
-        iconView.contentTintColor = hasUnread ? c.waiting : (isHovered ? c.textSecondary : c.textTertiary)
+        iconView.contentTintColor = hasUnread ? c.waiting : (isHovered ? c.textPrimary : c.textSecondary)
         badgeBackground.layer?.backgroundColor = c.danger.cgColor
         // SF Symbol variant: filled when there's an unread notification, outline
         // when idle. Makes the visual state read in a glance.

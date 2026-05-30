@@ -37,12 +37,6 @@ final class TerminalTabBarView: NSView {
 
     private let newTabButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private let overflowButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
-    /// Always-visible control at the content's leading edge that shows/hides the
-    /// session sidebar. Sits inside the traffic-light clearance so it doubles as the
-    /// "show sidebar" affordance when the sidebar is collapsed.
-    private let sidebarToggleButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
-    /// Invoked when the sidebar-toggle button is clicked. Wired by the content VC.
-    var onToggleSidebar: (() -> Void)?
     private var tabs: [Tab] = []
     private var activeTabID: TabID?
     private var pillsByID: [TabID: TabPillView] = [:]
@@ -62,10 +56,9 @@ final class TerminalTabBarView: NSView {
         didSet { guard leadingInset != oldValue else { return }; needsLayout = true }
     }
 
-    /// Leading x of the sidebar-toggle button (rides the traffic-light inset).
-    private var sidebarToggleLeft: CGFloat { edgeInset + leadingInset }
-    /// Leading x for all tab pills / buttons (after the toggle button).
-    private var contentLeft: CGFloat { sidebarToggleLeft + buttonSize + pillSpacing }
+    /// Leading x for all tab pills / buttons (rides the traffic-light inset). The
+    /// sidebar toggle now lives in the sidebar header, so nothing precedes the pills.
+    private var contentLeft: CGFloat { edgeInset + leadingInset }
 
     // Drag-reorder state.
     private weak var draggingPill: TabPillView?
@@ -85,13 +78,6 @@ final class TerminalTabBarView: NSView {
 
     private func setup() {
         HarnessDesign.applyTabBarChrome(to: self)
-
-        sidebarToggleButton.setSymbol("sidebar.left", accessibilityDescription: "Toggle sidebar", pointSize: 12, weight: .medium)
-        sidebarToggleButton.toolTip = "Toggle sidebar (⌘\\)"
-        sidebarToggleButton.target = self
-        sidebarToggleButton.action = #selector(sidebarToggleClicked)
-        sidebarToggleButton.translatesAutoresizingMaskIntoConstraints = true
-        addSubview(sidebarToggleButton)
 
         newTabButton.setSymbol("plus", accessibilityDescription: "New tab", pointSize: 11, weight: .medium)
         newTabButton.toolTip = "New tab (⌘T)"
@@ -165,15 +151,10 @@ final class TerminalTabBarView: NSView {
         }
         newTabButton.applyChrome()
         overflowButton.applyChrome()
-        sidebarToggleButton.applyChrome()
     }
 
     @objc private func addNewTab() {
         delegate?.tabBarDidRequestNewTab()
-    }
-
-    @objc private func sidebarToggleClicked() {
-        onToggleSidebar?()
     }
 
     /// Animate the traffic-light clearance inset (driven by the split controller as the
@@ -194,8 +175,6 @@ final class TerminalTabBarView: NSView {
     private func layoutPills() {
         let count = orderedPills.count
         let buttonY = (bounds.height - buttonSize) / 2
-        // Sidebar toggle always sits at the content's leading edge (rides the inset).
-        sidebarToggleButton.frame = NSRect(x: sidebarToggleLeft, y: buttonY, width: buttonSize, height: buttonSize)
         guard count > 0 else {
             newTabButton.frame = NSRect(x: contentLeft, y: buttonY, width: buttonSize, height: buttonSize)
             overflowButton.isHidden = true
@@ -334,15 +313,19 @@ final class TerminalTabBarView: NSView {
     }
 }
 
-/// Display label shared by pills and the overflow menu. When an agent is running,
-/// the tab reads as just the agent name (e.g. "Codex") — the leading cwd + "·" was
-/// noise. Otherwise it falls back to the folder, then a custom shell title.
+/// Display label shared by pills and the overflow menu. When an agent has a brand
+/// icon, the pill shows that icon as a leading glyph + the folder, so the title is
+/// just the folder (e.g. "harness"). Agents without an icon keep "folder · Agent"
+/// so they're still identifiable. Otherwise: folder, then a custom shell title.
 @MainActor
 private func tabDisplayTitle(_ tab: Tab) -> String {
-    if let kind = tabAgentKind(for: tab) {
-        return kind.displayName
-    }
     let folder = HarnessDesign.pathDisplayName(tab.cwd)
+    if let kind = tabAgentKind(for: tab) {
+        if AgentIconRenderer.hasIcon(for: kind) {
+            return folder.isEmpty ? kind.displayName : folder
+        }
+        return folder.isEmpty ? kind.displayName : "\(folder) · \(kind.displayName)"
+    }
     let titleIsAgentBranding = !tab.title.isEmpty && AgentTitleInference.kind(from: tab.title) != nil
     let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell" && !titleIsAgentBranding
     return !folder.isEmpty ? folder : (hasCustomTitle ? tab.title : "Terminal")
@@ -367,11 +350,12 @@ private final class TabPillView: NSView {
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
+    private let agentIcon = NSImageView()
+    private var agentIconWidth: NSLayoutConstraint!
     private var trackingArea: NSTrackingArea?
     private var isActive = false
     private var isHovered = false
     private var status: TabStatus = .idle
-    private var currentAgent: AgentSnapshot?
 
     // Drag detection.
     private var mouseDownLocation: NSPoint?
@@ -382,7 +366,6 @@ private final class TabPillView: NSView {
         super.init(frame: .zero)
         self.isActive = isActive
         self.status = tab.status
-        self.currentAgent = tab.agent
 
         wantsLayer = true
         layer?.cornerRadius = HarnessDesign.Radius.control
@@ -412,19 +395,29 @@ private final class TabPillView: NSView {
         closeButton.layer?.cornerRadius = HarnessDesign.Radius.badge
         closeButton.layer?.cornerCurve = .continuous
 
+        agentIcon.translatesAutoresizingMaskIntoConstraints = false
+        agentIcon.imageScaling = .scaleProportionallyUpOrDown
+        agentIcon.isHidden = true
+
+        addSubview(agentIcon)
         addSubview(titleLabel)
         addSubview(closeButton)
 
         // Title centers inside the pill with the close button floating on the
-        // right edge. Leading edge inset matches the close button's trailing
-        // inset so the title stays optically centered even when the close
-        // button is visible.
-        let titleLeading = titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: HarnessDesign.Spacing.md)
+        // right edge and the agent brand icon (when present) on the left. Leading
+        // edge inset matches the close button's trailing inset so the title stays
+        // optically centered even when both are visible.
+        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
+        let titleLeading = titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: agentIcon.trailingAnchor, constant: 4)
         let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.xs)
         let closeWidth = closeButton.widthAnchor.constraint(equalToConstant: 14)
         let closeHeight = closeButton.heightAnchor.constraint(equalToConstant: 14)
         [titleLeading, closeTrailing, closeWidth, closeHeight].forEach { $0.priority = .defaultHigh }
         NSLayoutConstraint.activate([
+            agentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.sm),
+            agentIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            agentIcon.heightAnchor.constraint(equalToConstant: 14),
+            agentIconWidth,
             titleLeading,
             titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -435,6 +428,7 @@ private final class TabPillView: NSView {
             closeHeight,
         ])
 
+        setAgentIcon(for: tab)
         applyChrome(isActive: isActive)
     }
 
@@ -529,9 +523,25 @@ private final class TabPillView: NSView {
 
     func update(tab: Tab, isActive: Bool) {
         status = tab.status
-        currentAgent = tab.agent
         titleLabel.stringValue = tabDisplayTitle(tab)
+        setAgentIcon(for: tab)
         applyChrome(isActive: isActive)
+    }
+
+    /// Show the agent's brand glyph as a leading icon (tinted to its brand color)
+    /// when one exists; collapse the slot otherwise.
+    private func setAgentIcon(for tab: Tab) {
+        if let kind = tabAgentKind(for: tab), let icon = AgentIconRenderer.templateImage(for: kind, size: 14) {
+            agentIcon.image = icon
+            agentIcon.contentTintColor = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: kind))
+                ?? HarnessDesign.chrome.textSecondary
+            agentIcon.isHidden = false
+            agentIconWidth.constant = 14
+        } else {
+            agentIcon.image = nil
+            agentIcon.isHidden = true
+            agentIconWidth.constant = 0
+        }
     }
 
     func applyChrome(isActive: Bool) {

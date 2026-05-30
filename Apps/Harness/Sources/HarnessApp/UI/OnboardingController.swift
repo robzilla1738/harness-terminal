@@ -320,7 +320,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     /// elevated surface with a rim + soft shadow.
     private func logoTile() -> NSView {
         let tile = makeTile(size: 88, cornerRadius: 20)
-        if let icon = NSApp.applicationIconImage {
+        if let icon = HarnessDesign.brandLogo() {
             let iconView = NSImageView(image: icon)
             iconView.imageScaling = .scaleProportionallyUpOrDown
             iconView.translatesAutoresizingMaskIntoConstraints = false
@@ -328,8 +328,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             NSLayoutConstraint.activate([
                 iconView.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
                 iconView.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
-                iconView.widthAnchor.constraint(equalToConstant: 64),
-                iconView.heightAnchor.constraint(equalToConstant: 64),
+                iconView.widthAnchor.constraint(equalToConstant: 72),
+                iconView.heightAnchor.constraint(equalToConstant: 72),
             ])
         }
         return tile

@@ -127,10 +127,18 @@ final class StatusLineView: NSView {
 
     private func refresh() {
         let options = HarnessOptions.shared
-        // tmux `status` may be `off`/`on`/`2..5`; the count drives how many rows show.
-        let count = options.get("status", scope: .global)?.statusLineCount ?? 1
+        // The GUI Settings toggle is the hard override; when off the band is hidden
+        // regardless of the tmux `status` option. Otherwise `status` (`off`/`on`/`2..5`)
+        // drives how many rows show.
+        let showInSettings = SessionCoordinator.shared.settings.showStatusLine
+        let count = showInSettings ? (options.get("status", scope: .global)?.statusLineCount ?? 1) : 0
         isHidden = count == 0
-        guard count > 0 else { return }
+        guard count > 0 else {
+            // Collapse the band to 0 so the terminal split fills the freed space
+            // (a hidden view still reserves its height constraint otherwise).
+            heightConstraint.constant = 0
+            return
+        }
         let context = buildContext()
         leftLabel.attributedStringValue = styledAttributed(options.get("status-left", scope: .global)?.stringValue ?? "", context: context)
         rightLabel.attributedStringValue = styledAttributed(options.get("status-right", scope: .global)?.stringValue ?? "", context: context, alignment: .right)
