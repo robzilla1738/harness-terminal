@@ -127,6 +127,10 @@ struct HarnessCLI {
                 try handleDeleteBuffer(args, client: client)
             case "paste-buffer":
                 try handlePasteBuffer(args, client: client)
+            case "save-buffer":
+                try handleSaveBuffer(args, client: client)
+            case "load-buffer":
+                try handleLoadBuffer(args, client: client)
             case "select-layout":
                 try handleSelectLayout(args, client: client)
             case "next-layout":
@@ -598,11 +602,55 @@ struct HarnessCLI {
 
     static func handlePasteBuffer(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli paste-buffer --surface <id> [--name <name>]\n", stderr)
+            fputs("Usage: harness-cli paste-buffer --surface <id> [--name <name>] [-p|--bracketed]\n", stderr)
             exit(1)
         }
         let name = flagValue(args, flag: "--name")
-        _ = try checkedRequest(client, .pasteBuffer(surfaceID: surface, name: name))
+        let bracketed = args.contains("-p") || args.contains("--bracketed")
+        _ = try checkedRequest(client, .pasteBuffer(surfaceID: surface, name: name, bracketed: bracketed))
+    }
+
+    /// Positional (non-flag) arguments, skipping the subcommand at index 0 and the
+    /// value tokens that follow the given value-taking flags.
+    static func positionalArgs(_ args: [String], skippingValuesFor flags: Set<String>) -> [String] {
+        var out: [String] = []
+        var i = 1  // index 0 is the subcommand
+        while i < args.count {
+            let a = args[i]
+            if flags.contains(a) { i += 2; continue }   // flag + its value
+            if a.hasPrefix("-") { i += 1; continue }
+            out.append(a); i += 1
+        }
+        return out
+    }
+
+    /// `save-buffer [--name <name>] <path>` — write a paste buffer to a file (file
+    /// I/O is client-side; the buffer data comes over IPC).
+    static func handleSaveBuffer(_ args: [String], client: DaemonClient) throws {
+        let name = flagValue(args, flag: "--name")
+        guard let path = flagValue(args, flag: "--file") ?? positionalArgs(args, skippingValuesFor: ["--name", "--file"]).first else {
+            fputs("Usage: harness-cli save-buffer [--name <name>] <path>\n", stderr)
+            exit(1)
+        }
+        let response = try checkedRequest(client, .getBuffer(name: name))
+        guard case let .buffer(summary) = response, let data = summary.data else {
+            throw DaemonClientError.unexpectedResponse
+        }
+        let expanded = (path as NSString).expandingTildeInPath
+        try data.write(to: URL(fileURLWithPath: expanded))
+    }
+
+    /// `load-buffer [--name <name>] <path>` — read a file into a new paste buffer.
+    static func handleLoadBuffer(_ args: [String], client: DaemonClient) throws {
+        let name = flagValue(args, flag: "--name")
+        guard let path = flagValue(args, flag: "--file") ?? positionalArgs(args, skippingValuesFor: ["--name", "--file"]).first else {
+            fputs("Usage: harness-cli load-buffer [--name <name>] <path>\n", stderr)
+            exit(1)
+        }
+        let expanded = (path as NSString).expandingTildeInPath
+        let data = try Data(contentsOf: URL(fileURLWithPath: expanded))
+        let response = try checkedRequest(client, .setBuffer(name: name, data: data))
+        if case let .text(final) = response { print(final) }
     }
 
     static func handleSelectLayout(_ args: [String], client: DaemonClient) throws {

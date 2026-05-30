@@ -66,7 +66,7 @@ enum Phase67UI {
                 for buffer in buffers {
                     add(to: menu, title: "\(buffer.name): \(buffer.preview)", command: .sequence([])) {
                         if let sid = coordinator.activeSurfaceID {
-                            coordinator.requestDaemon(.pasteBuffer(surfaceID: sid.uuidString, name: buffer.name))
+                            coordinator.requestDaemon(.pasteBuffer(surfaceID: sid.uuidString, name: buffer.name, bracketed: false))
                         }
                     }
                 }

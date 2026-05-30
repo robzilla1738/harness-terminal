@@ -360,7 +360,7 @@ final class CopyModeViewController: NSViewController, NSTextViewDelegate {
 
     private func pasteMostRecentBufferIntoSurface() {
         guard let surfaceID else { return }
-        _ = try? DaemonClient().request(.pasteBuffer(surfaceID: surfaceID.uuidString, name: nil), timeout: 1)
+        _ = try? DaemonClient().request(.pasteBuffer(surfaceID: surfaceID.uuidString, name: nil, bracketed: false), timeout: 1)
         close()
     }
 

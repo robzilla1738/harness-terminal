@@ -78,7 +78,7 @@ public enum IPCRequest: Codable, Sendable {
     case getBuffer(name: String?)
     case listBuffers
     case deleteBuffer(name: String)
-    case pasteBuffer(surfaceID: String, name: String?)
+    case pasteBuffer(surfaceID: String, name: String?, bracketed: Bool)
     // Phase 4: layouts + pane ops
     case selectPaneDirectional(currentPaneID: UUID, direction: DirectionalAxis)
     /// Commit the active (focused) pane for a tab, server-side. Distinct from

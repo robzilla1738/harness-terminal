@@ -27,7 +27,7 @@ final class IPCCodecTests: XCTestCase {
             .getBuffer(name: nil),
             .listBuffers,
             .deleteBuffer(name: "scratch"),
-            .pasteBuffer(surfaceID: "surface-1", name: "scratch"),
+            .pasteBuffer(surfaceID: "surface-1", name: "scratch", bracketed: true),
         ]
         for request in requests {
             let original = try IPCCodec.encode(IPCEnvelope(request: request))

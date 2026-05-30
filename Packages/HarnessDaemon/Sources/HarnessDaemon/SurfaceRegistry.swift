@@ -442,13 +442,22 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .buffers(summaries)
         case let .deleteBuffer(name):
             return bufferStore.delete(name) ? .ok : .error("Buffer not found")
-        case let .pasteBuffer(surfaceID, name):
+        case let .pasteBuffer(surfaceID, name, bracketed):
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
             let buffer: PasteBufferStore.Buffer?
             if let name { buffer = bufferStore.get(name) }
             else { buffer = bufferStore.mostRecent() }
             guard let buffer else { return .error("Buffer not found") }
-            session.write(buffer.data)
+            if bracketed {
+                // tmux `paste-buffer -p`: wrap in bracketed-paste markers so the
+                // program treats it as a single pasted block (DECSET 2004).
+                var out = Data("\u{1b}[200~".utf8)
+                out.append(buffer.data)
+                out.append(Data("\u{1b}[201~".utf8))
+                session.write(out)
+            } else {
+                session.write(buffer.data)
+            }
             return .ok
         case let .selectPaneDirectional(currentPaneID, direction):
             let target: Command.PaneTarget
