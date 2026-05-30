@@ -81,7 +81,8 @@ public enum CommandParser {
         "killw": "kill-window", "selectp": "select-pane", "selectw": "select-window",
         "resizep": "resize-pane", "swapp": "swap-pane", "swapw": "swap-window",
         "movew": "move-window", "rotatew": "rotate-window", "breakp": "break-pane",
-        "joinp": "join-pane", "respawnp": "respawn-pane",
+        "joinp": "join-pane", "respawnp": "respawn-pane", "movep": "move-pane",
+        "renumberw": "renumber-windows",
         "renamew": "rename-window", "rename": "rename-window",
         "renames": "rename-session", "news": "new-session", "kills": "kill-session",
         "nextl": "next-layout", "prevl": "previous-layout", "selectl": "select-layout",
@@ -268,6 +269,21 @@ public enum CommandParser {
             return .breakPane
         case "respawn-pane":
             return .respawnPane(keepHistory: !tokens.contains("-k"))
+        case "move-pane":
+            // move-pane -s <src> [-t <dst>] [-h|-v] — like join-pane with an
+            // explicit source. `-v` stacks (horizontal divider); default/`-h` is
+            // side-by-side. `-t` (dst) is wrapped by the universal target handler
+            // — except `move-pane` self-parses, so do it here.
+            let direction: SplitDirection = tokens.contains("-v") ? .horizontal : .vertical
+            let source = TargetSpec.parse(stringValue(for: "-s", in: tokens) ?? "")
+            let move = Command.movePane(direction: direction, source: source)
+            if let dstRaw = stringValue(for: "-t", in: tokens) {
+                let dst = TargetSpec.parse(dstRaw)
+                if !dst.isEmpty { return .targeted(dst, move) }
+            }
+            return move
+        case "renumber-windows":
+            return .renumberWindows
 
         // MARK: Phase 6 — command completeness
         case "last-window", "last-tab":

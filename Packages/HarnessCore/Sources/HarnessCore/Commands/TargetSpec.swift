@@ -184,12 +184,12 @@ extension Command {
     public var targetKind: TargetKind {
         switch self {
         case .splitWindow, .killPane, .zoomPane, .selectPane, .swapPane, .resizePane,
-             .markPane, .joinPane, .breakPane, .respawnPane, .sendKeys, .pipePane,
+             .markPane, .joinPane, .movePane, .breakPane, .respawnPane, .sendKeys, .pipePane,
              .copyMode, .displayPanes, .synchronizePanes:
             return .pane
         case .newWindow, .killWindow, .renameWindow, .nextWindow, .previousWindow,
-             .selectWindow, .moveWindow, .swapWindow, .rotateWindow, .selectLayout,
-             .nextLayout, .previousLayout, .lastWindow, .linkWindow, .unlinkWindow:
+             .selectWindow, .moveWindow, .swapWindow, .renumberWindows, .rotateWindow,
+             .selectLayout, .nextLayout, .previousLayout, .lastWindow, .linkWindow, .unlinkWindow:
             return .window
         case .newSession, .killSession, .renameSession:
             return .session

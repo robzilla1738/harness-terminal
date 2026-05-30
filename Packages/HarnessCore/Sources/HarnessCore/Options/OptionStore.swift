@@ -107,6 +107,8 @@ public final class OptionStore: @unchecked Sendable {
         // Default 0 (array-aligned); set to 1 for tmux's common `base-index 1`.
         "base-index": .int(0),
         "pane-base-index": .int(0),
+        // When on, tab indices are renumbered contiguously after a tab closes.
+        "renumber-windows": .bool(false),
         // Title behavior: `allow-rename` (global) lets a program set the title via
         // OSC; `automatic-rename` (per-tab, defaults on) is turned off by a manual
         // `rename-tab` so the chosen name sticks.

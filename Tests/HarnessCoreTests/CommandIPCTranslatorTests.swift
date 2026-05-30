@@ -118,6 +118,42 @@ final class CommandIPCTranslatorTests: XCTestCase {
         XCTAssertEqual(tabID, firstTab.id, "window 1 under base-index 1 is the first tab")
     }
 
+    func testMovePaneResolvesToJoin() throws {
+        let (target, _, _) = try makeTarget(splitOnce: true)
+        let firstPane = try XCTUnwrap(target.paneOrder.first)
+        let active = try XCTUnwrap(target.paneID)
+        let spec = TargetSpec(pane: .byIndex(0), raw: ".0")
+        guard case let .requests(reqs) = CommandIPCTranslator.translate(.movePane(direction: .vertical, source: spec), target: target),
+              case let .joinPane(src, dst, _) = reqs.first
+        else { return XCTFail("expected joinPane from move-pane") }
+        XCTAssertEqual(src, firstPane)
+        XCTAssertEqual(dst, active)
+    }
+
+    func testRenumberWindowsResolvesSession() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let session = try XCTUnwrap(ws.activeSession)
+        _ = try XCTUnwrap(editor.addTab(to: ws.id))
+        let target = CommandTarget(snapshot: editor.snapshot)
+        guard case let .requests(reqs) = CommandIPCTranslator.translate(.renumberWindows, target: target),
+              case let .renumberWindows(sid) = reqs.first
+        else { return XCTFail("expected renumberWindows") }
+        XCTAssertEqual(sid, session.id)
+    }
+
+    func testRenumberWindowsCompactsSortOrder() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        _ = try XCTUnwrap(editor.addTab(to: ws.id))
+        _ = try XCTUnwrap(editor.addTab(to: ws.id))
+        let session = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession)
+        XCTAssertTrue(editor.renumberWindows(sessionID: session.id))
+        let tabs = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs)
+            .sorted { $0.sortOrder < $1.sortOrder }
+        for (i, tab) in tabs.enumerated() { XCTAssertEqual(tab.sortOrder, i) }
+    }
+
     func testClientLocalVerbsAreNotIPC() throws {
         let (target, _, _) = try makeTarget()
         for command: Command in [.copyMode, .detachClient, .displayPanes, .showCheatsheet] {

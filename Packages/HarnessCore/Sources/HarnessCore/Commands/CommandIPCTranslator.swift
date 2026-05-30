@@ -201,6 +201,17 @@ public enum CommandIPCTranslator {
             guard let dst = target.paneID, let src = target.markedPaneID, src != dst else { return .unresolved }
             return .requests([.joinPane(sourcePaneID: src, destPaneID: dst, direction: layoutDirection(for: direction))])
 
+        case let .movePane(direction, source):
+            // move-pane = join-pane with an explicit `-s` source (the daemon op is
+            // identical). Resolve the source pane against the same snapshot.
+            let srcTarget = target.resolving(source, command: .killPane, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex)
+            guard let src = srcTarget.paneID, let dst = target.paneID, src != dst else { return .unresolved }
+            return .requests([.joinPane(sourcePaneID: src, destPaneID: dst, direction: layoutDirection(for: direction))])
+
+        case .renumberWindows:
+            guard let session = target.session else { return .unresolved }
+            return .requests([.renumberWindows(sessionID: session.id)])
+
         case let .rotateWindow(forward):
             guard let tab = target.tab else { return .unresolved }
             return .requests([.rotatePanes(tabID: tab.id, forward: forward)])

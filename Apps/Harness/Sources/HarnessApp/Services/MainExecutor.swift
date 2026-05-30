@@ -170,6 +170,10 @@ final class MainExecutor: CommandExecutor {
         case .respawnPane(let keepHistory):
             guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
             coordinator.requestDaemon(.respawnPane(surfaceID: sid.uuidString, keepHistory: keepHistory))
+        case let .movePane(direction, source):
+            try runViaTranslator(.movePane(direction: direction, source: source), coordinator: coordinator)
+        case .renumberWindows:
+            try runViaTranslator(.renumberWindows, coordinator: coordinator)
 
         // MARK: Phase 6/7
         case .lastWindow:
@@ -208,31 +212,37 @@ final class MainExecutor: CommandExecutor {
         case .displayMenu(let items):
             Phase67UI.presentMenu(items: items)
         case let .targeted(spec, inner):
-            try dispatchTargeted(spec: spec, inner: inner, coordinator: coordinator)
+            try runViaTranslator(.targeted(spec, inner), coordinator: coordinator)
         }
     }
 
     // MARK: Targeting
 
-    /// Resolve a `-t session:window.pane` target and run the inner command against
-    /// it through the shared `CommandIPCTranslator` — the same resolution the CLI,
-    /// compositor, and hook executor use. Structural results go straight to the
-    /// daemon; client-local inner verbs (UI overlays) fall back to normal dispatch.
+    /// Run a command through the shared `CommandIPCTranslator` against the GUI's
+    /// active focus — the same resolution the CLI, compositor, and hook executor
+    /// use. Structural results go straight to the daemon; client-local inner verbs
+    /// (UI overlays) fall back to normal dispatch. Used for `-t`-targeted commands
+    /// and for verbs (move-pane, renumber-windows) whose resolution already lives
+    /// in the translator.
     @MainActor
-    private func dispatchTargeted(spec: TargetSpec, inner: Command, coordinator: SessionCoordinator) throws {
+    private func runViaTranslator(_ command: Command, coordinator: SessionCoordinator) throws {
         let baseIndex = optionInt("base-index", default: 0, coordinator: coordinator)
         let paneBaseIndex = optionInt("pane-base-index", default: 0, coordinator: coordinator)
         let activeTab = coordinator.snapshot.activeWorkspace?.activeTab
         let activePane = coordinator.activeSurfaceID.flatMap { sid in
             activeTab.flatMap { panePathLookup(surfaceID: sid, in: $0.rootPane) }
         }
+        let markedPane = coordinator.markedSurfaceID.flatMap { sid in
+            activeTab.flatMap { panePathLookup(surfaceID: sid, in: $0.rootPane) }
+        }
         let focus = CommandTarget(
             snapshot: coordinator.snapshot,
             focusedWorkspaceID: coordinator.snapshot.activeWorkspaceID,
             focusedTabID: activeTab?.id,
-            focusedPaneID: activePane
+            focusedPaneID: activePane,
+            markedPaneID: markedPane
         )
-        switch CommandIPCTranslator.translate(.targeted(spec, inner), target: focus, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
+        switch CommandIPCTranslator.translate(command, target: focus, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
         case let .requests(requests):
             for request in requests { _ = coordinator.requestDaemon(request) }
             coordinator.syncFromDaemon()

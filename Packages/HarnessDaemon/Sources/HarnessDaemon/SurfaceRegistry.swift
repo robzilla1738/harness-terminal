@@ -171,7 +171,16 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             commit()
             return .ok
+        case let .renumberWindows(sessionID):
+            guard editor.renumberWindows(sessionID: sessionID) else {
+                return .error("Session not found")
+            }
+            commit()
+            return .ok
         case let .closeTab(tabID):
+            let owningSession = editor.snapshot.workspaces
+                .flatMap(\.sessions)
+                .first(where: { $0.tabs.contains { $0.id == tabID } })?.id
             let closedSurfaces = editor.snapshot.workspaces
                 .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
                 .first(where: { $0.id == tabID })?
@@ -181,6 +190,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard editor.closeTab(tabID) else { return .error("Tab not found") }
             closeSurfaces(closedSurfaces)
             ensureAllSnapshotSurfaces()
+            // tmux `renumber-windows`: keep indices contiguous after a tab closes.
+            if optionStore.get("renumber-windows")?.boolValue == true, let owningSession {
+                _ = editor.renumberWindows(sessionID: owningSession)
+            }
             commit()
             fireHookLocked(.afterKillTab)
             return .ok

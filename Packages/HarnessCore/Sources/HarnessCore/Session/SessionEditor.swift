@@ -190,6 +190,23 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    /// Reassign `sortOrder` to be contiguous (0,1,2,…) in current array order for
+    /// every tab in `sessionID` (`renumber-windows`). IDs are unchanged.
+    @discardableResult
+    public mutating func renumberWindows(sessionID: SessionID) -> Bool {
+        for workspaceIndex in snapshot.workspaces.indices {
+            guard let sessionIndex = snapshot.workspaces[workspaceIndex].sessions
+                .firstIndex(where: { $0.id == sessionID }) else { continue }
+            var session = snapshot.workspaces[workspaceIndex].sessions[sessionIndex]
+            session.tabs.sort { $0.sortOrder < $1.sortOrder }
+            for i in session.tabs.indices { session.tabs[i].sortOrder = i }
+            snapshot.workspaces[workspaceIndex].sessions[sessionIndex] = session
+            bumpRevision()
+            return true
+        }
+        return false
+    }
+
     /// Swap the tab `tabID` with the tab currently at `withIndex` in the same
     /// session (`swap-window`). IDs are unchanged so both tabs stay valid.
     @discardableResult

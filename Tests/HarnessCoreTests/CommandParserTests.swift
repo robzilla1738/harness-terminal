@@ -59,6 +59,17 @@ final class CommandParserTests: XCTestCase {
         )
     }
 
+    func testMovePaneAndRenumberParsing() throws {
+        XCTAssertEqual(
+            try CommandParser.parse("move-pane -s api:1.0"),
+            .movePane(direction: .vertical,
+                      source: TargetSpec(session: .byName("api"), window: .byIndex(1), pane: .byIndex(0), raw: "api:1.0"))
+        )
+        XCTAssertEqual(try CommandParser.parse("move-pane -v -s :2"),
+                       .movePane(direction: .horizontal, source: TargetSpec(window: .byIndex(2), raw: ":2")))
+        XCTAssertEqual(try CommandParser.parse("renumber-windows"), .renumberWindows)
+    }
+
     func testParsesSequences() throws {
         let parsed = try CommandParser.parse("split-window -h ; copy-mode")
         XCTAssertEqual(parsed, .sequence([

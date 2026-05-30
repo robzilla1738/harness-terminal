@@ -139,6 +139,10 @@ struct HarnessCLI {
                 try handleBreakPane(args, client: client)
             case "join-pane":
                 try handleJoinPane(args, client: client)
+            case "move-pane":
+                try handleMovePane(args, client: client)
+            case "renumber-windows":
+                try handleRenumberWindows(args, client: client)
             case "respawn-pane":
                 try handleRespawnPane(args, client: client)
             case "select-pane":
@@ -649,6 +653,29 @@ struct HarnessCLI {
         }
         let response = try checkedRequest(client, .joinPane(sourcePaneID: src, destPaneID: dst, direction: direction))
         if case let .paneID(id) = response { print(id.uuidString) }
+    }
+
+    /// `move-pane --src <uuid> --dst <uuid> [--direction horizontal|vertical]` —
+    /// identical daemon op to join-pane, with an explicit source (tmux's move-pane).
+    static func handleMovePane(_ args: [String], client: DaemonClient) throws {
+        guard let srcStr = flagValue(args, flag: "--src"), let src = UUID(uuidString: srcStr),
+              let dstStr = flagValue(args, flag: "--dst"), let dst = UUID(uuidString: dstStr)
+        else {
+            fputs("Usage: harness-cli move-pane --src <uuid> --dst <uuid> [--direction horizontal|vertical]\n", stderr)
+            exit(1)
+        }
+        let direction = flagValue(args, flag: "--direction").flatMap(SplitDirection.init(rawValue:)) ?? .horizontal
+        let response = try checkedRequest(client, .joinPane(sourcePaneID: src, destPaneID: dst, direction: direction))
+        if case let .paneID(id) = response { print(id.uuidString) }
+    }
+
+    /// `renumber-windows --session <uuid>` — renumber a session's tab indices.
+    static func handleRenumberWindows(_ args: [String], client: DaemonClient) throws {
+        guard let sessionStr = flagValue(args, flag: "--session"), let session = UUID(uuidString: sessionStr) else {
+            fputs("Usage: harness-cli renumber-windows --session <uuid>\n", stderr)
+            exit(1)
+        }
+        _ = try checkedRequest(client, .renumberWindows(sessionID: session))
     }
 
     static func handleRespawnPane(_ args: [String], client: DaemonClient) throws {
