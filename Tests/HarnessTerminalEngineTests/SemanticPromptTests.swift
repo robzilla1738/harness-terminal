@@ -29,13 +29,13 @@ final class SemanticPromptTests: XCTestCase {
         // sits below the prompt (mid-output).
         term.feed(osc133("A") + "$ false\r\n")
         term.feed(osc133("B") + osc133("C") + "\r\n")
-        term.feed(osc133("D") + ";1")
+        term.feed(osc133("D;1"))
         XCTAssertEqual(term.mark(atBufferLine: 0)?.exit, 1, "exit lands on the active command's prompt")
     }
 
     func testExitStatusZeroIsSuccess() {
         let term = TerminalEmulator(cols: 20, rows: 6)
-        term.feed(osc133("A") + "$ true\r\n" + osc133("D") + ";0")
+        term.feed(osc133("A") + "$ true\r\n" + osc133("D;0"))
         XCTAssertEqual(term.mark(atBufferLine: 0)?.exit, 0)
     }
 
