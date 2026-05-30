@@ -83,6 +83,14 @@ public final class DaemonServer: @unchecked Sendable {
             close(fd)
             throw DaemonError.bindFailed
         }
+        // Restrict the control socket to the owner. A world- or group-writable
+        // control socket would let any local process drive the daemon (spawn PTYs,
+        // read pane output, run hook shell commands). 0o600 means only our UID can
+        // even connect; the peer-credential check on accept is the second layer.
+        if chmod(HarnessPaths.socketURL.path, 0o600) != 0 {
+            close(fd)
+            throw DaemonError.bindFailed
+        }
         guard listen(fd, 8) == 0 else {
             close(fd)
             throw DaemonError.listenFailed
@@ -100,6 +108,15 @@ public final class DaemonServer: @unchecked Sendable {
     private func acceptConnection(listenerFD: Int32) {
         let clientFD = accept(listenerFD, nil, nil)
         guard clientFD >= 0 else { return }
+        // Defence in depth alongside the 0o600 socket mode: only accept peers running
+        // as our own euid. `getpeereid` reads the credentials the kernel recorded at
+        // connect time, so a process can't spoof them. Reject anything else outright.
+        var peerUID: uid_t = 0
+        var peerGID: gid_t = 0
+        if getpeereid(clientFD, &peerUID, &peerGID) != 0 || peerUID != geteuid() {
+            close(clientFD)
+            return
+        }
         var noSigPipe: Int32 = 1
         setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         // Non-blocking so a slow/stuck client never blocks `write` on the serial queue.

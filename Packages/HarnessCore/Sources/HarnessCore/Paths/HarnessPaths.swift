@@ -74,7 +74,18 @@ public enum HarnessPaths {
     }
 
     public static func ensureDirectories() throws {
-        try FileManager.default.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        // The Harness home holds the control socket, session layout, hooks (which run shell
+        // commands) and logs — owner-only (0o700) so another local user can't read or tamper
+        // with it. Apply on the root and propagate to the subdirectories we own.
+        let ownerOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
+        try FileManager.default.createDirectory(
+            at: applicationSupport, withIntermediateDirectories: true, attributes: ownerOnly)
+        try FileManager.default.createDirectory(
+            at: sessionsDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
+        try FileManager.default.createDirectory(
+            at: logsDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
+        // createDirectory only applies attributes to directories it creates; tighten an
+        // existing root that an older build made with the default 0o755 umask.
+        try? FileManager.default.setAttributes(ownerOnly, ofItemAtPath: applicationSupport.path)
     }
 }

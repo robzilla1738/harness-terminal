@@ -110,7 +110,15 @@ public final class HookRegistry: @unchecked Sendable {
     }
 
     private static func load(url: URL) -> [Hook] {
+        // Absent file is the normal case (no hooks bound yet) — start empty silently.
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([Hook].self, from: data)) ?? []
+        if let hooks = try? JSONDecoder().decode([Hook].self, from: data) { return hooks }
+        // Present but unparseable: preserve it as `.corrupt` for recovery rather than
+        // silently discarding the user's bindings (mirrors OptionStore / SessionStore).
+        let backup = url.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: backup)
+        try? FileManager.default.moveItem(at: url, to: backup)
+        fputs("HarnessDaemon: hooks.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+        return []
     }
 }

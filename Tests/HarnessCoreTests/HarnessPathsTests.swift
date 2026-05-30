@@ -34,4 +34,30 @@ final class HarnessPathsTests: XCTestCase {
         XCTAssertFalse(path.isEmpty)
         XCTAssertTrue(path.hasSuffix("/Harness"), "expected an Application Support/Harness path, got \(path)")
     }
+
+    func testEnsureDirectoriesCreatesOwnerOnlyHome() throws {
+        let dir = URL(fileURLWithPath: "/tmp/harness-perms-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        setenv("HARNESS_HOME", dir.path, 1)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try HarnessPaths.ensureDirectories()
+        // The Harness home holds the control socket, session layout, and shell-running hooks;
+        // it (and the subdirs we own) must be 0o700 so no other local user can read or tamper.
+        for url in [HarnessPaths.applicationSupport, HarnessPaths.sessionsDirectory, HarnessPaths.logsDirectory] {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            let perms = (attrs[.posixPermissions] as? NSNumber)?.intValue
+            XCTAssertEqual(perms, 0o700, "expected 0o700 on \(url.lastPathComponent), got \(perms.map { String($0, radix: 8) } ?? "nil")")
+        }
+    }
+
+    func testEnsureDirectoriesTightensPreexistingLoosePermissions() throws {
+        let dir = URL(fileURLWithPath: "/tmp/harness-perms-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        setenv("HARNESS_HOME", dir.path, 1)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Simulate a home created by an older build under the default 0o755 umask.
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        try HarnessPaths.ensureDirectories()
+        let attrs = try FileManager.default.attributesOfItem(atPath: dir.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+    }
 }

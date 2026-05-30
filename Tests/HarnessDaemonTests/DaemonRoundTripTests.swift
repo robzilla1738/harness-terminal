@@ -44,6 +44,13 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTFail("daemon did not become ready")
     }
 
+    func testControlSocketIsOwnerOnly() throws {
+        // The control socket drives PTY spawning and hook shell commands — it must be
+        // 0o600 so no other local user can connect, even before the peer-cred check.
+        let attrs = try FileManager.default.attributesOfItem(atPath: HarnessPaths.socketURL.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
     func testPingMutationAndSnapshotRoundTrip() throws {
         let client = DaemonClient()
         guard case .pong = try client.request(.ping) else { return XCTFail("expected pong") }

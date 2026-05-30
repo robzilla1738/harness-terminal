@@ -1059,7 +1059,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
         process.standardInput = stdin
         process.environment = ProcessInfo.processInfo.environment
         guard (try? process.run()) != nil else {
-            fputs("HarnessDaemon: pipe-pane failed to launch: \(shellCommand)\n", stderr)
+            // Never log the command itself — a pipe target can carry tokens/paths the user
+            // would not want in daemon stderr. The surface id is enough to diagnose.
+            fputs("HarnessDaemon: pipe-pane failed to launch for surface \(surfaceID)\n", stderr)
             return
         }
         let writer = stdin.fileHandleForWriting
