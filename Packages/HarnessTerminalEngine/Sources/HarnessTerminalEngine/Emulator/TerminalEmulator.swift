@@ -42,6 +42,21 @@ public final class TerminalEmulator: VTParserHandler {
     /// (e.g. a TUI reading the background to pick a light/dark theme). The host supplies it from
     /// the resolved theme; nil roles get no reply.
     public var colorProvider: ((TerminalColorRole) -> (r: UInt8, g: UInt8, b: UInt8)?)?
+    /// Desktop notification requested by a program (OSC 9 = `(nil, body)`; OSC 777 =
+    /// `(title, body)`). The host routes it to the system notification path.
+    public var onNotification: ((_ title: String?, _ body: String) -> Void)?
+    /// Mouse pointer shape requested via OSC 22 (e.g. `text`, `pointer`, `default`); nil clears.
+    public var onPointerShapeChange: ((String?) -> Void)?
+    /// Last OSC-22 pointer shape (nil = terminal default). Surfaced for hosts that prefer polling.
+    public private(set) var pointerShape: String?
+
+    /// Active character set per designation slot (`ESC ( …` / `ESC ) …`). DEC special graphics
+    /// turns letters into line-drawing glyphs; ASCII is the default. `glUsesG1` is toggled by
+    /// SO (invoke G1) / SI (invoke G0).
+    private enum Charset { case ascii, decSpecialGraphics }
+    private var g0: Charset = .ascii
+    private var g1: Charset = .ascii
+    private var glUsesG1 = false
 
     public init(cols: Int, rows: Int) {
         let c = max(1, cols)
@@ -96,7 +111,10 @@ public final class TerminalEmulator: VTParserHandler {
     // MARK: - VTParserHandler
 
     func parserPrint(_ scalar: UInt32) {
-        current.print(scalar)
+        // Translate through the DEC special-graphics table when that charset is invoked into GL,
+        // so `lqqk`-style line drawing renders via the existing procedural box-drawing path.
+        let active = glUsesG1 ? g1 : g0
+        current.print(active == .decSpecialGraphics ? DECSpecialGraphics.map(scalar) : scalar)
     }
 
     func parserExecute(_ control: UInt8) {
@@ -106,15 +124,24 @@ public final class TerminalEmulator: VTParserHandler {
         case 0x09: current.tab()             // HT
         case 0x0A, 0x0B, 0x0C: current.lineFeed() // LF, VT, FF
         case 0x0D: current.carriageReturn()  // CR
+        case 0x0E: glUsesG1 = true           // SO / LS1 — invoke G1 into GL
+        case 0x0F: glUsesG1 = false          // SI / LS0 — invoke G0 into GL
         default: break
         }
     }
 
     func parserESC(final: UInt8, intermediates: [UInt8]) {
-        // Charset designation (ESC ( B etc.) and other intermediate sequences are
-        // accepted but not acted on in Phase 1.
+        // Charset designation: `ESC ( <f>` designates G0, `ESC ) <f>` designates G1. `f` = `0`
+        // selects DEC special graphics (line drawing); anything else (incl. `B`) is ASCII.
+        if intermediates == [0x28] || intermediates == [0x29] {
+            let charset: Charset = (final == 0x30) ? .decSpecialGraphics : .ascii
+            if intermediates == [0x28] { g0 = charset } else { g1 = charset }
+            return
+        }
+        // Other intermediate sequences are accepted but not acted on.
         guard intermediates.isEmpty else { return }
         switch final {
+        case 0x48: current.setTabStop()      // HTS — set a tab stop at the cursor column
         case 0x44: current.lineFeed()        // IND — Index
         case 0x45: current.carriageReturn(); current.lineFeed() // NEL
         case 0x4D: current.reverseLineFeed() // RI — Reverse Index
@@ -168,6 +195,10 @@ public final class TerminalEmulator: VTParserHandler {
         case 0x75: current.restoreCursor()             // ANSI restore cursor
         case 0x6E: deviceStatusReport(argRaw(flat, 0, 0)) // DSR
         case 0x63: deviceAttributes()                  // DA
+        case 0x67: // TBC — `CSI g` clear tab at cursor; `CSI 3 g` clear all
+            argRaw(flat, 0, 0) == 3 ? current.clearAllTabStops() : current.clearTabStop()
+        case 0x49: current.cursorForwardTabs(arg(flat, 0, 1))  // CHT — forward N tab stops
+        case 0x5A: current.cursorBackwardTabs(arg(flat, 0, 1)) // CBT — back N tab stops
         default: break
         }
     }
@@ -186,8 +217,27 @@ public final class TerminalEmulator: VTParserHandler {
         case "12": handleColorQuery(code: "12", role: .cursor, payload: payload)
         case "4": handlePaletteColorQuery(payload)         // OSC 4 ; index ; ?
         case "52": handleClipboardOSC(payload)             // clipboard set (OSC 52)
+        case "9": onNotification?(nil, payload)            // OSC 9 ; <body> — desktop notification
+        case "777": handleNotify777(payload)               // OSC 777 ; notify ; <title> ; <body>
+        case "22": setPointerShape(payload)                // OSC 22 ; <shape> — mouse cursor shape
         default: break
         }
+    }
+
+    /// OSC 777 `notify;<title>;<body>` (urxvt/Ghostty). Other 777 sub-commands are ignored.
+    private func handleNotify777(_ payload: String) {
+        let parts = payload.split(separator: ";", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        guard parts.first == "notify", parts.count >= 2 else { return }
+        let title = parts.count >= 3 ? parts[1] : nil
+        let body = parts.count >= 3 ? parts[2] : parts[1]
+        onNotification?(title, body)
+    }
+
+    private func setPointerShape(_ shape: String) {
+        let value = shape.isEmpty ? nil : shape
+        guard value != pointerShape else { return }
+        pointerShape = value
+        onPointerShapeChange?(value)
     }
 
     /// OSC 10/11/12 `?`: report the current fg/bg/cursor color (8→16-bit, `rgb:RRRR/GGGG/BBBB`).
@@ -391,6 +441,10 @@ public final class TerminalEmulator: VTParserHandler {
             current = primary
         }
         modes = TerminalModes()
+        g0 = .ascii
+        g1 = .ascii
+        glUsesG1 = false
+        pointerShape = nil
         hyperlinks.removeAll()
         hyperlinkKeys.removeAll()
         nextHyperlinkID = 1

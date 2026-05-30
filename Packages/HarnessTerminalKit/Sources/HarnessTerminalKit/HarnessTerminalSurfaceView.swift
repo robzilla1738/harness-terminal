@@ -31,6 +31,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onPwd: ((String) -> Void)?
     /// Terminal bell (BEL) — the host forwards this to its delegate.
     public var onBell: (() -> Void)?
+    /// Desktop notification requested by a program (OSC 9 → nil title; OSC 777 → title+body)
+    /// — the host forwards this to its delegate.
+    public var onDesktopNotification: ((_ title: String?, _ body: String) -> Void)?
     /// Copied selection text — the host mirrors it into the daemon paste buffer (the
     /// system pasteboard is written here directly).
     public var onCopy: ((String) -> Void)?
@@ -299,6 +302,12 @@ public final class HarnessTerminalSurfaceView: NSView {
         emulator.onBell = { [weak self] in
             self?.onBell?()
         }
+        emulator.onNotification = { [weak self] title, body in
+            self?.onDesktopNotification?(title, body)
+        }
+        emulator.onPointerShapeChange = { [weak self] shape in
+            self?.applyPointerShape(shape)
+        }
         emulator.onSetClipboard = { [weak self] text in
             guard let self, self.allowProgramClipboardAccess, !text.isEmpty else { return }
             let pasteboard = NSPasteboard.general
@@ -319,6 +328,36 @@ public final class HarnessTerminalSurfaceView: NSView {
                 c = self.ansiPalette16[i]
             }
             return (c.red, c.green, c.blue)
+        }
+    }
+
+    /// Program-requested mouse pointer (OSC 22); nil = system default. Applied via cursor rects.
+    private var programPointerCursor: NSCursor?
+
+    private func applyPointerShape(_ shape: String?) {
+        programPointerCursor = shape.flatMap(Self.cursor(forShape:))
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override public func resetCursorRects() {
+        if let programPointerCursor {
+            addCursorRect(bounds, cursor: programPointerCursor)
+        } else {
+            super.resetCursorRects()
+        }
+    }
+
+    /// Map a CSI/OSC-22 pointer-shape name to an `NSCursor`. Unknown shapes fall back to the
+    /// system default (nil) rather than guessing.
+    private static func cursor(forShape name: String) -> NSCursor? {
+        switch name.lowercased() {
+        case "text", "ibeam", "xterm": return .iBeam
+        case "pointer", "hand", "pointinghand": return .pointingHand
+        case "default", "arrow", "left_ptr": return .arrow
+        case "crosshair": return .crosshair
+        case "grab", "openhand": return .openHand
+        case "grabbing", "closedhand": return .closedHand
+        default: return nil
         }
     }
 

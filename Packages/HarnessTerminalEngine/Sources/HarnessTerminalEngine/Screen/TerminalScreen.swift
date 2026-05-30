@@ -21,6 +21,9 @@ final class TerminalScreen {
     private(set) var cursorRow = 0
     private(set) var cursorCol = 0
     private var pendingWrap = false
+    /// Column tab stops (HTS/TBC). Length tracks `cols`; default is every 8th column. A `true`
+    /// at index `c` means a tab stop sits at column `c`.
+    private var tabStops: [Bool] = []
 
     var cursorVisible = true
     /// Program-requested cursor shape/blink (DECSCUSR); `.default`/nil honor the user setting.
@@ -66,6 +69,12 @@ final class TerminalScreen {
         self.recordsHistory = recordsHistory
         self.cells = Array(repeating: .blank, count: c * r)
         self.rowWrapped = Array(repeating: false, count: r)
+        self.tabStops = Self.defaultTabStops(c)
+    }
+
+    /// Default tab stops: every 8th column (the classic 8-column tab).
+    private static func defaultTabStops(_ cols: Int) -> [Bool] {
+        (0 ..< max(1, cols)).map { $0 % 8 == 0 }
     }
 
     // MARK: - Snapshot
@@ -232,6 +241,7 @@ final class TerminalScreen {
         scrollTop = 0
         scrollBottom = nr - 1
         pendingWrap = false
+        ensureTabStopsSized()   // tab stops are column-absolute; keep the array sized to `cols`
     }
 
     /// True when a cell is the default blank (no glyph, default bg, no attributes) — used to
@@ -488,10 +498,66 @@ final class TerminalScreen {
 
     func tab() {
         pendingWrap = false
+        advanceToNextTabStop()
+    }
+
+    /// True if column `c` is a tab stop (falls back to the every-8 default beyond the array).
+    private func tabStopAt(_ c: Int) -> Bool {
+        c < tabStops.count ? tabStops[c] : (c % 8 == 0)
+    }
+
+    private func advanceToNextTabStop() {
         guard cursorCol < cols - 1 else { return }
-        // Next multiple of 8, capped at the last column.
-        let next = ((cursorCol / 8) + 1) * 8
-        cursorCol = min(next, cols - 1)
+        var c = cursorCol + 1
+        while c < cols - 1, !tabStopAt(c) { c += 1 }
+        cursorCol = c
+    }
+
+    /// HTS — set a tab stop at the cursor column.
+    func setTabStop() {
+        ensureTabStopsSized()
+        guard cursorCol < tabStops.count else { return }
+        tabStops[cursorCol] = true
+    }
+
+    /// TBC `CSI g` — clear the tab stop at the cursor column.
+    func clearTabStop() {
+        ensureTabStopsSized()
+        guard cursorCol < tabStops.count else { return }
+        tabStops[cursorCol] = false
+    }
+
+    /// TBC `CSI 3 g` — clear every tab stop.
+    func clearAllTabStops() {
+        tabStops = Array(repeating: false, count: cols)
+    }
+
+    /// CHT — advance the cursor over `n` tab stops.
+    func cursorForwardTabs(_ n: Int) {
+        pendingWrap = false
+        for _ in 0 ..< max(1, n) { advanceToNextTabStop() }
+    }
+
+    /// CBT — move the cursor back over `n` tab stops.
+    func cursorBackwardTabs(_ n: Int) {
+        pendingWrap = false
+        for _ in 0 ..< max(1, n) {
+            guard cursorCol > 0 else { return }
+            var c = cursorCol - 1
+            while c > 0, !tabStopAt(c) { c -= 1 }
+            cursorCol = c
+        }
+    }
+
+    /// Keep `tabStops` the same length as `cols`, preserving existing stops and default-filling
+    /// any newly-exposed columns (tab stops are column-absolute, so they survive a resize).
+    private func ensureTabStopsSized() {
+        guard tabStops.count != cols else { return }
+        if tabStops.count < cols {
+            for c in tabStops.count ..< cols { tabStops.append(c % 8 == 0) }
+        } else {
+            tabStops.removeLast(tabStops.count - cols)
+        }
     }
 
     func moveCursor(row: Int, col: Int) {
@@ -869,6 +935,7 @@ final class TerminalScreen {
         autowrap = true
         scrollTop = 0
         scrollBottom = rows - 1
+        tabStops = Self.defaultTabStops(cols)
     }
 
     private func clamp(_ v: Int, _ lo: Int, _ hi: Int) -> Int {

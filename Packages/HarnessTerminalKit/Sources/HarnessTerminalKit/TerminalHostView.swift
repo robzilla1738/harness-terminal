@@ -161,6 +161,12 @@ public final class TerminalHostView: NSView {
             guard let self else { return }
             self.hostDelegate?.terminalHostDidRingBell(surfaceID: self.surfaceID)
         }
+        native.onDesktopNotification = { [weak self] title, body in
+            guard let self else { return }
+            // OSC 9 carries no title; fall back to the app name so the banner reads sensibly.
+            self.hostDelegate?.terminalHostDidRequestDesktopNotification(
+                title: title ?? "Harness", body: body, surfaceID: self.surfaceID)
+        }
         native.onCopy = { [weak self] text in
             self?.storeCopyBuffer(text)
         }
