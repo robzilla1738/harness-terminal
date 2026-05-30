@@ -23,12 +23,7 @@ public final class DaemonClient: @unchecked Sendable {
     ) throws -> DaemonSubscription {
         let fd = try connectSocket()
         let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSurfaceOutput(surfaceID: surfaceID, label: label)))
-        try payload.withUnsafeBytes { raw in
-            guard write(fd, raw.baseAddress, raw.count) == raw.count else {
-                close(fd)
-                throw DaemonClientError.writeFailed
-            }
-        }
+        do { try writeAll(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(onData: onData, onEnd: onEnd)
         return subscription
@@ -45,12 +40,7 @@ public final class DaemonClient: @unchecked Sendable {
     ) throws -> DaemonSubscription {
         let fd = try connectSocket()
         let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSnapshot(label: label)))
-        try payload.withUnsafeBytes { raw in
-            guard write(fd, raw.baseAddress, raw.count) == raw.count else {
-                close(fd)
-                throw DaemonClientError.writeFailed
-            }
-        }
+        do { try writeAll(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(
             onResponse: { response in
@@ -70,17 +60,22 @@ public final class DaemonClient: @unchecked Sendable {
 
         var buffer = Data()
         let deadline = Date().addingTimeInterval(timeout)
-        var temp = [UInt8](repeating: 0, count: 4096)
+        var temp = [UInt8](repeating: 0, count: 65_536)
         while Date() < deadline {
             let remaining = max(0, deadline.timeIntervalSinceNow)
             guard try waitForReadable(fd: fd, timeout: remaining) else { break }
             let count = read(fd, &temp, temp.count)
             if count > 0 {
                 buffer.append(contentsOf: temp.prefix(count))
-                if let reply = IPCCodec.decodeReply(from: &buffer) {
+                if let reply = try IPCCodec.decodeReply(from: &buffer) {
                     return reply.response
                 }
             } else if count == 0 {
+                // Peer closed. A complete (possibly large, multi-read) reply may already be
+                // buffered — try one last decode before giving up, so we don't drop it.
+                if let reply = try? IPCCodec.decodeReply(from: &buffer) {
+                    return reply.response
+                }
                 break
             }
         }
@@ -201,11 +196,15 @@ public final class DaemonSubscription: @unchecked Sendable {
         queue.async { [weak self, fd] in
             var buffer = Data()
             var temp = [UInt8](repeating: 0, count: 65_536)
-            while true {
+            outer: while true {
                 let count = read(fd, &temp, temp.count)
                 if count <= 0 { break }
                 buffer.append(contentsOf: temp.prefix(count))
-                while let reply = IPCCodec.decodeReply(from: &buffer) {
+                while true {
+                    let reply: IPCReply?
+                    do { reply = try IPCCodec.decodeReply(from: &buffer) }
+                    catch { break outer } // oversized/garbage frame — unrecoverable on a stream
+                    guard let reply else { break }
                     onResponse(reply.response)
                 }
             }

@@ -155,7 +155,13 @@ public final class GlyphRasterizer {
             CTRunGetGlyphs(run, CFRange(location: 0, length: count), &glyphs)
             CTRunGetStringIndices(run, CFRange(location: 0, length: count), &indices)
             let attrs = CTRunGetAttributes(run) as NSDictionary
-            let runFont = (attrs[kCTFontAttributeName as String] as! CTFont)
+            // CoreText can hand back a run with no `CTFont` attribute (some emoji / ZWJ /
+            // substituted runs). Skip such a run rather than force-casting — a force-cast here
+            // crashes the GUI on attacker/content-controlled output. The cell glyph path covers
+            // the codepoint as a fallback.
+            guard let fontAttr = attrs[kCTFontAttributeName as String],
+                  CFGetTypeID(fontAttr as CFTypeRef) == CTFontGetTypeID() else { continue }
+            let runFont = fontAttr as! CTFont // safe: type-checked above
             for i in 0 ..< count {
                 out.append(ShapedGlyph(glyph: glyphs[i], font: runFont, utf16Index: indices[i]))
             }

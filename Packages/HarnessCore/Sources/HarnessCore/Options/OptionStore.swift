@@ -197,17 +197,35 @@ public final class OptionStore: @unchecked Sendable {
     // MARK: Persistence
 
     private func save() {
+        // Snapshot under the lock — encoding `values` while another thread mutates it is a
+        // torn read of the dictionary (the store is `@unchecked Sendable` and the daemon both
+        // sets options and serves `show-options` concurrently).
+        lock.lock()
+        let snapshot = values
+        lock.unlock()
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(values) {
-            try? data.write(to: url, options: .atomic)
+        guard let data = try? encoder.encode(snapshot) else { return }
+        do {
+            try data.write(to: url, options: .atomic) // temp + rename: never a partial file
+        } catch {
+            fputs("HarnessDaemon: options save failed: \(error)\n", stderr)
         }
     }
 
     private static func load(url: URL) -> [String: Value] {
-        guard let data = try? Data(contentsOf: url) else { return [:] }
-        return (try? JSONDecoder().decode([String: Value].self, from: data)) ?? [:]
+        guard let data = try? Data(contentsOf: url) else { return [:] } // absent → fresh install
+        if let decoded = try? JSONDecoder().decode([String: Value].self, from: data) {
+            return decoded
+        }
+        // Present but unparseable: preserve it as `.corrupt` for recovery rather than letting
+        // the caller silently overwrite it with defaults (which would discard the user's options).
+        let backup = url.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: backup)
+        try? FileManager.default.moveItem(at: url, to: backup)
+        fputs("HarnessDaemon: options.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+        return [:]
     }
 }
 

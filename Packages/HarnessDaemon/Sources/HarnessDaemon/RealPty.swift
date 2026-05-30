@@ -353,7 +353,11 @@ public final class RealPty: @unchecked Sendable {
     }
 
     public func captureScrollback(includeHistory: Bool) -> String {
-        String(data: scrollbackData(includeHistory: includeHistory), encoding: .utf8) ?? ""
+        // Lossy decode: scrollback is stored as raw read chunks, and ring eviction can drop a
+        // whole entry mid-UTF-8-sequence, so a strict `String(data:encoding:.utf8)` would return
+        // nil → "" and silently blank the user's whole history. Replacement chars at a seam are
+        // far better than losing everything.
+        String(decoding: scrollbackData(includeHistory: includeHistory), as: UTF8.self)
     }
 
     /// The PTY's current geometry (`TIOCGWINSZ`), so grid capture reconstructs at the same
@@ -462,7 +466,9 @@ public final class RealPty: @unchecked Sendable {
         }
         scrollbackLock.unlock()
         let combined = entries.reduce(into: Data()) { $0.append($1.data) }
-        return String(data: combined, encoding: .utf8) ?? ""
+        // Lossy decode — a UTF-8 sequence split across the replay boundary (or an evicted entry)
+        // must not blank the entire reattach replay. See `captureScrollback`.
+        return String(decoding: combined, as: UTF8.self)
     }
 
     public func subscribe(_ handler: @escaping (Data, UInt64) -> Void) -> UUID {

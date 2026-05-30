@@ -216,7 +216,9 @@ public final class TerminalEmulator: VTParserHandler {
 
     private func setScrollRegion(_ params: [Int]) {
         let top = arg(params, 0, 1) - 1
-        let bottom = (argRaw(params, 1, 0) == 0) ? rows - 1 : params[1] - 1
+        // Use the bounds-safe accessor for both branches (no direct `params[1]` indexing).
+        let rawBottom = argRaw(params, 1, 0)
+        let bottom = rawBottom == 0 ? rows - 1 : rawBottom - 1
         current.setScrollRegion(top: top, bottom: bottom)
     }
 

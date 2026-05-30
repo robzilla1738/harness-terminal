@@ -26,6 +26,7 @@
 		2A3B080F4B0F44733627AD4D /* DisplayPanesOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F2AD1D92779527F2E5F14A /* DisplayPanesOverlay.swift */; };
 		309D6041940CA5663F7164C9 /* PasteBufferStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F913A1FD23783BAACAB189B6 /* PasteBufferStoreTests.swift */; };
 		3430064804A78854DB6766E5 /* HookFiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5074E518A70BAD1B635A6B0A /* HookFiringTests.swift */; };
+		38D3D8255A3FB7C775A79419 /* HarnessTerminalEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 7D2095A549D0871055203990 /* HarnessTerminalEngine */; };
 		38ED46EBAF81D35F3E683955 /* SurfaceRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51ECCD77E8E2A9F4EC74E1C /* SurfaceRegistryTests.swift */; };
 		3C7E2A84108B690A43D2E6DB /* WindowBlur.swift in Sources */ = {isa = PBXBuildFile; fileRef = 529595B70272EEEC10AF08E4 /* WindowBlur.swift */; };
 		3E9AE1966905F6D3329046DD /* HarnessTerminalKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0C48BB6BE591F289927C480C /* HarnessTerminalKit */; };
@@ -261,6 +262,7 @@
 			files = (
 				F1A7E304D300722E1C1E8DE8 /* libHarnessDaemonCore.a in Frameworks */,
 				EA3D4454CC7EEF45E59580C9 /* HarnessCore in Frameworks */,
+				38D3D8255A3FB7C775A79419 /* HarnessTerminalEngine in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -634,10 +636,12 @@
 			);
 			dependencies = (
 				2D148EC28FADEE9007754A0F /* PBXTargetDependency */,
+				A87B754A06471104441E6772 /* PBXTargetDependency */,
 			);
 			name = HarnessDaemonCore;
 			packageProductDependencies = (
 				108257444709C29ADD5F0477 /* HarnessCore */,
+				9FEE8D04D6CA30A6A32E49E9 /* HarnessTerminalEngine */,
 			);
 			productName = HarnessDaemonCore;
 			productReference = DC8B874CE39031F096488994 /* libHarnessDaemonCore.a */;
@@ -722,6 +726,7 @@
 			name = HarnessDaemon;
 			packageProductDependencies = (
 				15F6BDB0D66F28E216C388F0 /* HarnessCore */,
+				7D2095A549D0871055203990 /* HarnessTerminalEngine */,
 			);
 			productName = HarnessDaemon;
 			productReference = 96666DF423052B344FF603A4 /* HarnessDaemon */;
@@ -1009,6 +1014,10 @@
 			isa = PBXTargetDependency;
 			target = 4214C123697823C4FC5E5AB3 /* HarnessDaemonCore */;
 			targetProxy = 25CD4238161DC7587B217954 /* PBXContainerItemProxy */;
+		};
+		A87B754A06471104441E6772 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			productRef = 9FEE8D04D6CA30A6A32E49E9 /* HarnessTerminalEngine */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1572,6 +1581,10 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = HarnessTerminalEngine;
 		};
+		7D2095A549D0871055203990 /* HarnessTerminalEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HarnessTerminalEngine;
+		};
 		80A7F3466CEB9D469FDED468 /* HarnessTerminalKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = HarnessTerminalKit;
@@ -1583,6 +1596,10 @@
 		95F708A1BFDB3CBC190CFCD9 /* HarnessTheme */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = HarnessTheme;
+		};
+		9FEE8D04D6CA30A6A32E49E9 /* HarnessTerminalEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HarnessTerminalEngine;
 		};
 		D104338C78B1AD80EE41F4F3 /* HarnessCopyMode */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -10,10 +10,11 @@ public final class SessionStore: @unchecked Sendable {
 
     public func load() -> SessionSnapshot {
         queue.sync {
-            guard FileManager.default.fileExists(atPath: HarnessPaths.snapshotURL.path),
-                  let data = try? Data(contentsOf: HarnessPaths.snapshotURL)
+            let url = HarnessPaths.snapshotURL
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let data = try? Data(contentsOf: url)
             else {
-                return SessionSnapshot()
+                return SessionSnapshot() // absent → fresh install
             }
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -23,6 +24,12 @@ public final class SessionStore: @unchecked Sendable {
             if let snapshot = try? JSONDecoder().decode(SessionSnapshot.self, from: data) {
                 return snapshot
             }
+            // Present but unreadable: preserve it for recovery instead of silently starting
+            // empty (which would discard every session on the next save).
+            let backup = url.appendingPathExtension("corrupt")
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.moveItem(at: url, to: backup)
+            fputs("HarnessDaemon: layout.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
             return SessionSnapshot()
         }
     }

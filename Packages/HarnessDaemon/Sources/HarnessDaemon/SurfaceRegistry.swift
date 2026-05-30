@@ -621,7 +621,18 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard let scope = OptionStore.Scope(rawValue: scopeRaw) else {
                 return .error("Unknown option scope: \(scopeRaw)")
             }
+            // The on-disk key joins scope:target:key with colons; a colon in the option name or
+            // target would mis-parse on read-back. Option names and ID targets never contain one,
+            // so reject it rather than silently corrupt the store.
+            guard !key.contains(":"), !(target?.contains(":") ?? false) else {
+                return .error("Option name/target must not contain ':'")
+            }
             optionStore.set(.init(parsing: raw), key: key, scope: scope, target: target)
+            // Nudge snapshot subscribers (the attach-window compositor) so a runtime option
+            // change — status-*, mouse, pane-style, mode-keys — reaches attached clients instead
+            // of being stuck at their startup values. Re-uses the snapshot push as a generic
+            // "re-read server state" signal (revision unchanged; clients re-pull options).
+            onSnapshotCommitted?(editor.snapshot.revision)
             return .ok
         case let .showOptions(scopeRaw):
             let scope = scopeRaw.flatMap(OptionStore.Scope.init(rawValue:))
@@ -1020,6 +1031,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
         for surfaceID in surfaceIDs where !stillReferenced.contains(surfaceID) {
             sessions.removeValue(forKey: surfaceID)?.close()
             stopPipe(surfaceID: surfaceID)
+            // Drop the output monitor too, else it leaks across tab/session/pane churn.
+            monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
         }
     }
 
@@ -1101,6 +1114,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
         guard let session, sessions[surfaceID] === session else { lock.unlock(); return }
         sessions.removeValue(forKey: surfaceID)
         monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
+        // Natural shell exit must also tear down an active pipe-pane tap, else its `/bin/sh`
+        // consumer + write-FD leak (every other close path already calls stopPipe).
+        stopPipe(surfaceID: surfaceID)
         AgentDetector.unregisterRootPID(forSurfaceKey: surfaceID)
         // `remain-on-exit` (default on, Harness's safe default): keep the dead leaf so the
         // surface key still resolves and `respawn-pane` can revive it. Off → close the pane

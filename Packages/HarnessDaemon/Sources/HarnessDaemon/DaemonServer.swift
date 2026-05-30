@@ -9,6 +9,14 @@ public final class DaemonServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.robert.harness.daemon")
     private var clientBuffers: [Int32: Data] = [:]
     private var clientSources: [Int32: DispatchSourceRead] = [:]
+    /// Unsent reply bytes per client, flushed by a writable `DispatchSource` when the socket
+    /// was full. Client FDs are non-blocking, so a slow/stuck client buffers here instead of
+    /// blocking the serial queue (which would freeze the whole daemon and hang shutdown).
+    private var writeBuffers: [Int32: Data] = [:]
+    private var writeSources: [Int32: DispatchSourceWrite] = [:]
+    /// Drop a client whose backlog grows past this — it isn't draining; buffering more would
+    /// be an unbounded memory sink. Sized for a couple of large captures in flight.
+    private let maxWriteBacklog = 32 * 1024 * 1024
     private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
     /// FDs subscribed to layout-change pushes (`subscribeSnapshot`).
     private var snapshotSubscribers: Set<Int32> = []
@@ -94,6 +102,9 @@ public final class DaemonServer: @unchecked Sendable {
         guard clientFD >= 0 else { return }
         var noSigPipe: Int32 = 1
         setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        // Non-blocking so a slow/stuck client never blocks `write` on the serial queue.
+        let flags = fcntl(clientFD, F_GETFL, 0)
+        if flags >= 0 { _ = fcntl(clientFD, F_SETFL, flags | O_NONBLOCK) }
         clientBuffers[clientFD] = Data()
         // Don't auto-register the connection as a client — `DaemonClient.request`
         // opens a fresh socket per call, and bookkeeping every one of those would
@@ -111,6 +122,8 @@ public final class DaemonServer: @unchecked Sendable {
             }
             self.clientBuffers.removeValue(forKey: clientFD)
             self.clientSources.removeValue(forKey: clientFD)
+            self.writeBuffers.removeValue(forKey: clientFD)
+            if let wsrc = self.writeSources.removeValue(forKey: clientFD) { wsrc.cancel() }
             self.cancelSubscriptions(for: clientFD)
             self.waitForRegistry.remove(fd: clientFD)
             close(clientFD)
@@ -122,7 +135,10 @@ public final class DaemonServer: @unchecked Sendable {
     private func readClient(fd: Int32, source: DispatchSourceRead) {
         var buffer = [UInt8](repeating: 0, count: 65_536)
         let count = read(fd, &buffer, buffer.count)
-        if count <= 0 {
+        if count == 0 { source.cancel(); return } // EOF — peer closed
+        if count < 0 {
+            // Non-blocking fd: a transient EAGAIN/EINTR is not a disconnect.
+            if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
             source.cancel()
             return
         }
@@ -130,7 +146,17 @@ public final class DaemonServer: @unchecked Sendable {
         data.append(contentsOf: buffer.prefix(count))
         clientBuffers[fd] = data
 
-        while let envelope = IPCCodec.decodeRequest(from: &data) {
+        while true {
+            let envelope: IPCEnvelope?
+            do {
+                envelope = try IPCCodec.decodeRequest(from: &data)
+            } catch {
+                // Oversized/garbage frame — the stream can't be re-synced. Drop the client.
+                clientBuffers[fd] = Data()
+                source.cancel()
+                return
+            }
+            guard let envelope else { break }
             clientBuffers[fd] = data
             guard let request = envelope.request else { continue }
             if case let .subscribeSurfaceOutput(surfaceID, label) = request {
@@ -240,21 +266,73 @@ public final class DaemonServer: @unchecked Sendable {
         }
     }
 
+    private enum WriteOutcome { case complete, wouldBlock, failed }
+
     private func send(_ response: IPCResponse, to fd: Int32) {
         guard let data = try? IPCCodec.encode(IPCReply(response: response)) else { return }
-        data.withUnsafeBytes { raw in
+        // Append to any pending tail so frames stay in order, then flush what the socket takes.
+        if var pending = writeBuffers[fd] {
+            pending.append(data)
+            writeBuffers[fd] = pending
+        } else {
+            writeBuffers[fd] = data
+        }
+        // A client that won't drain must not pin unbounded memory — drop it past the backlog cap.
+        if (writeBuffers[fd]?.count ?? 0) > maxWriteBacklog {
+            writeBuffers[fd] = nil
+            suspendWriteSource(fd: fd)
+            clientSources[fd]?.cancel()
+            return
+        }
+        flushWrites(fd: fd)
+    }
+
+    /// Flush as much of `fd`'s pending reply bytes as the (non-blocking) socket accepts now.
+    /// Unwritten bytes stay buffered and a writable `DispatchSource` finishes them later; a
+    /// hard socket error drops the client. Runs on the serial queue, never blocks it.
+    private func flushWrites(fd: Int32) {
+        guard var pending = writeBuffers[fd], !pending.isEmpty else {
+            writeBuffers[fd] = nil
+            suspendWriteSource(fd: fd)
+            return
+        }
+        var written = 0
+        var outcome: WriteOutcome = .complete
+        pending.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.baseAddress else { return }
-            var written = 0
             while written < raw.count {
-                let result = write(fd, base.advanced(by: written), raw.count - written)
-                if result > 0 {
-                    written += result
-                    continue
-                }
-                if result < 0, errno == EINTR { continue }
-                break
+                let n = write(fd, base.advanced(by: written), raw.count - written)
+                if n > 0 { written += n; continue }
+                if n < 0, errno == EINTR { continue }
+                outcome = (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) ? .wouldBlock : .failed
+                return
             }
         }
+        if written > 0 { pending.removeFirst(written) }
+        switch outcome {
+        case .complete:
+            writeBuffers[fd] = nil
+            suspendWriteSource(fd: fd)
+        case .wouldBlock:
+            writeBuffers[fd] = pending
+            ensureWriteSource(fd: fd) // resume when the socket drains
+        case .failed:
+            writeBuffers[fd] = nil
+            suspendWriteSource(fd: fd)
+            clientSources[fd]?.cancel() // EPIPE / peer gone
+        }
+    }
+
+    private func ensureWriteSource(fd: Int32) {
+        guard writeSources[fd] == nil else { return }
+        let src = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
+        src.setEventHandler { [weak self] in self?.flushWrites(fd: fd) }
+        writeSources[fd] = src
+        src.resume()
+    }
+
+    private func suspendWriteSource(fd: Int32) {
+        if let src = writeSources.removeValue(forKey: fd) { src.cancel() }
     }
 
     private func handleSubscribe(surfaceID: String, label: String?, fd: Int32) {

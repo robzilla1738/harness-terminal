@@ -17,6 +17,17 @@ final class TabAlertTests: XCTestCase {
         editor.snapshot.workspaces.flatMap { $0.sessions }.flatMap { $0.tabs }.first { $0.id == id }
     }
 
+    func testSnapshotRepairsAbsentAndEmptyWorkspaceList() throws {
+        // A zero-workspace snapshot would leave the app with no active workspace and no way to
+        // add one — both an absent key and an explicit empty array must repair to one workspace.
+        let dec = JSONDecoder()
+        let absent = try dec.decode(SessionSnapshot.self, from: Data(#"{"revision":1}"#.utf8))
+        XCTAssertEqual(absent.workspaces.count, 1)
+        let empty = try dec.decode(SessionSnapshot.self, from: Data(#"{"workspaces":[]}"#.utf8))
+        XCTAssertEqual(empty.workspaces.count, 1)
+        XCTAssertNotNil(empty.activeWorkspaceID)
+    }
+
     func testSetAlertsOnlyChangesProvidedFlags() {
         var (editor, ws, _, t2) = makeEditor()
         XCTAssertTrue(editor.setTabAlerts(workspaceID: ws, tabID: t2, activity: true, bell: true))

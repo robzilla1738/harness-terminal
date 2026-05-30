@@ -51,7 +51,10 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = SessionSnapshot.currentVersion
         revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
-        workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? [Workspace()]
+        // Absent OR an explicitly-empty array both repair to one workspace — a zero-workspace
+        // snapshot leaves the app with no active workspace and no way to add one.
+        let decodedWorkspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
+        workspaces = decodedWorkspaces.isEmpty ? [Workspace()] : decodedWorkspaces
         activeWorkspaceID = try container.decodeIfPresent(WorkspaceID.self, forKey: .activeWorkspaceID) ?? workspaces.first?.id
         themeName = try container.decodeIfPresent(String.self, forKey: .themeName) ?? "Default"
         keepSessionsOnQuit = try container.decodeIfPresent(Bool.self, forKey: .keepSessionsOnQuit) ?? true

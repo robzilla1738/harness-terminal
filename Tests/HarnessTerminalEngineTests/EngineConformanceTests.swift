@@ -22,6 +22,20 @@ final class EngineConformanceTests: XCTestCase {
         XCTAssertEqual(grid.cursor.col, 1)
     }
 
+    /// A pathological unterminated OSC (and a flood of intermediates) must be bounded by the
+    /// parser caps and must not wedge it — normal output after the sequence still renders.
+    func testParserBoundsHostileSequencesAndRecovers() {
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        // 2 MiB OSC payload with no terminator, then a BEL ends it, then real text.
+        term.feed("\u{1b}]0;" + String(repeating: "X", count: 2_000_000) + "\u{07}hello")
+        // A flood of CSI intermediates, then a final byte, then more text.
+        term.feed("\u{1b}[" + String(repeating: " ", count: 100_000) + "mWORLD")
+        let grid = term.readGrid()!
+        // "hello" landed at the start; the parser recovered from both pathological sequences.
+        let row0 = (0 ..< 5).compactMap { grid.cell(row: 0, col: $0)?.codepoint }.compactMap { UnicodeScalar($0).map(Character.init) }
+        XCTAssertEqual(String(row0), "hello")
+    }
+
     func testAutowrapDisabledOverwritesLastColumn() {
         // ?7l disables DECAWM; subsequent glyphs pile up on the last column.
         let grid = read("\u{1b}[?7l" + String(repeating: "a", count: 80) + "XY", cols: 80, rows: 24)

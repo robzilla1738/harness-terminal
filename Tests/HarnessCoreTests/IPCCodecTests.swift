@@ -96,21 +96,26 @@ final class IPCCodecTests: XCTestCase {
         let full = try IPCCodec.encode(IPCEnvelope(request: .ping))
         var buffer = full.prefix(full.count - 1) // missing the last payload byte
         let countBefore = buffer.count
-        XCTAssertNil(IPCCodec.decodeRequest(from: &buffer))
+        XCTAssertNil(try IPCCodec.decodeRequest(from: &buffer))
         XCTAssertEqual(buffer.count, countBefore, "incomplete frame must be left for the next read")
     }
 
     func testTwoMessagesInOneBufferDecodeSequentially() throws {
         var buffer = try IPCCodec.encode(IPCEnvelope(request: .ping))
         buffer.append(try IPCCodec.encode(IPCEnvelope(request: .getSnapshot)))
-        XCTAssertNotNil(IPCCodec.decodeRequest(from: &buffer))
-        XCTAssertNotNil(IPCCodec.decodeRequest(from: &buffer))
+        XCTAssertNotNil(try IPCCodec.decodeRequest(from: &buffer))
+        XCTAssertNotNil(try IPCCodec.decodeRequest(from: &buffer))
         XCTAssertTrue(buffer.isEmpty)
     }
 
-    func testOversizeLengthHeaderIsRejectedAndBufferCleared() {
-        var buffer = Data([0xFF, 0xFF, 0xFF, 0xFF]) // ~4 GiB > 64 MiB cap
-        XCTAssertNil(IPCCodec.decodeRequest(from: &buffer))
-        XCTAssertTrue(buffer.isEmpty, "an over-cap frame must be dropped, not buffered")
+    func testOversizeLengthHeaderThrowsSoTheConnectionIsDropped() {
+        var buffer = Data([0xFF, 0xFF, 0xFF, 0xFF]) // ~4 GiB > the cap
+        // A declared length over the cap is unrecoverable on a stream — decode throws so the
+        // reader drops the connection rather than silently mis-framing what follows.
+        XCTAssertThrowsError(try IPCCodec.decodeRequest(from: &buffer)) { error in
+            guard case IPCCodec.FrameError.tooLarge = error else {
+                return XCTFail("expected FrameError.tooLarge, got \(error)")
+            }
+        }
     }
 }

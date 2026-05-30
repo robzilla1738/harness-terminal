@@ -904,9 +904,20 @@ public final class HarnessTerminalSurfaceView: NSView {
         process.arguments = ["-c", command]
         let pipe = Pipe()
         process.standardInput = pipe
-        if (try? process.run()) != nil {
-            pipe.fileHandleForWriting.write(Data(text.utf8))
-            try? pipe.fileHandleForWriting.close()
+        // Don't let the child inherit the GUI app's stdout/stderr (it would leak app fds and
+        // could block on a full inherited pipe); discard its output like tmux's copy-pipe.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        // Reap the child so it can't linger as a zombie across many copy-pipe invocations.
+        process.terminationHandler = { _ in }
+        guard (try? process.run()) != nil else { return }
+        // Write off the main thread so a large selection into a slow/non-draining command can't
+        // block the UI; a closed pipe (child already exited) throws and is ignored.
+        let data = Data(text.utf8)
+        let writer = pipe.fileHandleForWriting
+        DispatchQueue.global(qos: .utility).async {
+            try? writer.write(contentsOf: data)
+            try? writer.close()
         }
     }
 

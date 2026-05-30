@@ -65,6 +65,17 @@ final class VTParser {
     private var utf8Min: UInt32 = 0
 
     private let maxParams = 32
+    /// Hard caps so a hostile/buggy stream can't grow these buffers without bound (a memory
+    /// DoS via the daemon→app pipe). Real sequences are tiny; 8 intermediates is far above
+    /// xterm's 2, and 1 MiB bounds even a large OSC 52 clipboard payload. Past the cap we keep
+    /// consuming the (malformed/oversized) sequence but stop accumulating.
+    private let maxIntermediates = 8
+    private let maxOSCBytes = 1 << 20
+
+    /// Append an intermediate byte, dropping anything past the cap.
+    private func appendIntermediate(_ byte: UInt8) {
+        if intermediates.count < maxIntermediates { intermediates.append(byte) }
+    }
 
     init(handler: VTParserHandler) {
         self.handler = handler
@@ -176,7 +187,7 @@ final class VTParser {
         case 0x50, 0x58, 0x5E, 0x5F: // DCS 'P', SOS 'X', PM '^', APC '_'
             state = .stringConsume
         case 0x20 ... 0x2F: // intermediate
-            intermediates.append(byte)
+            appendIntermediate(byte)
             state = .escapeIntermediate
         case 0x30 ... 0x7E: // final
             handler?.parserESC(final: byte, intermediates: intermediates)
@@ -190,7 +201,7 @@ final class VTParser {
     private func escapeIntermediate(_ byte: UInt8) {
         switch byte {
         case 0x20 ... 0x2F:
-            intermediates.append(byte)
+            appendIntermediate(byte)
         case 0x30 ... 0x7E:
             handler?.parserESC(final: byte, intermediates: intermediates)
             state = .ground
@@ -216,7 +227,7 @@ final class VTParser {
             csiPrivate = true
             state = .csiParam
         case 0x20 ... 0x2F: // intermediate
-            intermediates.append(byte); state = .csiIntermediate
+            appendIntermediate(byte); state = .csiIntermediate
         case 0x40 ... 0x7E: // final
             dispatchCSI(byte)
         case 0x7F:
@@ -237,7 +248,7 @@ final class VTParser {
         case 0x3C ... 0x3F:
             state = .csiIgnore // private marker after params is malformed
         case 0x20 ... 0x2F:
-            intermediates.append(byte); state = .csiIntermediate
+            appendIntermediate(byte); state = .csiIntermediate
         case 0x40 ... 0x7E:
             dispatchCSI(byte)
         case 0x7F:
@@ -250,7 +261,7 @@ final class VTParser {
     private func csiIntermediate(_ byte: UInt8) {
         switch byte {
         case 0x20 ... 0x2F:
-            intermediates.append(byte)
+            appendIntermediate(byte)
         case 0x40 ... 0x7E:
             dispatchCSI(byte)
         case 0x7F:
@@ -354,7 +365,7 @@ final class VTParser {
         case 0x1B:
             sawESCInString = true
         default:
-            oscBuffer.append(byte)
+            if oscBuffer.count < maxOSCBytes { oscBuffer.append(byte) }
         }
     }
 

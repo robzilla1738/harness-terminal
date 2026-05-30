@@ -165,6 +165,13 @@ private final class WindowSession: @unchecked Sendable {
     private var compositor: GridCompositor
     private var activeSurface: String?
     private var renderScheduled = false
+    /// Status-band rows reserved by the last `rebuildLayout` (so a copy-mode/flash toggle that
+    /// changes the band can re-solve the pane rects instead of overpainting them).
+    private var reservedStatus = 1
+    /// Set on renderQueue during teardown so any already-deferred render (scheduleRender /
+    /// flashStatus / display-panes asyncAfter) bails instead of writing stdout after the final
+    /// cleanup sequence — no interleaved/garbled output on detach.
+    private var tornDown = false
 
     // MARK: Copy mode / mouse / synchronize (Phase 3)
     /// Copy mode over the focused pane — the same shared `CopyModeReducer` the GUI drives.
@@ -227,7 +234,8 @@ private final class WindowSession: @unchecked Sendable {
         self.rows = rows
         compositor.resize(cols: cols, rows: rows)
 
-        let contentRows = max(1, rows - 1) // reserve a status row
+        reservedStatus = reservedStatusRows()
+        let contentRows = max(1, rows - reservedStatus) // reserve the status band (status 1..5)
 
         // Compute rects. A zoomed pane takes the whole content area.
         if let zoomed = tab.zoomedPaneID, let leaf = findLeaf(tab.rootPane, paneID: zoomed) {
@@ -316,6 +324,7 @@ private final class WindowSession: @unchecked Sendable {
     }
 
     private func composeAndWrite() {
+        guard !tornDown else { return } // detaching — don't paint over the cleanup sequence
         var panes: [CompositorPane] = []
         panes.reserveCapacity(rects.count)
         // Resolve the active/inactive base styles once; map each to engine colors.
@@ -368,6 +377,16 @@ private final class WindowSession: @unchecked Sendable {
     /// `display-message` override and copy-mode status replace it while active. Extra rows
     /// (`status-format-1…`) sit above it. Returns nil to hide the band when `status off`
     /// (unless an override/copy-mode line still needs the row).
+    /// The number of bottom rows the status band occupies, matching exactly what
+    /// `statusLineSet()` paints: the `status` option count (0..5), or 1 when a copy-mode /
+    /// flash override is showing over an otherwise-hidden status bar. `PaneRectSolver` reserves
+    /// this many rows so panes/borders never overlap the status band.
+    private func reservedStatusRows() -> Int {
+        let count = OptionStore.Value(parsing: statusOptions["status"] ?? "on").statusLineCount
+        if count > 0 { return count }
+        return (copyMode != nil || statusOverride != nil) ? 1 : 0
+    }
+
     private func statusLineSet() -> [[StyledSegment]]? {
         let count = OptionStore.Value(parsing: statusOptions["status"] ?? "on").statusLineCount
         let override: [StyledSegment]?
@@ -563,8 +582,8 @@ private final class WindowSession: @unchecked Sendable {
     private var prefixPending: [UInt8] = []
     /// `switch-client -T <table>`: the key table for the next armed key (modal bindings).
     /// One-shot — consulted instead of `.prefix`, then cleared (unless its command switches
-    /// again). Set/read on the input thread for the prefix path; the root/command-prompt
-    /// path sets it from `renderQueue` like the other input-loop flags (copy-mode, mouse).
+    /// again). Like all input/mode state it is touched only on `renderQueue` (consumeInput and
+    /// every command path run there), so no cross-thread synchronization is needed.
     private var pendingTable: KeyTableID?
     private var copyModePending: [UInt8] = []
     private var mouseSeq: [UInt8] = []
@@ -596,11 +615,17 @@ private final class WindowSession: @unchecked Sendable {
             if n == 0 { break }
             if n < 0 { if errno == EINTR { continue }; break }
 
-            var forward = Data()
-            var i = 0
-            while i < n { consumeInput(buffer[i], forward: &forward); i += 1 }
-
-            if !forward.isEmpty { dispatchForward(forward) }
+            // The input thread only reads bytes; ALL decode + state inspection runs on
+            // renderQueue, which is the single owner of every piece of input/mode/layout state
+            // (inPrefix, prefixPending, pendingTable, copyMode, rects, activeSurface, …). This
+            // makes those accesses single-threaded — no data races between stdin and renders.
+            let chunk = Array(buffer[0 ..< n])
+            renderQueue.async { [weak self] in
+                guard let self else { return }
+                var forward = Data()
+                for byte in chunk { self.consumeInput(byte, forward: &forward) }
+                if !forward.isEmpty { self.dispatchForward(forward) }
+            }
         }
     }
 
@@ -643,9 +668,10 @@ private final class WindowSession: @unchecked Sendable {
             return
         }
 
-        // Copy mode consumes everything except the prefix.
+        // Copy mode consumes everything except the prefix. (Direct call — consumeInput already
+        // runs on renderQueue, so a nested async would risk reordering against the next chunk.)
         if copyMode != nil {
-            renderQueue.async { [weak self] in self?.handleCopyModeByte(byte) }
+            handleCopyModeByte(byte)
             return
         }
 
@@ -655,7 +681,7 @@ private final class WindowSession: @unchecked Sendable {
                 mouseSeq.append(byte)
                 if byte == UInt8(ascii: "M") || byte == UInt8(ascii: "m") {
                     let seq = mouseSeq; mouseSeq.removeAll(keepingCapacity: true); collectingMouse = false
-                    renderQueue.async { [weak self] in self?.handleMouse(seq) }
+                    handleMouse(seq)
                 } else if mouseSeq.count > 32 {
                     mouseSeq.removeAll(keepingCapacity: true); collectingMouse = false
                 }
@@ -678,10 +704,10 @@ private final class WindowSession: @unchecked Sendable {
         if showPaneNumbers {
             if byte >= UInt8(ascii: "0"), byte <= UInt8(ascii: "9") {
                 let digit = Int(byte - UInt8(ascii: "0"))
-                renderQueue.async { [weak self] in self?.selectPaneByDisplayIndex(digit) }
+                selectPaneByDisplayIndex(digit)
                 return
             }
-            renderQueue.async { [weak self] in self?.dismissPaneNumbers() }
+            dismissPaneNumbers()
         }
 
         // `bind -n` root table: a control byte / ESC sequence may be a no-prefix binding.
@@ -744,6 +770,12 @@ private final class WindowSession: @unchecked Sendable {
 
     // MARK: Copy mode (compositor) — runs on renderQueue
 
+    /// Re-solve the pane rects if the status band changed size (e.g. copy mode adds a status
+    /// row when `status` is off). Cheap — existing terminals just resize, no re-subscribe.
+    private func relayoutIfStatusBandChanged() {
+        if reservedStatusRows() != reservedStatus { rebuildLayout(initial: false) }
+    }
+
     private func enterCopyMode() {
         guard let surface = activeSurface, let term = terminals[surface] else { return }
         copyModeSurface = surface
@@ -751,11 +783,13 @@ private final class WindowSession: @unchecked Sendable {
         let cursorLine = term.historyCount + (live?.cursor.row ?? 0)
         copyMode = CopyModeReducer.initialState(grid: term, cursorLine: cursorLine, cursorColumn: live?.cursor.col ?? 0)
         copyModePending.removeAll(); copyModeSearchEntry = nil
+        relayoutIfStatusBandChanged()
         compositor.invalidate(); composeAndWrite()
     }
 
     private func exitCopyMode() {
         copyMode = nil; copyModeSurface = nil; copyModeSearchEntry = nil; copyModePending.removeAll()
+        relayoutIfStatusBandChanged()
         compositor.invalidate(); composeAndWrite()
     }
 
@@ -1130,8 +1164,9 @@ private final class WindowSession: @unchecked Sendable {
         case .displayPanes:
             showDisplayPanes()
         case let .switchClientTable(name):
-            // Reached from a `.root`/command-prompt/hook invocation (the prefix path resolves
-            // it synchronously in handleBoundKey). Arm the input loop like enter-copy-mode does.
+            // Reached from a `.root`/command-prompt/hook invocation (the prefix path resolves it
+            // in handleBoundKey). Arm the next key; safe because this and consumeInput both run
+            // on renderQueue.
             pendingTable = KeyTableID(rawValue: name)
             inPrefix = true
             prefixPending.removeAll(keepingCapacity: true)
@@ -1165,6 +1200,12 @@ private final class WindowSession: @unchecked Sendable {
     /// re-pin to it; otherwise we rebuild only when the focused tab's structure,
     /// zoom, title, or active pane changed. Runs on `renderQueue`.
     private func checkStructure() {
+        // A push also fires on `set-option` (the daemon nudges subscribers), so re-pull options
+        // every time — this is how a runtime status-*/mouse/pane-style/mode-keys change reaches
+        // an attached client. Then re-solve if the status band size changed but structure didn't.
+        refreshStatusOptions()
+        relayoutIfStatusBandChanged()
+
         guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 1) else { return }
         latestSnapshot = snapshot
         guard let session = WindowAttachClient.session(snapshot, id: sessionID) else {
@@ -1185,6 +1226,9 @@ private final class WindowSession: @unchecked Sendable {
         if changed {
             tab = latest
             rebuildLayout(initial: false)
+        } else {
+            // No structural change, but a status-left/right/format edit still needs a repaint.
+            compositor.invalidate(); composeAndWrite()
         }
     }
 
@@ -1243,7 +1287,7 @@ private final class WindowSession: @unchecked Sendable {
     }
 
     private func teardown() {
-        if mouseEnabled { setOuterMouseTracking(false) }
+        // Stop new render work from being enqueued before draining the queue.
         snapshotSubscription?.cancel()
         sigwinch?.cancel()
         sigterm?.cancel()
@@ -1251,8 +1295,13 @@ private final class WindowSession: @unchecked Sendable {
         for sid in terminals.keys {
             _ = try? client.request(.detachSurface(surfaceID: sid), timeout: 1)
         }
-        // Restore the cursor and clear our composited frame.
-        writeOut("\u{1b}[0m\u{1b}[?25h\u{1b}[2J\u{1b}[H")
+        // Drain any in-flight render, block future ones, then emit the cleanup sequence as the
+        // single final stdout write — so it never interleaves with a composeAndWrite.
+        renderQueue.sync {
+            tornDown = true
+            if mouseEnabled { setOuterMouseTracking(false) }
+            writeOut("\u{1b}[0m\u{1b}[?25h\u{1b}[2J\u{1b}[H") // reset SGR, show cursor, clear frame
+        }
         if wakeRead >= 0 { close(wakeRead) }
         if wakeWrite >= 0 { close(wakeWrite) }
     }
