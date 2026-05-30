@@ -118,4 +118,29 @@ final class HarnessGridTerminalTests: XCTestCase {
         XCTAssertEqual(grid.cell(row: 1, col: 0)?.codepoint, UInt32(UnicodeScalar("b").value))
         XCTAssertEqual(grid.cell(row: 2, col: 0)?.codepoint, UInt32(UnicodeScalar("c").value))
     }
+
+    // MARK: - capture-pane (-J join wrapped)
+
+    func testCaptureJoinsSoftWrappedLines() {
+        guard let term = HarnessGridTerminal(cols: 10, rows: 6) else { return XCTFail() }
+        // 25 chars with no newline autowraps across 3 physical rows; then a hard line.
+        term.feed("0123456789abcdefghijABCDE\r\nnext")
+
+        let physical = term.captureLines(joinWrapped: false)
+        XCTAssertEqual(physical.prefix(4).map { $0 }, ["0123456789", "abcdefghij", "ABCDE", "next"],
+                       "without -J each physical row is its own line")
+
+        let joined = term.captureLines(joinWrapped: true)
+        XCTAssertEqual(joined.prefix(2).map { $0 }, ["0123456789abcdefghijABCDE", "next"],
+                       "with -J the soft-wrapped rows rejoin into one logical line")
+    }
+
+    func testCaptureReflectsOverwrites() {
+        guard let term = HarnessGridTerminal(cols: 20, rows: 4) else { return XCTFail() }
+        // A carriage return returns to column 0; "done" overwrites "load" → "doneing...".
+        // Grid capture shows the final on-screen state — a raw byte-stream strip would keep
+        // the literal "loading...\rdone" instead.
+        term.feed("loading...\rdone")
+        XCTAssertEqual(term.captureLines(joinWrapped: false).first, "doneing...")
+    }
 }

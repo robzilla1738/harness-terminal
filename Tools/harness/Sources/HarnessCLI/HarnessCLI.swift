@@ -311,17 +311,19 @@ struct HarnessCLI {
 
     static func handleCapturePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-e] [-p]\n", stderr)
+            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-e] [-J] [-p]\n", stderr)
             exit(1)
         }
         // -S/-E request a line range (tmux `-p` prints to stdout, the default here);
-        // negative numbers count back from the bottom. -e keeps SGR/escapes (default strips).
+        // negative numbers count back from the bottom. -e keeps the program's raw escapes;
+        // -J joins soft-wrapped lines (grid-reconstructed plain text).
         let start = flagValue(args, flag: "-S").flatMap(Int.init)
         let end = flagValue(args, flag: "-E").flatMap(Int.init)
         let escapes = args.contains("-e")
+        let join = args.contains("-J")
         let response: IPCResponse
-        if args.contains("-S") || args.contains("-E") || escapes {
-            response = try checkedRequest(client, .capturePaneRange(surfaceID: surface, start: start, end: end, escapeSequences: escapes))
+        if args.contains("-S") || args.contains("-E") || escapes || join || args.contains("-p") {
+            response = try checkedRequest(client, .capturePaneRange(surfaceID: surface, start: start, end: end, escapeSequences: escapes, joinWrapped: join))
         } else {
             response = try checkedRequest(client, .capturePane(surfaceID: surface, includeScrollback: args.contains("--scrollback")))
         }

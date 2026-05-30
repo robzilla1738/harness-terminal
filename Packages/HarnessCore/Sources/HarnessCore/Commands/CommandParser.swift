@@ -346,6 +346,12 @@ public enum CommandParser {
             return .lockClient
         case "clock-mode":
             return .clockMode
+        case "switch-client", "switchc":
+            // `-T <table>` selects the key table for the next key press (modal bindings).
+            guard let table = stringValue(for: "-T", in: tokens) else {
+                throw CommandParseError.missingArgument("switch-client requires -T <table>")
+            }
+            return .switchClientTable(table: table)
         case "link-window", "linkw":
             guard let target = stringValue(for: "-t", in: tokens) ?? tokens.first(where: { !$0.hasPrefix("-") }) else {
                 throw CommandParseError.missingArgument("link-window requires a target session (-t <session>)")

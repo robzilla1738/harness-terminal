@@ -41,7 +41,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `display-panes` | prefix `q` numbered overlay (GUI + compositor; digit selects) | ✅ |
 | `last-window` / `last-pane` | `last-window` (MRU tab) + `select-pane -l` | ✅ |
 | `link-window` / `unlink-window` | linked window shares the source's surfaces (live PTYs) across sessions; ref-counted surface GC | ✅ |
-| grouped sessions (`new-session -t base`) | — (link-window covers cross-session sharing) | 🛣️ |
+| grouped sessions (`new-session -t base`) | `link-window` shares live PTYs across sessions; full grouped sessions need shared-window *references* (vs. Harness's value-typed session-owned tabs) — a deliberate divergence, see Remaining roadmap | 🟰 |
 
 ## Attach / multi-client
 
@@ -87,7 +87,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `remain-on-exit` | option read in the daemon PTY-exit handler: on (default, Harness's safe default) keeps the dead leaf for `respawn-pane`; off closes the pane — or its tab when last — on shell exit | ✅ |
 | `base-index` / `pane-base-index` | `base-index` / `pane-base-index` options, applied to `-t` indices, `select-window`, and index display | ✅ |
 | `monitor-activity` / `-silence` / `-bell` | daemon per-surface output monitor → tab `activity`/`silence`/`bell` flags (`#`/`~`/`!` in `#{window_flags}`, cleared on view) + `alert-activity`/`-silence`/`-bell` hooks | ✅ |
-| `destroy-unattached` / `detach-on-destroy` | — | 🛣️ |
+| `destroy-unattached` / `detach-on-destroy` / `exit-empty` | n/a — these clean up sessions/servers with no attached client; Harness shows all sessions at once and keeps the daemon alive under launchd `KeepAlive` by design, so there is no unattached/empty state to destroy | 🟰 |
 | `repeat-time` | `repeat-time` (ms) option read by `PrefixKeymap` for the post-`bind -r` re-arm window (no hardcoded literal) | ✅ |
 | `escape-time` | n/a — Harness's key decoding is byte-driven, not timer-gated, so there is no ESC-disambiguation delay to tune | 🟰 |
 
@@ -97,6 +97,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 |------|---------|--------|
 | prefix keymap + `bind-key`/`unbind-key` | `PrefixKeymap`, `KeyTable`, `keybindings.json` (merged defaults + overrides) | ✅ |
 | no-prefix bindings (`bind -n` / `-T root`) | seeded, consulted `root` key table; `bind-key -T root <key> <cmd>` runs without the prefix in the GUI **and** the `attach-window` compositor (control bytes + ESC sequences decoded against `.root`, engaged only when root bindings exist) | ✅ |
+| `switch-client -T <table>` (modal/multi-key bindings) | `switch-client -T <table>` resolves the next key in `<table>` (one-shot, client-local), so `bind-key -T <table> …` builds modal sequences on top of the prefix; wired identically in the GUI (`PrefixKeymap`) and the `attach-window` compositor via the shared `CommandIPCTranslator` (`.clientLocal`) | ✅ |
 | `send-keys -l` (literal) / `-H` (hex) | literal text / hex bytes sent raw via `sendData` (`KeyTokenParser.hexBytes`) | ✅ |
 | command prompt (`:`) | `Cmd+;` / prefix `:` (`CommandPromptController`) | ✅ |
 | one verb vocabulary across front-ends | `Command` + shared `CommandIPCTranslator` (GUI, compositor, hooks) | ✅ |
@@ -106,7 +107,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `confirm-before` | `confirm-before -p "…" "<cmd>"` → NSAlert, runs on OK | ✅ |
 | `command-alias` (short forms) | `neww`/`splitw`/`killp`/`selectp`/`resizep`/… resolve in `CommandParser` | ✅ |
 | `choose-tree` / `-session` / `-window` / `-buffer` / `-client` | GUI menu picker (`choose-*`); palette (`Cmd+K`) for themes/actions | ✅ |
-| `capture-pane -S/-E -e -p` (line ranges to stdout) | `capture-pane -S <n> -E <n>` (negative = from bottom); `-e` keeps SGR/escapes, default strips to plain text. `-J` (join wrapped lines) needs daemon-side grid emulation (the byte-stream capture can't reconstruct soft-wrap) — 🛣️ | ✅ |
+| `capture-pane -S/-E -e -p -J` (line ranges to stdout) | `capture-pane -S <n> -E <n>` (negative = from bottom). `-e` keeps the program's original escapes (raw byte stream); plain capture reconstructs the on-screen grid (a headless `HarnessGridTerminal` fed the retained output at the pane's width — faithful to overwrites/clears, like tmux). `-J` joins soft-wrapped rows into their logical line | ✅ |
 | `pipe-pane` | tee a pane's live output to a shell command (`pipe-pane "<cmd>"`, omit to stop) | ✅ |
 | `source-file` | run a file of Harness commands (`source-file <path>`) | ✅ |
 | `send-prefix` | send the configured prefix key to the pane | ✅ |
@@ -127,24 +128,30 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 
 ## Remaining roadmap
 
-Nearly all of tmux's capability surface is now implemented across the GUI, the
-CLI/compositor, and control mode — including copy-mode + SGR mouse on both surfaces,
-monitoring (`monitor-*`), multi-line status, `window-style`/`pane-style`,
-`pane-border-status`, `remain-on-exit`/`repeat-time`, the `bind -n` root table on both
-surfaces, and `capture-pane -e`. The remaining 🛣️ items are intentionally **not**
-shipped half-wired (that would be the tech debt this project forbids):
+Every tmux capability that maps onto Harness's model is now implemented across the GUI,
+the CLI/compositor, and control mode — copy-mode + SGR mouse on both surfaces, monitoring
+(`monitor-*`), multi-line status, `window-style`/`pane-style`, `pane-border-status`,
+`remain-on-exit`/`repeat-time`, the `bind -n` root table and `switch-client -T` modal key
+tables on both surfaces, and grid-reconstructed `capture-pane -e`/`-J`.
 
-- **Grouped sessions (`new-session -t base`)** — `link-window` already provides
-  cross-session shared windows (the underlying capability); grouped sessions add the
-  auto-shared window-list convenience on top.
-- **`switch-client -T <table>`** — per-client active key table (client-local state).
-- **`capture-pane -J`** — join soft-wrapped lines; needs daemon-side grid emulation
-  (the byte-stream scrollback capture can't reconstruct screen wrap).
+The few items marked 🟰 are **deliberate architectural divergences**, not deferred work —
+they conflict with design choices that make Harness better as a single-user native app, and
+shipping an approximation would be the half-wired tech debt this project forbids:
+
+- **Grouped sessions (`new-session -t base`)** — true tmux grouped sessions require
+  *windows to be first-class shared entities* referenced by multiple sessions (a split in
+  one is a split in all, because it's literally the same window). Harness deliberately
+  models tabs as **value-typed, session-owned** state — that's what gives it clean
+  persistence, clean daemon authority, and a clean GUI. `link-window` is the pragmatic
+  bridge (it shares the live PTYs across sessions, just not the pane *layout*). Retrofitting
+  shared-window references to gain the auto-synced window list would be a deep rework for a
+  multi-attach workflow the always-visible GUI already serves differently — net negative.
 - **Session-lifecycle options** — `destroy-unattached`/`detach-on-destroy`/`exit-empty`
-  depend on a session↔client attachment model Harness's all-sessions-visible GUI +
-  launchd-`KeepAlive` daemon don't have; `aggressive-resize` (smallest-wins already
-  ships) and `status-keys` (needs the unconsulted `.command` table) are low-value.
-
-Everything they build on — daemon authority, the shared translator, scoped options,
-hooks, server-side active pane, snapshot push, the compositor, control mode, linked
-windows — is in place, so each is additive rather than a rewrite.
+  presuppose a session↔client attachment lifecycle (sessions exist only while a client is
+  attached). Harness shows **all** sessions at once in the GUI and runs the daemon under
+  launchd `KeepAlive` by product decision, so "no client attached" and "server empty" are
+  not failure states to clean up. `aggressive-resize` is subsumed by the smallest-wins
+  multi-client sizing that already ships; `status-keys` (vi/emacs command-prompt editing)
+  is delivered natively by the macOS text field.
+- **`escape-time`** — n/a: Harness decodes keys byte-for-byte, not on an ESC-disambiguation
+  timer, so there is no delay to tune. 🟰

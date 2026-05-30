@@ -392,9 +392,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case let .closeSurface(surfaceID):
             closeSurfaces([surfaceID])
             return .ok
-        case let .capturePaneRange(surfaceID, start, end, escapeSequences):
+        case let .capturePaneRange(surfaceID, start, end, escapeSequences, joinWrapped):
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
-            return .text(session.captureRange(start: start, end: end, escapeSequences: escapeSequences))
+            // `-e` keeps the program's original escapes (raw byte stream); plain capture
+            // reconstructs the actual on-screen grid, with `-J` joining soft-wrapped rows.
+            if escapeSequences {
+                return .text(session.captureRange(start: start, end: end, escapeSequences: true))
+            }
+            return .text(session.captureGrid(start: start, end: end, joinWrapped: joinWrapped))
         case let .pipePane(surfaceID, shellCommand):
             guard sessions[surfaceID] != nil else { return .error("Surface not found") }
             if let shellCommand, !shellCommand.isEmpty {

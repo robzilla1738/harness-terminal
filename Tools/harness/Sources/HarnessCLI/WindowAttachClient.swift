@@ -561,6 +561,11 @@ private final class WindowSession: @unchecked Sendable {
     // Input state, held across reads so split escape/mouse sequences decode correctly.
     private var inPrefix = false
     private var prefixPending: [UInt8] = []
+    /// `switch-client -T <table>`: the key table for the next armed key (modal bindings).
+    /// One-shot — consulted instead of `.prefix`, then cleared (unless its command switches
+    /// again). Set/read on the input thread for the prefix path; the root/command-prompt
+    /// path sets it from `renderQueue` like the other input-loop flags (copy-mode, mouse).
+    private var pendingTable: KeyTableID?
     private var copyModePending: [UInt8] = []
     private var mouseSeq: [UInt8] = []
     private var collectingMouse = false
@@ -610,17 +615,20 @@ private final class WindowSession: @unchecked Sendable {
                 return
             case .literalPrefix:
                 forward.append(prefix)
-                prefixPending.removeAll(keepingCapacity: true); inPrefix = false
+                prefixPending.removeAll(keepingCapacity: true); inPrefix = false; pendingTable = nil
             case let .complete(spec):
                 if !handleBoundKey(spec) {
                     forward.append(prefix)
                     forward.append(contentsOf: prefixPending)
                 }
-                prefixPending.removeAll(keepingCapacity: true); inPrefix = false
+                prefixPending.removeAll(keepingCapacity: true)
+                // A `switch-client -T` binding leaves `pendingTable` set — stay armed so the
+                // next key decodes in that table instead of exiting prefix mode.
+                inPrefix = (pendingTable != nil)
             case .invalid:
                 forward.append(prefix)
                 forward.append(contentsOf: prefixPending)
-                prefixPending.removeAll(keepingCapacity: true); inPrefix = false
+                prefixPending.removeAll(keepingCapacity: true); inPrefix = false; pendingTable = nil
             }
             return
         }
@@ -1055,8 +1063,16 @@ private final class WindowSession: @unchecked Sendable {
     /// Look a `KeySpec` up in the merged prefix table and run its `Command`.
     /// Returns false if nothing is bound (caller forwards the bytes verbatim).
     private func handleBoundKey(_ spec: KeySpec) -> Bool {
-        guard let binding = keyTables.table(.prefix)?.lookup(spec) else { return false }
+        let table = pendingTable ?? .prefix
+        pendingTable = nil
+        guard let binding = keyTables.table(table)?.lookup(spec) else { return false }
         let command = binding.command
+        // A table switch is resolved synchronously on the input thread so the next byte
+        // re-enters prefix decoding in the new table (no thread hop, no race).
+        if case let .switchClientTable(name) = command {
+            pendingTable = KeyTableID(rawValue: name)
+            return true
+        }
         renderQueue.async { [weak self] in self?.execute(command) }
         return true
     }
@@ -1113,6 +1129,12 @@ private final class WindowSession: @unchecked Sendable {
             toggleSynchronize(set)
         case .displayPanes:
             showDisplayPanes()
+        case let .switchClientTable(name):
+            // Reached from a `.root`/command-prompt/hook invocation (the prefix path resolves
+            // it synchronously in handleBoundKey). Arm the input loop like enter-copy-mode does.
+            pendingTable = KeyTableID(rawValue: name)
+            inPrefix = true
+            prefixPending.removeAll(keepingCapacity: true)
         case .showCheatsheet, .sourceConfig, .reloadKeybindings, .bindKey, .unbindKey, .listKeys,
              .renameWindow, .renameSession, .runShell, .ifShell:
             break

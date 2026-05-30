@@ -40,8 +40,10 @@ public enum IPCRequest: Codable, Sendable {
     case capturePane(surfaceID: String, includeScrollback: Bool)
     /// `capture-pane -S <start> -E <end>`: a line range from scrollback+screen,
     /// negative numbers counting back from the bottom (tmux semantics). `escapeSequences`
-    /// (`-e`) keeps SGR/escapes instead of stripping to plain text. Returns `.text`.
-    case capturePaneRange(surfaceID: String, start: Int?, end: Int?, escapeSequences: Bool)
+    /// (`-e`) keeps SGR/escapes raw (byte-stream, faithful to what the program emitted);
+    /// otherwise the lines are grid-reconstructed plain text. `joinWrapped` (`-J`) joins
+    /// soft-wrapped rows into their logical line (grid path only). Returns `.text`.
+    case capturePaneRange(surfaceID: String, start: Int?, end: Int?, escapeSequences: Bool, joinWrapped: Bool)
     /// `pipe-pane`: tee the pane's live output to a spawned shell command's stdin.
     /// `shellCommand == nil` stops an active pipe (toggle off).
     case pipePane(surfaceID: String, shellCommand: String?)

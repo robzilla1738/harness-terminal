@@ -85,6 +85,10 @@ public final class TerminalEmulator: VTParserHandler {
     /// the current width. O(cols) random access — for copy-mode motion/search.
     public func bufferLine(_ index: Int) -> [TerminalGridCell] { current.bufferLine(index) }
 
+    /// The full buffer as plain-text lines for `capture-pane`. `joinWrapped` (tmux `-J`)
+    /// joins soft-wrapped physical rows into their logical line.
+    public func captureLines(joinWrapped: Bool) -> [String] { current.captureLines(joinWrapped: joinWrapped) }
+
     // MARK: - VTParserHandler
 
     func parserPrint(_ scalar: UInt32) {

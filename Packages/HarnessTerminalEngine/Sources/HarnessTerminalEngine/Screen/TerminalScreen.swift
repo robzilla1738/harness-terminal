@@ -131,6 +131,55 @@ final class TerminalScreen {
         return Array(cells[row * cols ..< (row + 1) * cols])
     }
 
+    // MARK: - Capture (capture-pane)
+
+    /// The full buffer (`history ++ viewport`) as plain-text lines — the actual on-screen
+    /// content, exactly like tmux's grid capture (so cursor moves, overwrites and clears are
+    /// reflected faithfully, unlike a raw byte-stream strip). A wide glyph's `spacerTail`
+    /// column is skipped; codepoint 0 reads as a space. When `joinWrapped` (tmux `-J`),
+    /// physical rows that ended in a soft autowrap are concatenated with their continuation
+    /// into one logical line; otherwise every physical row is one line.
+    func captureLines(joinWrapped: Bool) -> [String] {
+        var phys: [(cells: [TerminalGridCell], wrapped: Bool)] = []
+        phys.reserveCapacity(history.count + rows)
+        for h in history { phys.append((h.cells, h.wrapped)) }
+        for r in 0 ..< rows {
+            phys.append((Array(cells[r * cols ..< (r + 1) * cols]), rowWrapped[r]))
+        }
+
+        func text(_ cells: [TerminalGridCell], trimTrailing: Bool) -> String {
+            var end = cells.count
+            if trimTrailing { while end > 0, isBlank(cells[end - 1]) { end -= 1 } }
+            var s = String()
+            s.reserveCapacity(end)
+            for i in 0 ..< end {
+                let cell = cells[i]
+                if cell.width == .spacerTail { continue } // wide head already emitted
+                s.unicodeScalars.append(cell.codepoint == 0 ? " " : (Unicode.Scalar(cell.codepoint) ?? " "))
+            }
+            return s
+        }
+
+        guard joinWrapped else { return phys.map { text($0.cells, trimTrailing: true) } }
+
+        // A soft-wrapped row continues onto the next; don't trim its trailing cells (they're
+        // part of the logical line). Only trim where the logical line actually ends.
+        var out: [String] = []
+        var current = ""
+        var building = false
+        for row in phys {
+            current += text(row.cells, trimTrailing: !row.wrapped)
+            building = true
+            if !row.wrapped {
+                out.append(current)
+                current = ""
+                building = false
+            }
+        }
+        if building { out.append(current) }
+        return out
+    }
+
     // MARK: - Resize
 
     /// Resize to a new geometry. The primary screen *reflows*: physical rows are re-joined

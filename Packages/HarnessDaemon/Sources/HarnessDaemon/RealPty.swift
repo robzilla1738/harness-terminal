@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import HarnessCore
+import HarnessTerminalEngine
 
 public enum PtyError: Error {
     case launchFailed
@@ -335,22 +336,63 @@ public final class RealPty: @unchecked Sendable {
         return scrollbackBytes
     }
 
-    public func captureScrollback(includeHistory: Bool) -> String {
+    /// The retained PTY output bytes (whole history, or the last ~16 KiB) as raw `Data`.
+    private func scrollbackData(includeHistory: Bool) -> Data {
         scrollbackLock.lock()
-        let combined: Data
+        defer { scrollbackLock.unlock() }
         if includeHistory {
-            combined = scrollback.reduce(into: Data()) { $0.append($1.data) }
-        } else {
-            // Tail roughly the last 16 KiB.
-            var tail = Data()
-            for entry in scrollback.reversed() {
-                tail.insert(contentsOf: entry.data, at: 0)
-                if tail.count >= 16 * 1024 { break }
-            }
-            combined = tail
+            return scrollback.reduce(into: Data()) { $0.append($1.data) }
         }
-        scrollbackLock.unlock()
-        return String(data: combined, encoding: .utf8) ?? ""
+        // Tail roughly the last 16 KiB.
+        var tail = Data()
+        for entry in scrollback.reversed() {
+            tail.insert(contentsOf: entry.data, at: 0)
+            if tail.count >= 16 * 1024 { break }
+        }
+        return tail
+    }
+
+    public func captureScrollback(includeHistory: Bool) -> String {
+        String(data: scrollbackData(includeHistory: includeHistory), encoding: .utf8) ?? ""
+    }
+
+    /// The PTY's current geometry (`TIOCGWINSZ`), so grid capture reconstructs at the same
+    /// width the program is drawing to. Falls back to 80×24 when the fd is gone.
+    private func currentWinsize() -> (cols: Int, rows: Int) {
+        lifecycleLock.lock()
+        let fd = master
+        lifecycleLock.unlock()
+        var ws = Darwin.winsize()
+        if fd >= 0, ioctl(fd, TIOCGWINSZ, &ws) == 0, ws.ws_col > 0, ws.ws_row > 0 {
+            return (Int(ws.ws_col), Int(ws.ws_row))
+        }
+        return (80, 24)
+    }
+
+    /// `capture-pane` plain text via grid reconstruction: feed the retained output bytes
+    /// through a headless emulator at the pane's current width, then read the on-screen
+    /// lines. Unlike the raw byte-stream strip this reflects cursor moves / overwrites /
+    /// clears (the actual screen, like tmux). `joinWrapped` (`-J`) joins soft-wrapped rows
+    /// into their logical line. `-S`/`-E` slice the resulting lines (negative = from bottom).
+    public func captureGrid(start: Int?, end: Int?, joinWrapped: Bool) -> String {
+        let size = currentWinsize()
+        guard let term = HarnessGridTerminal(cols: size.cols, rows: size.rows) else { return "" }
+        // Retain enough history that even a long scrollback reconstructs fully.
+        term.maxScrollbackLines = 100_000
+        term.feed(scrollbackData(includeHistory: true))
+        var lines = term.captureLines(joinWrapped: joinWrapped)
+        // Drop the empty rows below the last content (tmux trims the blank tail).
+        while let last = lines.last, last.isEmpty { lines.removeLast() }
+        let count = lines.count
+        guard count > 0 else { return "" }
+        func resolve(_ value: Int?, fallback: Int) -> Int {
+            guard let value else { return fallback }
+            return value < 0 ? max(0, count + value) : min(value, count - 1)
+        }
+        let lo = resolve(start, fallback: 0)
+        let hi = resolve(end, fallback: count - 1)
+        guard lo <= hi else { return "" }
+        return lines[lo ... hi].joined(separator: "\n")
     }
 
     /// `capture-pane -S <start> -E <end> -p`: ANSI-stripped display lines in the

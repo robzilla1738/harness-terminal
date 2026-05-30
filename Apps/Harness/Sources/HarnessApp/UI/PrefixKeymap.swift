@@ -10,6 +10,10 @@ final class PrefixKeymap {
 
     private var monitor: Any?
     private var armed = false
+    /// `switch-client -T <table>`: when set, the next armed key is resolved in this table
+    /// instead of `.prefix`. One-shot — cleared once a key is handled (unless that key's
+    /// command switches again, chaining a multi-key sequence).
+    private var pendingTable: KeyTableID?
     private var prefix: ParsedShortcut = .controlA
     private var indicator: PrefixIndicatorWindow?
 
@@ -65,6 +69,15 @@ final class PrefixKeymap {
         scheduleAutoDisarm(after: 2)
     }
 
+    /// `switch-client -T <table>`: route the next key through `table`. Reuses the armed
+    /// consume path + indicator (labeled with the table name).
+    func switchClientTable(_ table: KeyTableID) {
+        pendingTable = table
+        armed = true
+        showIndicator(label: table.rawValue)
+        scheduleAutoDisarm(after: 2)
+    }
+
     /// Re-arm a short window after a repeatable binding (`bind-key -r`) so the key
     /// repeats without re-pressing the prefix — tmux's `repeat-time` behavior.
     private func armRepeat() {
@@ -87,6 +100,7 @@ final class PrefixKeymap {
 
     private func disarm() {
         armed = false
+        pendingTable = nil
         armGeneration += 1 // invalidate any pending auto-disarm
         hideIndicator()
     }
@@ -130,23 +144,25 @@ final class PrefixKeymap {
     }
 
     private func consume(event: NSEvent) {
+        // The active table is the prefix table by default, or a `switch-client -T` target.
+        let table = pendingTable ?? .prefix
         guard let spec = makeSpec(from: event) else {
             NSSound.beep()
             disarm()
             return
         }
-        // `:` enters the command prompt — always available under the prefix.
-        if spec.key == ":" {
+        // `:` enters the command prompt — always available under the prefix table.
+        if table == .prefix, spec.key == ":" {
             CommandPromptController.shared.present()
             disarm()
             return
         }
         // Fall back to a case-insensitive letter lookup so bound `c` matches a
         // typed `C` without forcing the user to bind both forms.
-        let binding = KeybindingsService.shared.lookup(table: .prefix, spec: spec)
+        let binding = KeybindingsService.shared.lookup(table: table, spec: spec)
             ?? (spec.key.count == 1
                 ? KeybindingsService.shared.lookup(
-                    table: .prefix,
+                    table: table,
                     spec: KeySpec(key: spec.key.lowercased(), modifiers: spec.modifiers))
                 : nil)
         guard let binding else {
@@ -154,7 +170,13 @@ final class PrefixKeymap {
             disarm()
             return
         }
+        // Clear the one-shot table before dispatch; the command may set a new one
+        // (`switch-client -T`) to chain another key, which we detect below.
+        pendingTable = nil
         executeBinding(binding)
+        if pendingTable != nil {
+            return // the binding switched tables — stay armed for its next key
+        }
         // Repeatable bindings keep the prefix armed for a short window so the key
         // can repeat; everything else disarms immediately.
         if binding.repeatable { armRepeat() } else { disarm() }
@@ -169,10 +191,10 @@ final class PrefixKeymap {
         }
     }
 
-    private func showIndicator() {
+    private func showIndicator(label: String? = nil) {
         let indicator = self.indicator ?? PrefixIndicatorWindow()
         self.indicator = indicator
-        indicator.present(near: NSApp.keyWindow, prefix: prefix.displayString)
+        indicator.present(near: NSApp.keyWindow, prefix: label ?? prefix.displayString)
     }
 
     private func hideIndicator() {

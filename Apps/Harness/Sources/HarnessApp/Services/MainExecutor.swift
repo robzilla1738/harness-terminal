@@ -202,6 +202,8 @@ final class MainExecutor: CommandExecutor {
             Phase67UI.lock()
         case .clockMode:
             Phase67UI.toggleClock()
+        case .switchClientTable(let table):
+            PrefixKeymap.shared.switchClientTable(KeyTableID(rawValue: table))
         case .linkWindow(let targetSessionName):
             linkWindow(targetSessionName: targetSessionName, coordinator: coordinator)
         case .unlinkWindow:

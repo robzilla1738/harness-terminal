@@ -323,7 +323,7 @@ public enum CommandIPCTranslator {
              .displayMessage, .runShell, .ifShell, .bindKey, .unbindKey, .listKeys,
              .sourceConfig, .reloadKeybindings, .showCheatsheet, .sequence,
              .sendPrefix, .sourceFile, .commandPrompt, .confirmBefore, .choose,
-             .lockClient, .clockMode, .displayPopup, .displayMenu:
+             .lockClient, .clockMode, .switchClientTable, .displayPopup, .displayMenu:
             return .clientLocal(command)
         }
     }

@@ -52,6 +52,17 @@ public final class HarnessGridTerminal {
     public var bufferLineCount: Int { emulator.bufferLineCount }
     public func bufferLine(_ index: Int) -> [TerminalGridCell] { emulator.bufferLine(index) }
 
+    /// Scrollback retention cap (lines). Raised by the daemon's `capture-pane` so a long
+    /// history reconstructs fully.
+    public var maxScrollbackLines: Int {
+        get { emulator.maxScrollbackLines }
+        set { emulator.maxScrollbackLines = newValue }
+    }
+
+    /// The full buffer as plain-text lines for `capture-pane`; `joinWrapped` (tmux `-J`)
+    /// joins soft-wrapped physical rows into their logical line.
+    public func captureLines(joinWrapped: Bool) -> [String] { emulator.captureLines(joinWrapped: joinWrapped) }
+
     /// The pane's active terminal modes (mouse tracking, bracketed paste, …) — read by the
     /// compositor to encode forwarded mouse events correctly.
     public var modes: TerminalModes { emulator.modes }

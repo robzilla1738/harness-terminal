@@ -68,7 +68,9 @@ let package = Package(
         // thin `main.swift` wrapper over it.
         .target(
             name: "HarnessDaemonCore",
-            dependencies: ["HarnessCore"],
+            // Depends on the engine so `capture-pane` reconstructs the on-screen grid
+            // (faithful overwrites/clears + soft-wrap join), exactly like tmux.
+            dependencies: ["HarnessCore", "HarnessTerminalEngine"],
             path: "Packages/HarnessDaemon/Sources/HarnessDaemon"
         ),
         .executableTarget(

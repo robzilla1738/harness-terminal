@@ -86,6 +86,9 @@ public indirect enum Command: Codable, Sendable, Equatable {
     // MARK: Phase 7 — server admin & integration
     case lockClient                                // lock-client / lock-session
     case clockMode                                 // clock-mode
+    /// `switch-client -T <table>`: resolve the next key press in `<table>` (client-local
+    /// state — builds modal/multi-key bindings on top of the prefix). One-shot, like tmux.
+    case switchClientTable(table: String)          // switch-client -T <table>
     case linkWindow(targetSessionName: String)     // link-window -t <session>
     case unlinkWindow                              // unlink-window
     case displayPopup(command: String?)            // display-popup [-E <command>]
@@ -182,6 +185,7 @@ extension Command {
         case let .pipePane(cmd): return cmd.map { "pipe-pane '\($0)'" } ?? "pipe-pane"
         case .lockClient: return "lock-client"
         case .clockMode: return "clock-mode"
+        case let .switchClientTable(table): return "switch-client -T \(table)"
         case let .linkWindow(target): return "link-window -t \(target)"
         case .unlinkWindow: return "unlink-window"
         case let .displayPopup(command): return command.map { "display-popup -E '\($0)'" } ?? "display-popup"

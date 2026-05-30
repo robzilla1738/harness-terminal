@@ -19,6 +19,17 @@ final class Phase67Tests: XCTestCase {
         } else { XCTFail("expected link-window") }
     }
 
+    func testSwitchClientTableParsesAndRoutesClientLocal() throws {
+        XCTAssertEqual(try CommandParser.parse("switch-client -T copy-mode"), .switchClientTable(table: "copy-mode"))
+        XCTAssertEqual(try CommandParser.parse("switchc -T mytable"), .switchClientTable(table: "mytable"))
+        XCTAssertThrowsError(try CommandParser.parse("switch-client")) // -T is required
+        // Client-local: it mutates per-client key-table state, never the daemon.
+        let target = CommandTarget(snapshot: SessionEditor().snapshot)
+        if case .clientLocal(.switchClientTable(let t)) = CommandIPCTranslator.translate(.switchClientTable(table: "x"), target: target) {
+            XCTAssertEqual(t, "x")
+        } else { XCTFail("expected clientLocal switchClientTable") }
+    }
+
     func testCommandAliasesResolve() throws {
         XCTAssertEqual(try CommandParser.parse("neww"), .newWindow)
         XCTAssertEqual(try CommandParser.parse("killp"), .killPane)
