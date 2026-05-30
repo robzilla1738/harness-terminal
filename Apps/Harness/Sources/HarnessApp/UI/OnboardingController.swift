@@ -471,18 +471,33 @@ private struct OnboardingPage {
 
     static var all: [OnboardingPage] {
         let p = prefix
-        return [
+        let settings = SessionCoordinator.shared.settings
+        let chrome = settings.showsTmuxChrome
+        var pages: [OnboardingPage] = [
             OnboardingPage(
                 symbol: "app",
                 useAppIcon: true,
                 title: "Welcome to Harness",
-                subtitle: "A native macOS terminal with a multiplexer built in. Split panes, keep work in tabs and sessions, and detach a window to reattach it later. Everything is GPU-rendered.",
+                subtitle: "A native, GPU-rendered macOS terminal. It's fast and simple out of the box, with an optional multiplexer (splits, sessions, attach/detach) and AI-agent workflows when you want them.",
                 bullets: [
-                    .init(key: nil, text: "Your sessions run in a background daemon, so they survive closing the window. Reopen and everything's still there."),
+                    .init(key: nil, text: "Split panes, keep work in tabs and sessions, and render a window in any terminal — when you turn those features on."),
                     .init(key: nil, text: "Use the mouse, the menus, or the keyboard. This guide covers the keyboard shortcuts."),
                 ]
             ),
             OnboardingPage(
+                symbol: "slider.horizontal.3",
+                title: "Pick your experience",
+                subtitle: "Harness has four modes, all on the same fast core. You're starting in \(settings.experienceMode.displayName). Change it any time in Settings → Appearance → Experience.",
+                bullets: [
+                    .init(key: "Plain", text: "A fast native terminal. No prefix key or status bar."),
+                    .init(key: "Persistent", text: "Sessions survive quitting and can be attached from the CLI."),
+                    .init(key: "Tmux", text: "The full multiplexer: prefix key, status line, copy mode, buffers."),
+                    .init(key: "Agent", text: "Project workspaces with AI-agent detection and jump-to-agent."),
+                ]
+            ),
+        ]
+        if chrome {
+            pages.append(OnboardingPage(
                 symbol: "keyboard",
                 title: "The prefix key",
                 subtitle: "Multiplexer commands start with a prefix press, then a key, like tmux. Your prefix is \(p). Press it, let go, then press the command key.",
@@ -493,7 +508,9 @@ private struct OnboardingPage {
                     .init(key: "\(p) ?", text: "Show a live cheatsheet of every prefix binding"),
                     .init(key: nil, text: "You can change the prefix in Settings → Keys."),
                 ]
-            ),
+            ))
+        }
+        pages.append(contentsOf: [
             OnboardingPage(
                 symbol: "square.split.2x1",
                 title: "Panes and splits",
@@ -538,7 +555,8 @@ private struct OnboardingPage {
                 ]
             ),
             OnboardingPage(symbol: "command", title: "", subtitle: nil, bullets: [], isShortcuts: true),
-        ]
+        ])
+        return pages
     }
 }
 

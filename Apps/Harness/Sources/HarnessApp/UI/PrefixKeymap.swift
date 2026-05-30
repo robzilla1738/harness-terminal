@@ -14,17 +14,16 @@ final class PrefixKeymap {
     /// instead of `.prefix`. One-shot — cleared once a key is handled (unless that key's
     /// command switches again, chaining a multi-key sequence).
     private var pendingTable: KeyTableID?
-    private var prefix: ParsedShortcut = .controlA
+    /// The armed prefix, or `nil` when the prefix is disabled — non-tmux modes, or a blanked
+    /// `prefixKey`. When `nil` the key monitor is removed entirely so plain mode does no
+    /// multiplexer key handling at all (it feels like a normal terminal).
+    private var prefix: ParsedShortcut?
     private var indicator: PrefixIndicatorWindow?
 
     private init() {}
 
     func install() {
         rebuildFromSettings()
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            self?.handle(event) ?? event
-        }
     }
 
     func uninstall() {
@@ -32,9 +31,27 @@ final class PrefixKeymap {
         monitor = nil
     }
 
+    /// (Re)evaluate the prefix from settings + experience mode and install or tear down the
+    /// global key monitor to match. Idempotent — safe to call on every settings change.
     func rebuildFromSettings() {
-        let raw = SessionCoordinator.shared.settings.prefixKey
-        prefix = ParsedShortcut.parse(raw) ?? .controlA
+        if let raw = SessionCoordinator.shared.settings.effectivePrefixKey,
+           let parsed = ParsedShortcut.parse(raw) {
+            prefix = parsed
+            ensureMonitor()
+        } else {
+            // Prefix disabled (plain/persistent/agent without tmux controls, or blanked key):
+            // disarm, drop any open indicator, and remove the monitor so no key is intercepted.
+            prefix = nil
+            disarm()
+            uninstall()
+        }
+    }
+
+    private func ensureMonitor() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handle(event) ?? event
+        }
     }
 
     /// Returns nil to swallow the event or the original event to forward it.
@@ -43,7 +60,7 @@ final class PrefixKeymap {
             consume(event: event)
             return nil
         }
-        if prefix.matches(event) {
+        if let prefix, prefix.matches(event) {
             arm()
             return nil
         }
@@ -194,7 +211,7 @@ final class PrefixKeymap {
     private func showIndicator(label: String? = nil) {
         let indicator = self.indicator ?? PrefixIndicatorWindow()
         self.indicator = indicator
-        indicator.present(near: NSApp.keyWindow, prefix: label ?? prefix.displayString)
+        indicator.present(near: NSApp.keyWindow, prefix: label ?? prefix?.displayString ?? "⌃A")
     }
 
     private func hideIndicator() {

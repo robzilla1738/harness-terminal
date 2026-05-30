@@ -27,6 +27,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let transparentTitlebarToggle = HarnessToggle(title: "Transparent title bar")
     private let showStatusLineToggle = HarnessToggle(title: "Show status line (bottom bar)")
     private let sidebarVisibleToggle = HarnessToggle(title: "Show sidebar")
+    private let experienceSegment = HarnessSegmented(frame: .zero)
+    private let experienceSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let cursorStyleSegment = HarnessSegmented(frame: .zero)
     private let cursorBlinkToggle = HarnessToggle(title: "Blinking cursor")
     private let copyOnSelectToggle = HarnessToggle(title: "Copy text to clipboard on selection")
@@ -239,6 +241,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         scrollbackField.target = self
         scrollbackField.action = #selector(appearanceTextDidCommit)
 
+        experienceSegment.setSegments(ExperienceMode.allCases.map(\.displayName))
+        experienceSegment.selectItem(withTitle: settings.experienceMode.displayName)
+        experienceSegment.target = self
+        experienceSegment.action = #selector(experienceModeChanged)
+        experienceSummaryLabel.font = .systemFont(ofSize: 11.5)
+        experienceSummaryLabel.textColor = HarnessChrome.current.textSecondary
+        experienceSummaryLabel.stringValue = settings.experienceMode.summary
+
         cursorStyleSegment.setSegments(["Block", "Beam", "Underline"])
         cursorStyleSegment.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
         cursorStyleSegment.target = self
@@ -285,7 +295,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         keyRecorder = KeyRecorderView(initial: settings.prefixKey)
         keyRecorder.onChange = { [weak self] value in
-            SessionCoordinator.shared.settings.prefixKey = value.isEmpty ? "ctrl-a" : value
+            // Empty = disable the prefix entirely (honored via `effectivePrefixKey`); don't
+            // silently snap back to Ctrl-A the way the old code did.
+            SessionCoordinator.shared.settings.prefixKey = value
             try? SessionCoordinator.shared.settings.save()
             PrefixKeymap.shared.rebuildFromSettings()
             self?.refreshLivePreview()
@@ -503,9 +515,20 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             ("", sidebarVisibleToggle),
         ])
 
+        // Experience mode: the headline knob. Plain feels like a fast native terminal;
+        // Tmux exposes the full multiplexer; Persistent/Agent sit between. The summary updates
+        // live so the choice is self-explanatory.
+        experienceSegment.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let experienceGroup = NSStackView(views: [experienceSegment, experienceSummaryLabel])
+        experienceGroup.orientation = .vertical
+        experienceGroup.alignment = .leading
+        experienceGroup.spacing = 8
+        experienceSegment.widthAnchor.constraint(equalTo: experienceGroup.widthAnchor).isActive = true
+
         let stack = NSStackView(views: [
             header,
             livePreview,
+            sectionCard("Experience", experienceGroup),
             sectionCard("Theme", themeGroup),
             sectionCard("Window", windowGroup),
         ])
@@ -1282,6 +1305,31 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep))
     }
 
+    /// The selected experience mode, derived from the segment position.
+    private var selectedExperienceMode: ExperienceMode {
+        let cases = ExperienceMode.allCases
+        let i = experienceSegment.selectedSegment
+        return cases.indices.contains(i) ? cases[i] : .plain
+    }
+
+    /// Switching mode re-gates the chrome (prefix + status line), sets the default
+    /// session-persistence policy on the daemon, and refreshes the live surfaces — all on the
+    /// one session core. `flushAndApply` persists the setting and posts the chrome-changed
+    /// notification the status line + prefix react to.
+    @objc private func experienceModeChanged() {
+        let mode = selectedExperienceMode
+        experienceSummaryLabel.stringValue = mode.summary
+        flushAndApply()
+        PrefixKeymap.shared.rebuildFromSettings()
+        // Mode sets the default persistence: Plain is ephemeral (a clean quit closes its
+        // sessions), the others keep sessions running. The user can still override via the
+        // "Keep sessions running" toggle. Mirror the snapshot truth into that toggle so the
+        // two controls stay consistent while the window is open.
+        let keep = mode.persistsSessionsByDefault
+        SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep))
+        keepSessionsToggle.state = keep ? .on : .off
+    }
+
     /// "Show sidebar" applies live to the main window's split (which also persists the
     /// setting), so the sidebar slides immediately rather than only on the next launch.
     @objc private func sidebarVisibilityChanged() {
@@ -1438,6 +1486,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         paddingYField.stringValue = String(Int(settings.windowPaddingY.rounded()))
         fontFamilyField.stringValue = settings.fontFamily
         fontSizeField.stringValue = String(Int(settings.fontSize.rounded()))
+        experienceSegment.selectItem(withTitle: settings.experienceMode.displayName)
+        experienceSummaryLabel.stringValue = settings.experienceMode.summary
         cursorStyleSegment.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
         cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
@@ -1524,6 +1574,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.linearBlending = linearBlendingToggle.state == .on
         coordinator.settings.applyThemeToTerminalOutput = themeTerminalOutputToggle.state == .on
         coordinator.settings.ligatures = ligaturesToggle.state == .on
+        coordinator.settings.experienceMode = selectedExperienceMode
         try? coordinator.settings.save()
 
         // Theme switching (and its color seeding) is handled by themeDidChange, so
