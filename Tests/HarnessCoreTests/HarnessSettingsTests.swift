@@ -112,23 +112,41 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertNil(settings.agentColorOverrides["unknown"])
     }
 
-    func testResetToImportedConfigResetsVisualFieldsAndPreservesShell() {
+    func testResetToImportedConfigResetsVisualFieldsToDefaultsAndPreservesShell() {
         var s = HarnessSettings()
         s.defaultShell = "/opt/homebrew/bin/fish"
         s.defaultCWD = "/tmp/work"
         s.backgroundOpacity = 0.42
         s.backgroundBlur = 20
+        s.fontSize = 99
         s.customBackgroundHex = "#123456"
         s.paletteHex[0] = "#abcdef"
 
         s.resetToImportedConfig()
 
-        XCTAssertEqual(s.backgroundOpacity, 1)
-        XCTAssertEqual(s.backgroundBlur, 0)
+        // Reset lands on the first-run defaults (the memberwise init), not a separate set.
+        let defaults = HarnessSettings()
+        XCTAssertEqual(s.backgroundOpacity, defaults.backgroundOpacity)
+        XCTAssertEqual(s.backgroundBlur, defaults.backgroundBlur)
+        XCTAssertEqual(s.fontSize, defaults.fontSize)
         XCTAssertNil(s.customBackgroundHex)
         XCTAssertNil(s.paletteHex[0])
         // Behavior fields are untouched.
         XCTAssertEqual(s.defaultShell, "/opt/homebrew/bin/fish")
         XCTAssertEqual(s.defaultCWD, "/tmp/work")
+    }
+
+    func testFontSizeIsHarnessOwnedNotImported() {
+        // A source terminal's font *size* must not carry over (only the face does), so the
+        // Harness default size wins even when the imported config specifies one.
+        let imported = ImportedTerminalConfig(
+            fontFamily: "JetBrainsMono Nerd Font",
+            fontSize: 17,
+            backgroundOpacity: 0.85
+        )
+        let settings = HarnessSettings.makeDefaults(imported: imported)
+        XCTAssertEqual(settings.fontFamily, "JetBrainsMono Nerd Font") // face imported
+        XCTAssertEqual(settings.fontSize, HarnessSettings().fontSize)  // size is the Harness default
+        XCTAssertEqual(settings.backgroundOpacity, 0.85)              // other fields still import
     }
 }

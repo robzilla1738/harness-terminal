@@ -40,7 +40,9 @@ public enum AgentHookInstaller {
         case .pi: return home.appendingPathComponent(".pi/hooks.json")
         case .hermes: return home.appendingPathComponent(".hermes/hooks.json")
         case .openClaw: return home.appendingPathComponent(".openclaw/hooks.json")
-        case .aider, .gemini, .goose, .generic: return nil
+        // OpenCode notifies via process detection (no shell-command hook mechanism), like
+        // Pi/Hermes rely on detection — so it has no installable hook file.
+        case .openCode, .aider, .gemini, .goose, .generic: return nil
         }
     }
 
@@ -68,7 +70,7 @@ public enum AgentHookInstaller {
         var backedUp: URL?
         var replacedInvalidJSON = false
         if FileManager.default.fileExists(atPath: url.path) {
-            let backup = url.appendingPathExtension("harness-bak-\(Int(Date().timeIntervalSince1970))")
+            let backup = backupURL(for: url)
             // Hard `try`: if we can't back the file up, abort before touching it — never risk
             // destroying a config we couldn't preserve first.
             try FileManager.default.copyItem(at: url, to: backup)
@@ -82,7 +84,69 @@ public enum AgentHookInstaller {
         }
         let data = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
+
+        // Codex ignores its hooks file unless the hooks feature flag is enabled.
+        if agent == .codex {
+            try enableCodexHooksFeature(homeOverride: homeOverride)
+        }
         return InstallResult(path: url, backedUp: backedUp, replacedInvalidJSON: replacedInvalidJSON)
+    }
+
+    /// Enable `[features] hooks = true` in `~/.codex/config.toml`, creating/editing it in
+    /// place (backed up first) and idempotently. Codex only loads `~/.codex/hooks.json`
+    /// when this flag is set. Mirrors the Skillz integration.
+    private static func enableCodexHooksFeature(homeOverride: URL?) throws {
+        let home = homeOverride ?? FileManager.default.homeDirectoryForCurrentUser
+        let url = home.appendingPathComponent(".codex/config.toml")
+        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        if codexHooksFeatureEnabled(in: existing) { return }
+
+        var lines = existing.isEmpty ? [] : existing.components(separatedBy: "\n")
+        if let featuresIdx = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "[features]" }) {
+            var end = lines.count
+            if let next = lines[(featuresIdx + 1)...].firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("[")
+            }) { end = next }
+            if let hooksIdx = lines[(featuresIdx + 1)..<end].firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("hooks")
+            }) {
+                lines[hooksIdx] = "hooks = true"
+            } else {
+                lines.insert("hooks = true", at: featuresIdx + 1)
+            }
+        } else {
+            if let last = lines.last, !last.isEmpty { lines.append("") }
+            lines.append("[features]")
+            lines.append("hooks = true")
+        }
+
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.copyItem(at: url, to: backupURL(for: url))
+        }
+        try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// A unique backup path for `url` (`<name>.harness-bak-<ms>-<rand>`). Millisecond
+    /// timestamp + a short random suffix so backing the same file up twice in quick
+    /// succession can't collide (a colliding `copyItem` would otherwise throw and abort).
+    private static func backupURL(for url: URL) -> URL {
+        let stamp = Int(Date().timeIntervalSince1970 * 1000)
+        return url.appendingPathExtension("harness-bak-\(stamp)-\(UUID().uuidString.prefix(8))")
+    }
+
+    /// True when `[features] hooks = true` is present in a `config.toml`'s contents.
+    private static func codexHooksFeatureEnabled(in content: String) -> Bool {
+        var inFeatures = false
+        for raw in content.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") {
+                inFeatures = (line == "[features]")
+            } else if inFeatures, line.hasPrefix("hooks") {
+                return line.contains("true")
+            }
+        }
+        return false
     }
 
     // MARK: - Hook payloads
@@ -116,16 +180,32 @@ public enum AgentHookInstaller {
                 ],
             ]
         case .codex:
+            // Codex uses the same event/matcher hook shape as Claude Code (NOT `on_pause`/
+            // `on_done`, which it ignores). It only reads these once `[features] hooks = true`
+            // is set in `~/.codex/config.toml` — `install` enables that flag too.
             return [
                 "hooks": [
-                    "on_pause": notifyCommand(title: "Codex", body: "Awaiting input"),
-                    "on_done": notifyCommand(title: "Codex", body: "Done"),
+                    "PermissionRequest": [[
+                        "matcher": "*",
+                        "hooks": [[
+                            "type": "command",
+                            "command": notifyCommand(title: "Codex", body: "Awaiting input"),
+                        ]],
+                    ]],
+                    "Stop": [[
+                        "matcher": "*",
+                        "hooks": [[
+                            "type": "command",
+                            "command": notifyCommand(title: "Codex", body: "Done"),
+                        ]],
+                    ]],
                 ],
             ]
         case .cursor:
             return [
                 "version": 1,
                 "agent_notify": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Cursor\" --body \"$1\"",
+                "agent_done": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Cursor\" --body \"Done\"",
             ]
         case .pi:
             return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\""]
@@ -133,7 +213,7 @@ public enum AgentHookInstaller {
             return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\""]
         case .openClaw:
             return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\""]
-        case .aider, .gemini, .goose, .generic:
+        case .openCode, .aider, .gemini, .goose, .generic:
             return nil
         }
     }

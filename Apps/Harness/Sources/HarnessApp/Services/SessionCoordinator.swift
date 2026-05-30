@@ -415,6 +415,15 @@ final class SessionCoordinator: NSObject {
         selectTab(workspaceID: workspace.id, tabID: workspace.tabs[nextIndex].id)
     }
 
+    /// Select the Nth (0-based) tab — backs the ⌘1–9 tab-switch shortcuts (Ghostty-style).
+    /// Out-of-range numbers (e.g. ⌘5 with 3 tabs) are no-ops.
+    func selectTab(atIndex index: Int) {
+        guard let workspace = snapshot.activeWorkspace,
+              index >= 0, index < workspace.tabs.count
+        else { return }
+        selectTab(workspaceID: workspace.id, tabID: workspace.tabs[index].id)
+    }
+
     func closeActiveTab() {
         guard let disposition = activeTabCloseDisposition() else { return }
         performClose(disposition)
@@ -1076,7 +1085,16 @@ final class SessionCoordinator: NSObject {
     }
 
     func updateFontSize(delta: Float) {
-        settings.fontSize = max(8, min(32, settings.fontSize + delta))
+        applyFontSize(settings.fontSize + delta)
+    }
+
+    /// ⌘0 — restore the default font size (Ghostty parity, completes the ⌘+/⌘-/⌘0 trio).
+    func resetFontSize() {
+        applyFontSize(HarnessSettings().fontSize)
+    }
+
+    private func applyFontSize(_ size: Float) {
+        settings.fontSize = max(8, min(32, size))
         try? settings.save()
         for host in terminalHosts.allHosts() {
             host.applySettings(settings)

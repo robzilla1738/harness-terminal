@@ -25,6 +25,11 @@ struct HarnessChromePalette {
     let success: NSColor
     let idleStatus: NSColor
 
+    /// Divider hairline on dark themes when the user hasn't set a custom `dividerHex`: a quiet
+    /// near-background line. Shared by the renderer (`MainSplitViewController.resolvedDividerColor`)
+    /// and the Settings divider swatch so they never drift.
+    static let defaultDarkDividerHex = "#1E1E1E"
+
     static let fallback = HarnessChromePalette.from(
         backgroundHex: ThemeManager.defaultBaselineBackgroundHex,
         foregroundHex: ThemeManager.defaultBaselineForegroundHex,

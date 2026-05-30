@@ -64,8 +64,8 @@ enum MainMenuBuilder {
         workspace.submenu?.addItem(.separator())
         for index in 1...9 {
             let item = NSMenuItem(
-                title: "Switch to Workspace \(index)",
-                action: #selector(MenuTarget.selectWorkspaceNumber(_:)),
+                title: "Switch to Tab \(index)",
+                action: #selector(MenuTarget.selectTabNumber(_:)),
                 keyEquivalent: "\(index)"
             )
             item.tag = index
@@ -114,6 +114,10 @@ enum MainMenuBuilder {
         zoomOut.keyEquivalentModifierMask = [.command]
         zoomOut.target = MenuTarget.shared
         view.submenu?.addItem(zoomOut)
+        let zoomReset = NSMenuItem(title: "Reset Font Size", action: #selector(MenuTarget.zoomReset), keyEquivalent: "0")
+        zoomReset.keyEquivalentModifierMask = [.command]
+        zoomReset.target = MenuTarget.shared
+        view.submenu?.addItem(zoomReset)
         main.addItem(view)
 
         // Window — standard macOS window management. Registered as windowsMenu so
@@ -167,11 +171,9 @@ final class MenuTarget: NSObject {
         SessionCoordinator.shared.closeActiveWorkspace()
     }
 
-    @objc func selectWorkspaceNumber(_ sender: NSMenuItem) {
-        let workspaces = SessionCoordinator.shared.snapshot.workspaces
-        let index = sender.tag - 1
-        guard index >= 0, index < workspaces.count else { return }
-        SessionCoordinator.shared.selectWorkspace(workspaces[index].id)
+    /// ⌘1–9 switch to the tab at that position in the active session (Ghostty-style).
+    @objc func selectTabNumber(_ sender: NSMenuItem) {
+        SessionCoordinator.shared.selectTab(atIndex: sender.tag - 1)
     }
 
     @objc func previousTab() {
@@ -228,6 +230,10 @@ final class MenuTarget: NSObject {
 
     @objc func zoomOut() {
         SessionCoordinator.shared.updateFontSize(delta: -1)
+    }
+
+    @objc func zoomReset() {
+        SessionCoordinator.shared.resetFontSize()
     }
 
     @objc func installCLI() {

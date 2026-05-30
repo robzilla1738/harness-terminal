@@ -4,11 +4,17 @@
 
 Harness renders agent brand marks from vector geometry embedded in
 `Apps/Harness/Sources/HarnessApp/UI/AgentIconArt.swift` (parsed to `CGPath`s by
-`SVGPathParser` and tinted at draw time — no bundled raster assets). All marks are
-[**Lobe Icons**](https://github.com/lobehub/lobe-icons) (MIT, see below) — the
-`@lobehub/icons-static-svg` monochrome (`currentColor`) variants: `codex`, `claude`,
-`cursor`, `inflection` (Pi), `gemini`, and `goose`. Agents without a Lobe Icons mark
-(e.g. Hermes, Aider, OpenClaw) fall back to a text name pill.
+`SVGPathParser` and tinted at draw time — no bundled raster assets).
+
+- **[Lobe Icons](https://github.com/lobehub/lobe-icons)** (MIT, see below), the
+  `@lobehub/icons-static-svg` monochrome (`currentColor`) variants: `codex`, `claude`
+  (Claude Code), `cursor`, `openclaw`, `opencode`, `gemini`, and `goose`.
+- **Vendor brand mark** for `pi` (Inflection Pi), matching the mark used in the referenced
+  Skillz app. A trademark of its owner, embedded only as monochrome geometry to identify the
+  running agent.
+
+Agents without a mark (Hermes, Aider) fall back to a tinted two-letter monogram. (Hermes's
+official mark is a detailed portrait that is illegible at icon size, so it uses the monogram.)
 
 Platform names and logos are trademarks of their respective owners. They are used
 here solely to identify the corresponding coding agent in the UI.

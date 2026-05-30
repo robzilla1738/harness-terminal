@@ -8,15 +8,28 @@ Surface Codex CLI pause / done events as Harness pane notifications.
 harness-cli install-hooks codex
 ```
 
-Writes `~/.codex/hooks.json`:
+Writes `~/.codex/hooks.json` (the event/matcher shape Codex uses — the same as Claude
+Code, deep-merged into any existing hooks):
 
 ```json
 {
   "hooks": {
-    "on_pause": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Codex\" --body \"Awaiting input\"",
-    "on_done":  "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Codex\" --body \"Done\""
+    "PermissionRequest": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Codex\" --body \"Awaiting input\"" }] }
+    ],
+    "Stop": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Codex\" --body \"Done\"" }] }
+    ]
   }
 }
+```
+
+…and enables the hooks feature flag in `~/.codex/config.toml` (Codex won't load
+`hooks.json` without it):
+
+```toml
+[features]
+hooks = true
 ```
 
 ## What you'll see

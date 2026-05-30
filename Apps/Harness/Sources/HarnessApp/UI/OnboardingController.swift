@@ -512,7 +512,7 @@ private struct OnboardingPage {
                 subtitle: "Harness nests your work. A workspace holds sessions (the sidebar rows), a session holds tabs, and a tab holds the pane layout.",
                 bullets: [
                     .init(key: "⌘T", text: "New tab  ·  ⌘⇧[ / ⌘⇧] to switch tabs"),
-                    .init(key: "⌘1–9", text: "Jump to a workspace"),
+                    .init(key: "⌘1–9", text: "Switch to a tab"),
                     .init(key: "\(p) ,", text: "Rename the current tab"),
                     .init(key: "⌘K", text: "Command palette, to search themes and actions"),
                 ]
@@ -558,7 +558,7 @@ enum OnboardingShortcuts {
             .init(key: "⌘W", action: "Close tab"),
             .init(key: "⌘D / ⌘⇧D", action: "Split side-by-side / top-bottom"),
             .init(key: "⌘⇧[ / ⌘⇧]", action: "Previous / next tab"),
-            .init(key: "⌘1–9", action: "Switch workspace"),
+            .init(key: "⌘1–9", action: "Switch to tab 1–9"),
             .init(key: "⌘K", action: "Command palette"),
             .init(key: "⌘;", action: "Command prompt"),
             .init(key: "⌘,", action: "Settings"),

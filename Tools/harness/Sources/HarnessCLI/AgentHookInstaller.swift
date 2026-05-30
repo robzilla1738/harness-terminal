@@ -12,10 +12,15 @@ enum AgentHookInstallerCLI {
             fputs("install-hooks: missing agent name (e.g. claude-code, codex, cursor, pi, hermes, openclaw)\n", stderr)
             exit(1)
         }
-        guard let kind = AgentHookInstaller.resolveAgentName(trimmed),
-              AgentHookInstaller.canInstall(kind) else {
+        guard let kind = AgentHookInstaller.resolveAgentName(trimmed) else {
             fputs("install-hooks: unknown agent \"\(agentArg)\"\n", stderr)
             exit(1)
+        }
+        guard AgentHookInstaller.canInstall(kind) else {
+            // Known agent, but it has no shell-command hook mechanism — Harness notifies
+            // for it automatically via process detection. Informational, not an error.
+            print("\(kind.displayName) is detected automatically — no hook file needed; Harness notifies when it stops or needs input.")
+            exit(0)
         }
         do {
             let result = try AgentHookInstaller.install(agent: kind)

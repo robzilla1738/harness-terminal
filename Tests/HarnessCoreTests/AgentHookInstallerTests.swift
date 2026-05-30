@@ -76,6 +76,46 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertNil(AgentHookInstaller.hookConfigURL(for: .goose, homeOverride: home))
     }
 
+    func testCodexInstallsEventHooksAndEnablesFeatureFlag() throws {
+        let result = try AgentHookInstaller.install(agent: .codex, homeOverride: home)
+        // hooks.json uses the event/matcher shape (not the inert on_pause/on_done keys).
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try Data(contentsOf: result.path)) as? [String: Any]
+        )
+        let hooks = try XCTUnwrap(json["hooks"] as? [String: Any])
+        XCTAssertNil(hooks["on_pause"])
+        XCTAssertNotNil(hooks["Stop"] as? [Any])
+        XCTAssertNotNil(hooks["PermissionRequest"] as? [Any])
+        // config.toml gained [features] hooks = true so Codex actually loads the hooks.
+        let toml = try String(contentsOf: home.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
+        XCTAssertTrue(toml.contains("[features]"))
+        XCTAssertTrue(toml.contains("hooks = true"))
+    }
+
+    func testCodexFeatureFlagMergesIntoExistingConfig() throws {
+        let toml = home.appendingPathComponent(".codex/config.toml")
+        try FileManager.default.createDirectory(at: toml.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "model = \"o3\"\n\n[features]\nweb_search = true\n".write(to: toml, atomically: true, encoding: .utf8)
+
+        _ = try AgentHookInstaller.install(agent: .codex, homeOverride: home)
+        let content = try String(contentsOf: toml, encoding: .utf8)
+        XCTAssertTrue(content.contains("model = \"o3\""))      // preserved
+        XCTAssertTrue(content.contains("web_search = true"))    // preserved
+        XCTAssertTrue(content.contains("hooks = true"))         // added inside [features]
+        // Idempotent: a reinstall doesn't duplicate the flag.
+        _ = try AgentHookInstaller.install(agent: .codex, homeOverride: home)
+        let again = try String(contentsOf: toml, encoding: .utf8)
+        XCTAssertEqual(again.components(separatedBy: "hooks = true").count - 1, 1)
+    }
+
+    func testOpenCodeIsDetectedButNotInstallable() {
+        // OpenCode notifies via process detection, not a hook file.
+        XCTAssertFalse(AgentHookInstaller.canInstall(.openCode))
+        XCTAssertNil(AgentHookInstaller.hookConfigURL(for: .openCode, homeOverride: home))
+        XCTAssertTrue(AgentTable.default.entries.contains { $0.kind == .openCode && $0.executables.contains("opencode") })
+        XCTAssertEqual(AgentHookInstaller.resolveAgentName("opencode"), .openCode)
+    }
+
     func testResolveAgentNameAliases() {
         XCTAssertEqual(AgentHookInstaller.resolveAgentName("claude"), .claudeCode)
         XCTAssertEqual(AgentHookInstaller.resolveAgentName("claude-code"), .claudeCode)

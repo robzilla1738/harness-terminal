@@ -108,9 +108,10 @@ final class TerminalTabBarView: NSView {
         draggingPill = nil
         dragTargetIndex = nil
 
-        for tab in tabs {
+        for (index, tab) in tabs.enumerated() {
             let id = tab.id
-            let pill = TabPillView(tab: tab, isActive: tab.id == activeTabID)
+            // ⌘1–9 switch to the first nine tabs (Ghostty-style); past that, no hint.
+            let pill = TabPillView(tab: tab, isActive: tab.id == activeTabID, position: index < 9 ? index + 1 : nil)
             pill.translatesAutoresizingMaskIntoConstraints = true
             pill.toolTip = HarnessDesign.shortenPath(tab.cwd)
             pill.onSelect = { [weak self] id in self?.delegate?.tabBarDidSelect(tabID: id) }
@@ -351,6 +352,10 @@ private final class TabPillView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let agentIcon = NSImageView()
+    /// ⌘N hint (Ghostty-style), shown at the trailing edge for the first 9 tabs and
+    /// swapped for the close button on hover. Empty for tabs past position 9.
+    private let shortcutLabel = NSTextField(labelWithString: "")
+    private let hasShortcut: Bool
     private var agentIconWidth: NSLayoutConstraint!
     private var trackingArea: NSTrackingArea?
     private var isActive = false
@@ -361,8 +366,16 @@ private final class TabPillView: NSView {
     private var mouseDownLocation: NSPoint?
     private var isDragging = false
 
-    init(tab: Tab, isActive: Bool) {
+    // The tab strip lives in the window's titlebar drag region (`.fullSizeContentView`).
+    // Without this, AppKit interprets a drag that starts on a pill as a window move and
+    // pre-empts our reorder. Returning false lets the pill's own `mouseDragged` →
+    // `onDragChanged` reorder run smoothly; the empty tab-bar background keeps the default
+    // (true), so dragging there still moves the window.
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    init(tab: Tab, isActive: Bool, position: Int?) {
         tabID = tab.id
+        hasShortcut = position != nil
         super.init(frame: .zero)
         self.isActive = isActive
         self.status = tab.status
@@ -401,8 +414,17 @@ private final class TabPillView: NSView {
         agentIcon.imageScaling = .scaleProportionallyUpOrDown
         agentIcon.isHidden = true
 
+        shortcutLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        shortcutLabel.alignment = .right
+        shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
+        shortcutLabel.stringValue = position.map { "⌘\($0)" } ?? ""
+        shortcutLabel.isHidden = !hasShortcut
+        shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
+
         addSubview(agentIcon)
         addSubview(titleLabel)
+        addSubview(shortcutLabel)
         addSubview(closeButton)
 
         // Title centers inside the pill with the close button floating on the
@@ -423,7 +445,10 @@ private final class TabPillView: NSView {
             titleLeading,
             titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: shortcutLabel.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
+            shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.sm),
+            shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeTrailing,
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeWidth,
@@ -454,6 +479,7 @@ private final class TabPillView: NSView {
         isHovered = true
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 1
+            shortcutLabel.animator().alphaValue = 0
             applyChrome(isActive: isActive)
         }
     }
@@ -462,6 +488,7 @@ private final class TabPillView: NSView {
         isHovered = false
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 0
+            shortcutLabel.animator().alphaValue = hasShortcut ? 1 : 0
             applyChrome(isActive: isActive)
         }
     }
@@ -576,5 +603,7 @@ private final class TabPillView: NSView {
 
         closeButton.contentTintColor = c.textTertiary
         closeButton.layer?.backgroundColor = NSColor.clear.cgColor
+        // ⌘N hint: a touch brighter on the active tab, quiet otherwise.
+        shortcutLabel.textColor = isActive ? c.textSecondary : c.textTertiary
     }
 }

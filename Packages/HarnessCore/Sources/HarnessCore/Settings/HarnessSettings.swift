@@ -77,16 +77,18 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var showStatusLine: Bool
 
     public init(
-        fontSize: Float = 14,
-        fontFamily: String = "JetBrains Mono",
+        // First-run "out of the box" look (a fresh install with no imported config):
+        // translucent + blurred canvas, Nerd Font, roomy padding, copy-on-select on.
+        fontSize: Float = 16,
+        fontFamily: String = "JetBrainsMono Nerd Font",
         defaultShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh",
         defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
         transparentTitlebar: Bool = true,
         sidebarVisible: Bool = true,
-        backgroundOpacity: Float = 1,
-        backgroundBlur: Int = 0,
-        windowPaddingX: Float = 12,
-        windowPaddingY: Float = 12,
+        backgroundOpacity: Float = 0.63,
+        backgroundBlur: Int = 16,
+        windowPaddingX: Float = 14,
+        windowPaddingY: Float = 14,
         customBackgroundHex: String? = nil,
         customForegroundHex: String? = nil,
         customCursorHex: String? = nil,
@@ -95,13 +97,16 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         scrollbackLines: Int = 10_000,
         cursorStyle: String = "block",
         cursorBlink: Bool = true,
-        copyOnSelect: Bool = false,
+        copyOnSelect: Bool = true,
         selectionBackgroundHex: String? = nil,
         selectionForegroundHex: String? = nil,
         boldColorHex: String? = nil,
         cursorTextHex: String? = nil,
         paletteHex: [String?] = Array(repeating: nil, count: 16),
         agentColorOverrides: [String: String] = [:],
+        // nil = derive from theme (dark themes resolve to a quiet #1E1E1E hairline; see
+        // MainSplitViewController.resolvedDividerColor). A pinned value would override that
+        // on every theme, so leave it unset.
         dividerHex: String? = nil,
         statusLineHex: String? = nil,
         systemNotificationsEnabled: Bool = true,
@@ -181,8 +186,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// stock baseline. Preserves shell, cwd, sidebar/titlebar chrome, prefix key, and
     /// agent color overrides so selecting "Default" changes appearance, not behavior.
     public mutating func resetToImportedConfig(imported: ImportedTerminalConfig? = nil) {
-        backgroundOpacity = imported?.backgroundOpacity ?? 1
-        backgroundBlur = imported?.backgroundBlur ?? 0
+        // Fall back to the first-run defaults (the memberwise init) so "Reset to defaults"
+        // always lands on the same out-of-the-box look — no separate set of magic numbers.
+        let defaults = HarnessSettings()
+        backgroundOpacity = imported?.backgroundOpacity ?? defaults.backgroundOpacity
+        backgroundBlur = imported?.backgroundBlur ?? defaults.backgroundBlur
         customBackgroundHex = imported?.backgroundHex
         customForegroundHex = imported?.foregroundHex
         customCursorHex = imported?.cursorColorHex
@@ -193,13 +201,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         dividerHex = nil
         statusLineHex = nil
         paletteHex = HarnessSettings.normalizedPalette(imported?.paletteHex ?? Array(repeating: nil, count: 16))
-        fontFamily = imported?.fontFamily ?? "JetBrains Mono"
-        fontSize = imported?.fontSize ?? 14
-        windowPaddingX = imported?.windowPaddingX ?? 12
-        windowPaddingY = imported?.windowPaddingY ?? 12
-        cursorStyle = imported?.cursorStyle ?? "block"
-        cursorBlink = imported?.cursorBlink ?? true
-        copyOnSelect = imported?.copyOnSelect ?? false
+        fontFamily = imported?.fontFamily ?? defaults.fontFamily
+        fontSize = defaults.fontSize // Harness-owned (import the face, not the size).
+        windowPaddingX = imported?.windowPaddingX ?? defaults.windowPaddingX
+        windowPaddingY = imported?.windowPaddingY ?? defaults.windowPaddingY
+        cursorStyle = imported?.cursorStyle ?? defaults.cursorStyle
+        cursorBlink = imported?.cursorBlink ?? defaults.cursorBlink
+        copyOnSelect = imported?.copyOnSelect ?? defaults.copyOnSelect
         importedConfigSignature = imported?.signature
     }
 
@@ -312,7 +320,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         var settings = HarnessSettings()
         guard let imported else { return settings }
         if let value = imported.fontFamily { settings.fontFamily = value }
-        if let value = imported.fontSize { settings.fontSize = value }
+        // Font *size* is Harness-owned (default 16), not imported: a source terminal's size
+        // preference doesn't carry over — only the font face does.
         if let value = imported.defaultShell { settings.defaultShell = value }
         if let value = imported.backgroundOpacity { settings.backgroundOpacity = value }
         if let value = imported.backgroundBlur { settings.backgroundBlur = value }
@@ -335,7 +344,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
 
     private mutating func applyImportedDefaults(_ imported: ImportedTerminalConfig) {
         if let value = imported.fontFamily { fontFamily = value }
-        if let value = imported.fontSize { fontSize = value }
+        // Font size is Harness-owned (see makeDefaults) — import the face, not the size.
         if let value = imported.defaultShell { defaultShell = value }
         if let value = imported.backgroundOpacity { backgroundOpacity = value }
         if let value = imported.backgroundBlur { backgroundBlur = value }

@@ -58,6 +58,17 @@ final class MainWindowController: NSWindowController {
         window.isOpaque = isOpaque
         window.backgroundColor = isOpaque ? HarnessChrome.current.terminalBackground : .clear
 
+        // Drop the window shadow while translucent. macOS computes the drop shadow from the
+        // window's content alpha (a rectangle), so on a translucent window it renders as a
+        // dark band hugging the rounded frame. With blur high the blurred backdrop hides it;
+        // as blur drops it sharpens into the "hard dark edge at the corners that won't go
+        // away." A translucent canvas already reads as glass (and the one window-wide blur
+        // gives separation), so no shadow is the clean look; opaque windows keep theirs.
+        // `invalidateShadow` forces an immediate recompute (toggling blur via the private CGS
+        // API doesn't notify AppKit, which is why a stale shadow lingered).
+        window.hasShadow = isOpaque
+        window.invalidateShadow()
+
         // Do NOT force the window's `contentView` to be a layer-backed, clear rectangle.
         // Forcing `wantsLayer` on the contentView makes the whole window layer-backed, and a
         // layer-backed window clips the private CGS background blur to the contentView's

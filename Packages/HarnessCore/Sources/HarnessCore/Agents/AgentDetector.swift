@@ -256,6 +256,7 @@ public struct AgentTable: Codable, Sendable {
         AgentTableEntry(kind: .pi, executables: ["pi", "pi-cli"]),
         AgentTableEntry(kind: .hermes, executables: ["hermes"]),
         AgentTableEntry(kind: .openClaw, executables: ["openclaw", "openclaude"]),
+        AgentTableEntry(kind: .openCode, executables: ["opencode"]),
         AgentTableEntry(kind: .aider, executables: ["aider"]),
         AgentTableEntry(kind: .gemini, executables: ["gemini", "gemini-cli"]),
         AgentTableEntry(kind: .goose, executables: ["goose"]),

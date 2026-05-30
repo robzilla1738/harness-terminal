@@ -287,7 +287,7 @@ enum CommandPaletteController {
                 title: workspace.name,
                 subtitle: workspaceSubtitle(workspace, isActive: isActive),
                 symbol: isActive ? "checkmark.rectangle.stack.fill" : "rectangle.stack",
-                shortcut: idx < 9 ? "⌘\(idx + 1)" : "",
+                shortcut: "",
                 section: .workspaces
             ) {
                 coordinator.selectWorkspace(workspace.id)
@@ -296,7 +296,7 @@ enum CommandPaletteController {
 
         // MARK: - Tabs in active workspace
         if let workspace = snapshot.activeWorkspace {
-            for tab in workspace.tabs {
+            for (idx, tab) in workspace.tabs.enumerated() {
                 let folder = HarnessDesign.pathDisplayName(tab.cwd)
                 let title = !folder.isEmpty ? folder : (tab.title.isEmpty ? "Terminal" : tab.title)
                 let subtitle = HarnessDesign.shortenPath(tab.cwd)
@@ -305,7 +305,7 @@ enum CommandPaletteController {
                     title: title,
                     subtitle: subtitle,
                     symbol: tab.status == .waiting ? "bell.fill" : (tab.agent != nil ? "sparkles" : "terminal"),
-                    shortcut: "",
+                    shortcut: idx < 9 ? "⌘\(idx + 1)" : "",
                     section: .tabs
                 ) {
                     coordinator.selectTab(workspaceID: workspace.id, tabID: tab.id)

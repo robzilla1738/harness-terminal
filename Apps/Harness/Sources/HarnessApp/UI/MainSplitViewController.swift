@@ -101,13 +101,17 @@ final class MainSplitViewController: NSViewController {
         )
     }
 
-    /// Resolve the divider line color: user override (`settings.dividerHex`) wins;
-    /// otherwise the theme's border × alpha.
+    /// Resolve the divider line color: user override (`settings.dividerHex`) wins; otherwise
+    /// a quiet near-background hairline — `#1E1E1E` on dark themes (the default look), and the
+    /// theme's border on light themes (where a near-black line would read as a hard rule).
     private func resolvedDividerColor() -> NSColor {
-        let custom = SessionCoordinator.shared.settings.dividerHex
-        if let hex = custom, let color = NSColor.fromHex(hex) { return color }
+        if let hex = SessionCoordinator.shared.settings.dividerHex, let color = NSColor.fromHex(hex) {
+            return color
+        }
         let c = HarnessChrome.current
-        return c.border.withAlphaComponent(c.isDark ? 0.45 : 0.65)
+        return c.isDark
+            ? (NSColor.fromHex(HarnessChromePalette.defaultDarkDividerHex) ?? c.border)
+            : c.border.withAlphaComponent(0.65)
     }
 
     func applyChrome() {

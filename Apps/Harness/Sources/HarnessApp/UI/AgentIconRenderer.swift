@@ -236,6 +236,25 @@ enum AgentIconRenderer {
         return image
     }
 
+    /// A tintable template for an agent that has no vector brand mark (e.g. Aider): its
+    /// short `chip` monogram drawn as a silhouette (alpha = glyph coverage), so an icon
+    /// slot stays visually uniform and recolors via `contentTintColor` like the real marks.
+    static func monogramTemplate(_ text: String, size: CGFloat) -> NSImage {
+        let key = "mono:\(text)@\(Int(size.rounded()))"
+        if let cached = cache[key] { return cached }
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let font = NSFont.systemFont(ofSize: size * 0.46, weight: .bold)
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+            let str = NSAttributedString(string: text, attributes: attrs)
+            let b = str.size()
+            str.draw(at: NSPoint(x: rect.midX - b.width / 2, y: rect.midY - b.height / 2))
+            return true
+        }
+        image.isTemplate = true
+        cache[key] = image
+        return image
+    }
+
     /// A template image (alpha = silhouette) for the agent, or nil if none exists.
     /// Set `contentTintColor` on the hosting `NSImageView` to color it.
     static func templateImage(for kind: AgentKind, size: CGFloat) -> NSImage? {
