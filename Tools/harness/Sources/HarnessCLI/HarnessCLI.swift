@@ -470,7 +470,7 @@ struct HarnessCLI {
 
     static func handleInstallHooks(_ args: [String]) throws {
         let agent = args.dropFirst().first ?? flagValue(args, flag: "--agent") ?? ""
-        try AgentHookInstaller.install(agent: agent)
+        AgentHookInstallerCLI.run(agentArg: agent)
     }
 
     static func handleAttach(_ args: [String]) throws -> Int32 {

@@ -22,9 +22,13 @@ final class MainSplitViewController: NSViewController {
     private let trafficLightInset: CGFloat = 72
 
     override func loadView() {
-        let root = NSView()
-        HarnessDesign.makeClear(root)
-        view = root
+        // The root contentView must stay a plain, NON-layer-backed NSView. A plain NSView
+        // draws nothing (transparent by default), so the window blur shows through — but it
+        // is *not* layer-backed, so the window server rounds the frame + CGS background blur
+        // together (Ghostty's approach). Calling `makeClear` here would set `wantsLayer` and
+        // layer-back the whole window, which clips the blur to a rectangle and leaves a dark
+        // compositing seam at the rounded edge. See MainWindowController.applyTransparency.
+        view = NSView()
     }
 
     override func viewDidLoad() {
@@ -107,9 +111,12 @@ final class MainSplitViewController: NSViewController {
     }
 
     func applyChrome() {
-        HarnessDesign.makeClear(view)
+        // Never `makeClear(view)` here: the root contentView must stay non-layer-backed
+        // (see loadView) so the window stays rounded with no dark perimeter seam. It is
+        // transparent already; there is nothing to repaint on it.
         if let sidebarContainer = split.subviews.first {
-            // Keep this transparent — the sidebar view inside owns the chrome.
+            // Keep this transparent — the sidebar view inside owns the chrome. This is a
+            // child layer-backing island and does not affect the root's backing.
             HarnessDesign.makeClear(sidebarContainer)
         }
         edgeDivider.layer?.backgroundColor = resolvedDividerColor().cgColor

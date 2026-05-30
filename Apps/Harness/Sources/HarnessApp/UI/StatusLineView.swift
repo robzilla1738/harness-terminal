@@ -222,5 +222,9 @@ final class StatusLineView: NSView {
 /// from constructing a new store every read.
 @MainActor
 enum HarnessOptions {
-    static let shared = OptionStore()
+    /// The app's mirror of the daemon-owned `options.json`. Reloaded from disk after the
+    /// Settings ▸ Advanced page writes an option via IPC so the status line (and other
+    /// option readers) reflect the change without an app restart.
+    private(set) static var shared = OptionStore()
+    static func reloadFromDisk() { shared = OptionStore() }
 }

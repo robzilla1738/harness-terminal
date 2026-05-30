@@ -287,6 +287,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
+        scroll.backgroundColor = .clear
+        scroll.contentView.drawsBackground = false
         let doc = NSView()
         doc.translatesAutoresizingMaskIntoConstraints = false
         doc.addSubview(grid)

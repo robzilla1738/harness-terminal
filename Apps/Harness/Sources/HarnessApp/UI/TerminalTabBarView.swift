@@ -368,7 +368,9 @@ private final class TabPillView: NSView {
         self.status = tab.status
 
         wantsLayer = true
-        layer?.cornerRadius = HarnessDesign.Radius.control
+        // Card radius (not control) so the active pill reads identically to the
+        // selected session card in the sidebar.
+        layer?.cornerRadius = HarnessDesign.Radius.card
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = false
 
@@ -547,27 +549,27 @@ private final class TabPillView: NSView {
     func applyChrome(isActive: Bool) {
         self.isActive = isActive
         let c = HarnessDesign.chrome
+        layer?.cornerRadius = HarnessDesign.Radius.card
 
-        // Selected tabs get a modest rounded highlight: softer than a square box,
-        // but not a full capsule/pill.
-        // Blend off the (elevated) chrome strip, not the terminal bg, so the active
-        // pill keeps its lift above the tab strip now that chrome sits above terminal.
-        let activeFill = c.sidebarBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.rowSelectedFill
-        let hoverFill = c.sidebarBackground.blended(withFraction: c.isDark ? 0.060 : 0.05, of: c.textPrimary) ?? c.iconHoverFill
-
+        // The active tab is painted to match the *selected session card* in the sidebar
+        // exactly (SessionCardRowView.refresh): an accent-tinted fill + accent rim +
+        // resting elevation, so the tab strip and the side tab read as one system.
         if isActive {
-            layer?.backgroundColor = activeFill.withAlphaComponent(c.isDark ? 0.92 : 0.85).cgColor
-            layer?.borderWidth = 0
+            layer?.backgroundColor = c.accent.withAlphaComponent(c.isDark ? 0.13 : 0.10).cgColor
+            layer?.borderWidth = 1
+            layer?.borderColor = c.focusRing.withAlphaComponent(c.isDark ? 0.48 : 0.52).cgColor
             HarnessDesign.applyShadow(.elevation1, to: layer)
             titleLabel.textColor = c.textPrimary
         } else if isHovered {
-            layer?.backgroundColor = hoverFill.withAlphaComponent(c.isDark ? 0.88 : 0.78).cgColor
+            layer?.backgroundColor = c.rowHoverFill.cgColor
             layer?.borderWidth = 0
+            layer?.borderColor = NSColor.clear.cgColor
             HarnessDesign.applyShadow(.none, to: layer)
             titleLabel.textColor = c.textPrimary
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
             layer?.borderWidth = 0
+            layer?.borderColor = NSColor.clear.cgColor
             HarnessDesign.applyShadow(.none, to: layer)
             titleLabel.textColor = c.textSecondary
         }

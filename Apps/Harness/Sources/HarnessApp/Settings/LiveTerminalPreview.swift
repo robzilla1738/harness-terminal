@@ -1,12 +1,11 @@
 import AppKit
-import CoreImage
 
-/// Big "this is what your terminal looks like right now" tile shown at the top
-/// of the Appearance page. Renders a faux Harness window using the live
-/// settings — a representative blurred desktop behind a background tint ×
-/// opacity, foreground, cursor, selection, bold, and the 16-slot ANSI palette
-/// across the bottom. Repaints on every slider/field/well change so the user
-/// sees their edit (including opacity + blur) immediately.
+/// A restrained, theme-true "this is your terminal" tile at the top of the Appearance
+/// page. It renders a real-looking Harness pane using the live settings — the actual
+/// canvas (background × opacity, foreground, cursor, selection, bold) and a couple of
+/// palette-colored tokens — over a faint monochrome wash so opacity still reads. No gaudy
+/// desktop blobs, traffic-light dots, or rainbow swatch strip: it should look like a clean
+/// pane, not a color board. Repaints on every settings change.
 @MainActor
 final class LiveTerminalPreview: NSView {
     enum CursorStyle { case block, beam, underline }
@@ -20,37 +19,33 @@ final class LiveTerminalPreview: NSView {
         var blur: CGFloat = 0
         var cursorStyle: CursorStyle
         var cursorBlink: Bool
+        var padding: CGFloat = 12
     }
 
-    /// Cached representative-desktop backdrop, keyed by size + blur so it only
-    /// recomputes when those change (not on every opacity/color tick).
-    private var backdropCache: (key: String, image: NSImage)?
-
-    private var state: State = .init(
-        colors: .init(
-            background: .black, foreground: .white, cursor: .systemBlue,
-            cursorText: .black, selectionBackground: NSColor.systemBlue.withAlphaComponent(0.4),
-            selectionForeground: .white, bold: .white
-        ),
-        palette: Array(repeating: .gray, count: 16),
-        fontName: "Menlo",
-        fontSize: 13,
-        opacity: 1,
-        cursorStyle: .block,
-        cursorBlink: false
-    )
+    private var state: State = {
+        let c = HarnessChrome.current
+        return State(
+            colors: .init(
+                background: c.terminalBackground, foreground: c.textPrimary, cursor: c.accent,
+                cursorText: c.terminalBackground, selectionBackground: c.textPrimary.withAlphaComponent(0.25),
+                selectionForeground: c.textPrimary, bold: c.textPrimary
+            ),
+            palette: Array(repeating: c.textSecondary, count: 16),
+            fontName: "Menlo", fontSize: 13, opacity: 1,
+            cursorStyle: .block, cursorBlink: false
+        )
+    }()
 
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = HarnessDesign.Radius.overlay
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+        layer?.borderColor = HarnessChrome.current.border.cgColor
         layer?.masksToBounds = true
         translatesAutoresizingMaskIntoConstraints = false
-        // A fixed-ish aspect ratio so it always reads as a tiny window.
-        heightAnchor.constraint(equalToConstant: 188).isActive = true
+        heightAnchor.constraint(equalToConstant: 168).isActive = true
     }
 
     @available(*, unavailable)
@@ -58,6 +53,7 @@ final class LiveTerminalPreview: NSView {
 
     func update(_ state: State) {
         self.state = state
+        layer?.borderColor = HarnessChrome.current.border.cgColor
         needsDisplay = true
     }
 
@@ -68,98 +64,81 @@ final class LiveTerminalPreview: NSView {
         super.draw(dirtyRect)
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let rect = bounds
+        let chrome = HarnessChrome.current
 
-        // Representative desktop behind the window so opacity (how much shows
-        // through) and blur (how soft it is) read truthfully — mirroring the real
-        // CGS window blur. At opacity 1 the tint below fully covers it.
-        desktopBackdrop(for: rect).draw(in: rect, from: .zero, operation: .copy, fraction: 1)
+        // Faint monochrome wash "behind" the pane so dialing opacity down reveals a
+        // neutral, theme-derived backdrop (not a colorful desktop). Two close tones.
+        if let gradient = NSGradient(colors: [
+            chrome.surfaceElevated.blended(withFraction: 0.5, of: chrome.sidebarBackground) ?? chrome.sidebarBackground,
+            chrome.sidebarBackground,
+        ]) {
+            gradient.draw(in: rect, angle: 90)
+        }
 
-        // Background — tinted bg × opacity, so dialing opacity down reveals the
-        // backdrop just like the real translucent window.
-        let bg = state.colors.background.withAlphaComponent(state.opacity)
-        bg.setFill()
+        // Terminal background × opacity — the real translucency.
+        state.colors.background.withAlphaComponent(state.opacity).setFill()
         ctx.fill(rect)
 
-        // Title bar — three traffic-light dots and a faint divider, so the tile
-        // reads as a real window rather than a flat colored card.
-        let titlebarHeight: CGFloat = 22
-        let titlebar = NSRect(x: 0, y: 0, width: rect.width, height: titlebarHeight)
-        NSColor.black.withAlphaComponent(0.18).setFill()
-        ctx.fill(titlebar)
-        let dotColors: [NSColor] = [
-            NSColor(srgbRed: 1.00, green: 0.37, blue: 0.34, alpha: 1),
-            NSColor(srgbRed: 0.99, green: 0.74, blue: 0.16, alpha: 1),
-            NSColor(srgbRed: 0.18, green: 0.79, blue: 0.27, alpha: 1),
-        ]
-        for (i, color) in dotColors.enumerated() {
-            color.setFill()
-            let dot = NSRect(x: 10 + CGFloat(i) * 16, y: titlebar.midY - 5, width: 10, height: 10)
-            NSBezierPath(ovalIn: dot).fill()
-        }
-        NSColor.black.withAlphaComponent(0.25).setFill()
-        ctx.fill(NSRect(x: 0, y: titlebarHeight - 1, width: rect.width, height: 1))
+        // Minimal header: a slim bar + 1px divider, no traffic lights.
+        let headerHeight: CGFloat = 14
+        state.colors.foreground.withAlphaComponent(0.05).setFill()
+        ctx.fill(NSRect(x: 0, y: 0, width: rect.width, height: headerHeight))
+        state.colors.foreground.withAlphaComponent(0.10).setFill()
+        ctx.fill(NSRect(x: 0, y: headerHeight, width: rect.width, height: 1))
 
-        // Body — sample prompt + a couple of lines + a selection highlight + cursor.
-        let bodyTop = titlebarHeight + 14
-        let lineHeight = state.fontSize + 6
+        // Body, inset by the live window padding (scaled so the preview reads true).
+        let inset = max(12, min(28, state.padding))
+        let left = inset
+        let bodyTop = headerHeight + max(10, inset * 0.6)
         let baseFont = NSFont(name: state.fontName, size: state.fontSize)
             ?? .monospacedSystemFont(ofSize: state.fontSize, weight: .regular)
         let boldFont = bestBoldFont(name: state.fontName, size: state.fontSize)
+        let lineHeight = state.fontSize + 7
 
-        let promptColor = state.palette.indices.contains(2) ? state.palette[2] : state.colors.foreground
+        let prompt = state.palette.indices.contains(2) ? state.palette[2] : state.colors.foreground
         let pathColor = state.palette.indices.contains(4) ? state.palette[4] : state.colors.foreground
-        let dim = state.colors.foreground.withAlphaComponent(0.78)
+        let added = state.palette.indices.contains(2) ? state.palette[2] : state.colors.foreground
+        let removed = state.palette.indices.contains(1) ? state.palette[1] : state.colors.foreground
+        let dim = state.colors.foreground.withAlphaComponent(0.72)
 
-        // Line 1: prompt with bold result word
-        var x: CGFloat = 14
-        let line1Y = bodyTop
-        x = draw("➜  ", at: NSPoint(x: x, y: line1Y), color: promptColor, font: baseFont)
-        x = draw("~/code/harness ", at: NSPoint(x: x, y: line1Y), color: pathColor, font: baseFont)
-        x = draw("git status", at: NSPoint(x: x, y: line1Y), color: state.colors.foreground, font: baseFont)
+        // Line 1: prompt + path + command.
+        let y1 = bodyTop
+        var x = left
+        x = draw("➜ ", at: NSPoint(x: x, y: y1), color: prompt, font: baseFont)
+        x = draw("~/code/harness ", at: NSPoint(x: x, y: y1), color: pathColor, font: baseFont)
+        _ = draw("git status", at: NSPoint(x: x, y: y1), color: state.colors.foreground, font: baseFont)
 
-        // Line 2: a "branch" output with the bold color highlighted
-        let line2Y = line1Y + lineHeight
-        var x2: CGFloat = 14
-        x2 = draw("On branch ", at: NSPoint(x: x2, y: line2Y), color: dim, font: baseFont)
-        x2 = draw("main", at: NSPoint(x: x2, y: line2Y), color: state.colors.bold, font: boldFont)
+        // Line 2: branch output with the bold color.
+        let y2 = y1 + lineHeight
+        var x2 = left
+        x2 = draw("On branch ", at: NSPoint(x: x2, y: y2), color: dim, font: baseFont)
+        _ = draw("main", at: NSPoint(x: x2, y: y2), color: state.colors.bold, font: boldFont)
 
-        // Line 3: prompt + the selection sample
-        let line3Y = line2Y + lineHeight
-        var x3: CGFloat = 14
-        x3 = draw("➜  ", at: NSPoint(x: x3, y: line3Y), color: promptColor, font: baseFont)
+        // Line 3: a diff-style line so palette edits (green/red) still read.
+        let y3 = y2 + lineHeight
+        var x3 = left
+        x3 = draw("  ", at: NSPoint(x: x3, y: y3), color: dim, font: baseFont)
+        x3 = draw("+ added.swift  ", at: NSPoint(x: x3, y: y3), color: added, font: baseFont)
+        _ = draw("- removed.swift", at: NSPoint(x: x3, y: y3), color: removed, font: baseFont)
+
+        // Line 4: a selection sample.
+        let y4 = y3 + lineHeight
+        var x4 = left
+        x4 = draw("➜ ", at: NSPoint(x: x4, y: y4), color: prompt, font: baseFont)
         let sel = NSAttributedString(string: "selected text", attributes: [
-            .foregroundColor: state.colors.selectionForeground,
-            .font: baseFont,
+            .foregroundColor: state.colors.selectionForeground, .font: baseFont,
         ])
         let selSize = sel.size()
-        let selRect = NSRect(x: x3 - 1, y: line3Y - 1, width: selSize.width + 4, height: lineHeight - 2)
+        let selRect = NSRect(x: x4 - 1, y: y4 - 1, width: selSize.width + 4, height: lineHeight - 2)
         state.colors.selectionBackground.setFill()
-        NSBezierPath(roundedRect: selRect, xRadius: 2, yRadius: 2).fill()
-        sel.draw(at: NSPoint(x: x3 + 1, y: line3Y))
-        x3 += selSize.width + 8
+        NSBezierPath(roundedRect: selRect, xRadius: 3, yRadius: 3).fill()
+        sel.draw(at: NSPoint(x: x4 + 1, y: y4))
 
-        // Line 4: prompt + cursor sample
-        let line4Y = line3Y + lineHeight
-        var x4: CGFloat = 14
-        x4 = draw("➜  ", at: NSPoint(x: x4, y: line4Y), color: promptColor, font: baseFont)
-        drawCursor(at: NSPoint(x: x4, y: line4Y), font: baseFont)
-
-        // ANSI palette strip across the bottom — small color chips so theme/palette
-        // changes show up in the same tile (no need to flip pages to see effect).
-        let stripHeight: CGFloat = 14
-        let stripY = rect.height - stripHeight - 8
-        let chipCount: CGFloat = 16
-        let chipWidth = (rect.width - 28) / chipCount
-        for (i, color) in state.palette.prefix(16).enumerated() {
-            let chip = NSRect(
-                x: 14 + CGFloat(i) * chipWidth,
-                y: stripY,
-                width: chipWidth - 1,
-                height: stripHeight
-            )
-            color.setFill()
-            NSBezierPath(roundedRect: chip, xRadius: 2, yRadius: 2).fill()
-        }
+        // Line 5: prompt + cursor sample.
+        let y5 = y4 + lineHeight
+        var x5 = left
+        x5 = draw("➜ ", at: NSPoint(x: x5, y: y5), color: prompt, font: baseFont)
+        drawCursor(at: NSPoint(x: x5, y: y5), font: baseFont)
     }
 
     @discardableResult
@@ -172,83 +151,24 @@ final class LiveTerminalPreview: NSView {
     private func drawCursor(at p: NSPoint, font: NSFont) {
         let advance: CGFloat = font.maximumAdvancement.width.isFinite ? font.maximumAdvancement.width : font.pointSize * 0.6
         let height = font.pointSize + 2
-        let rect: NSRect
         switch state.cursorStyle {
         case .block:
-            rect = NSRect(x: p.x, y: p.y, width: advance, height: height)
+            let rect = NSRect(x: p.x, y: p.y, width: advance, height: height)
             state.colors.cursor.setFill()
             rect.fill()
-            let glyph = NSAttributedString(string: "_", attributes: [
-                .foregroundColor: state.colors.cursorText,
-                .font: font,
-            ])
-            glyph.draw(at: NSPoint(x: p.x + 1, y: p.y))
         case .beam:
-            rect = NSRect(x: p.x, y: p.y, width: 2, height: height)
             state.colors.cursor.setFill()
-            rect.fill()
+            NSRect(x: p.x, y: p.y, width: 2, height: height).fill()
         case .underline:
-            rect = NSRect(x: p.x, y: p.y + height - 2, width: advance, height: 2)
             state.colors.cursor.setFill()
-            rect.fill()
+            NSRect(x: p.x, y: p.y + height - 2, width: advance, height: 2).fill()
         }
     }
 
     private func bestBoldFont(name: String, size: CGFloat) -> NSFont {
         if let bold = NSFont(name: name + "-Bold", size: size) { return bold }
-        if let descriptor = NSFont(name: name, size: size)?.fontDescriptor
-            .withSymbolicTraits(.bold),
-            let bold = NSFont(descriptor: descriptor, size: size)
-        { return bold }
+        if let descriptor = NSFont(name: name, size: size)?.fontDescriptor.withSymbolicTraits(.bold),
+           let bold = NSFont(descriptor: descriptor, size: size) { return bold }
         return .monospacedSystemFont(ofSize: size, weight: .bold)
-    }
-
-    /// Cached representative desktop, blurred by the current blur amount.
-    private func desktopBackdrop(for rect: NSRect) -> NSImage {
-        let key = "\(Int(rect.width))x\(Int(rect.height))@\(Int(state.blur))"
-        if let cached = backdropCache, cached.key == key { return cached.image }
-        let base = drawDesktopImage(size: rect.size)
-        let image = state.blur > 0.5 ? (gaussianBlurred(base, radius: state.blur * 0.4) ?? base) : base
-        backdropCache = (key, image)
-        return image
-    }
-
-    /// A colorful gradient with a few soft blobs — enough high-frequency detail
-    /// that the blur amount is visibly different.
-    private func drawDesktopImage(size: NSSize) -> NSImage {
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSGradient(colors: [
-            NSColor(srgbRed: 0.16, green: 0.30, blue: 0.66, alpha: 1),
-            NSColor(srgbRed: 0.42, green: 0.22, blue: 0.58, alpha: 1),
-            NSColor(srgbRed: 0.90, green: 0.46, blue: 0.34, alpha: 1),
-        ])?.draw(in: NSRect(origin: .zero, size: size), angle: 35)
-        let blobs: [(CGFloat, CGFloat, CGFloat, NSColor)] = [
-            (0.18, 0.32, 64, NSColor(srgbRed: 1.0, green: 0.85, blue: 0.40, alpha: 0.55)),
-            (0.60, 0.68, 84, NSColor(srgbRed: 0.40, green: 0.90, blue: 0.80, alpha: 0.45)),
-            (0.86, 0.26, 56, NSColor(srgbRed: 1.0, green: 0.50, blue: 0.70, alpha: 0.50)),
-        ]
-        for (fx, fy, r, color) in blobs {
-            color.setFill()
-            let c = NSPoint(x: fx * size.width, y: fy * size.height)
-            NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)).fill()
-        }
-        image.unlockFocus()
-        return image
-    }
-
-    private func gaussianBlurred(_ image: NSImage, radius: CGFloat) -> NSImage? {
-        guard let tiff = image.tiffRepresentation,
-              let input = CIImage(data: tiff),
-              let filter = CIFilter(name: "CIGaussianBlur")
-        else { return nil }
-        filter.setValue(input, forKey: kCIInputImageKey)
-        filter.setValue(radius, forKey: kCIInputRadiusKey)
-        // Crop back to the input extent so the blur doesn't shrink/expand the tile.
-        guard let output = filter.outputImage?.cropped(to: input.extent) else { return nil }
-        let rep = NSCIImageRep(ciImage: output)
-        let result = NSImage(size: image.size)
-        result.addRepresentation(rep)
-        return result
     }
 }

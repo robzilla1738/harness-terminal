@@ -84,12 +84,16 @@ enum AboutPanelController {
         buttons.orientation = .horizontal
         buttons.spacing = 10
 
-        let copyCLI = NSButton(title: "Copy CLI Path", target: LinkHandler.shared, action: #selector(LinkHandler.copyCLIPath))
-        copyCLI.bezelStyle = .rounded
+        // Monochrome pills (never the system-blue default button). The GitHub link is
+        // deliberately NOT a `keyEquivalent = "\r"` default button — that is what macOS
+        // auto-tints with the accent color.
+        let copyCLI = HarnessPillButton(title: "Copy CLI Path", kind: .secondary)
+        copyCLI.target = LinkHandler.shared
+        copyCLI.action = #selector(LinkHandler.copyCLIPath)
 
-        let link = NSButton(title: "Open on GitHub", target: LinkHandler.shared, action: #selector(LinkHandler.openRepo))
-        link.bezelStyle = .rounded
-        link.keyEquivalent = "\r"
+        let link = HarnessPillButton(title: "Open on GitHub", kind: .secondary)
+        link.target = LinkHandler.shared
+        link.action = #selector(LinkHandler.openRepo)
 
         buttons.addArrangedSubview(copyCLI)
         buttons.addArrangedSubview(link)
@@ -125,7 +129,7 @@ private final class LinkHandler: NSObject {
     static let shared = LinkHandler()
 
     @objc func openRepo() {
-        if let url = URL(string: "https://github.com/robert/harness") {
+        if let url = URL(string: "https://github.com/robzilla1738/harness-cli") {
             NSWorkspace.shared.open(url)
         }
     }

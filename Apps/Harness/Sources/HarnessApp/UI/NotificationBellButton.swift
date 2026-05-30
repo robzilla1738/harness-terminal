@@ -114,18 +114,10 @@ final class NotificationBellButton: NSControl {
 
     func applyChrome() {
         let c = HarnessDesign.chrome
-        // Raised circular soft-button chrome — identical to `SoftIconButton` so the bell
-        // matches the sidebar toggle + footer +/⌘ buttons.
-        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
-        layer?.borderWidth = 1
-        layer?.borderColor = (isHovered ? c.textPrimary.withAlphaComponent(0.20) : c.textPrimary.withAlphaComponent(0.12)).cgColor
-        let base = c.sidebarBackground.blended(withFraction: c.isDark ? 0.045 : 0.035, of: c.textPrimary) ?? c.sidebarBackground
-        let hover = c.sidebarBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
-        layer?.backgroundColor = (isHovered ? hover : base).withAlphaComponent(c.isDark ? 0.96 : 0.86).cgColor
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = isHovered ? 0.20 : 0.08
-        layer?.shadowRadius = isHovered ? 6 : 3
-        layer?.shadowOffset = NSSize(width: 0, height: -1)
+        // Shared circular icon-button chrome — identical disc to `SoftIconButton` (the
+        // sidebar toggle, footer gear/＋/palette, tab strip ＋) so the whole icon set
+        // reads as one themed pack that follows the theme like the session cards.
+        HarnessDesign.applyIconButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
         let hasUnread = waitingCount > 0
         iconView.contentTintColor = hasUnread ? c.waiting : (isHovered ? c.textPrimary : c.textSecondary)
         badgeBackground.layer?.backgroundColor = c.danger.cgColor

@@ -52,6 +52,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// in-window bell badge still updates but the OS notification banner is
     /// suppressed.
     public var systemNotificationsEnabled: Bool
+    /// Play a sound ("chime") with agent notifications. When `systemNotificationsEnabled`
+    /// is on, the banner carries the sound; when banners are off but this is on, Harness
+    /// plays an in-app chime so an agent stopping / needing input is still audible.
+    public var notificationSoundEnabled: Bool
     /// Extra-saturated full Display-P3 gamut when true; accurate sRGB (the source terminal
     /// parity, the default) when false. Maps to `window-colorspace`.
     public var vividColors: Bool
@@ -101,6 +105,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         dividerHex: String? = nil,
         statusLineHex: String? = nil,
         systemNotificationsEnabled: Bool = true,
+        notificationSoundEnabled: Bool = true,
         vividColors: Bool = true,
         linearBlending: Bool = false,
         applyThemeToTerminalOutput: Bool = false,
@@ -135,6 +140,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.dividerHex = dividerHex
         self.statusLineHex = statusLineHex
         self.systemNotificationsEnabled = systemNotificationsEnabled
+        self.notificationSoundEnabled = notificationSoundEnabled
         self.vividColors = vividColors
         self.linearBlending = linearBlending
         self.applyThemeToTerminalOutput = applyThemeToTerminalOutput
@@ -232,6 +238,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         dividerHex = try container.decodeIfPresent(String.self, forKey: .dividerHex)
         statusLineHex = try container.decodeIfPresent(String.self, forKey: .statusLineHex)
         systemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? true
+        notificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationSoundEnabled) ?? true
         vividColors = try container.decodeIfPresent(Bool.self, forKey: .vividColors) ?? fallback.vividColors
         linearBlending = try container.decodeIfPresent(Bool.self, forKey: .linearBlending) ?? fallback.linearBlending
         applyThemeToTerminalOutput = try container.decodeIfPresent(Bool.self, forKey: .applyThemeToTerminalOutput) ?? fallback.applyThemeToTerminalOutput

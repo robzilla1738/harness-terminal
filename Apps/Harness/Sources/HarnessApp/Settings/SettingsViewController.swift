@@ -3,100 +3,68 @@ import HarnessCore
 import HarnessTerminalKit
 
 @MainActor
-final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSFontChanging {
-    private let themePopup = NSPopUpButton()
-    private let fontSizeField = NSTextField()
-    private let fontFamilyField = NSTextField()
+final class SettingsViewController: NSViewController, NSFontChanging {
+    private let themePopup = HarnessSelect(frame: .zero)
+    private let fontSizeField = HarnessTextField()
+    private let fontFamilyField = NSTextField() // backing store for the chosen font (not shown)
     private let fontReadout = NSTextField(labelWithString: "")
-    private let shellField = NSTextField()
-    private let cwdField = NSTextField()
-    private let opacitySlider = NSSlider()
+    private let shellField = HarnessTextField()
+    private let cwdField = HarnessTextField()
+    private let opacitySlider = HarnessSlider(frame: .zero)
     private let opacityLabel = NSTextField(labelWithString: "")
-    private let blurSlider = NSSlider()
+    private let blurSlider = HarnessSlider(frame: .zero)
     private let blurLabel = NSTextField(labelWithString: "")
-    private let paddingXField = NSTextField()
-    private let paddingYField = NSTextField()
-    private let backgroundHexField = NSTextField()
-    private let foregroundHexField = NSTextField()
-    private let cursorHexField = NSTextField()
-    private let backgroundWell = NSColorWell()
-    private let foregroundWell = NSColorWell()
-    private let cursorWell = NSColorWell()
+    private let paddingXField = HarnessTextField()
+    private let paddingYField = HarnessTextField()
+    private let backgroundHexField = HarnessTextField()
+    private let foregroundHexField = HarnessTextField()
+    private let cursorHexField = HarnessTextField()
+    private let backgroundWell = HarnessSwatchWell(frame: .zero)
+    private let foregroundWell = HarnessSwatchWell(frame: .zero)
+    private let cursorWell = HarnessSwatchWell(frame: .zero)
     private let useThemeColorsButton = NSButton()
-    private let scrollbackField = NSTextField()
-    private let transparentTitlebarToggle = NSButton(
-        checkboxWithTitle: "Transparent title bar",
-        target: nil,
-        action: nil
-    )
-    private let showStatusLineToggle = NSButton(
-        checkboxWithTitle: "Show status line (bottom bar)",
-        target: nil,
-        action: nil
-    )
-    private let cursorStylePopup = NSPopUpButton()
-    private let cursorBlinkToggle = NSButton(
-        checkboxWithTitle: "Blinking cursor",
-        target: nil,
-        action: nil
-    )
-    private let copyOnSelectToggle = NSButton(
-        checkboxWithTitle: "Copy text to clipboard on selection",
-        target: nil,
-        action: nil
-    )
-    private let keepSessionsToggle = NSButton(
-        checkboxWithTitle: "Keep sessions running after the window closes",
-        target: nil,
-        action: nil
-    )
-    private let vividColorsToggle = NSButton(
-        checkboxWithTitle: "Vivid colors (Display P3) — off = accurate sRGB",
-        target: nil,
-        action: nil
-    )
-    private let linearBlendingToggle = NSButton(
-        checkboxWithTitle: "Gamma-correct text blending",
-        target: nil,
-        action: nil
-    )
-    private let themeTerminalOutputToggle = NSButton(
-        checkboxWithTitle: "Apply theme colors to terminal output — off = canvas matches theme, output untouched",
-        target: nil,
-        action: nil
-    )
-    private let ligaturesToggle = NSButton(
-        checkboxWithTitle: "Programming ligatures (=>, !=, ->) for fonts that have them",
-        target: nil,
-        action: nil
-    )
-    private let selectionBgHexField = NSTextField()
-    private let selectionFgHexField = NSTextField()
-    private let boldHexField = NSTextField()
-    private let cursorTextHexField = NSTextField()
-    private let dividerHexField = NSTextField()
-    private let statusLineHexField = NSTextField()
-    private let selectionBgWell = NSColorWell()
-    private let selectionFgWell = NSColorWell()
-    private let boldWell = NSColorWell()
-    private let cursorTextWell = NSColorWell()
-    private let dividerWell = NSColorWell()
-    private let statusLineWell = NSColorWell()
-    private let systemNotificationsToggle = NSButton()
+    private let scrollbackField = HarnessTextField()
+    private let transparentTitlebarToggle = HarnessToggle(title: "Transparent title bar")
+    private let showStatusLineToggle = HarnessToggle(title: "Show status line (bottom bar)")
+    private let sidebarVisibleToggle = HarnessToggle(title: "Show sidebar")
+    private let cursorStyleSegment = HarnessSegmented(frame: .zero)
+    private let cursorBlinkToggle = HarnessToggle(title: "Blinking cursor")
+    private let copyOnSelectToggle = HarnessToggle(title: "Copy text to clipboard on selection")
+    private let keepSessionsToggle = HarnessToggle(title: "Keep sessions running after the window closes")
+    private let vividColorsToggle = HarnessToggle(title: "Vivid colors (Display P3) — off = accurate sRGB")
+    private let linearBlendingToggle = HarnessToggle(title: "Gamma-correct text blending")
+    private let themeTerminalOutputToggle = HarnessToggle(title: "Apply theme colors to terminal output — off = canvas matches theme, output untouched")
+    private let ligaturesToggle = HarnessToggle(title: "Programming ligatures (=>, !=, ->) for fonts that have them")
+    private let selectionBgHexField = HarnessTextField()
+    private let selectionFgHexField = HarnessTextField()
+    private let boldHexField = HarnessTextField()
+    private let cursorTextHexField = HarnessTextField()
+    private let dividerHexField = HarnessTextField()
+    private let statusLineHexField = HarnessTextField()
+    private let selectionBgWell = HarnessSwatchWell(frame: .zero)
+    private let selectionFgWell = HarnessSwatchWell(frame: .zero)
+    private let boldWell = HarnessSwatchWell(frame: .zero)
+    private let cursorTextWell = HarnessSwatchWell(frame: .zero)
+    private let dividerWell = HarnessSwatchWell(frame: .zero)
+    private let statusLineWell = HarnessSwatchWell(frame: .zero)
+    private let systemNotificationsToggle = HarnessToggle(title: "Push notification when an agent stops or needs input")
+    private let notificationSoundToggle = HarnessToggle(title: "Play a chime with notifications")
     private let livePreview = LiveTerminalPreview()
     private let pageContainer = NSView()
     private var pages: [Int: NSView] = [:]
     private var currentPage: Int = 0
-    private var paletteWells: [NSColorWell] = []
+    private var paletteWells: [HarnessSwatchWell] = []
     private var paletteHexValues: [String?] = Array(repeating: nil, count: 16)
-    private var agentColorWells: [AgentKind: NSColorWell] = [:]
-    private var agentColorPreviews: [AgentKind: AgentChipView] = [:]
+    private var agentColorWells: [AgentKind: HarnessSwatchWell] = [:]
+    private var agentIconViews: [AgentKind: NSImageView] = [:]
     private var colorBindings: [ColorBinding] = []
     private var keyRecorder: KeyRecorderView!
+    /// Live "Installed ✓ / Install hooks" buttons keyed by agent (Agents page).
+    private var hookButtons: [AgentKind: HarnessPillButton] = [:]
 
     private struct ColorBinding {
-        let field: NSTextField
-        let well: NSColorWell
+        let field: HarnessTextField
+        let well: HarnessSwatchWell
         let reset: NSButton
         let keyPath: WritableKeyPath<HarnessSettings, String?>
         let themeColor: () -> String?
@@ -266,11 +234,10 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         scrollbackField.target = self
         scrollbackField.action = #selector(appearanceTextDidCommit)
 
-        cursorStylePopup.removeAllItems()
-        cursorStylePopup.addItems(withTitles: ["Block", "Beam", "Underline"])
-        cursorStylePopup.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
-        cursorStylePopup.target = self
-        cursorStylePopup.action = #selector(appearanceTextDidCommit)
+        cursorStyleSegment.setSegments(["Block", "Beam", "Underline"])
+        cursorStyleSegment.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
+        cursorStyleSegment.target = self
+        cursorStyleSegment.action = #selector(appearanceTextDidCommit)
         cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
         cursorBlinkToggle.target = self
         cursorBlinkToggle.action = #selector(appearanceTextDidCommit)
@@ -303,10 +270,13 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         showStatusLineToggle.target = self
         showStatusLineToggle.action = #selector(appearanceTextDidCommit)
 
+        sidebarVisibleToggle.state = settings.sidebarVisible ? .on : .off
+        sidebarVisibleToggle.target = self
+        sidebarVisibleToggle.action = #selector(sidebarVisibilityChanged)
+
         useThemeColorsButton.title = "Use Theme Colors"
         useThemeColorsButton.target = self
         useThemeColorsButton.action = #selector(useThemeColors)
-        useThemeColorsButton.bezelStyle = .rounded
 
         keyRecorder = KeyRecorderView(initial: settings.prefixKey)
         keyRecorder.onChange = { [weak self] value in
@@ -334,7 +304,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         pageContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(pageContainer)
 
-        let doneButton = HarnessPillButton(title: "Done", kind: .primary)
+        let doneButton = HarnessPillButton(title: "Done", kind: .secondary)
         doneButton.target = self
         doneButton.action = #selector(closeWindow)
         doneButton.keyEquivalent = "\r"
@@ -361,6 +331,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         pages[2] = buildTerminalPage()
         pages[3] = buildKeysPage()
         pages[4] = buildAgentsPage()
+        pages[5] = buildAdvancedPage()
     }
 
     private func showPage(_ index: Int) {
@@ -381,13 +352,14 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     // MARK: - Sidebar
 
     private var sidebarButtons: [SettingsSidebarButton] = []
-    private let settingsSearch = NSSearchField()
+    private let settingsSearch = HarnessSearchField()
     private static let sectionKeywords: [Int: [String]] = [
-        0: ["appearance", "theme", "opacity", "blur", "padding", "window", "transparent", "titlebar"],
+        0: ["appearance", "theme", "opacity", "blur", "padding", "window", "transparent", "titlebar", "sidebar"],
         1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status"],
         2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session"],
         3: ["keys", "prefix", "binding", "keybinding", "shortcut"],
-        4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification"],
+        4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "detection"],
+        5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "tmux"],
     ]
 
     private func buildSidebar() -> NSView {
@@ -403,8 +375,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         title.translatesAutoresizingMaskIntoConstraints = false
 
         settingsSearch.placeholderString = "Filter sections…"
-        settingsSearch.delegate = self
-        settingsSearch.font = .systemFont(ofSize: 12)
+        settingsSearch.onChange = { [weak self] query in self?.filterSections(query) }
         settingsSearch.translatesAutoresizingMaskIntoConstraints = false
 
         let buttons = NSStackView()
@@ -420,6 +391,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("Terminal", "terminal"),
             ("Keys", "keyboard"),
             ("Agents", "sparkles"),
+            ("Advanced", "slider.horizontal.3"),
         ]
         for (index, entry) in entries.enumerated() {
             let button = SettingsSidebarButton(title: entry.0, symbol: entry.1)
@@ -448,9 +420,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         return container
     }
 
-    func controlTextDidChange(_ obj: Notification) {
-        guard obj.object as? NSSearchField === settingsSearch else { return }
-        let query = settingsSearch.stringValue.lowercased().trimmingCharacters(in: .whitespaces)
+    private func filterSections(_ raw: String) {
+        let query = raw.lowercased().trimmingCharacters(in: .whitespaces)
         for button in sidebarButtons {
             if query.isEmpty {
                 button.isHidden = false
@@ -524,6 +495,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("Padding", paddingRow),
             ("", transparentTitlebarToggle),
             ("", showStatusLineToggle),
+            ("", sidebarVisibleToggle),
         ])
 
         let stack = NSStackView(views: [
@@ -634,7 +606,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             ("Default directory", cwdField),
         ])
         let behaviorGroup = formGrid(rows: [
-            ("Cursor style", cursorStylePopup),
+            ("Cursor style", cursorStyleSegment),
             ("Scrollback", scrollbackField),
             ("", cursorBlinkToggle),
             ("", copyOnSelectToggle),
@@ -681,52 +653,45 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     private func buildAgentsPage() -> NSView {
         let header = pageHeader(title: "Agents", trailing: nil)
 
-        let editAgents = HarnessPillButton(title: "Edit agents.json…", kind: .secondary)
-        editAgents.target = self
-        editAgents.action = #selector(openAgentsJSON)
-
-        systemNotificationsToggle.title = "Show system notifications when an agent needs attention"
-        systemNotificationsToggle.setButtonType(.switch)
         systemNotificationsToggle.state = SessionCoordinator.shared.settings.systemNotificationsEnabled ? .on : .off
         systemNotificationsToggle.target = self
         systemNotificationsToggle.action = #selector(appearanceTextDidCommit)
+        notificationSoundToggle.state = SessionCoordinator.shared.settings.notificationSoundEnabled ? .on : .off
+        notificationSoundToggle.target = self
+        notificationSoundToggle.action = #selector(appearanceTextDidCommit)
 
-        let detectionGroup = formGrid(rows: [
-            ("Agent table", editAgents),
+        let notificationsGroup = formGrid(rows: [
             ("", systemNotificationsToggle),
+            ("", notificationSoundToggle),
         ])
 
-        let caption = NSTextField(labelWithString: "Per-agent chip color shown in the sidebar and tab pills.")
-        caption.font = .systemFont(ofSize: 11.5)
-        caption.textColor = .secondaryLabelColor
+        let detectionCaption = settingsCaption("Harness identifies agents by walking each pane's process tree and matching the executables shown below — it works for any shell, no setup. Install hooks so an agent can ping you the moment it stops or needs input (the config is merged into the agent's own file and backed up first). Customize matching in agents.json.")
+        let editAgents = HarnessPillButton(title: "Edit agents.json…", kind: .secondary)
+        editAgents.target = self
+        editAgents.action = #selector(openAgentsJSON)
+        let detectionBox = NSStackView(views: [detectionCaption, leadingRow(editAgents)])
+        detectionBox.orientation = .vertical
+        detectionBox.alignment = .leading
+        detectionBox.spacing = 12
 
-        let halves = Self.agentColorKinds.chunked(into: (Self.agentColorKinds.count + 1) / 2)
-        let columns = halves.map { kinds -> NSStackView in
-            let rows = kinds.map(agentColorRow)
-            let s = NSStackView(views: rows)
-            s.orientation = .vertical
-            s.alignment = .leading
-            s.spacing = 8
-            return s
-        }
-        let grid = NSStackView(views: columns)
-        grid.orientation = .horizontal
-        grid.spacing = 28
-        grid.alignment = .top
+        let agentRows = NSStackView(views: Self.agentColorKinds.map(agentRow))
+        agentRows.orientation = .vertical
+        agentRows.alignment = .width
+        agentRows.spacing = 12
 
         let reset = HarnessPillButton(title: "Reset agent colors", kind: .secondary)
         reset.target = self
         reset.action = #selector(resetAgentColors)
-
-        let colorsBox = NSStackView(views: [caption, grid, reset])
-        colorsBox.orientation = .vertical
-        colorsBox.alignment = .leading
-        colorsBox.spacing = 12
+        let agentsBox = NSStackView(views: [agentRows, leadingRow(reset)])
+        agentsBox.orientation = .vertical
+        agentsBox.alignment = .width
+        agentsBox.spacing = 14
 
         let stack = NSStackView(views: [
             header,
-            sectionCard("Detection", detectionGroup),
-            sectionCard("Agent colors", colorsBox),
+            sectionCard("Notifications", notificationsGroup),
+            sectionCard("Detection & hooks", detectionBox),
+            sectionCard("Agents", agentsBox),
         ])
         stack.orientation = .vertical
         stack.alignment = .width
@@ -735,18 +700,273 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         return scrollWrap(stack)
     }
 
+    /// One per-agent row: brand icon + name + the executables it matches + a color-override
+    /// swatch + a one-click "Install hooks" button (with installed status) where supported.
+    private func agentRow(_ kind: AgentKind) -> NSView {
+        let c = HarnessChrome.current
+        let colorHex = SessionCoordinator.shared.settings.agentColorHex(for: kind)
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.image = AgentIconRenderer.templateImage(for: kind, size: 18)
+        icon.contentTintColor = NSColor.fromHex(colorHex) ?? c.textSecondary
+        icon.widthAnchor.constraint(equalToConstant: 20).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        agentIconViews[kind] = icon
+
+        let name = NSTextField(labelWithString: kind.displayName)
+        name.font = .systemFont(ofSize: 13, weight: .medium)
+        name.textColor = c.textPrimary
+        let execs = NSTextField(labelWithString: executablesString(for: kind))
+        execs.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        execs.textColor = c.textTertiary
+        execs.lineBreakMode = .byTruncatingTail
+        let textCol = NSStackView(views: [name, execs])
+        textCol.orientation = .vertical
+        textCol.alignment = .leading
+        textCol.spacing = 1
+
+        let leading = NSStackView(views: [icon, textCol])
+        leading.orientation = .horizontal
+        leading.alignment = .centerY
+        leading.spacing = 10
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let trailing = NSStackView()
+        trailing.orientation = .horizontal
+        trailing.alignment = .centerY
+        trailing.spacing = 10
+        if let well = agentColorWells[kind] { trailing.addArrangedSubview(well) }
+        if AgentHookInstaller.canInstall(kind) {
+            let installed = AgentHookInstaller.isInstalled(agent: kind)
+            let button = HarnessPillButton(title: installed ? "Reinstall hooks" : "Install hooks", kind: .secondary)
+            button.target = self
+            button.action = #selector(installHooksClicked(_:))
+            hookButtons[kind] = button
+            trailing.addArrangedSubview(button)
+        }
+
+        let row = NSStackView(views: [leading, spacer, trailing])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        return row
+    }
+
+    private func executablesString(for kind: AgentKind) -> String {
+        let execs = AgentTable.default.entries.first { $0.kind == kind }?.executables ?? []
+        return execs.isEmpty ? "—" : execs.joined(separator: ", ")
+    }
+
+    private func retintAgentIcon(_ kind: AgentKind) {
+        let hex = SessionCoordinator.shared.settings.agentColorHex(for: kind)
+        agentIconViews[kind]?.contentTintColor = NSColor.fromHex(hex) ?? HarnessChrome.current.textSecondary
+    }
+
+    @objc private func installHooksClicked(_ sender: HarnessPillButton) {
+        guard let kind = hookButtons.first(where: { $0.value === sender })?.key else { return }
+        sender.setTitleText("Installing…")
+        sender.isEnabled = false
+        // File I/O off-main; weak captures so a closed Settings window isn't kept alive.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak sender] in
+            let outcome = Result { try AgentHookInstaller.install(agent: kind) }
+            DispatchQueue.main.async {
+                guard let sender else { return }
+                sender.isEnabled = true
+                let host = self?.view
+                switch outcome {
+                case .success(let result):
+                    sender.setTitleText("Reinstall hooks")
+                    sender.toolTip = result.backedUp.map { "Backed up your previous config to \($0.lastPathComponent)" }
+                        ?? "Installed at \(result.path.path)"
+                    if let host { Toast.show("Installed \(kind.displayName) hooks", in: host) }
+                case .failure(let error):
+                    sender.setTitleText("Install hooks")
+                    sender.toolTip = "Failed: \(error.localizedDescription)"
+                    if let host { Toast.show("Couldn't install \(kind.displayName) hooks", in: host) }
+                }
+            }
+        }
+    }
+
+    // MARK: - Page: Advanced (tmux-style options)
+
+    /// Daemon-owned `OptionStore` values, fetched on page build. Keyed by option name.
+    private var advValues: [String: String] = [:]
+    private enum AdvKind { case toggle, segment, field }
+    private var advOptKeys: [ObjectIdentifier: (key: String, kind: AdvKind)] = [:]
+
+    private func buildAdvancedPage() -> NSView {
+        let header = pageHeader(title: "Advanced", trailing: nil)
+        loadAdvancedValues()
+
+        let statusGroup = formGrid(rows: [
+            ("Status position", advSegment("status-position", ["bottom", "top"])),
+            ("Status left", advField("status-left", width: 260)),
+            ("Status right", advField("status-right", width: 260)),
+        ])
+        let statusBox = NSStackView(views: [
+            settingsCaption("Format the bottom status bar (FormatString tokens like #{cwd_basename}, #{git_branch}, #{time:%H:%M}). The on/off switch is in Appearance ▸ Window."),
+            statusGroup,
+        ])
+        statusBox.orientation = .vertical
+        statusBox.alignment = .width
+        statusBox.spacing = 10
+
+        let inputGroup = formGrid(rows: [
+            ("", advToggle("mouse", "Mouse reporting")),
+            ("Copy-mode keys", advSegment("mode-keys", ["vi", "emacs"])),
+            ("", advToggle("set-clipboard", "Programs may set the system clipboard (OSC 52)")),
+        ])
+
+        let indexGroup = formGrid(rows: [
+            ("Window base index", advSegment("base-index", ["0", "1"])),
+            ("Pane base index", advSegment("pane-base-index", ["0", "1"])),
+            ("", advToggle("renumber-windows", "Renumber windows after one closes")),
+        ])
+
+        let titleGroup = formGrid(rows: [
+            ("", advToggle("allow-rename", "Allow programs to rename a tab (OSC title)")),
+            ("", advToggle("automatic-rename", "Automatic tab rename from the running command")),
+            ("", advToggle("monitor-activity", "Flag a background tab on new output")),
+            ("", advToggle("monitor-bell", "Flag a background tab on a terminal bell")),
+            ("Silence alert (s)", advField("monitor-silence", width: 80)),
+        ])
+
+        let lifecycleGroup = formGrid(rows: [
+            ("", advToggle("remain-on-exit", "Keep a dead pane so it can be respawned")),
+            ("Prefix repeat (ms)", advField("repeat-time", width: 100)),
+            ("History limit", advField("history-limit", width: 120)),
+        ])
+        let lifecycleBox = NSStackView(views: [
+            lifecycleGroup,
+            settingsCaption("History limit is the multiplexer scrollback; the renderer's own scrollback is in Terminal ▸ Behavior."),
+        ])
+        lifecycleBox.orientation = .vertical
+        lifecycleBox.alignment = .width
+        lifecycleBox.spacing = 8
+
+        let borderGroup = formGrid(rows: [
+            ("Pane border labels", advSegment("pane-border-status", ["off", "top", "bottom"])),
+            ("Border format", advField("pane-border-format", width: 260)),
+        ])
+
+        let stack = NSStackView(views: [
+            header,
+            settingsCaption("Power-user options shared with the harness-cli set-option / tmux command surface. Changes apply globally and persist immediately."),
+            sectionCard("Status bar", statusBox),
+            sectionCard("Input", inputGroup),
+            sectionCard("Indexing", indexGroup),
+            sectionCard("Titles & monitoring", titleGroup),
+            sectionCard("Lifecycle", lifecycleBox),
+            sectionCard("Pane borders", borderGroup),
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return scrollWrap(stack)
+    }
+
+    private func loadAdvancedValues() {
+        advValues.removeAll()
+        for (key, value) in OptionStore.builtinDefaults { advValues[key] = value.stringValue }
+        if case let .options(entries)? = SessionCoordinator.shared.requestDaemon(.showOptions(scope: nil)) {
+            for entry in entries where entry.scope == "global" { advValues[entry.key] = entry.value }
+        }
+    }
+
+    private func advToggle(_ key: String, _ title: String) -> HarnessToggle {
+        let toggle = HarnessToggle(title: title)
+        let raw = (advValues[key] ?? "off").lowercased()
+        toggle.state = (raw == "on" || raw == "true" || raw == "1") ? .on : .off
+        toggle.target = self
+        toggle.action = #selector(advChanged(_:))
+        advOptKeys[ObjectIdentifier(toggle)] = (key, .toggle)
+        return toggle
+    }
+
+    private func advSegment(_ key: String, _ values: [String]) -> HarnessSegmented {
+        let segment = HarnessSegmented(frame: .zero)
+        segment.setSegments(values.map { $0.capitalized })
+        if let current = advValues[key] { segment.selectItem(withTitle: current.capitalized) }
+        segment.target = self
+        segment.action = #selector(advChanged(_:))
+        advOptKeys[ObjectIdentifier(segment)] = (key, .segment)
+        return segment
+    }
+
+    private func advField(_ key: String, width: CGFloat) -> HarnessTextField {
+        let field = HarnessTextField()
+        field.stringValue = advValues[key] ?? ""
+        field.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        field.widthAnchor.constraint(equalToConstant: width).isActive = true
+        field.target = self
+        field.action = #selector(advChanged(_:))
+        advOptKeys[ObjectIdentifier(field)] = (key, .field)
+        return field
+    }
+
+    @objc private func advChanged(_ sender: NSObject) {
+        guard let entry = advOptKeys[ObjectIdentifier(sender)] else { return }
+        let raw: String
+        switch entry.kind {
+        case .toggle: raw = (sender as? HarnessToggle)?.state == .on ? "on" : "off"
+        case .segment: raw = (sender as? HarnessSegmented)?.titleOfSelectedItem?.lowercased() ?? ""
+        case .field: raw = (sender as? NSTextField)?.stringValue ?? ""
+        }
+        setDaemonOption(key: entry.key, rawValue: raw)
+    }
+
+    private func setDaemonOption(key: String, rawValue: String) {
+        SessionCoordinator.shared.requestDaemon(.setOption(scope: "global", target: nil, key: key, rawValue: rawValue))
+        advValues[key] = rawValue
+        HarnessOptions.reloadFromDisk()
+        // Nudge the status line + chrome to re-read the new option value.
+        NotificationCenter.default.post(
+            name: NotificationBus.shared.snapshotChanged,
+            object: nil,
+            userInfo: ["revision": SessionCoordinator.shared.snapshot.revision,
+                       "structureChanged": false,
+                       "chromeChanged": false,
+                       "metadataOnly": true]
+        )
+    }
+
+    private func settingsCaption(_ text: String) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 11.5)
+        label.textColor = HarnessChrome.current.textTertiary
+        return label
+    }
+
+    /// Wrap a control so it sits flush-left in a `.width`-aligned stack (trailing spacer).
+    private func leadingRow(_ control: NSView) -> NSView {
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let row = NSStackView(views: [control, spacer])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        return row
+    }
+
     // MARK: - Layout helpers
 
-    private func pageHeader(title: String, trailing: NSButton?) -> NSView {
+    private func pageHeader(title: String, trailing: HarnessPillButton? = nil) -> NSView {
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        titleLabel.textColor = HarnessChrome.current.textPrimary
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 12
         stack.addArrangedSubview(titleLabel)
         if let trailing {
-            trailing.bezelStyle = .rounded
             let spacer = NSView()
             spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
             spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -893,9 +1113,18 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
+        scroll.backgroundColor = .clear
+        scroll.contentView.drawsBackground = false
+        documentView.wantsLayer = true
+        documentView.layer?.backgroundColor = NSColor.clear.cgColor
         scroll.documentView = documentView
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
+        // `.width` alignment on a vertical NSStackView does NOT reliably stretch children to
+        // the stack's full width — it sizes them equal to each other. Pin every section flush
+        // to the content's leading+trailing so headers/cards fill the column uniformly and
+        // left-align (no right-shift, no ragged widths).
+        content.alignment = .leading
         NSLayoutConstraint.activate([
             documentView.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             documentView.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
@@ -907,16 +1136,23 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             content.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -28),
             content.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -28),
         ])
+        for section in content.arrangedSubviews {
+            NSLayoutConstraint.activate([
+                section.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                section.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            ])
+        }
         return scroll
     }
 
     private func makeResetButton() -> NSButton {
         let button = NSButton()
-        button.bezelStyle = .recessed
+        button.bezelStyle = .shadowlessSquare
         button.image = NSImage(systemSymbolName: "arrow.uturn.backward.circle",
                                accessibilityDescription: "Reset to theme color")
         button.imagePosition = .imageOnly
         button.isBordered = false
+        button.contentTintColor = HarnessChrome.current.textTertiary
         button.target = self
         button.action = #selector(colorResetClicked(_:))
         button.toolTip = "Use theme color"
@@ -931,7 +1167,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     private func buildPaletteWells() {
         paletteWells.removeAll()
         for index in 0 ..< 16 {
-            let well = NSColorWell()
+            let well = HarnessSwatchWell(frame: .zero)
             well.translatesAutoresizingMaskIntoConstraints = false
             well.widthAnchor.constraint(equalToConstant: 40).isActive = true
             well.heightAnchor.constraint(equalToConstant: 32).isActive = true
@@ -947,7 +1183,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
     private func buildAgentColorWells(settings: HarnessSettings) {
         agentColorWells.removeAll()
         for kind in Self.agentColorKinds {
-            let well = NSColorWell()
+            let well = HarnessSwatchWell(frame: .zero)
             well.translatesAutoresizingMaskIntoConstraints = false
             well.widthAnchor.constraint(equalToConstant: 38).isActive = true
             well.heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -969,25 +1205,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         cell.spacing = 4
         cell.alignment = .centerX
         return cell
-    }
-
-    private func agentColorRow(_ kind: AgentKind) -> NSView {
-        let label = NSTextField(labelWithString: kind.displayName)
-        label.font = .systemFont(ofSize: 12)
-        label.textColor = .secondaryLabelColor
-        label.widthAnchor.constraint(equalToConstant: 120).isActive = true
-
-        let preview = AgentChipView()
-        preview.translatesAutoresizingMaskIntoConstraints = false
-        preview.heightAnchor.constraint(equalToConstant: 18).isActive = true
-        preview.widthAnchor.constraint(lessThanOrEqualToConstant: 126).isActive = true
-        preview.configure(kind: kind, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
-        agentColorPreviews[kind] = preview
-
-        let row = NSStackView(views: [agentColorWells[kind] ?? NSView(), label, preview])
-        row.orientation = .horizontal
-        row.spacing = 10
-        return row
     }
 
     // MARK: - Formatting / utilities
@@ -1058,6 +1275,17 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep))
     }
 
+    /// "Show sidebar" applies live to the main window's split (which also persists the
+    /// setting), so the sidebar slides immediately rather than only on the next launch.
+    @objc private func sidebarVisibilityChanged() {
+        let visible = sidebarVisibleToggle.state == .on
+        for window in NSApp.windows {
+            if let split = window.contentViewController as? MainSplitViewController {
+                split.setSidebarVisible(visible, animated: true)
+            }
+        }
+    }
+
     @objc private func appearanceTextDidCommit() {
         flushAndApply()
     }
@@ -1073,7 +1301,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         }
     }
 
-    private func configureColorWell(_ well: NSColorWell) {
+    private func configureColorWell(_ well: HarnessSwatchWell) {
         well.target = self
         well.action = #selector(colorWellChanged(_:))
         well.translatesAutoresizingMaskIntoConstraints = false
@@ -1081,7 +1309,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         well.heightAnchor.constraint(equalToConstant: 22).isActive = true
     }
 
-    @objc private func colorWellChanged(_ sender: NSColorWell) {
+    @objc private func colorWellChanged(_ sender: HarnessSwatchWell) {
         guard let binding = colorBindings.first(where: { $0.well === sender }) else { return }
         binding.field.stringValue = hexString(sender.color)
         refreshColorBinding(binding)
@@ -1109,14 +1337,15 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             let chosen = normalizedHexOrNil(binding.field.stringValue) ?? binding.themeColor()
             return chosen.flatMap(NSColor.fromHex)
         }
+        let c = HarnessChrome.current
         return ColorSamplePreview.Context(
-            background: resolve(colorBindings[0]) ?? .black,
-            foreground: resolve(colorBindings[1]) ?? .white,
-            cursor: resolve(colorBindings[2]) ?? .systemBlue,
-            cursorText: resolve(colorBindings[3]) ?? .black,
-            selectionBackground: resolve(colorBindings[4]) ?? NSColor.systemBlue.withAlphaComponent(0.5),
-            selectionForeground: resolve(colorBindings[5]) ?? .white,
-            bold: resolve(colorBindings[6]) ?? .white
+            background: resolve(colorBindings[0]) ?? c.terminalBackground,
+            foreground: resolve(colorBindings[1]) ?? c.textPrimary,
+            cursor: resolve(colorBindings[2]) ?? c.accent,
+            cursorText: resolve(colorBindings[3]) ?? c.terminalBackground,
+            selectionBackground: resolve(colorBindings[4]) ?? c.textPrimary.withAlphaComponent(0.25),
+            selectionForeground: resolve(colorBindings[5]) ?? c.textPrimary,
+            bold: resolve(colorBindings[6]) ?? c.textPrimary
         )
     }
 
@@ -1145,7 +1374,8 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
             opacity: CGFloat(s.backgroundOpacity),
             blur: CGFloat(s.backgroundBlur),
             cursorStyle: style,
-            cursorBlink: s.cursorBlink
+            cursorBlink: s.cursorBlink,
+            padding: CGFloat(s.windowPaddingX)
         ))
     }
 
@@ -1156,18 +1386,18 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         }
     }
 
-    @objc private func paletteWellChanged(_ sender: NSColorWell) {
+    @objc private func paletteWellChanged(_ sender: HarnessSwatchWell) {
         guard let index = paletteWells.firstIndex(where: { $0 === sender }) else { return }
         paletteHexValues[index] = hexString(sender.color)
         flushAndApply()
     }
 
-    @objc private func agentColorWellChanged(_ sender: NSColorWell) {
+    @objc private func agentColorWellChanged(_ sender: HarnessSwatchWell) {
         guard let kind = agentColorWells.first(where: { $0.value === sender })?.key else { return }
         let coordinator = SessionCoordinator.shared
         coordinator.settings.agentColorOverrides[kind.rawValue] = hexString(sender.color)
         coordinator.settings.agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(coordinator.settings.agentColorOverrides)
-        agentColorPreviews[kind]?.configure(kind: kind, hex: coordinator.settings.agentColorHex(for: kind))
+        retintAgentIcon(kind)
         try? coordinator.settings.save()
         coordinator.applySettingsToHosts()
     }
@@ -1177,7 +1407,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.agentColorOverrides.removeAll()
         for (kind, well) in agentColorWells {
             well.color = NSColor.fromHex(coordinator.settings.agentColorHex(for: kind)) ?? .gray
-            agentColorPreviews[kind]?.configure(kind: kind, hex: coordinator.settings.agentColorHex(for: kind))
+            retintAgentIcon(kind)
         }
         try? coordinator.settings.save()
         coordinator.applySettingsToHosts()
@@ -1201,7 +1431,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         paddingYField.stringValue = String(Int(settings.windowPaddingY.rounded()))
         fontFamilyField.stringValue = settings.fontFamily
         fontSizeField.stringValue = String(Int(settings.fontSize.rounded()))
-        cursorStylePopup.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
+        cursorStyleSegment.selectItem(withTitle: cursorStyleTitle(settings.cursorStyle))
         cursorBlinkToggle.state = settings.cursorBlink ? .on : .off
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
         keepSessionsToggle.state = SessionCoordinator.shared.snapshot.keepSessionsOnQuit ? .on : .off
@@ -1210,6 +1440,9 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         ligaturesToggle.state = settings.ligatures ? .on : .off
         showStatusLineToggle.state = settings.showStatusLine ? .on : .off
+        sidebarVisibleToggle.state = settings.sidebarVisible ? .on : .off
+        systemNotificationsToggle.state = settings.systemNotificationsEnabled ? .on : .off
+        notificationSoundToggle.state = settings.notificationSoundEnabled ? .on : .off
         for binding in colorBindings {
             binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
@@ -1267,6 +1500,7 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.paletteHex = HarnessSettings.normalizedPalette(paletteHexValues)
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
         coordinator.settings.showStatusLine = showStatusLineToggle.state == .on
+        coordinator.settings.sidebarVisible = sidebarVisibleToggle.state == .on
         coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
         coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
         coordinator.settings.fontSize = Float(fontSizeField.stringValue) ?? 14
@@ -1274,10 +1508,11 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
         coordinator.settings.defaultShell = shellField.stringValue
         coordinator.settings.defaultCWD = cwdField.stringValue
         coordinator.settings.scrollbackLines = max(100, Int(scrollbackField.stringValue) ?? 10_000)
-        coordinator.settings.cursorStyle = cursorStyleValue(cursorStylePopup.titleOfSelectedItem)
+        coordinator.settings.cursorStyle = cursorStyleValue(cursorStyleSegment.titleOfSelectedItem)
         coordinator.settings.cursorBlink = cursorBlinkToggle.state == .on
         coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on
         coordinator.settings.systemNotificationsEnabled = systemNotificationsToggle.state == .on
+        coordinator.settings.notificationSoundEnabled = notificationSoundToggle.state == .on
         coordinator.settings.vividColors = vividColorsToggle.state == .on
         coordinator.settings.linearBlending = linearBlendingToggle.state == .on
         coordinator.settings.applyThemeToTerminalOutput = themeTerminalOutputToggle.state == .on
@@ -1341,21 +1576,6 @@ final class SettingsViewController: NSViewController, NSSearchFieldDelegate, NSF
               cleaned.allSatisfy({ $0.isHexDigit })
         else { return nil }
         return "#\(cleaned)"
-    }
-
-    private func hasCustomColorOverrides() -> Bool {
-        // Divider + status line are chrome accents — they're allowed to be set
-        // without flipping `useCustomColors` on, which would otherwise also
-        // override the terminal palette.
-        let chromeAccentPaths: [WritableKeyPath<HarnessSettings, String?>] = [\.dividerHex, \.statusLineHex]
-        let terminalColors = colorBindings.contains {
-            normalizedHexOrNil($0.field.stringValue) != nil && !chromeAccentPaths.contains($0.keyPath)
-        }
-        return terminalColors || paletteHexValues.contains { $0 != nil }
-    }
-
-    private func syncColorWellsFromFields() {
-        for binding in colorBindings { refreshColorBinding(binding) }
     }
 
     @objc private func openAgentsJSON() {
@@ -1506,14 +1726,5 @@ enum SettingsWindowController {
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-}
-
-private extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        guard size > 0 else { return [self] }
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0 ..< Swift.min($0 + size, count)])
-        }
     }
 }

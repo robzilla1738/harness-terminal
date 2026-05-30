@@ -21,6 +21,23 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
     }
 
+    func testNotificationSoundRoundTripsAndDefaultsTrueWhenMissing() throws {
+        // Older settings files predate the chime toggle: decoding must default it on
+        // (so existing users keep an audible ping), not crash or default off.
+        let legacy = Data("""
+        { "fontSize": 14, "customBackgroundHex": "#000000" }
+        """.utf8)
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+        XCTAssertTrue(migrated.notificationSoundEnabled)
+
+        // And an explicit value survives a save/load round-trip.
+        var settings = HarnessSettings()
+        settings.notificationSoundEnabled = false
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: encoded)
+        XCTAssertFalse(decoded.notificationSoundEnabled)
+    }
+
     func testImportedDefaultsKeepFullColorSet() {
         let imported = ImportedTerminalConfig(
             backgroundHex: "#000000",

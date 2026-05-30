@@ -14,6 +14,14 @@ final class SessionCoordinator: NSObject {
     private let terminalHosts = TerminalPaneRegistry()
     private var metadataTask: Task<Void, Never>?
     private var pushedNotificationKeys: Set<String> = []
+    /// Last-seen agent activity per surface key, so we can fire a notification the
+    /// moment an agent transitions out of `working` (i.e. stopped producing output —
+    /// finished its turn or is blocked on you). This is hook-independent, so it works
+    /// for any detected agent under any shell.
+    private var lastAgentActivity: [String: AgentActivity] = [:]
+    /// Cooldown timestamp per surface so a streaming agent that briefly flips
+    /// working→idle→working mid-task can't spam "stopped" pings.
+    private var lastStopNotifyAt: [String: Date] = [:]
     var settings = HarnessSettings.load()
     var activeSurfaceID: SurfaceID?
     /// Most-recently-active pane within the current tab, for `select-pane -l`
@@ -86,6 +94,7 @@ final class SessionCoordinator: NSObject {
             structureRevision += 1
         }
         pushNewRemoteNotifications(from: remote)
+        pushAgentActivityNotifications(from: remote)
         if !metadataOnly {
             applyThemeToAllHosts()
         }
@@ -157,11 +166,9 @@ final class SessionCoordinator: NSObject {
                     guard !pushedNotificationKeys.contains(key) else { continue }
                     pushedNotificationKeys.insert(key)
                     terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
-                    if settings.systemNotificationsEnabled {
-                        let agentLabel = tab.agent?.kind.displayName ?? "Harness"
-                        let title = "\(agentLabel) · \(tab.title.isEmpty ? "Terminal" : tab.title)"
-                        DesktopNotifier.show(title: title, body: text)
-                    }
+                    let agentLabel = tab.agent?.kind.displayName ?? "Harness"
+                    let title = "\(agentLabel) · \(tab.title.isEmpty ? "Terminal" : tab.title)"
+                    deliverAgentAlert(title: title, body: text)
                 }
             }
         }
@@ -178,6 +185,64 @@ final class SessionCoordinator: NSObject {
             }
         })
         pushedNotificationKeys = pushedNotificationKeys.intersection(live)
+    }
+
+    /// Hook-independent agent alerts: ping the moment a *detected* agent stops
+    /// producing output (transitions out of `working`). The daemon's `AgentDetector`
+    /// flips an agent to `idle`/`awaiting` after a few seconds of PTY silence, which is
+    /// exactly "the AI stopped or is waiting on you" — so this works for any agent under
+    /// any shell, with no hook install required. The explicit `harness-cli notify` path
+    /// (richer message) still fires via `pushNewRemoteNotifications`; we skip here when a
+    /// tab is already `.waiting` so the two paths never double-ping.
+    private func pushAgentActivityNotifications(from snapshot: SessionSnapshot) {
+        var live: Set<String> = []
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    guard let agent = tab.agent,
+                          let surfaceID = tab.rootPane.allSurfaceIDs().first
+                    else { continue }
+                    let key = surfaceID.uuidString
+                    live.insert(key)
+                    let previous = lastAgentActivity[key]
+                    lastAgentActivity[key] = agent.activity
+
+                    // Only the working → (idle|awaiting) edge counts as "stopped".
+                    let stopped = previous == .working
+                        && (agent.activity == .idle || agent.activity == .awaiting)
+                    guard stopped else { continue }
+                    // The explicit notify path owns `.waiting` tabs (it carries the real
+                    // message); don't double-fire.
+                    if tab.status == .waiting { continue }
+                    // Don't nag for the pane you're already watching.
+                    if NSApp.isActive, surfaceID == activeSurfaceID { continue }
+                    // Cooldown so a flapping stream can't spam.
+                    if let last = lastStopNotifyAt[key], Date().timeIntervalSince(last) < 30 { continue }
+                    lastStopNotifyAt[key] = Date()
+
+                    let folder = HarnessDesign.pathDisplayName(tab.cwd)
+                    let title = "\(agent.kind.displayName) · \(folder)"
+                    deliverAgentAlert(title: title, body: "Finished — waiting for you")
+                }
+            }
+        }
+        lastAgentActivity = lastAgentActivity.filter { live.contains($0.key) }
+        lastStopNotifyAt = lastStopNotifyAt.filter { live.contains($0.key) }
+    }
+
+    /// Single delivery point for agent alerts, honoring the two Settings toggles:
+    /// `systemNotificationsEnabled` (push banner) and `notificationSoundEnabled` (chime).
+    /// Banner-on carries the sound; banner-off-but-chime-on still plays an in-app chime,
+    /// so an agent stopping is audible even when banners are suppressed.
+    private func deliverAgentAlert(title: String, body: String) {
+        let wantBanner = settings.systemNotificationsEnabled
+        let wantChime = settings.notificationSoundEnabled
+        guard wantBanner || wantChime else { return }
+        if wantBanner {
+            DesktopNotifier.show(title: title, body: body, withSound: wantChime)
+        } else if wantChime {
+            NSSound(named: "Glass")?.play()
+        }
     }
 
     private func updateDockBadge(from snapshot: SessionSnapshot) {
@@ -999,7 +1064,7 @@ final class SessionCoordinator: NSObject {
         pushedNotificationKeys.insert(key)
         terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
         if NSApp.isActive == false {
-            DesktopNotifier.show(title: title, body: body)
+            deliverAgentAlert(title: title, body: body)
         }
         syncFromDaemon()
     }
@@ -1156,11 +1221,11 @@ enum DesktopNotifier {
         center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
-    static func show(title: String, body: String) {
+    static func show(title: String, body: String, withSound: Bool = true) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        content.sound = withSound ? .default : nil
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,

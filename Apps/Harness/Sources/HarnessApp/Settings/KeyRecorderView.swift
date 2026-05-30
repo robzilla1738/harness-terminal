@@ -119,7 +119,10 @@ final class KeyRecorderView: NSView {
     }
 
     private func refresh() {
+        let c = HarnessChrome.current
         clearButton.isHidden = value.isEmpty
+        clearButton.contentTintColor = c.textTertiary
+        hint.textColor = c.textSecondary
         if recording {
             label.stringValue = ""
             hint.isHidden = false
@@ -127,15 +130,16 @@ final class KeyRecorderView: NSView {
         } else {
             hint.isHidden = true
             label.stringValue = value.isEmpty ? "No prefix" : Self.glyphString(for: value)
-            label.textColor = value.isEmpty ? .secondaryLabelColor : .labelColor
+            label.textColor = value.isEmpty ? c.textSecondary : c.textPrimary
         }
     }
 
+    /// Monochrome states — never the system accent. Recording lifts the fill toward the
+    /// foreground and brightens the border; resting matches the themed field surface.
     private func updateAppearance() {
-        layer?.backgroundColor = (recording ? NSColor.controlAccentColor.withAlphaComponent(0.12)
-                                            : NSColor.textBackgroundColor.withAlphaComponent(0.7)).cgColor
-        layer?.borderColor = (recording ? NSColor.controlAccentColor
-                                        : NSColor.separatorColor.withAlphaComponent(0.6)).cgColor
+        let c = HarnessChrome.current
+        layer?.backgroundColor = (recording ? c.textPrimary.withAlphaComponent(0.12) : c.surfaceElevated).cgColor
+        layer?.borderColor = (recording ? c.borderStrong : c.border).cgColor
     }
 
     /// Serialize an NSEvent into the dash-delimited form `ParsedShortcut.parse` reads.

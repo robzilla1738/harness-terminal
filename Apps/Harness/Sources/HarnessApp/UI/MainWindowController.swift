@@ -62,12 +62,15 @@ final class MainWindowController: NSWindowController {
         // Forcing `wantsLayer` on the contentView makes the whole window layer-backed, and a
         // layer-backed window clips the private CGS background blur to the contentView's
         // RECTANGULAR bounds instead of the system's rounded titled-window frame — squaring the
-        // corners whenever blur is on. Left non-layer-backed (a plain `NSView` is transparent by
+        // corners and leaving a dark compositing seam (hairline) around the rounded edge that
+        // hardens as the blur thins. Left non-layer-backed (a plain `NSView` is transparent by
         // default, so the blur still shows through), the window server rounds the blur together
         // with the frame — exactly how Ghostty keeps the same CGS blur rounded. Chrome/terminal
         // subviews keep their own layer backing as needed; the root contentView must not.
-        // `MainSplitViewController.loadView` creates the root as a plain non-layer-backed view, so
-        // simply not touching it here keeps it that way.
+        // INVARIANT: NO site may layer-back the root. `MainSplitViewController.loadView` creates
+        // it as a plain `NSView`, and `MainSplitViewController.applyChrome` must NOT `makeClear`
+        // the root (`makeClear` sets `wantsLayer`) — that re-layer-backs it on every chrome
+        // refresh and the dark seam returns. So simply not touching it here keeps it correct.
 
         // One uniform blur for the whole window — the same private CGS surface blur
         // modern terminals use on macOS. This is the single blur source: the terminal keeps

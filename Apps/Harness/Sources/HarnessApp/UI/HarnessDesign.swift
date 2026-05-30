@@ -136,6 +136,29 @@ enum HarnessDesign {
         layer.shadowOffset = NSSize(width: 0, height: shadow.offsetY)
     }
 
+    /// Resting/hover chrome for the small circular icon buttons that live in the chrome
+    /// (notification bell, sidebar toggle, footer gear/＋/palette, tab strip ＋/overflow).
+    /// One source of truth so every icon button reads as the *same* themed disc — the
+    /// same `surfaceElevated` fill + `borderStrong` rim the search field beside them
+    /// uses — instead of an opaque near-black circle that floats above the chrome.
+    /// Flat by design (no drop shadow): the whole window is one continuous surface, and
+    /// hover is the only state that lifts. Both `SoftIconButton` and `NotificationBellButton`
+    /// call this so they can never drift apart.
+    static func applyIconButtonChrome(to layer: CALayer?, bounds: CGRect, isHovered: Bool) {
+        guard let layer else { return }
+        let c = chrome
+        layer.cornerCurve = .continuous
+        layer.cornerRadius = min(bounds.width, bounds.height) / 2
+        layer.borderWidth = 1
+        layer.borderColor = c.borderStrong.cgColor
+        // Resting = the same elevated surface as the search field; hover lifts toward
+        // the foreground so the affordance reads without a heavy fill or shadow.
+        let resting = c.surfaceElevated
+        let hover = c.textPrimary.withAlphaComponent(c.isDark ? 0.14 : 0.12)
+        layer.backgroundColor = (isHovered ? hover : resting).cgColor
+        applyShadow(.none, to: layer)
+    }
+
     enum ChromeRole {
         case sidebar
         case tabBar
@@ -365,17 +388,8 @@ final class SoftIconButton: NSButton {
     }
 
     func applyChrome() {
-        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
+        HarnessDesign.applyIconButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
         let c = HarnessDesign.chrome
-        layer?.borderWidth = 1
-        layer?.borderColor = (isHovered ? c.textPrimary.withAlphaComponent(0.20) : c.textPrimary.withAlphaComponent(0.12)).cgColor
-        let base = c.sidebarBackground.blended(withFraction: c.isDark ? 0.045 : 0.035, of: c.textPrimary) ?? c.sidebarBackground
-        let hover = c.sidebarBackground.blended(withFraction: c.isDark ? 0.085 : 0.07, of: c.textPrimary) ?? c.iconHoverFill
-        layer?.backgroundColor = (isHovered ? hover : base).withAlphaComponent(c.isDark ? 0.96 : 0.86).cgColor
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = isHovered ? 0.20 : 0.08
-        layer?.shadowRadius = isHovered ? 6 : 3
-        layer?.shadowOffset = NSSize(width: 0, height: -1)
         iconView.contentTintColor = isHovered ? c.textPrimary : c.textSecondary
     }
 }
@@ -411,14 +425,19 @@ final class HarnessPillButton: NSButton {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.alignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(titleLabel)
+        // Pin the label leading+trailing (not just centerX) so the button's intrinsic width
+        // is driven by the label + 16pt of padding each side. Without this the button
+        // collapses to a tiny square and clips its title (the old empty-pill bug).
         NSLayoutConstraint.activate([
-            titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
         ])
         setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
         applyChrome()
     }
 
