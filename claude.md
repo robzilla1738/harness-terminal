@@ -263,6 +263,8 @@ enum PaneNode {
 
 **UI labels:** Prefer cwd basename over `"Shell"`. Show `tab.title` only when it differs from cwd basename and is not `"Shell"` (`TerminalTabBarView`, `SessionCardRowView`).
 
+**Session persistence:** `SessionGroup.persistent` (per-session pin, decodes to `false` on old snapshots). A session survives a *clean* quit iff `keepSessionsOnQuit || persistent` — so keep-on-quit keeps its "keep all" meaning and the flag is a pure pin (Plain-mode "promote to persistent"). The GUI calls `closeEphemeralSessions` on a clean quit only (a crash leaves everything; reaped next clean quit); `SessionEditor.ephemeralSessionIDs` is the reap set. Promote/demote: sidebar context menu, `harness-cli promote-session`/`demote-session`, IPC `setSessionPersistent`. See [docs/MODES.md](docs/MODES.md).
+
 ---
 
 ## On-disk layout
@@ -410,7 +412,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 **Concurrency invariant (compositor):** the stdin reader thread does **only** `read()` — every byte is handed to `renderQueue`, the single owner of all input/mode/layout state (`inPrefix`, `prefixPending`, `pendingTable`, `copyMode`, `rects`, `activeSurface`, …). Never touch that state off `renderQueue`. Teardown drains the queue (`renderQueue.sync`) and sets `tornDown` before the final cleanup write, so no `composeAndWrite` races the reset sequence.
 
-**Robustness invariants (daemon/IPC):** client sockets are **non-blocking**; `DaemonServer.send` buffers unsent bytes per-fd and flushes from a writable `DispatchSource` (a slow/stuck client can never block the serial queue or hang shutdown), dropping a client past `maxWriteBacklog`. IPC frames are length-prefixed and bounded by `IPCCodec.maxPayloadLength` (16 MiB); an over-cap declared length **throws** so the reader drops the (unrecoverable) connection instead of mis-framing. `capture-pane` and reattach `replay` decode scrollback **lossily** (`String(decoding:as:UTF8.self)`) so a multibyte split at an eviction seam can't blank the history. Corrupt `layout.json`/`options.json` are renamed `.corrupt` (not silently reseeded). `VTParser` caps OSC/intermediate buffers so hostile output can't grow them without bound.
+**Robustness invariants (daemon/IPC):** client sockets are **non-blocking**; `DaemonServer.send` buffers unsent bytes per-fd and flushes from a writable `DispatchSource` (a slow/stuck client can never block the serial queue or hang shutdown), dropping a client past `maxWriteBacklog`. IPC frames are length-prefixed and bounded by `IPCCodec.maxPayloadLength` (16 MiB); an over-cap declared length **throws** so the reader drops the (unrecoverable) connection instead of mis-framing. `capture-pane` and reattach `replay` decode scrollback **lossily** (`String(decoding:as:UTF8.self)`) so a multibyte split at an eviction seam can't blank the history. Corrupt `layout.json`/`options.json`/`hooks.json` are renamed `.corrupt` (not silently reseeded). `VTParser` caps OSC (1 MiB)/CSI-params (32)/intermediates (8) so hostile output can't grow them without bound and always recovers to ground (`ParserRobustnessTests`). The **control socket is `0o600` and `accept()` verifies the peer euid via `getpeereid`** (only the owning user can drive the daemon); the Harness home + subdirs are `0o700`. `pipe-pane`/hook failures never log the command (secret hygiene). See [docs/RELIABILITY.md](docs/RELIABILITY.md).
 
 **Tests:** `GridCompositorTests` (borders/SGR/diff), `PaneRectSolverTests` (layout), `CommandIPCTranslatorTests` (verb mapping + split inversion), `HarnessGridTerminalTests` (engine fidelity). Run the AppKit-linked grid suite via `xcrun xctest` if `swift test`'s parallel runner is flaky.
 
@@ -430,6 +432,8 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `vividColors`, `linearBlending` | Display-P3 vs sRGB layer colorspace; gamma-correct glyph coverage when linear |
 | `ligatures`, `applyThemeToTerminalOutput` | Programming ligatures (CoreText shaping); theme palette recolors program output (off = untouched) |
 | `prefixKey` | Prefix binding (`ctrl-a`; empty disables); edited via `KeyRecorderView` in Settings |
+| `experienceMode` | `ExperienceMode` (plain/persistent/tmux/agent). Gates chrome + default persistence on the one daemon core. Fresh installs → `.plain`; pre-modes files migrate → `.tmux`. See [docs/MODES.md](docs/MODES.md) |
+| `tmuxControlsEnabled` | `Bool?` override for tmux chrome; nil derives from mode. `showsTmuxChrome` (mode default ⊕ override) is the single gate `PrefixKeymap`/`StatusLineView`/onboarding consult; `effectivePrefixKey` is nil when chrome is hidden or the key is blank |
 | `scrollbackLines` | Scrollback size |
 | `cursorStyle`, `cursorBlink`, `copyOnSelect` | Terminal behavior |
 | `dividerHex`, `statusLineHex` | Chrome accents (nil → derive from theme) |
@@ -581,7 +585,11 @@ App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The lau
 
 **HarnessTerminalRendererTests:** `FrameBuilderTests` (incl. selection), `GlyphRasterizerTests` (incl. shaping), `CellColorResolverTests`, `MetalRendererTests`.
 
-**HarnessTerminalEngineTests:** `HarnessGridTerminalTests`, `InputEncoderTests` (incl. mouse), `ScrollbackTests`, `EngineConformanceTests`.
+**HarnessTerminalEngineTests:** `HarnessGridTerminalTests`, `InputEncoderTests` (incl. mouse), `ScrollbackTests`, `EngineConformanceTests`, `ParserRobustnessTests` (hostile/oversized OSC/CSI/DCS stay bounded + recover).
+
+**HarnessBenchmarks** (opt-in perf baselines for VT parse / readGrid / scrollback / IPC codec / compositor): `HARNESS_BENCHMARKS=1 swift test --filter HarnessBenchmarks` (skipped otherwise so `swift test` stays fast).
+
+New mode/persistence/security tests also live in **HarnessCoreTests** (`ExperienceModeTests`, `SessionPersistenceTests`, `HookRegistryTests`, perms in `HarnessPathsTests`) and **HarnessDaemonTests** (`closeEphemeralSessions` + socket-perms in `DaemonRoundTripTests`).
 
 **Smoke:**
 
@@ -697,6 +705,9 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 ## Related documentation
 
 - [README.md](README.md) — user overview
+- [docs/MODES.md](docs/MODES.md) — experience modes (Plain / Persistent / Tmux / Agent) + persistence
+- [docs/MIGRATION.md](docs/MIGRATION.md) — tested tmux + Ghostty migration paths
+- [docs/RELIABILITY.md](docs/RELIABILITY.md) — daemon crash/restart, corrupted-state recovery, security model, benchmarks
 - [docs/COMMANDS.md](docs/COMMANDS.md) — command reference
 - [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md) — tmux capability parity ledger (done / Harness-equivalent / roadmap)
 - [docs/GHOSTTY_COMPARISON.md](docs/GHOSTTY_COMPARISON.md) — Ghostty ↔ Harness terminal-feature side-by-side

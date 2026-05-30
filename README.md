@@ -2,6 +2,20 @@
 
 Native macOS terminal for organizing AI agents and dev sessions — Harness's own GPU renderer, cmux-style workspaces, harness-cli automation.
 
+## Experience modes
+
+Harness is simple like Ghostty by default, powerful like tmux when you enable it, and
+agent-focused like cmux when you want it — all on **one** daemon-backed session core. Pick a
+mode in **Settings → Appearance → Experience** (see [docs/MODES.md](docs/MODES.md)):
+
+- **Plain Terminal** — a fast native terminal: no prefix key, no status bar, sessions close when you quit.
+- **Persistent Terminal** — same clean UI, but sessions survive quitting and attach from the CLI.
+- **Tmux Compatibility** — prefix key, status line, copy mode, buffers, targets, attach/detach.
+- **Agent Workspace** — persistent project workspaces with agent detection, notifications, and jump-to-agent.
+
+New installs start in Plain; upgrades keep what you had (Tmux). Migrating from Ghostty or tmux?
+See [docs/MIGRATION.md](docs/MIGRATION.md).
+
 ## Features
 
 - GPU-accelerated terminals rendered by **Harness's own terminal engine** — crisp Display-P3 / sRGB color, themed translucent canvas with untouched program output (a libghostty path remains as the proven fallback during rollout)
@@ -142,7 +156,9 @@ See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging a rele
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Related: [experience modes](docs/MODES.md),
+[migration](docs/MIGRATION.md), [reliability & security](docs/RELIABILITY.md),
+[tmux parity](docs/TMUX_PARITY.md), [Ghostty comparison](docs/GHOSTTY_COMPARISON.md).
 
 ## Agent documentation
 
