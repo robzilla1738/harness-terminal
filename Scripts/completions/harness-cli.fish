@@ -5,7 +5,7 @@ set -l __harness_cli_subcommands \
     ping list-workspaces list-surfaces get-snapshot \
     new-workspace new-session new-tab new-split \
     select-workspace select-session select-tab \
-    close-tab close-session \
+    close-tab close-session promote-session demote-session \
     send send-keys capture-pane \
     kill-pane swap-pane resize-pane zoom-pane copy-mode \
     rename-tab rename-session rename-workspace \

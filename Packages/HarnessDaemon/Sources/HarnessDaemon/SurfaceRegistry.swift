@@ -302,6 +302,30 @@ public final class SurfaceRegistry: @unchecked Sendable {
             editor.setKeepSessionsOnQuit(value)
             commit()
             return .ok
+        case let .setSessionPersistent(sessionID, persistent):
+            guard editor.setSessionPersistent(sessionID, persistent) else {
+                return .error("Session not found")
+            }
+            commit()
+            return .ok
+        case .closeEphemeralSessions:
+            // Close each ephemeral session inline (NOT via re-entrant handle(.closeSession),
+            // which would deadlock on the non-recursive `lock` we already hold). Same helpers
+            // the .closeSession case uses, so PTYs are killed and the layout stays consistent.
+            let ids = editor.ephemeralSessionIDs()
+            guard !ids.isEmpty else { return .ok }
+            for sessionID in ids {
+                let closedSurfaces = editor.snapshot.workspaces
+                    .flatMap(\.sessions)
+                    .first(where: { $0.id == sessionID })?
+                    .tabs
+                    .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
+                guard editor.closeSession(sessionID) else { continue }
+                closeSurfaces(closedSurfaces)
+            }
+            ensureAllSnapshotSurfaces()
+            commit()
+            return .ok
         case let .send(surfaceID, text):
             guard let session = sessions[surfaceID] else {
                 return .error("Surface not found")

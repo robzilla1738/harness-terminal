@@ -258,6 +258,29 @@ public struct SessionEditor: Sendable {
         bumpRevision()
     }
 
+    /// Pin/unpin a session so it survives a clean quit even when `keepSessionsOnQuit` is off.
+    /// "Promote a normal session to persistent" (and the reverse).
+    @discardableResult
+    public mutating func setSessionPersistent(_ sessionID: SessionID, _ persistent: Bool) -> Bool {
+        for wi in snapshot.workspaces.indices {
+            if let si = snapshot.workspaces[wi].sessions.firstIndex(where: { $0.id == sessionID }) {
+                guard snapshot.workspaces[wi].sessions[si].persistent != persistent else { return true }
+                snapshot.workspaces[wi].sessions[si].persistent = persistent
+                bumpRevision()
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Session IDs that should be torn down on a clean GUI quit: a session is removed iff it is
+    /// neither globally kept (`keepSessionsOnQuit`) nor individually pinned (`persistent`).
+    /// A daemon/GUI crash never calls this — survival across a crash is always a feature.
+    public func ephemeralSessionIDs() -> [SessionID] {
+        guard !snapshot.keepSessionsOnQuit else { return [] }
+        return snapshot.workspaces.flatMap(\.sessions).filter { !$0.persistent }.map(\.id)
+    }
+
     public mutating func closeTab(_ tabID: TabID) -> Bool {
         guard let match = tabIndex(tabID: tabID) else { return false }
         var session = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex]

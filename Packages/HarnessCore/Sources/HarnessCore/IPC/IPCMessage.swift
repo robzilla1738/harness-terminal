@@ -22,6 +22,13 @@ public enum IPCRequest: Codable, Sendable {
     case closeWorkspace(id: UUID)
     case setTheme(name: String)
     case setKeepSessionsOnQuit(Bool)
+    /// Pin/unpin a session so it survives a clean quit even with `keepSessionsOnQuit` off
+    /// (Plain mode "promote to persistent"). `true` = persistent, `false` = ephemeral.
+    case setSessionPersistent(sessionID: UUID, persistent: Bool)
+    /// Tear down sessions that are neither globally kept nor individually pinned. The GUI calls
+    /// this on a *clean* quit so Plain-mode sessions behave like a normal terminal; pinned and
+    /// keep-on-quit sessions are left running.
+    case closeEphemeralSessions
     case notify(surfaceID: String, title: String, body: String)
     case clearNotification(surfaceID: String)
     case updateTabTitle(surfaceID: String, title: String)

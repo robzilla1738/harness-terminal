@@ -46,6 +46,14 @@ struct HarnessCLI {
                     exit(1)
                 }
                 _ = try checkedRequest(client, .closeSession(sessionID: sessionID))
+            case "promote-session", "demote-session":
+                guard let sessionID = UUID(uuidString: flagValue(args, flag: "--session") ?? "") else {
+                    fputs("Usage: harness-cli \(command) --session <uuid>\n", stderr)
+                    exit(1)
+                }
+                // Promote pins a session to survive a clean quit even in Plain mode; demote
+                // makes it ephemeral again.
+                _ = try checkedRequest(client, .setSessionPersistent(sessionID: sessionID, persistent: command == "promote-session"))
             case "send":
                 guard let surface = flagValue(args, flag: "--surface"),
                       let text = flagValue(args, flag: "--text")
@@ -992,6 +1000,8 @@ struct HarnessCLI {
           select-tab --workspace <uuid> --tab <uuid>
           close-tab --tab <uuid>
           close-session --session <uuid>
+          promote-session --session <uuid>            (pin: survive a clean quit in Plain mode)
+          demote-session --session <uuid>             (unpin: ephemeral again)
           send --surface <uuid> --text "..."
           send-keys --surface <uuid> --keys "C-c Up Enter ..."
           capture-pane --surface <uuid> [--scrollback]

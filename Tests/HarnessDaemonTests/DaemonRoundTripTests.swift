@@ -51,6 +51,26 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    func testCloseEphemeralSessionsKeepsPinnedClosesRest() throws {
+        let client = DaemonClient()
+        guard case let .snapshot(initial) = try client.request(.getSnapshot),
+              let ws = initial.activeWorkspace else { return XCTFail("no workspace") }
+
+        guard case let .sessionID(pinned) = try client.request(.newSession(workspaceID: ws.id, cwd: nil, name: "pinned")),
+              case let .sessionID(throwaway) = try client.request(.newSession(workspaceID: ws.id, cwd: nil, name: "throwaway"))
+        else { return XCTFail("expected session IDs") }
+
+        // Plain-mode contract: keep-on-quit off, pin one session, then reap ephemerals.
+        _ = try client.request(.setKeepSessionsOnQuit(false))
+        _ = try client.request(.setSessionPersistent(sessionID: pinned, persistent: true))
+        _ = try client.request(.closeEphemeralSessions)
+
+        guard case let .snapshot(after) = try client.request(.getSnapshot) else { return XCTFail("no snapshot") }
+        let ids = after.workspaces.flatMap(\.sessions).map(\.id)
+        XCTAssertTrue(ids.contains(pinned), "pinned session must survive a clean quit")
+        XCTAssertFalse(ids.contains(throwaway), "unpinned session must be reaped")
+    }
+
     func testPingMutationAndSnapshotRoundTrip() throws {
         let client = DaemonClient()
         guard case .pong = try client.request(.ping) else { return XCTFail("expected pong") }
