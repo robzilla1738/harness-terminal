@@ -58,12 +58,16 @@ final class TerminalScreen {
     /// one row of cells captured at its width when evicted; the reader pads/truncates.
     /// One scrolled-off line plus whether it ended by a soft autowrap (so reflow can re-join
     /// it with its continuation) rather than a hard line break.
-    private struct HistoryLine { var cells: [TerminalGridCell]; var wrapped: Bool }
+    private struct HistoryLine { var cells: [TerminalGridCell]; var wrapped: Bool; var mark: SemanticMark? = nil }
     private var history: [HistoryLine] = []
     /// Per-row soft-wrap flag, parallel to the `rows` viewport rows: true when that row
     /// continues onto the next (set on autowrap in `wrapLine`), so reflow knows which physical
     /// rows form one logical line. Kept in sync with every row move (scroll/insert/delete/erase).
     private var rowWrapped: [Bool]
+    /// Per-row OSC 133 semantic mark, parallel to `rowWrapped` (and carried into `HistoryLine`
+    /// when a row scrolls off): non-nil marks a shell prompt line. Kept in lockstep with
+    /// `rowWrapped` at every row move so prompt positions never drift.
+    private var rowMarks: [SemanticMark?]
     /// Whether this screen accumulates scrollback (primary = true, alternate = false).
     let recordsHistory: Bool
     /// Cap on retained scrollback lines.
@@ -81,6 +85,7 @@ final class TerminalScreen {
         self.recordsHistory = recordsHistory
         self.cells = Array(repeating: .blank, count: c * r)
         self.rowWrapped = Array(repeating: false, count: r)
+        self.rowMarks = Array(repeating: nil, count: r)
         self.tabStops = Self.defaultTabStops(c)
     }
 
@@ -98,8 +103,28 @@ final class TerminalScreen {
             rows: rows,
             cells: cells,
             cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: cursorVisible, shape: cursorShape, blinking: cursorBlinking),
-            images: imageSnapshots(rowOffset: 0)
+            images: imageSnapshots(rowOffset: 0),
+            marks: markSnapshot(topIndex: history.count)
         )
+    }
+
+    /// Semantic marks for the `rows`-tall window whose top sits at `topIndex` in the virtual
+    /// `[history ++ viewport]` sequence (`history.count` for the live view, less for a
+    /// scrollback view), keyed by the row's position within the window.
+    private func markSnapshot(topIndex: Int) -> [Int: SemanticMark] {
+        var out: [Int: SemanticMark] = [:]
+        for i in 0 ..< rows {
+            let idx = topIndex + i
+            let mark: SemanticMark?
+            if idx < history.count {
+                mark = idx >= 0 ? history[idx].mark : nil
+            } else {
+                let vr = idx - history.count
+                mark = (vr >= 0 && vr < rowMarks.count) ? rowMarks[vr] : nil
+            }
+            if let mark { out[i] = mark }
+        }
+        return out
     }
 
     /// Placements mapped into the snapshot's viewport (shifted by `rowOffset` for scrollback
@@ -201,7 +226,8 @@ final class TerminalScreen {
             cells: out,
             cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: false),
             // Images are viewport-anchored; scrolling back `clamped` lines moves them down.
-            images: imageSnapshots(rowOffset: clamped)
+            images: imageSnapshots(rowOffset: clamped),
+            marks: markSnapshot(topIndex: topIndex)
         )
     }
 
@@ -228,6 +254,49 @@ final class TerminalScreen {
         }
         let row = index - history.count
         return Array(cells[row * cols ..< (row + 1) * cols])
+    }
+
+    // MARK: - Semantic prompts (OSC 133 shell integration)
+
+    /// OSC 133;A — mark the cursor's row as a shell prompt line (exit unknown until 133;D).
+    func markPromptStart() {
+        guard cursorRow >= 0, cursorRow < rowMarks.count else { return }
+        rowMarks[cursorRow] = SemanticMark(exit: rowMarks[cursorRow]?.exit)
+    }
+
+    /// OSC 133;D[;exit] — record the finished command's exit status onto the most recent prompt
+    /// line at or above the cursor. Scans backward (viewport, then history) and stops at the
+    /// first prompt mark — the active command's prompt — so the exit lands where the gutter
+    /// indicator is drawn. A no-op when no prompt has been marked.
+    func markCommandFinished(exit: Int?) {
+        // Viewport rows above (and including) the cursor, newest first.
+        var r = min(cursorRow, rowMarks.count - 1)
+        while r >= 0 {
+            if rowMarks[r] != nil { rowMarks[r]?.exit = exit; return }
+            r -= 1
+        }
+        var h = history.count - 1
+        while h >= 0 {
+            if history[h].mark != nil { history[h].mark?.exit = exit; return }
+            h -= 1
+        }
+    }
+
+    /// Absolute indices (in `[history ++ viewport]` space, matching `bufferLine`/copy-mode) of
+    /// every shell-prompt row, oldest first — drives jump-to-previous/next-prompt navigation.
+    func promptRows() -> [Int] {
+        var rowsOut: [Int] = []
+        for (i, h) in history.enumerated() where h.mark != nil { rowsOut.append(i) }
+        for (i, m) in rowMarks.enumerated() where m != nil { rowsOut.append(history.count + i) }
+        return rowsOut
+    }
+
+    /// The semantic mark on a virtual line (`[history ++ viewport]` index), or nil.
+    func mark(atBufferLine index: Int) -> SemanticMark? {
+        guard index >= 0, index < bufferLineCount else { return nil }
+        if index < history.count { return history[index].mark }
+        let row = index - history.count
+        return (row >= 0 && row < rowMarks.count) ? rowMarks[row] : nil
     }
 
     // MARK: - Capture (capture-pane)
@@ -305,6 +374,7 @@ final class TerminalScreen {
             cols = nc
             rows = nr
             rowWrapped = Array(repeating: false, count: nr)
+            rowMarks = Array(repeating: nil, count: nr)
             cursorRow = min(cursorRow, nr - 1)
             cursorCol = min(cursorCol, nc - 1)
         }
@@ -334,12 +404,20 @@ final class TerminalScreen {
         for r in 0 ..< rows {
             srcRows.append((Array(cells[r * cols ..< (r + 1) * cols]), rowWrapped[r]))
         }
+        // Prompt marks parallel to `srcRows`, so reflow re-anchors them onto the logical line
+        // they tag (carried to that line's first physical row below).
+        var srcMarks: [SemanticMark?] = []
+        srcMarks.reserveCapacity(history.count + rows)
+        for h in history { srcMarks.append(h.mark) }
+        for r in 0 ..< rows { srcMarks.append(rowMarks[r]) }
         let cursorAbsRow = history.count + min(cursorRow, rows - 1)
 
         // 2) Build logical lines by joining a row onto the previous when it soft-wrapped.
         //    Record the cursor's (logical line index, column within that line).
         var logicals: [[TerminalGridCell]] = []
+        var logicalMarks: [SemanticMark?] = []
         var current: [TerminalGridCell] = []
+        var currentMark: SemanticMark? = nil
         var building = false
         var prevWrapped = false
         var cursorLogical = 0
@@ -348,8 +426,12 @@ final class TerminalScreen {
             if building, !prevWrapped {
                 // The previous logical line ended with a hard break — finalize it.
                 logicals.append(current)
+                logicalMarks.append(currentMark)
                 current = []
+                currentMark = nil
             }
+            // A logical line's mark is the mark of its first physical row.
+            if current.isEmpty { currentMark = srcMarks[i] }
             building = true
             if i == cursorAbsRow {
                 cursorLogical = logicals.count
@@ -358,7 +440,7 @@ final class TerminalScreen {
             current.append(contentsOf: row.cells)
             prevWrapped = row.wrapped
         }
-        if building { logicals.append(current) }
+        if building { logicals.append(current); logicalMarks.append(currentMark) }
 
         // 3) Trim each logical line's trailing blank cells (but never below the cursor column on
         //    the cursor's own line, so the cursor keeps its place). Empty lines are preserved.
@@ -374,15 +456,20 @@ final class TerminalScreen {
         //    logical line yields at least one row (preserving blank lines). Map the cursor.
         var out: [[TerminalGridCell]] = []
         var outWrapped: [Bool] = []
+        var outMarks: [SemanticMark?] = []
         var cursorOutRow = 0
         var cursorOutCol = 0
         let blank = TerminalGridCell.blank
         for (li, line) in logicals.enumerated() {
             var rowBuf = Array(repeating: blank, count: nc)
             var col = 0
+            var firstRowOfLogical = true
             func flush(soft: Bool) {
                 out.append(rowBuf)
                 outWrapped.append(soft)
+                // The logical line's mark lands on its first re-wrapped row only.
+                outMarks.append(firstRowOfLogical ? logicalMarks[li] : nil)
+                firstRowOfLogical = false
                 rowBuf = Array(repeating: blank, count: nc)
                 col = 0
             }
@@ -417,23 +504,26 @@ final class TerminalScreen {
         while total - 1 > cursorOutRow, isRowBlank(out[total - 1]) { total -= 1 }
         out = Array(out.prefix(total))
         outWrapped = Array(outWrapped.prefix(total))
+        outMarks = Array(outMarks.prefix(total))
 
         let viewportTop = max(0, total - nr)
         // Scrollback = rows above the viewport.
         var newHistory: [HistoryLine] = []
         if viewportTop > 0 {
-            for i in 0 ..< viewportTop { newHistory.append(HistoryLine(cells: out[i], wrapped: outWrapped[i])) }
+            for i in 0 ..< viewportTop { newHistory.append(HistoryLine(cells: out[i], wrapped: outWrapped[i], mark: outMarks[i])) }
             if newHistory.count > maxHistoryLines { newHistory.removeFirst(newHistory.count - maxHistoryLines) }
         }
         // Viewport = the next `nr` rows, blank-padded at the bottom if content is shorter.
         var newCells = [TerminalGridCell]()
         newCells.reserveCapacity(nc * nr)
         var newWrapped = [Bool](repeating: false, count: nr)
+        var newMarks = [SemanticMark?](repeating: nil, count: nr)
         for r in 0 ..< nr {
             let srcIdx = viewportTop + r
             if srcIdx < total {
                 newCells.append(contentsOf: out[srcIdx])
                 newWrapped[r] = outWrapped[srcIdx]
+                newMarks[r] = outMarks[srcIdx]
             } else {
                 newCells.append(contentsOf: Array(repeating: blank, count: nc))
             }
@@ -442,6 +532,7 @@ final class TerminalScreen {
         history = newHistory
         cells = newCells
         rowWrapped = newWrapped
+        rowMarks = newMarks
         cols = nc
         rows = nr
         cursorRow = clamp(cursorOutRow - viewportTop, 0, nr - 1)
@@ -670,7 +761,7 @@ final class TerminalScreen {
             // A line leaving the very top of the screen (not a sub-region) is scrollback —
             // carry its soft-wrap flag so reflow can re-join it with its continuation.
             if recordsHistory, scrollTop == 0 {
-                history.append(HistoryLine(cells: Array(cells[0 ..< cols]), wrapped: rowWrapped[scrollTop]))
+                history.append(HistoryLine(cells: Array(cells[0 ..< cols]), wrapped: rowWrapped[scrollTop], mark: rowMarks[scrollTop]))
                 // `removeFirst` is O(history.count) — doing it every scrolled line makes a
                 // terminal at full scrollback pay O(maxHistoryLines) per output line (the
                 // steady-state hot path for any long-running shell). Amortize it: let the
@@ -689,11 +780,13 @@ final class TerminalScreen {
                     cells[r * cols + c] = cells[(r + 1) * cols + c]
                 }
                 rowWrapped[r] = rowWrapped[r + 1]
+                rowMarks[r] = rowMarks[r + 1]
             }
             for c in 0 ..< cols {
                 cells[scrollBottom * cols + c] = blank
             }
             rowWrapped[scrollBottom] = false
+            rowMarks[scrollBottom] = nil
         }
         shiftPlacements(by: -count)   // images ride the scroll; off-screen ones drop
     }
@@ -708,12 +801,14 @@ final class TerminalScreen {
                     cells[r * cols + c] = cells[(r - 1) * cols + c]
                 }
                 rowWrapped[r] = rowWrapped[r - 1]
+                rowMarks[r] = rowMarks[r - 1]
                 r -= 1
             }
             for c in 0 ..< cols {
                 cells[scrollTop * cols + c] = blank
             }
             rowWrapped[scrollTop] = false
+            rowMarks[scrollTop] = nil
         }
         shiftPlacements(by: count)
     }
@@ -735,11 +830,12 @@ final class TerminalScreen {
             for r in 0 ..< cursorRow {
                 for c in 0 ..< cols { cells[r * cols + c] = blank }
                 rowWrapped[r] = false
+                rowMarks[r] = nil   // fully-cleared row is no longer a prompt
             }
             for c in 0 ... cursorCol where c < cols { cells[cursorRow * cols + c] = blank }
         case 2, 3:
             for i in 0 ..< cells.count { cells[i] = blank }
-            for r in 0 ..< rows { rowWrapped[r] = false }
+            for r in 0 ..< rows { rowWrapped[r] = false; rowMarks[r] = nil }
             clearImages()   // ED 2/3 clears the screen (and scrollback for 3) → drop images
             if mode == 3 { history.removeAll() }
         default: // 0
@@ -748,6 +844,7 @@ final class TerminalScreen {
             for r in (cursorRow + 1) ..< rows {
                 for c in 0 ..< cols { cells[r * cols + c] = blank }
                 rowWrapped[r] = false
+                rowMarks[r] = nil   // fully-cleared row is no longer a prompt
             }
         }
         pendingWrap = false
@@ -763,6 +860,7 @@ final class TerminalScreen {
         case 2:
             for c in 0 ..< cols { cells[cursorRow * cols + c] = blank }
             rowWrapped[cursorRow] = false
+            rowMarks[cursorRow] = nil   // whole line cleared → no longer a prompt
         default:
             for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
             rowWrapped[cursorRow] = false
@@ -815,11 +913,13 @@ final class TerminalScreen {
         while r >= cursorRow + count {
             for c in 0 ..< cols { cells[r * cols + c] = cells[(r - count) * cols + c] }
             rowWrapped[r] = rowWrapped[r - count]
+            rowMarks[r] = rowMarks[r - count]
             r -= 1
         }
         for r in cursorRow ..< (cursorRow + count) {
             for c in 0 ..< cols { cells[r * cols + c] = blank }
             rowWrapped[r] = false
+            rowMarks[r] = nil
         }
         pendingWrap = false
     }
@@ -833,11 +933,13 @@ final class TerminalScreen {
         while r + count <= scrollBottom {
             for c in 0 ..< cols { cells[r * cols + c] = cells[(r + count) * cols + c] }
             rowWrapped[r] = rowWrapped[r + count]
+            rowMarks[r] = rowMarks[r + count]
             r += 1
         }
         while r <= scrollBottom {
             for c in 0 ..< cols { cells[r * cols + c] = blank }
             rowWrapped[r] = false
+            rowMarks[r] = nil
             r += 1
         }
         pendingWrap = false
@@ -1005,6 +1107,7 @@ final class TerminalScreen {
         history.removeAll()
         cells = Array(repeating: .blank, count: cols * rows)
         rowWrapped = Array(repeating: false, count: rows)
+        rowMarks = Array(repeating: nil, count: rows)
         cursorRow = 0
         cursorCol = 0
         pendingWrap = false

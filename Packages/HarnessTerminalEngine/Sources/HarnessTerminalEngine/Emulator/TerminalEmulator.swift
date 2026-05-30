@@ -109,6 +109,13 @@ public final class TerminalEmulator: VTParserHandler {
     /// the current width. O(cols) random access — for copy-mode motion/search.
     public func bufferLine(_ index: Int) -> [TerminalGridCell] { current.bufferLine(index) }
 
+    /// OSC 133 shell-prompt rows in copy-mode view space (`[history ++ viewport]`), oldest
+    /// first — drives jump-to-previous/next-prompt. Empty without shell integration.
+    public var promptRows: [Int] { current.promptRows() }
+
+    /// The OSC 133 semantic mark on a copy-mode-space line, or nil.
+    public func mark(atBufferLine index: Int) -> SemanticMark? { current.mark(atBufferLine: index) }
+
     /// The full buffer as plain-text lines for `capture-pane`. `joinWrapped` (tmux `-J`)
     /// joins soft-wrapped physical rows into their logical line.
     public func captureLines(joinWrapped: Bool) -> [String] { current.captureLines(joinWrapped: joinWrapped) }
@@ -295,7 +302,24 @@ public final class TerminalEmulator: VTParserHandler {
         case "9": onNotification?(nil, payload)            // OSC 9 ; <body> — desktop notification
         case "777": handleNotify777(payload)               // OSC 777 ; notify ; <title> ; <body>
         case "22": setPointerShape(payload)                // OSC 22 ; <shape> — mouse cursor shape
+        case "133": handleSemanticPrompt(payload)          // OSC 133 ; A/B/C/D — shell integration
         case "1337": handleITerm2Image(payload)            // iTerm2 inline image (File=…)
+        default: break
+        }
+    }
+
+    /// OSC 133 shell integration (FinalTerm/iTerm2/Ghostty). `A` marks a prompt line, `D[;exit]`
+    /// reports the finished command's status; `B` (command start) and `C` (output start) are the
+    /// input/output delimiters — parsed but not stamped, since the prompt mark + exit status are
+    /// what drive jump-to-prompt and the success/failure gutter. Purely informational: nothing is
+    /// written back to the PTY, and a program that doesn't emit 133 is unaffected.
+    private func handleSemanticPrompt(_ payload: String) {
+        let parts = payload.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+        guard let kind = parts.first?.first else { return }
+        switch kind {
+        case "A": current.markPromptStart()
+        case "D": current.markCommandFinished(exit: parts.count >= 2 ? Int(parts[1]) : nil)
+        case "B", "C": break
         default: break
         }
     }

@@ -154,14 +154,19 @@ public struct TerminalGridSnapshot: Equatable, Sendable {
     public let cursor: TerminalCursor
     /// Inline images overlaid on this viewport (Sixel / Kitty graphics / iTerm2). Empty when none.
     public let images: [ImagePlacementSnapshot]
+    /// Semantic prompt marks (OSC 133) for the rows visible in this snapshot, keyed by viewport
+    /// row. Empty when the program emits no shell integration. A row's presence marks a shell
+    /// prompt; its `exit` is filled in once the command launched from it finishes.
+    public let marks: [Int: SemanticMark]
 
     public init(cols: Int, rows: Int, cells: [TerminalGridCell], cursor: TerminalCursor,
-                images: [ImagePlacementSnapshot] = []) {
+                images: [ImagePlacementSnapshot] = [], marks: [Int: SemanticMark] = [:]) {
         self.cols = cols
         self.rows = rows
         self.cells = cells
         self.cursor = cursor
         self.images = images
+        self.marks = marks
     }
 
     /// The cell at (`row`, `col`), or `nil` if out of bounds. Bounds-checked so callers
@@ -170,4 +175,13 @@ public struct TerminalGridSnapshot: Equatable, Sendable {
         guard row >= 0, row < rows, col >= 0, col < cols else { return nil }
         return cells[row * cols + col]
     }
+}
+
+/// A semantic mark on a terminal row, recorded from OSC 133 shell integration. The mark's
+/// presence identifies a shell *prompt* line (OSC 133;A); `exit` is populated when the command
+/// that ran from that prompt reports completion (OSC 133;D;<code>) — `nil` until then, `0` for
+/// success, non-zero for failure. Marks ride scrollback and reflow with the line they tag.
+public struct SemanticMark: Equatable, Sendable {
+    public var exit: Int?
+    public init(exit: Int? = nil) { self.exit = exit }
 }

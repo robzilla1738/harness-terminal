@@ -60,6 +60,11 @@ public final class HarnessGridTerminal {
     public var bufferLineCount: Int { emulator.bufferLineCount }
     public func bufferLine(_ index: Int) -> [TerminalGridCell] { emulator.bufferLine(index) }
 
+    /// OSC 133 shell-prompt rows (copy-mode view space), oldest first.
+    public var promptRows: [Int] { emulator.promptRows }
+    /// The OSC 133 semantic mark on a copy-mode-space line, or nil.
+    public func mark(atBufferLine index: Int) -> SemanticMark? { emulator.mark(atBufferLine: index) }
+
     /// Scrollback retention cap (lines). Raised by the daemon's `capture-pane` so a long
     /// history reconstructs fully.
     public var maxScrollbackLines: Int {
