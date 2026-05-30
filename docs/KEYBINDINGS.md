@@ -41,7 +41,7 @@ Trigger: the prefix key (default `ctrl-a`, configurable via `settings.prefixKey`
 
 ## Copy-mode key table
 
-`CopyModeViewController` interprets these natively today; the entries in `KeyTableSet.defaults.copy-mode` are advisory and let `list-keys -T copy-mode` show what's bound. A future overlay rewrite will rebind through `bind-key -T copy-mode <spec> <command>`.
+The copy-mode view resolves each keystroke against the `copy-mode` `KeyTable` (merged with your `keybindings.json` overrides) and runs the resulting `copy-mode -X` command, so copy mode is fully rebindable via `bind-key -T copy-mode <spec> <command>`. Defaults follow `mode-keys vi`.
 
 | Key | Action |
 |---|---|
@@ -50,12 +50,16 @@ Trigger: the prefix key (default `ctrl-a`, configurable via `settings.prefixKey`
 | `0` / `$` | Line start / end |
 | `g` / `G` | Top / bottom |
 | `w` / `b` | Next / previous word |
-| `v` / `V` | Char / line selection |
+| `PageUp` / `PageDown` | Page up / down |
+| `C-u` / `C-d` | Half page up / down |
+| `v` / `V` / `C-v` | Char / line / rectangle (block) selection |
 | `/` / `?` | Search forward / backward |
 | `n` / `N` | Next / previous match |
 | `y` / `Enter` | Yank selection → clipboard + daemon paste buffer; exit |
 | `p` | Paste most recent buffer into the surface; exit |
 | `q` / `Escape` | Exit copy mode |
+
+Copy-mode is rebindable: `bind-key -T copy-mode <key> <command>` where `<command>` is `copy-mode -X <action>` (e.g. `copy-pipe "pbcopy"`).
 
 ## Command prompt
 

@@ -61,11 +61,12 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 
 | tmux | Harness | Status |
 |------|---------|--------|
-| copy-mode (vi motions, search, yank) | `CopyModeViewController` — `hjkl`/word/line/`g`/`G`, `/ ? n N`, yank, paste | ✅ (GUI) |
-| multiple paste buffers | `PasteBufferStore` (`set/show/list/delete/paste-buffer`) | ✅ |
-| rectangle selection | — | 🛣️ |
-| rebindable copy-mode key table | native handler today; `keybindings.json` copy-mode table is discoverability-only | 🟡 |
-| copy-mode in the attach client | — | 🛣️ |
+| copy-mode (vi motions, search, yank) | `CopyModeViewController` — `hjkl`/word/line/`g`/`G`, page/half-page, `/ ? n N`, yank, paste | ✅ (GUI) |
+| multiple paste buffers (+ `save`/`load-buffer`, `paste-buffer -p`) | `PasteBufferStore`; file I/O CLI; bracketed paste | ✅ |
+| rectangle selection + `copy-pipe` | block mode (`C-v`) + `copy-pipe` (yank → shell command) | ✅ (GUI) |
+| rebindable copy-mode key table | copy-mode `KeyTable` binds real `copy-mode -X` commands; `bind-key -T copy-mode <key> <cmd>` works (`mode-keys vi` defaults) | ✅ |
+| `set-clipboard` (OSC 52) | engine decodes OSC 52 → pasteboard + paste buffer, gated by `set-clipboard` | ✅ |
+| copy-mode in the attach client | — (reuses the rebindable vocabulary; Phase 3 overlay) | 🛣️ |
 
 ## Options, hooks, status, environment
 

@@ -71,6 +71,7 @@ form; `select-window -t session:N` is supported.
 | Command | Effect |
 |---|---|
 | `copy-mode` | Open the vim-style copy-mode viewer for the active pane. |
+| `copy-mode -X <action> [arg]` | Run an in-mode copy command: `cursor-left/right/up/down`, `next-word`/`previous-word`, `start-of-line`/`end-of-line`, `history-top`/`history-bottom`, `page-up`/`page-down`/`halfpage-up`/`halfpage-down`, `begin-selection`/`select-line`/`rectangle-toggle`/`clear-selection`, `search-forward`/`search-backward`/`search-again`/`search-reverse`, `copy-selection`/`copy-selection-and-cancel`/`copy-pipe "<cmd>"`, `paste`, `cancel`. Also `send-keys -X <action>`. Rebind with `bind-key -T copy-mode <key> <command>`. |
 | `detach-client` | Detach the calling client (CLI attach) or fire SIGTERM-like handling. |
 
 ### Attaching from a plain terminal
@@ -91,7 +92,9 @@ in the GUI re-composites automatically.
 | `list-buffers` | List name/size/preview/created-at. |
 | `show-buffer [--name <name>]` | Dump bytes to stdout. |
 | `delete-buffer --name <name>` | Remove. |
-| `paste-buffer --surface <uuid> [--name <name>]` | Write buffer contents to a surface's PTY. |
+| `paste-buffer --surface <uuid> [--name <name>] [-p\|--bracketed]` | Write buffer contents to a surface's PTY; `-p` wraps in bracketed-paste markers. |
+| `save-buffer [--name <name>] <path>` | Write a paste buffer to a file. |
+| `load-buffer [--name <name>] <path>` | Read a file into a new paste buffer. |
 
 ## Bindings
 
