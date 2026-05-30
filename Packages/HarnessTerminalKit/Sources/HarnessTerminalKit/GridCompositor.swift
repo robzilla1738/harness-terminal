@@ -18,6 +18,14 @@ public struct CompositorPane: Sendable {
     public var searchHits: [CopyModeMatch]
     /// Copy-mode cursor in viewport coordinates (overrides the program cursor).
     public var copyModeCursor: (row: Int, column: Int)?
+    /// `window-style`/`pane-style` base colors for this pane's default-colored cells
+    /// (dim inactive panes). `.none` = no override. Applied before copy-mode shading so a
+    /// selection/search hit still wins.
+    public var baseForeground: TerminalGridColor
+    public var baseBackground: TerminalGridColor
+    /// `pane-border-format` label drawn on this pane's border row (`rect.labelRow`), centered
+    /// over the box-drawing. Active panes draw it highlighted. Nil/empty = no label.
+    public var borderLabel: String?
 
     public init(
         rect: PaneRect,
@@ -25,7 +33,10 @@ public struct CompositorPane: Sendable {
         isActive: Bool,
         selection: CopyModeViewportSelection? = nil,
         searchHits: [CopyModeMatch] = [],
-        copyModeCursor: (row: Int, column: Int)? = nil
+        copyModeCursor: (row: Int, column: Int)? = nil,
+        baseForeground: TerminalGridColor = .none,
+        baseBackground: TerminalGridColor = .none,
+        borderLabel: String? = nil
     ) {
         self.rect = rect
         self.grid = grid
@@ -33,6 +44,9 @@ public struct CompositorPane: Sendable {
         self.selection = selection
         self.searchHits = searchHits
         self.copyModeCursor = copyModeCursor
+        self.baseForeground = baseForeground
+        self.baseBackground = baseBackground
+        self.borderLabel = borderLabel
     }
 }
 
@@ -69,17 +83,34 @@ public final class GridCompositor {
     public func invalidate() { front = nil }
 
     /// Render `panes` plus an optional `status` line (drawn on the bottom row)
-    /// into ANSI. Pane rects are expected to be laid out within the top
-    /// `rows - (status == nil ? 0 : 1)` rows.
+    /// into ANSI. Convenience over `render(panes:statusLines:)` for the single-line
+    /// case: styled segments (with `#[…]` spans) take precedence over a plain string.
     public func render(panes: [CompositorPane], status: String? = nil, statusSegments: [StyledSegment]? = nil) -> String {
-        let hasStatus = status != nil || statusSegments != nil
-        let statusRow: Int? = hasStatus ? rows - 1 : nil
+        let lines: [[StyledSegment]]?
+        if let statusSegments {
+            lines = [statusSegments]
+        } else if let status {
+            // A plain string is one fully-default segment → the classic inverse band.
+            lines = [[StyledSegment(text: status)]]
+        } else {
+            lines = nil
+        }
+        return render(panes: panes, statusLines: lines)
+    }
+
+    /// Render `panes` plus N status lines (tmux `status 2..5`). `statusLines` is
+    /// **bottom-to-top**: index 0 is the bottom (main) line drawn on the last row,
+    /// index 1 the row above it, and so on. The pane area is the top
+    /// `rows - statusLines.count` rows, so borders and panes never overlap the status
+    /// band. `nil`/empty hides the status entirely.
+    public func render(panes: [CompositorPane], statusLines: [[StyledSegment]]?) -> String {
+        let statusCount = max(0, min(rows, statusLines?.count ?? 0))
         var buffer = [RenderCell](repeating: .blank, count: cols * rows)
 
         // 1) Borders: fill the pane area with box-drawing lines, then panes
         //    paint their interiors over them. We classify each pane-area cell by
         //    whether it is covered by a pane; uncovered cells become borders.
-        let paneArea = statusRow ?? rows
+        let paneArea = rows - statusCount
         paintBorders(into: &buffer, panes: panes, paneAreaRows: paneArea)
 
         // 2) Panes.
@@ -88,12 +119,16 @@ public final class GridCompositor {
             paint(pane: pane, into: &buffer, into: &cursor)
         }
 
-        // 3) Status line — styled segments (with `#[…]` spans) take precedence over plain.
-        if let statusRow {
-            if let statusSegments {
-                paintStatusSegments(statusSegments, row: statusRow, into: &buffer)
-            } else if let status {
-                paintStatus(status, row: statusRow, into: &buffer)
+        // 2.5) `pane-border-status` labels, drawn over the border row carved for each pane.
+        for pane in panes {
+            guard let label = pane.borderLabel, !label.isEmpty, let row = pane.rect.labelRow else { continue }
+            paintBorderLabel(label, row: row, paneX: pane.rect.x, paneCols: pane.rect.cols, active: pane.isActive, into: &buffer)
+        }
+
+        // 3) Status lines, bottom-to-top: line i sits on row `rows - 1 - i`.
+        if let statusLines {
+            for (i, line) in statusLines.prefix(statusCount).enumerated() {
+                paintStatusSegments(line, row: rows - 1 - i, into: &buffer)
             }
         }
 
@@ -125,6 +160,10 @@ public final class GridCompositor {
                 // already spans two columns when emitted.
                 if cell.width == .spacerTail { continue }
                 var rc = RenderCell(cell)
+                // `window-style`/`pane-style` base: substitute the pane's base color into any
+                // cell still using the surface default, so an inactive pane dims uniformly.
+                if pane.baseForeground != .none, rc.fg == .none { rc.fg = pane.baseForeground }
+                if pane.baseBackground != .none, rc.bg == .none { rc.bg = pane.baseBackground }
                 // Copy-mode shading (palette indices, so the client terminal themes them):
                 // primary selection > search hit > normal.
                 if pane.selection?.contains(row: gy, column: gx) == true {
@@ -156,19 +195,6 @@ public final class GridCompositor {
     private static let searchBg: TerminalGridColor = .palette(3)
     private static let searchFg: TerminalGridColor = .palette(0)
 
-    private func paintStatus(_ status: String, row: Int, into buffer: inout [RenderCell]) {
-        var x = 0
-        for scalar in status.unicodeScalars {
-            guard x < cols else { break }
-            buffer[row * cols + x] = RenderCell(codepoint: scalar.value, inverse: true)
-            x += 1
-        }
-        while x < cols {
-            buffer[row * cols + x] = RenderCell(codepoint: 0x20, inverse: true)
-            x += 1
-        }
-    }
-
     /// Paint styled status segments. A fully-default segment (no fg/bg/attrs) renders as the
     /// classic inverse status band; styled spans honor their `#[fg=…,bg=…,attrs]`.
     private func paintStatusSegments(_ segments: [StyledSegment], row: Int, into buffer: inout [RenderCell]) {
@@ -197,7 +223,27 @@ public final class GridCompositor {
         }
     }
 
-    private static func gridColor(_ color: FormatColor?) -> TerminalGridColor {
+    /// Draw a `pane-border-format` label centered on `row` within the pane's column span,
+    /// over the box-drawing border. The active pane's label is highlighted (bold, brighter)
+    /// so the focused pane stands out, matching tmux's pane-active-border accent.
+    private func paintBorderLabel(_ text: String, row: Int, paneX: Int, paneCols: Int, active: Bool, into buffer: inout [RenderCell]) {
+        guard row >= 0, row < rows, paneCols > 0 else { return }
+        let scalars = Array(text.unicodeScalars)
+        let width = min(scalars.count, paneCols)
+        guard width > 0 else { return }
+        let startX = paneX + max(0, (paneCols - width) / 2)
+        let fg: TerminalGridColor = active ? .palette(15) : .palette(8)
+        for i in 0 ..< width {
+            let x = startX + i
+            guard x >= 0, x < cols, x < paneX + paneCols else { continue }
+            buffer[row * cols + x] = RenderCell(codepoint: scalars[i].value, fg: fg, bold: active)
+        }
+    }
+
+    /// Map a renderer-agnostic `FormatColor` to the engine's `TerminalGridColor`, preserving
+    /// palette indices (so the client terminal's own theme colors them). Shared by status
+    /// segments and `window-style`/`pane-style` base colors.
+    public static func gridColor(_ color: FormatColor?) -> TerminalGridColor {
         switch color {
         case nil, .some(.none): return .none
         case let .some(.palette(i)): return .palette(i)

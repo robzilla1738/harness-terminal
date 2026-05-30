@@ -10,14 +10,28 @@ public struct PaneRect: Sendable, Equatable {
     public var y: Int
     public var cols: Int
     public var rows: Int
+    /// Absolute row for this pane's `pane-border-status` label (carved from the pane's top
+    /// or bottom), or nil when `pane-border-status off`. The interior (`x/y/cols/rows`)
+    /// already excludes it, so the pane's surface is sized one row shorter (tmux behavior).
+    public var labelRow: Int?
 
-    public init(paneID: PaneID, surfaceID: SurfaceID, x: Int, y: Int, cols: Int, rows: Int) {
+    public init(paneID: PaneID, surfaceID: SurfaceID, x: Int, y: Int, cols: Int, rows: Int, labelRow: Int? = nil) {
         self.paneID = paneID
         self.surfaceID = surfaceID
         self.x = x
         self.y = y
         self.cols = cols
         self.rows = rows
+        self.labelRow = labelRow
+    }
+}
+
+/// Where (if anywhere) each pane shows its `pane-border-format` label.
+public enum PaneBorderStatus: String, Sendable, Equatable {
+    case off, top, bottom
+
+    public init(option value: String) {
+        self = PaneBorderStatus(rawValue: value.lowercased()) ?? .off
     }
 }
 
@@ -42,11 +56,12 @@ public enum PaneRectSolver {
         _ node: PaneNode,
         cols: Int,
         rows: Int,
-        border: Bool = true
+        border: Bool = true,
+        paneBorderStatus: PaneBorderStatus = .off
     ) -> [PaneRect] {
         guard cols > 0, rows > 0 else { return [] }
         var out: [PaneRect] = []
-        solve(node, x: 0, y: 0, cols: cols, rows: rows, border: border, into: &out)
+        solve(node, x: 0, y: 0, cols: cols, rows: rows, border: border, status: paneBorderStatus, into: &out)
         return out
     }
 
@@ -57,16 +72,27 @@ public enum PaneRectSolver {
         cols: Int,
         rows: Int,
         border: Bool,
+        status: PaneBorderStatus,
         into out: inout [PaneRect]
     ) {
         guard cols > 0, rows > 0 else { return }
 
         switch node {
         case let .leaf(leaf):
+            // Carve one row for the border-status label (only if the pane keeps >= 1 content
+            // row); the interior shrinks so the pane's surface is sized to match.
+            var iy = y, irows = rows, labelRow: Int? = nil
+            if status != .off, rows >= 2 {
+                switch status {
+                case .top: labelRow = y; iy = y + 1; irows = rows - 1
+                case .bottom: labelRow = y + rows - 1; irows = rows - 1
+                case .off: break
+                }
+            }
             out.append(PaneRect(
                 paneID: leaf.id,
                 surfaceID: leaf.surfaceID,
-                x: x, y: y, cols: cols, rows: rows
+                x: x, y: iy, cols: cols, rows: irows, labelRow: labelRow
             ))
 
         case let .branch(direction, ratio, first, second):
@@ -74,14 +100,14 @@ public enum PaneRectSolver {
             case .horizontal:
                 // Side-by-side: split along columns.
                 let (firstCols, gap, secondCols) = split(total: cols, ratio: ratio, border: border)
-                solve(first, x: x, y: y, cols: firstCols, rows: rows, border: border, into: &out)
-                solve(second, x: x + firstCols + gap, y: y, cols: secondCols, rows: rows, border: border, into: &out)
+                solve(first, x: x, y: y, cols: firstCols, rows: rows, border: border, status: status, into: &out)
+                solve(second, x: x + firstCols + gap, y: y, cols: secondCols, rows: rows, border: border, status: status, into: &out)
 
             case .vertical:
                 // Stacked: split along rows.
                 let (firstRows, gap, secondRows) = split(total: rows, ratio: ratio, border: border)
-                solve(first, x: x, y: y, cols: cols, rows: firstRows, border: border, into: &out)
-                solve(second, x: x, y: y + firstRows + gap, cols: cols, rows: secondRows, border: border, into: &out)
+                solve(first, x: x, y: y, cols: cols, rows: firstRows, border: border, status: status, into: &out)
+                solve(second, x: x, y: y + firstRows + gap, cols: cols, rows: secondRows, border: border, status: status, into: &out)
             }
         }
     }

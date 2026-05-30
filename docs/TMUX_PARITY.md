@@ -76,7 +76,9 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `set-option` / `show-options` | same verbs (`setw` = window/tab) | ✅ |
 | `status-left`/`status-right` + format strings | `FormatString` (pane/session/window/agent/git/time/`window_flags`/…); GUI **and** compositor status lines | ✅ |
 | `#[fg=…,bg=…,attrs]` style spans + operators | one `StyledSegment` intermediate (GUI attributed text + compositor SGR); `#{==:}` `#{m:}` (regex) `#{s/re/rep/:}` `#{e\|op\|a\|b}` | ✅ |
-| multi-line `status` / `pane-border-status` / `window-style` | — | 🛣️ |
+| multi-line `status` (`status 2..5`) | extra rows (`status-format-1…4`) above the main line; GUI status bar **and** compositor reserve the same row count via one `statusLineCount` helper | ✅ |
+| `window-style` / `window-active-style` / `pane-style` / `pane-active-style` | base fg/bg for default-colored cells (dim inactive panes); GUI (`TerminalHostView`) **and** compositor (`WindowAttachClient`) resolve via one shared `PaneStyle`/`PaneStyleSet`; `*-active-style fg=default` cancels the dim on the active pane | ✅ |
+| `pane-border-status` / `pane-border-format` | per-pane label on a row carved from the pane border (top/bottom): ssh compositor (`PaneRectSolver` reserves the row, `GridCompositor` draws it) + GUI (`TerminalHostView` overlay label); shared `pane-border-format` evaluation | ✅ |
 | hooks (`set-hook` / `bind-hook`) | `HookRegistry` + `bind-hook`; fires at real mutation sites via `DaemonCommandExecutor` | ✅ |
 | `allow-rename` / `automatic-rename` | OSC title gated; manual `rename-tab` makes the name sticky | ✅ |
 | `set-environment` / `show-environment` | `EnvironmentStore` (global + per-session), injected on spawn/respawn | ✅ |
@@ -125,18 +127,22 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 ## Remaining roadmap
 
 The large majority of tmux's capability surface is now implemented across the GUI,
-the CLI/compositor, and control mode. The remaining 🛣️ items are intentionally
-**not** shipped half-wired (that would be the tech debt this project forbids):
+the CLI/compositor, and control mode — including copy-mode + SGR mouse on both
+surfaces, monitoring (`monitor-*`), multi-line status, `window-style`/`pane-style`,
+and `pane-border-status`. The remaining 🛣️ items are intentionally **not** shipped
+half-wired (that would be the tech debt this project forbids):
 
-- **Compositor copy-mode + SGR mouse** — a scrollback overlay and mouse demux in
-  `WindowAttachClient`; the GUI already has native copy-mode and mouse, so this is
-  a second-surface port, not a missing capability.
 - **Grouped sessions (`new-session -t base`)** — `link-window` already provides
   cross-session shared windows (the underlying capability); grouped sessions add the
   auto-shared window-list convenience on top.
-- **`wait-for`** (named semaphores) and **`monitor-*` / `destroy-unattached` /
-  `pane-border-status`** — option/event-driven behaviors that hang off new daemon
-  lifecycle hooks.
+- **`wait-for`** (named semaphores) — a new IPC surface that must block at the
+  `DaemonServer` socket layer, never under the `SurfaceRegistry` lock.
+- **Lifecycle/timing options** — `remain-on-exit` (currently 🟡: the dead leaf is
+  kept and `respawn-pane` revives it; the explicit `exitStatus` plumbing exists),
+  `destroy-unattached`/`detach-on-destroy`/`exit-empty`, and `repeat-time`/
+  `escape-time`/`aggressive-resize`.
+- **Compositor `bind -n` root table** — the GUI consults the seeded `root` key table;
+  the `attach-window` input loop does not yet.
 
 Everything they build on — daemon authority, the shared translator, scoped options,
 hooks, server-side active pane, snapshot push, the compositor, control mode, linked

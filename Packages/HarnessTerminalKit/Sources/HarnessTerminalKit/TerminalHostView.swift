@@ -45,9 +45,55 @@ public final class TerminalHostView: NSView {
     public var showsActiveBorder: Bool {
         get { isActiveBorder }
         set {
+            let changed = newValue != isActiveBorder
             isActiveBorder = newValue
             needsDisplay = true
+            // `window-style`/`pane-style` dims inactive panes — re-resolve the base color
+            // when focus changes (only worth a re-apply when a style is actually set).
+            if changed, !paneStyles.isEmpty { applyNativeAppearance() }
+            // Re-tint the pane-border label (active = focus accent) on focus change.
+            if changed, !borderLabelField.isHidden { refreshBorderLabelStyle(text: borderLabelField.stringValue) }
         }
+    }
+
+    /// `window-style`/`pane-style` base colors (dim inactive panes). The active pane uses the
+    /// `*-active-style` base; others the general one. Empty = no override.
+    private var paneStyles = PaneStyleSet()
+
+    /// Push the resolved pane-style options (from the app's `OptionStore`). Re-applies the
+    /// appearance so a `set-option -g window-style …` takes effect on the next refresh.
+    public func applyPaneStyles(_ styles: PaneStyleSet) {
+        guard styles != paneStyles else { return }
+        paneStyles = styles
+        applyNativeAppearance()
+    }
+
+    /// `pane-border-format` label, overlaid on the top/bottom edge above the terminal. The GUI
+    /// overlays it (the surface keeps full size) rather than reserving a row like the grid
+    /// compositor — surface-appropriate, same shared format/options underneath.
+    private let borderLabelField = NSTextField(labelWithString: "")
+    private var borderLabelTop: NSLayoutConstraint?
+    private var borderLabelBottom: NSLayoutConstraint?
+
+    /// Show a `pane-border-format` label at the top (or bottom) edge, or hide it (nil/empty).
+    public func setPaneBorderLabel(_ text: String?, atTop: Bool) {
+        let trimmed = text?.trimmingCharacters(in: .whitespaces)
+        guard let trimmed, !trimmed.isEmpty else {
+            borderLabelField.isHidden = true
+            return
+        }
+        borderLabelField.isHidden = false
+        borderLabelTop?.isActive = atTop
+        borderLabelBottom?.isActive = !atTop
+        refreshBorderLabelStyle(text: trimmed)
+    }
+
+    /// Active pane → the focus accent (brighter); inactive → a quiet secondary label, with a
+    /// translucent backing so it reads over terminal content.
+    private func refreshBorderLabelStyle(text: String) {
+        borderLabelField.stringValue = text
+        borderLabelField.textColor = isActiveBorder ? activeBorderColor : .secondaryLabelColor
+        borderLabelField.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.7).cgColor
     }
 
     private var isMarked = false
@@ -125,6 +171,26 @@ public final class TerminalHostView: NSView {
             native.trailingAnchor.constraint(equalTo: trailingAnchor),
             native.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+
+        // pane-border-format label overlay — added AFTER `native` so it sits above the Metal
+        // surface (a label drawn in `draw(_:)` would be hidden behind it).
+        borderLabelField.translatesAutoresizingMaskIntoConstraints = false
+        borderLabelField.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
+        borderLabelField.alignment = .center
+        borderLabelField.lineBreakMode = .byTruncatingTail
+        borderLabelField.wantsLayer = true
+        borderLabelField.layer?.cornerRadius = 3
+        borderLabelField.isHidden = true
+        addSubview(borderLabelField)
+        let top = borderLabelField.topAnchor.constraint(equalTo: topAnchor, constant: 1)
+        let bottom = borderLabelField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1)
+        borderLabelTop = top
+        borderLabelBottom = bottom
+        NSLayoutConstraint.activate([
+            borderLabelField.centerXAnchor.constraint(equalTo: centerXAnchor),
+            borderLabelField.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -8),
+            top,
+        ])
         applyNativeAppearance()
     }
 
@@ -142,12 +208,18 @@ public final class TerminalHostView: NSView {
             customForegroundHex: settings.customForegroundHex,
             customCursorHex: settings.customCursorHex
         )
+        // `window-style`/`pane-style`: a parsed base color overrides the canvas default for
+        // this pane's default-colored cells (so an inactive pane dims). `.none` channels keep
+        // the theme canvas. The active pane uses the `*-active-style` base.
+        let styleBase = paneStyles.base(active: isActiveBorder)
+        let canvasBg = Self.hexString(styleBase.bg) ?? canvas.backgroundHex
+        let canvasFg = Self.hexString(styleBase.fg) ?? canvas.foregroundHex
         nativeView.configureAppearance(
             fontFamily: settings.fontFamily,
             fontSize: CGFloat(settings.fontSize),
             vivid: settings.vividColors,
-            canvasBackgroundHex: canvas.backgroundHex,
-            canvasForegroundHex: canvas.foregroundHex,
+            canvasBackgroundHex: canvasBg,
+            canvasForegroundHex: canvasFg,
             cursorHex: canvas.cursorHex,
             outputPaletteHex: nativeOutputPaletteHex(settings: settings),
             canvasOpacity: HarnessSettings.clampedOpacity(settings.backgroundOpacity),
@@ -164,6 +236,13 @@ public final class TerminalHostView: NSView {
             linearBlending: settings.linearBlending,
             ligatures: settings.ligatures
         )
+    }
+
+    /// A parsed `window-style`/`pane-style` color as `#rrggbb` (xterm-256 resolved), or nil
+    /// for `.none`/unset so the caller keeps the theme canvas color.
+    private static func hexString(_ color: FormatColor?) -> String? {
+        guard let rgb = color?.rgbComponents() else { return nil }
+        return String(format: "#%02X%02X%02X", rgb.r, rgb.g, rgb.b)
     }
 
     /// Mirror a copy into the daemon paste buffer (parity with copy-mode), so `paste-buffer`

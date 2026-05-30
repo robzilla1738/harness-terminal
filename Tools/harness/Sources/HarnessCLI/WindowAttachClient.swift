@@ -141,6 +141,13 @@ private final class WindowSession: @unchecked Sendable {
     /// `-t session:window.pane` indices match the user's configured base.
     private var baseIndex = 0
     private var paneBaseIndex = 0
+    /// `window-style`/`pane-style` base colors (dim inactive panes), refreshed with the
+    /// status options. The active pane uses the `*-active-style` base; others the general one.
+    private var paneStyles = PaneStyleSet()
+    /// `pane-border-status` (off/top/bottom) + `pane-border-format`, refreshed with the
+    /// status options; the solver reserves a label row and the compositor draws the label.
+    private var paneBorderStatus: PaneBorderStatus = .off
+    private var paneBorderFormat = ""
     /// A transient status override (e.g. `display-message`), shown briefly.
     private var statusOverride: String?
     private var statusOverrideToken = 0
@@ -226,7 +233,7 @@ private final class WindowSession: @unchecked Sendable {
         if let zoomed = tab.zoomedPaneID, let leaf = findLeaf(tab.rootPane, paneID: zoomed) {
             rects = [PaneRect(paneID: leaf.id, surfaceID: leaf.surfaceID, x: 0, y: 0, cols: cols, rows: contentRows)]
         } else {
-            rects = PaneRectSolver.solve(tab.rootPane, cols: cols, rows: contentRows)
+            rects = PaneRectSolver.solve(tab.rootPane, cols: cols, rows: contentRows, paneBorderStatus: paneBorderStatus)
         }
 
         let wanted = Set(rects.map { $0.surfaceID.uuidString })
@@ -311,6 +318,18 @@ private final class WindowSession: @unchecked Sendable {
     private func composeAndWrite() {
         var panes: [CompositorPane] = []
         panes.reserveCapacity(rects.count)
+        // Resolve the active/inactive base styles once; map each to engine colors.
+        let activeBase = paneStyles.base(active: true)
+        let inactiveBase = paneStyles.base(active: false)
+        func base(_ active: Bool) -> (fg: TerminalGridColor, bg: TerminalGridColor) {
+            let s = active ? activeBase : inactiveBase
+            return (GridCompositor.gridColor(s.fg), GridCompositor.gridColor(s.bg))
+        }
+        // `pane-border-format` evaluated per pane (only when a label row was reserved).
+        func borderLabel(_ rect: PaneRect, active: Bool) -> String? {
+            guard rect.labelRow != nil, !paneBorderFormat.isEmpty else { return nil }
+            return FormatString.evaluate(paneBorderFormat, context: paneFormatContext(rect: rect, active: active))
+        }
         for rect in rects {
             let sid = rect.surfaceID.uuidString
             guard let term = terminals[sid] else { continue }
@@ -319,30 +338,54 @@ private final class WindowSession: @unchecked Sendable {
                 // search highlights and the copy-mode cursor (the shared projection).
                 let offset = cm.scrollbackOffset(historyCount: term.historyCount)
                 guard let grid = term.readGrid(scrollbackOffset: offset) else { continue }
+                let b = base(true)
                 panes.append(CompositorPane(
                     rect: rect, grid: grid, isActive: true,
                     selection: cm.viewportSelection(rows: rect.rows, columns: rect.cols),
                     searchHits: cm.viewportSearchHits(rows: rect.rows),
-                    copyModeCursor: cm.viewportCursor(rows: rect.rows)
+                    copyModeCursor: cm.viewportCursor(rows: rect.rows),
+                    baseForeground: b.fg, baseBackground: b.bg,
+                    borderLabel: borderLabel(rect, active: true)
                 ))
             } else {
                 guard let grid = term.readGrid() else { continue }
-                panes.append(CompositorPane(rect: rect, grid: grid, isActive: sid == activeSurface))
+                let active = sid == activeSurface
+                let b = base(active)
+                panes.append(CompositorPane(
+                    rect: rect, grid: grid, isActive: active,
+                    baseForeground: b.fg, baseBackground: b.bg,
+                    borderLabel: borderLabel(rect, active: active)
+                ))
             }
         }
-        var ansi = compositor.render(panes: panes, statusSegments: statusSegments())
+        var ansi = compositor.render(panes: panes, statusLines: statusLineSet())
         if showPaneNumbers { ansi += paneNumbersOverlay() }
         writeOut(ansi)
     }
 
-    /// The status row as styled segments (same `#[…]`/`#{…}` grammar + tokens as the GUI),
-    /// right-aligning the right segment. A `display-message` override and copy-mode status win
-    /// while active. Returns nil to hide the row when `status off`.
-    private func statusSegments() -> [StyledSegment]? {
-        if let statusOverride { return [StyledSegment(text: clip(statusOverride, to: cols))] }
-        if let cm = copyModeStatusLine() { return [StyledSegment(text: cm)] }
-        if (statusOptions["status"] ?? "on") == "off" { return nil }
+    /// All status rows, **bottom-to-top** for `GridCompositor` (tmux `status 2..5`). The
+    /// bottom (main) line is the `status-left`/`status-right` composition; a
+    /// `display-message` override and copy-mode status replace it while active. Extra rows
+    /// (`status-format-1…`) sit above it. Returns nil to hide the band when `status off`
+    /// (unless an override/copy-mode line still needs the row).
+    private func statusLineSet() -> [[StyledSegment]]? {
+        let count = OptionStore.Value(parsing: statusOptions["status"] ?? "on").statusLineCount
+        let override: [StyledSegment]?
+        if let statusOverride { override = [StyledSegment(text: clip(statusOverride, to: cols))] }
+        else if let cm = copyModeStatusLine() { override = [StyledSegment(text: cm)] }
+        else { override = nil }
+        guard count > 0 else { return override.map { [$0] } }
         let ctx = formatContext(target: currentTarget())
+        var lines: [[StyledSegment]] = [override ?? mainStatusLine(ctx: ctx)]
+        for i in 1 ..< count {
+            lines.append(extraStatusLine(statusOptions["status-format-\(i)"] ?? "", ctx: ctx))
+        }
+        return lines
+    }
+
+    /// The bottom status line: `status-left` left-aligned, `status-right` right-aligned,
+    /// padded between (the same `#[…]`/`#{…}` grammar + tokens as the GUI).
+    private func mainStatusLine(ctx: FormatContext) -> [StyledSegment] {
         let leftSegs = FormatString.evaluateStyled(statusOptions["status-left"] ?? "", context: ctx)
         let rightSegs = FormatString.evaluateStyled(statusOptions["status-right"] ?? "", context: ctx)
         let leftWidth = leftSegs.reduce(0) { $0 + $1.text.unicodeScalars.count }
@@ -352,6 +395,12 @@ private final class WindowSession: @unchecked Sendable {
         out.append(StyledSegment(text: String(repeating: " ", count: cols - leftWidth - rightWidth)))
         out.append(contentsOf: rightSegs)
         return out
+    }
+
+    /// An extra status row (`status-format-<i>`), clipped to width. A blank format yields
+    /// an empty row so the band keeps its reserved height.
+    private func extraStatusLine(_ format: String, ctx: FormatContext) -> [StyledSegment] {
+        clipSegments(FormatString.evaluateStyled(format, context: ctx), to: cols)
     }
 
     /// Truncate styled segments to a total scalar `width`, cutting the last that overflows.
@@ -403,6 +452,30 @@ private final class WindowSession: @unchecked Sendable {
         )
     }
 
+    /// Format context for a *specific* pane (for `pane-border-format`): its index in the
+    /// pane order and active state. Harness has no per-pane title, so `pane_title` falls back
+    /// to the tab title (matching what the GUI shows).
+    private func paneFormatContext(rect: PaneRect, active: Bool) -> FormatContext {
+        let target = currentTarget()
+        let paneIndex = target.paneOrder.firstIndex(of: rect.paneID)
+        let tabIndex = target.session?.tabs.firstIndex(where: { $0.id == tab.id })
+        return FormatContext(
+            paneID: rect.paneID.uuidString,
+            paneTitle: tab.title,
+            paneCwd: tab.cwd,
+            paneActive: active,
+            paneIndex: paneIndex.map { $0 + paneBaseIndex },
+            sessionName: target.session?.name,
+            tabName: tab.title,
+            tabIndex: tabIndex.map { $0 + baseIndex },
+            workspaceName: target.workspace?.name,
+            agentKind: tab.agent?.kind.rawValue,
+            gitBranch: tab.gitBranch,
+            clientName: configuration.label,
+            windowFlags: windowFlags()
+        )
+    }
+
     private func windowFlags() -> String {
         var flags = ""
         if tab.zoomedPaneID != nil { flags += "Z" }
@@ -439,13 +512,34 @@ private final class WindowSession: @unchecked Sendable {
     private func refreshStatusOptions() {
         guard case let .options(entries)? = try? client.request(.showOptions(scope: nil), timeout: 1) else { return }
         var resolved: [String: String] = [:]
-        for entry in entries where ["status", "status-left", "status-right"].contains(entry.key) {
+        // `status`, `status-left`/`-right`/`-center`, and the multi-line `status-format-<i>`
+        // rows. A prefix match keeps the multi-line keys without enumerating each.
+        for entry in entries where entry.key == "status" || entry.key.hasPrefix("status-") {
             // Prefer a global value; any scope is acceptable as a fallback.
             if resolved[entry.key] == nil || entry.scope == "global" {
                 resolved[entry.key] = entry.value
             }
         }
         statusOptions = resolved
+        // `window-style`/`pane-style` base colors (global values; per-pane scoping is a
+        // refinement left to the GUI which has the pane targets).
+        func styleValue(_ key: String) -> String {
+            var v = ""
+            for entry in entries where entry.key == key {
+                if v.isEmpty || entry.scope == "global" { v = entry.value }
+            }
+            return v
+        }
+        paneStyles = PaneStyleSet(
+            window: styleValue("window-style"),
+            windowActive: styleValue("window-active-style"),
+            pane: styleValue("pane-style"),
+            paneActive: styleValue("pane-active-style")
+        )
+        paneBorderStatus = PaneBorderStatus(option: styleValue("pane-border-status"))
+        // Unset over IPC (show-options omits unseeded builtins) → the shared builtin default.
+        let fmt = styleValue("pane-border-format")
+        paneBorderFormat = fmt.isEmpty ? (OptionStore.builtinDefaults["pane-border-format"]?.stringValue ?? "") : fmt
         for entry in entries where entry.key == "base-index" { baseIndex = Int(entry.value) ?? baseIndex }
         for entry in entries where entry.key == "pane-base-index" { paneBaseIndex = Int(entry.value) ?? paneBaseIndex }
         for entry in entries where entry.key == "mode-keys" { modeKeys = entry.value }

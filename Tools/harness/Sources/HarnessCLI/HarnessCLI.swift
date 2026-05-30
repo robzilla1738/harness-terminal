@@ -330,7 +330,9 @@ struct HarnessCLI {
             fputs("Usage: harness-cli pipe-pane --surface <id> [<shell-command>]   (omit command to stop)\n", stderr)
             exit(1)
         }
-        let command = args.first { !$0.hasPrefix("-") && $0 != surface }
+        // Skip the subcommand at index 0; the first remaining non-flag, non-surface
+        // token is the shell command (omitted → stop piping).
+        let command = args.dropFirst().first { !$0.hasPrefix("-") && $0 != surface }
         _ = try checkedRequest(client, .pipePane(surfaceID: surface, shellCommand: command))
     }
 
@@ -535,7 +537,9 @@ struct HarnessCLI {
     static func handleBindKey(_ args: [String]) throws {
         // Usage: harness-cli bind-key [-T <table>] <spec> <command source>
         let table = flagValue(args, flag: "-T") ?? "prefix"
-        var positional = args
+        // Drop the subcommand (`bind-key`/`bind`) at index 0; keep every other token so
+        // the command source can itself contain flags (e.g. `new-window -h`).
+        var positional = Array(args.dropFirst())
         positional.removeAll { $0 == "-T" }
         if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
         guard positional.count >= 2 else {
@@ -557,7 +561,8 @@ struct HarnessCLI {
 
     static func handleUnbindKey(_ args: [String]) throws {
         let table = flagValue(args, flag: "-T") ?? "prefix"
-        var positional = args
+        // Drop the subcommand (`unbind-key`/`unbind`) at index 0.
+        var positional = Array(args.dropFirst())
         positional.removeAll { $0 == "-T" }
         if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
         guard let spec = positional.first, let parsedSpec = KeySpec.parse(spec) else {
@@ -769,7 +774,9 @@ struct HarnessCLI {
         if args.contains("-t") { scope = "tab" }
         if args.contains("-p") { scope = "pane" }
         let target = flagValue(args, flag: "-T")
-        let positional = args.filter { !$0.hasPrefix("-") && $0 != target }
+        // `positionalArgs` skips the subcommand at index 0 plus `-T <target>` (and any
+        // lone scope flags), so `<key>` isn't mis-read as the subcommand name.
+        let positional = positionalArgs(args, skippingValuesFor: ["-T"])
         guard positional.count >= 2 else {
             fputs("Usage: harness-cli set-option [-g|-w|-s|-t|-p] [-T <target>] <key> <value>\n", stderr)
             exit(1)
@@ -801,7 +808,9 @@ struct HarnessCLI {
         let unset = args.contains("-u")
         let sessionRaw = flagValue(args, flag: "-s")
         let sessionID = (global ? nil : sessionRaw).flatMap(UUID.init(uuidString:))
-        let positional = args.filter { !$0.hasPrefix("-") && $0 != sessionRaw }
+        // `positionalArgs` skips the subcommand at index 0 plus `-s <session>` (and lone
+        // flags like `-g`/`-u`), so `<key>` isn't mis-read as the subcommand name.
+        let positional = positionalArgs(args, skippingValuesFor: ["-s"])
         guard let key = positional.first else {
             fputs("Usage: harness-cli set-environment [-g] [-u] [-s <sessionID>] <key> [value]\n", stderr)
             exit(1)
@@ -820,18 +829,20 @@ struct HarnessCLI {
     }
 
     static func handleBindHook(_ args: [String], client: DaemonClient) throws {
-        guard args.count >= 3 else {
+        // Drop the subcommand (`bind-hook`) at index 0: `<event> <command...> [--if <format>]`.
+        let rest = Array(args.dropFirst())
+        guard rest.count >= 2 else {
             fputs("Usage: harness-cli bind-hook <event> <command...> [--if <format>]\n", stderr)
             exit(1)
         }
-        let event = args[0]
-        let ifIndex = args.firstIndex(of: "--if")
-        let condition = (ifIndex.flatMap { args.count > $0 + 1 ? args[$0 + 1] : nil })
+        let event = rest[0]
+        let ifIndex = rest.firstIndex(of: "--if")
+        let condition = (ifIndex.flatMap { rest.count > $0 + 1 ? rest[$0 + 1] : nil })
         let source: String
         if let ifIndex {
-            source = args[1..<ifIndex].joined(separator: " ")
+            source = rest[1..<ifIndex].joined(separator: " ")
         } else {
-            source = args.dropFirst().joined(separator: " ")
+            source = rest.dropFirst().joined(separator: " ")
         }
         let response = try checkedRequest(client, .bindHook(event: event, source: source, condition: condition))
         if case let .hookID(id) = response { print(id.uuidString) }
@@ -856,7 +867,8 @@ struct HarnessCLI {
     }
 
     static func handleDisplayMessage(_ args: [String], client: DaemonClient) throws {
-        let format = args.joined(separator: " ")
+        // Drop the subcommand at index 0 so it doesn't leak into the format string.
+        let format = args.dropFirst().joined(separator: " ")
         guard !format.isEmpty else {
             fputs("Usage: harness-cli display-message <format>\n", stderr)
             exit(1)

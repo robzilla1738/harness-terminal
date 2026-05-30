@@ -120,6 +120,19 @@ public final class OptionStore: @unchecked Sendable {
         "monitor-activity": .bool(false),
         "monitor-silence": .int(0),
         "monitor-bell": .bool(true),
+        // Pane base styles (`fg=…,bg=…`) — read by the GUI (`TerminalHostView`) and the ssh
+        // compositor (`WindowAttachClient`) via `PaneStyle`/`PaneStyleSet`. Empty = no
+        // override (theme canvas). `window-active-style fg=default,bg=default` cancels a dim
+        // set by `window-style` on the active pane (the classic dim-inactive-panes setup).
+        "window-style": .string(""),
+        "window-active-style": .string(""),
+        "pane-style": .string(""),
+        "pane-active-style": .string(""),
+        // `pane-border-status` (`off`/`top`/`bottom`) draws a `pane-border-format` label on a
+        // row carved from each pane's border. Read by the GUI (`TerminalHostView`) and the ssh
+        // compositor (`PaneRectSolver` + `GridCompositor`).
+        "pane-border-status": .string("off"),
+        "pane-border-format": .string(" #{pane_index} #{pane_title} "),
     ]
 
     /// Values that shipped as defaults in an earlier build and have since been
@@ -214,6 +227,20 @@ extension OptionStore.Value {
         case let .bool(value): return value ? "on" : "off"
         case let .int(value): return String(value)
         case let .string(value): return value
+        }
+    }
+
+    /// Number of status lines a `status` value denotes (tmux allows `status 2..5`):
+    /// `off`/`false`/`0` → 0 (hidden), `on`/`true` → 1, an integer N → N clamped to
+    /// 0...5. The GUI status bar and the ssh compositor both read this so they reserve
+    /// the **same** row count — never a hardcoded single line.
+    public var statusLineCount: Int {
+        switch self {
+        case let .bool(value): return value ? 1 : 0
+        case let .int(value): return max(0, min(5, value))
+        case let .string(value):
+            if let n = Int(value) { return max(0, min(5, n)) }
+            return boolValue ? 1 : 0
         }
     }
 

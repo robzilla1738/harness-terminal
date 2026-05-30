@@ -10,6 +10,12 @@ final class StatusLineView: NSView {
     private let leftLabel = NSTextField(labelWithString: "")
     private let rightLabel = NSTextField(labelWithString: "")
     private let centerLabel = NSTextField(labelWithString: "")
+    /// Full-width rows above the main band for tmux `status 2..5` (`status-format-1…4`).
+    /// Pre-created and hidden; `refresh` shows as many as the line count needs.
+    private let extraLabels: [NSTextField] = (0..<4).map { _ in NSTextField(labelWithString: "") }
+    private var heightConstraint: NSLayoutConstraint!
+    private static let mainRowHeight: CGFloat = 26
+    private static let extraRowHeight: CGFloat = 22
     private var refreshTimer: Timer?
 
     init() {
@@ -23,7 +29,7 @@ final class StatusLineView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         HarnessDesign.installChromeBackground(.sidebar, on: self)
 
-        for label in [leftLabel, rightLabel, centerLabel] {
+        for label in [leftLabel, rightLabel, centerLabel] + extraLabels {
             label.translatesAutoresizingMaskIntoConstraints = false
             // 12pt regular reads cleaner than 11pt medium on translucent
             // surfaces — heavier-stem-at-bigger-size gives crisper edges than
@@ -36,23 +42,37 @@ final class StatusLineView: NSView {
         }
         rightLabel.alignment = .right
         centerLabel.alignment = .center
-        NSLayoutConstraint.activate([
+        for label in extraLabels { label.isHidden = true }
+
+        // The main (left/center/right) row is pinned to the bottom `mainRowHeight`
+        // band; extra `status 2..5` rows stack above it. Anchoring the main row to
+        // the bottom (not the view centre) keeps its baseline above the window's
+        // rounded corner regardless of how many rows are visible.
+        let mainCenterY = bottomAnchor.constraint(equalTo: leftLabel.centerYAnchor, constant: Self.mainRowHeight / 2)
+        heightConstraint = heightAnchor.constraint(equalToConstant: Self.mainRowHeight)
+        var constraints: [NSLayoutConstraint] = [
             leftLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            leftLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            mainCenterY,
             leftLabel.trailingAnchor.constraint(lessThanOrEqualTo: centerLabel.leadingAnchor, constant: -8),
 
             centerLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            centerLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            centerLabel.centerYAnchor.constraint(equalTo: leftLabel.centerYAnchor),
 
             rightLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            rightLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            rightLabel.centerYAnchor.constraint(equalTo: leftLabel.centerYAnchor),
             rightLabel.leadingAnchor.constraint(greaterThanOrEqualTo: centerLabel.trailingAnchor, constant: 8),
 
-            // 26pt keeps the baseline well above the window's rounded bottom
-            // corner so text reads as a defined footer rather than a strip
-            // floating into the corner curve.
-            heightAnchor.constraint(equalToConstant: 26),
-        ])
+            heightConstraint,
+        ]
+        // Extra row i (0-based) sits in the band centred at
+        // `mainRowHeight + i*extraRowHeight + extraRowHeight/2` above the bottom.
+        for (i, label) in extraLabels.enumerated() {
+            let centerOffset = Self.mainRowHeight + CGFloat(i) * Self.extraRowHeight + Self.extraRowHeight / 2
+            constraints.append(label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10))
+            constraints.append(label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10))
+            constraints.append(bottomAnchor.constraint(equalTo: label.centerYAnchor, constant: centerOffset))
+        }
+        NSLayoutConstraint.activate(constraints)
         applyChrome()
         NotificationCenter.default.addObserver(
             self,
@@ -107,13 +127,26 @@ final class StatusLineView: NSView {
 
     private func refresh() {
         let options = HarnessOptions.shared
-        let visible = options.get("status", scope: .global)?.boolValue ?? true
-        isHidden = !visible
-        guard visible else { return }
+        // tmux `status` may be `off`/`on`/`2..5`; the count drives how many rows show.
+        let count = options.get("status", scope: .global)?.statusLineCount ?? 1
+        isHidden = count == 0
+        guard count > 0 else { return }
         let context = buildContext()
         leftLabel.attributedStringValue = styledAttributed(options.get("status-left", scope: .global)?.stringValue ?? "", context: context)
         rightLabel.attributedStringValue = styledAttributed(options.get("status-right", scope: .global)?.stringValue ?? "", context: context, alignment: .right)
         centerLabel.attributedStringValue = styledAttributed(options.get("status-center", scope: .global)?.stringValue ?? "", context: context, alignment: .center)
+        // Extra rows above the main band: `status-format-1` is the first row up, etc.
+        for (i, label) in extraLabels.enumerated() {
+            let lineIndex = i + 1
+            if lineIndex < count {
+                label.isHidden = false
+                label.attributedStringValue = styledAttributed(options.get("status-format-\(lineIndex)", scope: .global)?.stringValue ?? "", context: context)
+            } else {
+                label.isHidden = true
+                label.attributedStringValue = NSAttributedString()
+            }
+        }
+        heightConstraint.constant = Self.mainRowHeight + CGFloat(max(0, count - 1)) * Self.extraRowHeight
     }
 
     /// Render a status format to an attributed string, honoring `#[fg=…,bg=…,attrs]` style

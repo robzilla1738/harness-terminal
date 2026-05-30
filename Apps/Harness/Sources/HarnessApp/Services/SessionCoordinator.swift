@@ -541,16 +541,82 @@ final class SessionCoordinator: NSObject {
             lastActiveSurfaceID = old
         }
         activeSurfaceID = surfaceID
+        // Refresh `window-style`/`pane-style` before the border toggle so each host has the
+        // current base before it re-resolves active vs inactive on the focus change.
+        refreshPaneStyles()
         let showBorder = surfaceID.map { paneCount(forSurface: $0) > 1 } ?? false
         for host in terminalHosts.allHosts() {
             host.showsActiveBorder = showBorder && host.surfaceID == surfaceID
         }
+        // pane-border labels re-evaluate per host (active state just changed above).
+        refreshPaneBorders()
         // Push focus to the daemon (single source of truth) so other clients —
         // attach-window compositors, target-less CLI commands — agree on the active
         // pane. Suppressed while reflecting a remote change to avoid a feedback loop.
         if !suppressActivePaneSync, let surfaceID, let loc = tabAndPane(forSurface: surfaceID) {
             _ = requestDaemon(.selectPane(tabID: loc.tabID, paneID: loc.paneID))
         }
+    }
+
+    /// Read the `window-style`/`pane-style` options (fresh from the daemon-authored
+    /// `options.json`, so a CLI `set-option` lands without an app restart) and push the
+    /// resolved set to every host. Each host dims itself when inactive via its own
+    /// `showsActiveBorder`. Called on focus changes — the moment dimming matters.
+    func refreshPaneStyles() {
+        let opts = OptionStore()
+        func value(_ key: String) -> String { opts.get(key, scope: .global)?.stringValue ?? "" }
+        let styles = PaneStyleSet(
+            window: value("window-style"),
+            windowActive: value("window-active-style"),
+            pane: value("pane-style"),
+            paneActive: value("pane-active-style")
+        )
+        for host in terminalHosts.allHosts() { host.applyPaneStyles(styles) }
+    }
+
+    /// Evaluate `pane-border-format` per host and push the label (or hide it when
+    /// `pane-border-status off`). Read fresh from the daemon-authored `options.json`.
+    func refreshPaneBorders() {
+        let opts = OptionStore()
+        let status = PaneBorderStatus(option: opts.get("pane-border-status", scope: .global)?.stringValue ?? "off")
+        let atTop = status == .top
+        let format = opts.get("pane-border-format", scope: .global)?.stringValue ?? ""
+        for host in terminalHosts.allHosts() {
+            if status == .off || format.isEmpty {
+                host.setPaneBorderLabel(nil, atTop: atTop)
+            } else {
+                let label = FormatString.evaluate(format, context: paneBorderContext(forSurface: host.surfaceID))
+                host.setPaneBorderLabel(label, atTop: atTop)
+            }
+        }
+    }
+
+    /// Format context for a specific pane (for `pane-border-format`): its index in the owning
+    /// tab's pane order, the tab title (Harness has no per-pane title), and active state.
+    private func paneBorderContext(forSurface surfaceID: SurfaceID) -> FormatContext {
+        var owningTab: Tab?
+        var paneIndex: Int?
+        outer: for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if let idx = tab.rootPane.allSurfaceIDs().firstIndex(of: surfaceID) {
+                        owningTab = tab; paneIndex = idx; break outer
+                    }
+                }
+            }
+        }
+        return FormatContext(
+            paneID: surfaceID.uuidString,
+            paneTitle: owningTab?.title,
+            paneCwd: owningTab?.cwd,
+            paneActive: surfaceID == activeSurfaceID,
+            paneIndex: paneIndex,
+            tabName: owningTab?.title,
+            workspaceName: snapshot.activeWorkspace?.name,
+            agentKind: owningTab?.agent?.kind.rawValue,
+            gitBranch: owningTab?.gitBranch,
+            clientName: "Harness.app"
+        )
     }
 
     /// Resolve the owning tab + pane IDs for a surface, for daemon focus sync.

@@ -29,6 +29,20 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "FDA3CC3703D3BAB2A5CB6F48"
+               BuildableName = "HarnessCopyModeTests.xctest"
+               BlueprintName = "HarnessCopyModeTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "9515B8E3BA6F25B8EF9E7918"
                BuildableName = "HarnessCoreTests.xctest"
                BlueprintName = "HarnessCoreTests"
@@ -139,6 +153,17 @@
                BlueprintIdentifier = "352C8E0B8D989854A1ABDC85"
                BuildableName = "HarnessTerminalKitTests.xctest"
                BlueprintName = "HarnessTerminalKitTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "FDA3CC3703D3BAB2A5CB6F48"
+               BuildableName = "HarnessCopyModeTests.xctest"
+               BlueprintName = "HarnessCopyModeTests"
                ReferencedContainer = "container:Harness.xcodeproj">
             </BuildableReference>
          </TestableReference>

@@ -10,6 +10,45 @@ final class PaneRectSolverTests: XCTestCase {
         XCTAssertEqual(rects.count, 1)
         let r = rects[0]
         XCTAssertEqual([r.x, r.y, r.cols, r.rows], [0, 0, 80, 24])
+        XCTAssertNil(r.labelRow, "no pane-border-status → no reserved label row")
+    }
+
+    func testPaneBorderStatusTopReservesTopRow() {
+        let rects = PaneRectSolver.solve(leaf(), cols: 80, rows: 24, paneBorderStatus: .top)
+        let r = rects[0]
+        // Interior shifts down one row; the label sits on the original top row.
+        XCTAssertEqual([r.x, r.y, r.cols, r.rows], [0, 1, 80, 23])
+        XCTAssertEqual(r.labelRow, 0)
+    }
+
+    func testPaneBorderStatusBottomReservesBottomRow() {
+        let rects = PaneRectSolver.solve(leaf(), cols: 80, rows: 24, paneBorderStatus: .bottom)
+        let r = rects[0]
+        XCTAssertEqual([r.x, r.y, r.cols, r.rows], [0, 0, 80, 23])
+        XCTAssertEqual(r.labelRow, 23)
+    }
+
+    func testPaneBorderStatusReservesPerPaneInSplit() {
+        // Each stacked pane reserves its own top label row.
+        let node = PaneNode.branch(direction: .vertical, ratio: 0.5, first: leaf(), second: leaf())
+        let rects = PaneRectSolver.solve(node, cols: 80, rows: 25, paneBorderStatus: .top)
+        XCTAssertEqual(rects[0].labelRow, 0)            // top pane label on row 0
+        XCTAssertEqual(rects[0].y, 1)                   // its content starts below
+        XCTAssertEqual(rects[1].labelRow, rects[1].y - 1) // bottom pane label just above its content
+    }
+
+    func testPaneBorderStatusSkippedForOneRowPane() {
+        // A 1-row pane can't spare a row for the label.
+        let rects = PaneRectSolver.solve(leaf(), cols: 80, rows: 1, paneBorderStatus: .top)
+        XCTAssertEqual(rects[0].rows, 1)
+        XCTAssertNil(rects[0].labelRow)
+    }
+
+    func testPaneBorderStatusOptionParsing() {
+        XCTAssertEqual(PaneBorderStatus(option: "top"), .top)
+        XCTAssertEqual(PaneBorderStatus(option: "BOTTOM"), .bottom)
+        XCTAssertEqual(PaneBorderStatus(option: "off"), .off)
+        XCTAssertEqual(PaneBorderStatus(option: "garbage"), .off)
     }
 
     func testHorizontalSplitIsSideBySideWithDivider() {

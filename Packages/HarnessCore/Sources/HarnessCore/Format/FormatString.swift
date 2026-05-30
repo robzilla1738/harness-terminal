@@ -208,28 +208,8 @@ public enum FormatString {
         }
     }
 
-    private static let ansiColorNames: [String: Int] = [
-        "black": 0, "red": 1, "green": 2, "yellow": 3, "blue": 4, "magenta": 5, "cyan": 6, "white": 7,
-        "brightblack": 8, "brightred": 9, "brightgreen": 10, "brightyellow": 11,
-        "brightblue": 12, "brightmagenta": 13, "brightcyan": 14, "brightwhite": 15,
-    ]
-
     private static func parseFormatColor(_ raw: String) -> FormatColor? {
-        let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
-        if s.isEmpty { return nil }
-        if s == "default" || s == "none" { return FormatColor.none }
-        if let idx = ansiColorNames[s] { return .palette(idx) }
-        if s.hasPrefix("#"), s.count == 7 {
-            let hex = s.dropFirst()
-            guard let r = UInt8(hex.prefix(2), radix: 16),
-                  let g = UInt8(hex.dropFirst(2).prefix(2), radix: 16),
-                  let b = UInt8(hex.dropFirst(4).prefix(2), radix: 16) else { return nil }
-            return .rgb(r: r, g: g, b: b)
-        }
-        if s.hasPrefix("colour"), let n = Int(s.dropFirst(6)) { return .palette(n) }
-        if s.hasPrefix("color"), let n = Int(s.dropFirst(5)) { return .palette(n) }
-        if let n = Int(s) { return .palette(n) }
-        return nil
+        FormatColor.parse(raw)
     }
 
     /// Wrap a bare body in #{…} so nested truncation can re-use the evaluator.

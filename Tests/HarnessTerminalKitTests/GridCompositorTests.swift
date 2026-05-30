@@ -76,6 +76,65 @@ final class GridCompositorTests: XCTestCase {
         XCTAssertTrue(out.contains("harness"), "status text should appear")
     }
 
+    func testMultiLineStatusRendersAllRows() {
+        // tmux `status 2`: two status rows reserved at the bottom; the pane area is the
+        // top `rows - 2`. Both rows render and pane content above them is preserved.
+        let comp = GridCompositor(cols: 80, rows: 24)
+        let grid = snapshot(80, 22, "P")
+        let out = comp.render(panes: [pane(0, 0, 80, 22, grid)], statusLines: [
+            [StyledSegment(text: "MAINLINE")],
+            [StyledSegment(text: "UPPERLINE")],
+        ])
+        XCTAssertTrue(out.contains("MAINLINE"), "bottom (main) status line renders")
+        XCTAssertTrue(out.contains("UPPERLINE"), "second status line renders above it")
+        XCTAssertTrue(out.contains("P"), "pane content still renders above the status band")
+        // Bottom row is 24 (1-based); the second status line sits on row 23.
+        XCTAssertTrue(out.contains("\u{1b}[24;1H"), "main line painted on the last row")
+        XCTAssertTrue(out.contains("\u{1b}[23;1H"), "second line painted on the row above")
+    }
+
+    func testPaneBaseStyleDimsDefaultCells() {
+        // `window-style bg=colour235`: a default-colored cell in an inactive pane gets the
+        // base background (palette 235), while an explicitly-colored cell is untouched.
+        let comp = GridCompositor(cols: 80, rows: 24)
+        let grid = snapshot(80, 24, "A\u{1b}[41mB") // A = default bg, B = red (palette 1) bg
+        var p = pane(0, 0, 80, 24, grid, active: false)
+        p.baseBackground = .palette(235)
+        let out = comp.render(panes: [p])
+        XCTAssertTrue(out.contains("48;5;235"), "default-bg cell should take the base background")
+        XCTAssertTrue(out.contains("48;5;1"), "explicitly-colored cell keeps its own background")
+    }
+
+    func testPaneBorderLabelDrawnOnLabelRow() {
+        // A pane with a reserved top label row draws its pane-border-format label there.
+        let comp = GridCompositor(cols: 80, rows: 24)
+        let grid = snapshot(80, 23, "x")
+        var rect = PaneRect(paneID: UUID(), surfaceID: UUID(), x: 0, y: 1, cols: 80, rows: 23, labelRow: 0)
+        let p = CompositorPane(rect: rect, grid: grid, isActive: true, borderLabel: " 0 myshell ")
+        let out = comp.render(panes: [p])
+        XCTAssertTrue(out.contains("myshell"), "border label text should render on the label row")
+        // Drawn on row 1 (1-based) = the reserved labelRow 0.
+        XCTAssertTrue(out.contains("\u{1b}[1;"), "label drawn on the top reserved row")
+        _ = rect
+    }
+
+    func testNoBaseStyleLeavesCellsUntouched() {
+        let comp = GridCompositor(cols: 80, rows: 24)
+        let grid = snapshot(80, 24, "A")
+        let out = comp.render(panes: [pane(0, 0, 80, 24, grid, active: false)])
+        XCTAssertFalse(out.contains("48;5;235"), "no base style → no background substitution")
+    }
+
+    func testSingleLineStatusDelegatesToStatusLines() {
+        // The legacy `status:`/`statusSegments:` path must stay byte-compatible: one
+        // bottom row, classic inverse band.
+        let comp = GridCompositor(cols: 80, rows: 24)
+        let grid = snapshot(80, 23, "x")
+        let out = comp.render(panes: [pane(0, 0, 80, 23, grid)], statusSegments: [StyledSegment(text: "seg")])
+        XCTAssertTrue(out.contains("seg"))
+        XCTAssertTrue(out.contains("\u{1b}[24;1H"), "single status line on the last row")
+    }
+
     func testEmitsExtendedAttributeSGR() {
         let comp = GridCompositor(cols: 80, rows: 24)
         // Strikethrough (9), faint/dim (2), blink (5), curly underline (4:3) — each
