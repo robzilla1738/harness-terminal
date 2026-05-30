@@ -18,6 +18,14 @@ public protocol CopyModeGridSource {
     var columns: Int { get }
     /// One virtual line (0 = oldest), already padded/truncated to `columns`.
     func line(_ index: Int) -> [TerminalGridCell]
+    /// OSC 133 shell-prompt rows in virtual line space, oldest first (empty without shell
+    /// integration) — drives the copy-mode previous/next-prompt motions.
+    var promptRows: [Int] { get }
+}
+
+extension CopyModeGridSource {
+    /// Default: no shell-integration marks. The engine conformances override this.
+    public var promptRows: [Int] { [] }
 }
 
 /// One virtual line decomposed for column ↔ character mapping: the visible characters plus,

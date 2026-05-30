@@ -10,6 +10,7 @@ public enum CopyModeAction: Codable, Sendable, Equatable {
     case nextWord, previousWord
     case startOfLine, endOfLine
     case top, bottom                       // history-top / history-bottom
+    case previousPrompt, nextPrompt        // jump between OSC 133 shell-prompt rows
     case pageUp, pageDown, halfPageUp, halfPageDown
     case beginSelection, clearSelection, selectLine, rectangleToggle
     case searchForward, searchBackward, searchAgain, searchReverse
@@ -31,6 +32,8 @@ public enum CopyModeAction: Codable, Sendable, Equatable {
         case .endOfLine: return "end-of-line"
         case .top: return "history-top"
         case .bottom: return "history-bottom"
+        case .previousPrompt: return "previous-prompt"
+        case .nextPrompt: return "next-prompt"
         case .pageUp: return "page-up"
         case .pageDown: return "page-down"
         case .halfPageUp: return "halfpage-up"
@@ -65,6 +68,8 @@ public enum CopyModeAction: Codable, Sendable, Equatable {
         case "end-of-line": self = .endOfLine
         case "history-top", "top-line": self = .top
         case "history-bottom", "bottom-line": self = .bottom
+        case "previous-prompt": self = .previousPrompt
+        case "next-prompt": self = .nextPrompt
         case "page-up": self = .pageUp
         case "page-down": self = .pageDown
         case "halfpage-up": self = .halfPageUp

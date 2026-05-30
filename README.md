@@ -32,6 +32,8 @@ See [docs/MIGRATION.md](docs/MIGRATION.md).
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`), Settings (`Cmd+,`)
 - 485 built-in color themes + `.harnesstheme` export/import for sharing
+- Shell integration (OSC 133): prompt marks for jump-to-prompt + command success/failure gutter — bash/zsh/fish snippets in [docs/shell-integration/](docs/shell-integration/README.md)
+- Inline images (Sixel / Kitty / iTerm2) that persist across reflow and into scrollback
 
 ## Download and install
 
@@ -120,7 +122,9 @@ harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 | Scriptable send-keys / capture-pane / resize-pane | Yes | No | Limited | Yes |
 | In-app prefix keymap (`Ctrl-A`) | Yes | No | No | Yes |
 | Auto-detected agent status (Codex / Claude Code / Cursor / …) | Yes | No | No | No |
-| Live shell detach/reattach | v1.1 | No | Partial | Yes |
+| Live shell detach/reattach (multi-client) | Yes | No | Partial | Yes |
+| Shell integration (OSC 133 prompt marks) | Yes | Yes | No | No |
+| Inline images persist across reflow + scrollback | Yes | No | No | No |
 
 ## Distribution
 

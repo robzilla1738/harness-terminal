@@ -43,6 +43,14 @@ public enum CopyModeReducer {
         case .endOfLine: s.cursor.column = grid.renderedLine(s.cursor.line).lastContentColumn
         case .top: s.cursor = GridPosition(line: 0, column: 0)
         case .bottom: s.cursor = GridPosition(line: max(0, grid.totalLines - 1), column: 0)
+        case .previousPrompt:
+            if let target = grid.promptRows.last(where: { $0 < s.cursor.line }) {
+                s.cursor = GridPosition(line: target, column: 0)
+            }
+        case .nextPrompt:
+            if let target = grid.promptRows.first(where: { $0 > s.cursor.line }) {
+                s.cursor = GridPosition(line: target, column: 0)
+            }
         case .pageUp: s.cursor.line = max(0, s.cursor.line - grid.viewportRows)
         case .pageDown: s.cursor.line = min(grid.totalLines - 1, s.cursor.line + grid.viewportRows)
         case .halfPageUp: s.cursor.line = max(0, s.cursor.line - max(1, grid.viewportRows / 2))

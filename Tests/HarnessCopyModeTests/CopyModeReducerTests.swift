@@ -9,11 +9,13 @@ private struct FakeGrid: CopyModeGridSource {
     let lines: [String]
     let columns: Int
     let viewportRows: Int
+    let promptRows: [Int]
 
-    init(_ lines: [String], columns: Int? = nil, viewportRows: Int? = nil) {
+    init(_ lines: [String], columns: Int? = nil, viewportRows: Int? = nil, prompts: [Int] = []) {
         self.lines = lines
         self.columns = columns ?? (lines.map(\.count).max() ?? 1)
         self.viewportRows = viewportRows ?? lines.count
+        self.promptRows = prompts
     }
 
     var totalLines: Int { lines.count }
@@ -70,6 +72,29 @@ final class CopyModeReducerTests: XCTestCase {
         s = reduce(s, .bottom, grid)
         XCTAssertEqual(s.cursor.line, 2)
         XCTAssertEqual(s.viewTop, 1) // 3 lines, 2 rows → bottom row scrolled to viewTop 1
+    }
+
+    func testPromptJumpMotions() {
+        // Prompts on lines 1 and 4 of a 6-line buffer.
+        let grid = FakeGrid(["out", "$ a", "r1", "r2", "$ b", "r3"], viewportRows: 6, prompts: [1, 4])
+        var s = CopyModeReducer.initialState(grid: grid) // cursor at bottom (line 5)
+        s = reduce(s, .previousPrompt, grid)
+        XCTAssertEqual(s.cursor.line, 4, "previous-prompt lands on the nearest prompt above")
+        s = reduce(s, .previousPrompt, grid)
+        XCTAssertEqual(s.cursor.line, 1)
+        s = reduce(s, .previousPrompt, grid)
+        XCTAssertEqual(s.cursor.line, 1, "no prompt above the first → stays put")
+        s = reduce(s, .nextPrompt, grid)
+        XCTAssertEqual(s.cursor.line, 4, "next-prompt lands on the nearest prompt below")
+        s = reduce(s, .nextPrompt, grid)
+        XCTAssertEqual(s.cursor.line, 4, "no prompt below the last → stays put")
+    }
+
+    func testPromptJumpNoOpWithoutMarks() {
+        let grid = FakeGrid(["a", "b", "c"], viewportRows: 3) // no prompts
+        var s = CopyModeReducer.initialState(grid: grid)
+        s = reduce(s, .previousPrompt, grid)
+        XCTAssertEqual(s.cursor.line, 2, "no marks → previous-prompt is a no-op")
     }
 
     func testWordMotion() {
