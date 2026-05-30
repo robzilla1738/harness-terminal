@@ -58,6 +58,11 @@ public final class TerminalEmulator: VTParserHandler {
     private var g1: Charset = .ascii
     private var glUsesG1 = false
 
+    /// In-flight Kitty graphics chunk reassembly, keyed by image id. The first chunk carries the
+    /// control keys (format/dims); later chunks append payload until `m=0`.
+    private var kittyPending: [Int: (command: KittyGraphicsCommand, payload: [UInt8])] = [:]
+    private let maxKittyPendingBytes = 32 << 20
+
     public init(cols: Int, rows: Int) {
         let c = max(1, cols)
         let r = max(1, rows)
@@ -203,6 +208,76 @@ public final class TerminalEmulator: VTParserHandler {
         }
     }
 
+    func parserDCS(_ data: [UInt8]) {
+        // Sixel images arrive as DCS `… q …`. Decode + place (A2/A3).
+        guard data.contains(0x71) /* 'q' */, let image = SixelDecoder.decode(data) else { return }
+        placeImage(image, z: 0)
+    }
+
+    func parserAPC(_ data: [UInt8]) {
+        // Kitty graphics protocol (`G …`). Reassemble chunks, then decode + place.
+        guard let command = KittyGraphicsCommand.parse(data) else { return }
+        handleKittyGraphics(command)
+    }
+
+    // MARK: - Inline images
+
+    /// Decoded pixels for a placed image (queried by the renderer on the main thread).
+    public func image(for id: Int) -> DecodedImage? { current.image(for: id) }
+
+    /// Set by the host so an image's cell footprint + cursor advance match the real cell size.
+    public func setCellPixelSize(width: Int, height: Int) {
+        for screen in [primary, alternate] {
+            screen.cellPixelWidth = max(1, width)
+            screen.cellPixelHeight = max(1, height)
+        }
+    }
+
+    private func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0) {
+        current.placeImage(image, cols: cols, rows: rows, z: z)
+    }
+
+    private func handleKittyGraphics(_ cmd: KittyGraphicsCommand) {
+        let key = cmd.imageID
+        if cmd.moreChunks {
+            if var pending = kittyPending[key] {
+                guard pending.payload.count < maxKittyPendingBytes else { kittyPending[key] = nil; return }
+                pending.payload.append(contentsOf: cmd.payload)
+                kittyPending[key] = pending
+            } else {
+                kittyPending[key] = (cmd, cmd.payload) // first chunk holds the control keys
+            }
+            return
+        }
+        // Final chunk: combine with any accumulated chunks (whose first command holds the control).
+        let base: KittyGraphicsCommand
+        var payload: [UInt8]
+        if let pending = kittyPending.removeValue(forKey: key) {
+            base = pending.command
+            payload = pending.payload
+            payload.append(contentsOf: cmd.payload)
+        } else {
+            base = cmd
+            payload = cmd.payload
+        }
+        // Only transmit+display / put actions place an image; deletes/queries are ignored.
+        guard base.action == "T" || base.action == "p" else { return }
+        guard let image = base.decode(base64Payload: payload) else { return }
+        placeImage(image, cols: base.cols, rows: base.rows, z: base.z)
+    }
+
+    /// iTerm2 inline image (`OSC 1337 ; File=…:<base64>`). width/height args may be cells (`N`),
+    /// pixels (`Npx`), or percent (`N%`); only plain cell counts are honored here — pixel/percent
+    /// fall back to the footprint computed from the image's pixels.
+    private func handleITerm2Image(_ payload: String) {
+        guard let parsed = ITerm2InlineImage.parse(Array(payload.utf8)) else { return }
+        func cells(_ s: String?) -> Int {
+            guard let s, !s.hasSuffix("px"), !s.hasSuffix("%"), let n = Int(s) else { return 0 }
+            return n
+        }
+        placeImage(parsed.image, cols: cells(parsed.widthArg), rows: cells(parsed.heightArg), z: 0)
+    }
+
     func parserOSC(_ data: [UInt8]) {
         guard let text = String(bytes: data, encoding: .utf8) else { return }
         guard let semi = text.firstIndex(of: ";") else { return }
@@ -220,6 +295,7 @@ public final class TerminalEmulator: VTParserHandler {
         case "9": onNotification?(nil, payload)            // OSC 9 ; <body> — desktop notification
         case "777": handleNotify777(payload)               // OSC 777 ; notify ; <title> ; <body>
         case "22": setPointerShape(payload)                // OSC 22 ; <shape> — mouse cursor shape
+        case "1337": handleITerm2Image(payload)            // iTerm2 inline image (File=…)
         default: break
         }
     }
@@ -483,6 +559,7 @@ public final class TerminalEmulator: VTParserHandler {
         g0 = .ascii
         g1 = .ascii
         glUsesG1 = false
+        kittyPending.removeAll()
         pointerShape = nil
         hyperlinks.removeAll()
         hyperlinkKeys.removeAll()

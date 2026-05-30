@@ -21,6 +21,11 @@ protocol VTParserHandler: AnyObject {
     func parserESC(final: UInt8, intermediates: [UInt8])
     /// A complete OSC string payload (without the introducer or terminator).
     func parserOSC(_ data: [UInt8])
+    /// A complete DCS string payload (without the `ESC P` introducer or `ST`), e.g. Sixel.
+    func parserDCS(_ data: [UInt8])
+    /// A complete APC string payload (without the `ESC _` introducer or `ST`), e.g. the Kitty
+    /// graphics protocol.
+    func parserAPC(_ data: [UInt8])
 }
 
 /// A streaming VT100/VT220/xterm parser based on the canonical VT500 state machine
@@ -40,8 +45,11 @@ final class VTParser {
         case csiIntermediate
         case csiIgnore
         case oscString
-        case stringConsume // DCS/PM/APC/SOS: skip payload until ST
+        case stringConsume // PM/SOS: skip payload until ST
+        case stringCapture // DCS/APC: capture payload (Sixel, Kitty graphics) until ST
     }
+
+    private enum StringKind { case dcs, apc }
 
     private weak var handler: VTParserHandler?
     private var state: State = .ground
@@ -76,6 +84,14 @@ final class VTParser {
     /// consuming the (malformed/oversized) sequence but stop accumulating.
     private let maxIntermediates = 8
     private let maxOSCBytes = 1 << 20
+    /// OSC 1337 (iTerm2 inline images) can be large; only that OSC gets the bigger budget so the
+    /// OSC-52 clipboard DoS bound (`maxOSCBytes`) stays tight for everything else.
+    private let maxOSCImageBytes = 32 << 20
+    /// DCS/APC image payloads (Sixel, Kitty graphics) — bounded; past the cap we keep consuming
+    /// but stop accumulating (the sequence is malformed/oversized).
+    private let maxImageStringBytes = 32 << 20
+    private var stringKind: StringKind = .dcs
+    private var stringBuffer: [UInt8] = []
 
     /// Append an intermediate byte, dropping anything past the cap.
     private func appendIntermediate(_ byte: UInt8) {
@@ -90,6 +106,7 @@ final class VTParser {
         state = .ground
         clearCSI()
         oscBuffer.removeAll(keepingCapacity: true)
+        stringBuffer.removeAll(keepingCapacity: true)
         sawESCInString = false
         utf8Remaining = 0
     }
@@ -115,6 +132,7 @@ final class VTParser {
         case .csiIgnore: csiIgnore(byte)
         case .oscString: oscString(byte)
         case .stringConsume: stringConsume(byte)
+        case .stringCapture: stringCapture(byte)
         }
     }
 
@@ -189,7 +207,11 @@ final class VTParser {
         case 0x5D: // ']'
             oscBuffer.removeAll(keepingCapacity: true)
             state = .oscString
-        case 0x50, 0x58, 0x5E, 0x5F: // DCS 'P', SOS 'X', PM '^', APC '_'
+        case 0x50: // DCS 'P' — capture (Sixel)
+            stringKind = .dcs; stringBuffer.removeAll(keepingCapacity: true); state = .stringCapture
+        case 0x5F: // APC '_' — capture (Kitty graphics)
+            stringKind = .apc; stringBuffer.removeAll(keepingCapacity: true); state = .stringCapture
+        case 0x58, 0x5E: // SOS 'X', PM '^' — no payload of interest, discard
             state = .stringConsume
         case 0x20 ... 0x2F: // intermediate
             appendIntermediate(byte)
@@ -373,8 +395,19 @@ final class VTParser {
         case 0x1B:
             sawESCInString = true
         default:
-            if oscBuffer.count < maxOSCBytes { oscBuffer.append(byte) }
+            if oscBuffer.count < oscCap { oscBuffer.append(byte) }
         }
+    }
+
+    /// OSC byte budget: the larger image cap once the buffer is recognizably `1337;…` (iTerm2
+    /// inline image), otherwise the tight default that bounds OSC-52 clipboard floods.
+    private var oscCap: Int {
+        if oscBuffer.count >= 5,
+           oscBuffer[0] == 0x31, oscBuffer[1] == 0x33, oscBuffer[2] == 0x33, oscBuffer[3] == 0x37,
+           oscBuffer[4] == 0x3B { // "1337;"
+            return maxOSCImageBytes
+        }
+        return maxOSCBytes
     }
 
     // MARK: - DCS / PM / APC / SOS payload consumption
@@ -397,6 +430,36 @@ final class VTParser {
         default:
             break
         }
+    }
+
+    /// Capture a DCS/APC payload until its String Terminator (`ESC \`) or BEL, then dispatch it
+    /// (Sixel via `parserDCS`, Kitty graphics via `parserAPC`). Bounded by `maxImageStringBytes`.
+    private func stringCapture(_ byte: UInt8) {
+        if sawESCInString {
+            sawESCInString = false
+            if byte == 0x5C { dispatchCapturedString(); state = .ground; return }
+            // A lone ESC aborts the string and reprocesses from ground.
+            stringBuffer.removeAll(keepingCapacity: true)
+            state = .ground
+            feedFromGround(byte)
+            return
+        }
+        switch byte {
+        case 0x07: // BEL terminates
+            dispatchCapturedString(); state = .ground
+        case 0x1B:
+            sawESCInString = true
+        default:
+            if stringBuffer.count < maxImageStringBytes { stringBuffer.append(byte) }
+        }
+    }
+
+    private func dispatchCapturedString() {
+        switch stringKind {
+        case .dcs: handler?.parserDCS(stringBuffer)
+        case .apc: handler?.parserAPC(stringBuffer)
+        }
+        stringBuffer.removeAll(keepingCapacity: true)
     }
 
     /// Reprocess a byte as if freshly arriving in the ground state. Used when a string

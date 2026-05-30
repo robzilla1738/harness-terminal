@@ -25,6 +25,18 @@ final class TerminalScreen {
     /// at index `c` means a tab stop sits at column `c`.
     private var tabStops: [Bool] = []
 
+    // MARK: - Inline images
+    /// One placed image, in viewport-cell coordinates. Pixels live in `imageStore` keyed by id.
+    private struct ImagePlacement { var id: Int; var row: Int; var col: Int; var cols: Int; var rows: Int; var z: Int }
+    private var placements: [ImagePlacement] = []
+    private var imageStore: [Int: DecodedImage] = [:]
+    private var nextImageID = 1
+    private var imageByteTotal = 0
+    /// Pixel size of one cell, set by the host renderer; used to size an image's cell footprint
+    /// and advance the cursor below it. A deterministic headless default keeps engine tests stable.
+    var cellPixelWidth = 8
+    var cellPixelHeight = 16
+
     var cursorVisible = true
     /// Program-requested cursor shape/blink (DECSCUSR); `.default`/nil honor the user setting.
     var cursorShape: TerminalCursorShape = .default
@@ -85,8 +97,64 @@ final class TerminalScreen {
             cols: cols,
             rows: rows,
             cells: cells,
-            cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: cursorVisible, shape: cursorShape, blinking: cursorBlinking)
+            cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: cursorVisible, shape: cursorShape, blinking: cursorBlinking),
+            images: imageSnapshots(rowOffset: 0)
         )
+    }
+
+    /// Placements mapped into the snapshot's viewport (shifted by `rowOffset` for scrollback
+    /// views); only those still overlapping the viewport are emitted.
+    private func imageSnapshots(rowOffset: Int) -> [ImagePlacementSnapshot] {
+        placements.compactMap { p in
+            let row = p.row + rowOffset
+            guard row + p.rows > 0, row < rows else { return nil }
+            return ImagePlacementSnapshot(id: p.id, row: row, col: p.col, cols: p.cols, rows: p.rows, z: p.z)
+        }
+    }
+
+    /// Decoded pixels for a placed image (queried by the renderer on the main thread).
+    func image(for id: Int) -> DecodedImage? { imageStore[id] }
+
+    /// Place a decoded image at the cursor. `cols`/`rows`, when > 0, override the computed cell
+    /// footprint (Kitty `c`/`r`, iTerm2 width/height). Advances the cursor below the image.
+    func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0) {
+        let fCols = cols > 0 ? cols : max(1, Int((Double(image.pixelWidth) / Double(max(1, cellPixelWidth))).rounded(.up)))
+        let fRows = rows > 0 ? rows : max(1, Int((Double(image.pixelHeight) / Double(max(1, cellPixelHeight))).rounded(.up)))
+        let id = nextImageID; nextImageID += 1
+        imageStore[id] = image
+        imageByteTotal += image.byteCount
+        placements.append(ImagePlacement(id: id, row: cursorRow, col: cursorCol, cols: fCols, rows: fRows, z: z))
+        evictImagesIfNeeded()
+        // Move the cursor below the image so following output doesn't overlap it (the placement
+        // rides along if these line feeds scroll the screen).
+        for _ in 0 ..< fRows { lineFeed() }
+    }
+
+    /// Enforce the per-screen image byte budget by dropping the oldest placements (LRU by age).
+    private func evictImagesIfNeeded() {
+        while imageByteTotal > ImageLimits.maxBytesPerScreen, !placements.isEmpty {
+            let oldest = placements.removeFirst()
+            if let bytes = imageStore.removeValue(forKey: oldest.id)?.byteCount { imageByteTotal -= bytes }
+        }
+    }
+
+    /// Shift placements as the screen scrolls; drop any fully scrolled out of the viewport.
+    private func shiftPlacements(by delta: Int) {
+        guard !placements.isEmpty else { return }
+        for i in placements.indices { placements[i].row += delta }
+        placements.removeAll { p in
+            if p.row + p.rows <= 0 || p.row >= rows {
+                if let bytes = imageStore.removeValue(forKey: p.id)?.byteCount { imageByteTotal -= bytes }
+                return true
+            }
+            return false
+        }
+    }
+
+    private func clearImages() {
+        placements.removeAll()
+        imageStore.removeAll()
+        imageByteTotal = 0
     }
 
     /// DECSCUSR `CSI Ps SP q`: 0/1 blink block, 2 steady block, 3 blink underline, 4 steady
@@ -131,7 +199,9 @@ final class TerminalScreen {
             cols: cols,
             rows: rows,
             cells: out,
-            cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: false)
+            cursor: TerminalCursor(row: cursorRow, col: cursorCol, visible: false),
+            // Images are viewport-anchored; scrolling back `clamped` lines moves them down.
+            images: imageSnapshots(rowOffset: clamped)
         )
     }
 
@@ -242,6 +312,9 @@ final class TerminalScreen {
         scrollBottom = nr - 1
         pendingWrap = false
         ensureTabStopsSized()   // tab stops are column-absolute; keep the array sized to `cols`
+        // Images don't reflow; drop them on a geometry change rather than mispositioning pixels
+        // (a documented limitation matching most terminals).
+        clearImages()
     }
 
     /// True when a cell is the default blank (no glyph, default bg, no attributes) — used to
@@ -622,6 +695,7 @@ final class TerminalScreen {
             }
             rowWrapped[scrollBottom] = false
         }
+        shiftPlacements(by: -count)   // images ride the scroll; off-screen ones drop
     }
 
     func scrollDown(_ n: Int) {
@@ -641,6 +715,7 @@ final class TerminalScreen {
             }
             rowWrapped[scrollTop] = false
         }
+        shiftPlacements(by: count)
     }
 
     // MARK: - Erase / edit
@@ -665,6 +740,8 @@ final class TerminalScreen {
         case 2, 3:
             for i in 0 ..< cells.count { cells[i] = blank }
             for r in 0 ..< rows { rowWrapped[r] = false }
+            clearImages()   // ED 2/3 clears the screen (and scrollback for 3) → drop images
+            if mode == 3 { history.removeAll() }
         default: // 0
             for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
             rowWrapped[cursorRow] = false
@@ -936,6 +1013,7 @@ final class TerminalScreen {
         scrollTop = 0
         scrollBottom = rows - 1
         tabStops = Self.defaultTabStops(cols)
+        clearImages()
     }
 
     private func clamp(_ v: Int, _ lo: Int, _ hi: Int) -> Int {

@@ -130,18 +130,38 @@ public struct TerminalCursor: Equatable, Sendable {
 /// (row-major) plus the cursor. This is what `readGrid()` returns and what the
 /// compositor / renderer consume. Pure value type, `Sendable`, safe to hand across
 /// threads.
+/// A placed inline image, in viewport-cell coordinates. Carries only geometry + the image id —
+/// the RGBA pixels stay in the emulator's store (queried by id on the render thread) so the
+/// `Sendable` snapshot never copies megabytes of pixels across threads.
+public struct ImagePlacementSnapshot: Equatable, Sendable {
+    public let id: Int
+    public let row: Int      // top-left cell row (viewport space; may be negative while scrolling off)
+    public let col: Int
+    public let cols: Int     // cell footprint
+    public let rows: Int
+    public let z: Int        // <0 below text, >=0 above background (Kitty z); default 0
+
+    public init(id: Int, row: Int, col: Int, cols: Int, rows: Int, z: Int) {
+        self.id = id; self.row = row; self.col = col; self.cols = cols; self.rows = rows; self.z = z
+    }
+}
+
 public struct TerminalGridSnapshot: Equatable, Sendable {
     public let cols: Int
     public let rows: Int
     /// Row-major: index `row * cols + col`. Always `cols * rows` long.
     public let cells: [TerminalGridCell]
     public let cursor: TerminalCursor
+    /// Inline images overlaid on this viewport (Sixel / Kitty graphics / iTerm2). Empty when none.
+    public let images: [ImagePlacementSnapshot]
 
-    public init(cols: Int, rows: Int, cells: [TerminalGridCell], cursor: TerminalCursor) {
+    public init(cols: Int, rows: Int, cells: [TerminalGridCell], cursor: TerminalCursor,
+                images: [ImagePlacementSnapshot] = []) {
         self.cols = cols
         self.rows = rows
         self.cells = cells
         self.cursor = cursor
+        self.images = images
     }
 
     /// The cell at (`row`, `col`), or `nil` if out of bounds. Bounds-checked so callers
