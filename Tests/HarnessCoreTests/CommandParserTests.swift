@@ -158,4 +158,25 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("move-window -t :2"), .moveWindow(toIndex: 2))
         XCTAssertEqual(try CommandParser.parse("select-pane -l"), .selectPane(target: .last))
     }
+
+    func testPaneCycleConvenienceVerbs() throws {
+        XCTAssertEqual(try CommandParser.parse("next-pane"), .selectPane(target: .next))
+        XCTAssertEqual(try CommandParser.parse("previous-pane"), .selectPane(target: .previous))
+        XCTAssertEqual(try CommandParser.parse("last-pane"), .selectPane(target: .last))
+    }
+
+    func testKnownVerbsAreAllParseable() {
+        // Drift guard: every verb advertised by `list-commands` must be one the parser actually
+        // accepts. A verb may still throw missing-arg/flag (it needs operands) — that proves it's
+        // known; only `.unknownCommand` is a failure.
+        for verb in CommandParser.knownVerbs {
+            do {
+                _ = try CommandParser.parse(verb)
+            } catch CommandParseError.unknownCommand(let name) {
+                XCTFail("knownVerbs lists \(verb) but the parser rejects it as unknown (\(name))")
+            } catch {
+                // Other parse errors (missing arg/flag) are fine — the verb is recognized.
+            }
+        }
+    }
 }

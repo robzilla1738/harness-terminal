@@ -16,6 +16,16 @@ struct HarnessCLI {
                 try printWorkspaces(client)
             case "list-surfaces":
                 try printSurfaces(client)
+            case "list-sessions":
+                try printSessions(client)
+            case "list-windows":
+                try printWindows(args, client: client)
+            case "list-panes":
+                try printPanes(args, client: client)
+            case "has-session":
+                try handleHasSession(args, client: client)   // exits with status, prints nothing
+            case "list-commands":
+                CommandParser.knownVerbs.forEach { print($0) }
             case "get-snapshot":
                 try printSnapshot(client)
             case "new-workspace":
@@ -285,6 +295,62 @@ struct HarnessCLI {
         let response = try checkedRequest(client, .listWorkspaces)
         guard case let .workspaces(items) = response else { return nil }
         return items.first { $0.name == target }?.id
+    }
+
+    private static func snapshot(_ client: DaemonClient) throws -> SessionSnapshot {
+        guard case let .snapshot(snapshot) = try checkedRequest(client, .getSnapshot) else {
+            throw DaemonClientError.unexpectedResponse
+        }
+        return snapshot
+    }
+
+    static func printSessions(_ client: DaemonClient) throws {
+        try SnapshotQueryFormatter.sessions(snapshot(client)).forEach { print($0) }
+    }
+
+    /// `list-windows [--session <name|uuid>]` — all tabs, or one session's when targeted.
+    static func printWindows(_ args: [String], client: DaemonClient) throws {
+        let snap = try snapshot(client)
+        if let target = flagValue(args, flag: "--session"),
+           let session = resolveSession(snap, nameOrID: target) {
+            SnapshotQueryFormatter.windows(in: session).forEach { print($0) }
+        } else {
+            SnapshotQueryFormatter.windows(snap).forEach { print($0) }
+        }
+    }
+
+    /// `list-panes [--tab <uuid>]` — panes of the targeted tab, or the active tab.
+    static func printPanes(_ args: [String], client: DaemonClient) throws {
+        let snap = try snapshot(client)
+        let tab: Tab?
+        if let raw = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: raw) {
+            tab = snap.workspaces.flatMap(\.sessions).flatMap(\.tabs).first { $0.id == tabID }
+        } else {
+            tab = snap.activeWorkspace?.activeTab
+        }
+        guard let tab else {
+            fputs("list-panes: no matching tab\n", stderr)
+            exit(1)
+        }
+        SnapshotQueryFormatter.panes(in: tab).forEach { print($0) }
+    }
+
+    /// `has-session --session <name|uuid>` — tmux scripting verb: exit 0 if it exists, 1 if not,
+    /// printing nothing (so `if harness-cli has-session …` works in shell scripts).
+    static func handleHasSession(_ args: [String], client: DaemonClient) throws {
+        guard let target = flagValue(args, flag: "--session") else {
+            fputs("Usage: harness-cli has-session --session <name|uuid>\n", stderr)
+            exit(2)
+        }
+        let exists = SnapshotQueryFormatter.sessionExists(try snapshot(client), nameOrID: target)
+        exit(exists ? 0 : 1)
+    }
+
+    private static func resolveSession(_ snapshot: SessionSnapshot, nameOrID: String) -> SessionGroup? {
+        let lowered = nameOrID.lowercased()
+        return snapshot.workspaces.flatMap(\.sessions).first {
+            $0.id.uuidString.lowercased() == lowered || $0.name == nameOrID
+        }
     }
 
     static func printSnapshot(_ client: DaemonClient) throws {
@@ -990,6 +1056,11 @@ struct HarnessCLI {
         Commands:
           list-workspaces
           list-surfaces
+          list-sessions
+          list-windows [--session <name|uuid>]
+          list-panes [--tab <uuid>]
+          has-session --session <name|uuid>           (exit 0 if it exists, else 1)
+          list-commands
           get-snapshot
           new-workspace --name <name>
           new-session --workspace <name|uuid> [--cwd path] [--name name]

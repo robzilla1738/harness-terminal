@@ -65,6 +65,20 @@ form; `select-window -t session:N` is supported.
 | `rename-session [name]` | Interactive or inline. |
 | `select-workspace <0..N>` | Focus workspace by index. |
 | `next-workspace` / `previous-workspace` | Cycle workspaces. |
+| `next-pane` / `previous-pane` / `last-pane` | Cycle the active pane (sugar for `select-pane -t :.+/:.-/-l`); bindable. |
+
+### Inspection (CLI / control mode)
+
+These are query verbs (read the daemon snapshot); they don't mutate layout, so they live in
+`harness-cli` and control mode rather than as bindable `Command`s.
+
+| Command | Effect |
+|---|---|
+| `list-sessions` | One line per session: `<id>: <name> (<n> windows)`. |
+| `list-windows [--session <name\|uuid>]` | Tabs across all sessions, or one session's. |
+| `list-panes [--tab <uuid>]` | Panes of the targeted (or active) tab, index-prefixed, active flagged. |
+| `has-session --session <name\|uuid>` | Scripting verb: exit `0` if it exists, `1` if not; prints nothing. |
+| `list-commands` | Print the bindable command vocabulary (`CommandParser.knownVerbs`). |
 
 ## Modes
 

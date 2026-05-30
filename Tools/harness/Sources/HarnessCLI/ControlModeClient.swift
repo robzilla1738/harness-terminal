@@ -69,13 +69,14 @@ enum ControlModeClient {
         switch words.first {
         case "list-sessions", "ls":
             guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 2) else { return "" }
-            return snapshot.workspaces.flatMap { $0.sessions }
-                .map { "\($0.id.uuidString): \($0.name) (\($0.tabs.count) windows)" }
-                .joined(separator: "\n")
+            return SnapshotQueryFormatter.sessions(snapshot).joined(separator: "\n")
         case "list-windows", "lsw":
             guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 2) else { return "" }
-            return snapshot.workspaces.flatMap { $0.sessions }.flatMap { $0.tabs }
-                .enumerated().map { "\($0.offset): \($0.element.title)" }.joined(separator: "\n")
+            return SnapshotQueryFormatter.windows(snapshot).joined(separator: "\n")
+        case "list-panes", "lsp":
+            guard case let .snapshot(snapshot)? = try? client.request(.getSnapshot, timeout: 2),
+                  let tab = snapshot.activeWorkspace?.activeTab else { return "" }
+            return SnapshotQueryFormatter.panes(in: tab).joined(separator: "\n")
         default:
             break
         }

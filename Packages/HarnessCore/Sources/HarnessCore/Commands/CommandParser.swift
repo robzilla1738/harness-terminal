@@ -93,6 +93,25 @@ public enum CommandParser {
 
     private static func resolveAlias(_ name: String) -> String? { aliases[name] }
 
+    /// The bindable command vocabulary — every verb `buildCommand` accepts (what a user can put
+    /// in `bind-key`, the `:` prompt, a hook, or `display-popup -e`). Backs `harness-cli
+    /// list-commands`. `CommandParserTests.testKnownVerbsAreAllParseable` guards it from drifting
+    /// out of sync with the switch below.
+    public static let knownVerbs: [String] = [
+        "bind-key", "break-pane", "choose-buffer", "choose-client", "choose-session",
+        "choose-tree", "choose-window", "clock-mode", "command-prompt", "confirm-before",
+        "copy-mode", "detach", "display-menu", "display-message", "display-panes",
+        "display-popup", "if-shell", "join-pane", "kill-pane", "kill-session", "kill-window",
+        "last-pane", "last-window", "link-window", "list-keys", "lock-client", "move-pane",
+        "move-window", "new-session", "new-window", "next-layout", "next-pane", "next-window",
+        "next-workspace", "pipe-pane", "previous-layout", "previous-pane", "previous-window",
+        "previous-workspace", "reload-keybindings", "rename-session", "rename-window",
+        "renumber-windows", "respawn-pane", "rotate-window", "select-layout", "select-pane",
+        "select-window", "select-workspace", "send-keys", "send-prefix", "show-cheatsheet",
+        "source-config", "source-file", "swap-pane", "swap-window", "switch-client",
+        "synchronize-panes", "unbind-key", "unlink-window", "zoom-pane",
+    ]
+
     private static func buildCommand(name rawName: String, tokens: [String]) throws -> Command {
         let name = resolveAlias(rawName) ?? rawName
         switch name {
@@ -121,6 +140,14 @@ public enum CommandParser {
             if tokens.contains("-M") { return .markPane(set: false) }
             let target = try paneTarget(from: tokens, defaultValue: .next)
             return .selectPane(target: target)
+        // Convenience verbs for the directional cycle (`select-pane -t :.+/:.-` and the
+        // tmux `last-pane`). Bindable like any other verb.
+        case "next-pane":
+            return .selectPane(target: .next)
+        case "previous-pane":
+            return .selectPane(target: .previous)
+        case "last-pane":
+            return .selectPane(target: .last)
         case "join-pane":
             // `-v` → stacked (horizontal divider); default/`-h` → side by side.
             if tokens.contains("-v") { return .joinPane(direction: .horizontal) }

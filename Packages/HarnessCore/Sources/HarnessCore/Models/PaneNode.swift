@@ -45,6 +45,17 @@ public enum PaneNode: Codable, Sendable, Equatable {
             first.allPaneIDs() + second.allPaneIDs()
         }
     }
+
+    /// All leaves in the same first-then-second order as `allPaneIDs()`/`allSurfaceIDs()` and
+    /// `display-panes`/`select-pane` numbering — pairs each pane id with its surface atomically.
+    public func allLeaves() -> [PaneLeaf] {
+        switch self {
+        case let .leaf(leaf):
+            [leaf]
+        case let .branch(_, _, first, second):
+            first.allLeaves() + second.allLeaves()
+        }
+    }
 }
 
 public struct PaneLeaf: Codable, Sendable, Equatable {
