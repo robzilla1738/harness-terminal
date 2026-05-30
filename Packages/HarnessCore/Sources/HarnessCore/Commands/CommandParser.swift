@@ -101,8 +101,10 @@ public enum CommandParser {
         "bind-key", "break-pane", "choose-buffer", "choose-client", "choose-session",
         "choose-tree", "choose-window", "clock-mode", "command-prompt", "confirm-before",
         "copy-mode", "detach", "display-menu", "display-message", "display-panes",
-        "display-popup", "if-shell", "join-pane", "kill-pane", "kill-session", "kill-window",
+        "display-popup", "if-shell", "join-pane", "jump-next-prompt", "jump-previous-prompt",
+        "kill-pane", "kill-session", "kill-window",
         "last-pane", "last-window", "link-window", "list-keys", "lock-client", "move-pane",
+        "reattach-surface",
         "move-window", "new-session", "new-window", "next-layout", "next-pane", "next-window",
         "next-workspace", "pipe-pane", "previous-layout", "previous-pane", "previous-window",
         "previous-workspace", "reload-keybindings", "rename-session", "rename-window",
@@ -227,6 +229,9 @@ public enum CommandParser {
             return .copyMode
         case "display-panes", "displayp": return .displayPanes
         case "detach", "detach-client": return .detachClient
+        case "reattach-surface": return .reattachSurface
+        case "jump-previous-prompt": return .jumpToPreviousPrompt
+        case "jump-next-prompt": return .jumpToNextPrompt
         case "send-keys":
             // `send-keys -X <action> [arg]` dispatches a copy-mode command.
             if let xi = tokens.firstIndex(of: "-X"), xi + 1 < tokens.count {

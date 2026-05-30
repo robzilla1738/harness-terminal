@@ -561,6 +561,37 @@ public final class HarnessTerminalSurfaceView: NSView {
         scheduleRender()
     }
 
+    // MARK: - Jump to prompt (OSC 133)
+
+    /// Scroll so the nearest shell-prompt row *above* the current top-of-viewport line sits at the
+    /// top. No-op without shell-integration marks or when already above the first prompt.
+    public func jumpToPreviousPrompt() {
+        let prompts = emulator.promptRows
+        guard !prompts.isEmpty else { return }
+        let topVisible = emulator.historyCount - scrollOffset   // buffer index of the top row
+        guard let target = prompts.last(where: { $0 < topVisible }) else { return }
+        scrollToBufferLine(target)
+    }
+
+    /// Scroll so the nearest shell-prompt row *below* the current top-of-viewport line sits at the
+    /// top. No-op without marks or when already at/after the last prompt.
+    public func jumpToNextPrompt() {
+        let prompts = emulator.promptRows
+        guard !prompts.isEmpty else { return }
+        let topVisible = emulator.historyCount - scrollOffset
+        guard let target = prompts.first(where: { $0 > topVisible }) else { return }
+        scrollToBufferLine(target)
+    }
+
+    /// Set the scrollback offset so virtual buffer line `index` is the top viewport row.
+    private func scrollToBufferLine(_ index: Int) {
+        let target = max(0, min(emulator.historyCount, emulator.historyCount - index))
+        guard target != scrollOffset else { return }
+        scrollOffset = target
+        clearSelection()
+        scheduleRender()
+    }
+
     // MARK: - Selection & copy
 
     /// The active selection span (nil when nothing is selected).

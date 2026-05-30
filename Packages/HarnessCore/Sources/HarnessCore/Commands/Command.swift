@@ -44,6 +44,9 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case copyMode                                  // toggle copy mode
     case copyModeCommand(CopyModeAction)           // copy-mode -X <action> (in-mode motion/selection)
     case detachClient                              // detach the calling client
+    case reattachSurface                           // re-grab a surface released to headless
+    case jumpToPreviousPrompt                      // scroll to the previous OSC 133 shell prompt
+    case jumpToNextPrompt                          // scroll to the next OSC 133 shell prompt
 
     // MARK: Scripting
     case sendKeys(keys: [String])
@@ -155,6 +158,9 @@ extension Command {
             if case let .copyPipe(cmd) = action { return "copy-mode -X copy-pipe '\(cmd)'" }
             return "copy-mode -X \(action.tmuxName)"
         case .detachClient: return "detach-client"
+        case .reattachSurface: return "reattach-surface"
+        case .jumpToPreviousPrompt: return "jump-previous-prompt"
+        case .jumpToNextPrompt: return "jump-next-prompt"
         case let .sendKeys(keys): return "send-keys \(keys.joined(separator: " "))"
         case let .displayMessage(format): return "display-message \(format)"
         case let .runShell(cmd, capture): return "run-shell \(capture ? "-b " : "")'\(cmd)'"

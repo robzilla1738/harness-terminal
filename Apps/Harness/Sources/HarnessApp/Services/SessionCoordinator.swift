@@ -919,9 +919,35 @@ final class SessionCoordinator: NSObject {
         host.performCopyModeAction(action)
     }
 
+    /// Release the active pane to headless: drop this client's output subscription + size vote so
+    /// the PTY keeps running (and can grow to other clients), then re-grab with
+    /// `reattachActiveSurface()`. Routed through the host — the daemon's per-client detach acts on
+    /// the subscribing connection, which an ephemeral RPC socket is not.
     func detachActiveSurface() {
-        guard let surfaceID = activeSurfaceID else { return }
-        requestDaemon(.detachSurface(surfaceID: surfaceID.uuidString))
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
+        host.detachFromDaemonSurface()
+    }
+
+    /// Re-grab a surface released with `detachActiveSurface()`: resubscribe and replay scrollback.
+    func reattachActiveSurface() {
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
+        host.reattachToDaemonSurface()
+    }
+
+    /// Scroll the active pane's viewport to the previous OSC 133 shell prompt (no-op without marks).
+    func jumpToPreviousPrompt() {
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
+        host.jumpToPreviousPrompt()
+    }
+
+    /// Scroll the active pane's viewport to the next OSC 133 shell prompt (no-op without marks).
+    func jumpToNextPrompt() {
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
+        host.jumpToNextPrompt()
     }
 
     func selectWorkspace(byIndex index: Int) {

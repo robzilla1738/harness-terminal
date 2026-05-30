@@ -320,6 +320,7 @@ public enum CommandIPCTranslator {
 
         // MARK: Client-local (UI overlays, modes, file/shell, composition)
         case .markPane, .synchronizePanes, .displayPanes, .copyMode, .copyModeCommand, .detachClient,
+             .reattachSurface, .jumpToPreviousPrompt, .jumpToNextPrompt,
              .displayMessage, .runShell, .ifShell, .bindKey, .unbindKey, .listKeys,
              .sourceConfig, .reloadKeybindings, .showCheatsheet, .sequence,
              .sendPrefix, .sourceFile, .commandPrompt, .confirmBefore, .choose,

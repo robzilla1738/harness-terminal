@@ -365,6 +365,26 @@ public final class TerminalHostView: NSView {
         nativeView.performCopyModeAction(action)
     }
 
+    /// Release this pane to headless: cancel the daemon output subscription, which drops this
+    /// client's hold (subscription + size vote) on the surface while the PTY keeps running. The
+    /// session stays alive for `reattachToDaemonSurface()` (or another client) to re-grab.
+    public func detachFromDaemonSurface() {
+        outputSubscription?.cancel()
+        outputSubscription = nil
+    }
+
+    /// Re-grab a surface released with `detachFromDaemonSurface()`: resubscribe and replay
+    /// scrollback so the pane catches up. No-op if still attached.
+    public func reattachToDaemonSurface() {
+        guard outputSubscription == nil else { return }
+        startDaemonOutput()
+    }
+
+    /// Scroll the viewport to the previous/next OSC 133 shell prompt (no-op without shell
+    /// integration marks).
+    public func jumpToPreviousPrompt() { nativeView.jumpToPreviousPrompt() }
+    public func jumpToNextPrompt() { nativeView.jumpToNextPrompt() }
+
     /// `synchronize-panes`: the surface-id strings (excluding this pane) that this
     /// pane's input should also be mirrored to. Empty = normal single-pane input.
     public func setSyncSiblings(_ surfaceIDStrings: [String]) {

@@ -123,6 +123,12 @@ final class MainExecutor: CommandExecutor {
             coordinator.performCopyModeAction(action)
         case .detachClient:
             coordinator.detachActiveSurface()
+        case .reattachSurface:
+            coordinator.reattachActiveSurface()
+        case .jumpToPreviousPrompt:
+            coordinator.jumpToPreviousPrompt()
+        case .jumpToNextPrompt:
+            coordinator.jumpToNextPrompt()
         case .sendKeys(let keys):
             guard let surfaceID = coordinator.activeSurfaceID else {
                 throw CommandExecutionError.noActiveSurface
