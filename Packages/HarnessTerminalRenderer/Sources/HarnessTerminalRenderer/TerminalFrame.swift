@@ -98,13 +98,19 @@ public struct TerminalFrame: Equatable, Sendable {
     public var cursor: CursorRender
     /// Inline images overlaid on the grid (empty when none).
     public var images: [FrameImage]
+    /// OSC 133 prompt-gutter colors keyed by viewport row: the resolved stripe color to paint
+    /// in the left margin of a shell-prompt row (green = exit 0, red = non-zero, neutral =
+    /// prompt with no exit yet). Empty without shell integration, so the gutter is a no-op then.
+    public var promptGutter: [Int: RenderColor]
 
-    public init(columns: Int, rows: Int, cells: [RenderCell], cursor: CursorRender, images: [FrameImage] = []) {
+    public init(columns: Int, rows: Int, cells: [RenderCell], cursor: CursorRender,
+                images: [FrameImage] = [], promptGutter: [Int: RenderColor] = [:]) {
         self.columns = columns
         self.rows = rows
         self.cells = cells
         self.cursor = cursor
         self.images = images
+        self.promptGutter = promptGutter
     }
 
     public func cell(row: Int, column: Int) -> RenderCell? {
@@ -372,6 +378,26 @@ public struct FrameBuilder {
                                          columns: p.cols, rows: p.rows, z: p.z, image: decoded))
             }
         }
-        return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells, cursor: cursor, images: images)
+        // OSC 133 prompt gutter: resolve each marked row's stripe color from the palette —
+        // ANSI green (success) / red (failure) / bright-black (prompt with no exit yet).
+        let promptGutter = resolvePromptGutter(snapshot.marks)
+        return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells,
+                             cursor: cursor, images: images, promptGutter: promptGutter)
+    }
+
+    /// Map OSC 133 semantic marks (viewport row → mark) to gutter stripe colors. A mark with a
+    /// known exit is green (0) or red (non-zero); an unfinished prompt is neutral (bright-black).
+    private func resolvePromptGutter(_ marks: [Int: SemanticMark]) -> [Int: RenderColor] {
+        guard !marks.isEmpty else { return [:] }
+        let success = RenderColor(resolver.palette.color(at: 2))   // ANSI green
+        let failure = RenderColor(resolver.palette.color(at: 1))   // ANSI red
+        let neutral = RenderColor(resolver.palette.color(at: 8))   // bright black (gray)
+        var gutter: [Int: RenderColor] = [:]
+        gutter.reserveCapacity(marks.count)
+        for (row, mark) in marks {
+            if let exit = mark.exit { gutter[row] = (exit == 0) ? success : failure }
+            else { gutter[row] = neutral }
+        }
+        return gutter
     }
 }

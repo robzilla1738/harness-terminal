@@ -217,6 +217,23 @@ public final class TerminalMetalRenderer {
                               strikeY: strikeY, overlineY: overlineY, into: &decorations)
         }
 
+        // OSC 133 prompt gutter: a thin vertical stripe in the left margin marking shell-prompt
+        // rows (green/red/neutral, resolved in the FrameBuilder). Appended after the cell
+        // backgrounds so it paints over them; it sits in the window padding (flush to the grid's
+        // left edge, falling back to column 0's bearing when there's no padding), where no glyph
+        // draws — so it never collides with text. No-op without shell-integration marks.
+        if !frame.promptGutter.isEmpty {
+            let gutterW = max(2, (cellW * 0.14).rounded())
+            let gx = max(0, ox - gutterW)
+            for (row, color) in frame.promptGutter where row >= 0 && row < frame.rows {
+                backgrounds.append(BgInstance(
+                    origin: SIMD2(gx, oy + Float(row) * cellH),
+                    size: SIMD2(gutterW, cellH),
+                    color: vector(color)
+                ))
+            }
+        }
+
         // Glyphs: ligated CoreText run shaping when enabled, else the fast per-cell path.
         // Both place each glyph on its source cell so the monospace grid stays aligned.
         let cursorCell = invertCursorGlyph ? (row: cursorRow, column: cursorCol) : nil

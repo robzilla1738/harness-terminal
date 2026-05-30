@@ -110,4 +110,29 @@ final class FrameBuilderTests: XCTestCase {
         // Outside the selection keeps the default background.
         XCTAssertEqual(f.cell(row: 0, column: 0)!.background, RenderColor(theme.background))
     }
+
+    // MARK: - OSC 133 prompt gutter
+
+    private func osc133(_ body: String) -> String { "\u{1b}]133;\(body)\u{07}" }
+
+    func testNoPromptGutterWithoutShellIntegration() {
+        let f = frame("plain output")
+        XCTAssertTrue(f.promptGutter.isEmpty)
+    }
+
+    func testPromptGutterNeutralBeforeExit() {
+        // A prompt mark with no exit yet → neutral stripe (palette bright-black, index 8).
+        let f = frame(osc133("A") + "$ ")
+        XCTAssertEqual(f.promptGutter[0], RenderColor(theme.palette[8]))
+    }
+
+    func testPromptGutterGreenOnSuccess() {
+        let f = frame(osc133("A") + "$ true\r\n" + osc133("D;0"), rows: 4)
+        XCTAssertEqual(f.promptGutter[0], RenderColor(theme.palette[2]))   // ANSI green
+    }
+
+    func testPromptGutterRedOnFailure() {
+        let f = frame(osc133("A") + "$ false\r\n" + osc133("D;1"), rows: 4)
+        XCTAssertEqual(f.promptGutter[0], RenderColor(theme.palette[1]))   // ANSI red
+    }
 }

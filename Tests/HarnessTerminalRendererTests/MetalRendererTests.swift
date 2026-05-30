@@ -96,6 +96,30 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertLessThan(Int(px(iw + iw / 2, ih + ih / 2).1), 160, "no-image cell isn't green")
     }
 
+    func testPromptGutterStripeRendersInLeftPadding() throws {
+        let (device, renderer) = try makeRenderer()
+        // A prompt that succeeded → green stripe (ANSI green, palette[2]). Cursor hidden so it
+        // can't paint anything; the prompt row stays at viewport row 0.
+        let f = frame("\u{1b}[?25l\u{1b}]133;A\u{07}$ ok\r\n\u{1b}]133;D;0\u{07}", cols: 4, rows: 4)
+        XCTAssertEqual(f.promptGutter[0], RenderColor(theme.palette[2]), "succeeded prompt → green gutter")
+        let grid = renderer.surfacePixelSize(columns: 4, rows: 4)
+        let pad = 12
+        guard let target = makeTarget(device, width: grid.width + pad, height: grid.height) else { throw XCTSkip("no texture") }
+
+        renderer.render(f, to: target,
+                        clearColor: RenderColor(red: 0, green: 0, blue: 0, alpha: 1),
+                        origin: (x: pad, y: 0))
+        let px = readPixels(target, width: grid.width + pad, height: grid.height)
+
+        // The stripe sits in the padding flush to the grid's left edge ([pad-gutterW, pad)), on
+        // the prompt row (row 0). Sample its rightmost pixel; the far-left padding stays black.
+        let g = theme.palette[2]
+        let y = renderer.cellPixelHeight / 2
+        assertColor(px(pad - 1, y), r: Int(g.red), g: Int(g.green), b: Int(g.blue),
+                    label: "prompt gutter green", tolerance: 24)
+        assertColor(px(0, y), r: 0, g: 0, b: 0, label: "padding left of the gutter stays clear")
+    }
+
     // MARK: - Pixel helpers
 
     private func readPixels(_ texture: MTLTexture, width: Int, height: Int) -> (Int, Int) -> (UInt8, UInt8, UInt8, UInt8) {
