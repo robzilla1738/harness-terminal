@@ -631,7 +631,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | PTY / attach | `RealPty` (PTY env sets `COLORTERM=truecolor`) + GUI native renderer; `harness-cli attach` (single pane) with detach keys |
 | Rendering | Native Metal renderer: themed translucent canvas, ligatures, pixel-snapped decorations; **block elements + box-drawing drawn procedurally** (seamless, font-independent); reflow on resize; copy / paste / right-click menu |
 | Terminal compositor | `harness-cli attach-window` renders a tab's full split layout in any plain terminal (incl. ssh): client-side `HarnessGridTerminal` emulation per pane + `PaneRectSolver` + `GridCompositor` (borders, SGR, diff, status); prefix (`Ctrl-A`) routes `%`/`"` split, `x` kill, `z` zoom, `hjkl` select, `o`/`;` cycle, `c` new-tab, `n`/`p` tab, `d` detach |
-| Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key`; display panes (`prefix q`) |
+| Commands / keys | `Command` for GUI prefix/prompt; CLI subcommands + `keybindings.json`; prefix, `:`, `bind-key`; display panes (`prefix q`); universal `-t session:window.pane` targets (`TargetSpec` → `CommandIPCTranslator`) + `base-index`/`pane-base-index`; `move-pane`, `renumber-windows` |
 | Copy mode | Vim-style viewer; paste buffers in `buffers.json` |
 | Layouts | `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, `tiled`; break/join/rotate/respawn |
 | Options / status | `OptionStore`; `StatusLineView` + `FormatString` tokens |
