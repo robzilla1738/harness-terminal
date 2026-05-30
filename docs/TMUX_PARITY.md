@@ -32,6 +32,8 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `select-pane` (directional + next/prev/last) | `select-pane -L/-R/-U/-D`, next/prev/last | ✅ |
 | **active pane is server-authoritative** | `Tab.activePaneID` / `lastActivePaneID`, `selectPane` IPC | ✅ |
 | `swap-pane` / `rotate-window` / `break-pane` / `join-pane` | same verbs (marked pane = `select-pane -m`) | ✅ |
+| `move-pane` (explicit `-s` source) | same verb (join-pane with `-s`; same daemon op) | ✅ |
+| `renumber-windows` (+ option, auto on close) | `renumber-windows` verb / CLI / `renumber-windows` option | ✅ |
 | `resize-pane` (+ repeatable) | `resize-pane -L/-R/-U/-D`, repeatable bindings | ✅ |
 | `zoom` (`resize-pane -Z`) | `zoom-pane` / prefix `z` | ✅ |
 | `select-layout` + named layouts | even-h/v, main-h/v, tiled; next/previous-layout | ✅ |
@@ -78,7 +80,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `$TMUX` nesting guard | `$HARNESS` / `$HARNESS_SOCK` injected; `attach-window` warns on nesting | ✅ |
 | agent `install-hooks` (Codex/Claude/Cursor/…) | `harness-cli install-hooks <agent>` | ✅ (Harness extension) |
 | `remain-on-exit` | Harness keeps the dead leaf; `respawn-pane` revives (safe default) | 🟡 |
-| `base-index` / `pane-base-index` | — (needs `-t session:window.pane` target parsing) | 🛣️ |
+| `base-index` / `pane-base-index` | `base-index` / `pane-base-index` options, applied to `-t` indices, `select-window`, and index display | ✅ |
 | `monitor-activity` / `-silence` / `-bell` | — | 🛣️ |
 | `destroy-unattached` / `detach-on-destroy` | — | 🛣️ |
 | `repeat-time` / `escape-time` | repeatable bindings exist; tunable timing | 🛣️ |
@@ -101,7 +103,7 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `source-file` | run a file of Harness commands (`source-file <path>`) | ✅ |
 | `send-prefix` | send the configured prefix key to the pane | ✅ |
 | `wait-for` (named semaphores) | — | 🛣️ |
-| tmux `-t session:window.pane` target syntax | directional + active-target resolution; explicit index/`!`/`~` parsing | 🛣️ |
+| tmux `-t session:window.pane` target syntax | `TargetSpec` parses index/name/`$`/`@`/`%` id, `!`/`+`/`-`/`^`/`$`, pane `{top,bottom,left,right}`; resolved centrally in `CommandIPCTranslator` for every leaf verb (directional `select-pane` unchanged) | ✅ |
 
 ## Server admin & integration
 
@@ -124,9 +126,6 @@ the CLI/compositor, and control mode. The remaining 🛣️ items are intentiona
 - **Compositor copy-mode + SGR mouse** — a scrollback overlay and mouse demux in
   `WindowAttachClient`; the GUI already has native copy-mode and mouse, so this is
   a second-surface port, not a missing capability.
-- **Explicit `-t session:window.pane` target syntax** — directional and active-target
-  resolution already work; this adds index/`!`/`~` addressing. `base-index` /
-  `pane-base-index` are gated on it.
 - **Grouped sessions (`new-session -t base`)** — `link-window` already provides
   cross-session shared windows (the underlying capability); grouped sessions add the
   auto-shared window-list convenience on top.

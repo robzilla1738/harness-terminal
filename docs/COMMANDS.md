@@ -19,6 +19,7 @@ Every action — keystroke binding, palette entry, `:` prompt, hook firing, `har
 | `resize-pane -L` / `-R` / `-U` / `-D` `N` | Shift the parent divider `N` units. |
 | `respawn-pane` (alias `respawn-pane -k` to clear scrollback) | Kill and re-spawn the shell with the same surface ID. |
 | `break-pane` | Move the active pane to a new tab in the same session. |
+| `move-pane -s <target> [-h\|-v]` | Move the `-s` source pane into the `-t` (or active) pane as a split. Like `join-pane` with an explicit source. |
 | `rotate-window` (alias `rotate-window -D` for reverse) | Cycle children at every branch. |
 | `display-panes` | Overlay a number on each pane; press the digit to jump to it. |
 | `synchronize-panes [on\|off]` | Toggle mirroring typed input to every pane in the tab. |
@@ -36,6 +37,24 @@ Every action — keystroke binding, palette entry, `:` prompt, hook firing, `har
 | `swap-window -t :<n>` | Swap the active tab with the tab at index `n`. |
 | `select-layout <name>` | Apply one of `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`, `tiled`. |
 | `next-layout` / `previous-layout` | Cycle through built-in layouts. |
+| `renumber-windows` | Renumber the session's tab indices contiguously (also fires on tab close when the `renumber-windows` option is on). |
+
+### Targets (`-t session:window.pane`)
+
+Most leaf verbs (`split-window`, `kill-pane`, `kill-window`, `send-keys`,
+`new-window`, `resize-pane`, `rename-window`, `select-layout`, …) accept a
+universal `-t` target that resolves centrally, so a command can act on a pane
+other than the focused one:
+
+- **session**: `name`, `$<uuid>`, `+` / `-` (next / previous).
+- **window**: index, `name`, `@<uuid>`, `!` (last/MRU), `+` / `-`, `^` / `{start}`
+  (first), `$` / `{end}` (highest index).
+- **pane**: index, `%<uuid>`, `!` / `{last}`, `+` / `-`, `{top}` / `{bottom}` /
+  `{left}` / `{right}`.
+
+Any component may be omitted (`api:`, `:2`, `:2.1`, `%<uuid>`). Indices honor
+`base-index` / `pane-base-index`. `select-pane` keeps its directional/relative
+form; `select-window -t session:N` is supported.
 
 ## Sessions / workspaces
 
@@ -97,6 +116,8 @@ Built-in defaults include:
 - `mode-keys` (string, default `vi`) — copy-mode key style.
 - `set-clipboard` (bool, default `on`) — mirror yank → NSPasteboard.
 - `history-limit` (int, default `10000`) — scrollback line cap.
+- `base-index` / `pane-base-index` (int, default `0`) — first window / pane index for `-t` targets and index display.
+- `renumber-windows` (bool, default `off`) — renumber tab indices contiguously when a tab closes.
 
 ## Hooks
 
