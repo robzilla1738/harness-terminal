@@ -49,6 +49,14 @@ public struct InputEncoder: Sendable {
     // MARK: - Special keys
 
     public func encode(_ key: SpecialKey, modifiers: KeyModifiers = [], modes: TerminalModes = TerminalModes()) -> [UInt8] {
+        // Progressive enhancement: when a program has enabled the Kitty keyboard protocol, the
+        // disambiguation-sensitive keys (Esc/Enter/Tab/Backspace) go out in unambiguous CSI-u
+        // form. Arrows/function keys keep their legacy CSI forms (which already carry modifier
+        // params), matching Kitty's "legacy functional keys" handling. When no flags are set this
+        // returns nil and the legacy switch below runs byte-for-byte unchanged.
+        if modes.kittyKeyboardFlags != 0, let csiU = kittyEncodeSpecial(key, modifiers) {
+            return csiU
+        }
         switch key {
         case .up: return cursor("A", modifiers, modes)
         case .down: return cursor("B", modifiers, modes)
@@ -98,8 +106,17 @@ public struct InputEncoder: Sendable {
     /// Encode printable input. `text` is the layout-resolved characters (e.g. NSEvent's
     /// `charactersIgnoringModifiers` for the Control case, or `characters` otherwise).
     /// Control collapses a letter to its C0 code; Option prefixes ESC (Meta).
-    public func encode(text: String, modifiers: KeyModifiers = []) -> [UInt8] {
+    public func encode(text: String, modifiers: KeyModifiers = [], modes: TerminalModes = TerminalModes()) -> [UInt8] {
         guard !text.isEmpty else { return [] }
+        // Progressive enhancement, gated so legacy output is byte-identical until a program opts
+        // in: Kitty keyboard first, then xterm modifyOtherKeys. Both only reshape *modified* keys
+        // (plain typing always falls through to the bytes below).
+        if modes.kittyKeyboardFlags != 0, let csiU = kittyEncodeText(text, modifiers, flags: modes.kittyKeyboardFlags) {
+            return csiU
+        }
+        if modes.modifyOtherKeys >= 1, let other = modifyOtherKeysEncode(text, modifiers) {
+            return other
+        }
         var bytes = Array(text.utf8)
         if modifiers.contains(.control), let control = controlByte(for: text) {
             bytes = [control]
@@ -181,6 +198,50 @@ public struct InputEncoder: Sendable {
         if m.contains(.control) { value += 4 }
         if m.contains(.command) { value += 8 }
         return value
+    }
+
+    // MARK: - Kitty keyboard protocol (CSI u) + modifyOtherKeys
+
+    /// Kitty modifier encoding: 1 + shift(1) + alt(2) + ctrl(4) + super(8).
+    private func kittyModifier(_ m: KeyModifiers) -> Int { modifierParam(m) }
+
+    /// `CSI <key>u` (no mods) or `CSI <key>;<mods>u`.
+    private func csiU(_ key: UInt32, _ m: KeyModifiers) -> [UInt8] {
+        let mod = kittyModifier(m)
+        return mod == 1 ? esc("[\(key)u") : esc("[\(key);\(mod)u")
+    }
+
+    /// CSI-u for a printable key when Kitty keyboard is active. Plain (un-Ctrl/Alt) typing falls
+    /// through to legacy text unless `report-all-keys-as-escape` (bit 8) is set. The key code is
+    /// the unshifted ASCII letter (Kitty convention), with Shift carried in the modifiers.
+    private func kittyEncodeText(_ text: String, _ m: KeyModifiers, flags: UInt8) -> [UInt8]? {
+        guard let scalar = text.unicodeScalars.first else { return nil }
+        let modified = m.contains(.control) || m.contains(.option) || m.contains(.command)
+        let allKeysEscape = (flags & 0x08) != 0
+        guard modified || allKeysEscape else { return nil } // plain text → legacy path
+        var key = scalar.value
+        if key >= 0x41, key <= 0x5A { key += 0x20 } // A–Z → a–z; Shift stays in the modifier bits
+        return csiU(key, m)
+    }
+
+    /// CSI-u for the disambiguation-sensitive special keys (others keep their legacy CSI forms).
+    private func kittyEncodeSpecial(_ key: SpecialKey, _ m: KeyModifiers) -> [UInt8]? {
+        let code: UInt32
+        switch key {
+        case .escape: code = 27
+        case .enter: code = 13
+        case .tab: code = 9
+        case .backspace: code = 127
+        default: return nil
+        }
+        return csiU(code, m)
+    }
+
+    /// xterm modifyOtherKeys (`CSI 27 ; <mod> ; <cp> ~`) — only reshapes Ctrl/Alt-modified keys.
+    private func modifyOtherKeysEncode(_ text: String, _ m: KeyModifiers) -> [UInt8]? {
+        guard m.contains(.control) || m.contains(.option),
+              let scalar = text.unicodeScalars.first else { return nil }
+        return esc("[27;\(modifierParam(m));\(scalar.value)~")
     }
 
     private func controlByte(for text: String) -> UInt8? {

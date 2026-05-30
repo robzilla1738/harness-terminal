@@ -936,7 +936,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         // text arrives via `insertText`, composition via `setMarkedText`.
         if mods.contains(.control) || mods.contains(.option) {
             let text = event.charactersIgnoringModifiers ?? ""
-            emit(inputEncoder.encode(text: text, modifiers: mods))
+            emit(inputEncoder.encode(text: text, modifiers: mods, modes: emulator.modes))
             return
         }
         interpretKeyEvents([event])

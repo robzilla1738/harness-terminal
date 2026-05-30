@@ -13,7 +13,10 @@ protocol VTParserHandler: AnyObject {
     /// handler can refuse to misread it. Parameters are grouped: the outer array is
     /// semicolon-separated parameters; each inner array holds that parameter's
     /// colon-separated sub-parameters (e.g. `4:3` → `[[4, 3]]`, `1;31` → `[[1], [31]]`).
-    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool)
+    /// `privateMarker` is the actual private-introducer byte (`<` `=` `>` `?`) when `isPrivate`,
+    /// so handlers can distinguish e.g. the Kitty-keyboard verbs `CSI > u` / `< u` / `= u` /
+    /// `? u`, which differ only by introducer. nil when not a private sequence.
+    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool, privateMarker: UInt8?)
     /// A final ESC byte (non-CSI) with any intermediate bytes (e.g. `ESC ( B`, `ESC M`).
     func parserESC(final: UInt8, intermediates: [UInt8])
     /// A complete OSC string payload (without the introducer or terminator).
@@ -51,6 +54,8 @@ final class VTParser {
     private var currentNumber: Int? = nil
     private var intermediates: [UInt8] = []
     private var csiPrivate = false
+    /// The private-introducer byte (`<` `=` `>` `?`) when `csiPrivate`; nil otherwise.
+    private var csiPrivateMarker: UInt8?
     private var csiOverflow = false
 
     // OSC / string accumulation
@@ -225,6 +230,7 @@ final class VTParser {
             // XTMODKEYS `>…m`, XTVERSION `>…q`, etc.). SGR and other standard functions are
             // never private, so the handler must not treat e.g. `\e[>4;1m` as SGR `4;1m`.
             csiPrivate = true
+            csiPrivateMarker = byte
             state = .csiParam
         case 0x20 ... 0x2F: // intermediate
             appendIntermediate(byte); state = .csiIntermediate
@@ -288,7 +294,8 @@ final class VTParser {
                 final: final,
                 params: paramGroups,
                 intermediates: intermediates,
-                isPrivate: csiPrivate
+                isPrivate: csiPrivate,
+                privateMarker: csiPrivateMarker
             )
         }
         state = .ground
@@ -336,6 +343,7 @@ final class VTParser {
         currentNumber = nil
         intermediates.removeAll(keepingCapacity: true)
         csiPrivate = false
+        csiPrivateMarker = nil
         csiOverflow = false
     }
 

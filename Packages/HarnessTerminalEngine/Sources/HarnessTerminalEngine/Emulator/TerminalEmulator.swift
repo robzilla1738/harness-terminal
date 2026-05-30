@@ -154,13 +154,13 @@ public final class TerminalEmulator: VTParserHandler {
         }
     }
 
-    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool) {
+    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool, privateMarker: UInt8?) {
         // Most control functions use one value per parameter; flatten by taking each
         // group's first sub-parameter. SGR is the exception — it needs the full groups
         // (for `4:3` underline styles and colon-form colors).
         let flat = params.map { $0.first ?? 0 }
         if isPrivate {
-            handlePrivateMode(final: final, intermediates: intermediates, params: flat)
+            handlePrivateMode(final: final, intermediates: intermediates, params: flat, marker: privateMarker)
             return
         }
         // DECSCUSR — `CSI Ps SP q` (intermediate space) sets the cursor shape/blink.
@@ -339,7 +339,17 @@ public final class TerminalEmulator: VTParserHandler {
         current.setScrollRegion(top: top, bottom: bottom)
     }
 
-    private func handlePrivateMode(final: UInt8, intermediates: [UInt8], params: [Int]) {
+    private func handlePrivateMode(final: UInt8, intermediates: [UInt8], params: [Int], marker: UInt8?) {
+        // Kitty keyboard protocol — `CSI u` with a private introducer (push/pop/set/query).
+        if final == 0x75, intermediates.isEmpty {
+            handleKittyKeyboard(marker: marker, params: params)
+            return
+        }
+        // modifyOtherKeys (XTMODKEYS) — `CSI > 4 ; n m`.
+        if final == 0x6D, marker == 0x3E, params.first == 4 {
+            modes.modifyOtherKeys = params.count > 1 ? params[1] : 0
+            return
+        }
         // DECRQM: `CSI ? Ps $ p` — report a private mode's current state.
         if final == 0x70, intermediates == [0x24] { // '$' then 'p'
             for p in params { reportPrivateMode(p) }
@@ -384,6 +394,35 @@ public final class TerminalEmulator: VTParserHandler {
         default: state = 0 // not recognized
         }
         respond("\u{1b}[?\(p);\(state)$y")
+    }
+
+    /// Kitty keyboard protocol control, dispatched by the private introducer:
+    /// `>` push flags, `<` pop N levels, `=` set flags with a mode, `?` query current flags.
+    private func handleKittyKeyboard(marker: UInt8?, params: [Int]) {
+        switch marker {
+        case 0x3E: // '>' — push flags
+            let flags = UInt8(truncatingIfNeeded: params.first ?? 0)
+            if modes.kittyKeyboardStack.count < 32 { modes.kittyKeyboardStack.append(flags) }
+        case 0x3C: // '<' — pop N levels (default 1)
+            let n = max(1, params.first ?? 1)
+            modes.kittyKeyboardStack.removeLast(min(n, modes.kittyKeyboardStack.count))
+        case 0x3D: // '=' — set flags on the active level; mode 1 replace, 2 set bits, 3 clear bits
+            let flags = UInt8(truncatingIfNeeded: params.first ?? 0)
+            let mode = params.count > 1 ? params[1] : 1
+            let current = modes.kittyKeyboardStack.last ?? 0
+            let next: UInt8
+            switch mode {
+            case 2: next = current | flags
+            case 3: next = current & ~flags
+            default: next = flags
+            }
+            if modes.kittyKeyboardStack.isEmpty { modes.kittyKeyboardStack.append(next) }
+            else { modes.kittyKeyboardStack[modes.kittyKeyboardStack.count - 1] = next }
+        case 0x3F: // '?' — query: reply with the current flags
+            respond("\u{1b}[?\(modes.kittyKeyboardFlags)u")
+        default:
+            break
+        }
     }
 
     private func switchAlternate(_ enable: Bool, clearOnEnter: Bool, saveCursor: Bool) {
@@ -467,6 +506,16 @@ public struct TerminalModes: Sendable, Equatable {
     /// renderer should hold the last presented frame rather than paint partial updates — no
     /// tearing in TUIs (vim, fzf, btop, …). Cleared by the program (or a renderer-side timeout).
     public var synchronizedOutput = false
+    /// Kitty keyboard progressive-enhancement flag stack (`CSI > flags u` push / `CSI < u` pop).
+    /// Top of stack = active flags; empty = disabled (flags 0). Bits: 1 disambiguate-escape-codes,
+    /// 2 report-event-types, 4 report-alternate-keys, 8 report-all-keys-as-escape-codes,
+    /// 16 report-associated-text. The input encoder uses CSI-u encoding only when non-zero, so
+    /// legacy output is byte-identical until a program opts in.
+    public var kittyKeyboardStack: [UInt8] = []
+    /// Active Kitty keyboard flags (top of stack, or 0 when none pushed).
+    public var kittyKeyboardFlags: UInt8 { kittyKeyboardStack.last ?? 0 }
+    /// xterm modifyOtherKeys level (`CSI > 4 ; n m`): 0 off, 1, or 2. Independent of Kitty.
+    public var modifyOtherKeys: Int = 0
 
     public init() {}
 
