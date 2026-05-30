@@ -485,9 +485,6 @@ public final class RealPty: @unchecked Sendable {
         subscribersLock.unlock()
     }
 
-    public func detachSubscriber(token: UUID? = nil) {
-        cancelSubscription(token: token)
-    }
 
     private func startReading(fd: Int32, generation gen: UInt64) {
         guard fd >= 0 else { return }

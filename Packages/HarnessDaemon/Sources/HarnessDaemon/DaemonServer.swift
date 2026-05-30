@@ -189,6 +189,14 @@ public final class DaemonServer: @unchecked Sendable {
                 send(.ok, to: fd)
                 continue
             }
+            if case let .detachSurface(surfaceID) = request {
+                // Per-client detach: release only THIS connection's hold (handled at the
+                // server FD layer, like resize/subscribe — never in the registry, which
+                // can't see which client asked).
+                handleDetachSurface(surfaceID: surfaceID, fd: fd)
+                send(.ok, to: fd)
+                continue
+            }
             if case let .waitFor(channel, mode) = request {
                 handleWaitFor(channel: channel, mode: mode, fd: fd)
                 continue
@@ -412,6 +420,25 @@ public final class DaemonServer: @unchecked Sendable {
             clientFDsByID[record.id] = fd
         }
         send(.ok, to: fd)
+    }
+
+    /// Release only *this* client's hold on one surface — its output subscription(s) and its
+    /// size vote — leaving the PTY and every other client untouched. The surface can then grow
+    /// back to the remaining clients' smallest size. The per-client counterpart to
+    /// `cancelSubscriptions(for:)` (which tears down a whole connection). Runs on `queue`, like
+    /// every other subscription/size mutation, so the maps are never touched off-queue.
+    private func handleDetachSurface(surfaceID: String, fd: Int32) {
+        if var subs = outputSubscriptions[fd] {
+            for sub in subs where sub.surfaceID == surfaceID {
+                registry.cancelSubscription(surfaceID: surfaceID, token: sub.token)
+            }
+            subs.removeAll { $0.surfaceID == surfaceID }
+            if subs.isEmpty { outputSubscriptions.removeValue(forKey: fd) } else { outputSubscriptions[fd] = subs }
+        }
+        if clientSurfaceSizes[fd]?.removeValue(forKey: surfaceID) != nil {
+            if clientSurfaceSizes[fd]?.isEmpty == true { clientSurfaceSizes.removeValue(forKey: fd) }
+            applyEffectiveSize(surfaceID: surfaceID)
+        }
     }
 
     private func cancelSubscriptions(for fd: Int32) {

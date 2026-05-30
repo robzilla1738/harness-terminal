@@ -107,6 +107,59 @@ final class DaemonRoundTripTests: XCTestCase {
         wait(for: [streamed], timeout: 8)
     }
 
+    /// Multi-client live mirroring: two independent subscribers on one surface both receive
+    /// its output — the foundation that live detach/reattach builds on.
+    func testTwoSubscribersBothReceiveOutput() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let marker = "HARNESS_MIRROR_OK"
+        let gotA = expectation(description: "subscriber A received marker")
+        let gotB = expectation(description: "subscriber B received marker")
+        gotA.assertForOverFulfill = false
+        gotB.assertForOverFulfill = false
+        let accA = OutputAccumulator(), accB = OutputAccumulator()
+        let subA = try client.subscribeSurfaceOutput(surfaceID: target.surfaceID) { d, _ in
+            if accA.appendAndContains(String(decoding: d, as: UTF8.self), marker: marker) { gotA.fulfill() }
+        }
+        let subB = try client.subscribeSurfaceOutput(surfaceID: target.surfaceID) { d, _ in
+            if accB.appendAndContains(String(decoding: d, as: UTF8.self), marker: marker) { gotB.fulfill() }
+        }
+        defer { subA.cancel(); subB.cancel() }
+        usleep(200_000)
+        _ = try client.request(.sendData(surfaceID: target.surfaceID, data: Data("echo \(marker)\n".utf8)))
+        wait(for: [gotA, gotB], timeout: 8)
+    }
+
+    /// Per-client detach: one subscriber calling `detachSurface` releases ONLY itself; the other
+    /// keeps receiving. Regression guard for the old bug where `detachSurface` wiped every
+    /// subscriber on the surface (it routed to `cancelSubscription(token: nil)`).
+    func testDetachSurfaceReleasesOnlyCallingClient() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let after = "HARNESS_AFTER_DETACH"
+        let bGotAfter = expectation(description: "surviving subscriber receives post-detach output")
+        bGotAfter.assertForOverFulfill = false
+        let accA = OutputAccumulator(), accB = OutputAccumulator()
+        let subA = try client.subscribeSurfaceOutput(surfaceID: target.surfaceID) { d, _ in
+            _ = accA.appendAndContains(String(decoding: d, as: UTF8.self), marker: after)
+        }
+        let subB = try client.subscribeSurfaceOutput(surfaceID: target.surfaceID) { d, _ in
+            if accB.appendAndContains(String(decoding: d, as: UTF8.self), marker: after) { bGotAfter.fulfill() }
+        }
+        defer { subA.cancel(); subB.cancel() }
+        usleep(200_000)
+        // A releases just this surface but keeps its connection open.
+        subA.detachSurface(target.surfaceID)
+        usleep(300_000)
+        _ = try client.request(.sendData(surfaceID: target.surfaceID, data: Data("echo \(after)\n".utf8)))
+        wait(for: [bGotAfter], timeout: 8)
+        XCTAssertFalse(accA.contains(after), "a detached client must stop receiving the surface's output")
+    }
+
     /// The `subscribeSnapshot` push: a layout mutation must deliver a `snapshotChanged`
     /// revision to subscribers (replaces the compositor's old 0.5s poll).
     func testSnapshotSubscriptionPushesRevisionOnMutation() throws {

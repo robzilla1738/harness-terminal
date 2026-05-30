@@ -164,6 +164,26 @@ public final class DaemonSubscription: @unchecked Sendable {
         self.fd = fd
     }
 
+    /// Detach this subscription's surface on the daemon **without closing the connection** —
+    /// releases only this client's hold (its subscription + size vote) on `surfaceID`, leaving
+    /// the PTY and every other client running, so the surface can be re-grabbed later. Use
+    /// `cancel()` instead to also tear down the connection. Safe to call from any thread (the
+    /// socket is full-duplex; the read loop runs on its own queue).
+    public func detachSurface(_ surfaceID: String) {
+        lock.lock(); let dead = cancelled || finished; lock.unlock()
+        guard !dead,
+              let payload = try? IPCCodec.encode(IPCEnvelope(request: .detachSurface(surfaceID: surfaceID)))
+        else { return }
+        let bytes = [UInt8](payload)
+        var off = 0
+        while off < bytes.count {
+            let n = bytes.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: off), bytes.count - off) }
+            if n > 0 { off += n }
+            else if n < 0, errno == EINTR || errno == EAGAIN { continue }
+            else { break }
+        }
+    }
+
     public func cancel() {
         lock.lock()
         defer { lock.unlock() }

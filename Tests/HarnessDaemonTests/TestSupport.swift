@@ -27,6 +27,12 @@ final class OutputAccumulator: @unchecked Sendable {
         text += chunk
         return text.contains(marker)
     }
+
+    /// Whether `marker` has been seen so far (for asserting absence).
+    func contains(_ marker: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return text.contains(marker)
+    }
 }
 
 /// Thread-safe integer counter for asserting how many times an off-thread callback

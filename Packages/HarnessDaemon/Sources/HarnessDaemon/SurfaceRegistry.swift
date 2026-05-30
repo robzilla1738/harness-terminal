@@ -521,8 +521,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case let .resizeSurface(surfaceID, rows, cols):
             sessions[surfaceID]?.resize(rows: rows, cols: cols)
             return .ok
-        case let .detachSurface(surfaceID):
-            sessions[surfaceID]?.detachSubscriber()
+        case .detachSurface:
+            // Per-client detach is owned by DaemonServer, which knows *which* connection asked
+            // and releases only that client's subscription + size vote. The registry can't see
+            // the client, so the socket path is intercepted upstream; reaching here would mean a
+            // caller bypassed the server — do nothing (the old code wiped *every* subscriber on
+            // the surface via cancelSubscription(token: nil), which dropped other clients too).
             return .ok
         case .identifyClient, .listClients, .detachClient, .daemonStats:
             // Client lifecycle and aggregate stats are owned by the DaemonServer
