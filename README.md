@@ -1,5 +1,7 @@
 # Harness
 
+[![CI](https://github.com/robzilla1738/harness-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/robzilla1738/harness-cli/actions/workflows/ci.yml)
+
 Native macOS terminal for organizing AI agents and dev sessions — Harness's own GPU renderer, cmux-style workspaces, harness-cli automation.
 
 ## Experience modes

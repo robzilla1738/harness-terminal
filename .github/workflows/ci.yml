@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
+
+      # Compiles every target, including the AppKit `HarnessApp` executable target,
+      # so a green build proves the GUI code compiles too.
+      - name: Build
+        run: swift build
+
+      # All eight suites (Core / Engine / CopyMode / Theme / Renderer / Kit / Daemon).
+      # Renderer tests run offscreen, which is fine on a headless runner.
+      - name: Test
+        run: swift test
+
+  benchmarks:
+    name: Benchmarks (non-blocking)
+    runs-on: macos-14
+    # Perf baselines are informational here; never block a merge on runner variance.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Run benchmark suite
+        env:
+          HARNESS_BENCHMARKS: "1"
+        run: swift test -c release --filter HarnessBenchmarks
+</content>
