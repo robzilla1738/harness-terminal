@@ -25,7 +25,7 @@ roadmap (documented, not shipped half-wired) · ➖ n/a.
 | Themes | ✅ (iTerm2-compatible) | ✅ **485 built-in** + `.harnesstheme` import/export |
 | Wide chars / emoji / grapheme width | ✅ | ✅ (wide-aware; per-scalar) |
 | **Custom background shaders** | ✅ | 🛣️ (Ghostty signature; not core to a multiplexer) |
-| **Images (Kitty graphics / Sixel)** | ✅ | 🛣️ (see "Deliberate roadmap") |
+| **Images (Kitty graphics / Sixel / iTerm2)** | ✅ | ✅ Sixel + Kitty graphics + iTerm2 OSC 1337, GPU-drawn in the GUI (scroll-aware; compositor degrades to text) |
 
 ## Terminal protocol
 
@@ -44,7 +44,11 @@ roadmap (documented, not shipped half-wired) · ➖ n/a.
 | OSC 7 cwd, OSC 0/2 title | ✅ | ✅ (drives the sidebar/tab labels) |
 | DSR / DA / cursor reports | ✅ | ✅ |
 | **macOS line-editing keys** (Option-as-Meta) | ✅ | ✅ Option+⌫ → ESC DEL (word), Option+←/→ → ESC b/f (word), ⌘⌫ → ^U, ⌘←/→ → ^A/^E |
-| **Kitty keyboard protocol** | ✅ | 🛣️ (see "Deliberate roadmap") |
+| **Kitty keyboard protocol (CSI u)** | ✅ | ✅ push/pop/set/query + modifyOtherKeys; disambiguate + all-keys-escape + modifier bitmap (event-types/alternate-keys deferred) |
+| **Programmable tab stops** (HTS/TBC/CHT/CBT) | ✅ | ✅ |
+| **DEC special-graphics charset** (`ESC ( 0`) | ✅ | ✅ line-drawing via the procedural box-drawing path |
+| **Desktop notifications** (OSC 9 / 777) | ✅ | ✅ routed to the system notification path (toggle-honoring) |
+| **Mouse pointer shape** (OSC 22) | ✅ | ✅ mapped to `NSCursor` |
 | Shell integration / semantic prompts (OSC 133) | ✅ | 🛣️ (Harness uses agent hooks + OSC 7 for the same UI today) |
 
 ## Multiplexing & sessions — **Harness's edge**
@@ -78,17 +82,18 @@ roadmap (documented, not shipped half-wired) · ➖ n/a.
 These are real Ghostty features Harness does **not** ship today. Each is deferred on purpose —
 shipping a partial version would be the tech debt this project forbids:
 
-- **Kitty graphics protocol / Sixel (images).** A large subsystem (image decode, placement,
-  z-order, deletion, GPU texture lifecycle) that doesn't compose with the daemon→client byte-
-  pipe cheaply. High value for some workflows; high bloat risk done wrong.
-- **Kitty keyboard protocol.** Needs the parser to surface the private introducer (`>`/`<`/`=`/`?`)
-  and a full CSI-u key encoder (functional keys, modifier bitmaps, event types, associated
-  text). Worth doing as one clean addition, not a partial one — most TUIs work without it.
 - **Custom background shaders / quick terminal.** Ghostty-signature polish, orthogonal to the
   multiplexer that is Harness's reason to exist.
 - **OSC color *set*** and **OSC 133 semantic prompts.** Harness's theme owns the canvas colors
   (one resolver, no per-surface drift) and its agent-hook + OSC 7 plumbing already drives the
   sidebar UI; honoring program color-sets / prompt marks is additive when wanted.
+- **Kitty keyboard event-types / alternate-keys / associated-text.** The protocol's core
+  (disambiguate + all-keys-escape + the modifier bitmap + modifyOtherKeys) ships; the remaining
+  progressive-enhancement flags (key-release events, shifted-key reporting, associated text) are
+  a clean follow-on — programs that don't request them are unaffected.
+- **Images don't survive reflow or scrollback.** Inline images (Sixel / Kitty / iTerm2) render in
+  the GUI and scroll with content, but are dropped on resize and don't persist into scrollback
+  (matching most terminals); the ssh compositor renders the underlying cells, not the bitmap.
 
 ## Where Harness already wins
 

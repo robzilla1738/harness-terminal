@@ -66,6 +66,29 @@ public struct RenderCell: Equatable, Sendable {
 /// A render-ready frame: the resolved background-pass + glyph-pass data for one grid
 /// snapshot, plus the cursor. Pure value type — the Metal renderer turns this into draw
 /// calls, and it is fully unit-testable without a GPU.
+/// An inline image to draw over the grid. Carries the decoded pixels (for first-time GPU upload)
+/// plus its cell rect + z. Equality intentionally ignores the pixels (the id uniquely identifies
+/// them — ids are monotonic, never reused) so frame diffing stays cheap.
+public struct FrameImage: Equatable, Sendable {
+    public var id: Int
+    public var column: Int
+    public var row: Int
+    public var columns: Int
+    public var rows: Int
+    public var z: Int
+    public var image: DecodedImage
+
+    public init(id: Int, column: Int, row: Int, columns: Int, rows: Int, z: Int, image: DecodedImage) {
+        self.id = id; self.column = column; self.row = row
+        self.columns = columns; self.rows = rows; self.z = z; self.image = image
+    }
+
+    public static func == (lhs: FrameImage, rhs: FrameImage) -> Bool {
+        lhs.id == rhs.id && lhs.column == rhs.column && lhs.row == rhs.row
+            && lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.z == rhs.z
+    }
+}
+
 public struct TerminalFrame: Equatable, Sendable {
     public var columns: Int
     public var rows: Int
@@ -73,6 +96,16 @@ public struct TerminalFrame: Equatable, Sendable {
     /// fill the whole surface).
     public var cells: [RenderCell]
     public var cursor: CursorRender
+    /// Inline images overlaid on the grid (empty when none).
+    public var images: [FrameImage]
+
+    public init(columns: Int, rows: Int, cells: [RenderCell], cursor: CursorRender, images: [FrameImage] = []) {
+        self.columns = columns
+        self.rows = rows
+        self.cells = cells
+        self.cursor = cursor
+        self.images = images
+    }
 
     public func cell(row: Int, column: Int) -> RenderCell? {
         guard row >= 0, row < rows, column >= 0, column < columns else { return nil }
@@ -251,8 +284,10 @@ public struct FrameBuilder {
 
     /// Build a frame with an optional linear selection. The original entry point — kept so
     /// existing callers (mouse selection, search-free render) are byte-identical.
-    public func build(_ snapshot: TerminalGridSnapshot, selection: TerminalSelection? = nil) -> TerminalFrame {
-        build(snapshot, region: selection.map(SelectionRegion.linear), searchHighlights: [], copyModeCursor: nil)
+    public func build(_ snapshot: TerminalGridSnapshot, selection: TerminalSelection? = nil,
+                      imageProvider: ((Int) -> DecodedImage?)? = nil) -> TerminalFrame {
+        build(snapshot, region: selection.map(SelectionRegion.linear), searchHighlights: [],
+              copyModeCursor: nil, imageProvider: imageProvider)
     }
 
     /// Build a frame with a selection region (linear or block), copy-mode search highlights,
@@ -263,7 +298,8 @@ public struct FrameBuilder {
         _ snapshot: TerminalGridSnapshot,
         region: SelectionRegion?,
         searchHighlights: [TerminalSelection] = [],
-        copyModeCursor: (row: Int, column: Int)? = nil
+        copyModeCursor: (row: Int, column: Int)? = nil,
+        imageProvider: ((Int) -> DecodedImage?)? = nil
     ) -> TerminalFrame {
         var cells = [RenderCell]()
         cells.reserveCapacity(snapshot.cols * snapshot.rows)
@@ -327,6 +363,15 @@ public struct FrameBuilder {
                 style: cursorStyle
             )
         }
-        return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells, cursor: cursor)
+        // Resolve placements to drawable images (those whose pixels the provider can supply).
+        var images: [FrameImage] = []
+        if let imageProvider {
+            for p in snapshot.images {
+                guard let decoded = imageProvider(p.id) else { continue }
+                images.append(FrameImage(id: p.id, column: p.col, row: p.row,
+                                         columns: p.cols, rows: p.rows, z: p.z, image: decoded))
+            }
+        }
+        return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells, cursor: cursor, images: images)
     }
 }

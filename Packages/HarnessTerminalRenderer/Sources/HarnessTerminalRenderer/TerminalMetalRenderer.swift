@@ -30,6 +30,12 @@ private struct DecoInstance {
     var kind: UInt32
 }
 
+/// One inline-image quad (pixel origin + size); the texture is bound per draw.
+private struct ImageInstance {
+    var origin: SIMD2<Float>
+    var size: SIMD2<Float>
+}
+
 /// Line-decoration styles; raw values match the `kind` switch in `deco_fragment`.
 private enum DecoKind: UInt32 {
     case solid = 0
@@ -52,8 +58,10 @@ public final class TerminalMetalRenderer {
     private let bgPipeline: MTLRenderPipelineState
     private let glyphPipeline: MTLRenderPipelineState
     private let decoPipeline: MTLRenderPipelineState
+    private let imagePipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
     private let atlas: GlyphAtlas
+    private let imageCache: ImageTextureCache
     private let ascentPixels: Int
     /// The render-target pixel format both pipelines are built for.
     public static let pixelFormat: MTLPixelFormat = .rgba8Unorm
@@ -82,9 +90,14 @@ public final class TerminalMetalRenderer {
                 device: device, library: library,
                 vertex: "deco_vertex", fragment: "deco_fragment", blending: true
             )
+            imagePipeline = try Self.makePipeline(
+                device: device, library: library,
+                vertex: "image_vertex", fragment: "image_fragment", blending: true
+            )
         } catch {
             return nil
         }
+        self.imageCache = ImageTextureCache(device: device)
 
         let sd = MTLSamplerDescriptor()
         sd.minFilter = .linear
@@ -266,6 +279,9 @@ public final class TerminalMetalRenderer {
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: backgrounds.count)
         }
 
+        // Images with z < 0 draw below text (Kitty negative z-index).
+        drawImages(frame.images.filter { $0.z < 0 }, encoder: renderEncoder, viewport: &vp, ox: ox, oy: oy)
+
         // Glyph pass (with the gamma-correct coverage uniform).
         if !glyphs.isEmpty,
            let buffer = device.makeBuffer(bytes: glyphs, length: glyphs.count * MemoryLayout<GlyphInstance>.stride, options: .storageModeShared) {
@@ -288,8 +304,32 @@ public final class TerminalMetalRenderer {
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: decorations.count)
         }
 
+        // Images with z >= 0 (the default) draw above text.
+        drawImages(frame.images.filter { $0.z >= 0 }, encoder: renderEncoder, viewport: &vp, ox: ox, oy: oy)
+
         renderEncoder.endEncoding()
         return commandBuffer
+    }
+
+    /// Draw each inline image as a textured quad at its cell rect. One draw per image (each has
+    /// its own texture); the GPU clips quads that extend past the viewport (images scrolling off).
+    private func drawImages(_ images: [FrameImage], encoder: MTLRenderCommandEncoder, viewport: inout SIMD2<Float>, ox: Float, oy: Float) {
+        guard !images.isEmpty else { return }
+        let cellW = Float(cellPixelWidth), cellH = Float(cellPixelHeight)
+        encoder.setRenderPipelineState(imagePipeline)
+        encoder.setFragmentSamplerState(sampler, index: 0)
+        for img in images {
+            guard let texture = imageCache.texture(
+                id: img.id, rgba: img.image.rgba, width: img.image.pixelWidth, height: img.image.pixelHeight)
+            else { continue }
+            var inst = ImageInstance(
+                origin: SIMD2(ox + Float(img.column) * cellW, oy + Float(img.row) * cellH),
+                size: SIMD2(Float(img.columns) * cellW, Float(img.rows) * cellH))
+            encoder.setVertexBytes(&inst, length: MemoryLayout<ImageInstance>.stride, index: 0)
+            encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            encoder.setFragmentTexture(texture, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: 1)
+        }
     }
 
     /// Emit underline (any style) + strikethrough + overline decoration instances for a cell.

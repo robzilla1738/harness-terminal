@@ -100,6 +100,27 @@ enum MetalShaders {
         return float4(in.color.rgb, in.color.a * coverage);
     }
 
+    // Inline image (Sixel / Kitty / iTerm2): one textured quad per image, RGBA sampled directly.
+    struct ImageInstance { float2 origin; float2 size; };
+
+    vertex VOut image_vertex(uint vid [[vertex_id]],
+                             constant ImageInstance &inst [[buffer(0)]],
+                             constant float2 &viewport [[buffer(1)]]) {
+        float2 corner = quadVerts[vid];
+        float2 px = inst.origin + corner * inst.size;
+        VOut out;
+        out.position = float4(pixelToNDC(px, viewport), 0.0, 1.0);
+        out.color = float4(1.0, 1.0, 1.0, 1.0);
+        out.uv = corner; // (0,0) top-left → texture row 0 (top); y-flip is in pixelToNDC
+        return out;
+    }
+
+    fragment float4 image_fragment(VOut in [[stage_in]],
+                                   texture2d<float> img [[texture(0)]],
+                                   sampler samp [[sampler(0)]]) {
+        return img.sample(samp, in.uv);
+    }
+
     vertex DecoOut deco_vertex(uint vid [[vertex_id]],
                                uint iid [[instance_id]],
                                constant DecoInstance *instances [[buffer(0)]],

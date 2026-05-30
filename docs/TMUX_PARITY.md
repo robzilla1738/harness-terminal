@@ -132,7 +132,10 @@ Every tmux capability that maps onto Harness's model is now implemented across t
 the CLI/compositor, and control mode — copy-mode + SGR mouse on both surfaces, monitoring
 (`monitor-*`), multi-line status, `window-style`/`pane-style`, `pane-border-status`,
 `remain-on-exit`/`repeat-time`, the `bind -n` root table and `switch-client -T` modal key
-tables on both surfaces, and grid-reconstructed `capture-pane -e`/`-J`.
+tables on both surfaces, and grid-reconstructed `capture-pane -e`/`-J`. The inspection/
+scripting verbs `list-sessions` / `list-windows` / `list-panes` / `has-session` (exit code)
+/ `list-commands`, and the `next-pane`/`previous-pane`/`last-pane` cycle verbs, are shipped
+(`SnapshotQueryFormatter`, shared by the CLI and control mode).
 
 The few items marked 🟰 are **deliberate architectural divergences**, not deferred work —
 they conflict with design choices that make Harness better as a single-user native app, and

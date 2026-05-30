@@ -77,6 +77,25 @@ final class MetalRendererTests: XCTestCase {
         assertColor(center, r: 0, g: 255, b: 0, label: "block glyph green", tolerance: 32)
     }
 
+    func testInlineImageRendersOverCell() throws {
+        let (device, renderer) = try makeRenderer()
+        let (w, h) = renderer.surfacePixelSize(columns: 2, rows: 2)
+        guard let target = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        // A solid-green image the size of one cell, placed at cell (0,0).
+        let iw = renderer.cellPixelWidth, ih = renderer.cellPixelHeight
+        var rgba = [UInt8](repeating: 0, count: iw * ih * 4)
+        for p in 0 ..< (iw * ih) { rgba[p * 4 + 1] = 255; rgba[p * 4 + 3] = 255 }
+        let img = DecodedImage(rgba: rgba, pixelWidth: iw, pixelHeight: ih)
+        var f = FrameBuilder(theme: theme).build(HarnessGridTerminal(cols: 2, rows: 2)!.readGrid()!)
+        f.images = [FrameImage(id: 1, column: 0, row: 0, columns: 1, rows: 1, z: 0, image: img)]
+
+        renderer.render(f, to: target, clearColor: RenderColor(red: 0, green: 0, blue: 0, alpha: 1))
+        let px = readPixels(target, width: w, height: h)
+        // Inside the image: green. A cell with no image: not green.
+        assertColor(px(iw / 2, ih / 2), r: 0, g: 255, b: 0, label: "inline image green", tolerance: 24)
+        XCTAssertLessThan(Int(px(iw + iw / 2, ih + ih / 2).1), 160, "no-image cell isn't green")
+    }
+
     // MARK: - Pixel helpers
 
     private func readPixels(_ texture: MTLTexture, width: Int, height: Int) -> (Int, Int) -> (UInt8, UInt8, UInt8, UInt8) {

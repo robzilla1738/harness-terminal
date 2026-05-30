@@ -366,6 +366,11 @@ public final class HarnessTerminalSurfaceView: NSView {
         metalLayer.device = device
         let scale = window?.backingScaleFactor ?? 2.0
         renderer = TerminalMetalRenderer(device: device, fontFamily: fontFamily, fontSize: fontSize, scale: scale)
+        // Tell the engine the real cell pixel size so inline-image cell footprints + cursor
+        // advancement match what the renderer draws.
+        if let renderer {
+            emulator.setCellPixelSize(width: renderer.cellPixelWidth, height: renderer.cellPixelHeight)
+        }
     }
 
     // MARK: - Layout & rendering
@@ -476,7 +481,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         // Copy mode owns the whole surface while active (its own scroll offset + overlay).
         if renderCopyMode(renderer: renderer, drawable: drawable) { return }
         let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
-        var frame = frameBuilder.build(grid, selection: currentSelection)
+        var frame = frameBuilder.build(grid, selection: currentSelection,
+                                       imageProvider: { [weak self] in self?.emulator.image(for: $0) })
         // IME preedit: draw the in-progress composition over the grid at the cursor.
         if !markedText.isEmpty, scrollOffset == 0 {
             overlayPreedit(into: &frame)
@@ -1160,7 +1166,9 @@ public final class HarnessTerminalSurfaceView: NSView {
         let hits = cm.viewportSearchHits(rows: rows).map { m in
             TerminalSelection((m.line, m.startColumn), (m.line, max(m.startColumn, m.endColumn - 1)))
         }
-        var frame = frameBuilder.build(grid, region: region, searchHighlights: hits, copyModeCursor: cm.viewportCursor(rows: rows))
+        var frame = frameBuilder.build(grid, region: region, searchHighlights: hits,
+                                       copyModeCursor: cm.viewportCursor(rows: rows),
+                                       imageProvider: { [weak self] in self?.emulator.image(for: $0) })
         let statusText = copyModeSearchEntry.map { (cm.search.reverse ? "?" : "/") + $0 } ?? cm.statusLine()
         overlayCopyModeStatus(into: &frame, text: statusText)
         renderer.present(
