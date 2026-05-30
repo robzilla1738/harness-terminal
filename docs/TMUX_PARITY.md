@@ -84,18 +84,19 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `set-environment` / `show-environment` | `EnvironmentStore` (global + per-session), injected on spawn/respawn | ✅ |
 | `$TMUX` nesting guard | `$HARNESS` / `$HARNESS_SOCK` injected; `attach-window` warns on nesting | ✅ |
 | agent `install-hooks` (Codex/Claude/Cursor/…) | `harness-cli install-hooks <agent>` | ✅ (Harness extension) |
-| `remain-on-exit` | Harness keeps the dead leaf; `respawn-pane` revives (safe default) | 🟡 |
+| `remain-on-exit` | option read in the daemon PTY-exit handler: on (default, Harness's safe default) keeps the dead leaf for `respawn-pane`; off closes the pane — or its tab when last — on shell exit | ✅ |
 | `base-index` / `pane-base-index` | `base-index` / `pane-base-index` options, applied to `-t` indices, `select-window`, and index display | ✅ |
 | `monitor-activity` / `-silence` / `-bell` | daemon per-surface output monitor → tab `activity`/`silence`/`bell` flags (`#`/`~`/`!` in `#{window_flags}`, cleared on view) + `alert-activity`/`-silence`/`-bell` hooks | ✅ |
 | `destroy-unattached` / `detach-on-destroy` | — | 🛣️ |
-| `repeat-time` / `escape-time` | repeatable bindings exist; tunable timing | 🛣️ |
+| `repeat-time` | `repeat-time` (ms) option read by `PrefixKeymap` for the post-`bind -r` re-arm window (no hardcoded literal) | ✅ |
+| `escape-time` | n/a — Harness's key decoding is byte-driven, not timer-gated, so there is no ESC-disambiguation delay to tune | 🟰 |
 
 ## Commands & keys
 
 | tmux | Harness | Status |
 |------|---------|--------|
 | prefix keymap + `bind-key`/`unbind-key` | `PrefixKeymap`, `KeyTable`, `keybindings.json` (merged defaults + overrides) | ✅ |
-| no-prefix bindings (`bind -n` / `-T root`) | seeded, consulted `root` key table (GUI); `bind-key -T root <key> <cmd>` runs without the prefix | ✅ (GUI) / 🛣️ (compositor) |
+| no-prefix bindings (`bind -n` / `-T root`) | seeded, consulted `root` key table; `bind-key -T root <key> <cmd>` runs without the prefix in the GUI **and** the `attach-window` compositor (control bytes + ESC sequences decoded against `.root`, engaged only when root bindings exist) | ✅ |
 | `send-keys -l` (literal) / `-H` (hex) | literal text / hex bytes sent raw via `sendData` (`KeyTokenParser.hexBytes`) | ✅ |
 | command prompt (`:`) | `Cmd+;` / prefix `:` (`CommandPromptController`) | ✅ |
 | one verb vocabulary across front-ends | `Command` + shared `CommandIPCTranslator` (GUI, compositor, hooks) | ✅ |
@@ -105,11 +106,11 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 | `confirm-before` | `confirm-before -p "…" "<cmd>"` → NSAlert, runs on OK | ✅ |
 | `command-alias` (short forms) | `neww`/`splitw`/`killp`/`selectp`/`resizep`/… resolve in `CommandParser` | ✅ |
 | `choose-tree` / `-session` / `-window` / `-buffer` / `-client` | GUI menu picker (`choose-*`); palette (`Cmd+K`) for themes/actions | ✅ |
-| `capture-pane -S/-E -p` (ANSI-stripped line ranges to stdout) | `capture-pane -S <n> -E <n>` (negative = from bottom) | ✅ |
+| `capture-pane -S/-E -e -p` (line ranges to stdout) | `capture-pane -S <n> -E <n>` (negative = from bottom); `-e` keeps SGR/escapes, default strips to plain text. `-J` (join wrapped lines) needs daemon-side grid emulation (the byte-stream capture can't reconstruct soft-wrap) — 🛣️ | ✅ |
 | `pipe-pane` | tee a pane's live output to a shell command (`pipe-pane "<cmd>"`, omit to stop) | ✅ |
 | `source-file` | run a file of Harness commands (`source-file <path>`) | ✅ |
 | `send-prefix` | send the configured prefix key to the pane | ✅ |
-| `wait-for` (named semaphores) | — | 🛣️ |
+| `wait-for` (named semaphores) | `wait-for [-S\|-L\|-U] <channel>`: `WaitForRegistry` in the daemon; `wait`/`lock` defer the reply at the `DaemonServer` socket layer (never under the registry lock — no deadlock), woken by `signal`/`unlock` | ✅ |
 | tmux `-t session:window.pane` target syntax | `TargetSpec` parses index/name/`$`/`@`/`%` id, `!`/`+`/`-`/`^`/`$`, pane `{top,bottom,left,right}`; resolved centrally in `CommandIPCTranslator` for every leaf verb (directional `select-pane` unchanged) | ✅ |
 
 ## Server admin & integration
@@ -126,23 +127,23 @@ environment are server-side. `Harness.app` and `harness-cli` are thin clients.
 
 ## Remaining roadmap
 
-The large majority of tmux's capability surface is now implemented across the GUI,
-the CLI/compositor, and control mode — including copy-mode + SGR mouse on both
-surfaces, monitoring (`monitor-*`), multi-line status, `window-style`/`pane-style`,
-and `pane-border-status`. The remaining 🛣️ items are intentionally **not** shipped
-half-wired (that would be the tech debt this project forbids):
+Nearly all of tmux's capability surface is now implemented across the GUI, the
+CLI/compositor, and control mode — including copy-mode + SGR mouse on both surfaces,
+monitoring (`monitor-*`), multi-line status, `window-style`/`pane-style`,
+`pane-border-status`, `remain-on-exit`/`repeat-time`, the `bind -n` root table on both
+surfaces, and `capture-pane -e`. The remaining 🛣️ items are intentionally **not**
+shipped half-wired (that would be the tech debt this project forbids):
 
 - **Grouped sessions (`new-session -t base`)** — `link-window` already provides
   cross-session shared windows (the underlying capability); grouped sessions add the
   auto-shared window-list convenience on top.
-- **`wait-for`** (named semaphores) — a new IPC surface that must block at the
-  `DaemonServer` socket layer, never under the `SurfaceRegistry` lock.
-- **Lifecycle/timing options** — `remain-on-exit` (currently 🟡: the dead leaf is
-  kept and `respawn-pane` revives it; the explicit `exitStatus` plumbing exists),
-  `destroy-unattached`/`detach-on-destroy`/`exit-empty`, and `repeat-time`/
-  `escape-time`/`aggressive-resize`.
-- **Compositor `bind -n` root table** — the GUI consults the seeded `root` key table;
-  the `attach-window` input loop does not yet.
+- **`switch-client -T <table>`** — per-client active key table (client-local state).
+- **`capture-pane -J`** — join soft-wrapped lines; needs daemon-side grid emulation
+  (the byte-stream scrollback capture can't reconstruct screen wrap).
+- **Session-lifecycle options** — `destroy-unattached`/`detach-on-destroy`/`exit-empty`
+  depend on a session↔client attachment model Harness's all-sessions-visible GUI +
+  launchd-`KeepAlive` daemon don't have; `aggressive-resize` (smallest-wins already
+  ships) and `status-keys` (needs the unconsulted `.command` table) are low-value.
 
 Everything they build on — daemon authority, the shared translator, scoped options,
 hooks, server-side active pane, snapshot push, the compositor, control mode, linked

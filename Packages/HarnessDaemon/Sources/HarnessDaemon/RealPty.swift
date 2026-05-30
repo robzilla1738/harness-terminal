@@ -356,9 +356,11 @@ public final class RealPty: @unchecked Sendable {
     /// `capture-pane -S <start> -E <end> -p`: ANSI-stripped display lines in the
     /// given range. Negative indices count back from the last line (tmux semantics);
     /// nil start = first line, nil end = last line.
-    public func captureRange(start: Int?, end: Int?) -> String {
-        let stripped = Self.stripANSI(captureScrollback(includeHistory: true))
-        var lines = stripped.components(separatedBy: "\n")
+    public func captureRange(start: Int?, end: Int?, escapeSequences: Bool = false) -> String {
+        // `-e` (escapeSequences) keeps SGR/escapes; the default strips to plain text.
+        let raw = captureScrollback(includeHistory: true)
+        let text = escapeSequences ? raw : Self.stripANSI(raw)
+        var lines = text.components(separatedBy: "\n")
         if lines.last == "" { lines.removeLast() }
         let count = lines.count
         guard count > 0 else { return "" }

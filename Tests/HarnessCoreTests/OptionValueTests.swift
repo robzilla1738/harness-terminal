@@ -35,4 +35,12 @@ final class OptionValueTests: XCTestCase {
         XCTAssertEqual(OptionStore.Value.string("on").statusLineCount, 1)
         XCTAssertEqual(OptionStore.Value.string("off").statusLineCount, 0)
     }
+
+    func testLifecycleAndTimingDefaults() {
+        // remain-on-exit defaults on (Harness's safe default — keep the dead leaf).
+        XCTAssertEqual(OptionStore.builtinDefaults["remain-on-exit"], .bool(true))
+        // repeat-time defaults to tmux's 500ms.
+        XCTAssertEqual(OptionStore.builtinDefaults["repeat-time"], .int(500))
+        XCTAssertEqual(OptionStore.builtinDefaults["pane-border-status"], .string("off"))
+    }
 }

@@ -24,6 +24,8 @@ public final class DaemonServer: @unchecked Sendable {
     }
     private var clients: [Int32: ClientRecord] = [:]
     private var clientFDsByID: [UUID: Int32] = [:]
+    /// `wait-for` named channels (queue-confined, like the other connection state).
+    private let waitForRegistry = WaitForRegistry()
     private let startedAt = Date()
 
     public init() {
@@ -110,6 +112,7 @@ public final class DaemonServer: @unchecked Sendable {
             self.clientBuffers.removeValue(forKey: clientFD)
             self.clientSources.removeValue(forKey: clientFD)
             self.cancelSubscriptions(for: clientFD)
+            self.waitForRegistry.remove(fd: clientFD)
             close(clientFD)
         }
         clientSources[clientFD] = source
@@ -143,6 +146,10 @@ public final class DaemonServer: @unchecked Sendable {
                 send(.ok, to: fd)
                 continue
             }
+            if case let .waitFor(channel, mode) = request {
+                handleWaitFor(channel: channel, mode: mode, fd: fd)
+                continue
+            }
             if let intercepted = handleClientLifecycle(request, fd: fd) {
                 send(intercepted, to: fd)
                 continue
@@ -154,6 +161,26 @@ public final class DaemonServer: @unchecked Sendable {
             send(response, to: fd)
         }
         clientBuffers[fd] = data
+    }
+
+    /// `wait-for`: register/wake fds on a named channel. `wait`/`lock` defer the reply (the
+    /// client's socket read blocks) until a `signal`/`unlock` from another connection sends
+    /// it. All on the serial queue — no blocking here, no registry lock.
+    private func handleWaitFor(channel: String, mode: String, fd: Int32) {
+        switch mode {
+        case "signal":
+            for waiter in waitForRegistry.signal(channel: channel) { send(.ok, to: waiter) }
+            send(.ok, to: fd)
+        case "lock":
+            if waitForRegistry.lock(channel: channel, fd: fd) { send(.ok, to: fd) }
+            // else: held — reply deferred until `unlock` grants it.
+        case "unlock":
+            if let granted = waitForRegistry.unlock(channel: channel) { send(.ok, to: granted) }
+            send(.ok, to: fd)
+        default: // "wait"
+            waitForRegistry.wait(channel: channel, fd: fd)
+            // reply deferred until a `signal`.
+        }
     }
 
     /// Requests the server owns (because they query/mutate the FD layer rather

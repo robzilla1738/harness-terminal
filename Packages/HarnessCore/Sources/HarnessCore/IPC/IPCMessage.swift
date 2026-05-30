@@ -39,11 +39,17 @@ public enum IPCRequest: Codable, Sendable {
     case sendKeys(surfaceID: String, keys: [String])
     case capturePane(surfaceID: String, includeScrollback: Bool)
     /// `capture-pane -S <start> -E <end>`: a line range from scrollback+screen,
-    /// negative numbers counting back from the bottom (tmux semantics). Returns `.text`.
-    case capturePaneRange(surfaceID: String, start: Int?, end: Int?)
+    /// negative numbers counting back from the bottom (tmux semantics). `escapeSequences`
+    /// (`-e`) keeps SGR/escapes instead of stripping to plain text. Returns `.text`.
+    case capturePaneRange(surfaceID: String, start: Int?, end: Int?, escapeSequences: Bool)
     /// `pipe-pane`: tee the pane's live output to a spawned shell command's stdin.
     /// `shellCommand == nil` stops an active pipe (toggle off).
     case pipePane(surfaceID: String, shellCommand: String?)
+    /// `wait-for <channel>` (mode `wait`/`signal`/`lock`/`unlock`): named-channel
+    /// synchronization. `wait`/`lock` may defer the reply (block the client) until a
+    /// `signal`/`unlock`. Intercepted at the `DaemonServer` socket layer, never under the
+    /// registry lock.
+    case waitFor(channel: String, mode: String)
     /// `link-window`: make `tabID`'s panes appear as a new linked tab in another
     /// session (shared surfaces). `unlinkWindow` removes the linked copy.
     case linkWindow(tabID: UUID, targetSessionID: UUID)

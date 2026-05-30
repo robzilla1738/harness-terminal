@@ -564,6 +564,12 @@ private final class WindowSession: @unchecked Sendable {
     private var copyModePending: [UInt8] = []
     private var mouseSeq: [UInt8] = []
     private var collectingMouse = false
+    // `bind -n` root table (no-prefix bindings): buffer a candidate command key (control
+    // byte / ESC sequence) and look it up in `.root`. Only engaged when the user actually
+    // has root bindings, so plain typing and unbound control keys still forward verbatim.
+    private var inRoot = false
+    private var rootPending: [UInt8] = []
+    private lazy var hasRootBindings = !(keyTables.table(.root)?.bindings.isEmpty ?? true)
 
     private func runInputLoop() {
         var buffer = [UInt8](repeating: 0, count: 4096)
@@ -618,6 +624,11 @@ private final class WindowSession: @unchecked Sendable {
             }
             return
         }
+        // Mid-decode of a `bind -n` root sequence (e.g. ESC [ 1 ; 3 D for M-Left).
+        if inRoot {
+            feedRoot(byte, forward: &forward)
+            return
+        }
         if byte == prefix {
             inPrefix = true
             prefixPending.removeAll(keepingCapacity: true)
@@ -665,7 +676,45 @@ private final class WindowSession: @unchecked Sendable {
             renderQueue.async { [weak self] in self?.dismissPaneNumbers() }
         }
 
+        // `bind -n` root table: a control byte / ESC sequence may be a no-prefix binding.
+        // ESC only reaches here with the mouse off (the mouse demux claims ESC above), so
+        // bind -n on modified arrows needs `mouse off` — the common attach case.
+        if hasRootBindings, Self.isRootCandidate(byte) {
+            feedRoot(byte, forward: &forward)
+            return
+        }
+
         forward.append(byte)
+    }
+
+    /// Bytes that could begin a `.root` key: control bytes (C-x) and ESC sequences
+    /// (M-x / modified arrows). Plain printable input is never buffered for root.
+    private static func isRootCandidate(_ byte: UInt8) -> Bool {
+        (byte >= 0x01 && byte <= 0x1a) || byte == 0x1b || byte == 0x7f
+    }
+
+    /// Buffer + decode a candidate root key; run its `.root` binding if bound, else forward
+    /// the buffered bytes verbatim. Mirrors the prefix machine (tolerant of split reads).
+    private func feedRoot(_ byte: UInt8, forward: inout Data) {
+        rootPending.append(byte)
+        switch Self.decodeKeySpec(rootPending) {
+        case .incomplete:
+            inRoot = true
+        case let .complete(spec):
+            if !handleRootKey(spec) { forward.append(contentsOf: rootPending) }
+            rootPending.removeAll(keepingCapacity: true); inRoot = false
+        case .invalid, .literalPrefix:
+            forward.append(contentsOf: rootPending)
+            rootPending.removeAll(keepingCapacity: true); inRoot = false
+        }
+    }
+
+    /// Look a `KeySpec` up in the `.root` (no-prefix) table and run its `Command`.
+    private func handleRootKey(_ spec: KeySpec) -> Bool {
+        guard let binding = keyTables.table(.root)?.lookup(spec) else { return false }
+        let command = binding.command
+        renderQueue.async { [weak self] in self?.execute(command) }
+        return true
     }
 
     /// Send forwarded bytes to the focused pane — or to every pane when synchronized.

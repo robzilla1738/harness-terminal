@@ -133,6 +133,13 @@ public final class OptionStore: @unchecked Sendable {
         // compositor (`PaneRectSolver` + `GridCompositor`).
         "pane-border-status": .string("off"),
         "pane-border-format": .string(" #{pane_index} #{pane_title} "),
+        // Lifecycle/timing. `remain-on-exit` on (Harness's safe default; tmux defaults off)
+        // keeps a pane's dead leaf so `respawn-pane` can revive it; off closes the pane (or
+        // its tab when last) when the shell exits — read in the daemon's PTY-exit handler.
+        "remain-on-exit": .bool(true),
+        // `repeat-time` (ms): how long the prefix stays armed after a repeatable binding
+        // (`bind -r`) so the key repeats without re-pressing the prefix. Read by `PrefixKeymap`.
+        "repeat-time": .int(500),
     ]
 
     /// Values that shipped as defaults in an earlier build and have since been

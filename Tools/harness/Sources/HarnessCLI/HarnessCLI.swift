@@ -73,6 +73,8 @@ struct HarnessCLI {
                 try handleCapturePane(args, client: client)
             case "pipe-pane":
                 try handlePipePane(args, client: client)
+            case "wait-for", "wait":
+                try handleWaitFor(args, client: client)
             case "link-window":
                 try handleLinkWindow(args, client: client)
             case "unlink-window":
@@ -309,16 +311,17 @@ struct HarnessCLI {
 
     static func handleCapturePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-p]\n", stderr)
+            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-e] [-p]\n", stderr)
             exit(1)
         }
-        // -S/-E request an ANSI-stripped line range (tmux `-p` prints to stdout,
-        // which is the default here). Negative numbers count back from the bottom.
+        // -S/-E request a line range (tmux `-p` prints to stdout, the default here);
+        // negative numbers count back from the bottom. -e keeps SGR/escapes (default strips).
         let start = flagValue(args, flag: "-S").flatMap(Int.init)
         let end = flagValue(args, flag: "-E").flatMap(Int.init)
+        let escapes = args.contains("-e")
         let response: IPCResponse
-        if args.contains("-S") || args.contains("-E") {
-            response = try checkedRequest(client, .capturePaneRange(surfaceID: surface, start: start, end: end))
+        if args.contains("-S") || args.contains("-E") || escapes {
+            response = try checkedRequest(client, .capturePaneRange(surfaceID: surface, start: start, end: end, escapeSequences: escapes))
         } else {
             response = try checkedRequest(client, .capturePane(surfaceID: surface, includeScrollback: args.contains("--scrollback")))
         }
@@ -334,6 +337,24 @@ struct HarnessCLI {
         // token is the shell command (omitted → stop piping).
         let command = args.dropFirst().first { !$0.hasPrefix("-") && $0 != surface }
         _ = try checkedRequest(client, .pipePane(surfaceID: surface, shellCommand: command))
+    }
+
+    /// `wait-for [-S|-L|-U] <channel>` — tmux named-channel sync. Plain `wait-for` blocks
+    /// until another client `-S` signals it; `-L`/`-U` lock/unlock.
+    static func handleWaitFor(_ args: [String], client: DaemonClient) throws {
+        let mode: String
+        if args.contains("-S") { mode = "signal" }
+        else if args.contains("-L") { mode = "lock" }
+        else if args.contains("-U") { mode = "unlock" }
+        else { mode = "wait" }
+        guard let channel = positionalArgs(args, skippingValuesFor: []).first else {
+            fputs("Usage: harness-cli wait-for [-S|-L|-U] <channel>\n", stderr)
+            exit(1)
+        }
+        // `wait`/`lock` block until signaled/granted — a generous (≈1 week) timeout, well
+        // within the poll's Int32 millisecond range. `signal`/`unlock` return at once.
+        let timeout: TimeInterval = (mode == "wait" || mode == "lock") ? 604_800 : 5
+        _ = try checkedRequest(client, .waitFor(channel: channel, mode: mode), timeout: timeout)
     }
 
     static func handleLinkWindow(_ args: [String], client: DaemonClient) throws {
@@ -944,8 +965,8 @@ struct HarnessCLI {
         return args[index + 1]
     }
 
-    static func checkedRequest(_ client: DaemonClient, _ request: IPCRequest) throws -> IPCResponse {
-        let response = try client.request(request)
+    static func checkedRequest(_ client: DaemonClient, _ request: IPCRequest, timeout: TimeInterval = 2) throws -> IPCResponse {
+        let response = try client.request(request, timeout: timeout)
         if case let .error(message) = response {
             throw DaemonSessionError.daemonError(message)
         }

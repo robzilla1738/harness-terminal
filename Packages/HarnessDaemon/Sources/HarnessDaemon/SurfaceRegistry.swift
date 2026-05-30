@@ -392,9 +392,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case let .closeSurface(surfaceID):
             closeSurfaces([surfaceID])
             return .ok
-        case let .capturePaneRange(surfaceID, start, end):
+        case let .capturePaneRange(surfaceID, start, end, escapeSequences):
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
-            return .text(session.captureRange(start: start, end: end))
+            return .text(session.captureRange(start: start, end: end, escapeSequences: escapeSequences))
         case let .pipePane(surfaceID, shellCommand):
             guard sessions[surfaceID] != nil else { return .error("Surface not found") }
             if let shellCommand, !shellCommand.isEmpty {
@@ -479,6 +479,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // FD-level streaming, owned by DaemonServer (intercepted before reaching
             // the registry); the stub keeps the switch exhaustive.
             return .error("subscribeSnapshot must be handled by DaemonServer")
+        case .waitFor:
+            // Socket-layer blocking primitive, owned by DaemonServer (intercepted before
+            // the registry so it never blocks this lock); stub keeps the switch exhaustive.
+            return .error("wait-for must be handled by DaemonServer")
         case let .cancelSubscription(surfaceID):
             sessions[surfaceID]?.cancelSubscription()
             return .ok
@@ -1089,13 +1093,29 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?) {
         lock.lock()
-        defer { lock.unlock() }
-        guard let session, sessions[surfaceID] === session else { return }
+        guard let session, sessions[surfaceID] === session else { lock.unlock(); return }
         sessions.removeValue(forKey: surfaceID)
         monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
         AgentDetector.unregisterRootPID(forSurfaceKey: surfaceID)
-        // The layout leaf survives the shell's death (until remain-on-exit handling in
-        // Phase 4 / an explicit kill), so the surfaceKey still resolves for the hook.
+        // `remain-on-exit` (default on, Harness's safe default): keep the dead leaf so the
+        // surface key still resolves and `respawn-pane` can revive it. Off → close the pane
+        // (or the whole tab when it was the pane's last). The close reuses the normal IPC
+        // handlers, so it must run off the registry lock — resolve the target here, dispatch
+        // there.
+        let keep = optionStore.get("remain-on-exit")?.boolValue ?? true
+        let toClose = keep ? nil : editor.paneLocation(forSurfaceKey: surfaceID)
         fireHookLocked(.paneExited, surfaceKey: surfaceID)
+        lock.unlock()
+
+        if let toClose {
+            hookQueue.async { [weak self] in
+                guard let self else { return }
+                if toClose.paneCount > 1 {
+                    _ = self.handle(.killPane(paneID: toClose.paneID))
+                } else {
+                    _ = self.handle(.closeTab(tabID: toClose.tabID))
+                }
+            }
+        }
     }
 }

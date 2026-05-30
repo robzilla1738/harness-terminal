@@ -70,7 +70,10 @@ final class PrefixKeymap {
     private func armRepeat() {
         armed = true
         showIndicator()
-        scheduleAutoDisarm(after: 0.6)
+        // tmux `repeat-time` (ms); clamp to a sane floor so a misconfigured 0 doesn't make
+        // repeatable bindings impossible.
+        let ms = HarnessOptions.shared.get("repeat-time", scope: .global)?.intValue ?? 500
+        scheduleAutoDisarm(after: max(0.05, Double(ms) / 1000))
     }
 
     private func scheduleAutoDisarm(after seconds: TimeInterval) {

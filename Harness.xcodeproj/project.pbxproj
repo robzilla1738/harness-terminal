@@ -59,6 +59,7 @@
 		87EB8777EA8043B7752985B8 /* SurfaceShellTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A0FAADD0C7DE4496F9A776 /* SurfaceShellTracker.swift */; };
 		8B1A56978E26C6722A72365F /* TerminalConfigImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 275F951E6B2787DECD0F1C56 /* TerminalConfigImporterTests.swift */; };
 		8C00D38E0430620212133366 /* Harness.icns in Resources */ = {isa = PBXBuildFile; fileRef = 9CBF9C616141AB5AFCF041D6 /* Harness.icns */; };
+		8C2F7C87968A67B3CD5047EB /* WaitForRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5FB4C8179560E786F5B2B4 /* WaitForRegistry.swift */; };
 		91572F33CB49E6A8D9B8E691 /* CommandPaletteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 245FF7D7A3A8434F040E6812 /* CommandPaletteController.swift */; };
 		920F928297C458ABDBEF88EC /* PaneRectSolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE940990023268131E49D65 /* PaneRectSolverTests.swift */; };
 		935E07FA27015FDA59C248B3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D745FE112DC4440236DABA22 /* Assets.xcassets */; };
@@ -104,6 +105,7 @@
 		F51258DADC262CFAFCC9F7AB /* HarnessCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B78BE3F3AF6A844038EF95 /* HarnessCLI.swift */; };
 		F63AA674E614B27B234B1ECC /* SessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8A2D8F06287D6DB6C5606FE /* SessionCoordinator.swift */; };
 		FA8BDF893A6EB2781A21B2C8 /* HarnessCopyMode in Frameworks */ = {isa = PBXBuildFile; productRef = FE523A47A837BFE82BB0E2CD /* HarnessCopyMode */; };
+		FC63C7B7E12D915CCA7CBA1A /* WaitForRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20DF4845E259A59459F605CA /* WaitForRegistryTests.swift */; };
 		FF14076D45F23530910D177B /* LaunchAgentInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF40CE61E1B2BA4AB5600378 /* LaunchAgentInstallerTests.swift */; };
 		FFCA3AA1B41CAF53A71C313F /* HarnessTerminalEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 3FC55903EBB40EC6C3E9A20D /* HarnessTerminalEngine */; };
 /* End PBXBuildFile section */
@@ -144,12 +146,14 @@
 		028273159E468DC46DD4AA0F /* PaneStyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneStyleTests.swift; sourceTree = "<group>"; };
 		036B746E8E08D842C7E96A4F /* CommandIPCTranslatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandIPCTranslatorTests.swift; sourceTree = "<group>"; };
 		0711E05B3BE71410054E6BEE /* Phase67Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase67Tests.swift; sourceTree = "<group>"; };
+		0D5FB4C8179560E786F5B2B4 /* WaitForRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitForRegistry.swift; sourceTree = "<group>"; };
 		12D719192EF917E6990605D1 /* GridCompositorCopyModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridCompositorCopyModeTests.swift; sourceTree = "<group>"; };
 		1879413866654EAF88523A14 /* KeyTokenParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTokenParserTests.swift; sourceTree = "<group>"; };
 		196C649521C73E076101AF6E /* NotificationBellButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationBellButton.swift; sourceTree = "<group>"; };
 		198091B7F721046BA174F52D /* TargetSpecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetSpecTests.swift; sourceTree = "<group>"; };
 		1D55ED26F49B2BE0BD71D99D /* FormatStyledTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormatStyledTests.swift; sourceTree = "<group>"; };
 		2025ED6B78DAA6996707D2F7 /* DaemonLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonLauncher.swift; sourceTree = "<group>"; };
+		20DF4845E259A59459F605CA /* WaitForRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitForRegistryTests.swift; sourceTree = "<group>"; };
 		245FF7D7A3A8434F040E6812 /* CommandPaletteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteController.swift; sourceTree = "<group>"; };
 		26F2AD1D92779527F2E5F14A /* DisplayPanesOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPanesOverlay.swift; sourceTree = "<group>"; };
 		275F951E6B2787DECD0F1C56 /* TerminalConfigImporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConfigImporterTests.swift; sourceTree = "<group>"; };
@@ -461,6 +465,7 @@
 				5122A39E062976C92BBDDDB2 /* DaemonServer.swift */,
 				F43DED9291885610DB352103 /* RealPty.swift */,
 				B7118759DA679A27E5A64BDB /* SurfaceRegistry.swift */,
+				0D5FB4C8179560E786F5B2B4 /* WaitForRegistry.swift */,
 			);
 			path = HarnessDaemon;
 			sourceTree = "<group>";
@@ -547,6 +552,7 @@
 				E8302E3F990CA380E0BEBB7A /* ShellLaunchProfileTests.swift */,
 				A51ECCD77E8E2A9F4EC74E1C /* SurfaceRegistryTests.swift */,
 				F07A9707ED8F9BC6D22C1973 /* TestSupport.swift */,
+				20DF4845E259A59459F605CA /* WaitForRegistryTests.swift */,
 			);
 			path = HarnessDaemonTests;
 			sourceTree = "<group>";
@@ -899,6 +905,7 @@
 				EF299CDAF4F68357FE3BEC21 /* ShellLaunchProfileTests.swift in Sources */,
 				38ED46EBAF81D35F3E683955 /* SurfaceRegistryTests.swift in Sources */,
 				1C97FE1CA6848A0A30C9EB2F /* TestSupport.swift in Sources */,
+				FC63C7B7E12D915CCA7CBA1A /* WaitForRegistryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -940,6 +947,7 @@
 				076308B3BD278A7808CC9C1C /* DaemonServer.swift in Sources */,
 				B21549FEB0B782423E9BC7D8 /* RealPty.swift in Sources */,
 				00D9494C7F45C06993EB9966 /* SurfaceRegistry.swift in Sources */,
+				8C2F7C87968A67B3CD5047EB /* WaitForRegistry.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -68,6 +68,29 @@ final class SessionEditorTests: XCTestCase {
                        "a pane not in the tab is rejected")
     }
 
+    func testPaneLocationResolvesSurfaceTabAndPaneCount() throws {
+        // Used by remain-on-exit: a single-pane tab reports count 1 (→ close the tab);
+        // a split reports count 2 (→ close just the pane).
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab = try XCTUnwrap(ws.activeTab)
+        let a = try XCTUnwrap(tab.rootPane.allPaneIDs().first)
+        let surfA = try XCTUnwrap(editor.surfaceID(forPaneID: a))
+
+        let loc1 = try XCTUnwrap(editor.paneLocation(forSurfaceKey: surfA.uuidString))
+        XCTAssertEqual(loc1.tabID, tab.id)
+        XCTAssertEqual(loc1.paneID, a)
+        XCTAssertEqual(loc1.paneCount, 1)
+
+        let b = try XCTUnwrap(editor.splitPane(in: ws.id, tabID: tab.id, paneID: a, direction: .horizontal))
+        let surfB = try XCTUnwrap(editor.surfaceID(forPaneID: b))
+        let loc2 = try XCTUnwrap(editor.paneLocation(forSurfaceKey: surfB.uuidString))
+        XCTAssertEqual(loc2.paneID, b)
+        XCTAssertEqual(loc2.paneCount, 2)
+
+        XCTAssertNil(editor.paneLocation(forSurfaceKey: UUID().uuidString), "unknown surface → nil")
+    }
+
     /// v2 layout.json had no `activePaneID`/`lastActivePaneID`; decoding must backfill
     /// the focus to the first leaf so older files load with a valid active pane.
     func testTabDecodeBackfillsActivePaneFromV2() throws {

@@ -461,6 +461,27 @@ public struct SessionEditor: Sendable {
         )
     }
 
+    /// Tab + pane backing a surface key, plus how many panes the tab has. Used by
+    /// `remain-on-exit off`: close just the dead pane, or the whole tab when it was the last.
+    public func paneLocation(forSurfaceKey key: String) -> (tabID: TabID, paneID: PaneID, paneCount: Int)? {
+        func leaf(_ node: PaneNode) -> PaneLeaf? {
+            switch node {
+            case let .leaf(l): return l.surfaceID.uuidString == key ? l : nil
+            case let .branch(_, _, first, second): return leaf(first) ?? leaf(second)
+            }
+        }
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if let l = leaf(tab.rootPane) {
+                        return (tab.id, l.id, tab.rootPane.allPaneIDs().count)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
     public func surfaceID(forPaneID paneID: PaneID) -> SurfaceID? {
         for workspace in snapshot.workspaces {
             for session in workspace.sessions {
