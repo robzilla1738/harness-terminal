@@ -105,6 +105,15 @@ public final class TerminalEmulator: VTParserHandler {
         current.snapshot()
     }
 
+    /// Which viewport rows of the current screen changed since the last call, so a renderer can
+    /// rebuild only those rows. Resets the accumulator: each change is reported exactly once.
+    /// Reports `full` for screen-wide changes (clear/resize/reset/alternate-screen switch) and
+    /// `cursorOnly` when the only change was the cursor moving. Always reflects the *live*
+    /// viewport; callers showing scrollback should rebuild fully instead.
+    public func consumeDamage() -> TerminalDamage {
+        current.consumeDamage()
+    }
+
     /// Total lines addressable by copy-mode / scrollback navigation on the current screen
     /// (retained history + the live viewport rows). 0 history on the alternate screen.
     public var bufferLineCount: Int { current.bufferLineCount }
@@ -548,6 +557,8 @@ public final class TerminalEmulator: VTParserHandler {
             current = primary
             if saveCursor { primary.restoreCursor() }
         }
+        // The visible buffer changed wholesale — the next consumer must repaint everything.
+        current.markFullyDirty()
     }
 
     private func deviceStatusReport(_ code: Int) {

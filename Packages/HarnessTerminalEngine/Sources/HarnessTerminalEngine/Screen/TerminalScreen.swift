@@ -40,7 +40,9 @@ final class TerminalScreen {
     var cellPixelWidth = 8
     var cellPixelHeight = 16
 
-    var cursorVisible = true
+    var cursorVisible = true {
+        didSet { if cursorVisible != oldValue { markRowDirty(cursorRow) } }
+    }
     /// Program-requested cursor shape/blink (DECSCUSR); `.default`/nil honor the user setting.
     var cursorShape: TerminalCursorShape = .default
     var cursorBlinking: Bool? = nil
@@ -78,6 +80,64 @@ final class TerminalScreen {
 
     /// Number of scrolled-off lines currently retained.
     var historyCount: Int { history.count }
+
+    // MARK: - Dirty-row damage
+    /// Viewport rows whose cell content changed since the last `consumeDamage()`. Cursor
+    /// *position* moves are tracked separately (`lastPresentedCursorRow`) so a pure cursor
+    /// move doesn't masquerade as content damage. Cleared by `consumeDamage()`.
+    private var contentDamage = IndexSet()
+    /// The whole screen changed and must be fully rebuilt. Starts true so the first render
+    /// paints everything.
+    private var fullDamage = true
+    /// The cursor row reported dirty at the last `consumeDamage()`. Unioned with the current
+    /// `cursorRow` on the next consume so a moved cursor redraws both its old and new rows.
+    private var lastPresentedCursorRow = 0
+
+    /// Mark one viewport row's content dirty (out-of-range rows are ignored).
+    private func markRowDirty(_ row: Int) {
+        guard row >= 0, row < rows else { return }
+        contentDamage.insert(row)
+    }
+
+    /// Mark a half-open range of viewport rows dirty, clamped to the grid.
+    private func markRowsDirty(_ range: Range<Int>) {
+        let lo = max(0, range.lowerBound)
+        let hi = min(rows, range.upperBound)
+        guard lo < hi else { return }
+        contentDamage.insert(integersIn: lo ..< hi)
+    }
+
+    /// Mark a closed range of viewport rows dirty, clamped to the grid.
+    private func markRowsDirty(_ range: ClosedRange<Int>) {
+        markRowsDirty(range.lowerBound ..< (range.upperBound + 1))
+    }
+
+    /// Flag the whole screen for a full rebuild (clear, resize/reflow, reset, screen switch).
+    func markFullyDirty() { fullDamage = true }
+
+    /// Return the rows that changed since the last call and reset the accumulator. A moved
+    /// cursor contributes its old and new rows; `cursorOnly` is set when that move is the only
+    /// change. `full` requests a whole-screen rebuild.
+    func consumeDamage() -> TerminalDamage {
+        let cursorMoved = cursorRow != lastPresentedCursorRow
+        let contentEmpty = contentDamage.isEmpty
+        var dirtyRows = fullDamage ? IndexSet(integersIn: 0 ..< rows) : contentDamage
+        if !fullDamage, cursorMoved {
+            if lastPresentedCursorRow >= 0, lastPresentedCursorRow < rows {
+                dirtyRows.insert(lastPresentedCursorRow)
+            }
+            dirtyRows.insert(cursorRow)
+        }
+        let damage = TerminalDamage(
+            rows: dirtyRows,
+            full: fullDamage,
+            cursorOnly: !fullDamage && contentEmpty && cursorMoved
+        )
+        contentDamage = IndexSet()
+        fullDamage = false
+        lastPresentedCursorRow = cursorRow
+        return damage
+    }
 
     init(cols: Int, rows: Int, recordsHistory: Bool = false) {
         let c = max(1, cols)
@@ -154,6 +214,8 @@ final class TerminalScreen {
         imageByteTotal += image.byteCount
         placements.append(ImagePlacement(id: id, absRow: history.count + cursorRow, col: cursorCol, cols: fCols, rows: fRows, z: z))
         evictImagesIfNeeded()
+        // The image overlays the rows it covers from the current cursor row down.
+        markRowsDirty(cursorRow ..< (cursorRow + fRows))
         // Move the cursor below the image so following output doesn't overlap it (the placement
         // rides along if these line feeds scroll the screen).
         for _ in 0 ..< fRows { lineFeed() }
@@ -219,6 +281,7 @@ final class TerminalScreen {
         case 6: cursorShape = .bar; cursorBlinking = false
         default: cursorShape = .default; cursorBlinking = nil
         }
+        markRowDirty(cursorRow)   // cursor shape/blink changed → repaint its row
     }
 
     /// A snapshot scrolled `offset` lines up into history (0 = the live viewport). The
@@ -287,6 +350,7 @@ final class TerminalScreen {
     func markPromptStart() {
         guard cursorRow >= 0, cursorRow < rowMarks.count else { return }
         rowMarks[cursorRow] = SemanticMark(exit: rowMarks[cursorRow]?.exit)
+        markRowDirty(cursorRow)   // the prompt gutter stripe appears on this row
     }
 
     /// OSC 133;D[;exit] — record the finished command's exit status onto the most recent prompt
@@ -297,7 +361,7 @@ final class TerminalScreen {
         // Viewport rows above (and including) the cursor, newest first.
         var r = min(cursorRow, rowMarks.count - 1)
         while r >= 0 {
-            if rowMarks[r] != nil { rowMarks[r]?.exit = exit; return }
+            if rowMarks[r] != nil { rowMarks[r]?.exit = exit; markRowDirty(r); return }
             r -= 1
         }
         var h = history.count - 1
@@ -412,6 +476,7 @@ final class TerminalScreen {
         scrollBottom = nr - 1
         pendingWrap = false
         ensureTabStopsSized()   // tab stops are column-absolute; keep the array sized to `cols`
+        markFullyDirty()        // geometry/reflow rebuilds every row
     }
 
     /// True when a cell is the default blank (no glyph, default bg, no attributes) — used to
@@ -662,6 +727,7 @@ final class TerminalScreen {
     private func writeCell(_ cell: TerminalGridCell, at col: Int) {
         guard col >= 0, col < cols, cursorRow >= 0, cursorRow < rows else { return }
         cells[cursorRow * cols + col] = cell
+        markRowDirty(cursorRow)
     }
 
     /// Advance the cursor after writing a glyph, arming a deferred wrap when it reaches
@@ -683,6 +749,7 @@ final class TerminalScreen {
         // The row we're leaving continues onto the next (a soft wrap) — record it so resize
         // reflow re-joins the logical line. `lineFeed` may scroll; `scrollUp` carries the flag.
         if cursorRow >= 0, cursorRow < rowWrapped.count { rowWrapped[cursorRow] = true }
+        markRowDirty(cursorRow)
         cursorCol = 0
         lineFeed()
     }
@@ -857,6 +924,7 @@ final class TerminalScreen {
             rowWrapped[scrollBottom] = false
             rowMarks[scrollBottom] = nil
         }
+        markRowsDirty(scrollTop ... scrollBottom)
         // Only region/alternate scrolls move anchors; a history-growing scroll leaves them
         // invariant (the image scrolls into scrollback instead of being dropped).
         if !growsHistory { shiftPlacements(by: -count) }
@@ -883,6 +951,7 @@ final class TerminalScreen {
             rowWrapped[scrollTop] = false
             rowMarks[scrollTop] = nil
         }
+        markRowsDirty(scrollTop ... scrollBottom)
         shiftPlacements(by: count)
     }
 
@@ -906,11 +975,13 @@ final class TerminalScreen {
                 rowMarks[r] = nil   // fully-cleared row is no longer a prompt
             }
             for c in 0 ... cursorCol where c < cols { cells[cursorRow * cols + c] = blank }
+            markRowsDirty(0 ... cursorRow)
         case 2, 3:
             for i in 0 ..< cells.count { cells[i] = blank }
             for r in 0 ..< rows { rowWrapped[r] = false; rowMarks[r] = nil }
             clearImages()   // ED 2/3 clears the screen (and scrollback for 3) → drop images
             if mode == 3 { history.removeAll() }
+            markFullyDirty()
         default: // 0
             for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
             rowWrapped[cursorRow] = false
@@ -919,6 +990,7 @@ final class TerminalScreen {
                 rowWrapped[r] = false
                 rowMarks[r] = nil   // fully-cleared row is no longer a prompt
             }
+            markRowsDirty(cursorRow ..< rows)
         }
         pendingWrap = false
     }
@@ -938,6 +1010,7 @@ final class TerminalScreen {
             for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
             rowWrapped[cursorRow] = false
         }
+        markRowDirty(cursorRow)
         pendingWrap = false
     }
 
@@ -952,6 +1025,7 @@ final class TerminalScreen {
             c -= 1
         }
         for c in cursorCol ..< (cursorCol + count) { cells[rowStart + c] = blank }
+        markRowDirty(cursorRow)
         pendingWrap = false
     }
 
@@ -966,6 +1040,7 @@ final class TerminalScreen {
             c += 1
         }
         while c < cols { cells[rowStart + c] = blank; c += 1 }
+        markRowDirty(cursorRow)
         pendingWrap = false
     }
 
@@ -975,6 +1050,7 @@ final class TerminalScreen {
         let blank = erasedCell()
         let rowStart = cursorRow * cols
         for c in cursorCol ..< (cursorCol + count) { cells[rowStart + c] = blank }
+        markRowDirty(cursorRow)
     }
 
     /// IL — insert `n` blank lines at the cursor row, within the scroll region.
@@ -994,6 +1070,7 @@ final class TerminalScreen {
             rowWrapped[r] = false
             rowMarks[r] = nil
         }
+        markRowsDirty(cursorRow ... scrollBottom)
         pendingWrap = false
     }
 
@@ -1015,6 +1092,7 @@ final class TerminalScreen {
             rowMarks[r] = nil
             r += 1
         }
+        markRowsDirty(cursorRow ... scrollBottom)
         pendingWrap = false
     }
 
@@ -1190,6 +1268,7 @@ final class TerminalScreen {
         scrollBottom = rows - 1
         tabStops = Self.defaultTabStops(cols)
         clearImages()
+        markFullyDirty()
     }
 
     private func clamp(_ v: Int, _ lo: Int, _ hi: Int) -> Int {

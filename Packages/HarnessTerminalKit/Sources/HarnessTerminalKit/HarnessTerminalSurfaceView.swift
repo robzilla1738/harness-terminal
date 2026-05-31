@@ -101,6 +101,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var columns: Int = 80
     private var rows: Int = 24
     private var renderScheduled = false
+    /// The last frame built on the plain live path (no scrollback/selection/copy-mode/IME), kept
+    /// so the next plain render can reuse unchanged rows via the engine's dirty-row damage. Set to
+    /// nil whenever a non-plain frame is drawn or the appearance changes, forcing a full rebuild.
+    private var lastPlainFrame: TerminalFrame?
     /// True once the grid has been sized from a real layout — the first sizing commits
     /// immediately (so the terminal opens at the right size); later changes coalesce.
     private var hasSizedGrid = false
@@ -265,6 +269,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             selectionForeground: selFg,
             promptGutterEnabled: promptGutterEnabled
         )
+        // Resolved colors/opacity changed — cached rows hold the old palette; force a full rebuild.
+        lastPlainFrame = nil
         restartBlinkTimer()
         // Opaque only when fully opaque; otherwise the layer must be non-opaque so the
         // window-wide blur shows through the translucent canvas.
@@ -484,10 +490,23 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func renderNow() {
         guard let renderer, let drawable = metalLayer.nextDrawable() else { return }
         // Copy mode owns the whole surface while active (its own scroll offset + overlay).
-        if renderCopyMode(renderer: renderer, drawable: drawable) { return }
+        if renderCopyMode(renderer: renderer, drawable: drawable) { lastPlainFrame = nil; return }
         let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
-        var frame = frameBuilder.build(grid, selection: currentSelection,
+        // Consume dirty-row damage every frame to keep the engine's "since last render" window
+        // aligned, then feed it to the builder only on the plain live path. Scrollback, an active
+        // selection, and IME preedit all rebuild every row (they aren't tracked by damage), so
+        // they take the full path and reset the reuse cache.
+        let damage = emulator.consumeDamage()
+        let plain = scrollOffset == 0 && currentSelection == nil && markedText.isEmpty
+        var frame: TerminalFrame
+        if plain {
+            frame = frameBuilder.build(grid, region: nil,
+                                       imageProvider: { [weak self] in self?.emulator.image(for: $0) },
+                                       reusing: lastPlainFrame, damage: damage)
+        } else {
+            frame = frameBuilder.build(grid, selection: currentSelection,
                                        imageProvider: { [weak self] in self?.emulator.image(for: $0) })
+        }
         // IME preedit: draw the in-progress composition over the grid at the cursor.
         if !markedText.isEmpty, scrollOffset == 0 {
             overlayPreedit(into: &frame)
@@ -517,6 +536,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             gamma: glyphGamma,
             ligatures: ligaturesEnabled
         )
+        // Retain only a plain frame for row reuse; a selection/scrollback/preedit frame would
+        // poison the cache with overlay-baked cells, so drop it. (`plain` already excludes IME.)
+        lastPlainFrame = plain ? frame : nil
     }
 
     // MARK: - Cursor blink

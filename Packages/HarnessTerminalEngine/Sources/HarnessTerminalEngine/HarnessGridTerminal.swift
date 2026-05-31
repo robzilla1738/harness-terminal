@@ -44,6 +44,12 @@ public final class HarnessGridTerminal {
         emulator.readGrid()
     }
 
+    /// Dirty viewport rows since the last call (resets the accumulator). See
+    /// `TerminalEmulator.consumeDamage()`.
+    public func consumeDamage() -> TerminalDamage {
+        emulator.consumeDamage()
+    }
+
     /// Read the viewport scrolled `offset` lines up into scrollback (0 = live bottom).
     /// Powers the compositor's copy-mode overlay (it renders history the same way the GUI
     /// surface does).

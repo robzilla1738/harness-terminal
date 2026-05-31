@@ -313,52 +313,33 @@ public struct FrameBuilder {
         region: SelectionRegion?,
         searchHighlights: [TerminalSelection] = [],
         copyModeCursor: (row: Int, column: Int)? = nil,
-        imageProvider: ((Int) -> DecodedImage?)? = nil
+        imageProvider: ((Int) -> DecodedImage?)? = nil,
+        reusing previous: TerminalFrame? = nil,
+        damage: TerminalDamage? = nil
     ) -> TerminalFrame {
+        let cols = snapshot.cols
         var cells = [RenderCell]()
-        cells.reserveCapacity(snapshot.cols * snapshot.rows)
-        for row in 0 ..< snapshot.rows {
-            for column in 0 ..< snapshot.cols {
-                let cell = snapshot.cell(row: row, col: column) ?? .blank
-                let colors = resolver.resolve(cell)
-                // Underline color defaults to the resolved foreground when unset.
-                let underline = resolver.resolved(cell.underlineColor, default: colors.foreground)
-                // A cell shows the canvas only when its background is the terminal default
-                // (no explicit SGR bg) and it isn't inverted (which promotes the foreground
-                // into the bg slot). Those — and only those — get the translucent alpha.
-                let isCanvasBackground = cell.background == .none && !cell.inverse
-                // Precedence: primary selection (opaque) > search hit > normal.
-                let selected = region?.contains(row: row, column: column) ?? false
-                let isSearchHit = !selected && !searchHighlights.isEmpty
-                    && searchHighlights.contains { $0.contains(row: row, column: column) }
-                let foreground: RenderColor
-                let background: RenderColor
-                if selected, let selBg = selectionBackground {
-                    background = RenderColor(selBg)
-                    foreground = selectionForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
-                } else if isSearchHit, let searchBg = searchBackground {
-                    background = RenderColor(searchBg)
-                    foreground = searchForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
+        cells.reserveCapacity(cols * snapshot.rows)
+        // Incremental rebuild: reuse the previous frame's `RenderCell`s for rows the engine
+        // didn't mark dirty, recomputing only the dirty ones. Gated to the plain path — a
+        // selection/search bakes per-cell highlight colors that the damage set doesn't track, so
+        // any of those forces a full rebuild. The cursor overlay is applied by the renderer (not
+        // baked into cells), so cursor movement never blocks reuse: clean rows stay byte-identical.
+        let canReuse = region == nil && searchHighlights.isEmpty && copyModeCursor == nil
+            && !(damage?.full ?? true)
+            && previous?.columns == cols && previous?.rows == snapshot.rows
+            && previous?.cells.count == cols * snapshot.rows
+        if canReuse, let previous, let damage {
+            for row in 0 ..< snapshot.rows {
+                if damage.rows.contains(row) {
+                    appendRow(row, snapshot: snapshot, region: region, searchHighlights: searchHighlights, into: &cells)
                 } else {
-                    background = isCanvasBackground
-                        ? RenderColor(colors.background, alpha: canvasOpacity)
-                        : RenderColor(colors.background)
-                    foreground = RenderColor(colors.foreground)
+                    cells.append(contentsOf: previous.cells[(row * cols) ..< ((row + 1) * cols)])
                 }
-                cells.append(RenderCell(
-                    row: row,
-                    column: column,
-                    codepoint: cell.codepoint,
-                    foreground: foreground,
-                    background: background,
-                    underlineColor: RenderColor(underline),
-                    bold: cell.bold,
-                    italic: cell.italic,
-                    underline: cell.underline,
-                    strikethrough: cell.strikethrough,
-                    overline: cell.overline,
-                    width: cell.width
-                ))
+            }
+        } else {
+            for row in 0 ..< snapshot.rows {
+                appendRow(row, snapshot: snapshot, region: region, searchHighlights: searchHighlights, into: &cells)
             }
         }
         // The copy-mode cursor overrides the program cursor's position and forces it visible
@@ -392,6 +373,56 @@ public struct FrameBuilder {
         let promptGutter = promptGutterEnabled ? resolvePromptGutter(snapshot.marks) : [:]
         return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells,
                              cursor: cursor, images: images, promptGutter: promptGutter)
+    }
+
+    /// Build the `RenderCell`s for one viewport row (appending in column order). A row's cells
+    /// depend only on its snapshot cells plus selection/search shading — the cursor overlay is
+    /// applied later by the renderer — so this is the unit of incremental reuse in `build`.
+    private func appendRow(_ row: Int, snapshot: TerminalGridSnapshot,
+                           region: SelectionRegion?, searchHighlights: [TerminalSelection],
+                           into cells: inout [RenderCell]) {
+        for column in 0 ..< snapshot.cols {
+            let cell = snapshot.cell(row: row, col: column) ?? .blank
+            let colors = resolver.resolve(cell)
+            // Underline color defaults to the resolved foreground when unset.
+            let underline = resolver.resolved(cell.underlineColor, default: colors.foreground)
+            // A cell shows the canvas only when its background is the terminal default
+            // (no explicit SGR bg) and it isn't inverted (which promotes the foreground
+            // into the bg slot). Those — and only those — get the translucent alpha.
+            let isCanvasBackground = cell.background == .none && !cell.inverse
+            // Precedence: primary selection (opaque) > search hit > normal.
+            let selected = region?.contains(row: row, column: column) ?? false
+            let isSearchHit = !selected && !searchHighlights.isEmpty
+                && searchHighlights.contains { $0.contains(row: row, column: column) }
+            let foreground: RenderColor
+            let background: RenderColor
+            if selected, let selBg = selectionBackground {
+                background = RenderColor(selBg)
+                foreground = selectionForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
+            } else if isSearchHit, let searchBg = searchBackground {
+                background = RenderColor(searchBg)
+                foreground = searchForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
+            } else {
+                background = isCanvasBackground
+                    ? RenderColor(colors.background, alpha: canvasOpacity)
+                    : RenderColor(colors.background)
+                foreground = RenderColor(colors.foreground)
+            }
+            cells.append(RenderCell(
+                row: row,
+                column: column,
+                codepoint: cell.codepoint,
+                foreground: foreground,
+                background: background,
+                underlineColor: RenderColor(underline),
+                bold: cell.bold,
+                italic: cell.italic,
+                underline: cell.underline,
+                strikethrough: cell.strikethrough,
+                overline: cell.overline,
+                width: cell.width
+            ))
+        }
     }
 
     /// Map OSC 133 semantic marks (viewport row → mark) to gutter stripe colors. A mark with a

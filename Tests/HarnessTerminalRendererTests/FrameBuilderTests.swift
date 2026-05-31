@@ -111,6 +111,53 @@ final class FrameBuilderTests: XCTestCase {
         XCTAssertEqual(f.cell(row: 0, column: 0)!.background, RenderColor(theme.background))
     }
 
+    // MARK: - Incremental rebuild (dirty-row reuse)
+
+    func testIncrementalRebuildMatchesFullRebuild() {
+        let b = builder
+        let term = HarnessGridTerminal(cols: 10, rows: 3)!
+        term.feed("abc")
+        _ = term.consumeDamage()                  // clear the initial full damage
+        let f1 = b.build(term.readGrid()!)        // plain baseline
+        term.feed("\u{1b}[2;1HXYZ")               // rewrite row 1 only
+        let damage = term.consumeDamage()
+        XCTAssertFalse(damage.full)               // a single-row change must not be full
+        let snap = term.readGrid()!
+        let incremental = b.build(snap, region: nil, reusing: f1, damage: damage)
+        // Reusing clean rows 0 and 2 must be byte-identical to rebuilding the whole grid.
+        XCTAssertEqual(incremental.cells, b.build(snap).cells)
+    }
+
+    func testIncrementalFallsBackOnFullDamage() {
+        let b = builder
+        let term = HarnessGridTerminal(cols: 8, rows: 2)!
+        term.feed("ab")
+        _ = term.consumeDamage()
+        let f1 = b.build(term.readGrid()!)
+        term.feed("\u{1b}[2J\u{1b}[1;1HZ")        // clear (full damage) + write
+        let damage = term.consumeDamage()
+        XCTAssertTrue(damage.full)
+        let snap = term.readGrid()!
+        let incremental = b.build(snap, region: nil, reusing: f1, damage: damage)
+        XCTAssertEqual(incremental.cells, b.build(snap).cells)
+    }
+
+    func testReuseIgnoredWhenSelectionPresent() {
+        // A selection bakes per-cell highlight colors the damage set doesn't track, so passing
+        // `reusing:`/`damage:` alongside a region must still produce a correct full build.
+        let b = FrameBuilder(theme: theme, selectionBackground: RGBColor(red: 1, green: 2, blue: 3))
+        let term = HarnessGridTerminal(cols: 6, rows: 2)!
+        term.feed("hi")
+        _ = term.consumeDamage()
+        let f1 = b.build(term.readGrid()!)
+        term.feed("\u{1b}[2;1Hyo")
+        let damage = term.consumeDamage()
+        let snap = term.readGrid()!
+        let sel = TerminalSelection((0, 0), (0, 2))
+        let withReuse = b.build(snap, region: .linear(sel), reusing: f1, damage: damage)
+        XCTAssertEqual(withReuse.cells, b.build(snap, region: .linear(sel)).cells)
+    }
+
     // MARK: - OSC 133 prompt gutter
 
     private func osc133(_ body: String) -> String { "\u{1b}]133;\(body)\u{07}" }
