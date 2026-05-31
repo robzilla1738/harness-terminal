@@ -54,9 +54,16 @@ public struct RenderCell: Equatable, Sendable {
     public var strikethrough: Bool
     public var overline: Bool
     public var width: TerminalCellWidth
+    /// Whether the renderer must paint this cell's background quad. `false` for cells whose
+    /// resolved background is the default canvas color (which the target is already cleared to),
+    /// so the common case of plain text skips a redundant fill. `true` for explicit program
+    /// backgrounds, inverse cells, selection, and search highlights. Defaults to `true` so any
+    /// cell built without an explicit decision is still filled.
+    public var drawBackground: Bool = true
 
     /// True when there is a visible glyph to rasterize (not blank/space and not the
-    /// trailing spacer of a wide cell). Background is still drawn for every cell.
+    /// trailing spacer of a wide cell). The cell background is filled only when
+    /// `drawBackground` is set.
     public var hasGlyph: Bool {
         guard width != .spacerTail else { return false }
         return codepoint != 0 && codepoint != 0x20
@@ -333,17 +340,26 @@ public struct FrameBuilder {
                     && searchHighlights.contains { $0.contains(row: row, column: column) }
                 let foreground: RenderColor
                 let background: RenderColor
+                // Skip the cell's background fill only when it resolves to the default canvas
+                // color — the renderer already clears the target to that color. Highlights and
+                // any non-default background must be drawn.
+                let drawBackground: Bool
                 if selected, let selBg = selectionBackground {
                     background = RenderColor(selBg)
                     foreground = selectionForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
+                    drawBackground = true
                 } else if isSearchHit, let searchBg = searchBackground {
                     background = RenderColor(searchBg)
                     foreground = searchForeground.map { RenderColor($0) } ?? RenderColor(colors.foreground)
+                    drawBackground = true
                 } else {
                     background = isCanvasBackground
                         ? RenderColor(colors.background, alpha: canvasOpacity)
                         : RenderColor(colors.background)
                     foreground = RenderColor(colors.foreground)
+                    // Default canvas cells match the clear color; everything else (explicit SGR
+                    // background, inverse) needs its quad.
+                    drawBackground = !isCanvasBackground
                 }
                 cells.append(RenderCell(
                     row: row,
@@ -357,7 +373,8 @@ public struct FrameBuilder {
                     underline: cell.underline,
                     strikethrough: cell.strikethrough,
                     overline: cell.overline,
-                    width: cell.width
+                    width: cell.width,
+                    drawBackground: drawBackground
                 ))
             }
         }

@@ -120,6 +120,38 @@ final class MetalRendererTests: XCTestCase {
         assertColor(px(0, y), r: 0, g: 0, b: 0, label: "padding left of the gutter stays clear")
     }
 
+    func testDefaultCanvasCellRevealsClearColor() throws {
+        let (device, renderer) = try makeRenderer()
+        // Cursor hidden; the blank default-background cells must not paint a quad, so the target
+        // keeps the clear color (which in production equals the canvas background, making the
+        // skip invisible). A pre-skip renderer would paint the theme bg over the clear instead.
+        let f = frame("\u{1b}[?25l", cols: 2, rows: 1)
+        let (w, h) = renderer.surfacePixelSize(columns: 2, rows: 1)
+        guard let target = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+
+        renderer.render(f, to: target, clearColor: RenderColor(red: 1, green: 0, blue: 0, alpha: 1))
+        let px = readPixels(target, width: w, height: h)
+        assertColor(px(renderer.cellPixelWidth / 2, renderer.cellPixelHeight / 2),
+                    r: 255, g: 0, b: 0, label: "blank cell reveals red clear color")
+    }
+
+    func testCursorFillDrawsOverSkippedDefaultCell() throws {
+        let (device, renderer) = try makeRenderer()
+        // The single cell is default-background (its quad is skipped), but the visible block
+        // cursor must still paint over it.
+        let f = frame("", cols: 1, rows: 1)
+        XCTAssertTrue(f.cursor.visible, "program cursor visible by default")
+        let (w, h) = renderer.surfacePixelSize(columns: 1, rows: 1)
+        guard let target = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+
+        renderer.render(f, to: target, clearColor: RenderColor(red: 0, green: 0, blue: 0, alpha: 1))
+        let px = readPixels(target, width: w, height: h)
+        let cursor = theme.cursor ?? theme.foreground
+        assertColor(px(renderer.cellPixelWidth / 2, renderer.cellPixelHeight / 2),
+                    r: Int(cursor.red), g: Int(cursor.green), b: Int(cursor.blue),
+                    label: "block cursor fill over skipped cell", tolerance: 24)
+    }
+
     // MARK: - Pixel helpers
 
     private func readPixels(_ texture: MTLTexture, width: Int, height: Int) -> (Int, Int) -> (UInt8, UInt8, UInt8, UInt8) {

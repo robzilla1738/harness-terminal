@@ -1227,6 +1227,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             frame.cells[idx].codepoint = 0x20
             frame.cells[idx].foreground = bandFg
             frame.cells[idx].background = bandBg
+            // The band is an opaque highlight, not the canvas color, so force its fill even
+            // though the underlying cell may have been built as a skippable canvas cell.
+            frame.cells[idx].drawBackground = true
             frame.cells[idx].underlineColor = bandFg
             frame.cells[idx].bold = false
             frame.cells[idx].italic = false

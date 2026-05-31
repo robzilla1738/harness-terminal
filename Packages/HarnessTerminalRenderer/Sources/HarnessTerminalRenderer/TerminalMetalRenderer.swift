@@ -187,11 +187,16 @@ public final class TerminalMetalRenderer {
         for cell in frame.cells {
             let originX = ox + Float(cell.column * cellPixelWidth)
             let originY = oy + Float(cell.row * cellPixelHeight)
-            backgrounds.append(BgInstance(
-                origin: SIMD2(originX, originY),
-                size: SIMD2(cellW, cellH),
-                color: vector(cell.background)
-            ))
+            // Default canvas cells already match the cleared target, so the FrameBuilder marks
+            // them `drawBackground == false` and we skip the redundant quad. Block-element fills
+            // and decorations below still emit unconditionally.
+            if cell.drawBackground {
+                backgrounds.append(BgInstance(
+                    origin: SIMD2(originX, originY),
+                    size: SIMD2(cellW, cellH),
+                    color: vector(cell.background)
+                ))
+            }
 
             // Block-element characters (█ ▀ ▄ ▌ quadrants …) are drawn as exact-fill rects in
             // the foreground color rather than as font glyphs — font glyphs leave sub-pixel

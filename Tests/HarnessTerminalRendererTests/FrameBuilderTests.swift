@@ -111,6 +111,44 @@ final class FrameBuilderTests: XCTestCase {
         XCTAssertEqual(f.cell(row: 0, column: 0)!.background, RenderColor(theme.background))
     }
 
+    // MARK: - Background fill skipping
+
+    func testDefaultCanvasCellsSkipBackgroundFill() {
+        // Blank cells resolve to the canvas background, which the renderer already clears to,
+        // so they must not request a redundant background quad — but they still carry the color.
+        let f = frame("", cols: 4, rows: 1)
+        for cell in f.cells {
+            XCTAssertFalse(cell.drawBackground, "blank default cell at col \(cell.column) should skip its fill")
+            XCTAssertEqual(cell.background, RenderColor(theme.background))
+        }
+    }
+
+    func testExplicitBackgroundRequiresFill() {
+        // SGR 41 -> ANSI red background: not the canvas color, so the quad must be drawn.
+        let f = frame("\u{1b}[41mX")
+        XCTAssertTrue(f.cell(row: 0, column: 0)!.drawBackground)
+    }
+
+    func testInverseRequiresFill() {
+        // Inverse promotes the foreground into the bg slot, so it's no longer the canvas color.
+        let f = frame("\u{1b}[7mX")
+        XCTAssertTrue(f.cell(row: 0, column: 0)!.drawBackground)
+    }
+
+    func testSelectionRequiresFillWhileOutsideSkips() {
+        let selBg = RGBColor(red: 10, green: 20, blue: 30)
+        let b = FrameBuilder(theme: theme, selectionBackground: selBg)
+        let term = HarnessGridTerminal(cols: 10, rows: 1)!
+        term.feed("ABCDE")
+        let f = b.build(term.readGrid()!, selection: TerminalSelection((0, 1), (0, 3)))
+        for col in 1 ... 3 {
+            XCTAssertTrue(f.cell(row: 0, column: col)!.drawBackground, "selected col \(col) fills")
+        }
+        // A default-background cell outside the selection stays skippable (glyph or blank).
+        XCTAssertFalse(f.cell(row: 0, column: 0)!.drawBackground, "unselected 'A' skips its fill")
+        XCTAssertFalse(f.cell(row: 0, column: 8)!.drawBackground, "blank cell skips its fill")
+    }
+
     // MARK: - OSC 133 prompt gutter
 
     private func osc133(_ body: String) -> String { "\u{1b}]133;\(body)\u{07}" }

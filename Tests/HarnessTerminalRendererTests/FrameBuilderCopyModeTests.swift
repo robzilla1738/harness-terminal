@@ -60,6 +60,20 @@ final class FrameBuilderCopyModeTests: XCTestCase {
         XCTAssertEqual(f.cell(row: 0, column: 1)!.background, RenderColor(selColor))
     }
 
+    func testHighlightedCellsRequireBackgroundFill() {
+        // Both selection and search highlights are opaque non-canvas fills, so their cells must
+        // draw a background quad; a plain cell beside them stays skippable.
+        let snap = snapshot(["abcde"])
+        let f = builder.build(
+            snap,
+            region: .linear(TerminalSelection((0, 0), (0, 1))),
+            searchHighlights: [TerminalSelection((0, 3), (0, 3))]
+        )
+        XCTAssertTrue(f.cell(row: 0, column: 0)!.drawBackground, "selected cell fills")
+        XCTAssertTrue(f.cell(row: 0, column: 3)!.drawBackground, "search hit fills")
+        XCTAssertFalse(f.cell(row: 0, column: 4)!.drawBackground, "plain default cell skips")
+    }
+
     func testCopyModeCursorOverridesAndIsVisible() {
         let snap = snapshot(["abcde"])
         let f = builder.build(snap, region: nil, copyModeCursor: (row: 2, column: 3))
