@@ -18,6 +18,8 @@ struct HarnessCLI {
                 try printSurfaces(client)
             case "list-sessions":
                 try printSessions(client)
+            case "list-agents":
+                try printAgents(args, client: client)
             case "list-windows":
                 try printWindows(args, client: client)
             case "list-panes":
@@ -308,6 +310,21 @@ struct HarnessCLI {
 
     static func printSessions(_ client: DaemonClient) throws {
         try SnapshotQueryFormatter.sessions(snapshot(client)).forEach { print($0) }
+    }
+
+    /// `list-agents [--waiting] [--json]` — every running agent with its
+    /// workspace/session/tab/pane, surface id, name, state, and last-activity age.
+    /// `--waiting` filters to agents blocking on you; `--json` emits the
+    /// machine-readable shape.
+    static func printAgents(_ args: [String], client: DaemonClient) throws {
+        let response = try checkedRequest(client, .listAgents)
+        guard case let .agents(items) = response else { throw DaemonClientError.unexpectedResponse }
+        let filtered = args.contains("--waiting") ? items.filter(\.waiting) : items
+        if args.contains("--json") {
+            print(try AgentListFormatter.json(filtered))
+        } else {
+            AgentListFormatter.text(filtered).forEach { print($0) }
+        }
     }
 
     /// `list-windows [--session <name|uuid>]` — all tabs, or one session's when targeted.
@@ -1103,6 +1120,7 @@ struct HarnessCLI {
           list-sessions
           list-windows [--session <name|uuid>]
           list-panes [--tab <uuid>]
+          list-agents [--waiting] [--json]            (running agents: state, age, surface)
           has-session --session <name|uuid>           (exit 0 if it exists, else 1)
           list-commands
           get-snapshot

@@ -26,6 +26,9 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private let sectionLabel = NSTextField(labelWithString: "Sessions")
     private let sessionTable = NSTableView()
     private let footer = NSView()
+    /// Opens the Agent Inbox popover (every running agent, waiting first). Stored so
+    /// the popover can anchor to it. Created in `setupFooter`.
+    private let agentsButton = HarnessDesign.softIconButton(symbol: "sparkles", tooltip: "Agents")
     private var sessionScroll: NSScrollView?
     private var workspaces: [Workspace] = []
     private var sessions: [SessionGroup] = []
@@ -231,6 +234,77 @@ final class HarnessSidebarPanelViewController: NSViewController {
         }
     }
 
+    @objc private func agentsButtonClicked() {
+        showAgentsInbox()
+    }
+
+    private var agentsInbox: AgentInboxPanelView?
+    private var agentsInboxMonitor: Any?
+
+    /// Float the Agent Inbox over the window's content view, anchored just above the
+    /// footer's agents button. Mirrors `showNotificationsDropdown`'s presentation so the
+    /// two panels feel identical; dismisses on any outside click.
+    private func showAgentsInbox() {
+        if agentsInbox != nil {
+            dismissAgentsInbox()
+            return
+        }
+        let coordinator = SessionCoordinator.shared
+        let inbox = AgentInboxPanelView(
+            agents: coordinator.agentsList(),
+            onSelect: { [weak self] agent in
+                self?.dismissAgentsInbox()
+                coordinator.openAgent(agent)
+            }
+        )
+        inbox.alphaValue = 0
+        inbox.translatesAutoresizingMaskIntoConstraints = true
+        inbox.layer?.zPosition = 100
+
+        let host = view.window?.contentView ?? view
+        let width: CGFloat = 300
+        let height = inbox.preferredHeight
+        let button = host.convert(agentsButton.bounds, from: agentsButton)
+        var originX = button.minX
+        originX = min(originX, host.bounds.maxX - width - 8)
+        originX = max(8, originX)
+        // Footer sits at the bottom; the content view is not flipped (y grows upward), so
+        // the panel sits *above* the button when its bottom edge is just above the button.
+        let originY = button.maxY + 6
+        inbox.frame = NSRect(x: originX, y: originY, width: width, height: height)
+        host.addSubview(inbox)
+        agentsInbox = inbox
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            inbox.animator().alphaValue = 1
+        }
+        installAgentsInboxMonitor()
+    }
+
+    private func dismissAgentsInbox() {
+        agentsInbox?.removeFromSuperview()
+        agentsInbox = nil
+        if let monitor = agentsInboxMonitor {
+            NSEvent.removeMonitor(monitor)
+            agentsInboxMonitor = nil
+        }
+    }
+
+    private func installAgentsInboxMonitor() {
+        agentsInboxMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, let inbox = self.agentsInbox else { return event }
+            let point = inbox.convert(event.locationInWindow, from: nil)
+            if !inbox.bounds.contains(point) {
+                let buttonPoint = self.agentsButton.convert(event.locationInWindow, from: nil)
+                if !self.agentsButton.bounds.contains(buttonPoint) {
+                    self.dismissAgentsInbox()
+                }
+            }
+            return event
+        }
+    }
+
     private func setupSectionHeader() {
         sectionHeader.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.makeClear(sectionHeader)
@@ -391,7 +465,11 @@ final class HarnessSidebarPanelViewController: NSViewController {
         palette.target = self
         palette.action = #selector(openPalette)
 
+        agentsButton.target = self
+        agentsButton.action = #selector(agentsButtonClicked)
+
         footer.addSubview(settings)
+        footer.addSubview(agentsButton)
         footer.addSubview(newSession)
         footer.addSubview(palette)
         view.addSubview(footer)
@@ -402,7 +480,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             footer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             footer.heightAnchor.constraint(equalToConstant: HarnessDesign.footerHeight + 6),
 
-            // Settings on the leading edge; the new-session + palette actions on the trailing.
+            // Settings on the leading edge; the agents/new-session/palette actions on the trailing.
             settings.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: HarnessDesign.horizontalInset),
             settings.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
 
@@ -410,6 +488,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
             palette.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
             newSession.trailingAnchor.constraint(equalTo: palette.leadingAnchor, constant: -2),
             newSession.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            agentsButton.trailingAnchor.constraint(equalTo: newSession.leadingAnchor, constant: -2),
+            agentsButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
         ])
     }
 

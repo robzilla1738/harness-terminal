@@ -1056,6 +1056,28 @@ final class SessionCoordinator: NSObject {
         return entries
     }
 
+    /// Every running agent (one row per tab carrying a detected agent), waiting
+    /// agents first, for the Agent Inbox panel. Reuses `SessionEditor.listAgents()`
+    /// so the GUI and CLI derive the exact same view from the snapshot.
+    func agentsList() -> [AgentSessionSummary] {
+        SessionEditor(snapshot: snapshot).listAgents()
+            .sorted { lhs, rhs in
+                if lhs.waiting != rhs.waiting { return lhs.waiting }   // waiting first
+                return lhs.lastActivityAt > rhs.lastActivityAt          // most recent next
+            }
+    }
+
+    /// Jump to the tab backing an agent row (Agent Inbox). Mirrors
+    /// `openNotification` but does not clear the notification — viewing the agent
+    /// list shouldn't dismiss a pending alert.
+    func openAgent(_ agent: AgentSessionSummary) {
+        guard let workspace = snapshot.workspaces.first(where: { ws in
+            ws.sessions.contains { $0.id == agent.sessionID }
+        }) else { return }
+        selectWorkspace(workspace.id)
+        selectTab(workspaceID: workspace.id, tabID: agent.tabID)
+    }
+
     func openNotification(_ entry: NotificationEntry) {
         selectWorkspace(entry.workspaceID)
         selectTab(workspaceID: entry.workspaceID, tabID: entry.tabID)

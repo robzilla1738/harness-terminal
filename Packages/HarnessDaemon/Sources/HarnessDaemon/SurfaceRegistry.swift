@@ -157,6 +157,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             })
         case .listSurfaces:
             return .surfaces(editor.listSurfaces())
+        case .listAgents:
+            return .agents(editor.listAgents())
         case let .newWorkspace(name):
             let id = editor.addWorkspace(name: name)
             commit()

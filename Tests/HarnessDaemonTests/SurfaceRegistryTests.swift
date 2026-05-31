@@ -98,4 +98,54 @@ final class SurfaceRegistryTests: XCTestCase {
             .map(\.uuidString)
         XCTAssertEqual(Set(surfaces.map(\.surfaceID)), Set(snapshotSurfaces))
     }
+
+    // MARK: - list-agents request/response
+
+    func testListAgentsIsEmptyUntilAnAgentIsDetected() {
+        let registry = SurfaceRegistry()
+        guard case let .agents(agents) = registry.handle(.listAgents) else {
+            return XCTFail("expected agents")
+        }
+        XCTAssertTrue(agents.isEmpty, "no agents until the scanner reports one")
+    }
+
+    func testListAgentsReflectsAppliedAgentChange() {
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(surfaces) = registry.handle(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        // Drive the same path the AgentScanner uses to write agent state into the snapshot.
+        registry.applyAgentChanges([
+            target.surfaceID: AgentSnapshot(kind: .claudeCode, executable: "/bin/claude", pid: 99, activity: .working),
+        ])
+
+        guard case let .agents(agents) = registry.handle(.listAgents) else {
+            return XCTFail("expected agents")
+        }
+        XCTAssertEqual(agents.count, 1)
+        XCTAssertEqual(agents[0].kind, .claudeCode)
+        XCTAssertEqual(agents[0].activity, .working)
+        XCTAssertEqual(agents[0].surfaceID, target.surfaceID)
+        XCTAssertFalse(agents[0].waiting, "a working agent that hasn't notified is not waiting")
+    }
+
+    func testNotifyFlipsAgentWaitingInListAgents() {
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(surfaces) = registry.handle(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        registry.applyAgentChanges([
+            target.surfaceID: AgentSnapshot(kind: .codex, executable: "/bin/codex", pid: 7, activity: .awaiting),
+        ])
+        guard case .ok = registry.handle(.notify(surfaceID: target.surfaceID, title: "Codex", body: "Approve?")) else {
+            return XCTFail("expected ok")
+        }
+
+        guard case let .agents(agents) = registry.handle(.listAgents) else {
+            return XCTFail("expected agents")
+        }
+        XCTAssertEqual(agents.count, 1)
+        XCTAssertTrue(agents[0].waiting, "notify marks the tab .waiting, which must surface as waiting")
+        XCTAssertEqual(agents[0].notificationText, "Approve?")
+    }
 }

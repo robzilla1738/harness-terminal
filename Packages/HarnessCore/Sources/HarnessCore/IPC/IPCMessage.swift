@@ -4,6 +4,9 @@ public enum IPCRequest: Codable, Sendable {
     case ping
     case listWorkspaces
     case listSurfaces
+    /// List every running agent (one row per tab carrying a detected `Tab.agent`)
+    /// with its workspace/session/tab/pane context, state, and `.waiting` signal.
+    case listAgents
     case newWorkspace(name: String)
     case newSession(workspaceID: UUID, cwd: String?, name: String?)
     case newTab(workspaceID: UUID, cwd: String?)
@@ -144,6 +147,7 @@ public enum IPCResponse: Codable, Sendable {
     case pong
     case workspaces([WorkspaceSummary])
     case surfaces([SurfaceSummary])
+    case agents([AgentSessionSummary])
     case workspaceID(UUID)
     case sessionID(UUID)
     case tabID(UUID)

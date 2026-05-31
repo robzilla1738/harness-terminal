@@ -813,6 +813,41 @@ public struct SessionEditor: Sendable {
         return result
     }
 
+    /// One row per running agent — a flattened view of every tab carrying a
+    /// detected agent (`Tab.agent`), with its workspace/session/tab/pane context,
+    /// state, and the `.waiting` "needs you" signal. Mirrors `listSurfaces()`;
+    /// reads the agent state the daemon already maintains (no detection here).
+    /// The surface/pane reported is the tab's active pane (falling back to its
+    /// first leaf), i.e. the one a caller would address.
+    public func listAgents() -> [AgentSessionSummary] {
+        var result: [AgentSessionSummary] = []
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    guard let agent = tab.agent else { continue }
+                    let leaves = tab.rootPane.allLeaves()
+                    let activeLeaf = tab.activePaneID.flatMap { active in leaves.first { $0.id == active } }
+                    let leaf = activeLeaf ?? leaves.first
+                    result.append(AgentSessionSummary(
+                        workspaceName: workspace.name,
+                        sessionID: session.id,
+                        sessionName: session.name,
+                        tabID: tab.id,
+                        tabTitle: tab.title,
+                        surfaceID: leaf?.surfaceID.uuidString ?? "",
+                        paneID: leaf?.id.uuidString,
+                        kind: agent.kind,
+                        activity: agent.activity,
+                        waiting: tab.status == .waiting,
+                        lastActivityAt: agent.lastActivityAt,
+                        notificationText: tab.notificationText
+                    ))
+                }
+            }
+        }
+        return result
+    }
+
     private func tabIndex(workspaceID: WorkspaceID, tabID: TabID) -> (workspaceIndex: Int, sessionIndex: Int, tabIndex: Int)? {
         guard let workspaceIndex = snapshot.workspaces.firstIndex(where: { $0.id == workspaceID }) else { return nil }
         for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
