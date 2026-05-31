@@ -28,6 +28,24 @@ final class HarnessPathsTests: XCTestCase {
         XCTAssertEqual(HarnessPaths.applicationSupport.path, "\(home)/.harness-paths-test")
     }
 
+    func testValidatedSocketPathAcceptsShortHome() throws {
+        setenv("HARNESS_HOME", "/tmp/harness-sock-test", 1)
+        XCTAssertEqual(try HarnessPaths.validatedSocketPath(), "/tmp/harness-sock-test/harness.sock")
+    }
+
+    func testValidatedSocketPathRejectsOverlongHome() {
+        // A HARNESS_HOME deep enough to push harness.sock past sun_path (104) must fail clearly,
+        // not silently truncate and connect/bind to the wrong socket.
+        let deep = "/tmp/" + String(repeating: "x", count: 120)
+        setenv("HARNESS_HOME", deep, 1)
+        XCTAssertGreaterThanOrEqual(HarnessPaths.socketURL.path.utf8.count, HarnessPaths.maxSocketPathLength)
+        XCTAssertThrowsError(try HarnessPaths.validatedSocketPath()) { error in
+            guard case HarnessPathsError.socketPathTooLong = error else {
+                return XCTFail("expected socketPathTooLong, got \(error)")
+            }
+        }
+    }
+
     func testWithoutOverrideFallsBackToApplicationSupportHarness() {
         unsetenv("HARNESS_HOME")
         let path = HarnessPaths.applicationSupport.path

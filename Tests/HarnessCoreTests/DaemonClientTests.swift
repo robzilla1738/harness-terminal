@@ -5,8 +5,10 @@ import XCTest
 final class DaemonClientTests: XCTestCase {
     func testRequestTimesOutWhenSocketAcceptsButDoesNotReply() throws {
         let previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("harness-client-\(UUID().uuidString)", isDirectory: true)
+        // Keep the root short: the macOS temp dir + a full UUID pushes harness.sock past the
+        // 104-byte sun_path limit (which the daemon/client now reject outright), so use /tmp + a
+        // truncated UUID to stay well within it.
+        let root = URL(fileURLWithPath: "/tmp/hc-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         setenv("HARNESS_HOME", root.path, 1)
         defer {

@@ -60,6 +60,13 @@ public final class RealPty: @unchecked Sendable {
 
     private let readQueue = DispatchQueue(label: "com.robert.harness.realpty.read")
     private var readSource: DispatchSourceRead?
+    /// Subscriber fan-out runs here, NOT on `readQueue`: a slow or misbehaving subscriber handler
+    /// must not stall PTY reads (which would back-pressure the shell and every other subscriber of
+    /// this surface). Output is enqueued in read order onto this *serial* queue, so each subscriber
+    /// still sees chunks in order. Bounded in practice — the real subscriber (`DaemonServer`) hands
+    /// each chunk to its own queue with a write-backlog cap and drops a stuck client — so this
+    /// queue can't grow without bound.
+    private let deliveryQueue = DispatchQueue(label: "com.robert.harness.realpty.deliver")
 
     public var onOutput: ((Data) -> Void)?
     public var onExit: (() -> Void)?
@@ -535,10 +542,16 @@ public final class RealPty: @unchecked Sendable {
         AgentDetector.recordActivity(forSurfaceKey: id)
         onOutput?(data)
 
-        subscribersLock.lock()
-        let handlers = Array(subscribers.values)
-        subscribersLock.unlock()
-        for handler in handlers { handler(data, sequence) }
+        // Fan out on the delivery queue (off the read loop). `data`/`sequence` are values; capture
+        // self weakly so a teardown mid-flight just no-ops. The snapshot is taken at delivery time
+        // so a just-cancelled subscriber drops out; one slow handler can't stall PTY reads.
+        deliveryQueue.async { [weak self] in
+            guard let self else { return }
+            self.subscribersLock.lock()
+            let handlers = Array(self.subscribers.values)
+            self.subscribersLock.unlock()
+            for handler in handlers { handler(data, sequence) }
+        }
     }
 
     private func watchForExit(pid: pid_t, generation gen: UInt64) {

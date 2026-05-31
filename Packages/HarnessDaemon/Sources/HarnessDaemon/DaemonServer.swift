@@ -60,6 +60,9 @@ public final class DaemonServer: @unchecked Sendable {
             try FileManager.default.removeItem(at: HarnessPaths.socketURL)
         }
 
+        // Validate the socket path fits `sun_path` before binding, so a deep HARNESS_HOME fails
+        // with a clear message instead of `strncpy`-truncating and binding the wrong socket.
+        let socketPath = try HarnessPaths.validatedSocketPath()
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw DaemonError.socketFailed }
         var noSigPipe: Int32 = 1
@@ -67,7 +70,7 @@ public final class DaemonServer: @unchecked Sendable {
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
-        HarnessPaths.socketURL.path.withCString { cstr in
+        socketPath.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
                 strncpy(dest, cstr, 104)

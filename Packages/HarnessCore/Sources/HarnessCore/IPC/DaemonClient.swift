@@ -83,22 +83,30 @@ public final class DaemonClient: @unchecked Sendable {
     }
 
     private func connectSocket() throws -> Int32 {
+        // Validate before opening the fd so an over-long path can't leak a socket — and so a deep
+        // HARNESS_HOME fails clearly instead of `strncpy`-truncating to the wrong socket.
+        let path = try HarnessPaths.validatedSocketPath()
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw DaemonClientError.connectionFailed }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
-        HarnessPaths.socketURL.path.withCString { cstr in
+        path.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
                 strncpy(dest, cstr, 104)
             }
         }
-        let connected = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        // connect() can be interrupted by a signal (EINTR). For a blocking AF_UNIX stream socket
+        // the connect completes synchronously, so retry on EINTR rather than spuriously failing.
+        var connected: Int32 = -1
+        repeat {
+            connected = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                }
             }
-        }
+        } while connected != 0 && errno == EINTR
         guard connected == 0 else {
             close(fd)
             throw DaemonClientError.connectionFailed
