@@ -7,14 +7,13 @@ import HarnessTerminalKit
 @MainActor
 struct PaletteAction: Identifiable {
     enum Section: Int, CaseIterable {
-        case recent, actions, navigation, workspaces, tabs, themes
+        case recent, actions, navigation, tabs, themes
 
         var title: String {
             switch self {
             case .recent: return "Recent"
             case .actions: return "Actions"
             case .navigation: return "Navigation"
-            case .workspaces: return "Workspaces"
             case .tabs: return "Tabs"
             case .themes: return "Themes"
             }
@@ -110,14 +109,14 @@ enum CommandPaletteController {
         // MARK: - Actions
         actions.append(contentsOf: [
             PaletteAction(
-                id: "action.newWorkspace",
-                title: "New Workspace",
-                subtitle: "Create a fresh workspace",
+                id: "action.newSession",
+                title: "New Session",
+                subtitle: "Create a fresh session",
                 symbol: "rectangle.stack.badge.plus",
                 shortcut: "⇧⌘N",
                 section: .actions
             ) {
-                coordinator.addWorkspace(name: "Workspace \(coordinator.snapshot.workspaces.count + 1)")
+                if let id = coordinator.snapshot.activeWorkspaceID { coordinator.addSession(to: id) }
             },
             PaletteAction(
                 id: "action.newSession",
@@ -279,21 +278,6 @@ enum CommandPaletteController {
             },
         ])
 
-        // MARK: - Workspaces
-        for (idx, workspace) in snapshot.workspaces.enumerated() {
-            let isActive = workspace.id == snapshot.activeWorkspaceID
-            actions.append(PaletteAction(
-                id: "workspace.\(workspace.id.uuidString)",
-                title: workspace.name,
-                subtitle: workspaceSubtitle(workspace, isActive: isActive),
-                symbol: isActive ? "checkmark.rectangle.stack.fill" : "rectangle.stack",
-                shortcut: "",
-                section: .workspaces
-            ) {
-                coordinator.selectWorkspace(workspace.id)
-            })
-        }
-
         // MARK: - Tabs in active workspace
         if let workspace = snapshot.activeWorkspace {
             for (idx, tab) in workspace.tabs.enumerated() {
@@ -330,12 +314,6 @@ enum CommandPaletteController {
         return actions
     }
 
-    private static func workspaceSubtitle(_ workspace: Workspace, isActive: Bool) -> String {
-        let sessions = workspace.sessions.count
-        let tabs = workspace.sessions.reduce(0) { $0 + $1.tabs.count }
-        let prefix = isActive ? "Active · " : ""
-        return prefix + "\(sessions) session\(sessions == 1 ? "" : "s") · \(tabs) tab\(tabs == 1 ? "" : "s")"
-    }
 }
 
 // MARK: - Fuzzy match
@@ -655,7 +633,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         var selectable: [Int] = []
         if query.isEmpty {
             // Empty: keep section order natural — recent first, then everything else.
-            let sectionsInOrder: [PaletteAction.Section] = [.recent, .actions, .navigation, .workspaces, .tabs, .themes]
+            let sectionsInOrder: [PaletteAction.Section] = [.recent, .actions, .navigation, .tabs, .themes]
             for section in sectionsInOrder {
                 let entries = matches.filter { $0.action.section == section }
                 if entries.isEmpty { continue }

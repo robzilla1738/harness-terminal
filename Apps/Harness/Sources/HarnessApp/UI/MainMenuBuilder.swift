@@ -46,21 +46,21 @@ enum MainMenuBuilder {
         main.addItem(edit)
 
         let workspace = NSMenuItem()
-        workspace.submenu = NSMenu(title: "Workspace")
-        let newWorkspaceItem = NSMenuItem(title: "New Workspace", action: #selector(MenuTarget.newWorkspace), keyEquivalent: "N")
-        newWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
-        newWorkspaceItem.target = MenuTarget.shared
-        workspace.submenu?.addItem(newWorkspaceItem)
+        workspace.submenu = NSMenu(title: "Session")
+        let newSessionItem = NSMenuItem(title: "New Session", action: #selector(MenuTarget.newSession), keyEquivalent: "N")
+        newSessionItem.keyEquivalentModifierMask = [.command, .shift]
+        newSessionItem.target = MenuTarget.shared
+        workspace.submenu?.addItem(newSessionItem)
         let newTabItem = NSMenuItem(title: "New Tab", action: #selector(MenuTarget.newTab), keyEquivalent: "t")
         newTabItem.target = MenuTarget.shared
         workspace.submenu?.addItem(newTabItem)
         let closeTab = NSMenuItem(title: "Close Tab", action: #selector(MenuTarget.closeTab), keyEquivalent: "w")
         closeTab.target = MenuTarget.shared
         workspace.submenu?.addItem(closeTab)
-        let closeWS = NSMenuItem(title: "Close Workspace", action: #selector(MenuTarget.closeWorkspace), keyEquivalent: "W")
-        closeWS.keyEquivalentModifierMask = [.command, .shift]
-        closeWS.target = MenuTarget.shared
-        workspace.submenu?.addItem(closeWS)
+        let closeSession = NSMenuItem(title: "Close Session", action: #selector(MenuTarget.closeSession), keyEquivalent: "W")
+        closeSession.keyEquivalentModifierMask = [.command, .shift]
+        closeSession.target = MenuTarget.shared
+        workspace.submenu?.addItem(closeSession)
         workspace.submenu?.addItem(.separator())
         for index in 1...9 {
             let item = NSMenuItem(
@@ -170,10 +170,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation {
         }
     }
 
-    @objc func newWorkspace() {
-        SessionCoordinator.shared.addWorkspace(
-            name: "Workspace \(SessionCoordinator.shared.snapshot.workspaces.count + 1)"
-        )
+    @objc func newSession() {
+        guard let id = SessionCoordinator.shared.snapshot.activeWorkspaceID else { return }
+        SessionCoordinator.shared.addSession(to: id)
+    }
+
+    @objc func closeSession() {
+        SessionCoordinator.shared.closeActiveSession()
     }
 
     @objc func newTab() {
@@ -185,9 +188,6 @@ final class MenuTarget: NSObject, NSMenuItemValidation {
         SessionCoordinator.shared.closeActiveTabWithConfirmation()
     }
 
-    @objc func closeWorkspace() {
-        SessionCoordinator.shared.closeActiveWorkspace()
-    }
 
     /// ⌘1–9 switch to the tab at that position in the active session (Ghostty-style).
     @objc func selectTabNumber(_ sender: NSMenuItem) {
