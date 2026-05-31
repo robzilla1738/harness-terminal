@@ -12,7 +12,7 @@ public enum OnboardingEnvironment {
         /// Stable agent key (the host passes `AgentKind.rawValue`).
         public let id: String
         public let displayName: String
-        public var hooksInstalled: Bool
+        public let hooksInstalled: Bool
 
         public init(id: String, displayName: String, hooksInstalled: Bool) {
             self.id = id

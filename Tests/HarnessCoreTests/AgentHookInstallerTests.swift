@@ -132,13 +132,16 @@ final class AgentHookInstallerTests: XCTestCase {
     }
 
     func testDetectInstalledAgentsFindsAgentByConfigDir() throws {
+        // Inject a table whose executables can't exist on PATH, so the result is driven purely
+        // by config-dir presence — deterministic regardless of what's installed on the host.
+        let table = AgentTable(entries: AgentKind.allCases.map {
+            AgentTableEntry(kind: $0, executables: ["harness-test-\(UUID().uuidString)"])
+        })
         // A bare `~/.claude` dir (no binary needed) signals Claude Code is set up here.
         try FileManager.default.createDirectory(
             at: home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
-        let detected = AgentHookInstaller.detectInstalledAgents(homeOverride: home)
-        XCTAssertTrue(detected.contains(.claudeCode))
-        // An agent with neither a binary on PATH nor a config dir isn't offered.
-        XCTAssertFalse(detected.contains(.hermes))
+        let detected = AgentHookInstaller.detectInstalledAgents(homeOverride: home, table: table)
+        XCTAssertEqual(detected, [.claudeCode], "only the agent with a config dir is offered")
     }
 
     /// Helper: pull the single Harness `Notification` command string out of a Claude config.
