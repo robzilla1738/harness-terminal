@@ -709,6 +709,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 - [docs/MIGRATION.md](docs/MIGRATION.md) — tested tmux + Ghostty migration paths
 - [docs/RELIABILITY.md](docs/RELIABILITY.md) — daemon crash/restart, corrupted-state recovery, security model, benchmarks
 - [docs/COMMANDS.md](docs/COMMANDS.md) — command reference
+- [docs/TMUX_GUIDE.md](docs/TMUX_GUIDE.md) — user guide to the multiplexer (prefix, panes/tabs/sessions, copy mode, compositor, shortcuts)
 - [docs/TMUX_PARITY.md](docs/TMUX_PARITY.md) — tmux capability parity ledger (done / Harness-equivalent / roadmap)
 - [docs/GHOSTTY_COMPARISON.md](docs/GHOSTTY_COMPARISON.md) — Ghostty ↔ Harness terminal-feature side-by-side
 - [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md) — bindings + format tokens

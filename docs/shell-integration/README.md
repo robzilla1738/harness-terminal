@@ -12,17 +12,31 @@ shell without integration behaves exactly as before.
 
 ## Install
 
-Source the snippet for your shell from its rc file. Each snippet is a no-op outside a Harness
-terminal (it checks `$HARNESS`, which the daemon exports into every pane).
+One command — it drops the script under the Harness home and wires a guarded `source` line into
+your shell's rc (idempotent, and your rc is backed up first):
+
+```bash
+harness-cli install-shell-integration           # auto-detects $SHELL
+harness-cli install-shell-integration zsh        # or name one: bash | zsh | fish
+harness-cli install-shell-integration all         # all three
+```
+
+Then restart your shell (or open a new Harness pane). Each snippet is a no-op outside a Harness
+terminal (it checks `$HARNESS`, which the daemon exports into every pane), so it's safe to keep
+in your rc everywhere.
+
+**Manual install** — the script is written to
+`~/Library/Application Support/Harness/shell-integration/harness.<shell>`; add the matching line
+yourself instead:
 
 | Shell | rc file | line to add |
 |-------|---------|-------------|
-| bash | `~/.bashrc` | `source "<harness>/docs/shell-integration/harness.bash"` |
-| zsh | `~/.zshrc` | `source "<harness>/docs/shell-integration/harness.zsh"` |
-| fish | `~/.config/fish/config.fish` | `source "<harness>/docs/shell-integration/harness.fish"` |
+| bash | `~/.bashrc` | `source "<…>/shell-integration/harness.bash"` |
+| zsh | `~/.zshrc` | `source "<…>/shell-integration/harness.zsh"` |
+| fish | `~/.config/fish/config.fish` | `source "<…>/shell-integration/harness.fish"` |
 
-(The shipped app installs these snippets alongside `harness-cli`; use that path in place of
-`<harness>` once installed.)
+The copies in `docs/shell-integration/` mirror the runtime scripts (`HarnessCore.ShellIntegration`
+is the source of truth).
 
 ## What gets emitted
 

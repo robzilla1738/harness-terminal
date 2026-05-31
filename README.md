@@ -163,8 +163,9 @@ See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging a rele
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Related: [experience modes](docs/MODES.md),
-[migration](docs/MIGRATION.md), [reliability & security](docs/RELIABILITY.md),
-[tmux parity](docs/TMUX_PARITY.md), [Ghostty comparison](docs/GHOSTTY_COMPARISON.md).
+[multiplexer guide](docs/TMUX_GUIDE.md), [migration](docs/MIGRATION.md),
+[reliability & security](docs/RELIABILITY.md), [tmux parity](docs/TMUX_PARITY.md),
+[Ghostty comparison](docs/GHOSTTY_COMPARISON.md).
 
 ## Agent documentation
 
