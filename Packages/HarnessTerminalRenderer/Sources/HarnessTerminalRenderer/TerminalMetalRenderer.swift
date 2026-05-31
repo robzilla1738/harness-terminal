@@ -1,3 +1,4 @@
+import Foundation  // DispatchSemaphore
 import HarnessTerminalEngine
 import Metal
 import QuartzCore
@@ -74,7 +75,7 @@ public final class TerminalMetalRenderer {
     private let decoInstanceBuffer: DynamicInstanceBuffer
     /// Caps in-flight frames at `maxFramesInFlight` so we never reuse a ring slot the GPU is
     /// still reading. Signaled from each command buffer's completion handler.
-    private let inFlightSemaphore = DispatchSemaphore(value: maxFramesInFlight)
+    private let inFlightSemaphore = DispatchSemaphore(value: TerminalMetalRenderer.maxFramesInFlight)
     /// Index of the ring slot the current frame writes into; advanced once per `encode`.
     private var frameSlot = 0
 

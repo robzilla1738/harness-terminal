@@ -1,3 +1,4 @@
+import Foundation  // memcpy
 import Metal
 
 /// A small triple-buffered ring of CPU-writable Metal buffers for per-frame instance data.
