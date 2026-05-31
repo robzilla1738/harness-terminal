@@ -636,6 +636,62 @@ final class TerminalScreen {
         }
     }
 
+    /// Write a run of printable ASCII bytes (each `0x20...0x7E`, always width 1, never combining)
+    /// at the cursor. Byte-for-byte equivalent to `print(UInt32(b))` for each `b`, but batched per
+    /// row: the cell template (pen + hyperlink, constant across a run with no embedded escapes) is
+    /// built once and only the codepoint varies, and a row's columns are filled in a tight loop.
+    /// Pending-wrap, autowrap on/off, the scroll region, and soft-wrap flags are honored exactly as
+    /// the scalar path does.
+    func printASCIIRun(_ bytes: UnsafeBufferPointer<UInt8>) {
+        let n = bytes.count
+        guard n > 0 else { return }
+        var template = makeCell(0, width: .normal)
+        var i = 0
+        while i < n {
+            // Mirror `print`'s leading pending-wrap check (may scroll and move the cursor row).
+            if pendingWrap { wrapLine() }
+            guard cursorRow >= 0, cursorRow < rows else {
+                // Defensive: matches `writeCell`'s bounds guard. Shouldn't happen; finish on the
+                // scalar path rather than risk an out-of-range write.
+                while i < n { print(UInt32(bytes[i])); i += 1 }
+                return
+            }
+            let rowBase = cursorRow * cols
+            if cursorCol < cols - 1 {
+                // Fill distinct columns cursorCol..<endCol on this row (endCol <= cols).
+                let endCol = Swift.min(cols, cursorCol + (n - i))
+                var c = cursorCol
+                while c < endCol {
+                    template.codepoint = UInt32(bytes[i])
+                    cells[rowBase + c] = template
+                    i += 1
+                    c += 1
+                }
+                // Mirror `advance(by: 1)` for the last byte written.
+                if endCol >= cols {
+                    cursorCol = cols - 1
+                    pendingWrap = autowrap
+                } else {
+                    cursorCol = endCol
+                    pendingWrap = false
+                }
+            } else {
+                // Cursor pinned at the last column. Write one byte; `advance` keeps the cursor here
+                // and arms pendingWrap with autowrap. With autowrap off the cursor stays and every
+                // further byte overwrites the last column, so only the run's final byte survives.
+                template.codepoint = UInt32(bytes[i])
+                cells[rowBase + cols - 1] = template
+                i += 1
+                pendingWrap = autowrap
+                if !autowrap, i < n {
+                    template.codepoint = UInt32(bytes[n - 1])
+                    cells[rowBase + cols - 1] = template
+                    i = n
+                }
+            }
+        }
+    }
+
     private func makeCell(_ scalar: UInt32, width: TerminalCellWidth) -> TerminalGridCell {
         TerminalGridCell(
             codepoint: scalar,

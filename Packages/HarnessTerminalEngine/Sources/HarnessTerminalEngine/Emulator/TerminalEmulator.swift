@@ -96,6 +96,12 @@ public final class TerminalEmulator: VTParserHandler {
     public func feed(_ bytes: [UInt8]) { parser.feed(bytes) }
     public func feed(_ text: String) { parser.feed(Array(text.utf8)) }
 
+    /// Reference seam: feed bytes one at a time through the per-byte scalar path, bypassing the
+    /// printable-ASCII run fast path that `feed` uses. Public so the (non-`@testable`) benchmark
+    /// target can A/B the run path against the scalar baseline; equivalence tests use it too. Not
+    /// part of the normal input API — production code should always use `feed`.
+    public func feedScalarwise(_ bytes: [UInt8]) { parser.feedScalarwise(bytes) }
+
     public func resize(cols: Int, rows: Int) {
         primary.resize(cols: cols, rows: rows)
         alternate.resize(cols: cols, rows: rows)

@@ -5,6 +5,11 @@ import Foundation
 protocol VTParserHandler: AnyObject {
     /// A printable Unicode scalar (UTF-8 already decoded).
     func parserPrint(_ scalar: UInt32)
+    /// A contiguous run of printable ASCII bytes (each `0x20...0x7E`) decoded in the ground state,
+    /// to be printed in order. Exactly equivalent to calling `parserPrint(UInt32(b))` for each
+    /// byte, but lets the handler write the whole run in one pass. The buffer is borrowed: it is
+    /// valid only for the duration of the call and must not escape.
+    func parserPrintRun(_ bytes: UnsafeBufferPointer<UInt8>)
     /// A C0/C1 control byte to execute (BS, HT, LF, CR, BEL, …).
     func parserExecute(_ control: UInt8)
     /// A final CSI byte with its decoded parameters, intermediate bytes, and whether a
@@ -26,6 +31,14 @@ protocol VTParserHandler: AnyObject {
     /// A complete APC string payload (without the `ESC _` introducer or `ST`), e.g. the Kitty
     /// graphics protocol.
     func parserAPC(_ data: [UInt8])
+}
+
+extension VTParserHandler {
+    /// Default: replay the run one scalar at a time, so a run is equivalent to repeated printing
+    /// by construction. Handlers that care about throughput override this.
+    func parserPrintRun(_ bytes: UnsafeBufferPointer<UInt8>) {
+        for b in bytes { parserPrint(UInt32(b)) }
+    }
 }
 
 /// A streaming VT100/VT220/xterm parser based on the canonical VT500 state machine
@@ -112,14 +125,44 @@ final class VTParser {
     }
 
     func feed(_ bytes: [UInt8]) {
-        for b in bytes { feed(b) }
+        bytes.withUnsafeBufferPointer { feedBuffer($0) }
     }
 
     func feed(_ data: Data) {
-        for b in data { feed(b) }
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+            feedBuffer(UnsafeBufferPointer(start: base, count: raw.count))
+        }
+    }
+
+    /// Test/reference seam: drive every byte through the per-byte scalar path, bypassing the
+    /// printable-ASCII run fast path. Used by tests to prove the run path is byte-for-byte
+    /// equivalent to repeated scalar printing.
+    func feedScalarwise(_ bytes: [UInt8]) {
+        for b in bytes { feed(b) }
     }
 
     // MARK: - Core dispatch
+
+    /// Walk `buf`, batching contiguous printable-ASCII (`0x20...0x7E`) runs while sitting in the
+    /// ground state with no partial UTF-8 sequence into a single `parserPrintRun`. Every other
+    /// byte — controls, ESC/CSI/OSC/DCS/APC, UTF-8 lead/continuation, high bytes — goes through the
+    /// unchanged per-byte `feed`, so the run path only ever short-circuits the common ASCII case.
+    private func feedBuffer(_ buf: UnsafeBufferPointer<UInt8>) {
+        let n = buf.count
+        var i = 0
+        while i < n {
+            if state == .ground, utf8Remaining == 0, buf[i] >= 0x20, buf[i] < 0x7F {
+                var j = i + 1
+                while j < n, buf[j] >= 0x20, buf[j] < 0x7F { j += 1 }
+                handler?.parserPrintRun(UnsafeBufferPointer(rebasing: buf[i ..< j]))
+                i = j
+            } else {
+                feed(buf[i])
+                i += 1
+            }
+        }
+    }
 
     private func feed(_ byte: UInt8) {
         switch state {

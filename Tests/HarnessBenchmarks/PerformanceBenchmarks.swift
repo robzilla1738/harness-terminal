@@ -48,6 +48,84 @@ final class PerformanceBenchmarks: XCTestCase {
         }
     }
 
+    /// Pure printable-ASCII lines + CRLF — the best case for the ASCII run fast path (no escapes,
+    /// no high bytes, so the parser batches each line into one run).
+    private func asciiStream(targetBytes: Int) -> [UInt8] {
+        var s = ""
+        var i = 0
+        while s.utf8.count < targetBytes {
+            s += "line \(i): the quick brown fox jumps over the lazy dog 0123456789\r\n"
+            i += 1
+        }
+        return Array(s.utf8)
+    }
+
+    /// SGR-colored ASCII: escapes punctuate the stream, but the text between them is printable
+    /// ASCII that still flows through the run fast path.
+    private func ansiAsciiStream(targetBytes: Int) -> [UInt8] {
+        var s = ""
+        var i = 0
+        while s.utf8.count < targetBytes {
+            let color = 31 + (i % 7)
+            s += "\u{1b}[\(color);1mline \(i)\u{1b}[0m the quick brown fox jumps 0123456789\r\n"
+            i += 1
+        }
+        return Array(s.utf8)
+    }
+
+    /// Print-dominated ASCII: no newlines, so it wraps to fill a tall screen instead of scrolling
+    /// (scroll is O(cols×rows) per line and would otherwise mask the print cost the fast path
+    /// targets).
+    private func wrapStream(targetBytes: Int) -> [UInt8] {
+        var a = [UInt8](); a.reserveCapacity(targetBytes)
+        let chunk = Array("the quick brown fox jumps over the lazy dog 0123456789 ".utf8)
+        while a.count < targetBytes { a.append(contentsOf: chunk) }
+        return a
+    }
+
+    /// Parse + write 256 KiB of plain ASCII — exercises the printable-ASCII run fast path.
+    func testVTParsePlainASCII256KiB() throws {
+        try skipUnlessEnabled()
+        let bytes = asciiStream(targetBytes: 256 * 1024)
+        measure {
+            let term = TerminalEmulator(cols: 120, rows: 40)
+            term.feed(bytes)
+        }
+    }
+
+    /// Parse + write 256 KiB of ANSI-colored ASCII — runs of ASCII between SGR escapes.
+    func testVTParseAnsiColoredASCII256KiB() throws {
+        try skipUnlessEnabled()
+        let bytes = ansiAsciiStream(targetBytes: 256 * 1024)
+        measure {
+            let term = TerminalEmulator(cols: 120, rows: 40)
+            term.feed(bytes)
+        }
+    }
+
+    /// The run fast path on print-heavy ASCII. Compare against
+    /// `testVTParseScalarBaselinePrintHeavyASCII` (same bytes, per-byte scalar path) to see the
+    /// speedup directly — the run path is measurably faster here (scalar ≈ 1.3× the time, release).
+    func testVTParseRunPathPrintHeavyASCII() throws {
+        try skipUnlessEnabled()
+        let bytes = wrapStream(targetBytes: 1024 * 1024)
+        measure {
+            let term = TerminalEmulator(cols: 120, rows: 10_000)
+            term.feed(bytes)
+        }
+    }
+
+    /// Baseline for `testVTParseRunPathPrintHeavyASCII`: identical input driven one byte at a time
+    /// through the scalar path (no run batching), so the two measured averages bracket the win.
+    func testVTParseScalarBaselinePrintHeavyASCII() throws {
+        try skipUnlessEnabled()
+        let bytes = wrapStream(targetBytes: 1024 * 1024)
+        measure {
+            let term = TerminalEmulator(cols: 120, rows: 10_000)
+            term.feedScalarwise(bytes)
+        }
+    }
+
     // MARK: - readGrid snapshot cost (per-frame, per attached compositor client)
 
     func testReadGridSnapshotFullScreen() throws {
