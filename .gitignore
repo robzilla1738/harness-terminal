@@ -17,3 +17,13 @@ Harness.dmg
 .dmg-staging/
 .icon-staging*/
 .env
+
+# Internal / agent + dev docs — kept locally, not published
+.claude/
+.cursor/
+claude.md
+agents.md
+HANDOFF.md
+docs/RELEASE_CHECKLIST.md
+docs/GHOSTTY_COMPARISON.md
+docs/TMUX_PARITY.md

@@ -491,7 +491,7 @@ private struct OnboardingPage {
                 bullets: [
                     .init(key: "Plain", text: "A fast native terminal. No prefix key or status bar."),
                     .init(key: "Persistent", text: "Sessions survive quitting and can be attached from the CLI."),
-                    .init(key: "Tmux", text: "The full multiplexer: prefix key, status line, copy mode, buffers."),
+                    .init(key: "Multiplexer", text: "The full multiplexer: prefix key, status line, copy mode, buffers."),
                     .init(key: "Agent", text: "Project workspaces with AI-agent detection and jump-to-agent."),
                 ]
             ),

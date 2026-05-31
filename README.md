@@ -2,26 +2,23 @@
 
 [![CI](https://github.com/robzilla1738/harness-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/robzilla1738/harness-cli/actions/workflows/ci.yml)
 
-Native macOS terminal for organizing AI agents and dev sessions — Harness's own GPU renderer, cmux-style workspaces, harness-cli automation.
+A native macOS terminal with its own GPU engine, a built-in multiplexer, and an eye on the coding agents in your panes. It does what you used to need a terminal and tmux for, in one app, with no external dependencies.
 
 ## Experience modes
 
-Harness is simple like Ghostty by default, powerful like tmux when you enable it, and
-agent-focused like cmux when you want it — all on **one** daemon-backed session core. Pick a
-mode in **Settings → Appearance → Experience** (see [docs/MODES.md](docs/MODES.md)):
+By default it stays out of your way. Turn on the multiplexer when you want splits, sessions, and a status line — it's the same fast core either way. Pick a mode in **Settings → Appearance → Experience** (see [docs/MODES.md](docs/MODES.md)):
 
 - **Plain Terminal** — a fast native terminal: no prefix key, no status bar, sessions close when you quit.
 - **Persistent Terminal** — same clean UI, but sessions survive quitting and attach from the CLI.
-- **Tmux Compatibility** — prefix key, status line, copy mode, buffers, targets, attach/detach.
+- **Multiplexer** — prefix key, status line, copy mode, buffers, targets, attach/detach.
 - **Agent Workspace** — persistent project workspaces with agent detection, notifications, and jump-to-agent.
 
-New installs start in Plain; upgrades keep what you had (Tmux). Migrating from Ghostty or tmux?
-See [docs/MIGRATION.md](docs/MIGRATION.md).
+New installs start in Plain. Coming from tmux or another terminal? See [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ## Features
 
 - GPU-accelerated terminals rendered by **Harness's own terminal engine** — crisp Display-P3 / sRGB color, themed translucent canvas with untouched program output, no external dependencies (`swift build` resolves zero packages)
-- Optional Ghostty config import — match your existing colors, opacity, blur, font, and padding
+- Switching from Ghostty? Optional one-time config import brings your colors, opacity, blur, font, and padding across
 - Workspaces + sidebar sessions + per-session tabs + horizontal/vertical splits
 - Session layout persistence (daemon-owned JSON)
 - **harness-cli** for automation and agent hooks
@@ -110,21 +107,20 @@ harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 | Switch workspace 1–9 | `Cmd+1` … `Cmd+9` |
 | Previous / next tab | `Cmd+Shift+[` / `Cmd+Shift+]` |
 
-## Comparison
+## What it replaces
 
-| Feature | Harness v1.0 | Ghostty | cmux | tmux |
-|---------|----------------|---------|------|------|
-| Native macOS app | Yes | Yes | Yes | No |
-| GPU-rendered terminal (own engine) | Yes | Yes | Yes | N/A |
-| Ghostty-config import (theme/opacity/blur) | Yes | Yes | No | No |
-| Workspaces + agent sidebar | Yes | Limited | Yes | DIY |
-| harness-cli automation | Yes | No | Yes | Yes |
-| Scriptable send-keys / capture-pane / resize-pane | Yes | No | Limited | Yes |
-| In-app prefix keymap (`Ctrl-A`) | Yes | No | No | Yes |
-| Auto-detected agent status (Codex / Claude Code / Cursor / …) | Yes | No | No | No |
-| Live shell detach/reattach (multi-client) | Yes | No | Partial | Yes |
-| Shell integration (OSC 133 prompt marks) | Yes | Yes | No | No |
-| Inline images persist across reflow + scrollback | Yes | No | No | No |
+Harness is one app where you used to run a terminal and a multiplexer side by side.
+
+| | Harness | Ghostty (terminal) | tmux (multiplexer) |
+|---|---|---|---|
+| GPU-native macOS terminal, own engine | ✅ | ✅ | — |
+| Persistent sessions, attach / detach | ✅ | — | ✅ |
+| Same session in two windows, or over SSH | ✅ | — | ✅ |
+| Scriptable from the CLI (send-keys, capture-pane, resize) | ✅ | — | ✅ |
+| Prefix keymap, copy mode, status line | ✅ | — | ✅ |
+| Inline images (Sixel / Kitty / iTerm2) | ✅ | ✅ | — |
+| OSC 133 prompt marks + success/failure gutter | ✅ | ✅ | — |
+| Auto-detects coding agents and notifies you | ✅ | — | — |
 
 ## Distribution
 
@@ -151,25 +147,19 @@ Regenerate the Dock icon after updating `AppIcon.appiconset`:
 ./Scripts/generate-app-icon.sh
 ```
 
-### v1.0.0 quality gate
-
-See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before tagging a release.
-
 ## Requirements
 
 - macOS 14.0+
 - Xcode 16+ / Swift 6.0
 
-## Architecture
+## Documentation
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Related: [experience modes](docs/MODES.md),
-[multiplexer guide](docs/TMUX_GUIDE.md), [migration](docs/MIGRATION.md),
-[reliability & security](docs/RELIABILITY.md), [tmux parity](docs/TMUX_PARITY.md),
-[Ghostty comparison](docs/GHOSTTY_COMPARISON.md).
-
-## Agent documentation
-
-Coding agents: see [claude.md](claude.md) and [agents.md](agents.md) (identical handbook).
+- [How it works](docs/ARCHITECTURE.md) — daemon, terminal engine, IPC, compositor
+- [Experience modes](docs/MODES.md) — Plain / Persistent / Multiplexer / Agent
+- [Multiplexer guide](docs/TMUX_GUIDE.md) — prefix, panes, sessions, copy mode, attach from anywhere
+- [Migration](docs/MIGRATION.md) — moving over from tmux or another terminal
+- [Keybindings](docs/KEYBINDINGS.md) · [Commands](docs/COMMANDS.md) · [Shell integration](docs/shell-integration/README.md) · [Agent hooks](docs/agent-hooks/README.md)
+- [Reliability & security](docs/RELIABILITY.md)
 
 ## License
 

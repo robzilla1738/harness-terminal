@@ -57,24 +57,21 @@ queries, the Kitty keyboard protocol, and inline images.
 line, active-pane cursor, copy mode, SGR mouse) into any plain terminal — including over ssh.
 `DaemonServer` records each client's requested PTY size per surface and resizes to the
 **smallest** (multi-client `window-size smallest`). Control mode (`-CC`) bridges the same
-command surface over stdio. The full capability ledger lives in
-[TMUX_PARITY.md](TMUX_PARITY.md); the side-by-side terminal-feature comparison is in
-[GHOSTTY_COMPARISON.md](GHOSTTY_COMPARISON.md).
+command surface over stdio. See the [multiplexer guide](TMUX_GUIDE.md) for the full surface.
 
 ## Migration paths (first-party, opt-in)
 
 - **Themes / config from Ghostty.app** — `TerminalConfigImporter` reads `~/.config/ghostty`
   so migrating users keep their colors, palette, font face, opacity, blur, and padding. Kept
   by product decision; nothing else depends on it. See [MIGRATION.md](MIGRATION.md).
-- **tmux muscle memory** — Tmux Compatibility mode exposes a prefix key, status line, copy
+- **tmux muscle memory** — Multiplexer mode exposes a prefix key, status line, copy
   mode, buffers, and `-t` targets, with a `source-file` path for bindings. See
   [MODES.md](MODES.md) and [MIGRATION.md](MIGRATION.md).
 
 ## Related docs
 
-- [MODES.md](MODES.md) — experience modes (Plain / Persistent / Tmux / Agent) + persistence
-- [MIGRATION.md](MIGRATION.md) — Ghostty + tmux migration paths
-- [TMUX_PARITY.md](TMUX_PARITY.md) — multiplexer capability ledger
-- [GHOSTTY_COMPARISON.md](GHOSTTY_COMPARISON.md) — terminal-feature side-by-side
+- [MODES.md](MODES.md) — experience modes (Plain / Persistent / Multiplexer / Agent) + persistence
+- [MIGRATION.md](MIGRATION.md) — migrating from tmux or another terminal
+- [TMUX_GUIDE.md](TMUX_GUIDE.md) — multiplexer guide (prefix, panes, sessions, copy mode)
 - [RELIABILITY.md](RELIABILITY.md) — reliability & security model
 - [COMMANDS.md](COMMANDS.md) / [KEYBINDINGS.md](KEYBINDINGS.md) — command + key reference

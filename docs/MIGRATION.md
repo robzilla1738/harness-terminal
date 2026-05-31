@@ -28,13 +28,13 @@ Import happens automatically on first run and is re-applied when the source conf
 fingerprint changes. Re-import manually any time:
 
 - **Settings → Appearance → Reset to defaults** (re-seeds from the imported config), or
-- the `source-config` command (prefix `r` in Tmux mode).
+- the `source-config` command (prefix `r` in Multiplexer mode).
 
 Comment lines start with `#`; `#` is **not** stripped from values (so hex colors survive).
 
 ## From tmux
 
-Switch to **Tmux Compatibility** mode (Settings → Appearance → Experience). Your muscle
+Switch to **Multiplexer** mode (Settings → Appearance → Experience). Your muscle
 memory works immediately:
 
 - **Prefix key** `Ctrl-A` (change in Settings → Keys, or blank it to disable).
@@ -45,7 +45,7 @@ memory works immediately:
 - **Detach / reattach** — `harness-cli attach` (one pane) or `harness-cli attach-window` (the
   full split layout, even over ssh); control mode via `harness-cli -CC`.
 
-See the full capability ledger in [TMUX_PARITY.md](TMUX_PARITY.md).
+See the [multiplexer guide](TMUX_GUIDE.md) for the full command and shortcut tour.
 
 ### Bringing your `.tmux.conf` over
 
@@ -82,5 +82,4 @@ harness-cli set-option -g base-index 1
 
 A few tmux concepts are intentionally *not* reproduced because they conflict with Harness's
 value-typed, session-owned-tabs, always-visible-sessions model — grouped sessions and some
-session-lifecycle options. These are tracked (as 🟰, not half-wired) in
-[TMUX_PARITY.md](TMUX_PARITY.md).
+session-lifecycle options. These are design choices, not gaps.

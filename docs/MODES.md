@@ -7,14 +7,14 @@ which chrome is visible, the default session-persistence policy, and how promine
 workflows are.
 
 Switch modes any time in **Settings → Appearance → Experience**. New installs start in
-**Plain**; an install that predates modes migrates to **Tmux** so nothing you already had
+**Plain**; an install that predates modes migrates to **Multiplexer** so nothing you already had
 (prefix key, status line) disappears.
 
 | Mode | Prefix key | Status line | Sessions survive a clean quit | Agent workflows |
 |------|:---------:|:-----------:|:-----------------------------:|:---------------:|
 | **Plain Terminal** | — | — | No (ephemeral) | available |
 | **Persistent Terminal** | — | — | Yes | available |
-| **Tmux Compatibility** | ✓ | ✓ | Yes | available |
+| **Multiplexer** | ✓ | ✓ | Yes | available |
 | **Agent Workspace** | optional | optional | Yes | foregrounded |
 
 ## 1. Plain Terminal
@@ -30,11 +30,11 @@ Visually identical to Plain, but sessions **survive** a clean quit and can be at
 driven from the CLI (`harness-cli attach`, `attach-window`). Promote/demote individual
 sessions (see *Persistence*, below).
 
-## 3. Tmux Compatibility
+## 3. Multiplexer
 
 The full multiplexer surface: the prefix key (default `Ctrl-A`), the status line, copy mode,
-paste buffers, tmux-style `-t session:window.pane` targets, the command prompt, attach/detach,
-and tmux/Ghostty config import. See [TMUX_PARITY.md](TMUX_PARITY.md).
+paste buffers, `-t session:window.pane` targets, the command prompt, and attach/detach. Coming
+from tmux? See the [multiplexer guide](TMUX_GUIDE.md) and [MIGRATION.md](MIGRATION.md).
 
 ## 4. Agent Workspace
 
@@ -55,7 +55,7 @@ keepSessionsOnQuit (global)  ||  session.persistent (per-session pin)
 ```
 
 - **Global** `keepSessionsOnQuit` keeps its classic "keep everything" meaning and is set by the
-  mode (Plain → off; Persistent/Tmux/Agent → on). It's the *Settings → Terminal → "Keep
+  mode (Plain → off; Persistent/Multiplexer/Agent → on). It's the *Settings → Terminal → "Keep
   sessions running after the window closes"* toggle.
 - **Per-session** `persistent` pins one session so it survives even when the global switch is
   off (Plain mode). Promote/demote:
@@ -67,9 +67,9 @@ keepSessionsOnQuit (global)  ||  session.persistent (per-session pin)
 
 `tmuxControlsEnabled` (in `settings.json`) overrides the mode's chrome default:
 
-- `null` (default) — derive from the mode (only Tmux shows the prefix + status line).
+- `null` (default) — derive from the mode (only Multiplexer shows the prefix + status line).
 - `true` — show the prefix + status line in any mode (e.g. an Agent user who wants the prefix).
-- `false` — hide them even in Tmux mode.
+- `false` — hide them even in Multiplexer mode.
 
 The single gate `HarnessSettings.showsTmuxChrome` (mode default, overridden by
 `tmuxControlsEnabled`) is what `PrefixKeymap`, `StatusLineView`, and onboarding all consult, so

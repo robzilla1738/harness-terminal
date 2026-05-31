@@ -11,9 +11,8 @@ This guide is the narrative "how it works + shortcuts" tour. For exhaustive refe
 
 - [KEYBINDINGS.md](KEYBINDINGS.md) — every default binding + the key-spec syntax.
 - [COMMANDS.md](COMMANDS.md) — the full command grammar.
-- [TMUX_PARITY.md](TMUX_PARITY.md) — feature-by-feature tmux parity ledger.
 - [MIGRATION.md](MIGRATION.md) — a tested path for moving a tmux setup over.
-- [MODES.md](MODES.md) — Plain / Persistent / Tmux / Agent experience modes.
+- [MODES.md](MODES.md) — Plain / Persistent / Multiplexer / Agent experience modes.
 
 ---
 
@@ -263,8 +262,8 @@ automatically and notify via Harness's activity path, so there's nothing to inst
 | `$TMUX` set inside a pane | `$HARNESS` (and `$HARNESS_SURFACE` for the pane id) |
 
 Default prefix differs (`Ctrl-A` vs tmux's `Ctrl-B`) — change it in Settings if you want `Ctrl-B`.
-The deliberate divergences (grouped sessions, some session-lifecycle options) and the full parity
-ledger are in [TMUX_PARITY.md](TMUX_PARITY.md); a tested migration walkthrough is in
+A few tmux concepts (grouped sessions, some session-lifecycle options) are deliberately left out
+where they clash with Harness's model. A tested migration walkthrough is in
 [MIGRATION.md](MIGRATION.md).
 
 ---

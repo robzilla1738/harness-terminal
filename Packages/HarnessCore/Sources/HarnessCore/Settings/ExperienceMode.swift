@@ -26,7 +26,7 @@ public enum ExperienceMode: String, Codable, Sendable, CaseIterable {
         switch self {
         case .plain: return "Plain Terminal"
         case .persistent: return "Persistent Terminal"
-        case .tmux: return "Tmux Compatibility"
+        case .tmux: return "Multiplexer"
         case .agent: return "Agent Workspace"
         }
     }
