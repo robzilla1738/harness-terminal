@@ -62,7 +62,10 @@ final class TerminalScreen {
     /// One scrolled-off line plus whether it ended by a soft autowrap (so reflow can re-join
     /// it with its continuation) rather than a hard line break.
     private struct HistoryLine { var cells: [TerminalGridCell]; var wrapped: Bool; var mark: SemanticMark? = nil }
-    private var history: [HistoryLine] = []
+    /// Ring-buffer-backed scrollback (see `HistoryRingBuffer`): appending newest lines and trimming
+    /// the oldest to the cap no longer shifts the surviving lines. Logical index 0 is the oldest,
+    /// matching the `[HistoryLine]` array this replaced, so every reader below is unchanged.
+    private var history = HistoryRingBuffer<HistoryLine>()
     /// Per-row soft-wrap flag, parallel to the `rows` viewport rows: true when that row
     /// continues onto the next (set on autowrap in `wrapLine`), so reflow knows which physical
     /// rows form one logical line. Kept in sync with every row move (scroll/insert/delete/erase).
@@ -563,7 +566,7 @@ final class TerminalScreen {
             }
         }
 
-        history = newHistory
+        history = HistoryRingBuffer(newHistory)
         cells = newCells
         rowWrapped = newWrapped
         rowMarks = newMarks

@@ -106,6 +106,25 @@ final class ImageProtocolTests: XCTestCase {
                       "an image evicted with its scrollback line is gone everywhere")
     }
 
+    func testScrollbackImageSurvivesTrimmingOfOlderHistory() {
+        // Cap 3 (slack == 0) so trimming is exact. Fill scrollback with image-free lines first,
+        // then place an image that is newer than every retained line. A couple more lines trim the
+        // oldest (image-free) history; the image is too recent to evict and must ride the
+        // ring-buffer head advance (its anchor stays consistent) rather than being dropped.
+        let term = TerminalEmulator(cols: 20, rows: 3)
+        term.maxScrollbackLines = 3
+        term.feed(String(repeating: "old\r\n", count: 30))
+        XCTAssertEqual(term.historyCount, 3)
+        term.feed("\u{1b}Pq#0;2;100;0;0~\u{1b}\\")
+        guard let id = placements(term).first?.id else { return XCTFail("image not placed") }
+        term.feed("x\r\nx\r\n") // trims the oldest image-free lines; image is newer, so it survives
+        XCTAssertEqual(term.historyCount, 3, "cap still enforced")
+        let live = placements(term)
+        let back = scrollbackPlacements(term, offset: term.historyCount)
+        XCTAssertEqual(live.count + back.count, 1, "image survived trimming of older history")
+        XCTAssertNotNil(term.image(for: id), "its pixels are retained")
+    }
+
     func testAltScreenIsolatesImages() {
         let term = TerminalEmulator(cols: 20, rows: 6)
         term.feed("\u{1b}Pq#0;2;100;0;0~\u{1b}\\")
