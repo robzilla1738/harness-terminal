@@ -71,6 +71,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Programming-font ligatures (e.g. `=>`, `!=`, `->`) via CoreText run shaping. On by
     /// default; turn off for the fastest one-glyph-per-cell path.
     public var ligatures: Bool
+    /// Draw the OSC 133 prompt gutter — a per-row stripe in the left margin marking shell
+    /// prompts (green = success, red = failure). Off by default; the marks still power
+    /// jump-to-prompt either way, so this only controls the stripe's visibility.
+    public var showPromptGutter: Bool
     /// Show the bottom status line (workspace · git · clock). When false the band is
     /// hidden and the terminal split extends to the window bottom. Read by
     /// `StatusLineView.refresh` (alongside the tmux `status` option and `showsTmuxChrome`).
@@ -141,6 +145,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         linearBlending: Bool = false,
         applyThemeToTerminalOutput: Bool = false,
         ligatures: Bool = true,
+        showPromptGutter: Bool = false,
         showStatusLine: Bool = true,
         // Fresh installs default to the simplest experience — a fast native terminal that
         // feels like Ghostty. Existing installs migrate to `.tmux` in `init(from:)` so no
@@ -181,6 +186,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.linearBlending = linearBlending
         self.applyThemeToTerminalOutput = applyThemeToTerminalOutput
         self.ligatures = ligatures
+        self.showPromptGutter = showPromptGutter
         self.showStatusLine = showStatusLine
         self.experienceMode = experienceMode
         self.tmuxControlsEnabled = tmuxControlsEnabled
@@ -284,6 +290,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         linearBlending = try container.decodeIfPresent(Bool.self, forKey: .linearBlending) ?? fallback.linearBlending
         applyThemeToTerminalOutput = try container.decodeIfPresent(Bool.self, forKey: .applyThemeToTerminalOutput) ?? fallback.applyThemeToTerminalOutput
         ligatures = try container.decodeIfPresent(Bool.self, forKey: .ligatures) ?? fallback.ligatures
+        showPromptGutter = try container.decodeIfPresent(Bool.self, forKey: .showPromptGutter) ?? fallback.showPromptGutter
         showStatusLine = try container.decodeIfPresent(Bool.self, forKey: .showStatusLine) ?? fallback.showStatusLine
         // Behavior-preserving migration: a settings file that predates modes was written by a
         // user who already had the prefix + status line, i.e. the Tmux experience. Default the

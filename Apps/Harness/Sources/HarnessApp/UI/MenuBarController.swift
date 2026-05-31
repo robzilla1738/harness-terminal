@@ -2,9 +2,9 @@ import AppKit
 import HarnessCore
 
 /// macOS menu-bar status item: the Harness mark, whose menu lists active agent
-/// sessions and every workspace's sessions. All state comes from the daemon-backed
-/// snapshot (`SessionCoordinator`), which owns session truth independently of the
-/// user's shell — so the menu works identically for zsh, fish, bash, etc.
+/// sessions and your sessions. All state comes from the daemon-backed snapshot
+/// (`SessionCoordinator`), which owns session truth independently of the user's
+/// shell — so the menu works identically for zsh, fish, bash, etc.
 ///
 /// Owned by the `AppDelegate` for the app lifetime. The menu is rebuilt on each open
 /// (`menuNeedsUpdate`) so it always reflects live state.
@@ -18,7 +18,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let button = statusItem.button {
             button.image = Self.markImage(pointSize: 17)
             button.imagePosition = .imageOnly
-            button.toolTip = "Harness — workspaces & agents"
+            button.toolTip = "Harness — sessions & agents"
         }
         let menu = NSMenu()
         menu.delegate = self
@@ -48,15 +48,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        addHeader("Workspaces", to: menu)
-        if snapshot.workspaces.isEmpty {
-            let empty = NSMenuItem(title: "No workspaces", action: nil, keyEquivalent: "")
+        addHeader("Sessions", to: menu)
+        let sessions = snapshot.workspaces.flatMap { ws in ws.sessions.map { (ws, $0) } }
+        if sessions.isEmpty {
+            let empty = NSMenuItem(title: "No sessions", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
-        }
-        for workspace in snapshot.workspaces {
-            menu.addItem(workspaceItem(workspace, activeWorkspace: snapshot.activeWorkspaceID))
-            for session in workspace.sessions {
+        } else {
+            for (workspace, session) in sessions {
                 menu.addItem(sessionItem(workspace, session))
             }
         }
@@ -102,23 +101,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return item
     }
 
-    private func workspaceItem(_ workspace: Workspace, activeWorkspace: WorkspaceID?) -> NSMenuItem {
-        let item = NSMenuItem(title: workspace.name, action: #selector(activate(_:)), keyEquivalent: "")
-        item.target = self
-        item.representedObject = MenuRef(workspace.id)
-        item.attributedTitle = NSAttributedString(string: workspace.name, attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-            .foregroundColor: NSColor.labelColor,
-        ])
-        item.state = workspace.id == activeWorkspace ? .on : .off
-        return item
-    }
-
     private func sessionItem(_ workspace: Workspace, _ session: SessionGroup) -> NSMenuItem {
         let item = NSMenuItem(title: session.name, action: #selector(activate(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = MenuRef(workspace.id, session.id)
-        item.indentationLevel = 1
         item.state = workspace.activeSessionID == session.id ? .on : .off
 
         let name = session.name.isEmpty ? sessionFolder(session) : session.name

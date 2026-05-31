@@ -240,6 +240,10 @@ public struct FrameBuilder {
     /// not also inside the primary selection). Background nil = no search highlight.
     public let searchBackground: RGBColor?
     public let searchForeground: RGBColor?
+    /// Draw the OSC 133 prompt gutter (the per-row success/failure stripe). Defaults to `true`
+    /// so existing callers/tests are unchanged; the GUI passes the user's `showPromptGutter`
+    /// setting (off by default), so the stripe only renders when a user opts in.
+    public let promptGutterEnabled: Bool
 
     public init(
         resolver: CellColorResolver,
@@ -250,7 +254,8 @@ public struct FrameBuilder {
         selectionBackground: RGBColor? = nil,
         selectionForeground: RGBColor? = nil,
         searchBackground: RGBColor? = nil,
-        searchForeground: RGBColor? = nil
+        searchForeground: RGBColor? = nil,
+        promptGutterEnabled: Bool = true
     ) {
         self.resolver = resolver
         self.cursorColor = cursorColor
@@ -261,6 +266,7 @@ public struct FrameBuilder {
         self.selectionForeground = selectionForeground
         self.searchBackground = searchBackground
         self.searchForeground = searchForeground
+        self.promptGutterEnabled = promptGutterEnabled
     }
 
     /// Convenience builder from a theme: resolver + cursor color in one call.
@@ -272,7 +278,8 @@ public struct FrameBuilder {
         selectionBackground: RGBColor? = nil,
         selectionForeground: RGBColor? = nil,
         searchBackground: RGBColor? = nil,
-        searchForeground: RGBColor? = nil
+        searchForeground: RGBColor? = nil,
+        promptGutterEnabled: Bool = true
     ) {
         let resolver = CellColorResolver(theme: theme, boldBrightens: boldBrightens)
         self.init(
@@ -284,7 +291,8 @@ public struct FrameBuilder {
             selectionBackground: selectionBackground,
             selectionForeground: selectionForeground,
             searchBackground: searchBackground,
-            searchForeground: searchForeground
+            searchForeground: searchForeground,
+            promptGutterEnabled: promptGutterEnabled
         )
     }
 
@@ -379,8 +387,9 @@ public struct FrameBuilder {
             }
         }
         // OSC 133 prompt gutter: resolve each marked row's stripe color from the palette —
-        // ANSI green (success) / red (failure) / bright-black (prompt with no exit yet).
-        let promptGutter = resolvePromptGutter(snapshot.marks)
+        // ANSI green (success) / red (failure) / bright-black (prompt with no exit yet). Skipped
+        // entirely when the user hasn't opted in (the default), so no stripe is drawn.
+        let promptGutter = promptGutterEnabled ? resolvePromptGutter(snapshot.marks) : [:]
         return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells,
                              cursor: cursor, images: images, promptGutter: promptGutter)
     }

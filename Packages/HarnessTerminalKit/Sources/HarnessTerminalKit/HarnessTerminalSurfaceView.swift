@@ -95,6 +95,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var glyphGamma: Float = 1
     /// Programming-font ligatures via CoreText run shaping.
     private var ligaturesEnabled = true
+    /// Draw the OSC 133 prompt gutter stripe. Off by default (a user opt-in).
+    private var promptGutterEnabled = false
 
     private var columns: Int = 80
     private var rows: Int = 24
@@ -213,12 +215,14 @@ public final class HarnessTerminalSurfaceView: NSView {
         copyOnSelect: Bool,
         scrollbackLines: Int,
         linearBlending: Bool,
-        ligatures: Bool
+        ligatures: Bool,
+        promptGutter: Bool = false
     ) {
         emulator.maxScrollbackLines = scrollbackLines
         // Gamma-correct ("linear") blending thickens light-on-dark antialiasing slightly.
         glyphGamma = linearBlending ? 0.8 : 1.0
         ligaturesEnabled = ligatures
+        promptGutterEnabled = promptGutter
         let bg = RGBColor(hex: canvasBackgroundHex) ?? RGBColor(red: 0, green: 0, blue: 0)
         let fg = RGBColor(hex: canvasForegroundHex) ?? RGBColor(red: 255, green: 255, blue: 255)
         let cursor = RGBColor(hex: cursorHex) ?? fg
@@ -258,7 +262,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             canvasOpacity: self.canvasOpacity,
             cursorStyle: self.cursorStyle,
             selectionBackground: selBg,
-            selectionForeground: selFg
+            selectionForeground: selFg,
+            promptGutterEnabled: promptGutterEnabled
         )
         restartBlinkTimer()
         // Opaque only when fully opaque; otherwise the layer must be non-opaque so the

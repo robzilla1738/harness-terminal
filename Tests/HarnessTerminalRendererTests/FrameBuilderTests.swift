@@ -135,4 +135,13 @@ final class FrameBuilderTests: XCTestCase {
         let f = frame(osc133("A") + "$ false\r\n" + osc133("D;1"), rows: 4)
         XCTAssertEqual(f.promptGutter[0], RenderColor(theme.palette[1]))   // ANSI red
     }
+
+    func testPromptGutterDisabledSkipsStripe() {
+        // With the gutter disabled, marks still exist on the snapshot but no stripe is resolved.
+        let b = FrameBuilder(theme: theme, promptGutterEnabled: false)
+        let term = HarnessGridTerminal(cols: 20, rows: 2)!
+        term.feed(osc133("A") + "$ ")
+        let f = b.build(term.readGrid()!)
+        XCTAssertTrue(f.promptGutter.isEmpty, "no gutter when disabled")
+    }
 }

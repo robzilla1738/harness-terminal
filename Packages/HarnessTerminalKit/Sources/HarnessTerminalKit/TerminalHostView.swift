@@ -247,7 +247,8 @@ public final class TerminalHostView: NSView {
             copyOnSelect: settings.copyOnSelect,
             scrollbackLines: settings.scrollbackLines,
             linearBlending: settings.linearBlending,
-            ligatures: settings.ligatures
+            ligatures: settings.ligatures,
+            promptGutter: settings.showPromptGutter
         )
     }
 

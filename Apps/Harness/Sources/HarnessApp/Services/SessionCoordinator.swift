@@ -1285,6 +1285,67 @@ enum DesktopNotifier {
         )
         UNUserNotificationCenter.current().add(request)
     }
+
+    /// The current system authorization status, on the main actor — drives the Settings
+    /// permission indicator so the user can tell whether macOS is allowing alerts at all.
+    static func authorizationStatus(_ completion: @escaping @MainActor (UNAuthorizationStatus) -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let status = settings.authorizationStatus
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(status) } }
+        }
+    }
+
+    /// Drive the permission flow from a user action: prompt when undecided, or open System
+    /// Settings ▸ Notifications when macOS has already denied us (the system never re-prompts
+    /// after a denial, so the only path back is the settings pane).
+    static func requestOrOpenSettings() {
+        UNUserNotificationCenter.current().delegate = ForegroundPresenter.shared
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .denied:
+                DispatchQueue.main.async { openSystemNotificationSettings() }
+            default:
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                    if !granted {
+                        DispatchQueue.main.async { openSystemNotificationSettings() }
+                    }
+                }
+            }
+        }
+    }
+
+    static func openSystemNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Fire a one-off banner so the user can confirm delivery end-to-end (bypasses the
+    /// agent-activity gates; still honors the system permission). If permission isn't granted
+    /// yet, request/route it first so the test isn't a silent no-op.
+    static func sendTest() {
+        UNUserNotificationCenter.current().delegate = ForegroundPresenter.shared
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let status = settings.authorizationStatus
+            DispatchQueue.main.async {
+                switch status {
+                case .authorized, .provisional:
+                    show(title: "Harness", body: "Test notification — alerts are working.", withSound: true)
+                case .denied:
+                    openSystemNotificationSettings()
+                default:
+                    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                        DispatchQueue.main.async {
+                            if granted {
+                                show(title: "Harness", body: "Test notification — alerts are working.", withSound: true)
+                            } else {
+                                openSystemNotificationSettings()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Presents agent notifications as banners even when Harness is frontmost (the OS

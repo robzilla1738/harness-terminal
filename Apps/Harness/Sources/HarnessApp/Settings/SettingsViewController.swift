@@ -1,6 +1,7 @@
 import AppKit
 import HarnessCore
 import HarnessTerminalKit
+import UserNotifications
 
 @MainActor
 final class SettingsViewController: NSViewController, NSFontChanging {
@@ -37,6 +38,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let linearBlendingToggle = HarnessToggle(title: "Gamma-correct text blending")
     private let themeTerminalOutputToggle = HarnessToggle(title: "Apply theme colors to terminal output — off = canvas matches theme, output untouched")
     private let ligaturesToggle = HarnessToggle(title: "Programming ligatures (=>, !=, ->) for fonts that have them")
+    private let promptGutterToggle = HarnessToggle(title: "Prompt gutter — green/red stripe marking command success (needs shell integration)")
     private let selectionBgHexField = HarnessTextField()
     private let selectionFgHexField = HarnessTextField()
     private let boldHexField = HarnessTextField()
@@ -51,6 +53,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let statusLineWell = HarnessSwatchWell(frame: .zero)
     private let systemNotificationsToggle = HarnessToggle(title: "Push notification when an agent stops or needs input")
     private let notificationSoundToggle = HarnessToggle(title: "Play a chime with notifications")
+    private let notificationTestButton = HarnessPillButton(title: "Send a test notification", kind: .secondary)
+    private let notificationPermissionButton = HarnessPillButton(title: "Allow in System Settings…", kind: .secondary)
+    private let notificationStatusField = NSTextField(labelWithString: "")
     private let livePreview = LiveTerminalPreview()
     private let pageContainer = NSView()
     private var pages: [Int: NSView] = [:]
@@ -276,6 +281,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         ligaturesToggle.state = settings.ligatures ? .on : .off
         ligaturesToggle.target = self
         ligaturesToggle.action = #selector(appearanceTextDidCommit)
+        promptGutterToggle.state = settings.showPromptGutter ? .on : .off
+        promptGutterToggle.target = self
+        promptGutterToggle.action = #selector(appearanceTextDidCommit)
 
         transparentTitlebarToggle.state = settings.transparentTitlebar ? .on : .off
         transparentTitlebarToggle.target = self
@@ -565,6 +573,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             ("", linearBlendingToggle),
             ("", themeTerminalOutputToggle),
             ("", ligaturesToggle),
+            ("", promptGutterToggle),
         ])
 
         let chromeAccents = colorPairRow(
@@ -688,10 +697,26 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         notificationSoundToggle.target = self
         notificationSoundToggle.action = #selector(appearanceTextDidCommit)
 
-        let notificationsGroup = formGrid(rows: [
+        let toggleGrid = formGrid(rows: [
             ("", systemNotificationsToggle),
             ("", notificationSoundToggle),
         ])
+        notificationStatusField.font = .systemFont(ofSize: 11)
+        notificationStatusField.textColor = .secondaryLabelColor
+        notificationStatusField.lineBreakMode = .byWordWrapping
+        notificationStatusField.maximumNumberOfLines = 2
+        notificationTestButton.target = self
+        notificationTestButton.action = #selector(sendTestNotification)
+        notificationPermissionButton.target = self
+        notificationPermissionButton.action = #selector(openNotificationPermission)
+        let notifButtons = NSStackView(views: [notificationTestButton, notificationPermissionButton])
+        notifButtons.orientation = .horizontal
+        notifButtons.spacing = 10
+        let notificationsGroup = NSStackView(views: [toggleGrid, notificationStatusField, leadingRow(notifButtons)])
+        notificationsGroup.orientation = .vertical
+        notificationsGroup.alignment = .leading
+        notificationsGroup.spacing = 12
+        refreshNotificationStatus()
 
         let detectionCaption = settingsCaption("Harness identifies agents by walking each pane's process tree and matching the executables shown below — it works for any shell, no setup. Install hooks so an agent can ping you the moment it stops or needs input (the config is merged into the agent's own file and backed up first). Customize matching in agents.json.")
         let editAgents = HarnessPillButton(title: "Edit agents.json…", kind: .secondary)
@@ -795,6 +820,42 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func retintAgentIcon(_ kind: AgentKind) {
         let hex = SessionCoordinator.shared.settings.agentColorHex(for: kind)
         agentIconViews[kind]?.contentTintColor = NSColor.fromHex(hex) ?? HarnessChrome.current.textSecondary
+    }
+
+    @objc private func sendTestNotification() {
+        DesktopNotifier.sendTest()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshNotificationStatus() }
+    }
+
+    @objc private func openNotificationPermission() {
+        DesktopNotifier.requestOrOpenSettings()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refreshNotificationStatus() }
+    }
+
+    /// Pull the live macOS permission state into the caption so the user can tell whether the
+    /// system is allowing alerts at all (the common reason agent notifications never appear).
+    private func refreshNotificationStatus() {
+        DesktopNotifier.authorizationStatus { [weak self] status in
+            guard let self else { return }
+            let text: String
+            let needsAllow: Bool
+            switch status {
+            case .authorized, .provisional:
+                text = "macOS is allowing notifications."
+                needsAllow = false
+            case .denied:
+                text = "macOS is blocking notifications for Harness. Click below to allow them in System Settings ▸ Notifications."
+                needsAllow = true
+            case .notDetermined:
+                text = "Notifications haven't been authorized yet. Send a test to grant them."
+                needsAllow = true
+            @unknown default:
+                text = ""
+                needsAllow = true
+            }
+            self.notificationStatusField.stringValue = text
+            self.notificationPermissionButton.isHidden = !needsAllow
+        }
     }
 
     @objc private func installHooksClicked(_ sender: HarnessPillButton) {
@@ -1574,6 +1635,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.linearBlending = linearBlendingToggle.state == .on
         coordinator.settings.applyThemeToTerminalOutput = themeTerminalOutputToggle.state == .on
         coordinator.settings.ligatures = ligaturesToggle.state == .on
+        coordinator.settings.showPromptGutter = promptGutterToggle.state == .on
         coordinator.settings.experienceMode = selectedExperienceMode
         try? coordinator.settings.save()
 
