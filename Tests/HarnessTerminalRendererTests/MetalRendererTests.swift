@@ -120,6 +120,28 @@ final class MetalRendererTests: XCTestCase {
         assertColor(px(0, y), r: 0, g: 0, b: 0, label: "padding left of the gutter stays clear")
     }
 
+    func testRepeatedRendersReuseInstanceBuffersWithoutCorruption() throws {
+        let (device, renderer) = try makeRenderer()
+        // Background + glyph + decoration all present so every reused ring buffer is exercised:
+        // red bg, green underlined "A". Cursor hidden so it can't repaint the cell.
+        let f = frame("\u{1b}[?25l\u{1b}[48;2;255;0;0m\u{1b}[38;2;0;255;0m\u{1b}[4mA", cols: 1, rows: 1)
+        let (w, h) = renderer.surfacePixelSize(columns: 1, rows: 1)
+        guard let target = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+
+        // Render the same frame more times than the ring is deep (3) so slots wrap and are
+        // overwritten while prior frames may still be referenced — output must stay identical.
+        var samples: [(UInt8, UInt8, UInt8, UInt8)] = []
+        for _ in 0 ..< 6 {
+            renderer.render(f, to: target, clearColor: RenderColor(red: 0, green: 0, blue: 0, alpha: 1))
+            let px = readPixels(target, width: w, height: h)
+            // Top-left corner sits outside the glyph: pure red background, a stable witness.
+            samples.append(px(1, 1))
+        }
+        for (i, s) in samples.enumerated() {
+            assertColor(s, r: 255, g: 0, b: 0, label: "reused-buffer frame \(i) red bg", tolerance: 24)
+        }
+    }
+
     // MARK: - Pixel helpers
 
     private func readPixels(_ texture: MTLTexture, width: Int, height: Int) -> (Int, Int) -> (UInt8, UInt8, UInt8, UInt8) {

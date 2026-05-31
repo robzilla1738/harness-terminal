@@ -66,6 +66,18 @@ public final class TerminalMetalRenderer {
     /// The render-target pixel format both pipelines are built for.
     public static let pixelFormat: MTLPixelFormat = .rgba8Unorm
 
+    /// Depth of the instance-buffer ring and the cap on frames the GPU may have in flight.
+    private static let maxFramesInFlight = 3
+    /// Reusable, growable instance buffers (one ring each) replacing per-frame `makeBuffer`.
+    private let bgInstanceBuffer: DynamicInstanceBuffer
+    private let glyphInstanceBuffer: DynamicInstanceBuffer
+    private let decoInstanceBuffer: DynamicInstanceBuffer
+    /// Caps in-flight frames at `maxFramesInFlight` so we never reuse a ring slot the GPU is
+    /// still reading. Signaled from each command buffer's completion handler.
+    private let inFlightSemaphore = DispatchSemaphore(value: maxFramesInFlight)
+    /// Index of the ring slot the current frame writes into; advanced once per `encode`.
+    private var frameSlot = 0
+
     public init?(device: MTLDevice, fontFamily: String, fontSize: CGFloat, scale: CGFloat) {
         guard let queue = device.makeCommandQueue() else { return nil }
         let rasterizer = GlyphRasterizer(fontFamily: fontFamily, size: fontSize, scale: scale)
@@ -98,6 +110,9 @@ public final class TerminalMetalRenderer {
             return nil
         }
         self.imageCache = ImageTextureCache(device: device)
+        self.bgInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "bg-instances")
+        self.glyphInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "glyph-instances")
+        self.decoInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "deco-instances")
 
         let sd = MTLSamplerDescriptor()
         sd.minFilter = .linear
@@ -283,16 +298,27 @@ public final class TerminalMetalRenderer {
             blue: Double(clearColor.blue), alpha: Double(clearColor.alpha)
         )
 
+        // Reserve an in-flight slot before touching the instance-buffer ring, then advance to
+        // the next slot so this frame writes a buffer no longer read by the GPU. The semaphore
+        // blocks here if `maxFramesInFlight` frames are already queued.
+        inFlightSemaphore.wait()
+        frameSlot = (frameSlot + 1) % Self.maxFramesInFlight
+
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass)
-        else { return nil }
+        else {
+            inFlightSemaphore.signal()  // Nothing was committed; release the reserved slot.
+            return nil
+        }
+        // Release the slot once the GPU finishes this frame. Capture the semaphore (not `self`)
+        // so the retained handler can't form a reference cycle with the renderer.
+        commandBuffer.addCompletedHandler { [inFlightSemaphore] _ in inFlightSemaphore.signal() }
 
         var vp = viewport
-        // Background pass. `makeBuffer(length:)` is undefined for length 0, so skip an empty
-        // pass (the glyph/decoration passes already guard the same way) — production clamps the
-        // grid to ≥1×1, but a directly-constructed empty frame must not hit a zero-length buffer.
-        if !backgrounds.isEmpty,
-           let buffer = device.makeBuffer(bytes: backgrounds, length: backgrounds.count * MemoryLayout<BgInstance>.stride, options: .storageModeShared) {
+        // Background pass. Empty instance arrays bind nothing — `DynamicInstanceBuffer.upload`
+        // returns nil for an empty array (the glyph/decoration passes guard the same way), so a
+        // directly-constructed empty frame never hits a zero-length buffer.
+        if let buffer = bgInstanceBuffer.upload(backgrounds, slot: frameSlot) {
             renderEncoder.setRenderPipelineState(bgPipeline)
             renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
@@ -303,8 +329,7 @@ public final class TerminalMetalRenderer {
         drawImages(frame.images.filter { $0.z < 0 }, encoder: renderEncoder, viewport: &vp, ox: ox, oy: oy)
 
         // Glyph pass (with the gamma-correct coverage uniform).
-        if !glyphs.isEmpty,
-           let buffer = device.makeBuffer(bytes: glyphs, length: glyphs.count * MemoryLayout<GlyphInstance>.stride, options: .storageModeShared) {
+        if let buffer = glyphInstanceBuffer.upload(glyphs, slot: frameSlot) {
             var glyphGamma = max(0.1, gamma)
             renderEncoder.setRenderPipelineState(glyphPipeline)
             renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
@@ -316,8 +341,7 @@ public final class TerminalMetalRenderer {
         }
 
         // Decoration pass (underline family / strikethrough / overline) — over the glyphs.
-        if !decorations.isEmpty,
-           let buffer = device.makeBuffer(bytes: decorations, length: decorations.count * MemoryLayout<DecoInstance>.stride, options: .storageModeShared) {
+        if let buffer = decoInstanceBuffer.upload(decorations, slot: frameSlot) {
             renderEncoder.setRenderPipelineState(decoPipeline)
             renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
