@@ -500,7 +500,7 @@ private struct OnboardingPage {
             pages.append(OnboardingPage(
                 symbol: "keyboard",
                 title: "The prefix key",
-                subtitle: "Multiplexer commands start with a prefix press, then a key, like tmux. Your prefix is \(p). Press it, let go, then press the command key.",
+                subtitle: "Multiplexer commands start with a prefix press, then a key. Your prefix is \(p). Press it, let go, then press the command key.",
                 bullets: [
                     .init(key: "\(p) c", text: "New tab"),
                     .init(key: "\(p) %", text: "Split the pane side by side"),

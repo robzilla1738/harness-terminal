@@ -3,9 +3,9 @@
 Harness is a native terminal multiplexer. If you've used **tmux**, you already know how to drive
 it: same muscle memory (a prefix key, splits, windows, copy mode, detach/attach, a `:` command
 line), the same verb vocabulary (`split-window`, `new-window`, `kill-pane`, `copy-mode`…). The
-difference is that it's **Harness-owned and self-contained** — there is no tmux, libtmux,
-cmux, or any other dependency under the hood. The daemon, the session model, the compositor, and
-the VT engine are all first-party Swift.
+difference is that it's **Harness-owned and self-contained** — there is no tmux, libtmux, or
+any other dependency under the hood. The daemon, the session model, the compositor, and the VT
+engine are all first-party Swift.
 
 This guide is the narrative "how it works + shortcuts" tour. For exhaustive references see:
 
