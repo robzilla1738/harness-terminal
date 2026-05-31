@@ -99,8 +99,9 @@ public struct FrameImage: Equatable, Sendable {
 public struct TerminalFrame: Equatable, Sendable {
     public var columns: Int
     public var rows: Int
-    /// Row-major, `columns * rows` long (every grid position, so the background pass can
-    /// fill the whole surface).
+    /// Row-major, `columns * rows` long — every grid position. The renderer clears the surface
+    /// to the canvas color and fills a per-cell background quad only where `drawBackground` is
+    /// set, so default-canvas cells rely on the clear rather than their own quad.
     public var cells: [RenderCell]
     public var cursor: CursorRender
     /// Inline images overlaid on the grid (empty when none).

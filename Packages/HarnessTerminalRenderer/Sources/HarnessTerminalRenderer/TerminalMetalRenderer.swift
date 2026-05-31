@@ -45,8 +45,9 @@ private enum DecoKind: UInt32 {
     case curly = 4
 }
 
-/// Renders a `TerminalFrame` with Metal: a solid background pass over every cell, then a
-/// texture-sampled glyph pass, then the cursor. Pixel sizes derive from the font's cell
+/// Renders a `TerminalFrame` with Metal: a background pass (the target is cleared to the canvas
+/// color, then only cells that need a non-canvas fill emit a quad — see `RenderCell.drawBackground`),
+/// then a texture-sampled glyph pass, then the cursor. Pixel sizes derive from the font's cell
 /// metrics × display scale. Designed to draw into either an offscreen texture (tests) or a
 /// `CAMetalLayer` drawable (the live view, added next).
 public final class TerminalMetalRenderer {
@@ -142,6 +143,12 @@ public final class TerminalMetalRenderer {
     /// Render `frame` into `target`, clearing to `clearColor` first. Synchronous: the
     /// command buffer is committed and waited on (suitable for offscreen capture).
     /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
+    ///
+    /// Contract: `clearColor` must be the canvas/default background that the frame was built
+    /// against (the color the `FrameBuilder`'s resolver uses for default-background cells, at
+    /// the same alpha). The builder marks those cells `drawBackground == false` and the renderer
+    /// skips their quads, so they show through to `clearColor`; a mismatch would mis-color every
+    /// default cell. `HarnessTerminalSurfaceView` satisfies this by sourcing both from one value.
     public func render(_ frame: TerminalFrame, to target: MTLTexture, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1, ligatures: Bool = false) {
         guard let commandBuffer = encode(frame, target: target, clearColor: clearColor, origin: origin, gamma: gamma, ligatures: ligatures) else { return }
         commandBuffer.commit()
@@ -152,6 +159,7 @@ public final class TerminalMetalRenderer {
     /// `origin` is the device-pixel offset of the grid's top-left (for window padding).
     /// `gamma` > 1 applies gamma-correct (linear) text coverage; 1 = native blending.
     /// `ligatures` enables CoreText run shaping (programming-font ligatures).
+    /// `clearColor` carries the same default-background contract as `render(_:to:clearColor:…)`.
     public func present(_ frame: TerminalFrame, to drawable: CAMetalDrawable, clearColor: RenderColor, origin: (x: Int, y: Int) = (0, 0), gamma: Float = 1, ligatures: Bool = false) {
         guard let commandBuffer = encode(frame, target: drawable.texture, clearColor: clearColor, origin: origin, gamma: gamma, ligatures: ligatures) else { return }
         commandBuffer.present(drawable)
