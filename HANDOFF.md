@@ -9,6 +9,35 @@ of the way.
 
 ---
 
+## ✅ On-device pass — COMPLETE (2026-05-30)
+
+The branch now builds, tests, and runs on macOS (Swift 6.2.4 / Xcode 26.3). Summary of the pass:
+
+- **Build:** `swift build` clean (all targets incl. the AppKit app).
+- **Tests:** `swift test` green — **487** tests, 0 failures (17 live-daemon tests skipped without
+  `HARNESS_LIVE_DAEMON_TESTS=1`; all 7 pass *with* it, incl. the per-client detach regression).
+  - Fixed two genuine bugs found on first compile: the OSC 133 exit-status tests fed the exit code
+    *outside* the OSC terminator (`osc133("D")+";1"` → `\e]133;D\a;1`); corrected to `osc133("D;1")`.
+- **§2 deferred on-device work — all done:**
+  - **A. Prompt gutter** — `FrameBuilder` resolves a per-row green/red/neutral color from
+    `snapshot.marks`; the Metal renderer paints a stripe in the left padding. Covered by
+    `FrameBuilder` + a GPU render-readback test, and **verified live** (green/red/neutral stripes
+    on `OK`/`FAIL`/`PENDING` lines, none on the unmarked shell prompt).
+  - **B. Detach/reattach UX** — View ▸ Detach/Reattach Pane menu items (validated) + a dimmed
+    `DetachedPaneOverlay` ("Pane released — click to re-grab"). **Verified live**: detach dims the
+    pane + shows the overlay; reattach clears it and resumes output with scrollback intact.
+  - **C. Copy-mode `[`/`]`** — confirmed they shadow nothing (free keys; search entry captures them
+    as literals first); locked with `KeyTableTests`. Live-view jump left unbound by default.
+  - **D. Hardening** — socket `sun_path` 104-byte guard (`HarnessPaths.validatedSocketPath`, used by
+    client connect + server bind), EINTR retry on `connect`, RealPty fan-out moved to a dedicated
+    serial delivery queue (off the read loop), and a vttest-style golden corpus.
+  - **E. Release dry-run** — `make release` (bundle) + `make dmg` succeed. `make sign` is correctly
+    gated behind `APPLE_ID`/`APPLE_TEAM_ID`/`APPLE_APP_PASSWORD` (not run — needs Apple credentials).
+
+The original to-do list below is kept as historical context.
+
+---
+
 ## 0. Do this first — build, test, fix
 
 ```bash
