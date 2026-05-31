@@ -13,7 +13,7 @@ public enum ShellCompletionInstaller {
     # accurate; regenerate after adding a new subcommand or flag.
 
     set -l __harness_cli_subcommands \
-        ping list-workspaces list-surfaces get-snapshot \
+        ping list-workspaces list-surfaces list-agents get-snapshot \
         new-workspace new-session new-tab new-split \
         select-workspace select-session select-tab \
         close-tab close-session \
@@ -56,6 +56,8 @@ public enum ShellCompletionInstaller {
         -a "after-new-tab after-new-session after-kill-tab after-split-pane after-kill-pane after-resize-pane pane-exited client-attached client-detached agent-state-changed notification-posted"
     complete -c harness-cli -n "__fish_seen_subcommand_from install-hooks" \
         -a "codex claude-code cursor pi hermes openclaw aider gemini goose"
+    complete -c harness-cli -n "__fish_seen_subcommand_from list-agents" -l waiting -d "Only agents waiting on you"
+    complete -c harness-cli -n "__fish_seen_subcommand_from list-agents" -l json    -d "Machine-readable JSON output"
     """#
 
     /// Write the fish completion script to its standard location. Returns

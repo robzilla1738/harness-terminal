@@ -6,8 +6,10 @@ import Foundation
 /// `AgentScanner`, and `Tab.status == .waiting`, set by the notification path).
 ///
 /// This is the wire shape returned by the `list-agents` daemon request and
-/// rendered (text + JSON) by `AgentListFormatter`. Keep the field names stable —
-/// they are part of the `--json` contract.
+/// rendered (text + JSON) by `AgentListFormatter`. Keep the stored field names
+/// stable — they are part of the `--json` contract. The machine-readable agent
+/// identity is `kind` (a stable string like `claude-code`); `agentName` is a
+/// derived display convenience and is intentionally not stored or serialized.
 public struct AgentSessionSummary: Codable, Sendable, Equatable, Identifiable {
     /// Stable identity for the row: the backing surface id (one agent per tab,
     /// surfaced through the tab's active/representative pane).
@@ -24,9 +26,6 @@ public struct AgentSessionSummary: Codable, Sendable, Equatable, Identifiable {
     public var paneID: String?
 
     public var kind: AgentKind
-    /// Human-readable agent name (`kind.displayName`), stored so JSON consumers
-    /// don't have to map the `kind` enum themselves.
-    public var agentName: String
     public var activity: AgentActivity
     /// The agent is blocking on you: `Tab.status == .waiting` (set by the
     /// notification/hook path). Distinct from `activity` — an agent can be
@@ -35,6 +34,11 @@ public struct AgentSessionSummary: Codable, Sendable, Equatable, Identifiable {
     public var lastActivityAt: Date
     /// The most recent notification body, when the tab is waiting.
     public var notificationText: String?
+
+    /// Human-readable agent name, derived from `kind` (the single source of truth).
+    /// Used by the text formatter and the GUI; JSON consumers read the canonical
+    /// `kind` instead.
+    public var agentName: String { kind.displayName }
 
     public init(
         workspaceName: String,
@@ -58,7 +62,6 @@ public struct AgentSessionSummary: Codable, Sendable, Equatable, Identifiable {
         self.surfaceID = surfaceID
         self.paneID = paneID
         self.kind = kind
-        self.agentName = kind.displayName
         self.activity = activity
         self.waiting = waiting
         self.lastActivityAt = lastActivityAt

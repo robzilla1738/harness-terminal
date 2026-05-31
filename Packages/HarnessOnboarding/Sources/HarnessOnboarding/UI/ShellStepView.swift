@@ -148,7 +148,7 @@ struct ShellStepView: View {
         let fishScript = """
         # Fish completion for harness-cli (embedded by the onboarding wizard)
         set -l __harness_cli_subcommands \\
-            ping list-workspaces list-surfaces list-sessions list-windows list-panes has-session \\
+            ping list-workspaces list-surfaces list-sessions list-windows list-panes list-agents has-session \\
             list-commands get-snapshot daemon-stats list-clients detach-client \\
             new-workspace new-session new-tab new-split \\
             select-workspace select-session select-tab \\
