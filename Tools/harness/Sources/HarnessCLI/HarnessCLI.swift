@@ -119,6 +119,8 @@ struct HarnessCLI {
                 try handleDetectAgent(args, client: client)
             case "install-hooks":
                 try handleInstallHooks(args)
+            case "install-shell-integration":
+                handleInstallShellIntegration(args)
             case "attach":
                 let code = try handleAttach(args)
                 exit(code)
@@ -545,6 +547,46 @@ struct HarnessCLI {
     static func handleInstallHooks(_ args: [String]) throws {
         let agent = args.dropFirst().first ?? flagValue(args, flag: "--agent") ?? ""
         AgentHookInstallerCLI.run(agentArg: agent)
+    }
+
+    /// `install-shell-integration [bash|zsh|fish|all]` — drop the OSC 133 script under the Harness
+    /// home and wire a guarded `source` line into the shell's rc (idempotent, rc backed up). With
+    /// no argument, install for the current `$SHELL`.
+    static func handleInstallShellIntegration(_ args: [String]) {
+        let arg = (args.dropFirst().first ?? "").lowercased()
+        let shells: [ShellIntegration.Shell]
+        switch arg {
+        case "all":
+            shells = ShellIntegration.Shell.allCases
+        case "bash", "zsh", "fish":
+            shells = [ShellIntegration.Shell(rawValue: arg)!]
+        case "":
+            guard let detected = ShellIntegration.Shell.detect(from: ProcessInfo.processInfo.environment["SHELL"] ?? "") else {
+                fputs("install-shell-integration: couldn't detect your shell from $SHELL — pass one of: bash, zsh, fish, all\n", stderr)
+                exit(1)
+            }
+            shells = [detected]
+        default:
+            fputs("install-shell-integration: unknown shell \"\(arg)\" (expected bash, zsh, fish, or all)\n", stderr)
+            exit(1)
+        }
+        var failed = false
+        for shell in shells {
+            do {
+                let r = try ShellIntegration.install(shell)
+                if let backup = r.rcBackedUp { print("(backed up \(r.rcPath.lastPathComponent) to \(backup.path))") }
+                if r.alreadyWired {
+                    print("\(shell.rawValue): already wired in \(r.rcPath.path) — refreshed \(r.scriptPath.lastPathComponent)")
+                } else {
+                    print("\(shell.rawValue): wrote \(r.scriptPath.path) and added it to \(r.rcPath.path)")
+                }
+            } catch {
+                fputs("install-shell-integration: \(shell.rawValue) failed: \(error)\n", stderr)
+                failed = true
+            }
+        }
+        print("Restart your shell (or open a new Harness pane) to enable prompt marks, the success/failure gutter, and prompt jumping.")
+        if failed { exit(1) }
     }
 
     static func handleAttach(_ args: [String]) throws -> Int32 {
@@ -1021,6 +1063,8 @@ struct HarnessCLI {
         } catch {
             fputs("warning: fish completion install failed: \(error)\n", stderr)
         }
+        print("Tip: run 'harness-cli install-shell-integration' to enable OSC 133 prompt marks, "
+            + "the success/failure gutter, and prompt jumping.")
     }
 
     /// Locate the daemon executable next to the running CLI. The CLI is
@@ -1091,6 +1135,7 @@ struct HarnessCLI {
           rename-workspace --id <uuid> --name "..."
           detect-agent --surface <uuid>
           install-hooks <codex|claude-code|cursor|pi|hermes|openclaw|aider|gemini|goose>
+          install-shell-integration [bash|zsh|fish|all]  (OSC 133 prompt marks + gutter)
           attach --surface <uuid> [--detach-keys "C-a d"]
           notify --surface <uuid> [--title t] [--body b]
           daemon-stats

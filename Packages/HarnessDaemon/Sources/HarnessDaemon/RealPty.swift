@@ -120,6 +120,8 @@ public final class RealPty: @unchecked Sendable {
         // verbatim, so program output renders exactly as the program intends.
         environment["COLORTERM"] = "truecolor"
         environment["HARNESS_SURFACE"] = id
+        // `HARNESS` (the $TMUX analog the OSC 133 scripts gate on) + session `set-environment`
+        // vars come in via extraEnvironment from SurfaceRegistry.
         for (key, value) in extraEnvironment { environment[key] = value }
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
 
