@@ -54,6 +54,106 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertEqual(notification?.count, 1) // not duplicated on reinstall
     }
 
+    func testClaudeNotificationUsesStdinHookNotEnvVar() throws {
+        let result = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
+        let command = try claudeNotificationCommand(at: result.path)
+        XCTAssertTrue(command.contains("--from-hook"), "Notification body must come from stdin")
+        XCTAssertFalse(command.contains("HARNESS_NOTIFY_MESSAGE"), "the dangling env var must be gone")
+    }
+
+    /// The migration: a config carrying the OLD broken `$HARNESS_NOTIFY_MESSAGE` hook must
+    /// converge to exactly one corrected entry on (re)install — not append a second copy.
+    func testInstallUpgradesOldBrokenNotificationHookInPlace() throws {
+        let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .claudeCode, homeOverride: home))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let broken = #"""
+        {
+          "model": "claude-opus",
+          "permissions": { "allow": ["Bash"] },
+          "hooks": {
+            "Notification": [
+              { "matcher": "*", "hooks": [ { "type": "command", "command": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Claude Code\" --body \"$HARNESS_NOTIFY_MESSAGE\"" } ] }
+            ],
+            "PreToolUse": [
+              { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo my-own-hook" } ] }
+            ]
+          }
+        }
+        """#
+        try broken.write(to: url, atomically: true, encoding: .utf8)
+
+        _ = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
+
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any])
+        let hooks = try XCTUnwrap(json["hooks"] as? [String: Any])
+        let notification = try XCTUnwrap(hooks["Notification"] as? [Any])
+        XCTAssertEqual(notification.count, 1, "old broken entry replaced, not appended")
+        let command = try claudeNotificationCommand(at: url)
+        XCTAssertTrue(command.contains("--from-hook"))
+        XCTAssertFalse(command.contains("HARNESS_NOTIFY_MESSAGE"))
+        // Unrelated config + the user's own non-Harness hook survive untouched.
+        XCTAssertEqual(json["model"] as? String, "claude-opus")
+        XCTAssertNotNil((json["permissions"] as? [String: Any])?["allow"])
+        XCTAssertNotNil(hooks["PreToolUse"] as? [Any])
+    }
+
+    /// A user's *own* Notification entry (no Harness marker) must be preserved alongside ours.
+    func testInstallPreservesUserNotificationEntries() throws {
+        let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .claudeCode, homeOverride: home))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let existing = #"""
+        { "hooks": { "Notification": [
+          { "matcher": "*", "hooks": [ { "type": "command", "command": "say hello" } ] }
+        ] } }
+        """#
+        try existing.write(to: url, atomically: true, encoding: .utf8)
+
+        _ = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
+
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any])
+        let notification = try XCTUnwrap((json["hooks"] as? [String: Any])?["Notification"] as? [Any])
+        XCTAssertEqual(notification.count, 2, "the user's entry plus exactly one Harness entry")
+        let commands = notification.compactMap { entry -> String? in
+            ((entry as? [String: Any])?["hooks"] as? [Any])?
+                .compactMap { ($0 as? [String: Any])?["command"] as? String }.first
+        }
+        XCTAssertTrue(commands.contains("say hello"))
+        XCTAssertTrue(commands.contains { $0.contains("--from-hook") })
+    }
+
+    func testReinstallStaysSingleAndCorrected() throws {
+        _ = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
+        _ = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
+        let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .claudeCode, homeOverride: home))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any])
+        let notification = try XCTUnwrap((json["hooks"] as? [String: Any])?["Notification"] as? [Any])
+        XCTAssertEqual(notification.count, 1)
+        XCTAssertTrue(try claudeNotificationCommand(at: url).contains("--from-hook"))
+    }
+
+    func testDetectInstalledAgentsFindsAgentByConfigDir() throws {
+        // A bare `~/.claude` dir (no binary needed) signals Claude Code is set up here.
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        let detected = AgentHookInstaller.detectInstalledAgents(homeOverride: home)
+        XCTAssertTrue(detected.contains(.claudeCode))
+        // An agent with neither a binary on PATH nor a config dir isn't offered.
+        XCTAssertFalse(detected.contains(.hermes))
+    }
+
+    /// Helper: pull the single Harness `Notification` command string out of a Claude config.
+    private func claudeNotificationCommand(at url: URL) throws -> String {
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any])
+        let hooks = try XCTUnwrap(json["hooks"] as? [String: Any])
+        let notification = try XCTUnwrap(hooks["Notification"] as? [Any])
+        let harness = notification.compactMap { entry -> String? in
+            ((entry as? [String: Any])?["hooks"] as? [Any])?
+                .compactMap { ($0 as? [String: Any])?["command"] as? String }
+                .first { $0.contains("harness-cli notify") }
+        }
+        return try XCTUnwrap(harness.first)
+    }
+
     func testInvalidExistingJSONIsReplacedWithBackup() throws {
         let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .codex, homeOverride: home))
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

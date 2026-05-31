@@ -9,9 +9,21 @@ struct SetupStepView: View {
     @State private var installReport: BinaryInstaller.InstallReport?
     @State private var errorMessage: String?
     @State private var notifState: NotificationPermission.State = .undetermined
+    @State private var agents: [OnboardingEnvironment.Agent] = []
+    @State private var installingHooks = false
 
     private var canInstall: Bool { cliStatus.isReady || daemonStatus.isReady }
     private var isSuccess: Bool { installReport != nil && errorMessage == nil }
+
+    /// Detected agents that don't yet have Harness hooks — the ones we offer to wire up.
+    private var pendingHookAgents: [OnboardingEnvironment.Agent] { agents.filter { !$0.hooksInstalled } }
+
+    private var hooksValue: String { pendingHookAgents.isEmpty ? "on" : "ask" }
+    private var hooksTone: StatusPill.Tone { pendingHookAgents.isEmpty ? .success : .pending }
+    private var hooksDetail: String {
+        let names = agents.map(\.displayName).joined(separator: ", ")
+        return "Notify Harness when \(names) finish or need input"
+    }
 
     private var notifValue: String {
         switch notifState {
@@ -48,6 +60,11 @@ struct SetupStepView: View {
                 Rectangle().fill(.white.opacity(0.075)).frame(height: 1)
                 QuietRow(title: "Notifications", detail: "Alerts when an agent finishes or needs input", value: notifValue, tone: notifTone)
                     .padding(.vertical, 13)
+                if !agents.isEmpty {
+                    Rectangle().fill(.white.opacity(0.075)).frame(height: 1)
+                    QuietRow(title: "Agent hooks", detail: hooksDetail, value: hooksValue, tone: hooksTone)
+                        .padding(.vertical, 13)
+                }
             }
             .frame(maxWidth: 500)
 
@@ -88,18 +105,42 @@ struct SetupStepView: View {
                        action: requestNotifications)
                     .buttonStyle(GlassSecondaryButtonStyle())
             }
+
+            if !pendingHookAgents.isEmpty {
+                Button(installingHooks
+                        ? "Installing…"
+                        : "Install hooks for \(pendingHookAgents.map(\.displayName).joined(separator: ", "))",
+                       action: installHooks)
+                    .buttonStyle(GlassSecondaryButtonStyle())
+                    .disabled(installingHooks)
+            }
         }
         .animation(Motion.spring, value: isSuccess)
         .animation(Motion.spring, value: notifState)
+        .animation(Motion.spring, value: agents)
         .onAppear {
             if case .willInstall = cliStatus { cliStatus = BinaryInstaller.detectCLI() }
             if case .willInstall = daemonStatus { daemonStatus = BinaryInstaller.detectDaemon() }
             NotificationPermission.current { notifState = $0 }
+            agents = OnboardingEnvironment.detectAgents()
         }
     }
 
     private func requestNotifications() {
         NotificationPermission.request { notifState = $0 }
+    }
+
+    /// Install Harness hooks for every detected agent that doesn't have them yet, then refresh.
+    /// Mirrors `performInstall`'s pattern (file I/O inside a main-actor `Task`).
+    private func installHooks() {
+        guard !installingHooks else { return }
+        installingHooks = true
+        Task {
+            for agent in pendingHookAgents { _ = OnboardingEnvironment.installHooks(agent.id) }
+            agents = OnboardingEnvironment.detectAgents()
+            installingHooks = false
+            NSSound(named: "Glass")?.play()
+        }
     }
 
     private func statusRow(title: String, detail: String, status: BinaryInstaller.DetectionStatus) -> some View {

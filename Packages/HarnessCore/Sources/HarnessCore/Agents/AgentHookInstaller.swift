@@ -77,7 +77,11 @@ public enum AgentHookInstaller {
             backedUp = backup
             if let data = try? Data(contentsOf: url),
                let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                merged = JSONMerge.deepMerge(existing, hook)
+                // Prune our own stale entries from the events we manage before merging, so a
+                // re-install converges to exactly the current payload instead of appending a
+                // second copy (JSONMerge unions arrays). This is what upgrades existing users
+                // off the old broken `$HARNESS_NOTIFY_MESSAGE` command.
+                merged = JSONMerge.deepMerge(pruneStaleHarnessHooks(existing, for: agent), hook)
             } else {
                 replacedInvalidJSON = true
             }
@@ -90,6 +94,73 @@ public enum AgentHookInstaller {
             try enableCodexHooksFeature(homeOverride: homeOverride)
         }
         return InstallResult(path: url, backedUp: backedUp, replacedInvalidJSON: replacedInvalidJSON)
+    }
+
+    /// The event keys Harness writes into an event/matcher-shaped config (Claude Code, Codex).
+    /// Other agents use flat keys (`notify`, `agent_notify`), which `deepMerge` overwrites
+    /// scalar-wise, so they need no pruning.
+    private static func managedHookEvents(for agent: AgentKind) -> [String] {
+        switch agent {
+        case .claudeCode: return ["Notification", "Stop"]
+        case .codex: return ["PermissionRequest", "Stop"]
+        default: return []
+        }
+    }
+
+    /// Remove Harness-owned entries (command contains `hookMarker`) from the events we manage,
+    /// dropping any event array left empty. Everything else — other keys, other events, and
+    /// the user's own non-Harness entries within a managed event — is preserved untouched.
+    /// Makes `install` idempotent and self-healing across command changes.
+    private static func pruneStaleHarnessHooks(_ config: [String: Any], for agent: AgentKind) -> [String: Any] {
+        let events = managedHookEvents(for: agent)
+        guard !events.isEmpty, var hooks = config["hooks"] as? [String: Any] else { return config }
+
+        for event in events {
+            guard let entries = hooks[event] as? [Any] else { continue }
+            let kept = entries.filter { entry in
+                guard let entry = entry as? [String: Any],
+                      let commands = entry["hooks"] as? [Any]
+                else { return true } // shape we don't recognize — leave it alone
+                let isHarnessOwned = commands.contains { command in
+                    guard let command = (command as? [String: Any])?["command"] as? String
+                    else { return false }
+                    return command.contains(hookMarker)
+                }
+                return !isHarnessOwned
+            }
+            if kept.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = kept }
+        }
+
+        var result = config
+        result["hooks"] = hooks
+        return result
+    }
+
+    /// The installable agents that look present on this machine — any of the agent's known
+    /// executables is on `$PATH`, or its config directory already exists. Used by onboarding to
+    /// offer hook setup only for agents the user actually has (no nagging for absent ones).
+    public static func detectInstalledAgents(homeOverride: URL? = nil, table: AgentTable = .default) -> [AgentKind] {
+        let pathDirs = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":").map(String.init)
+        let fm = FileManager.default
+
+        func isOnPath(_ executables: [String]) -> Bool {
+            for dir in pathDirs {
+                for exe in executables where fm.isExecutableFile(atPath: dir + "/" + exe) {
+                    return true
+                }
+            }
+            return false
+        }
+        func hasConfigDir(_ agent: AgentKind) -> Bool {
+            guard let url = hookConfigURL(for: agent, homeOverride: homeOverride) else { return false }
+            return fm.fileExists(atPath: url.deletingLastPathComponent().path)
+        }
+
+        return installableAgents.filter { agent in
+            let executables = table.entries.first { $0.kind == agent }?.executables ?? []
+            return isOnPath(executables) || hasConfigDir(agent)
+        }
     }
 
     /// Enable `[features] hooks = true` in `~/.codex/config.toml`, creating/editing it in
@@ -158,6 +229,13 @@ public enum AgentHookInstaller {
         "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --body \"\(body)\""
     }
 
+    /// A notify command whose body comes from the hook's stdin JSON `message` (`--from-hook`).
+    /// Used for agents (Claude Code) that pass the notification text on stdin rather than as a
+    /// shell argument — `--body "$HARNESS_NOTIFY_MESSAGE"` would expand to nothing.
+    private static func notifyFromHookCommand(title: String) -> String {
+        "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --from-hook"
+    }
+
     private static func hookPayload(for agent: AgentKind) -> [String: Any]? {
         switch agent {
         case .claudeCode:
@@ -167,7 +245,7 @@ public enum AgentHookInstaller {
                         "matcher": "*",
                         "hooks": [[
                             "type": "command",
-                            "command": notifyCommand(title: "Claude Code", body: "$HARNESS_NOTIFY_MESSAGE"),
+                            "command": notifyFromHookCommand(title: "Claude Code"),
                         ]],
                     ]],
                     "Stop": [[
@@ -207,12 +285,14 @@ public enum AgentHookInstaller {
                 "agent_notify": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Cursor\" --body \"$1\"",
                 "agent_done": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Cursor\" --body \"Done\"",
             ]
+        // Pi/Hermes/OpenClaw fire a single `notify` hook with no message argument, so pass a
+        // `--title` to identify the agent on the banner (the body falls back to the default).
         case .pi:
-            return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\""]
+            return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Pi\""]
         case .hermes:
-            return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\""]
+            return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Hermes\""]
         case .openClaw:
-            return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\""]
+            return ["notify": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"OpenClaw\""]
         case .openCode, .aider, .gemini, .goose, .generic:
             return nil
         }

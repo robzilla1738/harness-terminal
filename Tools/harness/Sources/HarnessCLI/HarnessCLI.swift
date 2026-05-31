@@ -74,11 +74,22 @@ struct HarnessCLI {
                 _ = try checkedRequest(client, .send(surfaceID: surface, text: text))
             case "notify":
                 guard let surface = flagValue(args, flag: "--surface") else {
-                    fputs("Usage: harness-cli notify --surface <uuid> [--title t] [--body b]\n", stderr)
+                    fputs("Usage: harness-cli notify --surface <uuid> [--title t] [--body b] [--from-hook]\n", stderr)
                     exit(1)
                 }
                 let title = flagValue(args, flag: "--title") ?? "Agent"
-                let body = flagValue(args, flag: "--body") ?? flagValue(args, flag: "--message") ?? "Needs attention"
+                let fallbackBody = flagValue(args, flag: "--body") ?? flagValue(args, flag: "--message")
+                // `--from-hook`: read the agent's notification payload (JSON) from stdin and use
+                // its `message` for the body. Gated behind the flag (like `set-buffer --stdin`)
+                // so an interactive `notify` never blocks on `readDataToEndOfFile`. Claude Code's
+                // `Notification` hook delivers the message this way — not via an env var.
+                let body: String
+                if args.contains("--from-hook") {
+                    let parsed = HookNotificationParser.parse(FileHandle.standardInput.readDataToEndOfFile())
+                    body = HookNotificationParser.resolveBody(parsed: parsed, fallbackBody: fallbackBody)
+                } else {
+                    body = fallbackBody ?? "Needs attention"
+                }
                 _ = try checkedRequest(client, .notify(surfaceID: surface, title: title, body: body))
             case "install":
                 try installCLI()
@@ -1137,7 +1148,7 @@ struct HarnessCLI {
           install-hooks <codex|claude-code|cursor|pi|hermes|openclaw|aider|gemini|goose>
           install-shell-integration [bash|zsh|fish|all]  (OSC 133 prompt marks + gutter)
           attach --surface <uuid> [--detach-keys "C-a d"]
-          notify --surface <uuid> [--title t] [--body b]
+          notify --surface <uuid> [--title t] [--body b] [--from-hook]
           daemon-stats
           list-clients
           detach-client --client <uuid>

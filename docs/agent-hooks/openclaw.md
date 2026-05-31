@@ -8,7 +8,7 @@ Writes `~/.openclaw/hooks.json`:
 
 ```json
 {
-  "notify": "harness-cli notify --surface \"$HARNESS_SURFACE\""
+  "notify": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"OpenClaw\""
 }
 ```
 

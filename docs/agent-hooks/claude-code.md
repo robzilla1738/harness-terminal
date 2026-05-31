@@ -24,7 +24,7 @@ This writes `~/.claude/settings.json` (backing up any existing file as
         "hooks": [
           {
             "type": "command",
-            "command": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Claude Code\" --body \"$HARNESS_NOTIFY_MESSAGE\""
+            "command": "harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Claude Code\" --from-hook"
           }
         ]
       }
@@ -45,7 +45,9 @@ This writes `~/.claude/settings.json` (backing up any existing file as
 ```
 
 `$HARNESS_SURFACE` is exported by Harness for every pane, so the hook always
-notifies the right tab.
+notifies the right tab. Claude Code passes the `Notification` message as JSON on
+the hook's **stdin** (not an env var), so `--from-hook` reads that stdin and uses
+its `message` field for the notification body.
 
 ## Verifying
 
@@ -60,6 +62,9 @@ notifies the right tab.
 
 ## Customizing
 
-Edit `~/.claude/settings.json` directly — `install-hooks` only runs once.
-You can match specific tools or pre/post events by following the standard
-Claude Code hook schema.
+Edit `~/.claude/settings.json` directly — you can match specific tools or
+pre/post events by following the standard Claude Code hook schema. `install-hooks`
+is idempotent and self-healing: re-running it replaces Harness's own
+`Notification`/`Stop` entries with the current versions (handy for picking up
+fixes) while leaving the rest of your config — model, permissions, MCP, and any
+non-Harness hooks — untouched.
