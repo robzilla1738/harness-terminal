@@ -308,6 +308,13 @@ public struct FrameBuilder {
     /// and an optional copy-mode cursor that renders even when the program cursor is hidden
     /// (e.g. scrolled into history). Shading precedence per cell: primary selection > search
     /// hit > normal.
+    ///
+    /// Pass `reusing:` (the previous frame) and `damage:` (from `TerminalEmulator.consumeDamage()`)
+    /// to rebuild incrementally: rows the engine didn't mark dirty are copied from the previous
+    /// frame instead of re-resolved. Reuse is taken only on the plain path (no selection/search/
+    /// copy-mode, matching dimensions, not full damage); otherwise the whole frame is rebuilt. The
+    /// reused rows are byte-identical to a full rebuild, so the result is visually identical either
+    /// way — the caller must just ensure `previous` was built with the same builder/selection state.
     public func build(
         _ snapshot: TerminalGridSnapshot,
         region: SelectionRegion?,
