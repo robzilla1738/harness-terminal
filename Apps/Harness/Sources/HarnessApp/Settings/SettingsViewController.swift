@@ -714,7 +714,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         notifButtons.spacing = 10
         let notificationsGroup = NSStackView(views: [toggleGrid, notificationStatusField, leadingRow(notifButtons)])
         notificationsGroup.orientation = .vertical
-        notificationsGroup.alignment = .leading
+        notificationsGroup.alignment = .width
         notificationsGroup.spacing = 12
         refreshNotificationStatus()
 
