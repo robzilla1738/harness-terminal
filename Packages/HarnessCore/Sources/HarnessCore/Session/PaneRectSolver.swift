@@ -77,6 +77,9 @@ public enum PaneRectSolver {
     ) {
         guard cols > 0, rows > 0 else { return }
 
+        // A zero-size region (e.g. a split forced into < 2 cells) yields no pane — never a broken
+        // 0-row/0-col rect that downstream rendering would choke on or silently drop.
+        guard rows > 0, cols > 0 else { return }
         switch node {
         case let .leaf(leaf):
             // Carve one row for the border-status label (only if the pane keeps >= 1 content
@@ -118,12 +121,15 @@ public enum PaneRectSolver {
     private static func split(total: Int, ratio: Double, border: Bool) -> (Int, Int, Int) {
         let wantGap = border && total >= 3
         let gap = wantGap ? 1 : 0
-        let available = total - gap
-        // Clamp the first child to [1, available-1] so the second keeps >= 1.
+        let available = max(0, total - gap)
         let r = ratio.isFinite ? min(max(ratio, 0), 1) : 0.5
+        // Fewer than 2 cells to share: two panes can't both get one. Give the first what's left and
+        // leave the second at 0 — solve() drops a zero-size child rather than emit a broken rect.
+        // (The old clamp `max(available - 1, 1)` forced first = 1, second = 0 here, but then still
+        // produced that 0-row/col rect downstream.)
+        guard available >= 2 else { return (available, gap, 0) }
         var first = Int((Double(available) * r).rounded())
-        first = min(max(first, 1), max(available - 1, 1))
-        let second = available - first
-        return (first, gap, second)
+        first = min(max(first, 1), available - 1) // both sides keep >= 1
+        return (first, gap, available - first)
     }
 }

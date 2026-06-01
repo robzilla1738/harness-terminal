@@ -228,15 +228,24 @@ public final class GridCompositor {
     /// so the focused pane stands out, matching tmux's pane-active-border accent.
     private func paintBorderLabel(_ text: String, row: Int, paneX: Int, paneCols: Int, active: Bool, into buffer: inout [RenderCell]) {
         guard row >= 0, row < rows, paneCols > 0 else { return }
+        // Center + place by DISPLAY width, not scalar count: a wide glyph occupies two cells and a
+        // combining mark zero, so counting scalars mis-centered and over-truncated non-ASCII labels.
+        // (For an all-ASCII label every width is 1, so this is identical to the old scalar loop.)
         let scalars = Array(text.unicodeScalars)
-        let width = min(scalars.count, paneCols)
+        let displayWidth = scalars.reduce(0) { $0 + CharacterWidth.width(of: $1) }
+        let width = min(displayWidth, paneCols)
         guard width > 0 else { return }
-        let startX = paneX + max(0, (paneCols - width) / 2)
         let fg: TerminalGridColor = active ? .palette(15) : .palette(8)
-        for i in 0 ..< width {
-            let x = startX + i
-            guard x >= 0, x < cols, x < paneX + paneCols else { continue }
-            buffer[row * cols + x] = RenderCell(codepoint: scalars[i].value, fg: fg, bold: active)
+        let limit = min(cols, paneX + paneCols)
+        var x = paneX + max(0, (paneCols - width) / 2)
+        for scalar in scalars {
+            let w = CharacterWidth.width(of: scalar)
+            if w == 0 { continue } // combining mark — a single-codepoint cell can't carry it
+            guard x >= 0, x + w <= limit else { break }
+            buffer[row * cols + x] = RenderCell(codepoint: scalar.value, fg: fg, bold: active)
+            // Blank a wide glyph's continuation cell so the border char beneath it doesn't show.
+            if w == 2, x + 1 < limit { buffer[row * cols + x + 1] = RenderCell(codepoint: 0x20, fg: fg, bold: active) }
+            x += w
         }
     }
 

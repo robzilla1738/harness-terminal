@@ -112,6 +112,20 @@ final class PaneRectSolverTests: XCTestCase {
         XCTAssertFalse(overlaps(rects[0], rects[1]))
     }
 
+    func testSplitIntoOneCellDropsZeroSizeChild() {
+        // A split rendered into a single row/column can't fit two panes; the solver must emit the
+        // first pane only — never a 0-size rect (the old clamp produced a second pane of 0 cells).
+        let vertical = PaneNode.branch(direction: .vertical, ratio: 0.5, first: leaf(), second: leaf())
+        let oneRow = PaneRectSolver.solve(vertical, cols: 80, rows: 1)
+        XCTAssertEqual(oneRow.count, 1)
+        XCTAssertTrue(oneRow.allSatisfy { $0.rows >= 1 && $0.cols >= 1 }, "no zero-size rect")
+
+        let horizontal = PaneNode.branch(direction: .horizontal, ratio: 0.5, first: leaf(), second: leaf())
+        let oneCol = PaneRectSolver.solve(horizontal, cols: 1, rows: 24)
+        XCTAssertEqual(oneCol.count, 1)
+        XCTAssertTrue(oneCol.allSatisfy { $0.rows >= 1 && $0.cols >= 1 }, "no zero-size rect")
+    }
+
     private func overlaps(_ a: PaneRect, _ b: PaneRect) -> Bool {
         let ax2 = a.x + a.cols, ay2 = a.y + a.rows
         let bx2 = b.x + b.cols, by2 = b.y + b.rows

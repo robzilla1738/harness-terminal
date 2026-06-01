@@ -76,6 +76,27 @@ final class ImageProtocolTests: XCTestCase {
         XCTAssertEqual(imgs[0].rows, 1)
     }
 
+    func testKittyMultiChunkReassembles() {
+        // A chunked (`m=1` … `m=0`) transmission must reassemble and place once, using the FIRST
+        // chunk's control keys (s/v/a) for the dimensions. Previously untested — and the cap path
+        // used to nil the entry mid-stream, losing those keys.
+        let pixels = [UInt8](repeating: 100, count: 16 * 16 * 4) // 16×16 RGBA
+        let b64 = Data(pixels).base64EncodedString()
+        let third = b64.count / 3
+        let c1 = String(b64.prefix(third))
+        let c2 = String(b64.dropFirst(third).prefix(third))
+        let c3 = String(b64.dropFirst(third * 2))
+        let term = TerminalEmulator(cols: 40, rows: 20)
+        term.feed("\u{1b}_Gf=32,s=16,v=16,a=T,m=1;\(c1)\u{1b}\\") // first chunk carries the keys
+        term.feed("\u{1b}_Gm=1;\(c2)\u{1b}\\")
+        term.feed("\u{1b}_Gm=0;\(c3)\u{1b}\\")                     // final chunk
+        let imgs = placements(term)
+        XCTAssertEqual(imgs.count, 1, "a multi-chunk image reassembles and places once")
+        XCTAssertEqual(imgs[0].cols, 2) // 16px / 8px cell — proves the first chunk's dims survived
+        XCTAssertEqual(imgs[0].rows, 1) // 16px / 16px cell
+        XCTAssertNotNil(term.image(for: imgs[0].id))
+    }
+
     func testITerm2InlineImagePlaces() {
         let term = TerminalEmulator(cols: 20, rows: 10)
         term.feed("\u{1b}]1337;File=inline=1:\(redPixelPNGBase64)\u{07}")

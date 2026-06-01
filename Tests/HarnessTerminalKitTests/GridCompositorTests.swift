@@ -118,6 +118,25 @@ final class GridCompositorTests: XCTestCase {
         _ = rect
     }
 
+    func testPaneBorderLabelWidthAware() {
+        // The label is centered + placed by display width, not scalar count. A combining mark is
+        // zero-width (skipped, not given its own cell), and a wide glyph advances two cells so a
+        // following character isn't clobbered.
+        let comp = GridCompositor(cols: 80, rows: 24)
+        let grid = snapshot(80, 23, "x")
+        let rect = PaneRect(paneID: UUID(), surfaceID: UUID(), x: 0, y: 1, cols: 80, rows: 23, labelRow: 0)
+
+        // NFD "café" = c a f e + combining acute (5 scalars, 4 display columns).
+        let nfd = CompositorPane(rect: rect, grid: grid, isActive: true, borderLabel: "cafe\u{0301}")
+        XCTAssertTrue(comp.render(panes: [nfd]).contains("cafe"), "base letters render; combining mark skipped")
+
+        // A wide CJK glyph followed by ASCII: both must survive (the ASCII lands two cells over).
+        let wide = CompositorPane(rect: rect, grid: grid, isActive: true, borderLabel: "中A")
+        let out = comp.render(panes: [wide])
+        XCTAssertTrue(out.contains("中"), "wide glyph renders")
+        XCTAssertTrue(out.contains("A"), "following ASCII letter still renders")
+    }
+
     func testNoBaseStyleLeavesCellsUntouched() {
         let comp = GridCompositor(cols: 80, rows: 24)
         let grid = snapshot(80, 24, "A")

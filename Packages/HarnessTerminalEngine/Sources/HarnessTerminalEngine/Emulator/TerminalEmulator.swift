@@ -281,9 +281,15 @@ public final class TerminalEmulator: VTParserHandler {
         let key = cmd.imageID
         if cmd.moreChunks {
             if var pending = kittyPending[key] {
-                guard pending.payload.count < maxKittyPendingBytes else { kittyPending[key] = nil; return }
-                pending.payload.append(contentsOf: cmd.payload)
-                kittyPending[key] = pending
+                // Bound total reassembly memory, but KEEP the entry (with its first chunk's control
+                // keys) so the final chunk still resolves the original dims/format. Append only up
+                // to the cap and drop the overflow — nilling the entry here would make a later final
+                // chunk decode as a fresh, dimensionless image and silently fail to place.
+                let remaining = maxKittyPendingBytes - pending.payload.count
+                if remaining > 0 {
+                    pending.payload.append(contentsOf: cmd.payload.prefix(remaining))
+                    kittyPending[key] = pending
+                }
             } else {
                 // New in-flight image: drop all pending reassembly if we're at the id cap, so a
                 // flood of never-finished `m=1` chunks under distinct ids can't grow the map.
