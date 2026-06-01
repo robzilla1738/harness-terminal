@@ -68,14 +68,16 @@ public enum HarnessThemeCatalog {
         "ghostty default": defaultThemeName.lowercased(),
     ]
 
-    /// Load the ported community catalog from the bundled `themes.json` (an array of
-    /// `HarnessThemeDefinition`). Returns empty if the resource is missing or empty —
-    /// the catalog then runs on the curated builtins alone. Regenerate the file with the
-    /// `ThemeCatalogExportTests` exporter.
+    /// Load the ported community catalog, embedded as base64-encoded JSON in
+    /// `BundledThemesData` (an array of `HarnessThemeDefinition`). The data is compiled
+    /// into the binary — there is no SwiftPM resource bundle and no `Bundle.module`, so a
+    /// packaging slip can never strand it (a missing `Bundle.module` bundle used to crash
+    /// the app at launch). Returns empty if the payload is somehow unreadable — the catalog
+    /// then runs on the curated builtins alone, never crashing. Regenerate the payload from
+    /// `Resources/themes.json` with `EXPORT_THEMES=1 swift test --filter ThemeCatalogEmbedTests`.
     private static func loadBundledThemes() -> [HarnessThemeDefinition] {
         guard
-            let url = Bundle.module.url(forResource: "themes", withExtension: "json"),
-            let data = try? Data(contentsOf: url),
+            let data = Data(base64Encoded: BundledThemesData.base64JSON),
             let themes = try? JSONDecoder().decode([HarnessThemeDefinition].self, from: data)
         else { return [] }
         return themes

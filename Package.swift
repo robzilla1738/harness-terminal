@@ -63,7 +63,12 @@ let package = Package(
         .target(
             name: "HarnessTheme",
             path: "Packages/HarnessTheme/Sources/HarnessTheme",
-            resources: [.process("Resources/themes.json")]
+            // The community catalog is embedded as base64 in BundledThemesData.swift (compiled
+            // into the binary), NOT shipped as a SwiftPM resource bundle: a missing/misplaced
+            // `Bundle.module` bundle crashed the app at launch for users on a non-builtin theme.
+            // themes.json stays as the editable source of truth but is excluded from the build —
+            // regenerate the embed with `EXPORT_THEMES=1 swift test --filter ThemeCatalogEmbedTests`.
+            exclude: ["Resources/themes.json"]
         ),
         // Native renderer — first-party frame building, CoreText glyph atlas, and Metal drawing.
         .target(
