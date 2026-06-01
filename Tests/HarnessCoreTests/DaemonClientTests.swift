@@ -89,4 +89,56 @@ final class DaemonClientTests: XCTestCase {
         // shutdown() inside cancel() must wake the blocked read so the loop exits.
         wait(for: [readLoopEnded], timeout: 2)
     }
+
+    /// Regression: a write that loses the race to the read loop's teardown must not touch the
+    /// closed (and possibly recycled) fd. Once the loop closes `fd` it sets `finished` under
+    /// `writeLock`, so `writeFrame` bails instead of writing into a stale descriptor.
+    func testSendInputAfterReadLoopCloseBails() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0, "socketpair failed")
+        let localEnd = fds[0]
+        let peerEnd = fds[1]
+
+        let ended = expectation(description: "read loop ended")
+        let subscription = DaemonSubscription(fd: localEnd)
+        subscription.start(onData: { _, _ in }, onEnd: { ended.fulfill() })
+
+        // Closing the peer makes read(localEnd) return EOF → the loop sets `finished` and closes
+        // localEnd (under writeLock) → onEnd fires.
+        close(peerEnd)
+        wait(for: [ended], timeout: 2)
+
+        // The fd is now closed; these writes must bail on `finished`, never touch the descriptor.
+        for _ in 0 ..< 100 { subscription.sendInput(Data([0x61]), surfaceID: "surface") }
+        // Reaching here without a crash is the assertion.
+    }
+
+    /// Stress: concurrent `sendInput` while `cancel()`/teardown runs must not crash or deadlock.
+    /// A background reader drains the peer so the blocking writes never wedge.
+    func testConcurrentSendInputDuringCancelIsSafe() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0, "socketpair failed")
+        let localEnd = fds[0]
+        let peerEnd = fds[1]
+        DispatchQueue(label: "drain").async {
+            var buf = [UInt8](repeating: 0, count: 4096)
+            while read(peerEnd, &buf, buf.count) > 0 {}
+            close(peerEnd) // peer hits EOF once localEnd closes; own its close here
+        }
+
+        let ended = expectation(description: "read loop ended")
+        let subscription = DaemonSubscription(fd: localEnd)
+        subscription.start(onData: { _, _ in }, onEnd: { ended.fulfill() })
+
+        let writersDone = expectation(description: "writers done")
+        DispatchQueue.global().async {
+            DispatchQueue.concurrentPerform(iterations: 8) { _ in
+                for _ in 0 ..< 200 { subscription.sendInput(Data([0x78]), surfaceID: "s") }
+            }
+            writersDone.fulfill()
+        }
+        Thread.sleep(forTimeInterval: 0.01) // let some writes start, then tear down mid-flight
+        subscription.cancel()
+        wait(for: [writersDone, ended], timeout: 5)
+    }
 }

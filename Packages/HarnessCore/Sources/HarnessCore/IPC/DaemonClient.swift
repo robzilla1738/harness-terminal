@@ -210,6 +210,13 @@ public final class DaemonSubscription: @unchecked Sendable {
         let bytes = [UInt8](payload)
         writeLock.lock()
         defer { writeLock.unlock() }
+        // The read loop sets `finished` and closes `fd` under `writeLock` on teardown. Holding it
+        // here means either that close already happened (bail — the fd is closed and its number may
+        // be recycled) or it can't begin until we're done. Re-checking under `lock` (not just in the
+        // sendInput/detachSurface entry points) closes the window where `cancel()` + the read-loop
+        // close raced an in-flight write into a stale descriptor.
+        lock.lock(); let dead = cancelled || finished; lock.unlock()
+        guard !dead else { return }
         var off = 0
         while off < bytes.count {
             let n = bytes.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: off), bytes.count - off) }
@@ -276,11 +283,19 @@ public final class DaemonSubscription: @unchecked Sendable {
                 }
             }
             if let self {
+                // Close `fd` under `writeLock` so an in-flight `writeFrame` completes first and any
+                // later writer sees `finished` and bails — never a write into a closed/recycled fd.
+                // Liveness: a blocked write here is released by `cancel()`'s shutdown or the peer's
+                // close (EPIPE), so this never hangs teardown.
+                self.writeLock.lock()
                 self.lock.lock()
                 self.finished = true
                 self.lock.unlock()
+                close(fd)
+                self.writeLock.unlock()
+            } else {
+                close(fd)
             }
-            close(fd)
             onEnd?()
         }
     }
