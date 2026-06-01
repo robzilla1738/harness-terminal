@@ -36,6 +36,7 @@ public enum CommandParser {
             throw CommandParseError.expectedCommand
         }
         let tokens = lexer.collectStatementTokens()
+        if lexer.unterminatedQuote { throw CommandParseError.unterminatedString }
         let canonical = resolveAlias(name) ?? name
         // Universal `-t <target>` handling: for the leaf verbs in
         // `universalTargetCommands`, strip the `-t <spec>` pair and wrap the result
@@ -326,7 +327,10 @@ public enum CommandParser {
             // side-by-side. `-t` (dst) is wrapped by the universal target handler
             // — except `move-pane` self-parses, so do it here.
             let direction: SplitDirection = tokens.contains("-v") ? .horizontal : .vertical
-            let source = TargetSpec.parse(stringValue(for: "-s", in: tokens) ?? "")
+            guard let sourceRaw = stringValue(for: "-s", in: tokens), !sourceRaw.isEmpty else {
+                throw CommandParseError.missingArgument("move-pane requires -s <source>")
+            }
+            let source = TargetSpec.parse(sourceRaw)
             let move = Command.movePane(direction: direction, source: source)
             if let dstRaw = stringValue(for: "-t", in: tokens) {
                 let dst = TargetSpec.parse(dstRaw)
@@ -350,11 +354,16 @@ public enum CommandParser {
             // command-prompt [-p prompt1,prompt2] "<template with %% / %1 …>"
             let prompts = stringValue(for: "-p", in: tokens)?
                 .split(separator: ",").map(String.init) ?? []
-            let template = tokens.last { !$0.hasPrefix("-") && $0 != stringValue(for: "-p", in: tokens) } ?? ""
+            // Drop the `-p <value>` pair by position, then take the remaining positional as the
+            // template — comparing each token to the prompt *value* (the old approach) wrongly
+            // dropped a template that happened to equal the prompt string.
+            let template = removingFlagPair("-p", in: tokens).first { !$0.hasPrefix("-") } ?? ""
             return .commandPrompt(prompts: prompts, template: template)
         case "confirm-before", "confirm":
             let prompt = stringValue(for: "-p", in: tokens)
-            let positional = tokens.filter { !$0.hasPrefix("-") && $0 != prompt }
+            // Drop the `-p <value>` pair by position before taking the command, so a command token
+            // equal to the prompt string isn't filtered out.
+            let positional = removingFlagPair("-p", in: tokens).filter { !$0.hasPrefix("-") }
             guard let cmd = positional.first else {
                 throw CommandParseError.missingArgument("confirm-before requires a command")
             }
@@ -456,6 +465,7 @@ public enum CommandParseError: Error, CustomStringConvertible, Equatable {
     case unknownCommand(String)
     case missingFlag(String)
     case missingArgument(String)
+    case unterminatedString
 
     public var description: String {
         switch self {
@@ -464,6 +474,7 @@ public enum CommandParseError: Error, CustomStringConvertible, Equatable {
         case let .unknownCommand(name): return "unknown command: \(name)"
         case let .missingFlag(message): return message
         case let .missingArgument(message): return message
+        case .unterminatedString: return "unterminated quoted string"
         }
     }
 }
@@ -473,6 +484,10 @@ public enum CommandParseError: Error, CustomStringConvertible, Equatable {
 private struct Lexer {
     let source: [Character]
     var index: Int = 0
+    /// Set when a quoted token runs to EOF with no closing quote — surfaced as a parse error so a
+    /// typo like `display-message "hello` fails loudly instead of silently swallowing the rest of
+    /// the line as the string's contents.
+    var unterminatedQuote = false
 
     init(source: String) { self.source = Array(source) }
 
@@ -510,7 +525,7 @@ private struct Lexer {
                     value.append(ch); advance()
                 }
             }
-            if peek == quote { advance() }
+            if peek == quote { advance() } else { unterminatedQuote = true }
             return value
         }
         return nextWord()

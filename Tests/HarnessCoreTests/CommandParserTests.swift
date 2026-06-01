@@ -165,6 +165,65 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("last-pane"), .selectPane(target: .last))
     }
 
+    // MARK: - Robustness (audit Tier 1.5)
+
+    func testUnterminatedQuoteThrows() {
+        XCTAssertThrowsError(try CommandParser.parse(#"display-message "hello"#)) { error in
+            XCTAssertEqual(error as? CommandParseError, .unterminatedString)
+        }
+        // A properly terminated quote still parses (no regression).
+        XCTAssertEqual(try CommandParser.parse(#"display-message "hello""#), .displayMessage(format: "hello"))
+    }
+
+    func testMovePaneRequiresSource() {
+        XCTAssertThrowsError(try CommandParser.parse("move-pane")) { error in
+            XCTAssertEqual(error as? CommandParseError, .missingArgument("move-pane requires -s <source>"))
+        }
+        // Direction flag but still no source.
+        XCTAssertThrowsError(try CommandParser.parse("move-pane -v"))
+    }
+
+    func testCommandPromptParsing() throws {
+        XCTAssertEqual(
+            try CommandParser.parse(#"command-prompt -p "name" "rename-window %%""#),
+            .commandPrompt(prompts: ["name"], template: "rename-window %%")
+        )
+        // The template token equals the -p prompt value: position-based parsing must keep it
+        // (the old value-comparison dropped it, yielding an empty template).
+        XCTAssertEqual(
+            try CommandParser.parse(#"command-prompt -p "rename" "rename""#),
+            .commandPrompt(prompts: ["rename"], template: "rename")
+        )
+    }
+
+    func testConfirmBeforeParsing() throws {
+        XCTAssertEqual(
+            try CommandParser.parse(#"confirm-before -p "Kill?" kill-pane"#),
+            .confirmBefore(prompt: "Kill?", command: .killPane)
+        )
+        // A command token equal to the -p prompt value must not be filtered out (the old
+        // value-comparison dropped it, throwing "requires a command").
+        XCTAssertEqual(
+            try CommandParser.parse(#"confirm-before -p "kill-pane" kill-pane"#),
+            .confirmBefore(prompt: "kill-pane", command: .killPane)
+        )
+    }
+
+    func testDisplayMenuParsesItemTriples() throws {
+        XCTAssertEqual(
+            try CommandParser.parse(#"display-menu -T "Menu" "Item A" a kill-pane "Item B" b zoom-pane"#),
+            .displayMenu(items: [
+                .init(title: "Item A", key: "a", command: .killPane),
+                .init(title: "Item B", key: "b", command: .zoomPane),
+            ])
+        )
+        // An empty key string means "no key".
+        XCTAssertEqual(
+            try CommandParser.parse(#"display-menu "Only" "" kill-pane"#),
+            .displayMenu(items: [.init(title: "Only", key: nil, command: .killPane)])
+        )
+    }
+
     func testKnownVerbsAreAllParseable() {
         // Drift guard: every verb advertised by `list-commands` must be one the parser actually
         // accepts. A verb may still throw missing-arg/flag (it needs operands) — that proves it's
