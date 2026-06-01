@@ -42,4 +42,22 @@ final class EnvironmentStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.resolved(sessionID: "abc")["TOKEN"], "kept")
         XCTAssertEqual(reloaded.resolved(sessionID: "abc")["S"], "svalue")
     }
+
+    func testCorruptFileIsBackedUpNotDiscarded() throws {
+        let url = tempURL()
+        let backup = url.appendingPathExtension("corrupt")
+        defer { try? FileManager.default.removeItem(at: url); try? FileManager.default.removeItem(at: backup) }
+        try Data("{ this is not valid json".utf8).write(to: url)
+
+        // Loading a corrupt environment.json must preserve it for recovery (mirrors every other
+        // store) rather than silently discard the user's variables, and must start empty.
+        let store = EnvironmentStore(url: url)
+        XCTAssertTrue(store.resolved(sessionID: nil).isEmpty, "corrupt file → empty in-memory state")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path), "corrupt file backed up to .corrupt")
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "{ this is not valid json")
+
+        // A subsequent set persists cleanly to the original path.
+        store.set("v", key: "K")
+        XCTAssertEqual(EnvironmentStore(url: url).resolved(sessionID: nil)["K"], "v")
+    }
 }

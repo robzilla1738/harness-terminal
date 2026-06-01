@@ -104,6 +104,47 @@ public enum HarnessPaths {
         // existing root that an older build made with the default 0o755 umask.
         try? FileManager.default.setAttributes(ownerOnly, ofItemAtPath: applicationSupport.path)
     }
+
+    // MARK: - Config-file persistence helpers
+    //
+    // Every JSON store (layout / options / hooks / keybindings / settings / environment) shares two
+    // needs: preserve an unreadable file instead of overwriting it, and never silently swallow a
+    // save failure. These were copy-pasted per store — with a subtle bug: the "backed up" message
+    // printed unconditionally, even when the move failed — so they live here once.
+
+    /// Move an unreadable config file aside to `<name>.corrupt` so the caller can recover it instead
+    /// of overwriting it with defaults. Replaces any stale backup. Logs to stderr under `label` —
+    /// naming the backup on success, the error on failure — and returns whether the file was
+    /// actually moved, so a failed backup is never reported as a success.
+    @discardableResult
+    public static func backupCorruptFile(at url: URL, label: String) -> Bool {
+        let backup = url.appendingPathExtension("corrupt")
+        do {
+            if FileManager.default.fileExists(atPath: backup.path) {
+                try FileManager.default.removeItem(at: backup)
+            }
+            try FileManager.default.moveItem(at: url, to: backup)
+            fputs("\(label): \(url.lastPathComponent) unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+            return true
+        } catch {
+            fputs("\(label): \(url.lastPathComponent) unreadable and could not be backed up: \(error)\n", stderr)
+            return false
+        }
+    }
+
+    /// Atomically write `data` to `url` (temp + rename, never a partial file), logging a failure to
+    /// stderr under `label` instead of swallowing it. Returns success. For fire-and-forget saves
+    /// with no caller to propagate a throw to; stores that surface write errors keep their `try`.
+    @discardableResult
+    public static func atomicWrite(_ data: Data, to url: URL, label: String) -> Bool {
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            fputs("\(label): failed to write \(url.lastPathComponent): \(error)\n", stderr)
+            return false
+        }
+    }
 }
 
 /// Errors from path validation that need to fail loudly rather than degrade silently.

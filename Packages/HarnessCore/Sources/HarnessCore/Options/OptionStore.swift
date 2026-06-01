@@ -207,11 +207,7 @@ public final class OptionStore: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(snapshot) else { return }
-        do {
-            try data.write(to: url, options: .atomic) // temp + rename: never a partial file
-        } catch {
-            fputs("HarnessDaemon: options save failed: \(error)\n", stderr)
-        }
+        HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon") // temp + rename, logs on failure
     }
 
     private static func load(url: URL) -> [String: Value] {
@@ -221,10 +217,7 @@ public final class OptionStore: @unchecked Sendable {
         }
         // Present but unparseable: preserve it as `.corrupt` for recovery rather than letting
         // the caller silently overwrite it with defaults (which would discard the user's options).
-        let backup = url.appendingPathExtension("corrupt")
-        try? FileManager.default.removeItem(at: backup)
-        try? FileManager.default.moveItem(at: url, to: backup)
-        fputs("HarnessDaemon: options.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+        HarnessPaths.backupCorruptFile(at: url, label: "HarnessDaemon")
         return [:]
     }
 }

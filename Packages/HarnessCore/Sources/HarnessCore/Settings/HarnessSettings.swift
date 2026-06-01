@@ -407,10 +407,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
                 // Present but unreadable: preserve it as `.corrupt` for recovery rather than
                 // silently overwriting it with defaults (which would discard the user's settings).
                 // Mirrors SessionStore/OptionStore — return defaults WITHOUT rewriting the file.
-                let backup = url.appendingPathExtension("corrupt")
-                try? FileManager.default.removeItem(at: backup)
-                try? FileManager.default.moveItem(at: url, to: backup)
-                fputs("Harness: settings.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+                HarnessPaths.backupCorruptFile(at: url, label: "Harness")
                 return HarnessSettings.makeDefaults(imported: imported)
             }
             let hasStoredColorChoice = settingsDataContainsColorChoice(data)

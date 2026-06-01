@@ -19,10 +19,15 @@ public final class EnvironmentStore: @unchecked Sendable {
 
     public init(url: URL? = nil) {
         self.url = url ?? HarnessPaths.applicationSupport.appendingPathComponent("environment.json")
-        if let data = try? Data(contentsOf: self.url),
-           let decoded = try? JSONDecoder().decode(Persisted.self, from: data) {
+        guard let data = try? Data(contentsOf: self.url) else { return } // absent → empty maps
+        if let decoded = try? JSONDecoder().decode(Persisted.self, from: data) {
             global = decoded.global
             perSession = decoded.perSession
+        } else {
+            // Present but unparseable: preserve it as `.corrupt` for recovery rather than silently
+            // discarding the user's variables (mirrors the other stores). The next save() then
+            // writes fresh state without clobbering the original.
+            HarnessPaths.backupCorruptFile(at: self.url, label: "HarnessDaemon")
         }
     }
 
@@ -77,8 +82,7 @@ public final class EnvironmentStore: @unchecked Sendable {
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(snapshot) {
-            try? data.write(to: url, options: .atomic)
-        }
+        guard let data = try? encoder.encode(snapshot) else { return }
+        HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon")
     }
 }

@@ -29,10 +29,7 @@ public final class SessionStore: @unchecked Sendable {
             }
             // Present but unreadable: preserve it for recovery instead of silently starting
             // empty (which would discard every session on the next save).
-            let backup = url.appendingPathExtension("corrupt")
-            try? FileManager.default.removeItem(at: backup)
-            try? FileManager.default.moveItem(at: url, to: backup)
-            fputs("HarnessDaemon: layout.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+            HarnessPaths.backupCorruptFile(at: url, label: "HarnessDaemon")
             return SessionSnapshot()
         }
     }

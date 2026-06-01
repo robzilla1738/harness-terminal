@@ -104,9 +104,8 @@ public final class HookRegistry: @unchecked Sendable {
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(hooks) {
-            try? data.write(to: url, options: .atomic)
-        }
+        guard let data = try? encoder.encode(hooks) else { return }
+        HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon")
     }
 
     private static func load(url: URL) -> [Hook] {
@@ -115,10 +114,7 @@ public final class HookRegistry: @unchecked Sendable {
         if let hooks = try? JSONDecoder().decode([Hook].self, from: data) { return hooks }
         // Present but unparseable: preserve it as `.corrupt` for recovery rather than
         // silently discarding the user's bindings (mirrors OptionStore / SessionStore).
-        let backup = url.appendingPathExtension("corrupt")
-        try? FileManager.default.removeItem(at: backup)
-        try? FileManager.default.moveItem(at: url, to: backup)
-        fputs("HarnessDaemon: hooks.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+        HarnessPaths.backupCorruptFile(at: url, label: "HarnessDaemon")
         return []
     }
 }

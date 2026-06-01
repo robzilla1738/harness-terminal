@@ -78,4 +78,41 @@ final class HarnessPathsTests: XCTestCase {
         let attrs = try FileManager.default.attributesOfItem(atPath: dir.path)
         XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
+
+    // MARK: - Config-file persistence helpers
+
+    func testBackupCorruptFileMovesAsideAndReplacesStaleBackup() throws {
+        let dir = URL(fileURLWithPath: "/tmp/harness-corrupt-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("config.json")
+        let backup = file.appendingPathExtension("corrupt")
+
+        try Data("first".utf8).write(to: file)
+        XCTAssertTrue(HarnessPaths.backupCorruptFile(at: file, label: "Test"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "original moved aside")
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "first")
+
+        // A second corruption replaces the stale backup rather than failing on the existing one.
+        try Data("second".utf8).write(to: file)
+        XCTAssertTrue(HarnessPaths.backupCorruptFile(at: file, label: "Test"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "second")
+    }
+
+    func testBackupCorruptFileReturnsFalseWhenSourceMissing() {
+        // No file to move → the move fails; the helper must report false (not a misleading success)
+        // and must not crash.
+        let missing = URL(fileURLWithPath: "/tmp/harness-missing-\(UUID().uuidString.prefix(8)).json")
+        XCTAssertFalse(HarnessPaths.backupCorruptFile(at: missing, label: "Test"))
+    }
+
+    func testAtomicWriteRoundTrips() throws {
+        let dir = URL(fileURLWithPath: "/tmp/harness-write-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("out.json")
+        XCTAssertTrue(HarnessPaths.atomicWrite(Data("payload".utf8), to: file, label: "Test"))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "payload")
+    }
 }

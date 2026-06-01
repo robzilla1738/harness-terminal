@@ -21,10 +21,7 @@ public enum KeybindingsStore {
             // Present but unreadable: preserve it as `.corrupt` for recovery rather than
             // silently overwriting the user's bindings with defaults. Mirrors
             // SessionStore/OptionStore — return defaults WITHOUT rewriting the file.
-            let backup = fileURL.appendingPathExtension("corrupt")
-            try? FileManager.default.removeItem(at: backup)
-            try? FileManager.default.moveItem(at: fileURL, to: backup)
-            fputs("Harness: keybindings.json unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+            HarnessPaths.backupCorruptFile(at: fileURL, label: "Harness")
             return defaults
         }
         // Merge: stored tables win for any spec they explicitly define, but
