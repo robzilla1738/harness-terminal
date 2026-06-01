@@ -219,4 +219,78 @@ final class DaemonRoundTripTests: XCTestCase {
         wait(for: [pushed], timeout: 5)
         XCTAssertGreaterThan(seen.value, 0)
     }
+
+    /// A frame that de-frames cleanly but carries no request (a `{}` / `{"request":null}`
+    /// envelope, e.g. from a newer client or schema skew) must get an explicit `.error` reply,
+    /// not silence — otherwise the client blocks until its timeout. Regression for the daemon
+    /// loop silently `continue`-ing on a nil request.
+    func testNilRequestGetsErrorReplyNotHang() throws {
+        // A synthesized-Codable optional encodes nil as an omitted key, so this frames as `{}`,
+        // which the daemon decodes to `.request(nil)` — exactly the guarded path.
+        var envelope = IPCEnvelope(request: .ping)
+        envelope.request = nil
+        let frame = try IPCCodec.encode(envelope)
+
+        let fd = try connectRawSocket()
+        defer { close(fd) }
+        try writeAllRaw(frame, to: fd)
+
+        var buffer = Data()
+        var temp = [UInt8](repeating: 0, count: 4096)
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&pfd, 1, 200) > 0 else { continue }
+            let n = read(fd, &temp, temp.count)
+            if n <= 0 { break }
+            buffer.append(contentsOf: temp.prefix(n))
+            if let reply = try IPCCodec.decodeReply(from: &buffer) {
+                guard case .error = reply.response else {
+                    return XCTFail("expected .error for a nil request, got \(reply.response)")
+                }
+                return
+            }
+        }
+        XCTFail("daemon did not reply to a nil-request frame (silent hang)")
+    }
+
+    // MARK: - Raw-socket helpers (for malformed/edge frames the typed DaemonClient can't send)
+
+    private enum RawSocketError: Error { case connectFailed, writeFailed }
+
+    private func connectRawSocket() throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw RawSocketError.connectFailed }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let path = HarnessPaths.socketURL.path
+        let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+        _ = withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+            path.withCString { src in
+                ptr.withMemoryRebound(to: CChar.self, capacity: capacity) { dst in
+                    strncpy(dst, src, capacity - 1)
+                }
+            }
+        }
+        let result = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard result == 0 else { close(fd); throw RawSocketError.connectFailed }
+        return fd
+    }
+
+    private func writeAllRaw(_ data: Data, to fd: Int32) throws {
+        try data.withUnsafeBytes { raw in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+            var off = 0
+            while off < data.count {
+                let n = write(fd, base + off, data.count - off)
+                if n > 0 { off += n }
+                else if n < 0, errno == EINTR || errno == EAGAIN { continue }
+                else { throw RawSocketError.writeFailed }
+            }
+        }
+    }
 }

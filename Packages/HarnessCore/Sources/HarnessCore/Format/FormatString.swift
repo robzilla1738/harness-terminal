@@ -78,8 +78,14 @@ public enum FormatString {
         }
         // Truncation: #{=N:body}
         if body.hasPrefix("="), let colon = body.firstIndex(of: ":"),
-           let count = Int(body[body.index(after: body.startIndex)..<colon])
+           let parsed = Int(body[body.index(after: body.startIndex)..<colon])
         {
+            // A negative width would trap `String.prefix(_:)` (it requires maxLength >= 0).
+            // Status formats are user-authored (`set-option -g status-left "#{=-5:…}"`) and
+            // re-evaluated every frame in both the GUI status bar and the ssh compositor, so a
+            // stray `-` must degrade to empty, never crash. Clamp instead of trapping; N == 0
+            // already yields "" through the same path.
+            let count = max(0, parsed)
             let inner = String(body[body.index(after: colon)...])
             let resolved = evaluate(wrap(inner), context: context)
             if resolved.count <= count { return resolved }

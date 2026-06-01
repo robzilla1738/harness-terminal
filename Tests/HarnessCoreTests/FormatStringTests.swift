@@ -40,6 +40,17 @@ final class FormatStringTests: XCTestCase {
         XCTAssertEqual(result, "/Use")
     }
 
+    func testTruncationDegradesInsteadOfTrapping() {
+        // A negative width must not trap `String.prefix(_:)`; it clamps to 0 (empty), and a
+        // non-numeric width falls through to the unknown-token path (also empty). A status
+        // format string is user-authored, so these must never crash the renderer.
+        XCTAssertEqual(FormatString.evaluate("#{=-5:pane_cwd}", context: context()), "")
+        XCTAssertEqual(FormatString.evaluate("#{=0:pane_cwd}", context: context()), "")
+        XCTAssertEqual(FormatString.evaluate("#{=abc:pane_cwd}", context: context()), "")
+        // A width at/above the body length returns the body untouched.
+        XCTAssertEqual(FormatString.evaluate("#{=99:session_name}", context: context()), "work")
+    }
+
     func testUnknownTokenIsEmpty() {
         XCTAssertEqual(FormatString.evaluate("[#{nothing_here}]", context: context()), "[]")
     }

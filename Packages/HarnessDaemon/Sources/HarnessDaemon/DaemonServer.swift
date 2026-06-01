@@ -197,7 +197,15 @@ public final class DaemonServer: @unchecked Sendable {
                 _ = registry.handle(.sendData(surfaceID: surfaceID, data: payload))
                 continue
             }
-            guard case let .request(maybeRequest) = frame, let request = maybeRequest else { continue }
+            guard case let .request(maybeRequest) = frame else { continue }
+            guard let request = maybeRequest else {
+                // The frame de-framed cleanly but carries no request — a `null`/empty/unknown-shape
+                // envelope, e.g. from a newer client. Reply with an explicit error instead of
+                // silently dropping it; otherwise the client blocks until its own timeout. Mirrors
+                // the `.undecodable` reply above — never silently hang a client.
+                send(.error("unrecognized request"), to: fd)
+                continue
+            }
             if case let .subscribeSurfaceOutput(surfaceID, label) = request {
                 handleSubscribe(surfaceID: surfaceID, label: label, fd: fd)
                 continue
