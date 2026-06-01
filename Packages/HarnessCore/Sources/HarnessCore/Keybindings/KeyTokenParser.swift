@@ -99,13 +99,26 @@ public enum KeyTokenParser {
         // No modifiers detected? Let the caller fall through.
         if !ctrl && !meta && !shift { return nil }
 
-        // Recursively encode the tail so we can compose with named keys (e.g. M-Up).
-        let tail = encode(token: remaining)
+        let key = remaining.lowercased()
 
+        // Modifier-aware named keys use xterm's parameterized CSI form, matching the engine's
+        // InputEncoder so `send-keys S-Up` sends the same bytes a physical Shift+Up does. Without
+        // this, S- (and C-/M-) on a named key was silently dropped to the bare key. Shift+Tab is
+        // the one special editing case (back-tab / CBT).
+        if key == "tab", shift, !ctrl, !meta {
+            return ansi("[Z")
+        }
+        if let seq = modifiedNamedKey(key, param: modifierParam(ctrl: ctrl, meta: meta, shift: shift)) {
+            return seq
+        }
+
+        // A plain character (or a key with no CSI modifier form, e.g. Enter/Space/Esc): keep the
+        // legacy Control-collapses-to-C0 / Meta-prefixes-ESC behavior. Shift on a letter is
+        // conveyed by the letter case the user passes (S-a vs S-A).
+        let tail = encode(token: remaining)
         var out = Data()
         if meta { out.append(0x1B) }
         if ctrl, tail.count == 1, let byte = tail.first {
-            // Translate to standard control byte (0x01 for Ctrl-A, etc).
             let lower = Character(UnicodeScalar(byte)).lowercased().first
             if let scalar = lower?.asciiValue, scalar >= 0x60, scalar < 0x80 {
                 out.append(scalar - 0x60)
@@ -114,10 +127,33 @@ public enum KeyTokenParser {
             } else {
                 out.append(byte)
             }
-            _ = shift // shift on plain letters is encoded by the letter case the user passes
         } else {
             out.append(tail)
         }
         return out
+    }
+
+    /// xterm modifier parameter: 1 + shift(1) + meta/alt(2) + ctrl(4). Matches
+    /// `InputEncoder.modifierParam` so a token's bytes equal the physical keypress's.
+    private static func modifierParam(ctrl: Bool, meta: Bool, shift: Bool) -> Int {
+        1 + (shift ? 1 : 0) + (meta ? 2 : 0) + (ctrl ? 4 : 0)
+    }
+
+    /// The xterm CSI form of a modifier-aware named key (cursor / function / editing), or nil if
+    /// `name` isn't one. `param` comes from `modifierParam`. Mirrors InputEncoder's cursor/ss3/
+    /// tilde helpers: cursor keys + F1–F4 → `ESC[1;<param><final>`; editing + F5–F12 →
+    /// `ESC[<code>;<param>~`.
+    private static func modifiedNamedKey(_ name: String, param: Int) -> Data? {
+        let cursorFinals: [String: Character] = [
+            "up": "A", "down": "B", "right": "C", "left": "D", "home": "H", "end": "F",
+            "f1": "P", "f2": "Q", "f3": "R", "f4": "S",
+        ]
+        if let final = cursorFinals[name] { return ansi("[1;\(param)\(final)") }
+        let tildeCodes: [String: Int] = [
+            "delete": 3, "del": 3, "pageup": 5, "pgup": 5, "pagedown": 6, "pgdn": 6,
+            "f5": 15, "f6": 17, "f7": 18, "f8": 19, "f9": 20, "f10": 21, "f11": 23, "f12": 24,
+        ]
+        if let code = tildeCodes[name] { return ansi("[\(code);\(param)~") }
+        return nil
     }
 }
