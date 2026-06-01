@@ -165,6 +165,14 @@ let package = Package(
             dependencies: ["HarnessOnboarding"],
             path: "Tests/HarnessOnboardingTests"
         ),
+        // Unit coverage for the CLI's pure argument-parsing helpers. The CLI is an executable
+        // target (`@main struct HarnessCLI`); `@testable import` reaches its internal statics
+        // without splitting out a library, so daemon-free helpers like `flagValue` are covered.
+        .testTarget(
+            name: "HarnessCLITests",
+            dependencies: ["HarnessCLI"],
+            path: "Tests/HarnessCLITests"
+        ),
         .testTarget(
             name: "HarnessDaemonTests",
             dependencies: ["HarnessDaemonCore", "HarnessCore", "HarnessTerminalEngine"],
