@@ -3,6 +3,10 @@ import HarnessCore
 
 @MainActor
 final class MainWindowController: NSWindowController {
+    /// Autosave key for the main window frame. Shared with Settings so the launch-time
+    /// restore and the live "Remember window size" toggle use the exact same name.
+    static let frameAutosaveName = "HarnessMainWindow"
+
     convenience init() {
         HarnessChrome.update(
             themeName: SessionCoordinator.shared.snapshot.themeName,
@@ -41,8 +45,8 @@ final class MainWindowController: NSWindowController {
         // position) and keep it updated automatically; otherwise open centered at the
         // default size. Window-level only — no effect on sessions or the terminal.
         if SessionCoordinator.shared.settings.restoreWindowSize {
-            window.setFrameAutosaveName("HarnessMainWindow")
-            if !window.setFrameUsingName("HarnessMainWindow") {
+            window.setFrameAutosaveName(Self.frameAutosaveName)
+            if !window.setFrameUsingName(Self.frameAutosaveName) {
                 window.center()
             }
         } else {

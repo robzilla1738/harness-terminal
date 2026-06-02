@@ -127,6 +127,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         .openClaw, .openCode, .aider, .gemini, .goose,
     ]
 
+    deinit {
+        // A fresh controller is built on each open and the previous one is torn down; drop
+        // its observers (the chrome-change observer + the per-field text-change observers
+        // registered in `configureLiveAppearanceField`) so a closed window stops reacting.
+        NotificationCenter.default.removeObserver(self)
+    }
+
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 880, height: 660))
     }
@@ -330,7 +337,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         restoreWindowSizeToggle.state = settings.restoreWindowSize ? .on : .off
         restoreWindowSizeToggle.target = self
-        restoreWindowSizeToggle.action = #selector(appearanceTextDidCommit)
+        restoreWindowSizeToggle.action = #selector(restoreWindowSizeChanged)
 
         // Optional tmux controls (prefix key + status line) without switching experience
         // mode: Auto follows the mode, On/Off force the chrome on/off via `tmuxControlsEnabled`.
@@ -348,13 +355,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         useThemeColorsButton.action = #selector(useThemeColors)
 
         keyRecorder = KeyRecorderView(initial: settings.prefixKey)
-        keyRecorder.onChange = { [weak self] value in
+        keyRecorder.onChange = { value in
             // Empty = disable the prefix entirely (honored via `effectivePrefixKey`); don't
             // silently snap back to Ctrl-A the way the old code did.
             SessionCoordinator.shared.settings.prefixKey = value
             try? SessionCoordinator.shared.settings.save()
             PrefixKeymap.shared.rebuildFromSettings()
-            _ = self
         }
 
         updateFontReadout()
@@ -1709,6 +1715,26 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         SessionCoordinator.shared.settings.tmuxControlsEnabled = selectedTmuxControls
         flushAndApply()
         PrefixKeymap.shared.rebuildFromSettings()
+    }
+
+    /// "Remember window size" applies to the live main window immediately, not just on the
+    /// next launch: enabling it arms frame autosave (and snapshots the current frame so the
+    /// very next quit/relaunch restores it); disabling it stops autosaving. Without this the
+    /// toggle would appear to do nothing until two launches later. `MainWindowController.init`
+    /// performs the launch-time restore using the same autosave name.
+    @objc private func restoreWindowSizeChanged() {
+        flushAndApply()
+        let enabled = restoreWindowSizeToggle.state == .on
+        for window in NSApp.windows where window.contentViewController is MainSplitViewController {
+            if enabled {
+                window.setFrameAutosaveName(MainWindowController.frameAutosaveName)
+                window.saveFrame(usingName: MainWindowController.frameAutosaveName)
+            } else {
+                // Empty name disables autosaving; the stored frame is ignored next launch
+                // because `restoreWindowSize` is now false.
+                window.setFrameAutosaveName("")
+            }
+        }
     }
 
     /// "Show sidebar" applies live to the main window's split (which also persists the

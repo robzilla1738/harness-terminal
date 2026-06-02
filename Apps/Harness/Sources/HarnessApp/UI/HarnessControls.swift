@@ -38,7 +38,7 @@ final class HarnessTextFieldCell: NSTextFieldCell {
 }
 
 /// Single-line editable field with a themed rounded background, no system bezel, and no
-/// blue focus ring (the border brightens to `borderStrong` on focus instead).
+/// blue focus ring (the border takes the theme accent via `focusRing` on focus instead).
 @MainActor
 final class HarnessTextField: NSTextField {
     private var focused = false
