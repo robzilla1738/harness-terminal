@@ -46,8 +46,8 @@ Most multiplexer commands start with a **prefix** keystroke, then a second key.
   entirely (then drive everything from the `:` prompt, the `Cmd-K` palette, and macOS shortcuts).
 - Press **`prefix ?`** any time for a live cheatsheet generated from your current bindings.
 
-> The prefix layer only appears in modes that show multiplexer chrome (Full/Agent modes, or when
-> you turn `tmuxControlsEnabled` on). In Plain mode you lean on the macOS `Cmd` shortcuts instead.
+> The prefix layer only appears in modes that show Harness controls (Full/Agent modes, or when
+> Harness controls are set to On). In Plain mode you lean on the macOS `Cmd` shortcuts instead.
 
 Everything below that says "`prefix X`" means: tap the prefix, release, then tap `X`.
 

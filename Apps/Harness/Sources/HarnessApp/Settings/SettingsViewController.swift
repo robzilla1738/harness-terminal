@@ -30,7 +30,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let sidebarVisibleToggle = HarnessToggle(title: "Show sidebar")
     private let restoreWindowSizeToggle = HarnessToggle(title: "Remember window size")
     private let experienceSegment = HarnessSegmented(frame: .zero)
-    private let tmuxControlsSegment = HarnessSegmented(frame: .zero)
+    private let harnessControlsSegment = HarnessSegmented(frame: .zero)
     private let textRenderingSegment = HarnessSegmented(frame: .zero)
     private let offMainPipelineToggle = HarnessToggle(title: "Off-main render pipeline")
     private let experienceSummaryLabel = NSTextField(wrappingLabelWithString: "")
@@ -339,12 +339,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         restoreWindowSizeToggle.target = self
         restoreWindowSizeToggle.action = #selector(restoreWindowSizeChanged)
 
-        // Optional tmux controls (prefix key + status line) without switching experience
-        // mode: Auto follows the mode, On/Off force the chrome on/off via `tmuxControlsEnabled`.
-        tmuxControlsSegment.setSegments(["Auto", "On", "Off"])
-        tmuxControlsSegment.selectItem(withTitle: tmuxControlsTitle(settings.tmuxControlsEnabled))
-        tmuxControlsSegment.target = self
-        tmuxControlsSegment.action = #selector(tmuxControlsChanged)
+        // Optional Harness controls (prefix key + status line) without switching experience
+        // mode: Auto follows the mode, On/Off force them on/off via `harnessControlsEnabled`.
+        harnessControlsSegment.setSegments(["Auto", "On", "Off"])
+        harnessControlsSegment.selectItem(withTitle: harnessControlsTitle(settings.harnessControlsEnabled))
+        harnessControlsSegment.target = self
+        harnessControlsSegment.action = #selector(harnessControlsChanged)
 
         offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
         offMainPipelineToggle.target = self
@@ -778,7 +778,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         experienceSegment.widthAnchor.constraint(equalTo: experienceContent.widthAnchor).isActive = true
         let experienceGroup = settingsGroup("Experience", [
             experienceContent,
-            settingsRow("Tmux controls", tmuxControlsSegment,
+            settingsRow("Harness controls", harnessControlsSegment,
                         hint: "Prefix key + status line. Auto follows the mode above."),
         ])
 
@@ -1574,9 +1574,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
-    /// Tri-state mapping for the optional tmux-controls override: Auto = `nil`
+    /// Tri-state mapping for the optional Harness-controls override: Auto = `nil`
     /// (follow the experience mode), On/Off force `true`/`false`.
-    private func tmuxControlsTitle(_ value: Bool?) -> String {
+    private func harnessControlsTitle(_ value: Bool?) -> String {
         switch value {
         case .some(true): return "On"
         case .some(false): return "Off"
@@ -1584,8 +1584,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
-    private var selectedTmuxControls: Bool? {
-        switch tmuxControlsSegment.titleOfSelectedItem {
+    private var selectedHarnessControls: Bool? {
+        switch harnessControlsSegment.titleOfSelectedItem {
         case "On": return true
         case "Off": return false
         default: return nil
@@ -1709,10 +1709,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         keepSessionsToggle.state = keep ? .on : .off
     }
 
-    /// The optional tmux-controls override re-gates the prefix key + status line without
+    /// The optional Harness-controls override re-gates the prefix key + status line without
     /// changing the experience mode. Mirrors the chrome-refresh path of `experienceModeChanged`.
-    @objc private func tmuxControlsChanged() {
-        SessionCoordinator.shared.settings.tmuxControlsEnabled = selectedTmuxControls
+    @objc private func harnessControlsChanged() {
+        SessionCoordinator.shared.settings.harnessControlsEnabled = selectedHarnessControls
         flushAndApply()
         PrefixKeymap.shared.rebuildFromSettings()
     }
@@ -1859,7 +1859,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         showStatusLineToggle.state = settings.showStatusLine ? .on : .off
         sidebarVisibleToggle.state = settings.sidebarVisible ? .on : .off
         restoreWindowSizeToggle.state = settings.restoreWindowSize ? .on : .off
-        tmuxControlsSegment.selectItem(withTitle: tmuxControlsTitle(settings.tmuxControlsEnabled))
+        harnessControlsSegment.selectItem(withTitle: harnessControlsTitle(settings.harnessControlsEnabled))
         systemNotificationsToggle.state = settings.systemNotificationsEnabled ? .on : .off
         notificationSoundToggle.state = settings.notificationSoundEnabled ? .on : .off
         notchModeSegment.selectItem(withTitle: notchModeTitle(settings.notchVisibilityMode))
@@ -1945,6 +1945,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.showPromptGutter = promptGutterToggle.state == .on
         coordinator.settings.offMainParserFramePipeline = offMainPipelineToggle.state == .on
         coordinator.settings.experienceMode = selectedExperienceMode
+        coordinator.settings.harnessControlsEnabled = selectedHarnessControls
         try? coordinator.settings.save()
 
         // Theme switching (and its color seeding) is handled by themeDidChange, so

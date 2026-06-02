@@ -107,7 +107,7 @@ When this guide says `prefix %`, press `Ctrl-A`, release it, then press `%`.
 
 Change the prefix in **Settings > Keys**. If the prefix does nothing, check that
 the app is in **Full Terminal** or **Agent Workspace**, or that
-`tmuxControlsEnabled` is on.
+Harness controls are set to On.
 
 ## 4. Panes and layouts
 

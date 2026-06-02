@@ -11,7 +11,7 @@ import Foundation
 ///   like a normal terminal.
 /// - `persistent`: like `plain` visually, but sessions survive a clean quit and can be
 ///   driven/attached from the CLI. Individual sessions can be promoted/demoted.
-/// - `tmux`: the full Harness surface — command prefix, status line, copy mode, paste
+/// - `full`: the full Harness surface — command prefix, status line, copy mode, paste
 ///   buffers, panes/splits, and the harness-cli command set, attach/detach.
 /// - `agent`: persistent project workspaces with agent detection, notifications, and
 ///   jump-to-agent foregrounded. The full controls are available but off by default.
@@ -21,7 +21,7 @@ import Foundation
 public enum ExperienceMode: String, Codable, Sendable, CaseIterable {
     case plain
     case persistent
-    case tmux
+    case full = "tmux"
     case agent
 
     /// Short title for menus and settings.
@@ -29,7 +29,7 @@ public enum ExperienceMode: String, Codable, Sendable, CaseIterable {
         switch self {
         case .plain: return "Plain Terminal"
         case .persistent: return "Persistent Terminal"
-        case .tmux: return "Full Terminal"
+        case .full: return "Full Terminal"
         case .agent: return "Agent Workspace"
         }
     }
@@ -41,17 +41,17 @@ public enum ExperienceMode: String, Codable, Sendable, CaseIterable {
             return "A fast native terminal. No command prefix or status bar; sessions close when you quit."
         case .persistent:
             return "Like Plain, but sessions survive quitting and can be attached from the CLI."
-        case .tmux:
+        case .full:
             return "The full Harness experience: command prefix, status line, copy mode, paste buffers, panes, and the harness-cli command set."
         case .agent:
             return "Persistent project workspaces with AI-agent detection, notifications, and jump-to-agent."
         }
     }
 
-    /// Whether the tmux chrome — prefix-key handling, the prefix indicator, the bottom
-    /// status line, and multiplexer terminology in onboarding — is shown by default.
-    /// Only `tmux` shows it by default; the others can opt in via `tmuxControlsEnabled`.
-    public var showsTmuxChromeByDefault: Bool { self == .tmux }
+    /// Whether Harness controls — prefix-key handling, the prefix indicator, and the
+    /// bottom status line — are shown by default.
+    /// Only the full experience shows them by default; the others can opt in.
+    public var showsHarnessControlsByDefault: Bool { self == .full }
 
     /// Whether sessions created in this mode persist across a *clean* GUI quit by default.
     /// Only `plain` is ephemeral. (A daemon or GUI crash never tears sessions down in any

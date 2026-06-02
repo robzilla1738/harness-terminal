@@ -127,13 +127,12 @@ final class StatusLineView: NSView {
 
     private func refresh() {
         let options = HarnessOptions.shared
-        // Mode gate first: non-tmux experiences (Plain/Persistent/Agent without tmux controls)
-        // never show the status band — it's part of the multiplexer chrome. Within a
-        // tmux-chrome experience, the GUI Settings toggle is the hard override; when off the
-        // band is hidden regardless of the tmux `status` option. Otherwise `status`
+        // Mode gate first: experiences without Harness controls never show the status band.
+        // Within the full Harness-controls experience, the GUI Settings toggle is the hard
+        // override; when off the band is hidden regardless of the `status` option. Otherwise `status`
         // (`off`/`on`/`2..5`) drives how many rows show.
         let settings = SessionCoordinator.shared.settings
-        let showInSettings = settings.showsTmuxChrome && settings.showStatusLine
+        let showInSettings = settings.showsHarnessControls && settings.showStatusLine
         let count = showInSettings ? (options.get("status", scope: .global)?.statusLineCount ?? 1) : 0
         isHidden = count == 0
         guard count > 0 else {

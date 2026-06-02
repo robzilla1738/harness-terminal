@@ -39,6 +39,10 @@ public enum TerminalTextRenderingMode: String, Codable, Sendable {
     }
 }
 
+private enum LegacyHarnessSettingsCodingKeys: String, CodingKey {
+    case tmuxControlsEnabled
+}
+
 public struct HarnessSettings: Codable, Sendable, Equatable {
     public var fontSize: Float
     public var fontFamily: String
@@ -159,31 +163,30 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var showPromptGutter: Bool
     /// Show the bottom status line (workspace · git · clock). When false the band is
     /// hidden and the terminal split extends to the window bottom. Read by
-    /// `StatusLineView.refresh` (alongside the tmux `status` option and `showsTmuxChrome`).
+    /// `StatusLineView.refresh` (alongside the `status` option and `showsHarnessControls`).
     public var showStatusLine: Bool
-    /// The user-facing experience (Plain / Persistent / Tmux / Agent). Drives which chrome
+    /// The user-facing experience (Plain / Persistent / Full / Agent). Drives which chrome
     /// is shown, the default session-persistence policy, and onboarding copy — all on top of
     /// the same daemon session core. See `ExperienceMode`.
     public var experienceMode: ExperienceMode
-    /// Explicit override for tmux-chrome visibility (prefix key + status line). `nil` derives
+    /// Explicit override for Harness controls visibility (prefix key + status line). `nil` derives
     /// from `experienceMode`. Lets a Persistent/Agent user opt into the prefix and status line
-    /// ("optional tmux controls") without switching to full Tmux mode, or a Tmux user turn the
-    /// chrome off without changing modes.
-    public var tmuxControlsEnabled: Bool?
+    /// without switching to Full Terminal, or a Full Terminal user turn the controls off without
+    /// changing modes.
+    public var harnessControlsEnabled: Bool?
 
-    /// Whether the tmux chrome (prefix-key handling, prefix indicator, status line,
-    /// multiplexer terminology) should be active. The explicit override wins; otherwise the
-    /// mode decides. The single gate consulted by `PrefixKeymap`, `StatusLineView`, and
-    /// onboarding so they never drift.
-    public var showsTmuxChrome: Bool {
-        tmuxControlsEnabled ?? experienceMode.showsTmuxChromeByDefault
+    /// Whether Harness controls (prefix-key handling, prefix indicator, and status line)
+    /// should be active. The explicit override wins; otherwise the mode decides. The single
+    /// gate consulted by `PrefixKeymap`, `StatusLineView`, and onboarding so they never drift.
+    public var showsHarnessControls: Bool {
+        harnessControlsEnabled ?? experienceMode.showsHarnessControlsByDefault
     }
 
     /// The prefix shortcut string to actually arm, or `nil` to disable the prefix entirely.
-    /// `nil` when the chrome is hidden (non-tmux modes) or when the user blanked the prefix in
+    /// `nil` when Harness controls are hidden or when the user blanked the prefix in
     /// Settings — fixes the old bug where an empty `prefixKey` silently fell back to Ctrl-A.
     public var effectivePrefixKey: String? {
-        guard showsTmuxChrome else { return nil }
+        guard showsHarnessControls else { return nil }
         let trimmed = prefixKey.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -237,10 +240,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         showPromptGutter: Bool = false,
         showStatusLine: Bool = true,
         // Fresh installs default to the simplest experience — a fast native terminal.
-        // Existing installs migrate to `.tmux` in `init(from:)` so no
+        // Existing installs migrate to `.full` in `init(from:)` so no
         // current user loses the prefix/status they already have.
         experienceMode: ExperienceMode = .plain,
-        tmuxControlsEnabled: Bool? = nil
+        harnessControlsEnabled: Bool? = nil
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -287,7 +290,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.showPromptGutter = showPromptGutter
         self.showStatusLine = showStatusLine
         self.experienceMode = experienceMode
-        self.tmuxControlsEnabled = tmuxControlsEnabled
+        self.harnessControlsEnabled = harnessControlsEnabled
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -351,6 +354,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Decoder that gracefully accepts older settings files missing the newer fields.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyContainer = try decoder.container(keyedBy: LegacyHarnessSettingsCodingKeys.self)
         let imported = TerminalConfigImporter.load()
         let fallback = HarnessSettings.makeDefaults(imported: imported)
 
@@ -409,11 +413,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         showPromptGutter = try container.decodeIfPresent(Bool.self, forKey: .showPromptGutter) ?? fallback.showPromptGutter
         showStatusLine = try container.decodeIfPresent(Bool.self, forKey: .showStatusLine) ?? fallback.showStatusLine
         // Behavior-preserving migration: a settings file that predates modes was written by a
-        // user who already had the prefix + status line, i.e. the Tmux experience. Default the
-        // absent key to `.tmux` (NOT the fresh-install `.plain`) so upgrading never silently
-        // strips features. New installs get `.plain` via `makeDefaults` (file absent entirely).
-        experienceMode = try container.decodeIfPresent(ExperienceMode.self, forKey: .experienceMode) ?? .tmux
-        tmuxControlsEnabled = try container.decodeIfPresent(Bool.self, forKey: .tmuxControlsEnabled)
+        // user who already had the prefix + status line, i.e. the full Harness experience.
+        // Default the absent key to `.full` (NOT the fresh-install `.plain`) so upgrading never
+        // silently strips features. New installs get `.plain` via `makeDefaults`.
+        experienceMode = try container.decodeIfPresent(ExperienceMode.self, forKey: .experienceMode) ?? .full
+        harnessControlsEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .harnessControlsEnabled)
+            ?? legacyContainer.decodeIfPresent(Bool.self, forKey: .tmuxControlsEnabled)
     }
 
     public static func load() -> HarnessSettings {

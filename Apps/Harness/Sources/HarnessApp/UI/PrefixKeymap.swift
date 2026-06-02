@@ -39,7 +39,7 @@ final class PrefixKeymap {
             prefix = parsed
             ensureMonitor()
         } else {
-            // Prefix disabled (plain/persistent/agent without tmux controls, or blanked key):
+            // Prefix disabled (Plain/Persistent/Agent without Harness controls, or blanked key):
             // disarm, drop any open indicator, and remove the monitor so no key is intercepted.
             prefix = nil
             disarm()
