@@ -46,11 +46,15 @@ final class HarnessPathsTests: XCTestCase {
         }
     }
 
-    func testWithoutOverrideFallsBackToApplicationSupportHarness() {
+    func testWithoutOverrideFallsBackToPlatformDefaultHarnessHome() {
         unsetenv("HARNESS_HOME")
         let path = HarnessPaths.applicationSupport.path
         XCTAssertFalse(path.isEmpty)
+        #if canImport(Glibc)
+        XCTAssertTrue(path.hasSuffix("/.local/share/harness"), "expected an XDG harness data path, got \(path)")
+        #else
         XCTAssertTrue(path.hasSuffix("/Harness"), "expected an Application Support/Harness path, got \(path)")
+        #endif
     }
 
     func testEnsureDirectoriesCreatesOwnerOnlyHome() throws {
