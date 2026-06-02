@@ -392,7 +392,8 @@ public final class RealPty: @unchecked Sendable {
             // Without the slave we have no stdio/controlling terminal — exec'ing the shell here would
             // leave it wired to the inherited master fd and misbehave. Bail instead.
             if slave < 0 { _ = sysClose(master); _exit(127) }
-            closeInheritedFileDescriptors(except: slave, upperBound: closeUpperBound)
+            _ = sysClose(master)
+            closeInheritedFileDescriptors(except: slave, alreadyClosed: master, upperBound: closeUpperBound)
             _ = harness_pty_make_controlling(slave)
             _ = harness_pty_set_winsize(slave, rows, cols)
             _ = dup2(slave, 0)
@@ -420,11 +421,11 @@ public final class RealPty: @unchecked Sendable {
         #endif
     }
 
-    private static func closeInheritedFileDescriptors(except keep: Int32, upperBound: Int32) {
+    private static func closeInheritedFileDescriptors(except keep: Int32, alreadyClosed: Int32? = nil, upperBound: Int32) {
         guard upperBound > 3 else { return }
         var fd: Int32 = 3
         while fd < upperBound {
-            if fd != keep { _ = sysClose(fd) }
+            if fd != keep, fd != alreadyClosed { _ = sysClose(fd) }
             fd += 1
         }
     }
@@ -835,7 +836,7 @@ public final class RealPty: @unchecked Sendable {
         guard bytes == size else { return nil }
         return withUnsafePointer(to: &info.pvi_cdir.vip_path) { ptr -> String in
             ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
-                boundedCString($0, capacity: Int(MAXPATHLEN))
+                decodeBoundedCString($0, capacity: Int(MAXPATHLEN))
             }
         }
         #else
@@ -846,11 +847,5 @@ public final class RealPty: @unchecked Sendable {
         guard len > 0 else { return nil }
         return String(decoding: buffer[0 ..< len].map { UInt8(bitPattern: $0) }, as: UTF8.self)
         #endif
-    }
-
-    private static func boundedCString(_ pointer: UnsafePointer<CChar>, capacity: Int) -> String {
-        let bytes = UnsafeBufferPointer(start: pointer, count: capacity)
-        let end = bytes.firstIndex(of: 0) ?? bytes.count
-        return String(decoding: bytes.prefix(end).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }

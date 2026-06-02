@@ -8,7 +8,7 @@ public struct RemoteHost: Codable, Sendable, Equatable, Identifiable {
     public var name: String
     /// SSH destination, e.g. `user@host` or a `~/.ssh/config` host alias.
     public var sshTarget: String
-    /// Path to `harness.sock` on the remote machine. Defaults to the daemon's default location.
+    /// Path to `harness.sock` on the remote machine.
     public var remoteSocketPath: String
     /// Extra `ssh` arguments (e.g. `-p 2222`, `-i ~/.ssh/id_ed25519`, `-J jump`).
     public var sshArgs: [String]
@@ -18,18 +18,6 @@ public struct RemoteHost: Codable, Sendable, Equatable, Identifiable {
         self.sshTarget = sshTarget
         self.remoteSocketPath = remoteSocketPath
         self.sshArgs = sshArgs
-    }
-
-    /// Best-effort default remote socket path inferred from a `user@host` SSH target — the daemon's
-    /// location for a standard systemd `harness-cli install` (which pins HARNESS_HOME to
-    /// `~/.local/share/harness`). `ssh -L` doesn't expand `~`, so this builds an absolute path.
-    /// Returns nil when the target has no `user@` to derive a home from.
-    public static func defaultRemoteSocketPath(forSSHTarget sshTarget: String) -> String? {
-        guard sshTarget.contains("@"), let user = sshTarget.split(separator: "@").first.map(String.init),
-              !user.isEmpty
-        else { return nil }
-        let home = user == "root" ? "/root" : "/home/\(user)"
-        return "\(home)/.local/share/harness/harness.sock"
     }
 }
 

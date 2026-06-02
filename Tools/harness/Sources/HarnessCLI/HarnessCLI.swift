@@ -734,11 +734,10 @@ struct HarnessCLI {
         case "add":
             guard let name = flagValue(args, flag: "--name"), let ssh = flagValue(args, flag: "--ssh") else {
                 fputs("Usage: harness-cli remote add --name <name> --ssh <user@host> "
-                    + "[--socket <remote-path>] [--ssh-arg <arg> ...]\n", harnessStderr)
+                    + "--socket <remote-path> [--ssh-arg <arg> ...]\n", harnessStderr)
                 return 64
             }
-            guard let socketPath = flagValue(args, flag: "--socket")
-                ?? RemoteHost.defaultRemoteSocketPath(forSSHTarget: ssh) else {
+            guard let socketPath = flagValue(args, flag: "--socket") else {
                 fputs("harness-cli remote add: could not infer the remote socket path; pass --socket "
                     + "<remote-path> (see `harness-cli doctor` on the remote for its value).\n", harnessStderr)
                 return 64

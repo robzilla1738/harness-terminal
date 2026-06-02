@@ -72,6 +72,14 @@ public func sysConnect(_ fd: Int32, _ addr: UnsafePointer<sockaddr>?, _ len: soc
     connect(fd, addr, len)
 }
 
+/// Decode a fixed-size C buffer that may or may not contain a trailing NUL. Used for OS APIs such
+/// as `proc_pidinfo` that return a bounded path buffer rather than an owned C string.
+public func decodeBoundedCString(_ pointer: UnsafePointer<CChar>, capacity: Int) -> String {
+    let bytes = UnsafeBufferPointer(start: pointer, count: capacity)
+    let end = bytes.firstIndex(of: 0) ?? bytes.count
+    return String(decoding: bytes.prefix(end).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+}
+
 // Peer-credential lookup for the control socket lives in the `CHarnessSys` C shim
 // (`harness_peer_uid`), because Linux's `struct ucred` / `SO_PEERCRED` are gated behind
 // `_GNU_SOURCE`, which the Swift Glibc module doesn't expose.

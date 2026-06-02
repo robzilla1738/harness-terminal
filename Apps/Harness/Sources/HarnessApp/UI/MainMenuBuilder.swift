@@ -254,7 +254,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         let sshField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
         sshField.placeholderString = "SSH target (user@host)"
         let sockField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
-        sockField.placeholderString = "Remote socket path (optional)"
+        sockField.placeholderString = "Remote socket path"
         stack.addArrangedSubview(nameField)
         stack.addArrangedSubview(sshField)
         stack.addArrangedSubview(sockField)
@@ -265,18 +265,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let ssh = sshField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !ssh.isEmpty else { return }
-        var socketPath = sockField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let socketPath = sockField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if socketPath.isEmpty {
-            guard let inferred = RemoteHost.defaultRemoteSocketPath(forSSHTarget: ssh) else {
-                // An SSH alias (no user@host) gives nothing to infer a path from — ask for it.
-                let warn = NSAlert()
-                warn.messageText = "Remote socket path required"
-                warn.informativeText = "Couldn't infer the daemon socket from \"\(ssh)\". Re-add the "
-                    + "host with its remote socket path (see `harness-cli doctor` on the remote)."
-                warn.runModal()
-                return
-            }
-            socketPath = inferred
+            let warn = NSAlert()
+            warn.messageText = "Remote socket path required"
+            warn.informativeText = "Use the path shown by `harness-cli doctor` on the remote host."
+            warn.runModal()
+            return
         }
         RemoteHostsService.shared.addHost(
             RemoteHost(name: name, sshTarget: ssh, remoteSocketPath: socketPath))
