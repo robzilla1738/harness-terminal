@@ -18,6 +18,12 @@ final class NotificationBellButton: NSControl {
         wantsLayer = true
         // Circular soft-button chrome (set in applyChrome/layout) to match SoftIconButton.
         layer?.cornerCurve = .continuous
+        // The badge sits at the top-right corner and pokes just past the circular
+        // disc (`cornerRadius` 15 set in `applyChrome`). AppKit re-syncs the backing
+        // layer's `masksToBounds` from `clipsToBounds` on every layout pass, so the
+        // direct layer set alone gets overwritten and the badge is clipped to the
+        // disc curve. Clear both so the badge always renders in full.
+        clipsToBounds = false
         layer?.masksToBounds = false
 
         // Weight matches the rest of the header glyphs (workspace pill, chevron,
