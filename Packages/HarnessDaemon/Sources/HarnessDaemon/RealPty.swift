@@ -362,26 +362,18 @@ public final class RealPty: @unchecked Sendable {
         if pid < 0 { return nil }
         if pid == 0 {
             if let cwd { _ = chdir(cwd) }
-            argv.withUnsafeBufferPointer { argvBuffer in
-                envp.withUnsafeBufferPointer { envpBuffer in
-                    if let path = argvBuffer.baseAddress?.pointee {
-                        _ = execve(path, argvBuffer.baseAddress, envpBuffer.baseAddress)
-                    }
-                }
-            }
+            execveChild(argv: argv, envp: envp)
             _exit(127)
         }
         return (pid, amaster)
         #elseif canImport(Glibc)
-        let master = posix_openpt(O_RDWR | O_NOCTTY)
-        guard master >= 0, grantpt(master) == 0, unlockpt(master) == 0 else {
-            if master >= 0 { _ = close(master) }
-            return nil
-        }
-        // `ptsname` isn't async-signal-safe, so resolve + copy the slave path in the parent before
-        // forking; the child only `open`s it (which is on the safe list).
-        guard let namePtr = ptsname(master) else { _ = close(master); return nil }
-        let slavePath = strdup(namePtr)
+        // `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` aren't in Swift's Glibc module, so the C shim
+        // opens the master and hands back the slave path. `ptsname` isn't async-signal-safe, so we
+        // resolve + copy the path in the parent before forking; the child only `open`s it.
+        var slaveBuf = [CChar](repeating: 0, count: 256)
+        let master = harness_open_pty_master(&slaveBuf, slaveBuf.count)
+        guard master >= 0 else { return nil }
+        let slavePath = strdup(slaveBuf)
         let pid = fork()
         if pid < 0 { slavePath.map { free($0) }; _ = close(master); return nil }
         if pid == 0 {
@@ -398,13 +390,7 @@ public final class RealPty: @unchecked Sendable {
             if slave > 2 { _ = close(slave) }
             _ = close(master)
             if let cwd { _ = chdir(cwd) }
-            argv.withUnsafeBufferPointer { argvBuffer in
-                envp.withUnsafeBufferPointer { envpBuffer in
-                    if let path = argvBuffer.baseAddress?.pointee {
-                        _ = execve(path, argvBuffer.baseAddress, envpBuffer.baseAddress)
-                    }
-                }
-            }
+            execveChild(argv: argv, envp: envp)
             _exit(127)
         }
         slavePath.map { free($0) }
@@ -412,6 +398,22 @@ public final class RealPty: @unchecked Sendable {
         #else
         return nil
         #endif
+    }
+
+    /// Replace the (just-forked child) process image with the shell. Binds the buffer base addresses
+    /// as non-optionals so the call type-checks on Linux, where `execve`'s argv/envp parameters
+    /// aren't optional (Darwin coerced them). Async-signal-safe: only buffer-pointer access + execve.
+    private static func execveChild(
+        argv: [UnsafeMutablePointer<CChar>?],
+        envp: [UnsafeMutablePointer<CChar>?]
+    ) {
+        argv.withUnsafeBufferPointer { argvBuffer in
+            envp.withUnsafeBufferPointer { envpBuffer in
+                guard let argvBase = argvBuffer.baseAddress, let path = argvBase.pointee,
+                      let envpBase = envpBuffer.baseAddress else { return }
+                _ = execve(path, argvBase, envpBase)
+            }
+        }
     }
 
     public func resize(rows: UInt16, cols: UInt16) {

@@ -1128,6 +1128,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // before closing, so no late debounced flush can resurrect the file.
             removed?.deletePersistedScrollback()
             removed?.close()
+            // Backstop: when a shell exits naturally (remain-on-exit off), `removeSurfaceIfCurrent`
+            // already reaped the RealPty, so `removed` is nil here and the line above is a no-op —
+            // remove the file by path so it doesn't linger until the next restart's orphan sweep.
+            // The RealPty (and its ScrollbackFile) is gone in that case, so this can't be resurrected.
+            try? FileManager.default.removeItem(at: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID))
             stopPipe(surfaceID: surfaceID)
             // Drop the output monitor too, else it leaks across tab/session/pane churn.
             monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
