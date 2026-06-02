@@ -726,14 +726,20 @@ final class TerminalScreen {
             }
             let rowBase = cursorRow * cols
             if cursorCol < cols - 1 {
-                // Fill distinct columns cursorCol..<endCol on this row (endCol <= cols).
+                // Fill distinct columns cursorCol..<endCol on this row (endCol <= cols) via the
+                // raw buffer to drop the per-store bounds check on this tight inner loop. (Only the
+                // fill is wrapped — `wrapLine`/`scrollUp` above open their own mutable-buffer scope,
+                // so they must stay outside this one to preserve exclusive access.)
                 let endCol = Swift.min(cols, cursorCol + (n - i))
-                var c = cursorCol
-                while c < endCol {
-                    template.codepoint = UInt32(bytes[i])
-                    cells[rowBase + c] = template
-                    i += 1
-                    c += 1
+                cells.withUnsafeMutableBufferPointer { buf in
+                    let base = buf.baseAddress!
+                    var c = cursorCol
+                    while c < endCol {
+                        template.codepoint = UInt32(bytes[i])
+                        base[rowBase + c] = template
+                        i += 1
+                        c += 1
+                    }
                 }
                 // Mirror `advance(by: 1)` for the last byte written.
                 if endCol >= cols {
