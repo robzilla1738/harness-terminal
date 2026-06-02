@@ -270,6 +270,45 @@ final class PerformanceBenchmarks: XCTestCase {
         }
     }
 
+    /// IPC-inclusive faithful scoreboard: the same workloads, but each is split at the daemon's
+    /// 64 KiB read size and round-tripped through the real binary output frame
+    /// (`IPCCodec.encodeOutputFrame` → `decodeReplyOrData`) before being fed to the engine — so it
+    /// includes the per-chunk framing + copy cost the in-process `testConsumerScoreboard` skips.
+    /// Comparing `ipc_consumer_<workload>` against `consumer_<workload>` isolates how much of the
+    /// daemon split's chunking + framing actually blunts the engine work (the question scope B asks).
+    /// Engine-level + deterministic: no socket, daemon, or window focus. Feeds the decoded payload
+    /// straight to the emulator, so it also exercises whatever `Data` shape the decoder returns.
+    func testIPCInclusiveScoreboard() throws {
+        try skipUnlessEnabled()
+        for chunkSize in [64 * 1024, 4 * 1024] {
+            for (name, bytes) in scoreboardWorkloads() {
+                let term = TerminalEmulator(cols: 160, rows: 48)
+                term.maxScrollbackLines = 10_000
+                var seq: UInt64 = 0
+                let nanos = timedNanos {
+                    var i = 0
+                    while i < bytes.count {
+                        let end = min(i + chunkSize, bytes.count)
+                        guard let framed = try? IPCCodec.encodeOutputFrame(Data(bytes[i ..< end]), sequence: seq)
+                        else { return }
+                        var buf = framed
+                        if case let .output(payload, _)? = try? IPCCodec.decodeReplyOrData(from: &buf) {
+                            term.feed(payload)
+                        }
+                        seq &+= UInt64(end - i)
+                        i = end
+                    }
+                }
+                let mbps = (Double(bytes.count) / 1_000_000) / (Double(nanos) / 1_000_000_000)
+                printBenchmark("ipc_consumer_\(name)_\(chunkSize)", nanos: nanos, fields: [
+                    ("bytes", "\(bytes.count)"),
+                    ("chunkBytes", "\(chunkSize)"),
+                    ("mbps", String(format: "%.3f", mbps)),
+                ])
+            }
+        }
+    }
+
     // MARK: - Latency under load (the headline gate for the daemon→GUI consume path)
     //
     // What users feel under a flood is *backlog drain time*: a keystroke echo is in-band (queued in
