@@ -296,7 +296,7 @@ public final class RealPty: @unchecked Sendable {
         do {
             try restartChild(cwd: cwd, shell: shell, rows: oldRows, cols: oldCols)
         } catch {
-            fputs("HarnessDaemon: respawn failed for \(id): \(error)\n", stderr)
+            fputs("HarnessDaemon: respawn failed for \(id): \(error)\n", harnessStderr)
             // The surface now has no live child, no read source, and would never fire `onExit` —
             // a zombie surface the GUI/attach clients hang attached to. Tear it down + notify
             // subscribers so `SurfaceRegistry` reaps it exactly like a normal shell exit.

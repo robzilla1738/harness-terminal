@@ -68,8 +68,8 @@ public struct SystemdUserInstaller: ServiceInstaller {
         if !activated {
             // Non-fatal: surface the systemctl output (e.g. "Failed to connect to bus" on a host with
             // no user session) but leave the unit installed so a later `systemctl --user` works.
-            fputs("harness: `systemctl --user enable --now \(Self.serviceName)` failed: \(result.output)\n", stderr)
-            fputs("harness: if this is a headless host, run `loginctl enable-linger $USER` and retry.\n", stderr)
+            fputs("harness: `systemctl --user enable --now \(Self.serviceName)` failed: \(result.output)\n", harnessStderr)
+            fputs("harness: if this is a headless host, run `loginctl enable-linger $USER` and retry.\n", harnessStderr)
         }
         return ServiceInstallReport(
             unitPath: unitURL,

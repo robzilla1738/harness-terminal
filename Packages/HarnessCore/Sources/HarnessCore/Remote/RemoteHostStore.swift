@@ -44,6 +44,45 @@ public final class RemoteHostStore: @unchecked Sendable {
     public func load() -> [RemoteHost] {
         lock.lock()
         defer { lock.unlock() }
+        return loadLocked()
+    }
+
+    @discardableResult
+    public func save(_ hosts: [RemoteHost]) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return saveLocked(hosts)
+    }
+
+    /// Insert or replace a host by name. Returns the updated list. The load-modify-save runs under
+    /// a single lock acquisition so concurrent upserts/removes can't lose each other's writes.
+    @discardableResult
+    public func upsert(_ host: RemoteHost) -> [RemoteHost] {
+        lock.lock()
+        defer { lock.unlock() }
+        var hosts = loadLocked()
+        if let idx = hosts.firstIndex(where: { $0.name == host.name }) {
+            hosts[idx] = host
+        } else {
+            hosts.append(host)
+        }
+        _ = saveLocked(hosts)
+        return hosts
+    }
+
+    @discardableResult
+    public func remove(name: String) -> [RemoteHost] {
+        lock.lock()
+        defer { lock.unlock() }
+        var hosts = loadLocked()
+        hosts.removeAll { $0.name == name }
+        _ = saveLocked(hosts)
+        return hosts
+    }
+
+    // MARK: - lock-held internals (caller holds `lock`)
+
+    private func loadLocked() -> [RemoteHost] {
         let url = HarnessPaths.remoteHostsURL
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url)
@@ -55,36 +94,12 @@ public final class RemoteHostStore: @unchecked Sendable {
         return []
     }
 
-    @discardableResult
-    public func save(_ hosts: [RemoteHost]) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
+    private func saveLocked(_ hosts: [RemoteHost]) -> Bool {
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(hosts) else { return false }
         return HarnessPaths.atomicWrite(data, to: HarnessPaths.remoteHostsURL, label: "RemoteHostStore")
-    }
-
-    /// Insert or replace a host by name. Returns the updated list.
-    @discardableResult
-    public func upsert(_ host: RemoteHost) -> [RemoteHost] {
-        var hosts = load()
-        if let idx = hosts.firstIndex(where: { $0.name == host.name }) {
-            hosts[idx] = host
-        } else {
-            hosts.append(host)
-        }
-        save(hosts)
-        return hosts
-    }
-
-    @discardableResult
-    public func remove(name: String) -> [RemoteHost] {
-        var hosts = load()
-        hosts.removeAll { $0.name == name }
-        save(hosts)
-        return hosts
     }
 
     public func host(named name: String) -> RemoteHost? {

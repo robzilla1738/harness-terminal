@@ -37,25 +37,25 @@ public enum WindowAttachClient {
 
     public static func run(tab selector: TabSelector, configuration: Configuration = Configuration()) throws -> Int32 {
         guard isatty(STDIN_FILENO) != 0, isatty(STDOUT_FILENO) != 0 else {
-            fputs("harness-cli attach-window: stdin/stdout must be a TTY\n", stderr)
+            fputs("harness-cli attach-window: stdin/stdout must be a TTY\n", harnessStderr)
             return 64
         }
         if ProcessInfo.processInfo.environment["HARNESS"] != nil {
             // The `$TMUX` analog: this is running inside a Harness pane. Allowed
             // (handy for testing), but warn so accidental nesting is visible.
-            fputs("harness-cli attach-window: already inside Harness ($HARNESS set); nesting — detach with the prefix.\n", stderr)
+            fputs("harness-cli attach-window: already inside Harness ($HARNESS set); nesting — detach with the prefix.\n", harnessStderr)
         }
         let client = DaemonClient()
         guard case let .snapshot(snapshot) = try client.request(.getSnapshot) else {
-            fputs("harness-cli attach-window: could not read session snapshot\n", stderr)
+            fputs("harness-cli attach-window: could not read session snapshot\n", harnessStderr)
             return 1
         }
         guard let tab = resolveTab(snapshot, selector: selector) else {
-            fputs("harness-cli attach-window: no matching tab\n", stderr)
+            fputs("harness-cli attach-window: no matching tab\n", harnessStderr)
             return 1
         }
         guard let location = locate(tabID: tab.id, in: snapshot) else {
-            fputs("harness-cli attach-window: tab is not in any session\n", stderr)
+            fputs("harness-cli attach-window: tab is not in any session\n", harnessStderr)
             return 1
         }
         // Make the requested tab the session's active window, then follow the
@@ -77,7 +77,7 @@ public enum WindowAttachClient {
             try session.run()
         } catch {
             AttachClient.restoreTerminalMode(original)
-            fputs("\nharness-cli attach-window: \(error)\n", stderr)
+            fputs("\nharness-cli attach-window: \(error)\n", harnessStderr)
             return 1
         }
         return 0

@@ -14,11 +14,11 @@ enum AgentHookInstallerCLI {
     static func run(agentArg: String) {
         let trimmed = agentArg.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            fputs("install-hooks: missing agent name (e.g. claude-code, codex, cursor, grok, opencode, pi, hermes, openclaw)\n", stderr)
+            fputs("install-hooks: missing agent name (e.g. claude-code, codex, cursor, grok, opencode, pi, hermes, openclaw)\n", harnessStderr)
             exit(1)
         }
         guard let kind = AgentHookInstaller.resolveAgentName(trimmed) else {
-            fputs("install-hooks: unknown agent \"\(agentArg)\"\n", stderr)
+            fputs("install-hooks: unknown agent \"\(agentArg)\"\n", harnessStderr)
             exit(1)
         }
         guard AgentHookInstaller.canInstall(kind) else {
@@ -57,7 +57,7 @@ enum AgentHookInstallerCLI {
             }
             print("See 'docs/agent-hooks/\(kind.rawValue).md' for details.")
         } catch {
-            fputs("install-hooks: failed to write hooks for \(kind.displayName): \(error)\n", stderr)
+            fputs("install-hooks: failed to write hooks for \(kind.displayName): \(error)\n", harnessStderr)
             exit(1)
         }
     }

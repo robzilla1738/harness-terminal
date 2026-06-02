@@ -474,7 +474,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             // (a read-only disk / full volume) instead of silently dropping the migrated state.
             if didMutate {
                 do { try settings.save() }
-                catch { fputs("Harness: failed to persist migrated settings.json — \(error)\n", stderr) }
+                catch { fputs("Harness: failed to persist migrated settings.json — \(error)\n", harnessStderr) }
             }
             return settings
         }
@@ -482,7 +482,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // immediately so subsequent launches are stable.
         let seeded = HarnessSettings.makeDefaults(imported: imported)
         do { try seeded.save() }
-        catch { fputs("Harness: failed to seed settings.json — \(error)\n", stderr) }
+        catch { fputs("Harness: failed to seed settings.json — \(error)\n", harnessStderr) }
         return seeded
     }
 

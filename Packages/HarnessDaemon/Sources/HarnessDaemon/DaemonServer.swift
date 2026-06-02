@@ -127,7 +127,7 @@ public final class DaemonServer: @unchecked Sendable {
         source.setCancelHandler { close(fd) }
         source.resume()
         listener = source
-        fputs("HarnessDaemon listening at \(HarnessPaths.socketURL.path)\n", stderr)
+        fputs("HarnessDaemon listening at \(HarnessPaths.socketURL.path)\n", harnessStderr)
     }
 
     private func acceptConnection(listenerFD: Int32) {

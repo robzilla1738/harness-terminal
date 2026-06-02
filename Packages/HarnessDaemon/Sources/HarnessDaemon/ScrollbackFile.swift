@@ -131,7 +131,7 @@ final class ScrollbackFile: @unchecked Sendable {
             try handle.write(contentsOf: data)
             return true
         } catch {
-            fputs("HarnessDaemon scrollback: append failed for \(url.lastPathComponent): \(error)\n", stderr)
+            fputs("HarnessDaemon scrollback: append failed for \(url.lastPathComponent): \(error)\n", harnessStderr)
             return false
         }
     }

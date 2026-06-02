@@ -25,7 +25,7 @@ public enum RecordClient {
         do {
             writer = try RecordingWriter(path: outputPath)
         } catch {
-            fputs("harness-cli record: cannot open \(outputPath): \(error)\n", stderr)
+            fputs("harness-cli record: cannot open \(outputPath): \(error)\n", harnessStderr)
             return 1
         }
 
@@ -74,7 +74,7 @@ private final class RecordSession: @unchecked Sendable {
         }
         installInterruptHandler()
 
-        fputs("harness-cli record: recording surface \(surfaceID) → \(writer.path) (Ctrl-C to stop)\n", stderr)
+        fputs("harness-cli record: recording surface \(surfaceID) → \(writer.path) (Ctrl-C to stop)\n", harnessStderr)
 
         do {
             subscription = try client.subscribeSurfaceOutput(
@@ -88,7 +88,7 @@ private final class RecordSession: @unchecked Sendable {
                 onEnd: { [weak self] in self?.stop() }
             )
         } catch {
-            fputs("harness-cli record: subscribe failed: \(error)\n", stderr)
+            fputs("harness-cli record: subscribe failed: \(error)\n", harnessStderr)
             _ = writer.close()
             return 1
         }
@@ -101,7 +101,7 @@ private final class RecordSession: @unchecked Sendable {
         let summary = writer.close()
         let seconds = Double(summary.durationMs) / 1000
         fputs(String(format: "harness-cli record: wrote %d events (%.1fs) → %@\n",
-                     summary.eventCount, seconds, writer.path), stderr)
+                     summary.eventCount, seconds, writer.path), harnessStderr)
         return 0
     }
 

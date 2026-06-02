@@ -10,6 +10,21 @@ import Darwin
 import Glibc
 #endif
 
+// MARK: - stderr
+
+/// A concurrency-safe stderr `FILE*` for the codebase's `fputs(_, harnessStderr)` logging idiom.
+///
+/// Swift 6 rejects direct references to the C `stderr` global on Linux (Glibc exposes it as a
+/// mutable `var`, "not concurrency-safe"). Opening our own unbuffered stream on fd 2 sidesteps that
+/// without referencing the flagged global, and behaves like real stderr (unbuffered, fd 2) on both
+/// platforms. `nonisolated(unsafe)`: a `FILE*` isn't `Sendable`, but a write-only unbuffered stderr
+/// stream is safe to share — `fputs` on it is atomic for the small lines we log.
+public nonisolated(unsafe) let harnessStderr: UnsafeMutablePointer<FILE> = {
+    guard let stream = fdopen(2, "w") else { fatalError("fdopen(stderr) failed") }
+    setvbuf(stream, nil, _IONBF, 0)
+    return stream
+}()
+
 // MARK: - Raw syscalls that collide with same-named Swift methods
 
 // `read`/`write`/`close` clash with instance methods (e.g. `RealPty.write`) and with Foundation, so

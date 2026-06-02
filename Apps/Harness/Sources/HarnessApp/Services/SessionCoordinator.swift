@@ -118,21 +118,24 @@ final class SessionCoordinator: NSObject {
     func connectToRemote(named name: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Bringing up the SSH tunnel blocks (spawns ssh + waits for the remote daemon), so it
-            // runs off-main. Carry a Sendable outcome (no non-Sendable Error) back to the main actor.
-            let outcome: Result<Endpoint, String>
+            // runs off-main. Carry Sendable values (an endpoint or an error message — not a
+            // non-Sendable Error) back to the main actor.
+            var resolved: Endpoint?
+            var failureMessage: String?
             do {
-                outcome = .success(try RemoteHostsService.shared.connect(named: name))
+                resolved = try RemoteHostsService.shared.connect(named: name)
             } catch {
-                outcome = .failure("\(error)")
+                failureMessage = "\(error)"
             }
+            let endpoint = resolved
+            let message = failureMessage
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    switch outcome {
-                    case let .success(endpoint):
+                    if let endpoint {
                         self.applyEndpointSwitch(endpoint)
-                    case let .failure(message):
-                        self.noteDaemonError(DaemonSessionError.daemonError(message))
+                    } else {
+                        self.noteDaemonError(DaemonSessionError.daemonError(message ?? "connection failed"))
                     }
                 }
             }

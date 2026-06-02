@@ -51,9 +51,9 @@ final class DaemonCommandExecutor: @unchecked Sendable {
             case let .requests(requests):
                 for request in requests { _ = registry.handle(request) }
             case .clientLocal:
-                fputs("HarnessDaemon: hook command has no server-side action: \(command.shortDescription)\n", stderr)
+                fputs("HarnessDaemon: hook command has no server-side action: \(command.shortDescription)\n", harnessStderr)
             case .unresolved:
-                fputs("HarnessDaemon: hook command had no resolvable target: \(command.shortDescription)\n", stderr)
+                fputs("HarnessDaemon: hook command had no resolvable target: \(command.shortDescription)\n", harnessStderr)
             }
         }
     }

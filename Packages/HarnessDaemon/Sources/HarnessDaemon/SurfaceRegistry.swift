@@ -937,7 +937,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
         }
         do { try process.run() } catch {
-            fputs("HarnessDaemon: run-shell hook failed: \(error)\n", stderr)
+            fputs("HarnessDaemon: run-shell hook failed: \(error)\n", harnessStderr)
         }
     }
 
@@ -973,7 +973,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         do {
             try store.saveImmediately(editor.snapshot)
         } catch {
-            fputs("HarnessDaemon snapshot save failed: \(error)\n", stderr)
+            fputs("HarnessDaemon snapshot save failed: \(error)\n", harnessStderr)
         }
         NotificationBus.shared.postSnapshotChanged(revision: revision)
         onSnapshotCommitted?(revision)
@@ -1021,7 +1021,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             sessions[surfaceID] = session
             return surfaceID
         } catch {
-            fputs("HarnessDaemon surface launch failed for \(surfaceID): \(error)\n", stderr)
+            fputs("HarnessDaemon surface launch failed for \(surfaceID): \(error)\n", harnessStderr)
             return nil
         }
     }
@@ -1034,7 +1034,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         let fallbacks = [ProcessInfo.processInfo.environment["SHELL"], "/bin/zsh", "/bin/bash", "/bin/sh"]
             .compactMap { $0 }
         for fallback in fallbacks where fm.isExecutableFile(atPath: fallback) {
-            fputs("HarnessDaemon: shell '\(candidate)' is not executable; falling back to '\(fallback)'\n", stderr)
+            fputs("HarnessDaemon: shell '\(candidate)' is not executable; falling back to '\(fallback)'\n", harnessStderr)
             return fallback
         }
         return candidate
@@ -1209,7 +1209,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         if (try? process.run()) == nil {
             // Never log the command itself — a pipe target can carry tokens/paths the user
             // would not want in daemon stderr. The surface id is enough to diagnose.
-            fputs("HarnessDaemon: pipe-pane failed to launch for surface \(surfaceID)\n", stderr)
+            fputs("HarnessDaemon: pipe-pane failed to launch for surface \(surfaceID)\n", harnessStderr)
             stopPipe(surfaceID: surfaceID)
         }
     }

@@ -39,7 +39,7 @@ public enum AttachClient {
         endpoint: Endpoint = .localControlSocket
     ) throws -> Int32 {
         guard isatty(STDIN_FILENO) != 0, isatty(STDOUT_FILENO) != 0 else {
-            fputs("harness-cli attach: stdin/stdout must be a TTY\n", stderr)
+            fputs("harness-cli attach: stdin/stdout must be a TTY\n", harnessStderr)
             return 64
         }
         let client = DaemonClient(endpoint: endpoint)
@@ -67,7 +67,7 @@ public enum AttachClient {
         do {
             try session.run()
         } catch {
-            fputs("\nharness-cli attach: \(error)\n", stderr)
+            fputs("\nharness-cli attach: \(error)\n", harnessStderr)
             return 1
         }
         return 0

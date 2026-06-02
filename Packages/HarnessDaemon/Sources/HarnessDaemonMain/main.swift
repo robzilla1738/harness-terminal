@@ -15,7 +15,7 @@ import HarnessDaemonCore
 @Sendable
 func daemonLog(_ message: String) {
     let line = "[\(ISO8601DateFormatter().string(from: Date())) pid=\(getpid())] \(message)\n"
-    fputs(line, stderr)
+    fputs(line, harnessStderr)
     let url = HarnessPaths.daemonLogURL
     try? HarnessPaths.ensureDirectories()
     let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)

@@ -192,10 +192,10 @@ public enum HarnessPaths {
                 try FileManager.default.removeItem(at: backup)
             }
             try FileManager.default.moveItem(at: url, to: backup)
-            fputs("\(label): \(url.lastPathComponent) unreadable — backed up to \(backup.lastPathComponent)\n", stderr)
+            fputs("\(label): \(url.lastPathComponent) unreadable — backed up to \(backup.lastPathComponent)\n", harnessStderr)
             return true
         } catch {
-            fputs("\(label): \(url.lastPathComponent) unreadable and could not be backed up: \(error)\n", stderr)
+            fputs("\(label): \(url.lastPathComponent) unreadable and could not be backed up: \(error)\n", harnessStderr)
             return false
         }
     }
@@ -209,7 +209,7 @@ public enum HarnessPaths {
             try data.write(to: url, options: .atomic)
             return true
         } catch {
-            fputs("\(label): failed to write \(url.lastPathComponent): \(error)\n", stderr)
+            fputs("\(label): failed to write \(url.lastPathComponent): \(error)\n", harnessStderr)
             return false
         }
     }

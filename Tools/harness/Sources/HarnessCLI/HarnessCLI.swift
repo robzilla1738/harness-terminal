@@ -73,19 +73,19 @@ struct HarnessCLI {
                 try handleSelectSession(args, client: client)
             case "close-tab":
                 guard let tabID = UUID(uuidString: flagValue(args, flag: "--tab") ?? "") else {
-                    fputs("Usage: harness-cli close-tab --tab <uuid>\n", stderr)
+                    fputs("Usage: harness-cli close-tab --tab <uuid>\n", harnessStderr)
                     exit(1)
                 }
                 _ = try checkedRequest(client, .closeTab(tabID: tabID))
             case "close-session":
                 guard let sessionID = UUID(uuidString: flagValue(args, flag: "--session") ?? "") else {
-                    fputs("Usage: harness-cli close-session --session <uuid>\n", stderr)
+                    fputs("Usage: harness-cli close-session --session <uuid>\n", harnessStderr)
                     exit(1)
                 }
                 _ = try checkedRequest(client, .closeSession(sessionID: sessionID))
             case "promote-session", "demote-session":
                 guard let sessionID = UUID(uuidString: flagValue(args, flag: "--session") ?? "") else {
-                    fputs("Usage: harness-cli \(command) --session <uuid>\n", stderr)
+                    fputs("Usage: harness-cli \(command) --session <uuid>\n", harnessStderr)
                     exit(1)
                 }
                 // Promote pins a session to survive a clean quit even in Plain mode; demote
@@ -95,13 +95,13 @@ struct HarnessCLI {
                 guard let surface = flagValue(args, flag: "--surface"),
                       let text = flagValue(args, flag: "--text")
                 else {
-                    fputs("Usage: harness-cli send --surface <uuid> --text \"...\"\n", stderr)
+                    fputs("Usage: harness-cli send --surface <uuid> --text \"...\"\n", harnessStderr)
                     exit(1)
                 }
                 _ = try checkedRequest(client, .send(surfaceID: surface, text: text))
             case "notify":
                 guard let surface = flagValue(args, flag: "--surface") else {
-                    fputs("Usage: harness-cli notify --surface <uuid> [--title t] [--body b] [--from-hook]\n", stderr)
+                    fputs("Usage: harness-cli notify --surface <uuid> [--title t] [--body b] [--from-hook]\n", harnessStderr)
                     exit(1)
                 }
                 let title = flagValue(args, flag: "--title") ?? "Agent"
@@ -168,7 +168,7 @@ struct HarnessCLI {
                 #else
                 // The window compositor needs the Metal/AppKit terminal kit, which isn't built on
                 // headless/Linux. Single-pane `attach` still works there.
-                fputs("harness-cli attach-window: not supported on this platform; use `attach`\n", stderr)
+                fputs("harness-cli attach-window: not supported on this platform; use `attach`\n", harnessStderr)
                 exit(64)
                 #endif
             case "record":
@@ -242,7 +242,7 @@ struct HarnessCLI {
                 exit(1)
             }
         } catch {
-            fputs("harness-cli: \(error)\n", stderr)
+            fputs("harness-cli: \(error)\n", harnessStderr)
             exit(1)
         }
     }
@@ -262,7 +262,7 @@ struct HarnessCLI {
 
         let themeName = flagValue(args, flag: "--theme") ?? HarnessThemeCatalog.defaultThemeName
         guard let theme = HarnessThemeCatalog.theme(named: themeName) else {
-            fputs("Unknown theme: \(themeName)\n", stderr)
+            fputs("Unknown theme: \(themeName)\n", harnessStderr)
             exit(1)
         }
         print(ThemeDiagnostics.themePreview(theme), terminator: "")
@@ -276,7 +276,7 @@ struct HarnessCLI {
             return
         }
         guard let workspaceID = UUID(uuidString: flagValue(args, flag: "--workspace-id") ?? "") else {
-            fputs("Usage: harness-cli new-tab --workspace <name|uuid> [--cwd path]\n", stderr)
+            fputs("Usage: harness-cli new-tab --workspace <name|uuid> [--cwd path]\n", harnessStderr)
             exit(1)
         }
         let cwd = flagValue(args, flag: "--cwd")
@@ -286,7 +286,7 @@ struct HarnessCLI {
 
     static func handleNewSession(_ args: [String], client: DaemonClient) throws {
         guard let workspaceID = try resolveWorkspaceID(args, client: client) else {
-            fputs("Usage: harness-cli new-session --workspace <name|uuid> [--cwd path] [--name name]\n", stderr)
+            fputs("Usage: harness-cli new-session --workspace <name|uuid> [--cwd path] [--name name]\n", harnessStderr)
             exit(1)
         }
         let cwd = flagValue(args, flag: "--cwd")
@@ -300,7 +300,7 @@ struct HarnessCLI {
               let directionRaw = flagValue(args, flag: "--direction"),
               let direction = SplitDirection(rawValue: directionRaw)
         else {
-            fputs("Usage: harness-cli new-split --tab <uuid> --direction horizontal|vertical\n", stderr)
+            fputs("Usage: harness-cli new-split --tab <uuid> --direction horizontal|vertical\n", harnessStderr)
             exit(1)
         }
         let paneID = UUID(uuidString: flagValue(args, flag: "--pane") ?? "")
@@ -310,7 +310,7 @@ struct HarnessCLI {
 
     static func handleSelectWorkspace(_ args: [String], client: DaemonClient) throws {
         guard let target = flagValue(args, flag: "--workspace") ?? flagValue(args, flag: "--id") else {
-            fputs("Usage: harness-cli select-workspace --workspace <name|uuid>\n", stderr)
+            fputs("Usage: harness-cli select-workspace --workspace <name|uuid>\n", harnessStderr)
             exit(1)
         }
         if let uuid = UUID(uuidString: target) {
@@ -324,7 +324,7 @@ struct HarnessCLI {
         guard let workspaceID = UUID(uuidString: flagValue(args, flag: "--workspace") ?? ""),
               let tabID = UUID(uuidString: flagValue(args, flag: "--tab") ?? "")
         else {
-            fputs("Usage: harness-cli select-tab --workspace <uuid> --tab <uuid>\n", stderr)
+            fputs("Usage: harness-cli select-tab --workspace <uuid> --tab <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .selectTab(workspaceID: workspaceID, tabID: tabID))
@@ -334,7 +334,7 @@ struct HarnessCLI {
         guard let workspaceID = try resolveWorkspaceID(args, client: client),
               let sessionID = UUID(uuidString: flagValue(args, flag: "--session") ?? "")
         else {
-            fputs("Usage: harness-cli select-session --workspace <name|uuid> --session <uuid>\n", stderr)
+            fputs("Usage: harness-cli select-session --workspace <name|uuid> --session <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .selectSession(workspaceID: workspaceID, sessionID: sessionID))
@@ -423,7 +423,7 @@ struct HarnessCLI {
             tab = snap.activeWorkspace?.activeTab
         }
         guard let tab else {
-            fputs("list-panes: no matching tab\n", stderr)
+            fputs("list-panes: no matching tab\n", harnessStderr)
             exit(1)
         }
         try emit(SnapshotQueryFormatter.paneRows(in: tab), args) {
@@ -435,7 +435,7 @@ struct HarnessCLI {
     /// printing nothing (so `if harness-cli has-session …` works in shell scripts).
     static func handleHasSession(_ args: [String], client: DaemonClient) throws {
         guard let target = flagValue(args, flag: "--session") else {
-            fputs("Usage: harness-cli has-session --session <name|uuid>\n", stderr)
+            fputs("Usage: harness-cli has-session --session <name|uuid>\n", harnessStderr)
             exit(2)
         }
         let exists = SnapshotQueryFormatter.sessionExists(try snapshot(client), nameOrID: target)
@@ -462,7 +462,7 @@ struct HarnessCLI {
         guard let surface = flagValue(args, flag: "--surface"),
               let keys = flagValue(args, flag: "--keys")
         else {
-            fputs("Usage: harness-cli send-keys --surface <id> [-l|-H] --keys \"C-c Up Enter ...\"\n", stderr)
+            fputs("Usage: harness-cli send-keys --surface <id> [-l|-H] --keys \"C-c Up Enter ...\"\n", harnessStderr)
             exit(1)
         }
         // `-l` (literal): send the keys text verbatim, no key-name interpretation.
@@ -481,7 +481,7 @@ struct HarnessCLI {
 
     static func handleCapturePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-e] [-J] [-p]\n", stderr)
+            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-e] [-J] [-p]\n", harnessStderr)
             exit(1)
         }
         // -S/-E request a line range (tmux `-p` prints to stdout, the default here);
@@ -502,7 +502,7 @@ struct HarnessCLI {
 
     static func handlePipePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli pipe-pane --surface <id> [<shell-command>]   (omit command to stop)\n", stderr)
+            fputs("Usage: harness-cli pipe-pane --surface <id> [<shell-command>]   (omit command to stop)\n", harnessStderr)
             exit(1)
         }
         // Skip the subcommand at index 0; the first remaining non-flag, non-surface
@@ -520,7 +520,7 @@ struct HarnessCLI {
         else if args.contains("-U") { mode = "unlock" }
         else { mode = "wait" }
         guard let channel = positionalArgs(args, skippingValuesFor: []).first else {
-            fputs("Usage: harness-cli wait-for [-S|-L|-U] <channel>\n", stderr)
+            fputs("Usage: harness-cli wait-for [-S|-L|-U] <channel>\n", harnessStderr)
             exit(1)
         }
         // `wait`/`lock` block until signaled/granted — a generous (≈1 week) timeout, well
@@ -532,7 +532,7 @@ struct HarnessCLI {
     static func handleLinkWindow(_ args: [String], client: DaemonClient) throws {
         guard let tabRaw = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabRaw),
               let sessionRaw = flagValue(args, flag: "--target-session"), let sessionID = UUID(uuidString: sessionRaw) else {
-            fputs("Usage: harness-cli link-window --tab <uuid> --target-session <uuid>\n", stderr)
+            fputs("Usage: harness-cli link-window --tab <uuid> --target-session <uuid>\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .linkWindow(tabID: tabID, targetSessionID: sessionID))
@@ -541,7 +541,7 @@ struct HarnessCLI {
 
     static func handleUnlinkWindow(_ args: [String], client: DaemonClient) throws {
         guard let tabRaw = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabRaw) else {
-            fputs("Usage: harness-cli unlink-window --tab <uuid>\n", stderr)
+            fputs("Usage: harness-cli unlink-window --tab <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .unlinkWindow(tabID: tabID))
@@ -549,7 +549,7 @@ struct HarnessCLI {
 
     static func handlePaneCommand(_ args: [String], client: DaemonClient, _ make: (UUID) -> IPCRequest) throws {
         guard let paneIDStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneIDStr) else {
-            fputs("Missing or invalid --pane <uuid>\n", stderr)
+            fputs("Missing or invalid --pane <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, make(paneID))
@@ -559,7 +559,7 @@ struct HarnessCLI {
         guard let srcStr = flagValue(args, flag: "--src"), let src = UUID(uuidString: srcStr),
               let dstStr = flagValue(args, flag: "--dst"), let dst = UUID(uuidString: dstStr)
         else {
-            fputs("Usage: harness-cli swap-pane --src <uuid> --dst <uuid>\n", stderr)
+            fputs("Usage: harness-cli swap-pane --src <uuid> --dst <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .swapPanes(srcPaneID: src, dstPaneID: dst))
@@ -570,7 +570,7 @@ struct HarnessCLI {
               let dirStr = flagValue(args, flag: "--dir")?.lowercased(),
               let direction = parseDirection(dirStr)
         else {
-            fputs("Usage: harness-cli resize-pane --pane <uuid> --dir L|R|U|D [--amount N]\n", stderr)
+            fputs("Usage: harness-cli resize-pane --pane <uuid> --dir L|R|U|D [--amount N]\n", harnessStderr)
             exit(1)
         }
         let amount = Int(flagValue(args, flag: "--amount") ?? "1") ?? 1
@@ -589,7 +589,7 @@ struct HarnessCLI {
 
     static func handleCopyMode(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli copy-mode --surface <id> [--enter|--exit]\n", stderr)
+            fputs("Usage: harness-cli copy-mode --surface <id> [--enter|--exit]\n", harnessStderr)
             exit(1)
         }
         let enabled = !args.contains("--exit")
@@ -600,7 +600,7 @@ struct HarnessCLI {
         guard let tabStr = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabStr),
               let name = flagValue(args, flag: "--name")
         else {
-            fputs("Usage: harness-cli rename-tab --tab <uuid> --name \"...\"\n", stderr)
+            fputs("Usage: harness-cli rename-tab --tab <uuid> --name \"...\"\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .renameTab(tabID: tabID, name: name))
@@ -610,7 +610,7 @@ struct HarnessCLI {
         guard let sessionStr = flagValue(args, flag: "--session"), let sessionID = UUID(uuidString: sessionStr),
               let name = flagValue(args, flag: "--name")
         else {
-            fputs("Usage: harness-cli rename-session --session <uuid> --name \"...\"\n", stderr)
+            fputs("Usage: harness-cli rename-session --session <uuid> --name \"...\"\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .renameSession(sessionID: sessionID, name: name))
@@ -621,7 +621,7 @@ struct HarnessCLI {
               let id = UUID(uuidString: idStr),
               let name = flagValue(args, flag: "--name")
         else {
-            fputs("Usage: harness-cli rename-workspace --id <uuid> --name \"...\"\n", stderr)
+            fputs("Usage: harness-cli rename-workspace --id <uuid> --name \"...\"\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .renameWorkspace(workspaceID: id, name: name))
@@ -629,7 +629,7 @@ struct HarnessCLI {
 
     static func handleDetectAgent(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli detect-agent --surface <id>\n", stderr)
+            fputs("Usage: harness-cli detect-agent --surface <id>\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .detectAgent(surfaceID: surface))
@@ -656,12 +656,12 @@ struct HarnessCLI {
             shells = [ShellIntegration.Shell(rawValue: arg)!]
         case "":
             guard let detected = ShellIntegration.Shell.detect(from: ProcessInfo.processInfo.environment["SHELL"] ?? "") else {
-                fputs("install-shell-integration: couldn't detect your shell from $SHELL — pass one of: bash, zsh, fish, all\n", stderr)
+                fputs("install-shell-integration: couldn't detect your shell from $SHELL — pass one of: bash, zsh, fish, all\n", harnessStderr)
                 exit(1)
             }
             shells = [detected]
         default:
-            fputs("install-shell-integration: unknown shell \"\(arg)\" (expected bash, zsh, fish, or all)\n", stderr)
+            fputs("install-shell-integration: unknown shell \"\(arg)\" (expected bash, zsh, fish, or all)\n", harnessStderr)
             exit(1)
         }
         var failed = false
@@ -675,7 +675,7 @@ struct HarnessCLI {
                     print("\(shell.rawValue): wrote \(r.scriptPath.path) and added it to \(r.rcPath.path)")
                 }
             } catch {
-                fputs("install-shell-integration: \(shell.rawValue) failed: \(error)\n", stderr)
+                fputs("install-shell-integration: \(shell.rawValue) failed: \(error)\n", harnessStderr)
                 failed = true
             }
         }
@@ -685,7 +685,7 @@ struct HarnessCLI {
 
     static func handleAttach(_ args: [String]) throws -> Int32 {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli attach --surface <id> [--detach-keys <bytes>] [--host <name>]\n", stderr)
+            fputs("Usage: harness-cli attach --surface <id> [--detach-keys <bytes>] [--host <name>]\n", harnessStderr)
             return 64
         }
         var configuration = AttachClient.Configuration()
@@ -710,7 +710,7 @@ struct HarnessCLI {
     static func resolveEndpoint(_ args: [String]) throws -> Endpoint {
         guard let hostName = flagValue(args, flag: "--host") else { return .localControlSocket }
         guard let host = RemoteHostStore().host(named: hostName) else {
-            fputs("harness-cli: unknown --host '\(hostName)'. Add it with `harness-cli remote add`.\n", stderr)
+            fputs("harness-cli: unknown --host '\(hostName)'. Add it with `harness-cli remote add`.\n", harnessStderr)
             exit(64)
         }
         return try SSHTunnelManager.shared.endpoint(for: host)
@@ -734,13 +734,13 @@ struct HarnessCLI {
         case "add":
             guard let name = flagValue(args, flag: "--name"), let ssh = flagValue(args, flag: "--ssh") else {
                 fputs("Usage: harness-cli remote add --name <name> --ssh <user@host> "
-                    + "[--socket <remote-path>] [--ssh-arg <arg> ...]\n", stderr)
+                    + "[--socket <remote-path>] [--ssh-arg <arg> ...]\n", harnessStderr)
                 return 64
             }
             guard let socketPath = flagValue(args, flag: "--socket")
                 ?? RemoteHost.defaultRemoteSocketPath(forSSHTarget: ssh) else {
                 fputs("harness-cli remote add: could not infer the remote socket path; pass --socket "
-                    + "<remote-path> (see `harness-cli doctor` on the remote for its value).\n", stderr)
+                    + "<remote-path> (see `harness-cli doctor` on the remote for its value).\n", harnessStderr)
                 return 64
             }
             var sshArgs: [String] = []
@@ -753,7 +753,7 @@ struct HarnessCLI {
             return 0
         case "remove":
             guard let name = flagValue(args, flag: "--name") else {
-                fputs("Usage: harness-cli remote remove --name <name>\n", stderr)
+                fputs("Usage: harness-cli remote remove --name <name>\n", harnessStderr)
                 return 64
             }
             store.remove(name: name)
@@ -761,7 +761,7 @@ struct HarnessCLI {
             print("Removed remote '\(name)'")
             return 0
         default:
-            fputs("Usage: harness-cli remote <list|add|remove> ...\n", stderr)
+            fputs("Usage: harness-cli remote <list|add|remove> ...\n", harnessStderr)
             return 64
         }
     }
@@ -773,7 +773,7 @@ struct HarnessCLI {
     static func handleRecord(_ args: [String], client: DaemonClient) -> Int32 {
         guard let surface = flagValue(args, flag: "--surface"),
               let output = flagValue(args, flag: "--output") else {
-            fputs("Usage: harness-cli record --surface <uuid> --output <file> [--display]\n", stderr)
+            fputs("Usage: harness-cli record --surface <uuid> --output <file> [--display]\n", harnessStderr)
             return 64
         }
         return RecordClient.run(
@@ -787,12 +787,12 @@ struct HarnessCLI {
     /// `--no-timing` dumps everything instantly. Ctrl-C stops cleanly.
     static func handleReplay(_ args: [String]) -> Int32 {
         guard let file = positionalArgs(args, skippingValuesFor: ["--speed"]).first else {
-            fputs("Usage: harness-cli replay <file> [--speed <n>] [--no-timing]\n", stderr)
+            fputs("Usage: harness-cli replay <file> [--speed <n>] [--no-timing]\n", harnessStderr)
             return 64
         }
         let speed = Double(flagValue(args, flag: "--speed") ?? "1") ?? .nan
         guard speed > 0 else {
-            fputs("harness-cli replay: --speed must be a positive number\n", stderr)
+            fputs("harness-cli replay: --speed must be a positive number\n", harnessStderr)
             return 64
         }
         return ReplayClient.run(path: file, speed: speed, honorTiming: !args.contains("--no-timing"))
@@ -869,7 +869,7 @@ struct HarnessCLI {
 
     static func handleDetachClient(_ args: [String], client: DaemonClient) throws {
         guard let raw = flagValue(args, flag: "--client"), let id = UUID(uuidString: raw) else {
-            fputs("Usage: harness-cli detach-client --client <uuid>\n", stderr)
+            fputs("Usage: harness-cli detach-client --client <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .detachClient(clientID: id))
@@ -884,13 +884,13 @@ struct HarnessCLI {
         positional.removeAll { $0 == "-T" }
         if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
         guard positional.count >= 2 else {
-            fputs("Usage: harness-cli bind-key [-T <table>] <spec> <command...>\n", stderr)
+            fputs("Usage: harness-cli bind-key [-T <table>] <spec> <command...>\n", harnessStderr)
             exit(1)
         }
         let spec = positional[0]
         let source = positional.dropFirst().joined(separator: " ")
         guard let parsedSpec = KeySpec.parse(spec) else {
-            fputs("Invalid key spec: \(spec)\n", stderr)
+            fputs("Invalid key spec: \(spec)\n", harnessStderr)
             exit(1)
         }
         let command = try CommandParser.parse(source)
@@ -907,7 +907,7 @@ struct HarnessCLI {
         positional.removeAll { $0 == "-T" }
         if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
         guard let spec = positional.first, let parsedSpec = KeySpec.parse(spec) else {
-            fputs("Usage: harness-cli unbind-key [-T <table>] <spec>\n", stderr)
+            fputs("Usage: harness-cli unbind-key [-T <table>] <spec>\n", harnessStderr)
             exit(1)
         }
         var set = KeybindingsStore.load()
@@ -924,7 +924,7 @@ struct HarnessCLI {
         } else if args.contains("--stdin") {
             data = FileHandle.standardInput.readDataToEndOfFile()
         } else {
-            fputs("Usage: harness-cli set-buffer (--data <text> | --stdin) [--name <name>]\n", stderr)
+            fputs("Usage: harness-cli set-buffer (--data <text> | --stdin) [--name <name>]\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .setBuffer(name: name, data: data))
@@ -952,7 +952,7 @@ struct HarnessCLI {
 
     static func handleDeleteBuffer(_ args: [String], client: DaemonClient) throws {
         guard let name = flagValue(args, flag: "--name") else {
-            fputs("Usage: harness-cli delete-buffer --name <name>\n", stderr)
+            fputs("Usage: harness-cli delete-buffer --name <name>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .deleteBuffer(name: name))
@@ -960,7 +960,7 @@ struct HarnessCLI {
 
     static func handlePasteBuffer(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli paste-buffer --surface <id> [--name <name>] [-p|--bracketed]\n", stderr)
+            fputs("Usage: harness-cli paste-buffer --surface <id> [--name <name>] [-p|--bracketed]\n", harnessStderr)
             exit(1)
         }
         let name = flagValue(args, flag: "--name")
@@ -987,7 +987,7 @@ struct HarnessCLI {
     static func handleSaveBuffer(_ args: [String], client: DaemonClient) throws {
         let name = flagValue(args, flag: "--name")
         guard let path = flagValue(args, flag: "--file") ?? positionalArgs(args, skippingValuesFor: ["--name", "--file"]).first else {
-            fputs("Usage: harness-cli save-buffer [--name <name>] <path>\n", stderr)
+            fputs("Usage: harness-cli save-buffer [--name <name>] <path>\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .getBuffer(name: name))
@@ -1002,7 +1002,7 @@ struct HarnessCLI {
     static func handleLoadBuffer(_ args: [String], client: DaemonClient) throws {
         let name = flagValue(args, flag: "--name")
         guard let path = flagValue(args, flag: "--file") ?? positionalArgs(args, skippingValuesFor: ["--name", "--file"]).first else {
-            fputs("Usage: harness-cli load-buffer [--name <name>] <path>\n", stderr)
+            fputs("Usage: harness-cli load-buffer [--name <name>] <path>\n", harnessStderr)
             exit(1)
         }
         let expanded = (path as NSString).expandingTildeInPath
@@ -1015,7 +1015,7 @@ struct HarnessCLI {
         guard let tabStr = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabStr),
               let layout = flagValue(args, flag: "--layout")
         else {
-            fputs("Usage: harness-cli select-layout --tab <uuid> --layout <name> [--main <paneUUID>]\n", stderr)
+            fputs("Usage: harness-cli select-layout --tab <uuid> --layout <name> [--main <paneUUID>]\n", harnessStderr)
             exit(1)
         }
         let mainPaneID = flagValue(args, flag: "--main").flatMap { UUID(uuidString: $0) }
@@ -1024,7 +1024,7 @@ struct HarnessCLI {
 
     static func handleCycleLayout(_ args: [String], client: DaemonClient, forward: Bool) throws {
         guard let tabStr = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabStr) else {
-            fputs("Usage: harness-cli \(forward ? "next" : "previous")-layout --tab <uuid>\n", stderr)
+            fputs("Usage: harness-cli \(forward ? "next" : "previous")-layout --tab <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, forward ? .nextLayout(tabID: tabID) : .previousLayout(tabID: tabID))
@@ -1032,7 +1032,7 @@ struct HarnessCLI {
 
     static func handleRotateWindow(_ args: [String], client: DaemonClient) throws {
         guard let tabStr = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: tabStr) else {
-            fputs("Usage: harness-cli rotate-window --tab <uuid> [--reverse]\n", stderr)
+            fputs("Usage: harness-cli rotate-window --tab <uuid> [--reverse]\n", harnessStderr)
             exit(1)
         }
         let forward = !args.contains("--reverse")
@@ -1041,7 +1041,7 @@ struct HarnessCLI {
 
     static func handleBreakPane(_ args: [String], client: DaemonClient) throws {
         guard let paneStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneStr) else {
-            fputs("Usage: harness-cli break-pane --pane <uuid>\n", stderr)
+            fputs("Usage: harness-cli break-pane --pane <uuid>\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .breakPane(paneID: paneID))
@@ -1054,7 +1054,7 @@ struct HarnessCLI {
               let dirStr = flagValue(args, flag: "--direction"),
               let direction = SplitDirection(rawValue: dirStr)
         else {
-            fputs("Usage: harness-cli join-pane --src <uuid> --dst <uuid> --direction horizontal|vertical\n", stderr)
+            fputs("Usage: harness-cli join-pane --src <uuid> --dst <uuid> --direction horizontal|vertical\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .joinPane(sourcePaneID: src, destPaneID: dst, direction: direction))
@@ -1067,7 +1067,7 @@ struct HarnessCLI {
         guard let srcStr = flagValue(args, flag: "--src"), let src = UUID(uuidString: srcStr),
               let dstStr = flagValue(args, flag: "--dst"), let dst = UUID(uuidString: dstStr)
         else {
-            fputs("Usage: harness-cli move-pane --src <uuid> --dst <uuid> [--direction horizontal|vertical]\n", stderr)
+            fputs("Usage: harness-cli move-pane --src <uuid> --dst <uuid> [--direction horizontal|vertical]\n", harnessStderr)
             exit(1)
         }
         let direction = flagValue(args, flag: "--direction").flatMap(SplitDirection.init(rawValue:)) ?? .horizontal
@@ -1078,7 +1078,7 @@ struct HarnessCLI {
     /// `renumber-windows --session <uuid>` — renumber a session's tab indices.
     static func handleRenumberWindows(_ args: [String], client: DaemonClient) throws {
         guard let sessionStr = flagValue(args, flag: "--session"), let session = UUID(uuidString: sessionStr) else {
-            fputs("Usage: harness-cli renumber-windows --session <uuid>\n", stderr)
+            fputs("Usage: harness-cli renumber-windows --session <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .renumberWindows(sessionID: session))
@@ -1086,7 +1086,7 @@ struct HarnessCLI {
 
     static func handleRespawnPane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli respawn-pane --surface <id> [--clear-history]\n", stderr)
+            fputs("Usage: harness-cli respawn-pane --surface <id> [--clear-history]\n", harnessStderr)
             exit(1)
         }
         let keepHistory = !args.contains("--clear-history")
@@ -1095,13 +1095,13 @@ struct HarnessCLI {
 
     static func handleSelectPane(_ args: [String], client: DaemonClient) throws {
         guard let paneStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneStr) else {
-            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", stderr)
+            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", harnessStderr)
             exit(1)
         }
         guard let dirStr = flagValue(args, flag: "--dir")?.lowercased(),
               let axis = DirectionalAxis(short: dirStr)
         else {
-            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", stderr)
+            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .selectPaneDirectional(currentPaneID: paneID, direction: axis))
@@ -1121,7 +1121,7 @@ struct HarnessCLI {
         // lone scope flags), so `<key>` isn't mis-read as the subcommand name.
         let positional = positionalArgs(args, skippingValuesFor: ["-T"])
         guard positional.count >= 2 else {
-            fputs("Usage: harness-cli set-option [-g|-w|-s|-t|-p] [-T <target>] <key> <value>\n", stderr)
+            fputs("Usage: harness-cli set-option [-g|-w|-s|-t|-p] [-T <target>] <key> <value>\n", harnessStderr)
             exit(1)
         }
         let key = positional[0]
@@ -1158,7 +1158,7 @@ struct HarnessCLI {
         // flags like `-g`/`-u`), so `<key>` isn't mis-read as the subcommand name.
         let positional = positionalArgs(args, skippingValuesFor: ["-s"])
         guard let key = positional.first else {
-            fputs("Usage: harness-cli set-environment [-g] [-u] [-s <sessionID>] <key> [value]\n", stderr)
+            fputs("Usage: harness-cli set-environment [-g] [-u] [-s <sessionID>] <key> [value]\n", harnessStderr)
             exit(1)
         }
         let value = unset ? nil : positional.dropFirst().joined(separator: " ")
@@ -1180,7 +1180,7 @@ struct HarnessCLI {
         // Drop the subcommand (`bind-hook`) at index 0: `<event> <command...> [--if <format>]`.
         let rest = Array(args.dropFirst())
         guard rest.count >= 2 else {
-            fputs("Usage: harness-cli bind-hook <event> <command...> [--if <format>]\n", stderr)
+            fputs("Usage: harness-cli bind-hook <event> <command...> [--if <format>]\n", harnessStderr)
             exit(1)
         }
         let event = rest[0]
@@ -1198,7 +1198,7 @@ struct HarnessCLI {
 
     static func handleUnbindHook(_ args: [String], client: DaemonClient) throws {
         guard let raw = flagValue(args, flag: "--id"), let id = UUID(uuidString: raw) else {
-            fputs("Usage: harness-cli unbind-hook --id <uuid>\n", stderr)
+            fputs("Usage: harness-cli unbind-hook --id <uuid>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .unbindHook(id: id))
@@ -1220,7 +1220,7 @@ struct HarnessCLI {
         // Drop the subcommand at index 0 so it doesn't leak into the format string.
         let format = args.dropFirst().joined(separator: " ")
         guard !format.isEmpty else {
-            fputs("Usage: harness-cli display-message <format>\n", stderr)
+            fputs("Usage: harness-cli display-message <format>\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .displayMessage(format: format))
@@ -1263,10 +1263,10 @@ struct HarnessCLI {
                 let report = try installer.install(daemonPath: installedDaemon, harnessHome: HarnessPaths.applicationSupport)
                 print("service (\(installer.backendName)): \(report.unitPath.path)")
             } catch {
-                fputs("warning: \(installer.backendName) install failed: \(error)\n", stderr)
+                fputs("warning: \(installer.backendName) install failed: \(error)\n", harnessStderr)
             }
         } else {
-            fputs("warning: HarnessDaemon binary not found; service not installed\n", stderr)
+            fputs("warning: HarnessDaemon binary not found; service not installed\n", harnessStderr)
         }
         // Shell completions for the user's login shell, so they work out of the box: fish drops
         // into its auto-load dir; zsh/bash get a guarded, backed-up, idempotent `source` block
@@ -1275,7 +1275,7 @@ struct HarnessCLI {
         do {
             for line in try ShellCompletionInstaller.installForLoginShell() { print(line) }
         } catch {
-            fputs("warning: shell completion install failed: \(error)\n", stderr)
+            fputs("warning: shell completion install failed: \(error)\n", harnessStderr)
         }
         print("Tip: run 'harness-cli install-shell-integration' to enable OSC 133 prompt marks, "
             + "the success/failure gutter, and prompt jumping.")
@@ -1317,14 +1317,14 @@ struct HarnessCLI {
     static func runDaemonForeground() -> Never {
         guard let daemon = locateDaemonBinary() else {
             fputs("harness-cli daemon: HarnessDaemon binary not found "
-                + "(set HARNESS_DAEMON_PATH or run `harness-cli install`).\n", stderr)
+                + "(set HARNESS_DAEMON_PATH or run `harness-cli install`).\n", harnessStderr)
             exit(1)
         }
         let path = daemon.path
         var argv: [UnsafeMutablePointer<CChar>?] = [strdup(path), nil]
         defer { argv.forEach { $0.map { free($0) } } } // unreachable on success (execv replaces us)
         execv(path, &argv)
-        fputs("harness-cli daemon: exec failed for \(path)\n", stderr)
+        fputs("harness-cli daemon: exec failed for \(path)\n", harnessStderr)
         exit(1)
     }
 
@@ -1373,7 +1373,7 @@ struct HarnessCLI {
     static func printCompletions(_ args: [String]) throws {
         let positional = Array(args.dropFirst()).first { !$0.hasPrefix("-") }
         guard let raw = positional, let shell = ShellIntegration.Shell(rawValue: raw) else {
-            fputs("Usage: harness-cli completions <zsh|fish|bash>\n", stderr)
+            fputs("Usage: harness-cli completions <zsh|fish|bash>\n", harnessStderr)
             exit(1)
         }
         print(CompletionGenerator.script(for: shell))

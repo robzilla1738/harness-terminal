@@ -21,13 +21,13 @@ public enum ReplayClient {
             let data = try Data(contentsOf: URL(fileURLWithPath: path))
             text = String(decoding: data, as: UTF8.self)
         } catch {
-            fputs("harness-cli replay: cannot read \(path): \(error)\n", stderr)
+            fputs("harness-cli replay: cannot read \(path): \(error)\n", harnessStderr)
             return 66 // EX_NOINPUT
         }
 
         let (events, skipped) = TerminalRecordingCodec.decode(text)
         if skipped > 0 {
-            fputs("harness-cli replay: skipped \(skipped) malformed line(s)\n", stderr)
+            fputs("harness-cli replay: skipped \(skipped) malformed line(s)\n", harnessStderr)
         }
         let steps = TerminalReplay.steps(from: events, honorTiming: honorTiming, speed: speed)
 

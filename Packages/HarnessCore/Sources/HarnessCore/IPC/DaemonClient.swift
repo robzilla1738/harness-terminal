@@ -94,12 +94,10 @@ public final class DaemonClient: @unchecked Sendable {
     private func connectSocket() throws -> Int32 {
         // Establishing the byte stream is the only transport-specific step; the framing and read
         // loop are endpoint-agnostic. `EndpointConnector` handles validation + connect for the
-        // local socket and (via an SSH tunnel) a remote one.
-        do {
-            return try EndpointConnector.connect(endpoint)
-        } catch {
-            throw DaemonClientError.connectionFailed
-        }
+        // local socket and (via an SSH tunnel) a remote one. Let its specific error propagate
+        // (e.g. `.pathTooLong` with the offending path) instead of flattening it to a generic
+        // `connectionFailed` — that detail is what tells a user how to fix it.
+        try EndpointConnector.connect(endpoint)
     }
 
     private func writeAll(_ data: Data, to fd: Int32) throws {
