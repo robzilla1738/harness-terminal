@@ -536,7 +536,7 @@ private final class TabPillView: NSView {
     override func otherMouseUp(with event: NSEvent) {
         guard event.buttonNumber == 2 else { super.otherMouseUp(with: event); return }
         let local = convert(event.locationInWindow, from: nil)
-        if bounds.contains(local) { onClose?(tabID) }
+        if bounds.contains(local) { onContextCommand?(.close) }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

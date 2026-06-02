@@ -62,8 +62,8 @@ enum MainMenuBuilder {
         let closeTab = NSMenuItem(title: "Close Tab", action: #selector(MenuTarget.closeTab), keyEquivalent: "w")
         closeTab.target = MenuTarget.shared
         workspace.submenu?.addItem(closeTab)
-        let reopenTab = NSMenuItem(title: "Reopen Closed Tab", action: #selector(MenuTarget.reopenClosedTab), keyEquivalent: "t")
-        reopenTab.keyEquivalentModifierMask = [.command, .shift]
+        let reopenTab = NSMenuItem(title: "Reopen Closed Tab", action: #selector(MenuTarget.reopenClosedTab), keyEquivalent: "T")
+        reopenTab.keyEquivalentModifierMask = [.command]
         reopenTab.target = MenuTarget.shared
         workspace.submenu?.addItem(reopenTab)
         let closeSession = NSMenuItem(title: "Close Session", action: #selector(MenuTarget.closeSession), keyEquivalent: "W")

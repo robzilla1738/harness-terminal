@@ -517,10 +517,14 @@ final class SessionCoordinator: NSObject {
         performClose(disposition)
     }
 
+    private func rememberTabForReopen(_ tab: Tab) {
+        lastClosedTab = (cwd: tab.cwd, title: tab.title)
+    }
+
     private func closeActiveTabOnly() {
         guard let tab = snapshot.activeWorkspace?.activeTab else { return }
         // Remember where this tab lived so ⇧⌘T can reopen a shell there.
-        lastClosedTab = (cwd: tab.cwd, title: tab.title)
+        rememberTabForReopen(tab)
         let surfaces = tab.rootPane.allSurfaceIDs()
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
@@ -648,8 +652,10 @@ final class SessionCoordinator: NSObject {
     }
 
     func closeActiveSession() {
-        guard let sessionID = snapshot.activeWorkspace?.activeSession?.id else { return }
-        let surfaces = snapshot.activeWorkspace?.activeSession?.tabs.flatMap { $0.rootPane.allSurfaceIDs() } ?? []
+        guard let session = snapshot.activeWorkspace?.activeSession else { return }
+        if let tab = session.activeTab { rememberTabForReopen(tab) }
+        let sessionID = session.id
+        let surfaces = session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
@@ -1113,9 +1119,13 @@ final class SessionCoordinator: NSObject {
 
     func closeWorkspace(id: WorkspaceID) {
         guard snapshot.workspaces.count > 1 else { return }
-        let surfaces = snapshot.workspaces.first(where: { $0.id == id })?.sessions.flatMap { session in
+        guard let workspace = snapshot.workspaces.first(where: { $0.id == id }) else { return }
+        if let session = workspace.activeSession, let tab = session.activeTab {
+            rememberTabForReopen(tab)
+        }
+        let surfaces = workspace.sessions.flatMap { session in
             session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
-        } ?? []
+        }
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
