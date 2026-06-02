@@ -49,6 +49,12 @@ protocol VTParserHandler: AnyObject {
     /// byte, but lets the handler write the whole run in one pass. The buffer is borrowed: it is
     /// valid only for the duration of the call and must not escape.
     func parserPrintRun(_ bytes: UnsafeBufferPointer<UInt8>)
+    /// A contiguous run of already-decoded printable Unicode scalars (ASCII + well-formed UTF-8)
+    /// decoded in the ground state, to be printed in order. Exactly equivalent to calling
+    /// `parserPrint(cp)` for each, but lets the handler write the whole run in one pass after the
+    /// parser has amortized the UTF-8 decode + per-byte dispatch. The buffer is borrowed: valid only
+    /// for the duration of the call and must not escape.
+    func parserPrintCodepointRun(_ codepoints: UnsafeBufferPointer<UInt32>)
     /// A C0/C1 control byte to execute (BS, HT, LF, CR, BEL, …).
     func parserExecute(_ control: UInt8)
     /// A final CSI byte with its decoded parameters, intermediate bytes, and whether a
@@ -79,6 +85,12 @@ extension VTParserHandler {
     /// by construction. Handlers that care about throughput override this.
     func parserPrintRun(_ bytes: UnsafeBufferPointer<UInt8>) {
         for b in bytes { parserPrint(UInt32(b)) }
+    }
+
+    /// Default: replay the run one scalar at a time, so a codepoint run is equivalent to repeated
+    /// printing by construction. Handlers that care about throughput override this.
+    func parserPrintCodepointRun(_ codepoints: UnsafeBufferPointer<UInt32>) {
+        for cp in codepoints { parserPrint(cp) }
     }
 }
 
@@ -138,6 +150,18 @@ final class VTParser {
     private var utf8Remaining = 0
     private var utf8Accumulator: UInt32 = 0
     private var utf8Min: UInt32 = 0
+
+    /// Reused decode buffer for the bulk printable (ASCII + UTF-8) run path — never allocated per
+    /// run (cleared with `removeAll(keepingCapacity: true)`), matching the allocation-free contract
+    /// of the CSI/OSC buffers.
+    private var codepointScratch: [UInt32] = []
+
+    /// Runtime kill-switch for the bulk codepoint run path (`HARNESS_DISABLE_BULK_UTF8=1` to fall
+    /// back to the proven per-byte scalar decode). Read once at process start. The bulk path is
+    /// proven byte-identical by `CodepointRunFastPathTests`; this exists purely as a no-rebuild
+    /// escape hatch.
+    static let bulkCodepointRunEnabled =
+        ProcessInfo.processInfo.environment["HARNESS_DISABLE_BULK_UTF8"] == nil
 
     private let maxParams = 32
     /// Bounds the flattened sub-parameter store so a hostile colon-flood (`CSI 1:1:1:…`) can't grow
@@ -208,6 +232,21 @@ final class VTParser {
                 let j = printableASCIIRunEnd(buf, from: i + 1, end: n)
                 handler.parserPrintRun(UnsafeBufferPointer(rebasing: buf[i ..< j]))
                 i = j
+            } else if Self.bulkCodepointRunEnabled, state == .ground, utf8Remaining == 0, buf[i] >= 0x80 {
+                // A printable run that begins with a UTF-8 lead byte. Bulk-decode it (incl. any
+                // trailing ASCII) into `codepointScratch` and emit in one call, amortizing the
+                // per-byte dispatch + decode. `decodePrintableRun` stops at the first control/ESC/DEL
+                // or any UTF-8 anomaly (invalid/short/overlong/surrogate/out-of-range) — anything it
+                // can't cleanly decode is left to the proven per-byte `feed`, which owns the U+FFFD
+                // replacement + cross-chunk carry semantics.
+                let j = decodePrintableRun(buf, from: i, end: n)
+                if j > i {
+                    codepointScratch.withUnsafeBufferPointer { handler.parserPrintCodepointRun($0) }
+                    i = j
+                } else {
+                    feed(buf[i])
+                    i += 1
+                }
             } else {
                 feed(buf[i])
                 i += 1
@@ -239,6 +278,53 @@ final class VTParser {
         }
         while j < end, buf[j] >= 0x20, buf[j] < 0x7F { j += 1 }
         return j
+    }
+
+    /// Decode a printable run (ASCII + well-formed UTF-8) starting at `start` (bounded by `end`)
+    /// into `codepointScratch`, returning the index one past the last consumed byte. Stops —
+    /// keeping whatever was decoded so far — at the first C0/DEL byte (end of run) OR at any UTF-8
+    /// anomaly: an invalid lead byte, a continuation byte that isn't `0x80...0xBF`, a sequence
+    /// truncated by `end` (a chunk boundary mid-sequence), an overlong encoding, a surrogate, or a
+    /// scalar above `0x10FFFF`. On an anomaly it leaves the offending byte unconsumed so the caller
+    /// hands it to the per-byte `feed`, which owns the exact U+FFFD-replacement, reprocess-fresh, and
+    /// cross-`feed`-call carry-over semantics — so the bulk path only ever handles clean text and
+    /// stays byte-identical to the scalar path. Returns `start` (empty scratch) when the first byte
+    /// is itself such an anomaly. ESC never reaches here (the caller's ASCII branch handles printable
+    /// ASCII and this branch only starts on a `>= 0x80` lead; ESC `0x1B < 0x20` ends the run).
+    private func decodePrintableRun(_ buf: UnsafeBufferPointer<UInt8>, from start: Int, end: Int) -> Int {
+        codepointScratch.removeAll(keepingCapacity: true)
+        var p = start
+        loop: while p < end {
+            let b = buf[p]
+            if b >= 0x20, b < 0x7F {            // printable ASCII
+                codepointScratch.append(UInt32(b))
+                p += 1
+                continue
+            }
+            if b < 0x80 { break }               // C0 control (< 0x20) or DEL (0x7F) — end of run
+            // UTF-8 lead byte: classify length, then validate the whole sequence before emitting.
+            let length: Int
+            let minValue: UInt32
+            var value: UInt32
+            if b & 0xE0 == 0xC0 { length = 2; value = UInt32(b & 0x1F); minValue = 0x80 }
+            else if b & 0xF0 == 0xE0 { length = 3; value = UInt32(b & 0x0F); minValue = 0x800 }
+            else if b & 0xF8 == 0xF0 { length = 4; value = UInt32(b & 0x07); minValue = 0x10000 }
+            else { break }                      // invalid lead (stray continuation, 0xF8+) — anomaly
+            guard p + length <= end else { break }   // truncated by the buffer end — anomaly (carry)
+            var k = 1
+            while k < length {
+                let c = buf[p + k]
+                if c & 0xC0 != 0x80 { break loop }   // invalid continuation — anomaly
+                value = (value << 6) | UInt32(c & 0x3F)
+                k += 1
+            }
+            // Reject overlong, surrogates, and out-of-range here; the scalar path emits U+FFFD for
+            // these, so leave them to it rather than reproduce the replacement inline.
+            if value < minValue || (value >= 0xD800 && value <= 0xDFFF) || value > 0x10FFFF { break }
+            codepointScratch.append(value)
+            p += length
+        }
+        return p
     }
 
     private func feed(_ byte: UInt8) {

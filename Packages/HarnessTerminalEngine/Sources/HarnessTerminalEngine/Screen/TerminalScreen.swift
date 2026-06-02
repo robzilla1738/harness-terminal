@@ -770,6 +770,61 @@ final class TerminalScreen {
         }
     }
 
+    /// Write a run of already-decoded printable scalars (ASCII + UTF-8) at the cursor. Byte-for-byte
+    /// equivalent to `print(cp)` for each `cp`, but batched: the cell template (pen + hyperlink, both
+    /// constant across a run with no embedded escapes) is built once, and each row touched is marked
+    /// dirty once instead of per cell. Per-scalar width, zero-width (combining) drop, wide-head +
+    /// `spacerTail`, pending-wrap, autowrap on/off, and the wide-at-right-margin wrap are handled
+    /// exactly as `print` does. `CodepointRunFastPathTests` proves the equivalence (incl. chunk
+    /// splits); only the ASCII charset reaches here (DEC special graphics replays scalar-wise).
+    func printCodepointRun(_ codepoints: UnsafeBufferPointer<UInt32>) {
+        let n = codepoints.count
+        guard n > 0 else { return }
+        var template = makeCell(0, width: .normal)
+        var lastMarkedRow = -1
+        var i = 0
+        while i < n {
+            let scalar = codepoints[i]
+            i += 1
+            let w = CharacterWidth.width(of: scalar)
+            // Zero-width (combining marks etc.): attach to the previous glyph; never advance the
+            // cursor — identical to `print`'s `w == 0` early return.
+            if w == 0 { continue }
+            // A glyph that cannot fit the remaining columns wraps first (mirrors `print`).
+            if pendingWrap {
+                wrapLine()
+            } else if w == 2, cursorCol >= cols - 1, autowrap {
+                wrapLine()
+            }
+            // Defensive bounds guard, matching `writeCell` / `printASCIIRun`.
+            guard cursorRow >= 0, cursorRow < rows else { return }
+            let rowBase = cursorRow * cols
+            let writeRow = cursorRow
+            if w == 2 {
+                template.codepoint = scalar
+                template.width = .wide
+                cells[rowBase + cursorCol] = template
+                if cursorCol + 1 < cols {
+                    template.codepoint = 0
+                    template.width = .spacerTail
+                    cells[rowBase + cursorCol + 1] = template
+                }
+                advance(by: 2)
+            } else {
+                template.codepoint = scalar
+                template.width = .normal
+                cells[rowBase + cursorCol] = template
+                advance(by: 1)
+            }
+            // Mark each row we wrote dirty exactly once (the direct writes above bypass `writeCell`);
+            // the dirty set is identical to the per-cell scalar path, which marks the same rows.
+            if writeRow != lastMarkedRow {
+                markRowDirty(writeRow)
+                lastMarkedRow = writeRow
+            }
+        }
+    }
+
     private func makeCell(_ scalar: UInt32, width: TerminalCellWidth) -> TerminalGridCell {
         TerminalGridCell(
             codepoint: scalar,

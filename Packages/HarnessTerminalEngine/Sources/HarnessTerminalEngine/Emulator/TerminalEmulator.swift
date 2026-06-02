@@ -162,6 +162,20 @@ public final class TerminalEmulator: VTParserHandler {
         }
     }
 
+    /// Run-batched printable codepoint path (ASCII + decoded UTF-8): route the run to the screen's
+    /// batched `printCodepointRun` (template once, width per scalar, row marked once). Under DEC
+    /// special graphics each scalar needs the per-codepoint translation `parserPrint` applies, so
+    /// fall back to scalar replay there — byte-for-byte equivalent to repeated `parserPrint`, which
+    /// `CodepointRunFastPathTests` proves.
+    func parserPrintCodepointRun(_ codepoints: UnsafeBufferPointer<UInt32>) {
+        let active = glUsesG1 ? g1 : g0
+        if active == .decSpecialGraphics {
+            for cp in codepoints { current.print(DECSpecialGraphics.map(cp)) }
+        } else {
+            current.printCodepointRun(codepoints)
+        }
+    }
+
     func parserExecute(_ control: UInt8) {
         switch control {
         case 0x07: onBell?()                 // BEL
