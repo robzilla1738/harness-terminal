@@ -216,6 +216,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var colorGamut: TerminalColorGamut
     private var offMainParserFramePipelineEnabled = true // production default; always set from init
     private var renderGeneration: UInt64 = 0
+    /// The last frame presented on the main thread, kept so a live resize can re-present it at the
+    /// new drawable size WITHOUT touching the emulator serial queue (which, during heavy output, is
+    /// busy parsing). During a drag the grid content is unchanged — reflow + SIGWINCH is debounced
+    /// to drag-end (`scheduleResizeCommit`) — so stretching the last frame is exactly correct and
+    /// never blocks main behind the parser. Main-thread only (written in `presentBuiltFrame`).
+    private var lastPresentedResult: SurfaceFrameBuildResult?
     private var fontFamily: String
     private var fontSize: CGFloat
     /// The canvas (default) background — used as the Metal clear color and (at
@@ -840,13 +846,23 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func layout() {
         super.layout()
         // Resize the drawable and repaint in the SAME turn, with implicit animations off, so a
-        // resize never shows a stale frame stretched to the new bounds (the flicker). Drawing
-        // synchronously here (not via the async `scheduleRender`) closes the gap where the
-        // drawable has the new size but the old grid is still presented.
+        // resize never shows a stale frame stretched to the new bounds (the flicker).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        let needsFirstPaint = !hasSizedGrid
         updateGridSize()
-        scheduler.forceRender() // synchronous, in-transaction repaint: flicker-free resize
+        if needsFirstPaint {
+            // First real layout: `updateGridSize` already committed the grid; build + present the
+            // true frame synchronously so the terminal opens correct with no flash.
+            scheduler.forceRender()
+        } else if !repaintLastFrame() {
+            // Resize/animation storm: re-present the cached frame at the new size — no emulator-queue
+            // access, so a window drag never blocks on the output parser (the jank source). Fresh
+            // output still lands between layout frames via the async display-link path. Fall back to
+            // a full synchronous build only when there's no valid cached frame (e.g. generation just
+            // changed via a font/theme/reflow invalidation).
+            scheduler.forceRender()
+        }
         CATransaction.commit()
     }
 
@@ -1148,11 +1164,43 @@ public final class HarnessTerminalSurfaceView: NSView {
             frameBuildNanos: result.frameBuildNanos
         )
         if didPresent {
+            // Remember the presented frame so a live resize can re-stretch it without rebuilding
+            // (and without touching the emulator queue). See `repaintLastFrame`.
+            lastPresentedResult = result
             onRenderStats?(renderer.stats)
         } else {
             scheduleRender() // transient encode/present failure — retry next tick
         }
         StartupMetrics.shared.mark(.firstDrawablePresented)
+    }
+
+    /// Re-present the last built frame at the *current* drawable size with no emulator-queue access
+    /// — the smooth-resize fast path. Used by `layout()` during a live drag/animation: the grid
+    /// hasn't reflowed yet (deferred to drag-end), so the cached frame is still the correct content;
+    /// we just need to redraw it into the freshly-resized drawable. Returns false when there's no
+    /// valid cached frame for this generation, so the caller falls back to a full synchronous build.
+    ///
+    /// `damage: nil` forces a full instance rebuild + redraw: the renderer always clears and draws
+    /// the complete frame (loadAction `.clear`), but the per-row instance-upload cache is keyed to
+    /// the old origin/viewport, so a full rebuild avoids reusing buffers built for the prior size.
+    @discardableResult
+    private func repaintLastFrame() -> Bool {
+        guard let result = lastPresentedResult,
+              result.generation == renderGeneration,
+              window != nil, let renderer else { return false }
+        guard let drawable = metalLayer.nextDrawable() else { return false }
+        let didPresent = renderer.present(
+            result.frame,
+            to: drawable,
+            clearColor: result.clearColor,
+            origin: (originOffsetX, originOffsetY),
+            gamma: glyphGamma,
+            ligatures: ligaturesEnabled,
+            damage: nil,
+            frameBuildNanos: result.frameBuildNanos
+        )
+        if didPresent { onRenderStats?(renderer.stats) }
+        return didPresent
     }
 
     // MARK: - Cursor blink
@@ -1449,6 +1497,49 @@ public final class HarnessTerminalSurfaceView: NSView {
         // Pressing/releasing ⌘ over a stationary pointer toggles whether the link is "hot".
         if let window {
             updateLinkHover(at: window.mouseLocationOutsideOfEventStream, modifiers: event.modifierFlags)
+        }
+        reportModifierKeyIfNeeded(event)
+    }
+
+    /// Physical modifier keycodes currently held — used to tell press from release in
+    /// `flagsChanged` (which fires for both, with no inherent direction).
+    private var pressedModifierKeyCodes: Set<UInt16> = []
+
+    /// Report a modifier key (Shift/Ctrl/Alt/Cmd/CapsLock) as its own key event when a program
+    /// enabled the Kitty protocol's "report all keys as escape codes" flag (0b1000). Release events
+    /// additionally require "report event types" (0b10). No-op otherwise — modifiers normally emit
+    /// nothing on their own.
+    private func reportModifierKeyIfNeeded(_ event: NSEvent) {
+        let modes = emulatorSync { $0.modes }
+        guard modes.kittyKeyboardFlags & 0b1000 != 0 else { pressedModifierKeyCodes.removeAll(); return }
+        guard copyMode == nil, let key = Self.modifierSpecialKey(forKeyCode: event.keyCode) else { return }
+        // flagsChanged toggles: if we already recorded this key down, this event is its release.
+        let isPress: Bool
+        if pressedModifierKeyCodes.contains(event.keyCode) {
+            pressedModifierKeyCodes.remove(event.keyCode)
+            isPress = false
+        } else {
+            pressedModifierKeyCodes.insert(event.keyCode)
+            isPress = true
+        }
+        if !isPress, modes.kittyKeyboardFlags & 0b10 == 0 { return } // release needs event-types
+        emit(inputEncoder.encode(key, modifiers: [], event: isPress ? .press : .release, modes: modes))
+    }
+
+    /// Map a macOS virtual keycode for a modifier key to its Kitty `SpecialKey`. Left/right are
+    /// distinguished by keycode (the device-independent modifier flags can't tell them apart).
+    private static func modifierSpecialKey(forKeyCode code: UInt16) -> SpecialKey? {
+        switch code {
+        case 56: return .leftShift       // kVK_Shift
+        case 60: return .rightShift      // kVK_RightShift
+        case 59: return .leftControl     // kVK_Control
+        case 62: return .rightControl    // kVK_RightControl
+        case 58: return .leftAlt         // kVK_Option
+        case 61: return .rightAlt        // kVK_RightOption
+        case 55: return .leftSuper       // kVK_Command
+        case 54: return .rightSuper      // kVK_RightCommand
+        case 57: return .capsLock        // kVK_CapsLock
+        default: return nil
         }
     }
 
@@ -1750,6 +1841,9 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     public override func resignFirstResponder() -> Bool {
         focused = false
+        // A modifier released while we're unfocused never reaches `flagsChanged`, so drop the
+        // press-tracking state to keep Kitty modifier-key press/release reporting in sync on return.
+        pressedModifierKeyCodes.removeAll()
         scheduleRender()
         return true
     }
@@ -1827,20 +1921,63 @@ public final class HarnessTerminalSurfaceView: NSView {
         if flags.contains(.option) { mods.insert(.option) }
         if flags.contains(.control) { mods.insert(.control) }
 
+        let modes = emulatorSync { $0.modes }
+        // A held key auto-repeats; under Kitty "report event types" each repeat is tagged `:2`.
+        let eventType: KeyEventType = event.isARepeat ? .repeat : .press
+
         if let special = Self.specialKey(for: event) {
-            emit(inputEncoder.encode(special, modifiers: mods, modes: emulatorSync { $0.modes }))
+            emit(inputEncoder.encode(special, modifiers: mods, event: eventType, modes: modes))
             return
         }
 
-        // Control/Option take the raw path (Meta prefix + control collapsing). Plain keys
-        // go through the input context so dead keys and IME composition work — committed
-        // text arrives via `insertText`, composition via `setMarkedText`.
-        if mods.contains(.control) || mods.contains(.option) {
-            let text = event.charactersIgnoringModifiers ?? ""
-            emit(inputEncoder.encode(text: text, modifiers: mods, modes: emulatorSync { $0.modes }))
+        // Control/Option — or Kitty "report all keys as escape codes" — take the encoder path:
+        // Meta prefix + Control collapsing in legacy mode, full CSI-u (with alternate-key and
+        // associated-text fields) under Kitty. Plain keys otherwise go through the input context so
+        // dead keys and IME composition work — committed text arrives via `insertText`.
+        let reportAllKeys = modes.kittyKeyboardFlags & 0b1000 != 0
+        if mods.contains(.control) || mods.contains(.option) || reportAllKeys {
+            let unshifted = event.charactersIgnoringModifiers ?? ""
+            emit(inputEncoder.encode(
+                text: unshifted,
+                shifted: event.characters,
+                modifiers: mods,
+                event: eventType,
+                associatedText: event.characters,
+                modes: modes
+            ))
             return
         }
         interpretKeyEvents([event])
+    }
+
+    public override func keyUp(with event: NSEvent) {
+        // Terminals never report key release — except under the Kitty keyboard protocol's "report
+        // event types" flag (0b10), which a program must explicitly enable. No-op otherwise.
+        let modes = emulatorSync { $0.modes }
+        guard modes.kittyKeyboardFlags & 0b10 != 0,
+              copyMode == nil, !hasMarkedText(),
+              !event.modifierFlags.contains(.command) else { return }
+
+        var mods: KeyModifiers = []
+        let flags = event.modifierFlags
+        if flags.contains(.shift) { mods.insert(.shift) }
+        if flags.contains(.option) { mods.insert(.option) }
+        if flags.contains(.control) { mods.insert(.control) }
+
+        if let special = Self.specialKey(for: event) {
+            emit(inputEncoder.encode(special, modifiers: mods, event: .release, modes: modes))
+            return
+        }
+        // Plain (text-producing) keys only have a release event when they're reported as escape
+        // codes in the first place: Ctrl/Option-modified, or under "report all keys" (0b1000).
+        let modified = mods.contains(.control) || mods.contains(.option)
+        guard modified || modes.kittyKeyboardFlags & 0b1000 != 0 else { return }
+        let unshifted = event.charactersIgnoringModifiers ?? ""
+        guard !unshifted.isEmpty else { return }
+        emit(inputEncoder.encode(
+            text: unshifted, shifted: event.characters, modifiers: mods,
+            event: .release, associatedText: nil, modes: modes
+        ))
     }
 
     private func emit(_ bytes: [UInt8]) {
@@ -1849,7 +1986,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     /// Map an NSEvent to a SpecialKey using the AppKit function-key unicode values.
-    private static func specialKey(for event: NSEvent) -> SpecialKey? {
+    /// `internal` (not `private`) so the NSEvent→SpecialKey seam can be unit-tested.
+    static func specialKey(for event: NSEvent) -> SpecialKey? {
         guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else { return nil }
         switch Int(scalar.value) {
         case NSUpArrowFunctionKey: return .up
@@ -1874,6 +2012,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         case NSF10FunctionKey: return .f10
         case NSF11FunctionKey: return .f11
         case NSF12FunctionKey: return .f12
+        case NSF13FunctionKey: return .f13
+        case NSF14FunctionKey: return .f14
+        case NSF15FunctionKey: return .f15
+        case NSF16FunctionKey: return .f16
+        case NSF17FunctionKey: return .f17
+        case NSF18FunctionKey: return .f18
+        case NSF19FunctionKey: return .f19
+        case NSF20FunctionKey: return .f20
+        case NSMenuFunctionKey: return .menu
+        case NSPauseFunctionKey: return .pause
+        case NSPrintScreenFunctionKey: return .printScreen
+        case NSScrollLockFunctionKey: return .scrollLock
         case 0x0D, 0x03: return .enter        // return, enter
         case 0x7F: return .backspace          // delete (backspace) key
         case 0x1B: return .escape

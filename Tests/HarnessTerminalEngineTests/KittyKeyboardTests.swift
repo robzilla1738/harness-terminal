@@ -56,6 +56,95 @@ final class KittyKeyboardTests: XCTestCase {
         XCTAssertEqual(enc.encode(.up, modes: kittyModes(1)), enc.encode(.up, modes: TerminalModes()))
     }
 
+    func testArrowsStayLegacyEvenUnderReportAllKeys() {
+        // report-all-keys (0b1000) moves *text/control* keys to CSI-u but functional keys (arrows)
+        // already are escape codes — they keep their legacy CSI form.
+        XCTAssertEqual(enc.encode(.up, modes: kittyModes(0b1000)), enc.encode(.up, modes: TerminalModes()))
+    }
+
+    // MARK: Event types (flag 0b10)
+
+    private func str(_ bytes: [UInt8]) -> String { String(decoding: bytes, as: UTF8.self) }
+
+    func testEventTypesOnCSIuSpecialKeys() {
+        let m = kittyModes(0b11) // disambiguate + report-event-types
+        XCTAssertEqual(str(enc.encode(.tab, event: .press, modes: m)), "\u{1b}[9u")          // press implicit
+        XCTAssertEqual(str(enc.encode(.tab, event: .repeat, modes: m)), "\u{1b}[9;1:2u")     // repeat
+        XCTAssertEqual(str(enc.encode(.tab, event: .release, modes: m)), "\u{1b}[9;1:3u")    // release
+    }
+
+    func testEventTypesOnLegacyFunctionalKeys() {
+        let m = kittyModes(0b11)
+        // Unmodified release needs the mods field present (defaults to 1) to carry the event.
+        XCTAssertEqual(str(enc.encode(.up, event: .release, modes: m)), "\u{1b}[1;1:3A")
+        // Press stays the bare legacy form (press is implicit).
+        XCTAssertEqual(str(enc.encode(.up, event: .press, modes: m)), "\u{1b}[A")
+        // With a modifier + release: CSI 1 ; <mod> : 3 A.
+        XCTAssertEqual(str(enc.encode(.up, modifiers: .shift, event: .release, modes: m)), "\u{1b}[1;2:3A")
+        // tilde-form key (PageUp) + release.
+        XCTAssertEqual(str(enc.encode(.pageUp, event: .release, modes: m)), "\u{1b}[5;1:3~")
+    }
+
+    func testEventTypesIgnoredWithoutFlag() {
+        // Without the report-event-types flag, release/repeat are not encoded specially.
+        let m = kittyModes(1)
+        XCTAssertEqual(str(enc.encode(.tab, event: .release, modes: m)), "\u{1b}[9u")
+        XCTAssertEqual(enc.encode(.up, event: .release, modes: m), enc.encode(.up, modes: TerminalModes()))
+    }
+
+    // MARK: Alternate keys (flag 0b100)
+
+    func testAlternateShiftedKey() {
+        // report-all (8) + alternate (4): Shift+a reports unshifted 97 with shifted 65.
+        let m = kittyModes(0b1100)
+        XCTAssertEqual(str(enc.encode(text: "a", shifted: "A", modifiers: .shift, modes: m)), "\u{1b}[97:65;2u")
+    }
+
+    func testAlternateOmittedWhenNoShift() {
+        // No shift held → no shifted-key field even with the flag on.
+        let m = kittyModes(0b1100)
+        XCTAssertEqual(str(enc.encode(text: "a", shifted: "A", modifiers: [], modes: m)), "\u{1b}[97u")
+    }
+
+    // MARK: Associated text (flag 0b10000)
+
+    func testAssociatedTextField() {
+        // report-all (8) + associated-text (16): plain 'a' → key 97, empty mods field, text 97.
+        let m = kittyModes(0b11000)
+        XCTAssertEqual(
+            str(enc.encode(text: "a", shifted: "a", event: .press, associatedText: "a", modes: m)),
+            "\u{1b}[97;;97u"
+        )
+    }
+
+    // MARK: Kitty CSI-u functional / modifier keys (Private-Use-Area codepoints)
+
+    func testFunctionalAndModifierCodepoints() {
+        let m = kittyModes(0b1001) // disambiguate + report-all
+        XCTAssertEqual(str(enc.encode(.f13, modes: m)), "\u{1b}[57376u")
+        XCTAssertEqual(str(enc.encode(.capsLock, modes: m)), "\u{1b}[57358u")
+        XCTAssertEqual(str(enc.encode(.menu, modes: m)), "\u{1b}[57363u")
+        XCTAssertEqual(str(enc.encode(.leftShift, modes: m)), "\u{1b}[57441u")
+        XCTAssertEqual(str(enc.encode(.rightSuper, modes: m)), "\u{1b}[57450u")
+        // Modifier-key release under event reporting carries the event sub-field.
+        XCTAssertEqual(str(enc.encode(.leftControl, event: .release, modes: kittyModes(0b1011))), "\u{1b}[57442;1:3u")
+    }
+
+    func testF13UsesLegacyTildeWhenKittyOff() {
+        // F13–F20 have xterm legacy `CSI <n>~` forms used when Kitty is disabled…
+        XCTAssertEqual(str(enc.encode(.f13, modes: TerminalModes())), "\u{1b}[25~")
+        XCTAssertEqual(str(enc.encode(.f20, modes: TerminalModes())), "\u{1b}[34~")
+        // …but switch to the Kitty CSI-u codepoint once a program opts in.
+        XCTAssertEqual(str(enc.encode(.f13, modes: kittyModes(1))), "\u{1b}[57376u")
+    }
+
+    func testModifierAndLockKeysEmitNothingWhenDisabled() {
+        // Keys with no legacy encoding produce no bytes in legacy mode.
+        XCTAssertEqual(enc.encode(.leftShift, modes: TerminalModes()), [])
+        XCTAssertEqual(enc.encode(.capsLock, modes: TerminalModes()), [])
+        XCTAssertEqual(enc.encode(.menu, modes: TerminalModes()), [])
+    }
+
     // MARK: modifyOtherKeys
 
     func testModifyOtherKeysForm() {
