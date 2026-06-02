@@ -284,6 +284,32 @@ final class PerformanceBenchmarks: XCTestCase {
         return a
     }
 
+    /// Mixed-width Unicode: Latin-1 accents, Greek, Cyrillic, CJK, and symbols — the per-scalar
+    /// width-lookup workload. Mirrors the cross-terminal `unicode_mixed` payload.
+    private func unicodeMixedStream(targetBytes: Int) -> [UInt8] {
+        let sample = "é Ω 世 Ж 中 λ ✓ café résumé 漢字 emoji-free wide text "
+        var s = ""
+        var i = 0
+        while s.utf8.count < targetBytes {
+            s += "\(i): \(sample)\(sample)\r\n"
+            i += 1
+        }
+        return Array(s.utf8)
+    }
+
+    /// SGR attribute storm: a fresh text-style escape each line then a reset, so the parser builds
+    /// and dispatches CSI parameters constantly. Mirrors the cross-terminal `attributes` payload.
+    private func sgrAttributeStormStream(targetBytes: Int) -> [UInt8] {
+        let attrs = ["\u{1b}[1m", "\u{1b}[2m", "\u{1b}[3m", "\u{1b}[4m", "\u{1b}[7m", "\u{1b}[9m", "\u{1b}[53m"]
+        var s = ""
+        var i = 0
+        while s.utf8.count < targetBytes {
+            s += attrs[i % attrs.count] + "attribute row \(i) underline bold faint inverse strike overline\u{1b}[0m\r\n"
+            i += 1
+        }
+        return Array(s.utf8)
+    }
+
     /// Parse + write 256 KiB of plain ASCII — exercises the printable-ASCII run fast path.
     func testVTParsePlainASCII256KiB() throws {
         try skipUnlessEnabled()
@@ -310,6 +336,57 @@ final class PerformanceBenchmarks: XCTestCase {
         printBenchmark("vt_parse_ansi_colored_ascii_256kib", nanos: nanos, fields: [("bytes", "\(bytes.count)")])
         measure {
             let term = TerminalEmulator(cols: 120, rows: 40)
+            term.feed(bytes)
+        }
+    }
+
+    /// Mixed-width Unicode — stresses the per-scalar `CharacterWidth.width(of:)` lookup, the path
+    /// behind the `unicode_mixed` cross-terminal loss. Gates the O(1) width-table optimization.
+    func testVTParseUnicodeMixed512KiB() throws {
+        try skipUnlessEnabled()
+        let bytes = unicodeMixedStream(targetBytes: 512 * 1024)
+        let nanos = timedNanos {
+            let term = TerminalEmulator(cols: 120, rows: 40)
+            term.feed(bytes)
+        }
+        printBenchmark("vt_parse_unicode_mixed_512kib", nanos: nanos, fields: [("bytes", "\(bytes.count)")])
+        measure {
+            let term = TerminalEmulator(cols: 120, rows: 40)
+            term.feed(bytes)
+        }
+    }
+
+    /// SGR attribute storm — constant CSI build/dispatch. Gates the allocation-free param parsing;
+    /// a regression to per-sequence nested-array allocation shows here. Maps to `attributes`.
+    func testVTParseSGRAttributeStorm512KiB() throws {
+        try skipUnlessEnabled()
+        let bytes = sgrAttributeStormStream(targetBytes: 512 * 1024)
+        let nanos = timedNanos {
+            let term = TerminalEmulator(cols: 120, rows: 40)
+            term.feed(bytes)
+        }
+        printBenchmark("vt_parse_sgr_attribute_storm_512kib", nanos: nanos, fields: [("bytes", "\(bytes.count)")])
+        measure {
+            let term = TerminalEmulator(cols: 120, rows: 40)
+            term.feed(bytes)
+        }
+    }
+
+    /// Region-scroll storm on the alternate screen (no history copy) — every line past the first
+    /// screenful scrolls the 160×48 region. Gates the block-move scroll (C1); a regression to the
+    /// per-cell nested-loop shift shows here.
+    func testCellScrollRegion160x48() throws {
+        try skipUnlessEnabled()
+        var s = "\u{1b}[?1049h" // alternate screen: isolate the in-region scroll from scrollback
+        for i in 0 ..< 5_000 { s += "scroll line \(i) with trailing content to fill the row\r\n" }
+        let bytes = Array(s.utf8)
+        let nanos = timedNanos {
+            let term = TerminalEmulator(cols: 160, rows: 48)
+            term.feed(bytes)
+        }
+        printBenchmark("cell_scroll_region_160x48", nanos: nanos, fields: [("lines", "5000")])
+        measure {
+            let term = TerminalEmulator(cols: 160, rows: 48)
             term.feed(bytes)
         }
     }
@@ -440,6 +517,28 @@ final class PerformanceBenchmarks: XCTestCase {
         // Guardrails (not perf gates): the binary frame must be smaller and no slower than JSON.
         XCTAssertLessThan(binaryWire, jsonWire, "binary frame must be smaller on the wire than JSON+base64")
         XCTAssertLessThanOrEqual(binaryWire, payload.count + 64, "binary frame is raw bytes + a tiny header")
+    }
+
+    /// The daemon→subscriber output-frame encode (`encodeOutputFrame`) over a 16 MiB stream of
+    /// 64 KiB chunks — the per-chunk fixed cost on the transport floor. A regression here (extra
+    /// copy / realloc) raises that floor for every workload.
+    func testTransportOutputFrameEncode() throws {
+        try skipUnlessEnabled()
+        let payload = Data(repeating: 0x41, count: 64 * 1024)
+        let iterations = 256 // ≈16 MiB through the encode path
+        let nanos = timedNanos {
+            for i in 0 ..< iterations {
+                _ = try? IPCCodec.encodeOutputFrame(payload, sequence: UInt64(i) &* 65_536)
+            }
+        }
+        printBenchmark("transport_output_frame_encode", nanos: nanos, fields: [
+            ("bytes", "\(payload.count * iterations)"), ("frames", "\(iterations)"),
+        ])
+        measure {
+            for i in 0 ..< iterations {
+                _ = try? IPCCodec.encodeOutputFrame(payload, sequence: UInt64(i) &* 65_536)
+            }
+        }
     }
 
     // MARK: - Compositor frame build (split layout → diffed ANSI)

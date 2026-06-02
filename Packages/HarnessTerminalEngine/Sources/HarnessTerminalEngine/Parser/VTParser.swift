@@ -1,5 +1,44 @@
 import Foundation
 
+/// A borrowed, non-escaping view over a CSI sequence's decoded parameters, handed to
+/// `VTParserHandler.parserCSI`. Parameters are semicolon-separated *groups*; each group holds its
+/// colon-separated sub-parameters, stored flattened in `values` with `starts[g]` marking where
+/// group `g` begins. Valid only for the duration of the `parserCSI` call — it wraps the parser's
+/// reused buffers (no per-sequence allocation), so it must not be stored or escape the call.
+struct CSIParams {
+    /// All sub-parameter values, flattened across groups.
+    let values: UnsafeBufferPointer<Int>
+    /// Start index in `values` of each semicolon-separated group; `starts.count` is the group count.
+    let starts: UnsafeBufferPointer<Int>
+
+    /// Number of semicolon-separated parameter groups (`CSI m` → 1, `CSI 1;31 m` → 2).
+    var count: Int { starts.count }
+
+    /// Number of colon sub-parameters in group `g` (e.g. `4:3` → 2).
+    @inline(__always)
+    func subCount(_ g: Int) -> Int {
+        guard g >= 0, g < starts.count else { return 0 }
+        let lo = starts[g]
+        let hi = (g + 1 < starts.count) ? starts[g + 1] : values.count
+        return hi - lo
+    }
+
+    /// Sub-parameter `sub` of group `g`, or `defaultValue` if absent.
+    @inline(__always)
+    func sub(_ g: Int, _ sub: Int, default defaultValue: Int = 0) -> Int {
+        guard g >= 0, g < starts.count else { return defaultValue }
+        let lo = starts[g]
+        let hi = (g + 1 < starts.count) ? starts[g + 1] : values.count
+        let idx = lo + sub
+        guard sub >= 0, idx < hi else { return defaultValue }
+        return values[idx]
+    }
+
+    /// First sub-parameter of group `g` (the flattened value most control functions use), or 0.
+    @inline(__always)
+    func first(_ g: Int) -> Int { sub(g, 0) }
+}
+
 /// Receives high-level events decoded by `VTParser`. The emulator implements this;
 /// the parser knows only escape syntax, never screen semantics.
 protocol VTParserHandler: AnyObject {
@@ -15,13 +54,15 @@ protocol VTParserHandler: AnyObject {
     /// A final CSI byte with its decoded parameters, intermediate bytes, and whether a
     /// private-parameter introducer (`<` `=` `>` `?`) was present — a private-use sequence
     /// (DEC modes, XTMODKEYS, …) that standard functions like SGR are never part of, so the
-    /// handler can refuse to misread it. Parameters are grouped: the outer array is
-    /// semicolon-separated parameters; each inner array holds that parameter's
-    /// colon-separated sub-parameters (e.g. `4:3` → `[[4, 3]]`, `1;31` → `[[1], [31]]`).
+    /// handler can refuse to misread it. Parameters arrive as a `CSIParams` borrowed view over the
+    /// parser's reused storage: semicolon-separated groups, each holding its colon-separated
+    /// sub-parameters (e.g. `4:3` → one group `[4, 3]`, `1;31` → two groups `[1]`, `[31]`). The
+    /// view is valid **only for the duration of this call** and must not escape (it wraps borrowed
+    /// buffers — same contract as `parserPrintRun`), so the parser never allocates per sequence.
     /// `privateMarker` is the actual private-introducer byte (`<` `=` `>` `?`) when `isPrivate`,
     /// so handlers can distinguish e.g. the Kitty-keyboard verbs `CSI > u` / `< u` / `= u` /
     /// `? u`, which differ only by introducer. nil when not a private sequence.
-    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool, privateMarker: UInt8?)
+    func parserCSI(final: UInt8, params: CSIParams, intermediates: [UInt8], isPrivate: Bool, privateMarker: UInt8?)
     /// A final ESC byte (non-CSI) with any intermediate bytes (e.g. `ESC ( B`, `ESC M`).
     func parserESC(final: UInt8, intermediates: [UInt8])
     /// A complete OSC string payload (without the introducer or terminator).
@@ -67,11 +108,13 @@ final class VTParser {
     private weak var handler: VTParserHandler?
     private var state: State = .ground
 
-    // CSI accumulation. Parameters are grouped (semicolon-separated), each holding its
-    // colon-separated sub-parameters. `currentGroup` accumulates the in-progress group
-    // and `currentNumber` the in-progress digits.
-    private var paramGroups: [[Int]] = []
-    private var currentGroup: [Int] = []
+    // CSI accumulation, allocation-free across sequences. Parameters are grouped
+    // (semicolon-separated), each holding its colon-separated sub-parameters. Sub-parameter values
+    // are stored flattened in `paramValues`; `groupStarts[g]` marks where group `g` begins. Both are
+    // reused via `removeAll(keepingCapacity: true)` so a flood of SGR sequences never allocates.
+    // `currentNumber` accumulates the in-progress digits.
+    private var paramValues: [Int] = []
+    private var groupStarts: [Int] = []
     private var currentNumber: Int? = nil
     private var intermediates: [UInt8] = []
     private var csiPrivate = false
@@ -91,6 +134,9 @@ final class VTParser {
     private var utf8Min: UInt32 = 0
 
     private let maxParams = 32
+    /// Bounds the flattened sub-parameter store so a hostile colon-flood (`CSI 1:1:1:…`) can't grow
+    /// it without bound. Far above any legitimate sequence (truecolor `38:2:cs:r:g:b` is 6).
+    private let maxParamValues = 128
     /// Hard caps so a hostile/buggy stream can't grow these buffers without bound (a memory
     /// DoS via the daemon→app pipe). Real sequences are tiny; 8 intermediates is far above
     /// xterm's 2, and 1 MiB bounds even a large OSC 52 clipboard payload. Past the cap we keep
@@ -354,14 +400,20 @@ final class VTParser {
 
     private func dispatchCSI(_ final: UInt8) {
         finalizeCurrentGroup()
-        if !csiOverflow {
-            handler?.parserCSI(
-                final: final,
-                params: paramGroups,
-                intermediates: intermediates,
-                isPrivate: csiPrivate,
-                privateMarker: csiPrivateMarker
-            )
+        if !csiOverflow, let handler {
+            // Borrow the reused buffers for the call only — `CSIParams` must not escape, so the
+            // whole dispatch (incl. screen mutation) runs inside the buffer-pointer scope.
+            paramValues.withUnsafeBufferPointer { vbuf in
+                groupStarts.withUnsafeBufferPointer { gbuf in
+                    handler.parserCSI(
+                        final: final,
+                        params: CSIParams(values: vbuf, starts: gbuf),
+                        intermediates: intermediates,
+                        isPrivate: csiPrivate,
+                        privateMarker: csiPrivateMarker
+                    )
+                }
+            }
         }
         state = .ground
         clearCSI()
@@ -374,37 +426,38 @@ final class VTParser {
         currentNumber = value
     }
 
+    /// Append a value to the flattened store, dropping (and flagging overflow) past the cap.
+    private func appendValue(_ value: Int) {
+        if paramValues.count >= maxParamValues { csiOverflow = true; return }
+        paramValues.append(value)
+    }
+
     /// End the current sub-parameter (`:`), staying within the same parameter group.
     private func pushSubparamSeparator() {
-        currentGroup.append(currentNumber ?? 0)
+        appendValue(currentNumber ?? 0)
         currentNumber = nil
     }
 
-    /// End the current parameter (`;`), opening a new group.
+    /// End the current parameter (`;`): close the current group's last sub-parameter and open a new
+    /// group at the current end of the flattened store.
     private func pushParamSeparator() {
-        currentGroup.append(currentNumber ?? 0)
+        appendValue(currentNumber ?? 0)
         currentNumber = nil
-        appendGroup(currentGroup)
-        currentGroup = []
+        if groupStarts.count >= maxParams { csiOverflow = true; return }
+        groupStarts.append(paramValues.count)
     }
 
-    /// Flush the in-progress number + group at dispatch time so a trailing parameter is
-    /// always emitted (e.g. `CSI m` → `[[0]]`, matching the prior flat `[0]`).
+    /// Flush the in-progress number into the final group at dispatch time so a trailing parameter is
+    /// always emitted (e.g. `CSI m` → one group `[0]`, matching the prior flat `[0]`).
     private func finalizeCurrentGroup() {
-        currentGroup.append(currentNumber ?? 0)
+        appendValue(currentNumber ?? 0)
         currentNumber = nil
-        appendGroup(currentGroup)
-        currentGroup = []
-    }
-
-    private func appendGroup(_ group: [Int]) {
-        if paramGroups.count >= maxParams { csiOverflow = true; return }
-        paramGroups.append(group)
     }
 
     private func clearCSI() {
-        paramGroups.removeAll(keepingCapacity: true)
-        currentGroup.removeAll(keepingCapacity: true)
+        paramValues.removeAll(keepingCapacity: true)
+        groupStarts.removeAll(keepingCapacity: true)
+        groupStarts.append(0) // group 0 always begins at the start of the (empty) value store
         currentNumber = nil
         intermediates.removeAll(keepingCapacity: true)
         csiPrivate = false

@@ -956,36 +956,49 @@ final class TerminalScreen {
         // than being dropped. A region/alternate scroll moves content without history, so anchors
         // shift (handled after the loop).
         let growsHistory = recordsHistory && scrollTop == 0
-        for _ in 0 ..< count {
-            // A line leaving the very top of the screen (not a sub-region) is scrollback —
-            // carry its soft-wrap flag so reflow can re-join it with its continuation.
-            if growsHistory {
-                history.append(HistoryLine(cells: Array(cells[0 ..< cols]), wrapped: rowWrapped[scrollTop], mark: rowMarks[scrollTop]))
-                // `removeFirst` is O(history.count) — doing it every scrolled line makes a
-                // terminal at full scrollback pay O(maxHistoryLines) per output line (the
-                // steady-state hot path for any long-running shell). Amortize it: let the
-                // buffer overshoot by a bounded slack, then trim back to the cap in one batch,
-                // so the O(n) shift fires once per `slack` lines (≈O(1) amortized). Readers
-                // clamp to `history.count`, so the transient margin just exposes a little extra
-                // scrollback — never less than configured. Slack is 0 when scrollback is off.
-                let slack = min(1024, maxHistoryLines / 4)
-                if history.count > maxHistoryLines + slack {
-                    dropHistoryHead(history.count - maxHistoryLines)
-                }
+        let regionRows = scrollBottom - scrollTop + 1
+        let survivors = regionRows - count   // region rows that remain after the top `count` leave
+
+        // The `count` lines leaving the top of the screen (not a sub-region) become scrollback,
+        // oldest first — carry each soft-wrap flag so reflow can re-join with its continuation.
+        if growsHistory {
+            for k in 0 ..< count {
+                let r = scrollTop + k
+                history.append(HistoryLine(cells: Array(cells[r * cols ..< (r + 1) * cols]),
+                                           wrapped: rowWrapped[r], mark: rowMarks[r]))
             }
-            // Drop the top region line; shift the rest up; blank the bottom line.
-            for r in scrollTop ..< scrollBottom {
-                for c in 0 ..< cols {
-                    cells[r * cols + c] = cells[(r + 1) * cols + c]
-                }
-                rowWrapped[r] = rowWrapped[r + 1]
-                rowMarks[r] = rowMarks[r + 1]
+            // `removeFirst` is O(history.count) — trimming every scrolled line would make a
+            // terminal at full scrollback pay O(maxHistoryLines) per output line. Amortize: let the
+            // buffer overshoot by a bounded slack, then trim back to the cap in one batch (≈O(1)
+            // amortized). Readers clamp to `history.count`, so the transient margin just exposes a
+            // little extra scrollback — never less than configured. Slack is 0 when scrollback is off.
+            let slack = min(1024, maxHistoryLines / 4)
+            if history.count > maxHistoryLines + slack {
+                dropHistoryHead(history.count - maxHistoryLines)
             }
-            for c in 0 ..< cols {
-                cells[scrollBottom * cols + c] = blank
+        }
+
+        // Shift the surviving region up by `count` rows in one contiguous block move, then blank the
+        // freed bottom rows. `TerminalGridCell` is a trivial value type (no refs), so `memmove` over
+        // the overlapping cell band is safe and replaces the old O(count × region × cols) cell loop.
+        cells.withUnsafeMutableBufferPointer { buf in
+            let base = buf.baseAddress!
+            if survivors > 0 {
+                memmove(base + scrollTop * cols,
+                        base + (scrollTop + count) * cols,
+                        survivors * cols * MemoryLayout<TerminalGridCell>.stride)
             }
-            rowWrapped[scrollBottom] = false
-            rowMarks[scrollBottom] = nil
+            (base + (scrollTop + survivors) * cols).update(repeating: blank, count: count * cols)
+        }
+        if survivors > 0 {
+            for r in scrollTop ..< (scrollTop + survivors) {
+                rowWrapped[r] = rowWrapped[r + count]
+                rowMarks[r] = rowMarks[r + count]
+            }
+        }
+        for r in (scrollTop + survivors) ... scrollBottom {
+            rowWrapped[r] = false
+            rowMarks[r] = nil
         }
         markRowsDirty(scrollTop ... scrollBottom)
         // Only region/alternate scrolls move anchors; a history-growing scroll leaves them
@@ -998,21 +1011,31 @@ final class TerminalScreen {
         // already blank, so a giant SD is wasted O(cols × region) work per extra iteration.
         let count = min(max(1, n), scrollBottom - scrollTop + 1)
         let blank = erasedCell()
-        for _ in 0 ..< count {
+        let regionRows = scrollBottom - scrollTop + 1
+        let survivors = regionRows - count
+
+        // Shift the surviving region down by `count` rows in one block move (memmove handles the
+        // overlap; `TerminalGridCell` is trivial), then blank the freed top rows.
+        cells.withUnsafeMutableBufferPointer { buf in
+            let base = buf.baseAddress!
+            if survivors > 0 {
+                memmove(base + (scrollTop + count) * cols,
+                        base + scrollTop * cols,
+                        survivors * cols * MemoryLayout<TerminalGridCell>.stride)
+            }
+            (base + scrollTop * cols).update(repeating: blank, count: count * cols)
+        }
+        if survivors > 0 {
             var r = scrollBottom
-            while r > scrollTop {
-                for c in 0 ..< cols {
-                    cells[r * cols + c] = cells[(r - 1) * cols + c]
-                }
-                rowWrapped[r] = rowWrapped[r - 1]
-                rowMarks[r] = rowMarks[r - 1]
+            while r >= scrollTop + count {
+                rowWrapped[r] = rowWrapped[r - count]
+                rowMarks[r] = rowMarks[r - count]
                 r -= 1
             }
-            for c in 0 ..< cols {
-                cells[scrollTop * cols + c] = blank
-            }
-            rowWrapped[scrollTop] = false
-            rowMarks[scrollTop] = nil
+        }
+        for r in scrollTop ..< (scrollTop + count) {
+            rowWrapped[r] = false
+            rowMarks[r] = nil
         }
         markRowsDirty(scrollTop ... scrollBottom)
         shiftPlacements(by: count)
@@ -1026,33 +1049,38 @@ final class TerminalScreen {
         TerminalGridCell(background: pen.background)
     }
 
+    /// Fill a contiguous run of cells `[start, start + count)` with `cell` via a single
+    /// vectorizable bulk write instead of a per-cell loop. `count <= 0` is a no-op.
+    private func fillCells(_ start: Int, _ count: Int, with cell: TerminalGridCell) {
+        guard count > 0 else { return }
+        cells.withUnsafeMutableBufferPointer { buf in
+            (buf.baseAddress! + start).update(repeating: cell, count: count)
+        }
+    }
+
     /// ED — erase in display. mode 0: cursor→end, 1: start→cursor, 2/3: all. Cleared full rows
     /// no longer continue a wrapped line, so their soft-wrap flags reset.
     func eraseInDisplay(mode: Int) {
         let blank = erasedCell()
         switch mode {
         case 1:
-            for r in 0 ..< cursorRow {
-                for c in 0 ..< cols { cells[r * cols + c] = blank }
-                rowWrapped[r] = false
-                rowMarks[r] = nil   // fully-cleared row is no longer a prompt
-            }
-            for c in 0 ... cursorCol where c < cols { cells[cursorRow * cols + c] = blank }
+            // Full rows above the cursor, then the cursor row up to and including the cursor.
+            fillCells(0, cursorRow * cols, with: blank)
+            for r in 0 ..< cursorRow { rowWrapped[r] = false; rowMarks[r] = nil }
+            fillCells(cursorRow * cols, min(cursorCol + 1, cols), with: blank)
             markRowsDirty(0 ... cursorRow)
         case 2, 3:
-            for i in 0 ..< cells.count { cells[i] = blank }
+            fillCells(0, cells.count, with: blank)
             for r in 0 ..< rows { rowWrapped[r] = false; rowMarks[r] = nil }
             clearImages()   // ED 2/3 clears the screen (and scrollback for 3) → drop images
             if mode == 3 { history.removeAll() }
             markFullyDirty()
         default: // 0
-            for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
+            // Cursor → end of its row, then every full row below in one bulk fill.
+            fillCells(cursorRow * cols + cursorCol, cols - cursorCol, with: blank)
             rowWrapped[cursorRow] = false
-            for r in (cursorRow + 1) ..< rows {
-                for c in 0 ..< cols { cells[r * cols + c] = blank }
-                rowWrapped[r] = false
-                rowMarks[r] = nil   // fully-cleared row is no longer a prompt
-            }
+            fillCells((cursorRow + 1) * cols, (rows - cursorRow - 1) * cols, with: blank)
+            for r in (cursorRow + 1) ..< rows { rowWrapped[r] = false; rowMarks[r] = nil }
             markRowsDirty(cursorRow ..< rows)
         }
         pendingWrap = false
@@ -1062,15 +1090,16 @@ final class TerminalScreen {
     /// end of the line (0 or 2) clears its soft-wrap continuation.
     func eraseInLine(mode: Int) {
         let blank = erasedCell()
+        let rowStart = cursorRow * cols
         switch mode {
         case 1:
-            for c in 0 ... cursorCol where c < cols { cells[cursorRow * cols + c] = blank }
+            fillCells(rowStart, min(cursorCol + 1, cols), with: blank)
         case 2:
-            for c in 0 ..< cols { cells[cursorRow * cols + c] = blank }
+            fillCells(rowStart, cols, with: blank)
             rowWrapped[cursorRow] = false
             rowMarks[cursorRow] = nil   // whole line cleared → no longer a prompt
         default:
-            for c in cursorCol ..< cols { cells[cursorRow * cols + c] = blank }
+            fillCells(rowStart + cursorCol, cols - cursorCol, with: blank)
             rowWrapped[cursorRow] = false
         }
         markRowDirty(cursorRow)
@@ -1168,30 +1197,29 @@ final class TerminalScreen {
     /// 16/256/truecolor for fg (38), bg (48), and underline color (58) in BOTH the
     /// semicolon form (`38;5;n`, `38;2;r;g;b`) and the colon form (`38:5:n`, `38:2::r:g:b`),
     /// and `4:N` underline styles (curly/dotted/dashed).
-    func applySGR(groups: [[Int]]) {
-        guard !groups.isEmpty else { resetPen(); return }
+    func applySGR(_ params: CSIParams) {
+        guard params.count > 0 else { resetPen(); return }
         var i = 0
-        while i < groups.count {
-            let group = groups[i]
-            let code = group.first ?? 0
-            if group.count > 1 {
+        while i < params.count {
+            let code = params.first(i)
+            if params.subCount(i) > 1 {
                 // Colon sub-parameter form: the whole spec lives in this one group.
                 switch code {
-                case 4: pen.underline = Self.underlineStyle(group[1])
-                case 38: if let c = Self.colonColor(group) { pen.foreground = c }
-                case 48: if let c = Self.colonColor(group) { pen.background = c }
-                case 58: if let c = Self.colonColor(group) { pen.underlineColor = c }
+                case 4: pen.underline = Self.underlineStyle(params.sub(i, 1))
+                case 38: if let c = Self.colonColor(params, i) { pen.foreground = c }
+                case 48: if let c = Self.colonColor(params, i) { pen.background = c }
+                case 58: if let c = Self.colonColor(params, i) { pen.underlineColor = c }
                 default: applySingleCode(code)
                 }
                 i += 1
             } else {
                 switch code {
                 case 38:
-                    if let (c, used) = Self.semicolonColor(groups, from: i) { pen.foreground = c; i += used } else { i += 1 }
+                    if let (c, used) = Self.semicolonColor(params, from: i) { pen.foreground = c; i += used } else { i += 1 }
                 case 48:
-                    if let (c, used) = Self.semicolonColor(groups, from: i) { pen.background = c; i += used } else { i += 1 }
+                    if let (c, used) = Self.semicolonColor(params, from: i) { pen.background = c; i += used } else { i += 1 }
                 case 58:
-                    if let (c, used) = Self.semicolonColor(groups, from: i) { pen.underlineColor = c; i += used } else { i += 1 }
+                    if let (c, used) = Self.semicolonColor(params, from: i) { pen.underlineColor = c; i += used } else { i += 1 }
                 default:
                     applySingleCode(code); i += 1
                 }
@@ -1219,15 +1247,15 @@ final class TerminalScreen {
         case 27: pen.inverse = false
         case 28: pen.invisible = false
         case 29: pen.strikethrough = false
-        case 30 ... 37: pen.foreground = .palette(code - 30)
+        case 30 ... 37: pen.foreground = .palette(UInt8(code - 30))
         case 39: pen.foreground = .none
-        case 40 ... 47: pen.background = .palette(code - 40)
+        case 40 ... 47: pen.background = .palette(UInt8(code - 40))
         case 49: pen.background = .none
         case 53: pen.overline = true
         case 55: pen.overline = false
         case 59: pen.underlineColor = .none
-        case 90 ... 97: pen.foreground = .palette(code - 90 + 8)
-        case 100 ... 107: pen.background = .palette(code - 100 + 8)
+        case 90 ... 97: pen.foreground = .palette(UInt8(code - 90 + 8))
+        case 100 ... 107: pen.background = .palette(UInt8(code - 100 + 8))
         default: break // unknown / unsupported SGR codes are ignored
         }
     }
@@ -1246,19 +1274,20 @@ final class TerminalScreen {
 
     private static func clampByte(_ v: Int) -> UInt8 { UInt8(min(max(v, 0), 255)) }
 
-    /// Colon form within one group: `[38, 5, n]` palette, `[38, 2, r, g, b]` or
+    /// Colon form within one group `g`: `[38, 5, n]` palette, `[38, 2, r, g, b]` or
     /// `[38, 2, colorspace, r, g, b]` truecolor.
-    private static func colonColor(_ group: [Int]) -> TerminalGridColor? {
-        guard group.count >= 2 else { return nil }
-        switch group[1] {
+    private static func colonColor(_ params: CSIParams, _ g: Int) -> TerminalGridColor? {
+        let n = params.subCount(g)
+        guard n >= 2 else { return nil }
+        switch params.sub(g, 1) {
         case 5:
-            guard group.count >= 3 else { return nil }
-            return .palette(min(max(group[2], 0), 255))
+            guard n >= 3 else { return nil }
+            return .palette(clampByte(params.sub(g, 2)))
         case 2:
-            if group.count >= 6 {
-                return .rgb(r: clampByte(group[3]), g: clampByte(group[4]), b: clampByte(group[5]))
-            } else if group.count >= 5 {
-                return .rgb(r: clampByte(group[2]), g: clampByte(group[3]), b: clampByte(group[4]))
+            if n >= 6 {
+                return .rgb(r: clampByte(params.sub(g, 3)), g: clampByte(params.sub(g, 4)), b: clampByte(params.sub(g, 5)))
+            } else if n >= 5 {
+                return .rgb(r: clampByte(params.sub(g, 2)), g: clampByte(params.sub(g, 3)), b: clampByte(params.sub(g, 4)))
             }
             return nil
         default:
@@ -1268,17 +1297,17 @@ final class TerminalScreen {
 
     /// Semicolon form across groups: `38;5;n` or `38;2;r;g;b`. Returns the color and how
     /// many groups it consumed (including the `38`/`48`/`58` lead group).
-    private static func semicolonColor(_ groups: [[Int]], from base: Int) -> (TerminalGridColor, Int)? {
-        guard base + 1 < groups.count else { return nil }
-        switch groups[base + 1].first ?? 0 {
+    private static func semicolonColor(_ params: CSIParams, from base: Int) -> (TerminalGridColor, Int)? {
+        guard base + 1 < params.count else { return nil }
+        switch params.first(base + 1) {
         case 5:
-            guard base + 2 < groups.count else { return nil }
-            return (.palette(min(max(groups[base + 2].first ?? 0, 0), 255)), 3)
+            guard base + 2 < params.count else { return nil }
+            return (.palette(clampByte(params.first(base + 2))), 3)
         case 2:
-            guard base + 4 < groups.count else { return nil }
-            let r = clampByte(groups[base + 2].first ?? 0)
-            let g = clampByte(groups[base + 3].first ?? 0)
-            let b = clampByte(groups[base + 4].first ?? 0)
+            guard base + 4 < params.count else { return nil }
+            let r = clampByte(params.first(base + 2))
+            let g = clampByte(params.first(base + 3))
+            let b = clampByte(params.first(base + 4))
             return (.rgb(r: r, g: g, b: b), 5)
         default:
             return nil

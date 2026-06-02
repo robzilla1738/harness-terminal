@@ -12,7 +12,18 @@ public final class DaemonServer: @unchecked Sendable {
     /// Unsent reply bytes per client, flushed by a writable `DispatchSource` when the socket
     /// was full. Client FDs are non-blocking, so a slow/stuck client buffers here instead of
     /// blocking the serial queue (which would freeze the whole daemon and hang shutdown).
-    private var writeBuffers: [Int32: Data] = [:]
+    ///
+    /// Each flush advances a `consumed` offset instead of shifting the buffer: `removeFirst` is
+    /// O(remaining), so under a large flood (the GUI socket backs up while a 16 MiB burst drains)
+    /// shifting on every partial write would be O(n²) and steal CPU from the PTY read loop. The
+    /// consumed prefix is compacted in one batch once it dominates — the same head-index pattern as
+    /// the PTY scrollback ring — so consume stays ≈O(1) amortized and memory stays bounded.
+    private struct PendingWrite {
+        var data: Data
+        var consumed: Int = 0
+        var remaining: Int { data.count - consumed }
+    }
+    private var writeBuffers: [Int32: PendingWrite] = [:]
     private var writeSources: [Int32: DispatchSourceWrite] = [:]
     /// Drop a client whose backlog grows past this — it isn't draining; buffering more would
     /// be an unbounded memory sink. Sized for a couple of large captures in flight.
@@ -367,16 +378,17 @@ public final class DaemonServer: @unchecked Sendable {
     /// growth — both JSON replies and binary frames go through here.
     private func enqueue(_ data: Data, to fd: Int32) {
         if var pending = writeBuffers[fd] {
-            pending.append(data)
+            pending.data.append(data) // amortized O(1) (Data grows by doubling)
             writeBuffers[fd] = pending
         } else {
-            writeBuffers[fd] = data
+            writeBuffers[fd] = PendingWrite(data: data)
         }
+        let backlog = writeBuffers[fd]?.remaining ?? 0
         // Read-only instrumentation of the peak backlog (the cap/flush/drop logic below is
         // unchanged); captured here so a client that's about to be dropped still registers its high.
-        registry.metrics.observeBacklog(bytes: writeBuffers[fd]?.count ?? 0)
+        registry.metrics.observeBacklog(bytes: backlog)
         // A client that won't drain must not pin unbounded memory — drop it past the backlog cap.
-        if (writeBuffers[fd]?.count ?? 0) > maxWriteBacklog {
+        if backlog > maxWriteBacklog {
             writeBuffers[fd] = nil
             suspendWriteSource(fd: fd)
             clientSources[fd]?.cancel()
@@ -386,32 +398,39 @@ public final class DaemonServer: @unchecked Sendable {
     }
 
     /// Flush as much of `fd`'s pending reply bytes as the (non-blocking) socket accepts now.
-    /// Unwritten bytes stay buffered and a writable `DispatchSource` finishes them later; a
-    /// hard socket error drops the client. Runs on the serial queue, never blocks it.
+    /// Unwritten bytes stay buffered (consume offset advanced, not shifted) and a writable
+    /// `DispatchSource` finishes them later; a hard socket error drops the client. Runs on the
+    /// serial queue, never blocks it.
     private func flushWrites(fd: Int32) {
-        guard var pending = writeBuffers[fd], !pending.isEmpty else {
+        guard var pending = writeBuffers[fd], pending.remaining > 0 else {
             writeBuffers[fd] = nil
             suspendWriteSource(fd: fd)
             return
         }
-        var written = 0
+        var newConsumed = pending.consumed
         var outcome: WriteOutcome = .complete
-        pending.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+        pending.data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.baseAddress else { return }
-            while written < raw.count {
-                let n = write(fd, base.advanced(by: written), raw.count - written)
-                if n > 0 { written += n; continue }
+            while newConsumed < raw.count {
+                let n = write(fd, base.advanced(by: newConsumed), raw.count - newConsumed)
+                if n > 0 { newConsumed += n; continue }
                 if n < 0, errno == EINTR { continue }
                 outcome = (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) ? .wouldBlock : .failed
                 return
             }
         }
-        if written > 0 { pending.removeFirst(written) }
+        pending.consumed = newConsumed
         switch outcome {
         case .complete:
             writeBuffers[fd] = nil
             suspendWriteSource(fd: fd)
         case .wouldBlock:
+            // Compact the consumed prefix in one batch once it dominates the buffer (≈O(1)
+            // amortized), bounding retained memory without an O(remaining) shift every flush.
+            if pending.consumed > 65_536, pending.consumed >= pending.remaining {
+                pending.data.removeFirst(pending.consumed)
+                pending.consumed = 0
+            }
             writeBuffers[fd] = pending
             ensureWriteSource(fd: fd) // resume when the socket drains
         case .failed:

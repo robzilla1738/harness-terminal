@@ -63,7 +63,7 @@ public struct CellColorResolver: Sendable {
         // 1 + 2: base foreground, with bold-bright applied to low palette indices.
         var fg: RGBColor
         if boldBrightens, cell.bold, case let .palette(i) = cell.foreground, i < 8 {
-            fg = palette.color(at: i + 8)
+            fg = palette.color(at: Int(i) + 8)
         } else {
             fg = rgb(cell.foreground, default: defaultForeground)
         }
@@ -94,7 +94,7 @@ public struct CellColorResolver: Sendable {
         case .none:
             return fallback
         case let .palette(i):
-            return palette.color(at: i)
+            return palette.color(at: Int(i))
         case let .rgb(r, g, b):
             return RGBColor(red: r, green: g, blue: b)
         }

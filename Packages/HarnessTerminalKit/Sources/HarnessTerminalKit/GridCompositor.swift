@@ -255,7 +255,7 @@ public final class GridCompositor {
     public static func gridColor(_ color: FormatColor?) -> TerminalGridColor {
         switch color {
         case nil, .some(.none): return .none
-        case let .some(.palette(i)): return .palette(i)
+        case let .some(.palette(i)): return .palette(UInt8(clamping: i))
         case let .some(.rgb(r, g, b)): return .rgb(r: r, g: g, b: b)
         }
     }

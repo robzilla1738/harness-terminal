@@ -6,9 +6,14 @@ import Foundation
 /// These are the engine's public, renderer-agnostic color values — the same shape the
 /// headless `readGrid` snapshot exposes and the live renderer consumes. They carry no
 /// platform color type so the engine stays Foundation-only and unit-testable without a GPU.
+///
+/// `palette` is a `UInt8` (the full 0–255 ANSI range) rather than `Int` so the enum's payload
+/// fits in one byte: this keeps `TerminalGridColor` tiny and, with three colors per cell, shrinks
+/// `TerminalGridCell` enough to roughly halve the per-cell copy / snapshot / `==` cost on the
+/// throughput hot paths.
 public enum TerminalGridColor: Equatable, Sendable {
     case none
-    case palette(Int)
+    case palette(UInt8)
     case rgb(r: UInt8, g: UInt8, b: UInt8)
 }
 

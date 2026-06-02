@@ -199,51 +199,56 @@ public final class TerminalEmulator: VTParserHandler {
         }
     }
 
-    func parserCSI(final: UInt8, params: [[Int]], intermediates: [UInt8], isPrivate: Bool, privateMarker: UInt8?) {
-        // Most control functions use one value per parameter; flatten by taking each
-        // group's first sub-parameter. SGR is the exception — it needs the full groups
-        // (for `4:3` underline styles and colon-form colors).
-        let flat = params.map { $0.first ?? 0 }
+    func parserCSI(final: UInt8, params: CSIParams, intermediates: [UInt8], isPrivate: Bool, privateMarker: UInt8?) {
+        // Most control functions use one value per parameter (the first sub-parameter of each
+        // group); the `arg`/`argRaw` helpers read those directly off the borrowed view. SGR is the
+        // exception — it needs the full groups (for `4:3` underline styles and colon-form colors).
         if isPrivate {
+            // Private modes (DECSET/DECRST, Kitty keyboard, XTMODKEYS) are rare and off the
+            // throughput hot path; materialize a small flat array just for them so the existing
+            // private-mode handlers stay unchanged.
+            var flat = [Int]()
+            flat.reserveCapacity(params.count)
+            for g in 0 ..< params.count { flat.append(params.first(g)) }
             handlePrivateMode(final: final, intermediates: intermediates, params: flat, marker: privateMarker)
             return
         }
         // DECSCUSR — `CSI Ps SP q` (intermediate space) sets the cursor shape/blink.
         if intermediates == [0x20], final == 0x71 {
-            current.setCursorStyle(argRaw(flat, 0, 0))
+            current.setCursorStyle(argRaw(params, 0, 0))
             return
         }
         guard intermediates.isEmpty else { return }
         switch final {
-        case 0x41: current.moveCursorRelative(dRow: -arg(flat, 0, 1), dCol: 0) // CUU
-        case 0x42: current.moveCursorRelative(dRow: arg(flat, 0, 1), dCol: 0)  // CUD
-        case 0x43: current.moveCursorRelative(dRow: 0, dCol: arg(flat, 0, 1))  // CUF
-        case 0x44: current.moveCursorRelative(dRow: 0, dCol: -arg(flat, 0, 1)) // CUB
-        case 0x45: cursorNextLine(arg(flat, 0, 1))   // CNL
-        case 0x46: cursorPrevLine(arg(flat, 0, 1))   // CPL
-        case 0x47: current.moveCursorCol(arg(flat, 0, 1) - 1) // CHA
+        case 0x41: current.moveCursorRelative(dRow: -arg(params, 0, 1), dCol: 0) // CUU
+        case 0x42: current.moveCursorRelative(dRow: arg(params, 0, 1), dCol: 0)  // CUD
+        case 0x43: current.moveCursorRelative(dRow: 0, dCol: arg(params, 0, 1))  // CUF
+        case 0x44: current.moveCursorRelative(dRow: 0, dCol: -arg(params, 0, 1)) // CUB
+        case 0x45: cursorNextLine(arg(params, 0, 1))   // CNL
+        case 0x46: cursorPrevLine(arg(params, 0, 1))   // CPL
+        case 0x47: current.moveCursorCol(arg(params, 0, 1) - 1) // CHA
         case 0x48, 0x66: // CUP / HVP
-            current.moveCursor(row: arg(flat, 0, 1) - 1, col: arg(flat, 1, 1) - 1)
-        case 0x4A: current.eraseInDisplay(mode: argRaw(flat, 0, 0)) // ED
-        case 0x4B: current.eraseInLine(mode: argRaw(flat, 0, 0))    // EL
-        case 0x4C: current.insertLines(arg(flat, 0, 1))   // IL
-        case 0x4D: current.deleteLines(arg(flat, 0, 1))   // DL
-        case 0x40: current.insertCharacters(arg(flat, 0, 1)) // ICH
-        case 0x50: current.deleteCharacters(arg(flat, 0, 1)) // DCH
-        case 0x58: current.eraseCharacters(arg(flat, 0, 1))  // ECH
-        case 0x53: current.scrollUp(arg(flat, 0, 1))   // SU
-        case 0x54: current.scrollDown(arg(flat, 0, 1)) // SD
-        case 0x64: current.moveCursorRow(arg(flat, 0, 1) - 1) // VPA
-        case 0x6D: current.applySGR(groups: params)    // SGR
-        case 0x72: setScrollRegion(flat)               // DECSTBM
+            current.moveCursor(row: arg(params, 0, 1) - 1, col: arg(params, 1, 1) - 1)
+        case 0x4A: current.eraseInDisplay(mode: argRaw(params, 0, 0)) // ED
+        case 0x4B: current.eraseInLine(mode: argRaw(params, 0, 0))    // EL
+        case 0x4C: current.insertLines(arg(params, 0, 1))   // IL
+        case 0x4D: current.deleteLines(arg(params, 0, 1))   // DL
+        case 0x40: current.insertCharacters(arg(params, 0, 1)) // ICH
+        case 0x50: current.deleteCharacters(arg(params, 0, 1)) // DCH
+        case 0x58: current.eraseCharacters(arg(params, 0, 1))  // ECH
+        case 0x53: current.scrollUp(arg(params, 0, 1))   // SU
+        case 0x54: current.scrollDown(arg(params, 0, 1)) // SD
+        case 0x64: current.moveCursorRow(arg(params, 0, 1) - 1) // VPA
+        case 0x6D: current.applySGR(params)            // SGR
+        case 0x72: setScrollRegion(params)             // DECSTBM
         case 0x73: current.saveCursor()                // ANSI save cursor
         case 0x75: current.restoreCursor()             // ANSI restore cursor
-        case 0x6E: deviceStatusReport(argRaw(flat, 0, 0)) // DSR
+        case 0x6E: deviceStatusReport(argRaw(params, 0, 0)) // DSR
         case 0x63: deviceAttributes()                  // DA
         case 0x67: // TBC — `CSI g` clear tab at cursor; `CSI 3 g` clear all
-            argRaw(flat, 0, 0) == 3 ? current.clearAllTabStops() : current.clearTabStop()
-        case 0x49: current.cursorForwardTabs(arg(flat, 0, 1))  // CHT — forward N tab stops
-        case 0x5A: current.cursorBackwardTabs(arg(flat, 0, 1)) // CBT — back N tab stops
+            argRaw(params, 0, 0) == 3 ? current.clearAllTabStops() : current.clearTabStop()
+        case 0x49: current.cursorForwardTabs(arg(params, 0, 1))  // CHT — forward N tab stops
+        case 0x5A: current.cursorBackwardTabs(arg(params, 0, 1)) // CBT — back N tab stops
         default: break
         }
     }
@@ -450,17 +455,18 @@ public final class TerminalEmulator: VTParserHandler {
 
     // MARK: - Helpers
 
-    /// Parameter at `index`, treating absent/zero as `defaultValue` (for 1-based counts).
-    private func arg(_ params: [Int], _ index: Int, _ defaultValue: Int) -> Int {
+    /// Parameter at `index` (first sub-parameter of group `index`), treating absent/zero as
+    /// `defaultValue` (for 1-based counts).
+    private func arg(_ params: CSIParams, _ index: Int, _ defaultValue: Int) -> Int {
         guard index < params.count else { return defaultValue }
-        let v = params[index]
+        let v = params.first(index)
         return v == 0 ? defaultValue : v
     }
 
     /// Parameter at `index` with a literal default (for modes where 0 is meaningful).
-    private func argRaw(_ params: [Int], _ index: Int, _ defaultValue: Int) -> Int {
+    private func argRaw(_ params: CSIParams, _ index: Int, _ defaultValue: Int) -> Int {
         guard index < params.count else { return defaultValue }
-        return params[index]
+        return params.first(index)
     }
 
     // CNL/CPL are cursor moves, not scrolls: ECMA-48 / xterm clamp them to the page exactly
@@ -476,9 +482,9 @@ public final class TerminalEmulator: VTParserHandler {
         current.carriageReturn()
     }
 
-    private func setScrollRegion(_ params: [Int]) {
+    private func setScrollRegion(_ params: CSIParams) {
         let top = arg(params, 0, 1) - 1
-        // Use the bounds-safe accessor for both branches (no direct `params[1]` indexing).
+        // Use the bounds-safe accessor for both branches (no direct indexing).
         let rawBottom = argRaw(params, 1, 0)
         let bottom = rawBottom == 0 ? rows - 1 : rawBottom - 1
         current.setScrollRegion(top: top, bottom: bottom)

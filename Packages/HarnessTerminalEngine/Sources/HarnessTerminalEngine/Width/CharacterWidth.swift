@@ -11,32 +11,86 @@ import Foundation
 /// NOTE (Phase 1): emoji ZWJ-sequence collapsing and variation-selector presentation
 /// are handled at the grapheme layer in the screen model; this function reports the
 /// width of a single scalar. Ranges here track Unicode 15-era East Asian Width = W/F.
+///
+/// ## Lookup strategy (hot path)
+/// `width(of:)` is on the per-scalar print path, so it must be O(1), not a linear range scan.
+/// Three tiers, fastest first:
+/// 1. `scalar < 0x300` — ASCII, Latin-1, and everything below the first combining block: a single
+///    range check yields zero-width controls vs. single-width text (covers `é`/`café`/`résumé`).
+/// 2. BMP (`≤ 0xFFFF`) — a generated two-stage trie (`CharacterWidthTable`): 256-block index → a
+///    deduped 2-bits-per-cell block. ~4 loads + bit ops.
+/// 3. Astral — a binary search over the few maximal non-width-1 runs.
+///
+/// The generated `CharacterWidthTable` is produced by `Scripts/generate-width-table.swift` from the
+/// canonical ranges below and proven byte-identical to `referenceWidth` over every scalar by
+/// `CharacterWidthTests`. The canonical ranges + `referenceWidth` remain the single source of truth.
 public enum CharacterWidth {
     /// Returns 0, 1, or 2 for the given scalar value.
+    @inline(__always)
     public static func width(of scalar: UInt32) -> Int {
-        // NUL and C0/C1 controls are zero-width (the screen model handles them as
-        // control functions, never as printable glyphs).
-        if scalar == 0 { return 0 }
-        if scalar < 0x20 || (scalar >= 0x7F && scalar < 0xA0) { return 0 }
-
-        if isZeroWidth(scalar) { return 0 }
-        if isWide(scalar) { return 2 }
-        return 1
+        // Tier 1 — ASCII / Latin-1 / pre-combining fast path. Below the first zero-width block
+        // (0x0300) and the first wide block (0x1100), the only non-single-width scalars are the
+        // C0/DEL/C1 controls, which the screen model executes rather than draws.
+        if scalar < 0x300 {
+            if scalar < 0x20 || (scalar >= 0x7F && scalar < 0xA0) { return 0 }
+            return 1
+        }
+        // Tier 2 — BMP two-stage trie.
+        if scalar <= 0xFFFF {
+            let hi = Int(scalar >> 8)
+            let base = Int(CharacterWidthTable.stage1[hi]) * CharacterWidthTable.blockBytes
+            let lo = Int(scalar & 0xFF)
+            let packed = CharacterWidthTable.stage2[base + (lo >> 2)]
+            return Int((packed >> UInt8((lo & 3) << 1)) & 0x3)
+        }
+        // Tier 3 — astral binary search.
+        return astralWidth(scalar)
     }
 
     /// Convenience for `Unicode.Scalar`.
+    @inline(__always)
     public static func width(of scalar: Unicode.Scalar) -> Int {
         width(of: scalar.value)
     }
 
-    // MARK: - Zero-width (combining marks, format characters)
+    /// Binary search the (sorted, non-overlapping) astral runs where width ≠ 1.
+    private static func astralWidth(_ cp: UInt32) -> Int {
+        let lo = CharacterWidthTable.astralLo
+        let hi = CharacterWidthTable.astralHi
+        var low = 0
+        var high = lo.count - 1
+        while low <= high {
+            let mid = (low + high) >> 1
+            if cp < lo[mid] {
+                high = mid - 1
+            } else if cp > hi[mid] {
+                low = mid + 1
+            } else {
+                return Int(CharacterWidthTable.astralCode[mid])
+            }
+        }
+        return 1
+    }
+
+    // MARK: - Reference (canonical) implementation — the single source of truth.
+    //
+    // The fast `width(of:)` above is a generated table proven equivalent to this function for every
+    // scalar by `CharacterWidthTests`. Edit the ranges here, then re-run
+    // `Scripts/generate-width-table.swift`; the parity test fails until the table is regenerated.
+
+    /// Canonical width via linear range scan — the oracle the generated table is verified against.
+    static func referenceWidth(of cp: UInt32) -> Int {
+        if cp == 0 { return 0 }
+        if cp < 0x20 || (cp >= 0x7F && cp < 0xA0) { return 0 }
+        if isZeroWidth(cp) { return 0 }
+        if isWide(cp) { return 2 }
+        return 1
+    }
 
     private static func isZeroWidth(_ cp: UInt32) -> Bool {
         for range in zeroWidthRanges where range.contains(cp) { return true }
         return false
     }
-
-    // MARK: - Wide (East Asian Width = Wide or Fullwidth)
 
     private static func isWide(_ cp: UInt32) -> Bool {
         for range in wideRanges where range.contains(cp) { return true }
@@ -44,7 +98,7 @@ public enum CharacterWidth {
     }
 
     /// Combining marks and zero-width format characters. Sorted, non-overlapping.
-    private static let zeroWidthRanges: [ClosedRange<UInt32>] = [
+    static let zeroWidthRanges: [ClosedRange<UInt32>] = [
         0x0300 ... 0x036F, // Combining Diacritical Marks
         0x0483 ... 0x0489,
         0x0591 ... 0x05BD,
@@ -71,7 +125,7 @@ public enum CharacterWidth {
     ]
 
     /// East Asian Wide / Fullwidth ranges. Sorted, non-overlapping.
-    private static let wideRanges: [ClosedRange<UInt32>] = [
+    static let wideRanges: [ClosedRange<UInt32>] = [
         0x1100 ... 0x115F, // Hangul Jamo
         0x2329 ... 0x232A, // angle brackets
         0x2E80 ... 0x303E, // CJK Radicals … Kangxi … CJK Symbols
