@@ -17,6 +17,7 @@ import XCTest
 /// `HARNESS_LIVE_DAEMON_TESTS=1` (it forks a child), so the normal suites never run it.
 final class PtyDrainCeilingBenchmark: XCTestCase {
     private func skipUnlessEnabled() throws {
+        _ = testSIGPIPEIgnored
         let env = ProcessInfo.processInfo.environment
         try XCTSkipUnless(
             env["HARNESS_BENCHMARKS"] == "1" && env["HARNESS_LIVE_DAEMON_TESTS"] == "1",
