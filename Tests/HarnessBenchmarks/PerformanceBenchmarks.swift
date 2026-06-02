@@ -270,6 +270,100 @@ final class PerformanceBenchmarks: XCTestCase {
         }
     }
 
+    // MARK: - Latency under load (the headline gate for the daemon→GUI consume path)
+    //
+    // What users feel under a flood is *backlog drain time*: a keystroke echo is in-band (queued in
+    // the PTY behind the flooding program's bytes), so echo latency ≈ how fast the consume path
+    // turns the backlog into frames — i.e. throughput. This drives the *real* off-main consume path
+    // (`HarnessTerminalSurfaceView.receive` → emulator worker hop → main hop → scheduler) with a
+    // chunked flood and reports: `mbps` (drain throughput — the latency proxy), `mainHops` (how well
+    // the path coalesces a small-chunk storm — the lever Tier 1 moves), and `mainGap*` (the longest
+    // the main thread is occupied between two consecutive runloop turns — i.e. how free the UI stays
+    // to service a keystroke; the off-main pipeline is supposed to keep this tiny). Deterministic,
+    // in-process: no daemon, socket, or window-focus confound.
+
+    private func chunked(_ bytes: [UInt8], size: Int) -> [Data] {
+        var out: [Data] = []
+        var i = 0
+        while i < bytes.count {
+            let end = min(i + size, bytes.count)
+            out.append(Data(bytes[i ..< end]))
+            i = end
+        }
+        return out
+    }
+
+    private func percentile(_ sorted: [UInt64], _ p: Double) -> UInt64 {
+        guard !sorted.isEmpty else { return 0 }
+        let idx = Int((Double(sorted.count - 1) * p).rounded())
+        return sorted[min(max(idx, 0), sorted.count - 1)]
+    }
+
+    /// A sustained ~4 MiB flood of SGR-punctuated + mixed-width-Unicode output — the shape that a
+    /// build log / chatty TUI produces, and the workloads Harness trails Ghostty on.
+    private func floodPayload(targetBytes: Int = 4 * 1024 * 1024) -> [UInt8] {
+        let colors = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96]
+        let uni = "café résumé Ω 世 中 λ ✓ "
+        var s = ""; var i = 0
+        while s.utf8.count < targetBytes {
+            s += "\u{1b}[\(colors[i % colors.count]);1mline \(String(format: "%07d", i))\u{1b}[0m \(uni)build output 0123456789\r\n"
+            i += 1
+        }
+        return Array(s.utf8)
+    }
+
+    /// Headline gate: drives a 4 MiB flood through the real off-main surface at a small-chunk size
+    /// (storm) and the daemon's 64 KiB read size. Emits `consume_latency_under_load_<chunkBytes>`
+    /// with drain throughput (the echo-latency proxy), the coalescing hop count, and the worst
+    /// main-thread occupancy between runloop turns (UI freedom under load).
+    @MainActor
+    func testConsumeLatencyUnderLoad() throws {
+        try skipUnlessEnabled()
+        let flood = floodPayload()
+        for chunkSize in [4 * 1024, 64 * 1024] {
+            let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+            view.testingResizeGrid(cols: 160, rows: 48)
+            view.testingMainHopCount = 0
+
+            let chunks = chunked(flood, size: chunkSize)
+            let probeEvery = max(1, chunks.count / 64)
+            // Each probe records the wall-clock instant the runloop reaches it; the gap between two
+            // consecutive probe runs is the main thread's busy span in between (worst-case = the
+            // longest a just-arrived keystroke would wait for the main thread).
+            var probeRuns: [UInt64] = []
+            let exp = expectation(description: "drain-\(chunkSize)")
+
+            let start = DispatchTime.now().uptimeNanoseconds
+            for (idx, chunk) in chunks.enumerated() {
+                view.receive(chunk)
+                if idx % probeEvery == 0 {
+                    DispatchQueue.main.async { probeRuns.append(DispatchTime.now().uptimeNanoseconds) }
+                }
+            }
+            // Drain the parser worker (sync barrier), then a sentinel that runs behind every
+            // flood-produced main bounce + probe, so the runloop fully settles before we measure.
+            view.testingWaitForEmulatorIdle()
+            DispatchQueue.main.async { exp.fulfill() }
+            wait(for: [exp], timeout: 60)
+            let totalNanos = DispatchTime.now().uptimeNanoseconds &- start
+
+            var gaps: [UInt64] = []
+            gaps.reserveCapacity(max(0, probeRuns.count - 1))
+            for k in 1 ..< max(1, probeRuns.count) { gaps.append(probeRuns[k] &- probeRuns[k - 1]) }
+            let sortedGaps = gaps.sorted()
+            let mbps = (Double(flood.count) / 1_000_000) / (Double(totalNanos) / 1_000_000_000)
+            printBenchmark("consume_latency_under_load_\(chunkSize)", nanos: totalNanos, fields: [
+                ("bytes", "\(flood.count)"),
+                ("chunks", "\(chunks.count)"),
+                ("mbps", String(format: "%.3f", mbps)),
+                ("mainHops", "\(view.testingMainHopCount)"),
+                ("mainGapP50Nanos", "\(percentile(sortedGaps, 0.50))"),
+                ("mainGapP95Nanos", "\(percentile(sortedGaps, 0.95))"),
+                ("mainGapMaxNanos", "\(sortedGaps.last ?? 0)"),
+            ])
+        }
+    }
+
     // MARK: - VT parser / emulator throughput
 
     func testVTParseThroughput256KiB() throws {
