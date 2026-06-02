@@ -48,6 +48,19 @@ final class ScrollbackFileTests: XCTestCase {
         XCTAssertEqual(String(decoding: loaded, as: UTF8.self), "GHIJ")
     }
 
+    func testOpenCompactsExistingLogToRetentionCap() throws {
+        let fileURL = url()
+        let cap = ScrollbackFile.minimumRetentionCap
+        try HarnessPaths.ensureDirectories()
+        try Data(repeating: UInt8(ascii: "x"), count: cap * 2)
+            .write(to: fileURL, options: .atomic)
+
+        _ = ScrollbackFile(url: fileURL, retentionCap: cap)
+
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int)
+        XCTAssertLessThanOrEqual(size, cap)
+    }
+
     func testCompactionTrimsToRetentionCap() throws {
         let fileURL = url()
         let cap = 64 * 1024 // the floor; highWater is 2× this

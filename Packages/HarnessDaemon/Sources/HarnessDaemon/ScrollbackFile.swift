@@ -42,8 +42,7 @@ final class ScrollbackFile: @unchecked Sendable {
     init(url: URL, retentionCap: Int) {
         self.url = url
         self.retentionCap = max(retentionCap, Self.minimumRetentionCap)
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil
-        self.fileBytes = size ?? 0
+        self.fileBytes = Self.compactExistingLogIfNeeded(url: url, retentionCap: self.retentionCap)
     }
 
     /// Read the persisted tail (at most `maxBytes`) for seeding `RealPty`'s in-memory ring on
@@ -54,6 +53,16 @@ final class ScrollbackFile: @unchecked Sendable {
         // `suffix` yields a slice whose indices are offset from the parent; wrap in `Data` so the
         // result is 0-indexed and safe to `subdata(in:)` against.
         return Data(data.suffix(maxBytes))
+    }
+
+    private static func compactExistingLogIfNeeded(url: URL, retentionCap: Int) -> Int {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        guard size > retentionCap, let data = try? Data(contentsOf: url) else { return size }
+        let tail = Data(data.suffix(retentionCap))
+        guard HarnessPaths.atomicWrite(tail, to: url, label: "HarnessDaemon scrollback") else {
+            return size
+        }
+        return tail.count
     }
 
     /// Queue a chunk of output for persistence. Cheap on the caller (the PTY read loop): append
