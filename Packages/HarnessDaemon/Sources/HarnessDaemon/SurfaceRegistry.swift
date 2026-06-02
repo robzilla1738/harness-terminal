@@ -41,6 +41,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             try? store.saveImmediately(editor.snapshot)
         }
         ensureAllSnapshotSurfaces()
+        cleanupOrphanScrollbackFiles()
         // Wire hook execution: bound commands run server-side via the registry's own
         // handlers. `fire` invokes this on `hookQueue` (off-lock), so re-entering
         // `handle` here is safe.
@@ -1008,7 +1009,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 rows: rows,
                 cols: cols,
                 scrollbackBytes: scrollbackBytes ?? 1024 * 1024,
-                extraEnvironment: extraEnvironment(forSurfaceKey: surfaceID)
+                extraEnvironment: extraEnvironment(forSurfaceKey: surfaceID),
+                scrollbackURL: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
             )
             session.onExit = { [weak self, weak session] in
                 self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session)
@@ -1123,6 +1125,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
         for surfaceID in surfaceIDs where !stillReferenced.contains(surfaceID) {
             sessions.removeValue(forKey: surfaceID)?.close()
             stopPipe(surfaceID: surfaceID)
+            // The surface is gone from the layout — drop its persisted scrollback so it doesn't
+            // linger on disk (and can't be resurrected by a stale file on a future restart).
+            try? FileManager.default.removeItem(at: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID))
             // Drop the output monitor too, else it leaks across tab/session/pane churn.
             monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
         }
@@ -1282,6 +1287,32 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    /// Synchronously persist every live surface's buffered scrollback. Called on graceful daemon
+    /// shutdown (`DaemonServer.stop`) so the last debounce window of output isn't lost.
+    public func flushAllScrollback() {
+        lock.lock()
+        let live = Array(sessions.values)
+        lock.unlock()
+        for session in live { session.flushScrollback() }
+    }
+
+    /// On startup, delete persisted scrollback files for surfaces no longer in the layout. A clean
+    /// shutdown removes a surface's file via `closeSurfaces`, but a crash can leave files behind for
+    /// surfaces that were closed in-flight; sweep them so the directory doesn't grow without bound.
+    /// Runs in `init` after `ensureAllSnapshotSurfaces`, so `sessions` holds exactly the live set.
+    private func cleanupOrphanScrollbackFiles() {
+        let dir = HarnessPaths.scrollbackDirectory
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil) else { return }
+        let live = Set(sessions.keys)
+        for file in files where file.pathExtension == "scroll" {
+            let surfaceID = file.deletingPathExtension().lastPathComponent
+            if !live.contains(surfaceID) {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
     }
 
     private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?) {

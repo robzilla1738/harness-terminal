@@ -103,6 +103,9 @@ public final class RealPty: @unchecked Sendable {
     private var maxScrollbackBytes: Int
     private var nextSequence: UInt64 = 1
     private let scrollbackLock = NSLock()
+    /// Optional on-disk persistence of the scrollback (set when the surface is created with a
+    /// `scrollbackURL`), so history survives a daemon restart/crash and reattach replays it.
+    private let scrollbackFile: ScrollbackFile?
 
     /// Subscribers receive raw output. Multiple subscribers can attach (the
     /// running app + any number of `harness-cli attach` clients).
@@ -124,12 +127,38 @@ public final class RealPty: @unchecked Sendable {
         rows: UInt16 = 24,
         cols: UInt16 = 80,
         scrollbackBytes: Int = 1024 * 1024,
-        extraEnvironment: [String: String] = [:]
+        extraEnvironment: [String: String] = [:],
+        scrollbackURL: URL? = nil
     ) throws {
         self.id = id
         self.maxScrollbackBytes = scrollbackBytes
         self.extraEnvironment = extraEnvironment
         self.shell = shell
+
+        // Seed the in-memory ring from any persisted history BEFORE the fresh shell starts
+        // writing, so a reattach after a daemon restart replays what was last on screen and
+        // new output simply continues after it. Chunked (not one giant entry) so the ring's
+        // per-entry eviction stays granular as new output pushes the oldest history out.
+        if let scrollbackURL {
+            self.scrollbackFile = ScrollbackFile(url: scrollbackURL, retentionCap: scrollbackBytes)
+            let history = ScrollbackFile.loadTail(url: scrollbackURL, maxBytes: scrollbackBytes)
+            if !history.isEmpty {
+                let chunkSize = 16 * 1024
+                var seq: UInt64 = 1
+                var offset = 0
+                while offset < history.count {
+                    let end = min(offset + chunkSize, history.count)
+                    let slice = history.subdata(in: offset ..< end)
+                    scrollback.append(ScrollbackEntry(sequence: seq, data: slice))
+                    scrollbackBytes += slice.count
+                    seq &+= UInt64(slice.count)
+                    offset = end
+                }
+                nextSequence = seq
+            }
+        } else {
+            self.scrollbackFile = nil
+        }
 
         // Prepare everything the child needs BEFORE forking. Between fork and exec a
         // child may only call async-signal-safe functions, so it must not malloc —
@@ -263,6 +292,9 @@ public final class RealPty: @unchecked Sendable {
             scrollbackBytes = 0
             nextSequence = 1
             scrollbackLock.unlock()
+            // Drop the persisted copy too, so a later restart doesn't resurrect the history the
+            // user just cleared.
+            scrollbackFile?.reset()
         }
         // Spawn a new shell, reusing the cwd of the previous process if we can
         // still read it from the dead PID's last-known location, otherwise the
@@ -381,6 +413,12 @@ public final class RealPty: @unchecked Sendable {
         scrollbackLock.lock()
         defer { scrollbackLock.unlock() }
         return scrollbackBytes
+    }
+
+    /// Synchronously persist any buffered scrollback. Called on graceful daemon shutdown so the
+    /// last debounce window isn't lost. No-op when the surface isn't persisted.
+    public func flushScrollback() {
+        scrollbackFile?.flush()
     }
 
     /// The retained PTY output bytes (whole history, or the last ~16 KiB) as raw `Data`.
@@ -590,6 +628,10 @@ public final class RealPty: @unchecked Sendable {
             scrollbackHead = 0
         }
         scrollbackLock.unlock()
+
+        // Persist the same bytes off the read hot path (debounced inside `ScrollbackFile`), so the
+        // history survives a daemon restart. No-op when the surface isn't persisted.
+        scrollbackFile?.append(data)
 
         // Throttle activity recording off the per-chunk hot path. A flood fires `handleOutput`
         // tens of thousands of times a second; `recordActivity` (a `Date()` + two locks + two

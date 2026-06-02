@@ -26,6 +26,18 @@ public enum HarnessPaths {
         applicationSupport.appendingPathComponent("sessions", isDirectory: true)
     }
 
+    /// Per-surface persisted scrollback lives here (one `<surfaceID>.scroll` file each).
+    /// Kept under `sessions/` so it ships in the same owner-only (0o700) tree as the layout.
+    public static var scrollbackDirectory: URL {
+        sessionsDirectory.appendingPathComponent("scrollback", isDirectory: true)
+    }
+
+    /// The persisted-scrollback file for a surface. Surface IDs are UUID strings, so they're
+    /// safe as a path component; the `.scroll` extension namespaces them within the directory.
+    public static func scrollbackFileURL(forSurfaceID surfaceID: String) -> URL {
+        scrollbackDirectory.appendingPathComponent("\(surfaceID).scroll")
+    }
+
     public static var socketURL: URL {
         applicationSupport.appendingPathComponent("harness.sock")
     }
@@ -98,6 +110,8 @@ public enum HarnessPaths {
             at: applicationSupport, withIntermediateDirectories: true, attributes: ownerOnly)
         try FileManager.default.createDirectory(
             at: sessionsDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
+        try FileManager.default.createDirectory(
+            at: scrollbackDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
         try FileManager.default.createDirectory(
             at: logsDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
         // createDirectory only applies attributes to directories it creates; tighten an
