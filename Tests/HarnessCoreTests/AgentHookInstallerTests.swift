@@ -259,6 +259,7 @@ final class AgentHookInstallerTests: XCTestCase {
         let text = try String(contentsOf: result.path, encoding: .utf8)
         XCTAssertTrue(text.contains("harness-cli notify"))
         XCTAssertTrue(text.contains("session_end"))
+        XCTAssertTrue(text.contains("HARNESS_SURFACE ?? \"\""))
         XCTAssertTrue(AgentHookInstaller.isInstalled(agent: .pi, homeOverride: home))
     }
 

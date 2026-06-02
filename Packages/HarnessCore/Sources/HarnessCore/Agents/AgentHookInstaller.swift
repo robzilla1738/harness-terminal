@@ -441,8 +441,9 @@ public enum AgentHookInstaller {
             else { continue } // absent or a user file — leave it alone
             // Never delete without a recoverable backup. If the backup fails, keep the orphan.
             guard (try? backUp(url)) != nil else { continue }
-            try FileManager.default.removeItem(at: url)
-            removed.append(url)
+            if (try? FileManager.default.removeItem(at: url)) != nil {
+                removed.append(url)
+            }
         }
         return removed
     }
@@ -555,7 +556,7 @@ public enum AgentHookInstaller {
         export function activate(api: any) {
           const notify = (body: string) =>
             execSync(
-              `\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE}" --title "Pi" --body "${body}"`,
+              `\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title "Pi" --body "${body}"`,
               { stdio: "ignore" }
             )
           api.on?.("session_end", () => notify("Done"))

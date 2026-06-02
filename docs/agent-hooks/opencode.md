@@ -17,10 +17,10 @@ Writes `~/.config/opencode/plugins/harness.js`:
 // harness-managed — surfaces OpenCode session events in Harness. Safe to delete.
 export const HarnessNotify = async ({ $ }) => ({
   "session.idle": async () => {
-    await $`PATH="$HOME/Library/Application Support/Harness/bin:$PATH" harness-cli notify --surface ${process.env.HARNESS_SURFACE} --title OpenCode --body Done`
+    await $`PATH="$HOME/Library/Application Support/Harness/bin:$PATH" harness-cli notify --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body Done`
   },
   "permission.asked": async () => {
-    await $`PATH="$HOME/Library/Application Support/Harness/bin:$PATH" harness-cli notify --surface ${process.env.HARNESS_SURFACE} --title OpenCode --body "Awaiting input"`
+    await $`PATH="$HOME/Library/Application Support/Harness/bin:$PATH" harness-cli notify --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body "Awaiting input"`
   },
 })
 ```

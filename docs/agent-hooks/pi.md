@@ -19,7 +19,7 @@ import { execSync } from "node:child_process"
 export function activate(api: any) {
   const notify = (body: string) =>
     execSync(
-      `PATH="$HOME/Library/Application Support/Harness/bin:$PATH" harness-cli notify --surface "${process.env.HARNESS_SURFACE}" --title "Pi" --body "${body}"`,
+      `PATH="$HOME/Library/Application Support/Harness/bin:$PATH" harness-cli notify --surface "${process.env.HARNESS_SURFACE ?? ""}" --title "Pi" --body "${body}"`,
       { stdio: "ignore" }
     )
   api.on?.("session_end", () => notify("Done"))
