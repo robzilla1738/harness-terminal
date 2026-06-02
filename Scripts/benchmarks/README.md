@@ -29,13 +29,29 @@ Run **5×** per terminal and compare **medians** (`mbps` per `benchmark`). Each 
 | `redraw_160x48_600_frames` | full-screen redraw | cell write + scroll |
 | `scrollback_100k_lines` | scroll + history eviction | block-move scroll + ring |
 
-## What it validates
+## What it measures — and what it does NOT
 
-This is the end-to-end gate behind the engine/transport work in
-`.cursor`/`docs` perf notes: the in-repo XCTest micro-benchmarks
-(`Tests/HarnessBenchmarks`, `HARNESS_BENCHMARKS=1 make bench`) isolate each hot path, while this
-script proves the change actually moves the **drain rate** a user sees. Target: the
-`unicode_mixed`, `attributes`, `ansi_sgr`, and `redraw` medians beat the comparison terminal, and
-the existing wins (`plain_ascii`, `scrollback`, `truecolor`) widen.
+⚠️ **This drain rate is not a faithful measure of the VT engine.** Harness decouples the writer
+from the consumer (the daemon is a dumb PTY-read pipe with no consumer→writer backpressure), so
+`os.write` finishes as fast as the **daemon drains the master fd**, and the GUI's parse/render runs
+asynchronously, merely *competing for CPU*. Consequences observed in practice:
 
-Save raw runs under `.benchmark-results/<date>-<desc>/` (git-ignored) alongside a short summary.
+- Running the **same binary** with the window **foregrounded** (rendering harder) drains **~25–33%
+  slower** than backgrounded — focus alone swings the number more than any code change.
+- A faster VT engine can leave this number flat or even *lower* (it does more rendering with the CPU
+  it frees), because the number is gated by daemon-read-rate + leftover CPU, not parse speed.
+
+So treat the cross-terminal table as a rough, environment-sensitive sanity check, **not** a gate for
+engine work. Always pin conditions (quiescent machine, identical window focus/visibility, no other
+Harness daemons running) and compare medians of ≥5 runs.
+
+## The faithful scoreboard
+
+For the engine hot paths, use the in-process **consumer scoreboard**
+(`PerformanceBenchmarks.testConsumerScoreboard`, `HARNESS_BENCHMARKS=1 make bench`). It runs these
+same seven payloads through the real consumer pipeline — parse → `readGrid` → damage →
+`FrameBuilder.build` — deterministically, with no daemon, contention, or window-focus confound, and
+reports `consumer_<workload>` MB/s. Higher = the terminal turns bytes into a renderable frame
+faster. That number tracks the parse/width/cell/scroll work directly; the drain table above does not.
+
+Save raw cross-terminal runs under `.benchmark-results/<date>-<desc>/` (git-ignored) with a summary.

@@ -185,6 +185,91 @@ final class PerformanceBenchmarks: XCTestCase {
         )
     }
 
+    // MARK: - Consumer scoreboard (faithful end-to-end: bytes → parsed grid → built frame)
+    //
+    // The cross-terminal `os.write` drain benchmark (Scripts/benchmarks/terminal_stress_runner.py)
+    // is NOT a faithful measure of the VT engine: with no consumer→writer backpressure, drain is
+    // gated by the daemon PTY-read loop + leftover CPU after the GUI renders, so it swings ~30% on
+    // window focus alone and can move *opposite* to engine speed. This scoreboard instead measures
+    // the GUI's actual consumer work — parse + readGrid + damage + FrameBuilder.build — on the same
+    // seven workloads, in-process and deterministic. Higher MB/s = the terminal turns bytes into a
+    // renderable frame faster. THIS is the scoreboard for the parse/width/cell/scroll hot paths.
+
+    /// The seven cross-terminal workloads as in-process byte payloads (mirroring the structure of
+    /// `terminal_stress_runner.py`), sized for a fast micro-benchmark.
+    private func scoreboardWorkloads() -> [(name: String, bytes: [UInt8])] {
+        let target = 1024 * 1024
+        var out: [(String, [UInt8])] = []
+
+        var plain = ""
+        while plain.utf8.count < target { plain += "the quick brown fox jumps over the lazy dog 0123456789\r\n" }
+        out.append(("plain_ascii", Array(plain.utf8)))
+
+        let colors = [31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97]
+        var sgr = ""; var i = 0
+        while sgr.utf8.count < target {
+            sgr += "\u{1b}[\(colors[i % colors.count]);1mline \(String(format: "%06d", i))\u{1b}[0m build output with SGR color and ASCII payload 0123456789\r\n"
+            i += 1
+        }
+        out.append(("ansi_sgr", Array(sgr.utf8)))
+
+        let sample = "é Ω 世 Ж 中 λ ✓ café résumé 漢字 emoji-free wide text "
+        var uni = ""; i = 0
+        while uni.utf8.count < target { uni += "\(String(format: "%06d", i)) \(sample)\(sample)\r\n"; i += 1 }
+        out.append(("unicode_mixed", Array(uni.utf8)))
+
+        let av = ["\u{1b}[1m", "\u{1b}[2m", "\u{1b}[3m", "\u{1b}[4m", "\u{1b}[7m", "\u{1b}[9m", "\u{1b}[53m"]
+        var attrs = ""; i = 0
+        while attrs.utf8.count < target {
+            attrs += av[i % av.count] + "attribute row \(String(format: "%06d", i)) underline bold faint inverse strike overline\u{1b}[0m\r\n"
+            i += 1
+        }
+        out.append(("attributes", Array(attrs.utf8)))
+
+        var tc = ""
+        for frame in 0 ..< 300 {
+            tc += "\u{1b}[H"
+            for col in 0 ..< 160 {
+                let r = (col * 255) / 159, g = (frame * 7) % 256, b = 255 - r
+                tc += "\u{1b}[48;2;\(r);\(g);\(b)m "
+            }
+            tc += "\u{1b}[0m\r\n"
+        }
+        out.append(("truecolor_gradient", Array(tc.utf8)))
+
+        let alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        let base = String(String(repeating: alphabet, count: 4).prefix(160))
+        var redraw = ""
+        for frame in 0 ..< 300 {
+            redraw += "\u{1b}[H"
+            for row in 0 ..< 48 { redraw += "\u{1b}[\(31 + ((row + frame) % 7))m\(base)\u{1b}[0m\r\n" }
+        }
+        out.append(("redraw", Array(redraw.utf8)))
+
+        var sb = ""
+        for j in 0 ..< 20_000 { sb += "scrollback row \(String(format: "%06d", j)) xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n" }
+        out.append(("scrollback", Array(sb.utf8)))
+
+        return out
+    }
+
+    /// Faithful consumer throughput per workload: parse + frame build, in-process, no daemon or
+    /// render contention. Emits `consumer_<workload>` with nanos + MB/s + the feed/frame-build split.
+    @MainActor
+    func testConsumerScoreboard() throws {
+        try skipUnlessEnabled()
+        for (name, bytes) in scoreboardWorkloads() {
+            let sample = sampleSurfaceMainThreadStall(bytes: bytes)
+            let mbps = (Double(bytes.count) / 1_000_000) / (Double(sample.totalNanos) / 1_000_000_000)
+            printBenchmark("consumer_\(name)", nanos: sample.totalNanos, fields: [
+                ("bytes", "\(bytes.count)"),
+                ("mbps", String(format: "%.3f", mbps)),
+                ("feedNanos", "\(sample.feedNanos)"),
+                ("frameBuildNanos", "\(sample.frameBuildNanos)"),
+            ])
+        }
+    }
+
     // MARK: - VT parser / emulator throughput
 
     func testVTParseThroughput256KiB() throws {
