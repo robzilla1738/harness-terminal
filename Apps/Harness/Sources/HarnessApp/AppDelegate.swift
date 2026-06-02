@@ -6,6 +6,7 @@ import HarnessCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private var menuBarController: MenuBarController?
+    private var notchController: NotchPanelController?
     private var externalOpenReady = false
     private var queuedExternalOpenURLs: [URL] = []
 
@@ -22,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Menu-bar status item: workspaces + active agents, read from the daemon
         // (shell-agnostic). Lives for the app's lifetime.
         menuBarController = MenuBarController()
+        notchController = NotchPanelController.shared
+        notchController?.start()
         PrefixKeymap.shared.install()
         SurfaceShellTracker.shared.start()
         // Request notification authorization once at launch instead of on every

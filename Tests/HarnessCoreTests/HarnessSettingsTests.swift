@@ -128,6 +128,36 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertFalse(decoded.notificationSoundEnabled)
     }
 
+    func testNotchSettingsDefaultAndLegacyDecode() throws {
+        XCTAssertEqual(HarnessSettings().notchVisibilityMode, .automatic)
+        XCTAssertTrue(HarnessSettings().notchOpenOnHover)
+
+        let legacy = Data("""
+        { "fontSize": 14, "customBackgroundHex": "#000000" }
+        """.utf8)
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+        XCTAssertEqual(migrated.notchVisibilityMode, .automatic)
+        XCTAssertTrue(migrated.notchOpenOnHover)
+    }
+
+    func testNotchSettingsRoundTripAndAutomaticResolution() throws {
+        var settings = HarnessSettings()
+        settings.notchVisibilityMode = .off
+        settings.notchOpenOnHover = false
+
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: try JSONEncoder().encode(settings))
+
+        XCTAssertEqual(decoded.notchVisibilityMode, .off)
+        XCTAssertFalse(decoded.notchOpenOnHover)
+
+        XCTAssertFalse(NotchVisibilityMode.automatic.isEnabled(for: .plain))
+        XCTAssertFalse(NotchVisibilityMode.automatic.isEnabled(for: .persistent))
+        XCTAssertFalse(NotchVisibilityMode.automatic.isEnabled(for: .tmux))
+        XCTAssertTrue(NotchVisibilityMode.automatic.isEnabled(for: .agent))
+        XCTAssertTrue(NotchVisibilityMode.on.isEnabled(for: .plain))
+        XCTAssertFalse(NotchVisibilityMode.off.isEnabled(for: .agent))
+    }
+
     func testOffMainParserFramePipelineDefaultsOnAndRoundTrips() throws {
         // Now the production default: parse + frame build run off the main thread.
         XCTAssertTrue(HarnessSettings().offMainParserFramePipeline)

@@ -48,6 +48,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        let openNotch = NSMenuItem(title: "Open Notch HUD", action: #selector(openNotchHUD), keyEquivalent: "")
+        openNotch.target = self
+        menu.addItem(openNotch)
+        let closeNotch = NSMenuItem(title: "Close Notch HUD", action: #selector(closeNotchHUD), keyEquivalent: "")
+        closeNotch.target = self
+        menu.addItem(closeNotch)
+        let notchSettings = NSMenuItem(title: "Notch HUD Settings…", action: #selector(openNotchSettings), keyEquivalent: "")
+        notchSettings.target = self
+        menu.addItem(notchSettings)
+
+        menu.addItem(.separator())
         addHeader("Sessions", to: menu)
         let sessions = snapshot.workspaces.flatMap { ws in ws.sessions.map { (ws, $0) } }
         if sessions.isEmpty {
@@ -217,6 +228,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openHarness() { bringToFront() }
+
+    @objc private func openNotchHUD() {
+        NotchPanelController.shared.openFromMenu()
+    }
+
+    @objc private func closeNotchHUD() {
+        NotchPanelController.shared.closeFromMenu()
+    }
+
+    @objc private func openNotchSettings() {
+        SettingsWindowController.show()
+    }
 
     private func bringToFront() {
         NSApp.activate(ignoringOtherApps: true)

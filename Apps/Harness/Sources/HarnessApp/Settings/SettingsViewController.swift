@@ -55,6 +55,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let statusLineWell = HarnessSwatchWell(frame: .zero)
     private let systemNotificationsToggle = HarnessToggle(title: "macOS banner when an agent stops or needs input")
     private let notificationSoundToggle = HarnessToggle(title: "Play a chime with notifications")
+    private let notchModeSegment = HarnessSegmented(frame: .zero)
+    private let notchOpenOnHoverToggle = HarnessToggle(title: "Open when I hover near the macOS notch")
+    private let notchSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let notificationTestButton = NSButton(title: "Send Test Notification", target: nil, action: nil)
     private let notificationPermissionButton = NSButton(title: "Open System Settings…", target: nil, action: nil)
     private let notificationStatusField = NSTextField(labelWithString: "")
@@ -714,6 +717,16 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         notificationSoundToggle.state = SessionCoordinator.shared.settings.notificationSoundEnabled ? .on : .off
         notificationSoundToggle.target = self
         notificationSoundToggle.action = #selector(appearanceTextDidCommit)
+        notchModeSegment.setSegments(NotchVisibilityMode.allCases.map(notchModeTitle))
+        notchModeSegment.selectItem(withTitle: notchModeTitle(SessionCoordinator.shared.settings.notchVisibilityMode))
+        notchModeSegment.target = self
+        notchModeSegment.action = #selector(notchSettingsChanged)
+        notchOpenOnHoverToggle.state = SessionCoordinator.shared.settings.notchOpenOnHover ? .on : .off
+        notchOpenOnHoverToggle.target = self
+        notchOpenOnHoverToggle.action = #selector(notchSettingsChanged)
+        notchSummaryLabel.font = .systemFont(ofSize: 11)
+        notchSummaryLabel.textColor = .secondaryLabelColor
+        notchSummaryLabel.stringValue = notchSummary(for: SessionCoordinator.shared.settings.notchVisibilityMode)
 
         notificationStatusField.font = .systemFont(ofSize: 11)
         notificationStatusField.textColor = .secondaryLabelColor
@@ -740,6 +753,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsToggleRow("Sound", notificationSoundToggle),
             notifStatusBlock,
         ])
+        let notchGroup = settingsGroup("Notch HUD", [
+            settingsRow("Visibility", notchModeSegment, hint: "Automatic shows the notch in Agent Workspace only."),
+            settingsToggleRow("Hover", notchOpenOnHoverToggle),
+            notchSummaryLabel,
+        ])
 
         let detectionCaption = settingsCaption("Harness identifies agents by walking each pane's process tree and matching the executables shown below — it works for any shell, no setup. Install hooks so an agent can ping you the moment it stops or needs input (the config is merged into the agent's own file and backed up first). Customize matching in agents.json.")
         let editAgents = makeRoundedButton("Edit agents.json…", action: #selector(openAgentsJSON))
@@ -753,6 +771,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let stack = NSStackView(views: [
             header,
             notificationsGroup,
+            notchGroup,
             settingsGroup("Detection & hooks", [detectionBox]),
             settingsGroup("Agents", Self.agentColorKinds.map(agentRow) + [leadingRow(reset)]),
         ])
@@ -1494,6 +1513,36 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return cases.indices.contains(i) ? cases[i] : .plain
     }
 
+    private var selectedNotchVisibilityMode: NotchVisibilityMode {
+        let cases = NotchVisibilityMode.allCases
+        let i = notchModeSegment.selectedSegment
+        return cases.indices.contains(i) ? cases[i] : .automatic
+    }
+
+    private func notchModeTitle(_ mode: NotchVisibilityMode) -> String {
+        switch mode {
+        case .automatic: return "Automatic"
+        case .on: return "On"
+        case .off: return "Off"
+        }
+    }
+
+    private func notchSummary(for mode: NotchVisibilityMode) -> String {
+        switch mode {
+        case .automatic:
+            return "Automatic shows the top-center Agent HUD only in Agent Workspace. It passively summarizes sessions, agents, and hook-driven waiting state."
+        case .on:
+            return "The Agent HUD is always available at the top center of the main display as a session overview."
+        case .off:
+            return "The Agent HUD is disabled. Menu-bar sessions and normal notifications still work."
+        }
+    }
+
+    @objc private func notchSettingsChanged() {
+        notchSummaryLabel.stringValue = notchSummary(for: selectedNotchVisibilityMode)
+        flushAndApply()
+    }
+
     /// Switching mode re-gates the chrome (prefix + status line), sets the default
     /// session-persistence policy on the daemon, and refreshes the live surfaces — all on the
     /// one session core. `flushAndApply` persists the setting and posts the chrome-changed
@@ -1682,6 +1731,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         sidebarVisibleToggle.state = settings.sidebarVisible ? .on : .off
         systemNotificationsToggle.state = settings.systemNotificationsEnabled ? .on : .off
         notificationSoundToggle.state = settings.notificationSoundEnabled ? .on : .off
+        notchModeSegment.selectItem(withTitle: notchModeTitle(settings.notchVisibilityMode))
+        notchOpenOnHoverToggle.state = settings.notchOpenOnHover ? .on : .off
+        notchSummaryLabel.stringValue = notchSummary(for: settings.notchVisibilityMode)
         for binding in colorBindings {
             binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
@@ -1752,6 +1804,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on
         coordinator.settings.systemNotificationsEnabled = systemNotificationsToggle.state == .on
         coordinator.settings.notificationSoundEnabled = notificationSoundToggle.state == .on
+        coordinator.settings.notchVisibilityMode = selectedNotchVisibilityMode
+        coordinator.settings.notchOpenOnHover = notchOpenOnHoverToggle.state == .on
         coordinator.settings.colorRendering = vividColorsToggle.state == .on ? .vivid : .accurate
         if linearBlendingToggle.state == .on {
             coordinator.settings.textRendering = .crisp
@@ -1768,6 +1822,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // flushAndApply only ever pushes the current settings to the live surfaces —
         // scrubbing a slider never fires a setTheme IPC.
         coordinator.applySettingsToHosts()
+        NotchPanelController.shared.refreshVisibility()
         updateFontReadout()
         refreshLivePreview()
     }

@@ -21,6 +21,7 @@
 		147C1684F38588D94A0677BF /* StatusLineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C91C2E3C2A8847B6A0514123 /* StatusLineView.swift */; };
 		177E543CDFB5245D3B31E7D9 /* KeyTokenParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1879413866654EAF88523A14 /* KeyTokenParserTests.swift */; };
 		1C97FE1CA6848A0A30C9EB2F /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F07A9707ED8F9BC6D22C1973 /* TestSupport.swift */; };
+		1CEA518B1A1543A4129F52ED /* AgentNotchProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D111CD86A38E0C70F9876628 /* AgentNotchProjectionTests.swift */; };
 		1DA45B2E56169234852AF361 /* TerminalPaneRegistryAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E7B54FEAA7751D104044B8 /* TerminalPaneRegistryAccess.swift */; };
 		1DBF933D416158318D613FF2 /* HarnessTheme in Frameworks */ = {isa = PBXBuildFile; productRef = 95F708A1BFDB3CBC190CFCD9 /* HarnessTheme */; };
 		1FEC3A2A3D056888051A94A3 /* FormatStringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED3F10448010DA860EE4CF70 /* FormatStringTests.swift */; };
@@ -61,9 +62,11 @@
 		6797E23285486E1D4EDFA763 /* RecordClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1BA93151A72684AFF7A91A9 /* RecordClient.swift */; };
 		680FACAD583B3DB81E06FBFE /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 9212B022D953712A47E264CE /* Sparkle */; };
 		69E1E0B522D02B059CFE5F6A /* CommandPromptController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3912417CC3E06CEA28B664B /* CommandPromptController.swift */; };
+		6AC746D56E8522996DC5381F /* NotchPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0736359DE83EBAAC5A471E82 /* NotchPanel.swift */; };
 		6BB1598EBC4BE2D61112C126 /* AgentListFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B4C40C5437277614258EC0F /* AgentListFormatterTests.swift */; };
 		6DF1566C74572D55BAD564C1 /* HookNotificationParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F4948241F8735E2B26DC42B /* HookNotificationParserTests.swift */; };
 		7087A9FA512DCAF73C2D4C7B /* HarnessTerminalEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 521BDAE274E325FC8B75908C /* HarnessTerminalEngine */; };
+		753196651A3113722FF568ED /* AgentNotchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FDC93D001A64D23698EF5CD /* AgentNotchViewModel.swift */; };
 		77455A95D1E79921E852B7B0 /* NotificationBellButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 196C649521C73E076101AF6E /* NotificationBellButton.swift */; };
 		7763C64652557E3521B07B91 /* SessionPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E632C296DF8B1837B6776C /* SessionPersistenceTests.swift */; };
 		78ADBD37C91092234B4E70DF /* DaemonCommandExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90D14213F469AF001702450A /* DaemonCommandExecutor.swift */; };
@@ -101,6 +104,7 @@
 		9D85B25DAE578F41F445768E /* NotificationDropdownPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA12DE19711C76D4DAF36509 /* NotificationDropdownPanel.swift */; };
 		A1A68DC98F92D08EEE267F72 /* AttachClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3E79EFC3E74BAE469D8CA0 /* AttachClient.swift */; };
 		A284F16041A5DCFDB4AD94F4 /* MainMenuBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48EBC3C7A2C25776245FBF88 /* MainMenuBuilder.swift */; };
+		A47D12105ECB79A92DEDAC41 /* AgentNotchRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1473B9A1AAB088E97563D451 /* AgentNotchRootView.swift */; };
 		A51A188E5E8ECAED8981811C /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41D469BFCF05F3CDA66D3777 /* KeyRecorderView.swift */; };
 		ABB946840EFE02E5304F395A /* HarnessTheme in Frameworks */ = {isa = PBXBuildFile; productRef = 054C9F52E5E9B321AD3CFF2B /* HarnessTheme */; };
 		AC246DC4CD09B78E19D44A55 /* ContentAreaViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B5969E6A4582978144B11 /* ContentAreaViewController.swift */; };
@@ -112,9 +116,12 @@
 		B21549FEB0B782423E9BC7D8 /* RealPty.swift in Sources */ = {isa = PBXBuildFile; fileRef = F43DED9291885610DB352103 /* RealPty.swift */; };
 		B244547C177738C471711E62 /* ExperienceModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 819339E44FFF2D3D9764E6D5 /* ExperienceModeTests.swift */; };
 		B57D37C9DF555424774117B7 /* PaneStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028273159E468DC46DD4AA0F /* PaneStyleTests.swift */; };
+		B75627186128B46DA567C091 /* NotchPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9206BAD43CF558C92B4BE39 /* NotchPanelController.swift */; };
 		BE97A9D536933B183C5EE5B9 /* HarnessTheme in Frameworks */ = {isa = PBXBuildFile; productRef = 5D5E88A4806CBFDE408201CC /* HarnessTheme */; };
+		C0AA811BC01DCE5E81D4513F /* NotchLayoutMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E75AE21E408720E33A16A14C /* NotchLayoutMetricsTests.swift */; };
 		C11FABE95034E5FF1967A348 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82BEC3CB7B1286D6CCDE1A1D /* main.swift */; };
 		C2BCF8DD2B632CA2C5A297A0 /* OptionValueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98AADED807E2179E9DDE038D /* OptionValueTests.swift */; };
+		C34AB27E5BE70BFEC45FFC0B /* NotchShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CD77EBDD8B1A13C0BA9273 /* NotchShape.swift */; };
 		C6615DC046488D6863E8EBDE /* ReplayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEEAC0FEC29983B2E235F4AD /* ReplayClient.swift */; };
 		C7402FE4B4BBB5EC6C3D7DD9 /* AttachInputBatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBCDDE3A4C2D6F709BE82CA7 /* AttachInputBatcherTests.swift */; };
 		C7E8E4FF6E4C1B61A606F4D0 /* HarnessTerminalSurfaceDragDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB808C784D47F165C2E844FC /* HarnessTerminalSurfaceDragDropTests.swift */; };
@@ -123,6 +130,7 @@
 		CD1734C04213D881E6A943EA /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D798A050D3824B4FEA80EA3A /* MainWindowController.swift */; };
 		CE5C2E7B22E27C60899113B6 /* AgentScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AF4631CE23460A1A0A4BEC4 /* AgentScanner.swift */; };
 		CEB9B54163AB73D20D84FC59 /* RealPtyLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7143B9A4AFB1E19A4836A27B /* RealPtyLifecycleTests.swift */; };
+		CF694EA87649265D310C84CF /* NotchGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF4D72D5E7F5CE0CC14C7FBB /* NotchGeometry.swift */; };
 		D45EFB29397B90EF2E46C35D /* CLIInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A9C10A4B52FB83548EAC0F3 /* CLIInstaller.swift */; };
 		D5A35A080C113603A8D707A7 /* HarnessControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63791142526EFF43A6EA6B0D /* HarnessControls.swift */; };
 		DA2D4A06C95D60F7ECE577C1 /* Phase67UI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B6EE4051D1702BE7F6D1AC /* Phase67UI.swift */; };
@@ -190,9 +198,11 @@
 		0324B7EC4D6F9F388E1553C5 /* DefaultTerminalLaunchRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultTerminalLaunchRequestTests.swift; sourceTree = "<group>"; };
 		036B746E8E08D842C7E96A4F /* CommandIPCTranslatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandIPCTranslatorTests.swift; sourceTree = "<group>"; };
 		0711E05B3BE71410054E6BEE /* Phase67Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase67Tests.swift; sourceTree = "<group>"; };
+		0736359DE83EBAAC5A471E82 /* NotchPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanel.swift; sourceTree = "<group>"; };
 		0BBE7387149A5556239509BE /* TmuxMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmuxMigrationTests.swift; sourceTree = "<group>"; };
 		0D5FB4C8179560E786F5B2B4 /* WaitForRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitForRegistry.swift; sourceTree = "<group>"; };
 		12D719192EF917E6990605D1 /* GridCompositorCopyModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridCompositorCopyModeTests.swift; sourceTree = "<group>"; };
+		1473B9A1AAB088E97563D451 /* AgentNotchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotchRootView.swift; sourceTree = "<group>"; };
 		1879413866654EAF88523A14 /* KeyTokenParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTokenParserTests.swift; sourceTree = "<group>"; };
 		196C649521C73E076101AF6E /* NotificationBellButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationBellButton.swift; sourceTree = "<group>"; };
 		198091B7F721046BA174F52D /* TargetSpecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetSpecTests.swift; sourceTree = "<group>"; };
@@ -216,6 +226,7 @@
 		48EBC3C7A2C25776245FBF88 /* MainMenuBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainMenuBuilder.swift; sourceTree = "<group>"; };
 		4ADA1A35855038CF9C5C8301 /* ShellCompletionInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellCompletionInstallerTests.swift; sourceTree = "<group>"; };
 		4BACA7ED813936C9B469999C /* TabAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabAlertTests.swift; sourceTree = "<group>"; };
+		4FDC93D001A64D23698EF5CD /* AgentNotchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotchViewModel.swift; sourceTree = "<group>"; };
 		5074E518A70BAD1B635A6B0A /* HookFiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookFiringTests.swift; sourceTree = "<group>"; };
 		5122A39E062976C92BBDDDB2 /* DaemonServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonServer.swift; sourceTree = "<group>"; };
 		518F03651AD8FC7B7ACAB2DC /* DefaultTerminalManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultTerminalManager.swift; sourceTree = "<group>"; };
@@ -258,6 +269,7 @@
 		A51ECCD77E8E2A9F4EC74E1C /* SurfaceRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceRegistryTests.swift; sourceTree = "<group>"; };
 		A657998E790ADAEAB45B5BF1 /* TerminalHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalHostViewTests.swift; sourceTree = "<group>"; };
 		A75A61F63B71608690269266 /* HarnessChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessChrome.swift; sourceTree = "<group>"; };
+		A9CD77EBDD8B1A13C0BA9273 /* NotchShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchShape.swift; sourceTree = "<group>"; };
 		AA141FB5D0A682E459A41536 /* AgentDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDetectorTests.swift; sourceTree = "<group>"; };
 		AC466EB75F0C68379AF32BF6 /* AgentSessionSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionSummaryTests.swift; sourceTree = "<group>"; };
 		AC4C4E4331C8177B281FBD72 /* Toast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Toast.swift; sourceTree = "<group>"; };
@@ -279,12 +291,14 @@
 		C695B1C26A7FA88933015EA9 /* IPCCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPCCodecTests.swift; sourceTree = "<group>"; };
 		C7893156ECB30158E11DC0B8 /* Phase6KeysTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase6KeysTests.swift; sourceTree = "<group>"; };
 		C91C2E3C2A8847B6A0514123 /* StatusLineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusLineView.swift; sourceTree = "<group>"; };
+		C9206BAD43CF558C92B4BE39 /* NotchPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanelController.swift; sourceTree = "<group>"; };
 		C98251A71A00B4D1AAD8859A /* SessionEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEditorTests.swift; sourceTree = "<group>"; };
 		CA12DE19711C76D4DAF36509 /* NotificationDropdownPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDropdownPanel.swift; sourceTree = "<group>"; };
 		CB808C784D47F165C2E844FC /* HarnessTerminalSurfaceDragDropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessTerminalSurfaceDragDropTests.swift; sourceTree = "<group>"; };
 		CBD4172A892BE31553B95C03 /* TerminalRecordingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalRecordingTests.swift; sourceTree = "<group>"; };
 		CCC26C5F0BC01F83A6FCD844 /* CopyModeReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyModeReducerTests.swift; sourceTree = "<group>"; };
 		CDDF46E038BBABC664D2CB1A /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
+		D111CD86A38E0C70F9876628 /* AgentNotchProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotchProjectionTests.swift; sourceTree = "<group>"; };
 		D1B1A6E6E225E68D9BA249CC /* SparkleUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkleUpdater.swift; sourceTree = "<group>"; };
 		D2028CCA071529A0A1D32390 /* SnapshotQueryFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotQueryFormatterTests.swift; sourceTree = "<group>"; };
 		D3E473950CF7C898DE998767 /* Harness.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Harness.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -296,6 +310,7 @@
 		DE9E43E8439F63774978C118 /* HarnessLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = HarnessLogo.png; sourceTree = "<group>"; };
 		DF3E79EFC3E74BAE469D8CA0 /* AttachClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachClient.swift; sourceTree = "<group>"; };
 		E63870191AAAF494B6C86D66 /* DaemonMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonMetrics.swift; sourceTree = "<group>"; };
+		E75AE21E408720E33A16A14C /* NotchLayoutMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchLayoutMetricsTests.swift; sourceTree = "<group>"; };
 		E8302E3F990CA380E0BEBB7A /* ShellLaunchProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellLaunchProfileTests.swift; sourceTree = "<group>"; };
 		E87D766FA02E02860C0BAC11 /* PrefixKeymap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrefixKeymap.swift; sourceTree = "<group>"; };
 		E904CB45A4390E27C46DA0BA /* HarnessSidebarPanelViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessSidebarPanelViewController.swift; sourceTree = "<group>"; };
@@ -304,6 +319,7 @@
 		ED20327575CCAC554D7ABB14 /* StartupMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupMetricsTests.swift; sourceTree = "<group>"; };
 		ED3F10448010DA860EE4CF70 /* FormatStringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormatStringTests.swift; sourceTree = "<group>"; };
 		ED4D137AE38994FB0D00AB53 /* AgentInboxPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentInboxPanelView.swift; sourceTree = "<group>"; };
+		EF4D72D5E7F5CE0CC14C7FBB /* NotchGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchGeometry.swift; sourceTree = "<group>"; };
 		F020335A72A6E59565B2702A /* CommandParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandParserTests.swift; sourceTree = "<group>"; };
 		F07A9707ED8F9BC6D22C1973 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
 		F130CE1B8BF54583AE852CF6 /* ThemeManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManagerTests.swift; sourceTree = "<group>"; };
@@ -454,6 +470,7 @@
 				FB39A88BC9BC722B53472CB4 /* TerminalTabBarView.swift */,
 				AC4C4E4331C8177B281FBD72 /* Toast.swift */,
 				529595B70272EEEC10AF08E4 /* WindowBlur.swift */,
+				70391D902D250FC43FE9AAC2 /* Notch */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -533,6 +550,19 @@
 				CCC26C5F0BC01F83A6FCD844 /* CopyModeReducerTests.swift */,
 			);
 			path = HarnessCopyModeTests;
+			sourceTree = "<group>";
+		};
+		70391D902D250FC43FE9AAC2 /* Notch */ = {
+			isa = PBXGroup;
+			children = (
+				1473B9A1AAB088E97563D451 /* AgentNotchRootView.swift */,
+				4FDC93D001A64D23698EF5CD /* AgentNotchViewModel.swift */,
+				EF4D72D5E7F5CE0CC14C7FBB /* NotchGeometry.swift */,
+				0736359DE83EBAAC5A471E82 /* NotchPanel.swift */,
+				C9206BAD43CF558C92B4BE39 /* NotchPanelController.swift */,
+				A9CD77EBDD8B1A13C0BA9273 /* NotchShape.swift */,
+			);
+			path = Notch;
 			sourceTree = "<group>";
 		};
 		8B9F84DC775F556DAE85C788 /* Products */ = {
@@ -676,6 +706,7 @@
 				AA141FB5D0A682E459A41536 /* AgentDetectorTests.swift */,
 				5417E8EA74A3B5605412B89D /* AgentHookInstallerTests.swift */,
 				2B4C40C5437277614258EC0F /* AgentListFormatterTests.swift */,
+				D111CD86A38E0C70F9876628 /* AgentNotchProjectionTests.swift */,
 				AC466EB75F0C68379AF32BF6 /* AgentSessionSummaryTests.swift */,
 				EBCDDE3A4C2D6F709BE82CA7 /* AttachInputBatcherTests.swift */,
 				036B746E8E08D842C7E96A4F /* CommandIPCTranslatorTests.swift */,
@@ -699,6 +730,7 @@
 				42A46C9D61AB68EF00510185 /* KeyTableTests.swift */,
 				1879413866654EAF88523A14 /* KeyTokenParserTests.swift */,
 				FF40CE61E1B2BA4AB5600378 /* LaunchAgentInstallerTests.swift */,
+				E75AE21E408720E33A16A14C /* NotchLayoutMetricsTests.swift */,
 				98AADED807E2179E9DDE038D /* OptionValueTests.swift */,
 				ECE940990023268131E49D65 /* PaneRectSolverTests.swift */,
 				028273159E468DC46DD4AA0F /* PaneStyleTests.swift */,
@@ -988,6 +1020,8 @@
 				48096D7AA18CB188888E9DBE /* AgentIconArt.swift in Sources */,
 				63A7BB255C20C0417076524A /* AgentIconRenderer.swift in Sources */,
 				7B4BC51AEE6B115848CF8EB6 /* AgentInboxPanelView.swift in Sources */,
+				A47D12105ECB79A92DEDAC41 /* AgentNotchRootView.swift in Sources */,
+				753196651A3113722FF568ED /* AgentNotchViewModel.swift in Sources */,
 				4562647C37E383D4146761CE /* AppDelegate.swift in Sources */,
 				D45EFB29397B90EF2E46C35D /* CLIInstaller.swift in Sources */,
 				91572F33CB49E6A8D9B8E691 /* CommandPaletteController.swift in Sources */,
@@ -1008,6 +1042,10 @@
 				65F2B3A9B42810F01F1D7E85 /* MainSplitViewController.swift in Sources */,
 				CD1734C04213D881E6A943EA /* MainWindowController.swift in Sources */,
 				92C279BDB914554A462FEDAE /* MenuBarController.swift in Sources */,
+				CF694EA87649265D310C84CF /* NotchGeometry.swift in Sources */,
+				6AC746D56E8522996DC5381F /* NotchPanel.swift in Sources */,
+				B75627186128B46DA567C091 /* NotchPanelController.swift in Sources */,
+				C34AB27E5BE70BFEC45FFC0B /* NotchShape.swift in Sources */,
 				77455A95D1E79921E852B7B0 /* NotificationBellButton.swift in Sources */,
 				9D85B25DAE578F41F445768E /* NotificationDropdownPanel.swift in Sources */,
 				9C6DEF330BAF774917666A83 /* OnboardingController.swift in Sources */,
@@ -1108,6 +1146,7 @@
 				7ABFF597375885A493A8B65B /* AgentDetectorTests.swift in Sources */,
 				110FC9F3AD6B2A718162A1C9 /* AgentHookInstallerTests.swift in Sources */,
 				6BB1598EBC4BE2D61112C126 /* AgentListFormatterTests.swift in Sources */,
+				1CEA518B1A1543A4129F52ED /* AgentNotchProjectionTests.swift in Sources */,
 				23C91C8D881DA17C2DF5AC23 /* AgentSessionSummaryTests.swift in Sources */,
 				C7402FE4B4BBB5EC6C3D7DD9 /* AttachInputBatcherTests.swift in Sources */,
 				F156745706F96098AB9D185A /* CommandIPCTranslatorTests.swift in Sources */,
@@ -1131,6 +1170,7 @@
 				177E543CDFB5245D3B31E7D9 /* KeyTokenParserTests.swift in Sources */,
 				E8ACCDC3344FD63E75491F6F /* KeybindingsStoreTests.swift in Sources */,
 				FF14076D45F23530910D177B /* LaunchAgentInstallerTests.swift in Sources */,
+				C0AA811BC01DCE5E81D4513F /* NotchLayoutMetricsTests.swift in Sources */,
 				C2BCF8DD2B632CA2C5A297A0 /* OptionValueTests.swift in Sources */,
 				920F928297C458ABDBEF88EC /* PaneRectSolverTests.swift in Sources */,
 				B57D37C9DF555424774117B7 /* PaneStyleTests.swift in Sources */,
