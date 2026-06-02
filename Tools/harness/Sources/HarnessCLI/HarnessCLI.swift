@@ -25,6 +25,8 @@ struct HarnessCLI {
                 return
             case "remote":
                 exit(try handleRemote(args))
+            case "daemon":
+                runDaemonForeground() // execs HarnessDaemon; never returns
             default:
                 break
             }
@@ -1258,19 +1260,21 @@ struct HarnessCLI {
         try copyExecutable(source: source, destination: dest)
         print(dest.path)
         print("export PATH=\"\(dest.deletingLastPathComponent().path):$PATH\"")
-        // Install the LaunchAgent so the daemon survives reboot.
+        // Install the daemon as a managed service so it survives reboot/logout: launchd on macOS,
+        // systemd --user on Linux. The same flow works on a headless box.
+        let installer = ServiceInstallers.current
         if let daemon = locateDaemonBinary() {
             do {
                 let installedDaemon = HarnessPaths.applicationSupport.appendingPathComponent("bin/HarnessDaemon")
                 try copyExecutable(source: daemon, destination: installedDaemon)
                 print("daemon: \(installedDaemon.path)")
-                let report = try LaunchAgentInstaller.install(daemonPath: installedDaemon)
-                print("launch-agent: \(report.plistPath.path)")
+                let report = try installer.install(daemonPath: installedDaemon, harnessHome: HarnessPaths.applicationSupport)
+                print("service (\(installer.backendName)): \(report.unitPath.path)")
             } catch {
-                fputs("warning: LaunchAgent install failed: \(error)\n", stderr)
+                fputs("warning: \(installer.backendName) install failed: \(error)\n", stderr)
             }
         } else {
-            fputs("warning: HarnessDaemon binary not found; LaunchAgent not installed\n", stderr)
+            fputs("warning: HarnessDaemon binary not found; service not installed\n", stderr)
         }
         // Shell completions for the user's login shell, so they work out of the box: fish drops
         // into its auto-load dir; zsh/bash get a guarded, backed-up, idempotent `source` block
@@ -1295,17 +1299,41 @@ struct HarnessCLI {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
     }
 
-    /// Locate the daemon executable next to the running CLI. The CLI is
-    /// expected to be either (a) inside Harness.app's MacOS folder, where
-    /// HarnessDaemon is a sibling, or (b) in `.build/<config>/` during dev.
+    /// Locate the daemon executable: next to the running CLI (the app bundle, or `.build/<config>/`
+    /// in dev, or a Linux install dir), the previously-installed copy under the Harness home, or the
+    /// macOS app bundle. An explicit `HARNESS_DAEMON_PATH` always wins.
     static func locateDaemonBinary() -> URL? {
+        if let override = ProcessInfo.processInfo.environment["HARNESS_DAEMON_PATH"],
+           !override.isEmpty, FileManager.default.fileExists(atPath: override) {
+            return URL(fileURLWithPath: override)
+        }
         let cli = CLIInstallLocator.sourceBinary()
         let candidate = cli.deletingLastPathComponent().appendingPathComponent("HarnessDaemon")
         if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-        // Try the installed app bundle.
+        // The copy `install` placed under the Harness home.
+        let installed = HarnessPaths.applicationSupport.appendingPathComponent("bin/HarnessDaemon")
+        if FileManager.default.fileExists(atPath: installed.path) { return installed }
+        // The installed macOS app bundle (no-op on Linux).
         let appCandidate = URL(fileURLWithPath: "/Applications/Harness.app/Contents/MacOS/HarnessDaemon")
         if FileManager.default.fileExists(atPath: appCandidate.path) { return appCandidate }
         return nil
+    }
+
+    /// `harness daemon` — run HarnessDaemon in the foreground (replacing this process), for
+    /// `systemd Type=simple`, container entrypoints, and debugging. Stdio/signals pass straight
+    /// through to the daemon.
+    static func runDaemonForeground() -> Never {
+        guard let daemon = locateDaemonBinary() else {
+            fputs("harness-cli daemon: HarnessDaemon binary not found "
+                + "(set HARNESS_DAEMON_PATH or run `harness-cli install`).\n", stderr)
+            exit(1)
+        }
+        let path = daemon.path
+        var argv: [UnsafeMutablePointer<CChar>?] = [strdup(path), nil]
+        defer { argv.forEach { $0.map { free($0) } } } // unreachable on success (execv replaces us)
+        execv(path, &argv)
+        fputs("harness-cli daemon: exec failed for \(path)\n", stderr)
+        exit(1)
     }
 
     static func flagValue(_ args: [String], flag: String) -> String? {

@@ -95,6 +95,15 @@ public enum DoctorRunner {
         // 4. CLI executable path (informational).
         checks.append(.init("CLI executable", .pass, cliPath))
 
+        // 4b. Service supervision backend (launchd on macOS, systemd --user on Linux) + whether the
+        //     daemon is installed to survive reboot/logout. The resolved socket path is reported too,
+        //     since on Linux it can live under $XDG_RUNTIME_DIR rather than the home.
+        let installer = ServiceInstallers.current
+        checks.append(installer.isInstalled
+            ? .init("Service (\(installer.backendName))", .pass, "installed; socket \(HarnessPaths.socketURL.path)")
+            : .init("Service (\(installer.backendName))", .warn,
+                "not installed — run: harness-cli install (socket \(HarnessPaths.socketURL.path))"))
+
         // 5. Shell integration (optional): any per-shell OSC 133 script written under the home.
         let integrationDir = home.appendingPathComponent("shell-integration", isDirectory: true)
         let installedShells = ShellIntegration.Shell.allCases.filter {
