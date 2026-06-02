@@ -98,16 +98,26 @@ public struct SystemdUserInstaller: ServiceInstaller {
         // `env` resolves systemctl on PATH across distros.
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["systemctl", "--user"] + arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("harness-systemctl-\(UUID().uuidString).log")
+        _ = FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        guard let outputHandle = try? FileHandle(forWritingTo: outputURL) else {
+            return (-1, "Failed to capture systemctl output")
+        }
+        defer {
+            try? outputHandle.close()
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+        process.standardOutput = outputHandle
+        process.standardError = outputHandle
         do {
             try process.run()
         } catch {
             return (-1, "Failed to launch systemctl: \(error)")
         }
         process.waitUntilExit()
-        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+        try? outputHandle.synchronize()
+        let data = (try? Data(contentsOf: outputURL)) ?? Data()
         return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 }

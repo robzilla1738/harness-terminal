@@ -145,7 +145,9 @@ public final class RealPty: @unchecked Sendable {
         scrollbackURL: URL? = nil
     ) throws {
         self.id = id
-        self.maxScrollbackBytes = max(scrollbackBytes, ScrollbackFile.minimumRetentionCap)
+        self.maxScrollbackBytes = scrollbackURL == nil
+            ? scrollbackBytes
+            : max(scrollbackBytes, ScrollbackFile.minimumRetentionCap)
         self.extraEnvironment = extraEnvironment
         self.shell = shell
 
