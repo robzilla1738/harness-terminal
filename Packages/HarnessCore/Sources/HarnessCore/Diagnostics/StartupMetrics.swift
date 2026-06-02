@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(os)
 import os
+#endif
 
 /// Opt-in startup timing for diagnosing launch latency. **Off by default** — when
 /// disabled every `mark` is a single branch, so the call sites are safe to leave on
@@ -31,7 +33,11 @@ public final class StartupMetrics: @unchecked Sendable {
 
     private let lock = NSLock()
     private var marks: [(phase: Phase, nanos: UInt64)] = []
+    #if canImport(os)
+    // Apple's unified log (Console.app / `log stream`). Linux has no equivalent; the file log
+    // under `logs/startup.log` is the durable sink there.
     private let logger = Logger(subsystem: "com.robert.harness", category: "startup")
+    #endif
     /// Whether to also append marks to `logs/startup.log`. True only for the
     /// env-constructed `shared` instance — test-constructed instances never touch
     /// the filesystem.
@@ -67,7 +73,9 @@ public final class StartupMetrics: @unchecked Sendable {
         let isFirst = marks.isEmpty
         marks.append((phase, nanos))
         let deltaMs = Double(nanos &- marks[0].nanos) / 1_000_000
+        #if canImport(os)
         logger.log("\(phase.rawValue, privacy: .public) +\(deltaMs, format: .fixed(precision: 1))ms")
+        #endif
         // Durable, capture-anywhere sink (mirrors the daemon's dual stderr+file log): the
         // unified log isn't always readable from headless/sandboxed contexts, but a file
         // under the logs dir always is. Best-effort; never affects launch on failure.

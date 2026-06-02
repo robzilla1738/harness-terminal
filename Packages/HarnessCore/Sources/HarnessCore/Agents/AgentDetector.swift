@@ -153,11 +153,11 @@ public enum AgentDetector {
     }
 
     private static func descendantPIDs(of pid: Int32) -> [Int32] {
-        let allPIDs = livePIDs()
+        let allPIDs = ProcessScan.livePIDs()
         guard !allPIDs.isEmpty else { return [] }
         var parents: [Int32: Int32] = [:]
         for candidate in allPIDs {
-            parents[candidate] = parentPID(candidate)
+            parents[candidate] = ProcessScan.parentPID(candidate)
         }
         var result: [Int32] = []
         for candidate in allPIDs where candidate != pid {
@@ -173,42 +173,6 @@ public enum AgentDetector {
             }
         }
         return result
-    }
-
-    /// All live PIDs. Darwin: `proc_listpids`. Linux: numeric entries under `/proc`.
-    private static func livePIDs() -> [Int32] {
-        #if canImport(Darwin)
-        let count = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard count > 0 else { return [] }
-        let bufferCount = Int(count) / MemoryLayout<pid_t>.size
-        var pids = [pid_t](repeating: 0, count: bufferCount)
-        let bytesUsed = proc_listpids(
-            UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * bufferCount))
-        let actual = Int(bytesUsed) / MemoryLayout<pid_t>.size
-        return pids.prefix(actual).filter { $0 > 0 }.map { Int32($0) }
-        #else
-        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else { return [] }
-        return entries.compactMap { Int32($0) }.filter { $0 > 0 }
-        #endif
-    }
-
-    private static func parentPID(_ pid: Int32) -> Int32 {
-        #if canImport(Darwin)
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        let bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
-        guard bytes == size else { return 0 }
-        return Int32(info.pbi_ppid)
-        #else
-        // /proc/<pid>/stat: "pid (comm) state ppid …"; comm may contain spaces/parens, so split
-        // after the last ')'. ppid is the 2nd whitespace field after that (state, then ppid).
-        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
-              let close = stat.lastIndex(of: ")") else { return 0 }
-        let fields = stat[stat.index(after: close)...]
-            .split(separator: " ", omittingEmptySubsequences: true)
-        guard fields.count >= 2, let ppid = Int32(fields[1]) else { return 0 }
-        return ppid
-        #endif
     }
 
     private static func pidPath(_ pid: Int32) -> String? {

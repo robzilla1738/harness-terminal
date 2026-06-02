@@ -16,17 +16,22 @@ import Glibc
 // callers used to disambiguate with `Darwin.` — which doesn't exist on Linux. These thin wrappers
 // give one portable spelling.
 
+// `@discardableResult` mirrors C, where these results are implicitly ignorable — without it the
+// wrappers (unlike the raw C calls they replace) emit unused-result warnings at every fd-close site.
 @inline(__always)
+@discardableResult
 public func sysRead(_ fd: Int32, _ buffer: UnsafeMutableRawPointer?, _ count: Int) -> Int {
     read(fd, buffer, count)
 }
 
 @inline(__always)
+@discardableResult
 public func sysWrite(_ fd: Int32, _ buffer: UnsafeRawPointer?, _ count: Int) -> Int {
     write(fd, buffer, count)
 }
 
 @inline(__always)
+@discardableResult
 public func sysClose(_ fd: Int32) -> Int32 {
     close(fd)
 }
@@ -34,6 +39,7 @@ public func sysClose(_ fd: Int32) -> Int32 {
 /// `connect(2)`, wrapped so callers (e.g. `EndpointConnector`, which has its own `connect(_:)`
 /// overload) can reach the POSIX one without name ambiguity.
 @inline(__always)
+@discardableResult
 public func sysConnect(_ fd: Int32, _ addr: UnsafePointer<sockaddr>?, _ len: socklen_t) -> Int32 {
     connect(fd, addr, len)
 }

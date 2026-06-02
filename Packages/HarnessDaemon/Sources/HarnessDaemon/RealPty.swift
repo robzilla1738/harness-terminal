@@ -155,7 +155,9 @@ public final class RealPty: @unchecked Sendable {
                     let end = min(offset + chunkSize, history.count)
                     let slice = history.subdata(in: offset ..< end)
                     scrollback.append(ScrollbackEntry(sequence: seq, data: slice))
-                    scrollbackBytes += slice.count
+                    // `self.` is required: the init parameter `scrollbackBytes` (a let) shadows the
+                    // stored property here.
+                    self.scrollbackBytes += slice.count
                     seq &+= UInt64(slice.count)
                     offset = end
                 }
@@ -758,10 +760,10 @@ public final class RealPty: @unchecked Sendable {
     }
 
     private func deepestReadableDescendant(of pid: pid_t) -> pid_t? {
-        let all = Self.allPIDs()
+        let all = ProcessScan.livePIDs()
         guard !all.isEmpty else { return nil }
         var parents: [pid_t: pid_t] = [:]
-        for candidate in all { parents[candidate] = Self.parentPID(candidate) }
+        for candidate in all { parents[candidate] = ProcessScan.parentPID(candidate) }
 
         var best: (pid: pid_t, depth: Int)?
         for candidate in all where candidate != pid {
@@ -779,42 +781,6 @@ public final class RealPty: @unchecked Sendable {
             }
         }
         return best?.pid
-    }
-
-    /// Every live PID. Darwin: `proc_listpids`. Linux: numeric entries under `/proc`.
-    private static func allPIDs() -> [pid_t] {
-        #if canImport(Darwin)
-        let count = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard count > 0 else { return [] }
-        let bufferCount = Int(count) / MemoryLayout<pid_t>.size
-        var pids = [pid_t](repeating: 0, count: bufferCount)
-        let bytes = proc_listpids(
-            UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * bufferCount))
-        let actual = Int(bytes) / MemoryLayout<pid_t>.size
-        return Array(pids.prefix(actual).filter { $0 > 0 })
-        #else
-        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else { return [] }
-        return entries.compactMap { pid_t($0) }.filter { $0 > 0 }
-        #endif
-    }
-
-    private static func parentPID(_ pid: pid_t) -> pid_t {
-        #if canImport(Darwin)
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        let bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
-        guard bytes == size else { return 0 }
-        return pid_t(info.pbi_ppid)
-        #else
-        // /proc/<pid>/stat: "pid (comm) state ppid …". `comm` can contain spaces and parens, so
-        // split *after the last ')'*; ppid is then the second whitespace field (after state).
-        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
-              let close = stat.lastIndex(of: ")") else { return 0 }
-        let fields = stat[stat.index(after: close)...]
-            .split(separator: " ", omittingEmptySubsequences: true)
-        guard fields.count >= 2, let ppid = pid_t(fields[1]) else { return 0 }
-        return ppid
-        #endif
     }
 
     private static func cwd(for pid: pid_t) -> String? {

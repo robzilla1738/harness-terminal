@@ -110,7 +110,6 @@ final class SessionCoordinator: NSObject {
 
     /// Hydrate from the daemon's snapshot. Returns whether the fetch succeeded so launch-time callers
     /// can gate work (e.g. draining queued external opens) on a real hydration rather than guessing.
-    @discardableResult
     // MARK: - Remote daemons
 
     /// Point the GUI at a saved remote daemon: bring up its SSH tunnel (off-main, it blocks), then
@@ -156,6 +155,7 @@ final class SessionCoordinator: NSObject {
         _ = syncFromDaemon()
     }
 
+    @discardableResult
     func syncFromDaemon(metadataOnly: Bool = false) -> Bool {
         let remote: SessionSnapshot
         do {

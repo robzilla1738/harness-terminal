@@ -23,12 +23,17 @@ final class ImageProtocolTests: XCTestCase {
         XCTAssertEqual(img.rgba[3], 255)
     }
 
+    #if canImport(ImageIO)
+    // PNG decoding goes through ImageIO/CoreGraphics, which only exist on Apple platforms; the
+    // headless Linux build returns nil from ImageDecoder, so this (and the iTerm2 inline-PNG
+    // placement test) are Apple-only.
     func testImageDecoderDecodesPNG() throws {
         let data = try XCTUnwrap(Data(base64Encoded: redPixelPNGBase64))
         let img = try XCTUnwrap(ImageDecoder.decode(data))
         XCTAssertEqual(img.pixelWidth, 1)
         XCTAssertEqual(img.pixelHeight, 1)
     }
+    #endif
 
     func testKittyRawRGBADecodes() {
         let pixels = [UInt8](repeating: 200, count: 2 * 2 * 4) // 2×2 RGBA
@@ -97,11 +102,13 @@ final class ImageProtocolTests: XCTestCase {
         XCTAssertNotNil(term.image(for: imgs[0].id))
     }
 
+    #if canImport(ImageIO)
     func testITerm2InlineImagePlaces() {
         let term = TerminalEmulator(cols: 20, rows: 10)
         term.feed("\u{1b}]1337;File=inline=1:\(redPixelPNGBase64)\u{07}")
         XCTAssertEqual(placements(term).count, 1)
     }
+    #endif
 
     func testImageScrollsIntoScrollbackAndPersists() {
         let term = TerminalEmulator(cols: 20, rows: 6)
