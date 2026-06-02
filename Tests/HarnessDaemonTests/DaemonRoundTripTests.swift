@@ -259,7 +259,7 @@ final class DaemonRoundTripTests: XCTestCase {
     private enum RawSocketError: Error { case connectFailed, writeFailed }
 
     private func connectRawSocket() throws -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = makeUnixStreamSocket()
         guard fd >= 0 else { throw RawSocketError.connectFailed }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
