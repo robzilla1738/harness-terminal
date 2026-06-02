@@ -14,7 +14,7 @@ final class PrefixKeymap {
     /// instead of `.prefix`. One-shot — cleared once a key is handled (unless that key's
     /// command switches again, chaining a multi-key sequence).
     private var pendingTable: KeyTableID?
-    /// The armed prefix, or `nil` when the prefix is disabled — non-tmux modes, or a blanked
+    /// The armed prefix, or `nil` when Harness controls are disabled, or a blanked
     /// `prefixKey`. When `nil` the key monitor is removed entirely so plain mode does no
     /// multiplexer key handling at all (it feels like a normal terminal).
     private var prefix: ParsedShortcut?

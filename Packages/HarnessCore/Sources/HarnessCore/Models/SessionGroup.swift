@@ -11,7 +11,7 @@ public struct SessionGroup: Codable, Sendable, Identifiable, Equatable {
     public var sortOrder: Int
     /// Pin this session to survive a clean GUI quit even when the global
     /// `keepSessionsOnQuit` is off (Plain mode). A session survives iff
-    /// `keepSessionsOnQuit || persistent` — so when keep-on-quit is on (Persistent/Tmux/Agent,
+    /// `keepSessionsOnQuit || persistent` — so when keep-on-quit is on (Persistent/Full/Agent,
     /// and every pre-modes install) this flag is moot and everything survives. Defaults to
     /// unpinned; promoting a session sets it. Older snapshots decode to `false`.
     public var persistent: Bool

@@ -27,7 +27,7 @@ final class SessionPersistenceTests: XCTestCase {
         let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
         _ = editor.addSession(to: ws.id, name: "a")
         _ = editor.addSession(to: ws.id, name: "b")
-        // keep-on-quit on (Persistent/Tmux/Agent, and every pre-modes install): nothing is
+        // keep-on-quit on (Persistent/Full/Agent, and every pre-modes install): nothing is
         // ephemeral, the per-session flag is moot.
         XCTAssertTrue(editor.ephemeralSessionIDs().isEmpty)
     }

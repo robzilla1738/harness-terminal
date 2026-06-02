@@ -18,7 +18,7 @@ Use this path for a fresh install.
    Download the DMG, drag `Harness.app` to Applications, and launch it once.
    Harness starts the background daemon automatically.
 
-2. Pick the tmux-style experience.
+2. Pick the Harness controls experience.
 
    Open **Settings > Terminal > Experience** and choose **Full Terminal** or
    **Agent Workspace**.

@@ -495,7 +495,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private static let sectionKeywords: [Int: [String]] = [
         0: ["appearance", "theme", "opacity", "blur", "padding", "window", "transparent", "titlebar", "sidebar", "restore", "remember", "size"],
         1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status", "soft", "native", "crisp", "rendering", "gamma"],
-        2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session", "tmux", "controls", "experience"],
+        2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session", "harness", "controls", "experience"],
         3: ["keys", "prefix", "binding", "keybinding", "shortcut"],
         4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "detection"],
         5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render"],

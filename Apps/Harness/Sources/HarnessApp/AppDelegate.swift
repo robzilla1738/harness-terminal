@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// One-shot: align the daemon's keep-on-quit default with the chosen experience the first
     /// time we launch with modes. A fresh Plain install becomes ephemeral; an upgraded install
-    /// (already keep-on-quit + migrated to Tmux) is a no-op. Keyed so it never overrides a
+    /// (already keep-on-quit + migrated to Full Terminal) is a no-op. Keyed so it never overrides a
     /// later explicit choice the user makes in Settings.
     private static func reconcileSessionPersistenceWithModeOnce() {
         let key = "HarnessModePersistenceReconciledV1"
