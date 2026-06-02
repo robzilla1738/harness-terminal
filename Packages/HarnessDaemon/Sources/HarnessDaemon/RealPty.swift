@@ -60,6 +60,15 @@ public final class RealPty: @unchecked Sendable {
 
     private let readQueue = DispatchQueue(label: "com.robert.harness.realpty.read")
     private var readSource: DispatchSourceRead?
+    /// Reused across read wakeups — `readQueue` is serial and every generation's read source runs on
+    /// it, so this is single-owner and never raced. Allocating + zero-filling a fresh 64 KiB buffer
+    /// *per wakeup* was a measured hot-path cost: the macOS PTY hands out only ~1 KiB per read, so a
+    /// flood fires this handler tens of thousands of times a second and that per-wakeup `memset`
+    /// was the largest single per-segment cost. Reusing one buffer raised end-to-end drain from
+    /// ≈42 to ≈48 MB/s in the `real_pty_end_to_end_drain` benchmark (the raw read ceiling is ≈75).
+    private var readBuffer = [UInt8](repeating: 0, count: 64 * 1024)
+    /// `readQueue`-confined throttle for `AgentDetector.recordActivity` (see `handleOutput`).
+    private var lastActivityRecordUptime: UInt64 = 0
     /// Subscriber fan-out runs here, NOT on `readQueue`: a slow or misbehaving subscriber handler
     /// must not stall PTY reads (which would back-pressure the shell and every other subscriber of
     /// this surface). Output is enqueued in read order onto this *serial* queue, so each subscriber
@@ -532,11 +541,11 @@ public final class RealPty: @unchecked Sendable {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: readQueue)
         source.setEventHandler { [weak self] in
             guard let self else { return }
-            // 64 KiB (was 8 KiB): a PTY can hold tens of KiB of buffered output, so a burst (cat,
-            // build logs, `yes`) drains in ~8× fewer read() calls — and therefore ~8× fewer IPC
-            // frames/encodes/socket writes downstream. Also coalesces bursts at the kernel level.
-            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-            let n = buffer.withUnsafeMutableBufferPointer { ptr -> Int in
+            // One read per wakeup into the reused `readBuffer` (no per-wakeup allocation). A macOS
+            // PTY hands out ~1 KiB per read regardless of buffer size, and a read-ahead loop does
+            // NOT help: the writer is paced by our reads, so right after we drain a segment the
+            // buffer is empty (FIONREAD == 0) — there is nothing accumulated to coalesce (measured).
+            let n = self.readBuffer.withUnsafeMutableBufferPointer { ptr -> Int in
                 Darwin.read(fd, ptr.baseAddress, ptr.count)
             }
             if n <= 0 {
@@ -544,7 +553,7 @@ public final class RealPty: @unchecked Sendable {
                 self.childEnded(generation: gen)
                 return
             }
-            let data = Data(buffer.prefix(n))
+            let data = Data(self.readBuffer.prefix(n))
             self.handleOutput(data)
         }
         source.setCancelHandler {
@@ -582,7 +591,18 @@ public final class RealPty: @unchecked Sendable {
         }
         scrollbackLock.unlock()
 
-        AgentDetector.recordActivity(forSurfaceKey: id)
+        // Throttle activity recording off the per-chunk hot path. A flood fires `handleOutput`
+        // tens of thousands of times a second; `recordActivity` (a `Date()` + two locks + two
+        // string-keyed dictionary writes) only needs coarse granularity — it sets the "working"
+        // edge (caught on the first chunk of a burst) and a "recent enough" timestamp for the
+        // ~1.5s agent scanner. Recording it at most every 50 ms keeps the semantics while removing
+        // it from ~99% of chunks under load. Sparse interactive output (gaps > 50 ms) still records
+        // every chunk. `lastActivityRecordUptime` is `readQueue`-confined like `handleOutput`.
+        let nowUptime = DispatchTime.now().uptimeNanoseconds
+        if nowUptime &- lastActivityRecordUptime >= 50_000_000 {
+            lastActivityRecordUptime = nowUptime
+            AgentDetector.recordActivity(forSurfaceKey: id)
+        }
         onOutput?(data)
 
         // Fan out on the delivery queue (off the read loop). `data`/`sequence` are values; capture

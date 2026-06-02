@@ -251,6 +251,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var copyOnSelect = false
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
+    /// Test-only: counts main-thread consume hops (one per `receiveOffMain` main bounce). The
+    /// latency-under-load benchmark reads this to measure how aggressively the consume path
+    /// coalesces a flood of small chunks. Never read in production; a single `Int` add on main.
+    var testingMainHopCount = 0
     /// Canvas foreground — used to draw IME preedit (marked) text over the grid.
     private var canvasForeground: RGBColor = RGBColor(red: 255, green: 255, blue: 255)
     /// Resolved cursor + 16-color palette, surfaced to programs via OSC 10/11/12/4 *queries*
@@ -418,6 +422,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             let synchronized = emulator.modes.synchronizedOutput
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                self.testingMainHopCount &+= 1
                 if self.scrollOffset > 0 {
                     let added = afterHistory - beforeHistory
                     if added > 0 { self.scrollOffset = min(afterHistory, self.scrollOffset + added) }
