@@ -105,7 +105,13 @@ final class VTParser {
 
     private enum StringKind { case dcs, apc }
 
-    private weak var handler: VTParserHandler?
+    /// The event sink. Held `unowned` (not `weak`): the emulator owns the parser and is the only
+    /// `VTParserHandler`, so the handler always outlives every `feed`. `unowned` drops the per-emit
+    /// ARC weak-load + the optional-chain branch on the byte hot path (the parser emits a print /
+    /// execute / CSI for nearly every input byte), and lets the optimizer devirtualize the witness
+    /// call. The parser never escapes the emulator and is never fed after the emulator deinits, so
+    /// the non-optional reference is strictly correct.
+    private unowned let handler: VTParserHandler
     private var state: State = .ground
 
     // CSI accumulation, allocation-free across sequences. Parameters are grouped
@@ -201,7 +207,7 @@ final class VTParser {
             if state == .ground, utf8Remaining == 0, buf[i] >= 0x20, buf[i] < 0x7F {
                 var j = i + 1
                 while j < n, buf[j] >= 0x20, buf[j] < 0x7F { j += 1 }
-                handler?.parserPrintRun(UnsafeBufferPointer(rebasing: buf[i ..< j]))
+                handler.parserPrintRun(UnsafeBufferPointer(rebasing: buf[i ..< j]))
                 i = j
             } else {
                 feed(buf[i])
@@ -250,7 +256,7 @@ final class VTParser {
             return
         }
         if byte < 0x20 || byte == 0x7F { // C0 controls (and DEL)
-            handler?.parserExecute(byte)
+            handler.parserExecute(byte)
             return
         }
         if byte < 0x80 { // ASCII printable
@@ -273,9 +279,9 @@ final class VTParser {
     private func emitScalar(_ value: UInt32) {
         // Reject surrogate range and out-of-range scalars.
         if (value >= 0xD800 && value <= 0xDFFF) || value > 0x10FFFF {
-            handler?.parserPrint(0xFFFD)
+            handler.parserPrint(0xFFFD)
         } else {
-            handler?.parserPrint(value)
+            handler.parserPrint(value)
         }
     }
 
@@ -306,11 +312,11 @@ final class VTParser {
             appendIntermediate(byte)
             state = .escapeIntermediate
         case 0x30 ... 0x7E: // final
-            handler?.parserESC(final: byte, intermediates: intermediates)
+            handler.parserESC(final: byte, intermediates: intermediates)
             state = .ground
         default:
             // C0 control inside ESC: execute and stay.
-            if byte < 0x20 { handler?.parserExecute(byte) } else { state = .ground }
+            if byte < 0x20 { handler.parserExecute(byte) } else { state = .ground }
         }
     }
 
@@ -319,10 +325,10 @@ final class VTParser {
         case 0x20 ... 0x2F:
             appendIntermediate(byte)
         case 0x30 ... 0x7E:
-            handler?.parserESC(final: byte, intermediates: intermediates)
+            handler.parserESC(final: byte, intermediates: intermediates)
             state = .ground
         default:
-            if byte < 0x20 { handler?.parserExecute(byte) } else { state = .ground }
+            if byte < 0x20 { handler.parserExecute(byte) } else { state = .ground }
         }
     }
 
@@ -350,7 +356,7 @@ final class VTParser {
         case 0x7F:
             break // ignore DEL
         default:
-            if byte < 0x20 { handler?.parserExecute(byte) } else { state = .csiIgnore }
+            if byte < 0x20 { handler.parserExecute(byte) } else { state = .csiIgnore }
         }
     }
 
@@ -371,7 +377,7 @@ final class VTParser {
         case 0x7F:
             break
         default:
-            if byte < 0x20 { handler?.parserExecute(byte) } else { state = .csiIgnore }
+            if byte < 0x20 { handler.parserExecute(byte) } else { state = .csiIgnore }
         }
     }
 
@@ -384,7 +390,7 @@ final class VTParser {
         case 0x7F:
             break
         default:
-            if byte < 0x20 { handler?.parserExecute(byte) } else { state = .csiIgnore }
+            if byte < 0x20 { handler.parserExecute(byte) } else { state = .csiIgnore }
         }
     }
 
@@ -394,13 +400,13 @@ final class VTParser {
             state = .ground
             clearCSI()
         } else if byte < 0x20 {
-            handler?.parserExecute(byte)
+            handler.parserExecute(byte)
         }
     }
 
     private func dispatchCSI(_ final: UInt8) {
         finalizeCurrentGroup()
-        if !csiOverflow, let handler {
+        if !csiOverflow {
             // Borrow the reused buffers for the call only — `CSIParams` must not escape, so the
             // whole dispatch (incl. screen mutation) runs inside the buffer-pointer scope.
             paramValues.withUnsafeBufferPointer { vbuf in
@@ -472,7 +478,7 @@ final class VTParser {
         if sawESCInString {
             sawESCInString = false
             if byte == 0x5C { // backslash → ST terminates the string
-                handler?.parserOSC(oscBuffer)
+                handler.parserOSC(oscBuffer)
                 oscBuffer.removeAll(keepingCapacity: true)
                 state = .ground
                 return
@@ -485,7 +491,7 @@ final class VTParser {
         }
         switch byte {
         case 0x07: // BEL terminates OSC
-            handler?.parserOSC(oscBuffer)
+            handler.parserOSC(oscBuffer)
             oscBuffer.removeAll(keepingCapacity: true)
             state = .ground
         case 0x1B:
@@ -552,8 +558,8 @@ final class VTParser {
 
     private func dispatchCapturedString() {
         switch stringKind {
-        case .dcs: handler?.parserDCS(stringBuffer)
-        case .apc: handler?.parserAPC(stringBuffer)
+        case .dcs: handler.parserDCS(stringBuffer)
+        case .apc: handler.parserAPC(stringBuffer)
         }
         stringBuffer.removeAll(keepingCapacity: true)
     }
