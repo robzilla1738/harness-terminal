@@ -314,6 +314,25 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var copyModeKeys: String = "vi"
     public var isInCopyMode: Bool { copyMode != nil }
 
+    // MARK: Find (in-scrollback search bar)
+    /// True while the Cmd+F find bar is open; gates highlight rendering + scroll-to-match.
+    private var findActive = false
+    /// All matches for the current query, in buffer-line order (history + viewport space).
+    private var findMatches: [TerminalBufferMatch] = []
+    /// Index of the "current" match within `findMatches` (the one we scrolled to).
+    private var findCurrentIndex = 0
+    /// Reports `(current, total)` to the host so the find bar can show "n of m" (0,0 = none).
+    public var onFindResultsChanged: ((_ current: Int, _ total: Int) -> Void)?
+
+    // MARK: Link hover (⌘-hover affordance for ⌘-click open)
+    /// The link span under the pointer while ⌘ is held: a grid row + half-open column range.
+    /// Drives the underline layer and the pointing-hand cursor. nil when not hovering a link.
+    private var hoveredLink: (row: Int, columns: Range<Int>)?
+    /// Underline drawn beneath the hovered link. A sublayer of the Metal layer so it composites
+    /// above the terminal content without intercepting clicks (a subview would eat the ⌘-click).
+    private let linkUnderlineLayer = CALayer()
+    private var trackingArea: NSTrackingArea?
+
     public init(
         themeName: String = ThemeManager.defaultThemeName,
         fontFamily: String = "Menlo",
@@ -634,6 +653,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         // Tag the layer to match the frame builder's RGB output. Accurate mode stays sRGB;
         // vivid mode converts authored sRGB into Display-P3 before tagging the layer P3.
         metalLayer.colorspace = CGColorSpace(name: layerColorSpaceName)
+        // Link-hover underline: a thin sublayer composited above the terminal content.
+        linkUnderlineLayer.isHidden = true
+        linkUnderlineLayer.backgroundColor = NSColor.linkColor.cgColor
+        metalLayer.addSublayer(linkUnderlineLayer)
     }
 
     private var layerColorSpaceName: CFString {
@@ -725,6 +748,11 @@ public final class HarnessTerminalSurfaceView: NSView {
             addCursorRect(bounds, cursor: programPointerCursor)
         } else {
             super.resetCursorRects()
+        }
+        // Added last so it wins over the base/program cursor for the link's region: ⌘-hovering
+        // a link shows the pointing hand, signalling it's ⌘-clickable.
+        if let rect = hoveredLinkRect() {
+            addCursorRect(rect, cursor: .pointingHand)
         }
     }
 
@@ -920,7 +948,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         // selection, and IME preedit all rebuild every row (they aren't tracked by damage), so
         // they take the full path and reset the reuse cache.
         let damage = emulator.consumeDamage()
-        let plain = scrollOffset == 0 && currentSelection == nil && markedText.isEmpty
+        let findHits = findActive
+            ? Self.viewportFindHighlights(findMatches, scrollOffset: scrollOffset, historyCount: emulator.historyCount, rows: rows)
+            : []
+        let plain = scrollOffset == 0 && currentSelection == nil && markedText.isEmpty && findHits.isEmpty
         let frameBuildStart = DispatchTime.now().uptimeNanoseconds
         var frame: TerminalFrame
         if plain {
@@ -928,7 +959,8 @@ public final class HarnessTerminalSurfaceView: NSView {
                                        imageProvider: { emulator.image(for: $0) },
                                        reusing: lastPlainFrame, damage: damage)
         } else {
-            frame = frameBuilder.build(grid, selection: currentSelection,
+            frame = frameBuilder.build(grid, region: currentSelection.map(SelectionRegion.linear),
+                                       searchHighlights: findHits,
                                        imageProvider: { emulator.image(for: $0) })
         }
         let frameBuildNanos = DispatchTime.now().uptimeNanoseconds &- frameBuildStart
@@ -1001,6 +1033,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         let fg = canvasForeground
         let bg = canvasBackground
         let opacity = canvasOpacity
+        let findIsActive = findActive
+        let findMatchesSnapshot = findMatches
 
         // The frame build, identical for the async (coalesced) and synchronous (forced) paths. Pure
         // over the captured value snapshot + the emulator; the only mutation is `state`'s plain-frame
@@ -1037,7 +1071,10 @@ public final class HarnessTerminalSurfaceView: NSView {
                     ? emulator.readGrid(scrollbackOffset: requestedScrollOffset)
                     : emulator.readGrid()
                 let damage = emulator.consumeDamage()
-                let plain = requestedScrollOffset == 0 && selection == nil && preedit.isEmpty
+                let findHits = findIsActive
+                    ? Self.viewportFindHighlights(findMatchesSnapshot, scrollOffset: requestedScrollOffset, historyCount: emulator.historyCount, rows: viewRows)
+                    : []
+                let plain = requestedScrollOffset == 0 && selection == nil && preedit.isEmpty && findHits.isEmpty
                 if plain {
                     // Only reuse a cached frame built for THIS generation — a stale-generation frame
                     // describes the old grid and would tear when diffed against fresh damage.
@@ -1047,7 +1084,8 @@ public final class HarnessTerminalSurfaceView: NSView {
                                           reusing: reuse, damage: damage)
                     renderDamage = damage
                 } else {
-                    frame = builder.build(grid, selection: selection,
+                    frame = builder.build(grid, region: selection.map(SelectionRegion.linear),
+                                          searchHighlights: findHits,
                                           imageProvider: { emulator.image(for: $0) })
                 }
                 if !preedit.isEmpty, requestedScrollOffset == 0 {
@@ -1273,15 +1311,24 @@ public final class HarnessTerminalSurfaceView: NSView {
         scheduleRender()
     }
 
-    /// The clickable URL at a grid cell: an OSC 8 hyperlink first, else an auto-detected URL in
-    /// the row text. The row is built one character per cell so `column` maps directly.
+    /// The clickable URL at a grid cell (OSC 8 hyperlink first, else an auto-detected URL).
     private func linkURL(atRow row: Int, column col: Int) -> String? {
+        linkRange(atRow: row, column: col)?.url
+    }
+
+    /// The clickable link at a grid cell *and* its column span — an OSC 8 hyperlink (the run of
+    /// adjacent cells sharing its id) first, else an auto-detected URL in the row text. The row is
+    /// built one character per cell so `column`/the returned range map directly to grid columns.
+    private func linkRange(atRow row: Int, column col: Int) -> (url: String, columns: Range<Int>)? {
         emulatorSync { emulator in
             let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
             guard row >= 0, row < grid.rows, col >= 0, col < grid.cols else { return nil }
             if let cell = grid.cell(row: row, col: col), cell.hyperlinkID != 0,
                let url = emulator.hyperlinkURL(id: cell.hyperlinkID) {
-                return url
+                var lo = col, hi = col
+                while lo > 0, grid.cell(row: row, col: lo - 1)?.hyperlinkID == cell.hyperlinkID { lo -= 1 }
+                while hi + 1 < grid.cols, grid.cell(row: row, col: hi + 1)?.hyperlinkID == cell.hyperlinkID { hi += 1 }
+                return (url, lo ..< (hi + 1))
             }
             var line = ""
             line.reserveCapacity(grid.cols)
@@ -1289,7 +1336,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 guard let cell = grid.cell(row: row, col: c), cell.width != .spacerTail else { line.append(" "); continue }
                 line.unicodeScalars.append(cell.codepoint == 0 ? " " : (Unicode.Scalar(cell.codepoint) ?? " "))
             }
-            return URLDetection.url(in: line, at: col)
+            return URLDetection.match(in: line, at: col)
         }
     }
 
@@ -1348,6 +1395,165 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func otherMouseUp(with event: NSEvent) {
         if isMouseReporting(event) { reportMouse(event, button: .middle, kind: .release) }
         else { super.otherMouseUp(with: event) }
+    }
+
+    // MARK: - Link hover (⌘-hover affordance)
+
+    private func cellSizePoints() -> (w: CGFloat, h: CGFloat)? {
+        guard let renderer else { return nil }
+        let scale = window?.backingScaleFactor ?? 2.0
+        let w = CGFloat(renderer.cellPixelWidth) / scale
+        let h = CGFloat(renderer.cellPixelHeight) / scale
+        guard w > 0, h > 0 else { return nil }
+        return (w, h)
+    }
+
+    /// The view-space rect (bottom-left origin, matching `cell(at:)`'s inverse) covering a grid
+    /// `row` and half-open `columns` span.
+    private func cellRect(row: Int, columns: Range<Int>) -> CGRect? {
+        guard let (w, h) = cellSizePoints(), !columns.isEmpty else { return nil }
+        let x = paddingPointsX + CGFloat(columns.lowerBound) * w
+        let y = bounds.height - paddingPointsY - CGFloat(row + 1) * h
+        return CGRect(x: x, y: y, width: CGFloat(columns.count) * w, height: h)
+    }
+
+    private func hoveredLinkRect() -> CGRect? {
+        guard let link = hoveredLink else { return nil }
+        return cellRect(row: link.row, columns: link.columns)
+    }
+
+    override public func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    public override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateLinkHover(at: event.locationInWindow, modifiers: event.modifierFlags)
+    }
+
+    public override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        clearLinkHover()
+    }
+
+    public override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        // Pressing/releasing ⌘ over a stationary pointer toggles whether the link is "hot".
+        if let window {
+            updateLinkHover(at: window.mouseLocationOutsideOfEventStream, modifiers: event.modifierFlags)
+        }
+    }
+
+    /// A link is only highlighted while ⌘ is held (matching ⌘-click open) and the program
+    /// isn't grabbing the mouse.
+    private func updateLinkHover(at locationInWindow: NSPoint, modifiers: NSEvent.ModifierFlags) {
+        // `cell(at:)` clamps to the grid, so first require the pointer to actually be inside us
+        // (⌘ can be pressed while the pointer rests over another pane).
+        guard copyMode == nil, modifiers.contains(.command),
+              bounds.contains(convert(locationInWindow, from: nil)),
+              let pos = cell(at: locationInWindow),
+              let link = linkRange(atRow: pos.row, column: pos.column)
+        else { clearLinkHover(); return }
+        if let current = hoveredLink, current.row == pos.row, current.columns == link.columns { return }
+        hoveredLink = (row: pos.row, columns: link.columns)
+        refreshLinkUnderline()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func clearLinkHover() {
+        guard hoveredLink != nil else { return }
+        hoveredLink = nil
+        refreshLinkUnderline()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func refreshLinkUnderline() {
+        // Disable implicit animations so the underline snaps to the pointer instead of sliding.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let rect = hoveredLinkRect() {
+            let thickness = max(1, (cellSizePoints()?.h ?? 16) * 0.07)
+            linkUnderlineLayer.frame = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: thickness)
+            linkUnderlineLayer.isHidden = false
+        } else {
+            linkUnderlineLayer.isHidden = true
+        }
+        CATransaction.commit()
+    }
+
+    // MARK: - Find (Cmd+F)
+
+    public func beginFind() { findActive = true }
+
+    /// Close the find bar: drop matches + highlights (the bar stays a host concern).
+    public func endFind() {
+        guard findActive else { return }
+        findActive = false
+        findMatches = []
+        findCurrentIndex = 0
+        onFindResultsChanged?(0, 0)
+        scheduleRender()
+    }
+
+    /// Run/refresh the search for `query` (incremental as the user types). Empty clears matches.
+    public func updateFind(query: String) {
+        findActive = true
+        if query.isEmpty {
+            findMatches = []
+            findCurrentIndex = 0
+        } else {
+            findMatches = emulatorSync { emulator in
+                TerminalBufferSearch.matches(query: query, lineCount: emulator.bufferLineCount) { emulator.bufferLine($0) }
+            }
+            findCurrentIndex = 0
+            if !findMatches.isEmpty { scrollToCurrentMatch() }
+        }
+        onFindResultsChanged?(findMatches.isEmpty ? 0 : findCurrentIndex + 1, findMatches.count)
+        scheduleRender()
+    }
+
+    public func findNext() { advanceFind(by: 1) }
+    public func findPrevious() { advanceFind(by: -1) }
+
+    private func advanceFind(by delta: Int) {
+        guard !findMatches.isEmpty else { return }
+        let n = findMatches.count
+        findCurrentIndex = ((findCurrentIndex + delta) % n + n) % n
+        scrollToCurrentMatch()
+        onFindResultsChanged?(findCurrentIndex + 1, n)
+        scheduleRender()
+    }
+
+    /// Scroll so the current match sits a little below the top of the viewport (context above it).
+    private func scrollToCurrentMatch() {
+        guard findMatches.indices.contains(findCurrentIndex) else { return }
+        let line = findMatches[findCurrentIndex].bufferLine
+        scrollToBufferLine(max(0, line - max(0, rows / 3)))
+    }
+
+    /// Viewport-relative highlight spans for the matches currently on screen. `nonisolated` +
+    /// pure so the off-main render path can call it on its worker queue.
+    private nonisolated static func viewportFindHighlights(
+        _ matches: [TerminalBufferMatch], scrollOffset: Int, historyCount: Int, rows: Int
+    ) -> [TerminalSelection] {
+        guard !matches.isEmpty, rows > 0 else { return [] }
+        let topVisible = historyCount - scrollOffset // buffer index of the top viewport row
+        var hits: [TerminalSelection] = []
+        for m in matches where !m.columns.isEmpty {
+            let row = m.bufferLine - topVisible
+            if row >= 0, row < rows {
+                hits.append(TerminalSelection((row, m.columns.lowerBound), (row, m.columns.upperBound - 1)))
+            }
+        }
+        return hits
     }
 
     public override func scrollWheel(with event: NSEvent) {

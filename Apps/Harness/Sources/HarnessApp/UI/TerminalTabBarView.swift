@@ -514,11 +514,29 @@ private final class TabPillView: NSView {
         if isDragging {
             onDragEnded?(self)
         } else if !closeButton.frame.contains(local), bounds.contains(local) {
-            onSelect?(tabID)
+            // Double-click anywhere on the pill (except the close button) renames it,
+            // matching the browser/Terminal.app convention; a single click selects.
+            if event.clickCount >= 2 {
+                onContextCommand?(.rename)
+            } else {
+                onSelect?(tabID)
+            }
         }
         mouseDownLocation = nil
         isDragging = false
         super.mouseUp(with: event)
+    }
+
+    // Middle-click closes the tab (standard tab-bar affordance). Swallow the press
+    // so it doesn't fall through, and act on release while still over the pill.
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { super.otherMouseDown(with: event); return }
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { super.otherMouseUp(with: event); return }
+        let local = convert(event.locationInWindow, from: nil)
+        if bounds.contains(local) { onClose?(tabID) }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

@@ -118,7 +118,9 @@ final class MainExecutor: CommandExecutor {
             }
         case .newSession(let name):
             if let workspaceID = coordinator.snapshot.activeWorkspaceID {
-                coordinator.addSession(to: workspaceID, name: name)
+                // tmux `new-session` starts in the default directory (not the active
+                // tab's), so pass it explicitly rather than inheriting the cwd.
+                coordinator.addSession(to: workspaceID, cwd: coordinator.settings.defaultCWD, name: name)
             }
         case .killSession:
             if let sessionID = coordinator.snapshot.activeWorkspace?.activeSessionID {

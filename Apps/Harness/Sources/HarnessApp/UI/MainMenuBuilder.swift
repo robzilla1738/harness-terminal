@@ -62,6 +62,10 @@ enum MainMenuBuilder {
         let closeTab = NSMenuItem(title: "Close Tab", action: #selector(MenuTarget.closeTab), keyEquivalent: "w")
         closeTab.target = MenuTarget.shared
         workspace.submenu?.addItem(closeTab)
+        let reopenTab = NSMenuItem(title: "Reopen Closed Tab", action: #selector(MenuTarget.reopenClosedTab), keyEquivalent: "t")
+        reopenTab.keyEquivalentModifierMask = [.command, .shift]
+        reopenTab.target = MenuTarget.shared
+        workspace.submenu?.addItem(reopenTab)
         let closeSession = NSMenuItem(title: "Close Session", action: #selector(MenuTarget.closeSession), keyEquivalent: "W")
         closeSession.keyEquivalentModifierMask = [.command, .shift]
         closeSession.target = MenuTarget.shared
@@ -115,6 +119,10 @@ enum MainMenuBuilder {
         promptItem.keyEquivalentModifierMask = [.command]
         promptItem.target = MenuTarget.shared
         view.submenu?.addItem(promptItem)
+        let findItem = NSMenuItem(title: "Find…", action: #selector(MenuTarget.find), keyEquivalent: "f")
+        findItem.keyEquivalentModifierMask = [.command]
+        findItem.target = MenuTarget.shared
+        view.submenu?.addItem(findItem)
         let sidebarItem = NSMenuItem(title: "Toggle Sidebar", action: #selector(MenuTarget.toggleSidebar), keyEquivalent: "\\")
         sidebarItem.keyEquivalentModifierMask = [.command]
         sidebarItem.target = MenuTarget.shared
@@ -123,6 +131,14 @@ enum MainMenuBuilder {
         zoomIn.keyEquivalentModifierMask = [.command]
         zoomIn.target = MenuTarget.shared
         view.submenu?.addItem(zoomIn)
+        // ⌘= alias so zooming in doesn't require Shift to reach "+". Marked as an
+        // alternate of the item above with the same modifier mask, so AppKit keeps
+        // its key equivalent live without showing a duplicate menu row.
+        let zoomInAlias = NSMenuItem(title: "Increase Font Size", action: #selector(MenuTarget.zoomIn), keyEquivalent: "=")
+        zoomInAlias.keyEquivalentModifierMask = [.command]
+        zoomInAlias.isAlternate = true
+        zoomInAlias.target = MenuTarget.shared
+        view.submenu?.addItem(zoomInAlias)
         let zoomOut = NSMenuItem(title: "Decrease Font Size", action: #selector(MenuTarget.zoomOut), keyEquivalent: "-")
         zoomOut.keyEquivalentModifierMask = [.command]
         zoomOut.target = MenuTarget.shared
@@ -140,6 +156,9 @@ enum MainMenuBuilder {
         window.submenu = windowMenu
         windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
         windowMenu.addItem(NSMenuItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: ""))
+        let fullScreen = NSMenuItem(title: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fullScreen.keyEquivalentModifierMask = [.command, .control]
+        windowMenu.addItem(fullScreen)
         windowMenu.addItem(.separator())
         windowMenu.addItem(NSMenuItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: ""))
         main.addItem(window)
@@ -171,6 +190,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation {
         switch menuItem.action {
         case #selector(detachPane): return !SessionCoordinator.shared.activePaneIsDetached
         case #selector(reattachPane): return SessionCoordinator.shared.activePaneIsDetached
+        case #selector(reopenClosedTab): return SessionCoordinator.shared.canReopenClosedTab
         default: return true
         }
     }
@@ -191,6 +211,14 @@ final class MenuTarget: NSObject, NSMenuItemValidation {
 
     @objc func closeTab() {
         SessionCoordinator.shared.closeActiveTabWithConfirmation()
+    }
+
+    @objc func reopenClosedTab() {
+        SessionCoordinator.shared.reopenLastClosedTab()
+    }
+
+    @objc func find() {
+        SessionCoordinator.shared.toggleFindBar()
     }
 
 

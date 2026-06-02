@@ -403,6 +403,43 @@ public final class TerminalHostView: NSView {
         hostDelegate?.terminalHostDidChangeFocus(true, surfaceID: surfaceID)
     }
 
+    // MARK: - Find (Cmd+F)
+
+    private var findBar: TerminalFindBar?
+
+    /// Toggle the in-pane find bar. Opening focuses its field (keystrokes go to the bar, not
+    /// the shell); closing clears highlights and returns focus to the terminal.
+    public func toggleFind() {
+        if findBar != nil { hideFind() } else { showFind() }
+    }
+
+    private func showFind() {
+        guard findBar == nil else { findBar?.focusField(); return }
+        let bar = TerminalFindBar()
+        bar.onQueryChanged = { [weak self] query in self?.nativeView.updateFind(query: query) }
+        bar.onNext = { [weak self] in self?.nativeView.findNext() }
+        bar.onPrevious = { [weak self] in self?.nativeView.findPrevious() }
+        bar.onClose = { [weak self] in self?.hideFind() }
+        addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+        ])
+        nativeView.onFindResultsChanged = { [weak bar] current, total in bar?.setResults(current: current, total: total) }
+        nativeView.beginFind()
+        findBar = bar
+        bar.focusField()
+    }
+
+    private func hideFind() {
+        guard let bar = findBar else { return }
+        nativeView.onFindResultsChanged = nil
+        nativeView.endFind()
+        bar.removeFromSuperview()
+        findBar = nil
+        focusTerminal()
+    }
+
     // MARK: - Copy mode (in-pane overlay)
 
     public var isInCopyMode: Bool { nativeView.isInCopyMode }

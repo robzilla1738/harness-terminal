@@ -9,17 +9,24 @@ public enum URLDetection {
     /// character per cell (so `column` is the clicked grid column); URLs are ASCII, so wide
     /// chars don't shift the mapping.
     public static func url(in line: String, at column: Int) -> String? {
+        match(in: line, at: column)?.url
+    }
+
+    /// As `url(in:at:)`, but also returns the matched span as a half-open column range,
+    /// so callers can underline the link on hover. `columns` uses the same one-character-
+    /// per-cell convention as the input `line`.
+    public static func match(in line: String, at column: Int) -> (url: String, columns: Range<Int>)? {
         guard !line.isEmpty, column >= 0,
               let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         else { return nil }
         let full = NSRange(line.startIndex ..< line.endIndex, in: line)
-        var result: String?
+        var result: (url: String, columns: Range<Int>)?
         detector.enumerateMatches(in: line, options: [], range: full) { match, _, stop in
             guard let match, let r = Range(match.range, in: line) else { return }
             let lower = line.distance(from: line.startIndex, to: r.lowerBound)
             let upper = line.distance(from: line.startIndex, to: r.upperBound)
             if column >= lower, column < upper {
-                result = match.url?.absoluteString ?? String(line[r])
+                result = (match.url?.absoluteString ?? String(line[r]), lower ..< upper)
                 stop.pointee = true
             }
         }
