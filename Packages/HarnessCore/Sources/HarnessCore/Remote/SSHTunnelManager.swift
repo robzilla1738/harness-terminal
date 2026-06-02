@@ -179,6 +179,12 @@ public final class SSHTunnelManager: @unchecked Sendable {
     }
 
     private static func forwardSpec(localSocketPath: String, remoteSocketPath: String) throws -> String {
+        guard localSocketPath.hasPrefix("/"),
+              isSafeArgumentToken(localSocketPath),
+              !localSocketPath.contains(":")
+        else {
+            throw SSHTunnelError.invalidConfiguration("local socket path must be an absolute path without ':' or control characters")
+        }
         guard remoteSocketPath.hasPrefix("/"),
               isSafeArgumentToken(remoteSocketPath),
               !remoteSocketPath.contains(":")

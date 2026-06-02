@@ -92,4 +92,15 @@ final class RemoteHostStoreTests: XCTestCase {
             for: host,
             localSocket: URL(fileURLWithPath: "/tmp/harness.sock")))
     }
+
+    func testSSHTunnelRejectsAmbiguousLocalForwardSocket() {
+        let host = RemoteHost(
+            name: "build",
+            sshTarget: "ci@build",
+            remoteSocketPath: "/run/user/1000/harness/harness.sock")
+
+        XCTAssertThrowsError(try SSHTunnelManager.sshArguments(
+            for: host,
+            localSocket: URL(fileURLWithPath: "/tmp/harness:sock")))
+    }
 }

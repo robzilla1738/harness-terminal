@@ -37,7 +37,8 @@ public enum EndpointConnector {
         path.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
-                strncpy(dest, cstr, sunPathCapacity)
+                strncpy(dest, cstr, sunPathCapacity - 1)
+                dest[sunPathCapacity - 1] = 0
             }
         }
         // connect() can be interrupted by a signal (EINTR). For a blocking AF_UNIX stream socket the

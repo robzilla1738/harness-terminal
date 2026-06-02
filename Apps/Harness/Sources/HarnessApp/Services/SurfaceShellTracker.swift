@@ -162,9 +162,15 @@ final class SurfaceShellTracker {
         guard bytes == size else { return nil }
         return withUnsafePointer(to: &info.pvi_cdir.vip_path) { ptr -> String in
             ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
-                String(cString: $0)
+                boundedCString($0, capacity: Int(MAXPATHLEN))
             }
         }
+    }
+
+    private nonisolated static func boundedCString(_ pointer: UnsafePointer<CChar>, capacity: Int) -> String {
+        let bytes = UnsafeBufferPointer(start: pointer, count: capacity)
+        let end = bytes.firstIndex(of: 0) ?? bytes.count
+        return String(decoding: bytes.prefix(end).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// Read another process's argv + envp via `sysctl(KERN_PROCARGS2)`.

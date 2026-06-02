@@ -89,7 +89,8 @@ public final class DaemonServer: @unchecked Sendable {
         socketPath.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
-                strncpy(dest, cstr, sunPathCapacity)
+                strncpy(dest, cstr, sunPathCapacity - 1)
+                dest[sunPathCapacity - 1] = 0
             }
         }
         let size = socklen_t(MemoryLayout<sockaddr_un>.size)

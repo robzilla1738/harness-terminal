@@ -62,7 +62,7 @@ long harness_peer_uid(int fd) {
     return (long)uid;
 #elif defined(SO_PEERCRED)
     // Kernel `struct ucred` layout {pid, uid, gid} — declared here so we don't need _GNU_SOURCE.
-    struct harness_ucred { unsigned int pid; unsigned int uid; unsigned int gid; } cred;
+    struct harness_ucred { pid_t pid; uid_t uid; gid_t gid; } cred;
     socklen_t len = sizeof(cred);
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) return -1;
     return (long)cred.uid;

@@ -99,6 +99,15 @@ public final class RealPty: @unchecked Sendable {
         let sequence: UInt64
         let data: Data
     }
+    struct ScrollbackReplaySegment: Sendable, Equatable {
+        let sequence: UInt64
+        let data: Data
+
+        init(sequence: UInt64, data: Data) {
+            self.sequence = sequence
+            self.data = data
+        }
+    }
     private var scrollback: [ScrollbackEntry] = []
     // Index of the first live entry. Eviction advances this (O(1)) instead of `removeFirst()`
     // (O(n) on the PTY read hot path); the dead prefix is physically compacted in one batched
@@ -390,7 +399,6 @@ public final class RealPty: @unchecked Sendable {
             _ = dup2(slave, 1)
             _ = dup2(slave, 2)
             if slave > 2 { _ = sysClose(slave) }
-            _ = sysClose(master)
             if let cwd { _ = chdir(cwd) }
             execveChild(argv: argv, envp: envp)
             _exit(127)
@@ -625,17 +633,29 @@ public final class RealPty: @unchecked Sendable {
     public func replay(fromSequence: UInt64?) -> String {
         scrollbackLock.lock()
         let live = scrollback[scrollbackHead...] // skip the evicted dead prefix
-        let entries: [ScrollbackEntry]
-        if let from = fromSequence {
-            entries = live.filter { $0.sequence >= from }
-        } else {
-            entries = Array(live)
-        }
+        let segments = live.map { ScrollbackReplaySegment(sequence: $0.sequence, data: $0.data) }
         scrollbackLock.unlock()
-        let combined = entries.reduce(into: Data()) { $0.append($1.data) }
+        let combined = Self.replayData(from: segments, fromSequence: fromSequence)
         // Lossy decode — a UTF-8 sequence split across the replay boundary (or an evicted entry)
         // must not blank the entire reattach replay. See `captureScrollback`.
         return String(decoding: combined, as: UTF8.self)
+    }
+
+    static func replayData(from segments: [ScrollbackReplaySegment], fromSequence: UInt64?) -> Data {
+        guard let fromSequence else {
+            return segments.reduce(into: Data()) { output, segment in output.append(segment.data) }
+        }
+        return segments.reduce(into: Data()) { output, segment in
+            let count = UInt64(segment.data.count)
+            let end = segment.sequence &+ count
+            guard fromSequence < end else { return }
+            if fromSequence > segment.sequence {
+                let offset = Int(fromSequence - segment.sequence)
+                output.append(contentsOf: segment.data.dropFirst(offset))
+            } else {
+                output.append(segment.data)
+            }
+        }
     }
 
     public func subscribe(_ handler: @escaping (Data, UInt64) -> Void) -> UUID {
@@ -815,7 +835,7 @@ public final class RealPty: @unchecked Sendable {
         guard bytes == size else { return nil }
         return withUnsafePointer(to: &info.pvi_cdir.vip_path) { ptr -> String in
             ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
-                String(cString: $0)
+                boundedCString($0, capacity: Int(MAXPATHLEN))
             }
         }
         #else
@@ -826,5 +846,11 @@ public final class RealPty: @unchecked Sendable {
         guard len > 0 else { return nil }
         return String(decoding: buffer[0 ..< len].map { UInt8(bitPattern: $0) }, as: UTF8.self)
         #endif
+    }
+
+    private static func boundedCString(_ pointer: UnsafePointer<CChar>, capacity: Int) -> String {
+        let bytes = UnsafeBufferPointer(start: pointer, count: capacity)
+        let end = bytes.firstIndex(of: 0) ?? bytes.count
+        return String(decoding: bytes.prefix(end).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }
