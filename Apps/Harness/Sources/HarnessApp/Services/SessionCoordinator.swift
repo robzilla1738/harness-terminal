@@ -23,6 +23,9 @@ final class SessionCoordinator: NSObject {
     /// working→idle→working mid-task can't spam "stopped" pings.
     private var lastStopNotifyAt: [String: Date] = [:]
     var settings = HarnessSettings.load()
+    /// Which daemon the GUI currently drives: the local one, or a remote daemon over an SSH tunnel.
+    /// New terminal panes are bound to this endpoint, and `daemon` (session/layout IPC) tracks it.
+    private(set) var activeEndpoint: Endpoint = .localControlSocket
     var activeSurfaceID: SurfaceID?
     /// Most-recently-active pane within the current tab, for `select-pane -l`
     /// (last-pane). Updated only on genuine intra-tab pane switches.
@@ -108,6 +111,39 @@ final class SessionCoordinator: NSObject {
     /// Hydrate from the daemon's snapshot. Returns whether the fetch succeeded so launch-time callers
     /// can gate work (e.g. draining queued external opens) on a real hydration rather than guessing.
     @discardableResult
+    // MARK: - Remote daemons
+
+    /// Point the GUI at a saved remote daemon: bring up its SSH tunnel (off-main, it blocks), then
+    /// switch the session service + new panes to that endpoint and rehydrate from it. On failure we
+    /// surface a throttled error and stay on the current daemon.
+    func connectToRemote(named name: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let endpoint = try RemoteHostsService.shared.connect(named: name)
+                DispatchQueue.main.async { self.applyEndpointSwitch(endpoint) }
+            } catch {
+                DispatchQueue.main.async { self.noteDaemonError(error) }
+            }
+        }
+    }
+
+    /// Tear down the remote tunnel and return the GUI to the local daemon.
+    func disconnectRemote() {
+        RemoteHostsService.shared.disconnect()
+        applyEndpointSwitch(.localControlSocket)
+    }
+
+    /// Repoint everything at `endpoint`: the session-service IPC, future panes, and the live view.
+    /// Existing panes are dropped (they belonged to the old daemon and have different surface IDs on
+    /// the new one) so the next layout pass rebuilds them against the new endpoint.
+    private func applyEndpointSwitch(_ endpoint: Endpoint) {
+        activeEndpoint = endpoint
+        daemon.switchEndpoint(endpoint)
+        terminalHosts.prune(keeping: [])
+        _ = syncFromDaemon()
+    }
+
     func syncFromDaemon(metadataOnly: Bool = false) -> Bool {
         let remote: SessionSnapshot
         do {
@@ -1146,7 +1182,8 @@ final class SessionCoordinator: NSObject {
             workingDirectory: cwd,
             harnessSurfaceEnv: surfaceID.uuidString,
             settings: settings,
-            themeName: snapshot.themeName
+            themeName: snapshot.themeName,
+            endpoint: activeEndpoint
         )
         host.hostDelegate = self
         host.applyTheme(named: snapshot.themeName)

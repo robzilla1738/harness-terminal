@@ -21,7 +21,9 @@ public final class TerminalHostView: NSView {
     public weak var hostDelegate: TerminalHostDelegate?
 
     private let nativeView: HarnessTerminalSurfaceView
-    private let daemonClient = DaemonClient()
+    /// Which daemon this pane talks to — the local one by default, or a remote daemon (via an SSH
+    /// tunnel) when the pane belongs to a connected remote host.
+    private let daemonClient: DaemonClient
     private let io: SurfaceIO
     private let inputGate: InputGate
     private var outputSubscription: DaemonSubscription?
@@ -133,18 +135,20 @@ public final class TerminalHostView: NSView {
         workingDirectory: String? = nil,
         harnessSurfaceEnv: String? = nil,
         settings: HarnessSettings? = nil,
-        themeName: String = ThemeManager.defaultThemeName
+        themeName: String = ThemeManager.defaultThemeName,
+        endpoint: Endpoint = .localControlSocket
     ) {
         self.surfaceID = surfaceID
+        self.daemonClient = DaemonClient(endpoint: endpoint)
         self.cachedThemeName = themeName
         self.cachedSettings = settings
         let shell = settings?.defaultShell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         self.cachedShell = shell
         self.cachedCwd = workingDirectory
         let surfaceEnv = harnessSurfaceEnv ?? surfaceID.uuidString
-        let io = SurfaceIO(surfaceID: surfaceEnv)
+        let io = SurfaceIO(surfaceID: surfaceEnv, endpoint: endpoint)
         self.io = io
-        let inputGate = InputGate(io: io)
+        let inputGate = InputGate(io: io, endpoint: endpoint)
         self.inputGate = inputGate
         let nativeView = HarnessTerminalSurfaceView(
             themeName: themeName,
@@ -300,8 +304,9 @@ public final class TerminalHostView: NSView {
     private func storeCopyBuffer(_ text: String) {
         guard !text.isEmpty else { return }
         let data = Data(text.utf8)
+        let client = daemonClient // same daemon (local or remote) this pane is bound to
         DispatchQueue.global(qos: .utility).async {
-            _ = try? DaemonClient().request(.setBuffer(name: nil, data: data))
+            _ = try? client.request(.setBuffer(name: nil, data: data))
         }
     }
 
@@ -748,7 +753,7 @@ private final class DetachedPaneOverlay: NSView {
 /// this keeps writes ordered and off the main thread.
 /// @unchecked Sendable: `DaemonClient` is itself thread-safe and `surfaceID` is immutable.
 private final class SurfaceIO: @unchecked Sendable {
-    private let client = DaemonClient()
+    private let client: DaemonClient
     private let queue = DispatchQueue(label: "com.robert.harness.terminal-io")
     private let surfaceID: String
     private let lock = NSLock()
@@ -762,7 +767,10 @@ private final class SurfaceIO: @unchecked Sendable {
     private var lastRows: UInt16 = 0
     private var lastCols: UInt16 = 0
 
-    init(surfaceID: String) { self.surfaceID = surfaceID }
+    init(surfaceID: String, endpoint: Endpoint = .localControlSocket) {
+        self.surfaceID = surfaceID
+        self.client = DaemonClient(endpoint: endpoint)
+    }
 
     /// Point input at the live subscription (or `nil` to fall back to the per-call client, e.g. when
     /// the pane is detached). Covers both first attach and re-grab.
@@ -812,12 +820,15 @@ private final class SurfaceIO: @unchecked Sendable {
 /// never a view — so it's safe to call from any input callback thread.
 private final class InputGate: @unchecked Sendable {
     private let io: SurfaceIO
-    private let broadcastClient = DaemonClient()
+    private let broadcastClient: DaemonClient
     private let broadcastQueue = DispatchQueue(label: "com.robert.harness.sync-input")
     private let lock = NSLock()
     private var siblingsStorage: [String] = []
 
-    init(io: SurfaceIO) { self.io = io }
+    init(io: SurfaceIO, endpoint: Endpoint = .localControlSocket) {
+        self.io = io
+        self.broadcastClient = DaemonClient(endpoint: endpoint)
+    }
 
     func setSiblings(_ ids: [String]) {
         lock.lock(); siblingsStorage = ids; lock.unlock()

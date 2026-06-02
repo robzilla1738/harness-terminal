@@ -12,12 +12,36 @@ public enum DaemonSessionError: Error, CustomStringConvertible {
     }
 }
 
-/// Client wrapper used by Harness.app for all session mutations.
-/// @unchecked Sendable: holds only an immutable, thread-safe `DaemonClient`.
+/// Client wrapper used by Harness.app for all session mutations. Can be repointed at a different
+/// daemon at runtime — e.g. a remote one over an SSH tunnel — via `switchEndpoint`.
+/// @unchecked Sendable: the client + endpoint are guarded by `lock`; `DaemonClient` is thread-safe.
 public final class DaemonSessionService: @unchecked Sendable {
-    private let client = DaemonClient()
+    private let lock = NSLock()
+    private var client: DaemonClient
+    private var _endpoint: Endpoint
 
-    public init() {}
+    public init(endpoint: Endpoint = .localControlSocket) {
+        _endpoint = endpoint
+        client = DaemonClient(endpoint: endpoint)
+    }
+
+    /// The daemon this service currently targets.
+    public var endpoint: Endpoint {
+        lock.lock(); defer { lock.unlock() }; return _endpoint
+    }
+
+    /// Repoint at a different daemon. Subsequent requests use the new endpoint; each request opens
+    /// its own connection, so in-flight ones on the old client are unaffected.
+    public func switchEndpoint(_ endpoint: Endpoint) {
+        lock.lock()
+        _endpoint = endpoint
+        client = DaemonClient(endpoint: endpoint)
+        lock.unlock()
+    }
+
+    private func currentClient() -> DaemonClient {
+        lock.lock(); defer { lock.unlock() }; return client
+    }
 
     @discardableResult
     public func request(_ ipcRequest: IPCRequest) throws -> IPCResponse {
@@ -28,7 +52,7 @@ public final class DaemonSessionService: @unchecked Sendable {
     /// than the snappy default so a momentarily busy daemon still confirms before the process exits.
     @discardableResult
     public func request(_ ipcRequest: IPCRequest, timeout: TimeInterval) throws -> IPCResponse {
-        let response = try client.request(ipcRequest, timeout: timeout)
+        let response = try currentClient().request(ipcRequest, timeout: timeout)
         if case let .error(message) = response {
             throw DaemonSessionError.daemonError(message)
         }

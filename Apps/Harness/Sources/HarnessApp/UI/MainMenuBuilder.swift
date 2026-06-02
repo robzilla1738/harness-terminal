@@ -149,6 +149,15 @@ enum MainMenuBuilder {
         view.submenu?.addItem(zoomReset)
         main.addItem(view)
 
+        // Remote — connect the GUI to a HarnessDaemon on another machine over an SSH tunnel.
+        // The submenu is rebuilt on open (NSMenuDelegate) so it reflects saved hosts + which one
+        // is currently connected.
+        let remote = NSMenuItem()
+        let remoteMenu = NSMenu(title: "Remote")
+        remoteMenu.delegate = MenuTarget.shared
+        remote.submenu = remoteMenu
+        main.addItem(remote)
+
         // Window — standard macOS window management. Registered as windowsMenu so
         // AppKit auto-populates the open-windows list and the standard actions work.
         let window = NSMenuItem()
@@ -181,7 +190,7 @@ enum MainMenuBuilder {
 }
 
 @MainActor
-final class MenuTarget: NSObject, NSMenuItemValidation {
+final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     static let shared = MenuTarget()
 
     /// Enable Detach only when the active pane is attached, Reattach only when it's released.
@@ -193,6 +202,88 @@ final class MenuTarget: NSObject, NSMenuItemValidation {
         case #selector(reopenClosedTab): return SessionCoordinator.shared.canReopenClosedTab
         default: return true
         }
+    }
+
+    // MARK: - Remote menu (rebuilt on open)
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.title == "Remote" else { return }
+        menu.removeAllItems()
+        let add = NSMenuItem(title: "Add Remote Host…", action: #selector(addRemoteHost), keyEquivalent: "")
+        add.target = self
+        menu.addItem(add)
+        menu.addItem(.separator())
+
+        let hosts = RemoteHostsService.shared.hosts()
+        let active = RemoteHostsService.shared.activeHostName
+        if hosts.isEmpty {
+            let none = NSMenuItem(title: "No saved hosts", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        } else {
+            for host in hosts {
+                let item = NSMenuItem(
+                    title: "\(host.name) — \(host.sshTarget)",
+                    action: #selector(connectRemoteHost(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = host.name
+                item.state = (host.name == active) ? .on : .off
+                menu.addItem(item)
+            }
+        }
+        menu.addItem(.separator())
+        let local = NSMenuItem(title: "Use Local Daemon", action: #selector(useLocalDaemon), keyEquivalent: "")
+        local.target = self
+        local.state = (active == nil) ? .on : .off
+        menu.addItem(local)
+    }
+
+    @objc func addRemoteHost() {
+        let alert = NSAlert()
+        alert.messageText = "Add Remote Host"
+        alert.informativeText = "Run HarnessDaemon on the remote machine (harness-cli install), "
+            + "then connect to it over SSH."
+        alert.addButton(withTitle: "Save & Connect")
+        alert.addButton(withTitle: "Cancel")
+        let stack = NSStackView(frame: NSRect(x: 0, y: 0, width: 320, height: 92))
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
+        nameField.placeholderString = "Name (e.g. devbox)"
+        let sshField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
+        sshField.placeholderString = "SSH target (user@host)"
+        let sockField = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
+        sockField.placeholderString = "Remote socket path (optional)"
+        stack.addArrangedSubview(nameField)
+        stack.addArrangedSubview(sshField)
+        stack.addArrangedSubview(sockField)
+        alert.accessoryView = stack
+        alert.window.initialFirstResponder = nameField
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ssh = sshField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !ssh.isEmpty else { return }
+        var socketPath = sockField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if socketPath.isEmpty {
+            let user = ssh.contains("@") ? String(ssh.split(separator: "@")[0]) : ""
+            socketPath = user == "root"
+                ? "/root/.local/share/harness/harness.sock"
+                : "/home/\(user)/.local/share/harness/harness.sock"
+        }
+        RemoteHostsService.shared.addHost(
+            RemoteHost(name: name, sshTarget: ssh, remoteSocketPath: socketPath))
+        SessionCoordinator.shared.connectToRemote(named: name)
+    }
+
+    @objc func connectRemoteHost(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        SessionCoordinator.shared.connectToRemote(named: name)
+    }
+
+    @objc func useLocalDaemon() {
+        SessionCoordinator.shared.disconnectRemote()
     }
 
     @objc func newSession() {
