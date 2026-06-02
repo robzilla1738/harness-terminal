@@ -2,11 +2,13 @@ import Foundation
 
 public enum SSHTunnelError: Error, CustomStringConvertible {
     case launchFailed(String)
+    case invalidConfiguration(String)
     case notReady(host: String)
 
     public var description: String {
         switch self {
         case let .launchFailed(message): return "Failed to start SSH tunnel: \(message)"
+        case let .invalidConfiguration(message): return "Invalid SSH tunnel configuration: \(message)"
         case let .notReady(host): return "SSH tunnel to '\(host)' did not become ready in time"
         }
     }
@@ -102,16 +104,7 @@ public final class SSHTunnelManager: @unchecked Sendable {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        var args = [
-            "ssh",
-            "-N",                                   // no remote command — just forward
-            "-o", "ExitOnForwardFailure=yes",       // fail fast if the forward can't bind
-            "-o", "StreamLocalBindUnlink=yes",      // replace a stale remote-side socket binding
-            "-o", "ServerAliveInterval=15",         // keep the tunnel alive / detect drops
-        ]
-        args += host.sshArgs
-        args += ["-L", "\(localSocket.path):\(host.remoteSocketPath)", host.sshTarget]
-        process.arguments = args
+        process.arguments = try Self.sshArguments(for: host, localSocket: localSocket)
         // Silence ssh's own chatter; failures surface as the process exiting + the readiness timeout.
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -124,6 +117,92 @@ public final class SSHTunnelManager: @unchecked Sendable {
         lock.lock()
         tunnels[host.name] = Tunnel(process: process, localSocket: localSocket)
         lock.unlock()
+    }
+
+    static func sshArguments(for host: RemoteHost, localSocket: URL) throws -> [String] {
+        var args = [
+            "ssh",
+            "-N",                                   // no remote command — just forward
+            "-o", "ExitOnForwardFailure=yes",       // fail fast if the forward can't bind
+            "-o", "StreamLocalBindUnlink=yes",      // replace a stale remote-side socket binding
+            "-o", "ServerAliveInterval=15",         // keep the tunnel alive / detect drops
+        ]
+        args += try validatedUserSSHArgs(host.sshArgs)
+        args += ["-L", try forwardSpec(localSocketPath: localSocket.path, remoteSocketPath: host.remoteSocketPath)]
+        args += [try validatedSSHTarget(host.sshTarget)]
+        return args
+    }
+
+    private static func validatedUserSSHArgs(_ input: [String]) throws -> [String] {
+        var output: [String] = []
+        var index = 0
+        while index < input.count {
+            let arg = input[index]
+            guard isSafeArgumentToken(arg) else {
+                throw SSHTunnelError.invalidConfiguration("SSH argument contains control characters")
+            }
+            switch arg {
+            case "-4", "-6", "-A", "-a", "-T", "-q", "-v", "-vv", "-vvv":
+                output.append(arg)
+                index += 1
+            case "-p", "-i", "-J", "-l":
+                guard index + 1 < input.count else {
+                    throw SSHTunnelError.invalidConfiguration("SSH argument \(arg) requires a value")
+                }
+                let value = input[index + 1]
+                try validateSSHValue(value, for: arg)
+                output.append(contentsOf: [arg, value])
+                index += 2
+            default:
+                if let prefix = ["-p", "-i", "-J", "-l"].first(where: { arg.hasPrefix($0) && arg.count > $0.count }) {
+                    let value = String(arg.dropFirst(prefix.count))
+                    try validateSSHValue(value, for: prefix)
+                    output.append(arg)
+                    index += 1
+                } else {
+                    throw SSHTunnelError.invalidConfiguration("SSH argument \(arg) is not allowed")
+                }
+            }
+        }
+        return output
+    }
+
+    private static func validateSSHValue(_ value: String, for option: String) throws {
+        guard isSafeArgumentToken(value), !value.hasPrefix("-") else {
+            throw SSHTunnelError.invalidConfiguration("SSH argument \(option) has an unsafe value")
+        }
+        if option == "-p" {
+            guard let port = Int(value), (1 ... 65_535).contains(port) else {
+                throw SSHTunnelError.invalidConfiguration("SSH port must be 1...65535")
+            }
+        }
+    }
+
+    private static func forwardSpec(localSocketPath: String, remoteSocketPath: String) throws -> String {
+        guard remoteSocketPath.hasPrefix("/"),
+              isSafeArgumentToken(remoteSocketPath),
+              !remoteSocketPath.contains(":")
+        else {
+            throw SSHTunnelError.invalidConfiguration("remote socket path must be an absolute path without ':' or control characters")
+        }
+        return "\(localSocketPath):\(remoteSocketPath)"
+    }
+
+    private static func validatedSSHTarget(_ target: String) throws -> String {
+        guard isSafeArgumentToken(target),
+              !target.hasPrefix("-"),
+              target.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+        else {
+            throw SSHTunnelError.invalidConfiguration("SSH target is unsafe")
+        }
+        return target
+    }
+
+    private static func isSafeArgumentToken(_ value: String) -> Bool {
+        guard !value.isEmpty else { return false }
+        return value.unicodeScalars.allSatisfy { scalar in
+            scalar.value >= 0x20 && scalar.value != 0x7F
+        }
     }
 
     private func isReachable(_ endpoint: Endpoint) -> Bool {

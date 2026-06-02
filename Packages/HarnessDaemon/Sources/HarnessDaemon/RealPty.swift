@@ -374,6 +374,7 @@ public final class RealPty: @unchecked Sendable {
         let master = harness_open_pty_master(&slaveBuf, slaveBuf.count)
         guard master >= 0 else { return nil }
         let slavePath = strdup(slaveBuf)
+        let closeUpperBound = childFileDescriptorCloseUpperBound()
         let pid = fork()
         if pid < 0 { slavePath.map { free($0) }; _ = sysClose(master); return nil }
         if pid == 0 {
@@ -382,6 +383,7 @@ public final class RealPty: @unchecked Sendable {
             // Without the slave we have no stdio/controlling terminal — exec'ing the shell here would
             // leave it wired to the inherited master fd and misbehave. Bail instead.
             if slave < 0 { _ = sysClose(master); _exit(127) }
+            closeInheritedFileDescriptors(except: slave, upperBound: closeUpperBound)
             _ = harness_pty_make_controlling(slave)
             _ = harness_pty_set_winsize(slave, rows, cols)
             _ = dup2(slave, 0)
@@ -398,6 +400,25 @@ public final class RealPty: @unchecked Sendable {
         #else
         return nil
         #endif
+    }
+
+    private static func childFileDescriptorCloseUpperBound() -> Int32 {
+        #if canImport(Glibc)
+        let raw = sysconf(Int32(_SC_OPEN_MAX))
+        guard raw > 0 else { return 1024 }
+        return Int32(min(raw, 65_536))
+        #else
+        return 1024
+        #endif
+    }
+
+    private static func closeInheritedFileDescriptors(except keep: Int32, upperBound: Int32) {
+        guard upperBound > 3 else { return }
+        var fd: Int32 = 3
+        while fd < upperBound {
+            if fd != keep { _ = sysClose(fd) }
+            fd += 1
+        }
     }
 
     /// Replace the (just-forked child) process image with the shell. Binds the buffer base addresses

