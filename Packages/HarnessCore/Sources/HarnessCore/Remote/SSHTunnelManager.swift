@@ -14,7 +14,7 @@ public enum SSHTunnelError: Error, CustomStringConvertible {
 
 /// Manages SSH tunnels that forward a remote daemon's Unix control socket to a local socket, so the
 /// existing `DaemonClient`/`DaemonSubscription` (which speak length-prefixed frames over any byte
-/// stream) can drive a remote daemon unchanged. This is the "remote tmux over SSH" transport: it
+/// stream) can drive a remote Harness daemon unchanged. This remote transport
 /// reuses the user's existing SSH trust for both encryption and authentication, with no new crypto.
 ///
 /// One `ssh -N -L <local>:<remote>` process per host; `endpoint(for:)` ensures it's up (re-spawning
