@@ -76,6 +76,35 @@ jobs:
       - name: Test
         run: swift test
 
+  linux-build-test:
+    name: Build & test (Linux, headless daemon)
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: swift --version
+
+      # On Linux the manifest drops the AppKit/Metal/SwiftUI targets (HarnessApp, renderer, kit,
+      # onboarding, Sparkle). This builds the headless daemon + CLI + the pure libraries, proving the
+      # daemon runs on a remote/headless box. A green build here is what makes issue #16 possible.
+      - name: Build (debug)
+        run: swift build
+
+      - name: Build (release)
+        run: swift build -c release
+
+      # Deterministic suites (Core / Engine / CopyMode / Theme / CLI / Daemon) plus the live PTY /
+      # socket / scrollback-persistence round-trips, which run fine in the Linux container.
+      - name: Test
+        run: swift test
+
+      - name: Live daemon tests
+        env:
+          HARNESS_LIVE_DAEMON_TESTS: "1"
+        run: swift test
+
   live-daemon-tests:
     name: Live daemon tests (socket / PTY / security)
     runs-on: macos-15

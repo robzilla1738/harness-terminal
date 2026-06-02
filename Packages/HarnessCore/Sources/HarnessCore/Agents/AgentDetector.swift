@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 /// Runs in the daemon. Walks the descendant process tree of each pane's shell
@@ -149,19 +153,8 @@ public enum AgentDetector {
     }
 
     private static func descendantPIDs(of pid: Int32) -> [Int32] {
-        let count = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard count > 0 else { return [] }
-        let bufferCount = Int(count) / MemoryLayout<pid_t>.size
-        var pids = [pid_t](repeating: 0, count: bufferCount)
-        let bytesUsed = proc_listpids(
-            UInt32(PROC_ALL_PIDS),
-            0,
-            &pids,
-            Int32(MemoryLayout<pid_t>.size * bufferCount)
-        )
-        let actual = Int(bytesUsed) / MemoryLayout<pid_t>.size
-        let allPIDs = pids.prefix(actual).filter { $0 > 0 }
-
+        let allPIDs = livePIDs()
+        guard !allPIDs.isEmpty else { return [] }
         var parents: [Int32: Int32] = [:]
         for candidate in allPIDs {
             parents[candidate] = parentPID(candidate)
@@ -182,15 +175,44 @@ public enum AgentDetector {
         return result
     }
 
+    /// All live PIDs. Darwin: `proc_listpids`. Linux: numeric entries under `/proc`.
+    private static func livePIDs() -> [Int32] {
+        #if canImport(Darwin)
+        let count = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard count > 0 else { return [] }
+        let bufferCount = Int(count) / MemoryLayout<pid_t>.size
+        var pids = [pid_t](repeating: 0, count: bufferCount)
+        let bytesUsed = proc_listpids(
+            UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * bufferCount))
+        let actual = Int(bytesUsed) / MemoryLayout<pid_t>.size
+        return pids.prefix(actual).filter { $0 > 0 }.map { Int32($0) }
+        #else
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else { return [] }
+        return entries.compactMap { Int32($0) }.filter { $0 > 0 }
+        #endif
+    }
+
     private static func parentPID(_ pid: Int32) -> Int32 {
+        #if canImport(Darwin)
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         let bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
         guard bytes == size else { return 0 }
         return Int32(info.pbi_ppid)
+        #else
+        // /proc/<pid>/stat: "pid (comm) state ppid …"; comm may contain spaces/parens, so split
+        // after the last ')'. ppid is the 2nd whitespace field after that (state, then ppid).
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+              let close = stat.lastIndex(of: ")") else { return 0 }
+        let fields = stat[stat.index(after: close)...]
+            .split(separator: " ", omittingEmptySubsequences: true)
+        guard fields.count >= 2, let ppid = Int32(fields[1]) else { return 0 }
+        return ppid
+        #endif
     }
 
     private static func pidPath(_ pid: Int32) -> String? {
+        #if canImport(Darwin)
         var buffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
         let length = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
             proc_pidpath(pid, ptr.baseAddress, UInt32(MAXPATHLEN))
@@ -198,11 +220,21 @@ public enum AgentDetector {
         guard length > 0 else { return nil }
         let prefix = buffer.prefix(Int(length))
         return String(decoding: prefix, as: UTF8.self)
+        #else
+        // /proc/<pid>/exe is a symlink to the running binary.
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let len = readlink("/proc/\(pid)/exe", &buffer, buffer.count - 1)
+        guard len > 0 else { return nil }
+        buffer[len] = 0
+        return String(cString: buffer)
+        #endif
     }
 
-    /// Lowercased basename of `pid`'s argv[0] (how it was invoked), read from
-    /// KERN_PROCARGS2. Catches launchers that exec a renamed/versioned binary.
+    /// Lowercased basename of `pid`'s argv[0] (how it was invoked). Darwin: KERN_PROCARGS2. Linux:
+    /// the first NUL-separated token of /proc/<pid>/cmdline. Catches launchers that exec a
+    /// renamed/versioned binary.
     private static func argv0Name(_ pid: Int32) -> String? {
+        #if canImport(Darwin)
         var size = 0
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
@@ -220,6 +252,14 @@ public enum AgentDetector {
         guard cursor > start else { return nil }
         let argv0 = String(decoding: buffer[start..<cursor], as: UTF8.self)
         return (argv0 as NSString).lastPathComponent.lowercased()
+        #else
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: "/proc/\(pid)/cmdline")),
+              !data.isEmpty else { return nil }
+        let first = data.prefix { $0 != 0 } // argv[0] up to the first NUL
+        guard !first.isEmpty else { return nil }
+        let argv0 = String(decoding: first, as: UTF8.self)
+        return (argv0 as NSString).lastPathComponent.lowercased()
+        #endif
     }
 }
 

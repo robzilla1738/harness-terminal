@@ -1,4 +1,9 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import CHarnessSys
 import Foundation
 import HarnessCore
 
@@ -76,15 +81,15 @@ public final class DaemonServer: @unchecked Sendable {
         let socketPath = try HarnessPaths.validatedSocketPath()
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw DaemonError.socketFailed }
-        var noSigPipe: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        setNoSigPipe(fd)
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
+        let sunPathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
         socketPath.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
-                strncpy(dest, cstr, 104)
+                strncpy(dest, cstr, sunPathCapacity)
             }
         }
         let size = socklen_t(MemoryLayout<sockaddr_un>.size)
@@ -128,20 +133,17 @@ public final class DaemonServer: @unchecked Sendable {
     private func acceptConnection(listenerFD: Int32) {
         let clientFD = accept(listenerFD, nil, nil)
         guard clientFD >= 0 else { return }
-        // Defence in depth alongside the 0o600 socket mode: only accept peers running
-        // as our own euid. `getpeereid` reads the credentials the kernel recorded at
-        // connect time, so a process can't spoof them. Reject anything else outright.
-        var peerUID: uid_t = 0
-        var peerGID: gid_t = 0
-        if getpeereid(clientFD, &peerUID, &peerGID) != 0 || peerUID != geteuid() {
+        // Defence in depth alongside the 0o600 socket mode: only accept peers running as our own
+        // euid. The kernel records the peer's credentials at connect time (Darwin `getpeereid`,
+        // Linux `SO_PEERCRED`), so a process can't spoof them. Reject anything else outright. This
+        // applies to the local Unix socket; a future TCP transport authenticates with a token.
+        guard let uid = peerUID(ofSocket: clientFD), uid == geteuid() else {
             close(clientFD)
             return
         }
-        var noSigPipe: Int32 = 1
-        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        setNoSigPipe(clientFD)
         // Non-blocking so a slow/stuck client never blocks `write` on the serial queue.
-        let flags = fcntl(clientFD, F_GETFL, 0)
-        if flags >= 0 { _ = fcntl(clientFD, F_SETFL, flags | O_NONBLOCK) }
+        _ = harness_set_nonblocking(clientFD)
         clientBuffers[clientFD] = Data()
         // Don't auto-register the connection as a client — `DaemonClient.request`
         // opens a fresh socket per call, and bookkeeping every one of those would

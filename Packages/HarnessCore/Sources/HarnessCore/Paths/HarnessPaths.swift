@@ -15,11 +15,38 @@ public enum HarnessPaths {
 
     public static var applicationSupport: URL {
         if let overrideRoot { return overrideRoot }
+        #if os(Linux)
+        // Headless/Linux daemon: follow the XDG base-dir spec rather than ~/Library.
+        let env = ProcessInfo.processInfo.environment
+        if let xdg = env["XDG_DATA_HOME"], !xdg.isEmpty {
+            return URL(fileURLWithPath: (xdg as NSString).expandingTildeInPath, isDirectory: true)
+                .appendingPathComponent("harness", isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/harness", isDirectory: true)
+        #else
         // Fall back to ~/Library/Application Support if the lookup ever returns empty
         // (it shouldn't on macOS) rather than force-unwrapping and crashing at launch.
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         return base.appendingPathComponent("Harness", isDirectory: true)
+        #endif
+    }
+
+    /// Directory the control socket lives in. On Darwin this is the application-support root, so the
+    /// socket path is unchanged. On Linux a short `$XDG_RUNTIME_DIR` is preferred when available so
+    /// the path comfortably fits `sockaddr_un.sun_path` (a deep `~/.local/share` could overflow it).
+    /// A `HARNESS_HOME` override always wins, so tests keep the socket inside their temp root.
+    public static var runtimeDirectory: URL {
+        #if os(Linux)
+        if overrideRoot == nil,
+           let xdg = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"], !xdg.isEmpty
+        {
+            return URL(fileURLWithPath: xdg, isDirectory: true)
+                .appendingPathComponent("harness", isDirectory: true)
+        }
+        #endif
+        return applicationSupport
     }
 
     public static var sessionsDirectory: URL {
@@ -39,13 +66,17 @@ public enum HarnessPaths {
     }
 
     public static var socketURL: URL {
-        applicationSupport.appendingPathComponent("harness.sock")
+        runtimeDirectory.appendingPathComponent("harness.sock")
     }
 
-    /// Max bytes for a Unix-domain `sockaddr_un.sun_path` on Darwin (104, including the trailing
-    /// NUL). A path at or over this silently truncates in `strncpy`, making `connect`/`bind` target
-    /// the wrong socket — so callers validate against it instead.
+    /// Max bytes for a Unix-domain `sockaddr_un.sun_path` (including the trailing NUL): 104 on
+    /// Darwin, 108 on Linux. A path at or over this silently truncates, making `connect`/`bind`
+    /// target the wrong socket — so callers validate against it instead.
+    #if os(Linux)
+    public static let maxSocketPathLength = 108
+    #else
     public static let maxSocketPathLength = 104
+    #endif
 
     /// The control-socket filesystem path, validated to fit `sun_path`. Throws when `HARNESS_HOME`
     /// (or a deep app-support root) pushes it past the limit, so the daemon/client fail with a
@@ -114,6 +145,12 @@ public enum HarnessPaths {
             at: scrollbackDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
         try FileManager.default.createDirectory(
             at: logsDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
+        // On Linux the control socket may live under a separate `$XDG_RUNTIME_DIR`; make sure it
+        // exists (owner-only) too. On Darwin this is the same path as the root, so it's a no-op.
+        if runtimeDirectory.path != applicationSupport.path {
+            try FileManager.default.createDirectory(
+                at: runtimeDirectory, withIntermediateDirectories: true, attributes: ownerOnly)
+        }
         // createDirectory only applies attributes to directories it creates; tighten an
         // existing root that an older build made with the default 0o755 umask.
         try? FileManager.default.setAttributes(ownerOnly, ofItemAtPath: applicationSupport.path)

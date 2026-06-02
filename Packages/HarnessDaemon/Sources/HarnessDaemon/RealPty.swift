@@ -1,4 +1,9 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import CHarnessSys
 import Foundation
 import HarnessCore
 import HarnessTerminalEngine
@@ -187,36 +192,21 @@ public final class RealPty: @unchecked Sendable {
             envp.forEach { $0.map { free($0) } }
         }
 
-        var winsize = Darwin.winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        var amaster: Int32 = -1
-        let pid = forkpty(&amaster, nil, nil, &winsize)
-        if pid < 0 {
+        guard let spawned = Self.spawnOnPTY(argv: argv, envp: envp, cwd: cwdC, rows: rows, cols: cols) else {
             freeChildStrings()
             throw PtyError.launchFailed
-        }
-        if pid == 0 {
-            // Child branch — async-signal-safe only. NEVER return; if exec fails, _exit.
-            if let cwdC { _ = chdir(cwdC) }
-            argv.withUnsafeBufferPointer { argvBuffer in
-                envp.withUnsafeBufferPointer { envpBuffer in
-                    if let path = argvBuffer.baseAddress?.pointee {
-                        _ = execve(path, argvBuffer.baseAddress, envpBuffer.baseAddress)
-                    }
-                }
-            }
-            _exit(127)
         }
         // Parent: the child holds its own copy-on-write view; free ours.
         freeChildStrings()
         lifecycleLock.lock()
         generation &+= 1
         let gen = generation
-        self.master = amaster
-        self.childPID = pid
+        self.master = spawned.master
+        self.childPID = spawned.pid
         lifecycleLock.unlock()
-        AgentDetector.registerRootPID(pid, forSurfaceKey: id)
-        startReading(fd: amaster, generation: gen)
-        watchForExit(pid: pid, generation: gen)
+        AgentDetector.registerRootPID(spawned.pid, forSurfaceKey: id)
+        startReading(fd: spawned.master, generation: gen)
+        watchForExit(pid: spawned.pid, generation: gen)
     }
 
     public func write(_ data: Data) {
@@ -232,7 +222,7 @@ public final class RealPty: @unchecked Sendable {
                 guard let base = buffer.baseAddress else { return }
                 var written = 0
                 while written < buffer.count {
-                    let result = Darwin.write(fd, base.advanced(by: written), buffer.count - written)
+                    let result = sysWrite(fd, base.advanced(by: written), buffer.count - written)
                     if result < 0 {
                         if errno == EINTR { continue }
                         break
@@ -261,10 +251,11 @@ public final class RealPty: @unchecked Sendable {
         let oldSource = readSource
         let oldRows: UInt16
         let oldCols: UInt16
-        var winsize = Darwin.winsize()
-        if oldFD >= 0, ioctl(oldFD, TIOCGWINSZ, &winsize) == 0 {
-            oldRows = winsize.ws_row
-            oldCols = winsize.ws_col
+        var probedRows: UInt16 = 0
+        var probedCols: UInt16 = 0
+        if oldFD >= 0, harness_pty_get_winsize(oldFD, &probedRows, &probedCols) == 0 {
+            oldRows = probedRows
+            oldCols = probedCols
         } else {
             oldRows = 24
             oldCols = 80
@@ -283,7 +274,7 @@ public final class RealPty: @unchecked Sendable {
         if let oldSource {
             oldSource.cancel()
         } else if oldFD >= 0 {
-            Darwin.close(oldFD)
+            sysClose(oldFD)
         }
         if clearHistory {
             scrollbackLock.lock()
@@ -334,15 +325,41 @@ public final class RealPty: @unchecked Sendable {
             envp.forEach { $0.map { free($0) } }
         }
 
-        var winsize = Darwin.winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        var amaster: Int32 = -1
-        let pid = forkpty(&amaster, nil, nil, &winsize)
-        if pid < 0 {
+        guard let spawned = Self.spawnOnPTY(argv: argv, envp: envp, cwd: cwdC, rows: rows, cols: cols) else {
             freeChildStrings()
             throw PtyError.launchFailed
         }
+        freeChildStrings()
+        lifecycleLock.lock()
+        generation &+= 1
+        let gen = generation
+        self.master = spawned.master
+        self.childPID = spawned.pid
+        lifecycleLock.unlock()
+        AgentDetector.registerRootPID(spawned.pid, forSurfaceKey: id)
+        startReading(fd: spawned.master, generation: gen)
+        watchForExit(pid: spawned.pid, generation: gen)
+    }
+
+    /// Spawn a shell on a fresh PTY and return its master fd + child pid, or nil on failure.
+    /// `argv`/`envp`/`cwd` are built parent-side so the child does only async-signal-safe work
+    /// between fork and exec. Darwin uses `forkpty(3)`; Linux opens a master with `posix_openpt`
+    /// and forks, having the child make the slave its controlling terminal — the same end state
+    /// `forkpty` produces, without depending on `<pty.h>` being in the Glibc module map.
+    private static func spawnOnPTY(
+        argv: [UnsafeMutablePointer<CChar>?],
+        envp: [UnsafeMutablePointer<CChar>?],
+        cwd: UnsafeMutablePointer<CChar>?,
+        rows: UInt16,
+        cols: UInt16
+    ) -> (pid: pid_t, master: Int32)? {
+        #if canImport(Darwin)
+        var ws = WinSize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+        var amaster: Int32 = -1
+        let pid = forkpty(&amaster, nil, nil, &ws)
+        if pid < 0 { return nil }
         if pid == 0 {
-            if let cwdC { _ = chdir(cwdC) }
+            if let cwd { _ = chdir(cwd) }
             argv.withUnsafeBufferPointer { argvBuffer in
                 envp.withUnsafeBufferPointer { envpBuffer in
                     if let path = argvBuffer.baseAddress?.pointee {
@@ -352,16 +369,46 @@ public final class RealPty: @unchecked Sendable {
             }
             _exit(127)
         }
-        freeChildStrings()
-        lifecycleLock.lock()
-        generation &+= 1
-        let gen = generation
-        self.master = amaster
-        self.childPID = pid
-        lifecycleLock.unlock()
-        AgentDetector.registerRootPID(pid, forSurfaceKey: id)
-        startReading(fd: amaster, generation: gen)
-        watchForExit(pid: pid, generation: gen)
+        return (pid, amaster)
+        #elseif canImport(Glibc)
+        let master = posix_openpt(O_RDWR | O_NOCTTY)
+        guard master >= 0, grantpt(master) == 0, unlockpt(master) == 0 else {
+            if master >= 0 { _ = close(master) }
+            return nil
+        }
+        // `ptsname` isn't async-signal-safe, so resolve + copy the slave path in the parent before
+        // forking; the child only `open`s it (which is on the safe list).
+        guard let namePtr = ptsname(master) else { _ = close(master); return nil }
+        let slavePath = strdup(namePtr)
+        let pid = fork()
+        if pid < 0 { slavePath.map { free($0) }; _ = close(master); return nil }
+        if pid == 0 {
+            _ = setsid() // new session so the slave can become our controlling terminal
+            let slave = slavePath.map { harness_open_rdwr($0) } ?? -1
+            if slave >= 0 {
+                _ = harness_pty_make_controlling(slave)
+                _ = harness_pty_set_winsize(slave, rows, cols)
+                _ = dup2(slave, 0)
+                _ = dup2(slave, 1)
+                _ = dup2(slave, 2)
+                if slave > 2 { _ = close(slave) }
+            }
+            _ = close(master)
+            if let cwd { _ = chdir(cwd) }
+            argv.withUnsafeBufferPointer { argvBuffer in
+                envp.withUnsafeBufferPointer { envpBuffer in
+                    if let path = argvBuffer.baseAddress?.pointee {
+                        _ = execve(path, argvBuffer.baseAddress, envpBuffer.baseAddress)
+                    }
+                }
+            }
+            _exit(127)
+        }
+        slavePath.map { free($0) }
+        return (pid, master)
+        #else
+        return nil
+        #endif
     }
 
     public func resize(rows: UInt16, cols: UInt16) {
@@ -369,8 +416,7 @@ public final class RealPty: @unchecked Sendable {
         let fd = master
         lifecycleLock.unlock()
         guard fd >= 0 else { return }
-        var winsize = Darwin.winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        _ = ioctl(fd, TIOCSWINSZ, &winsize)
+        _ = harness_pty_set_winsize(fd, rows, cols)
     }
 
     public func currentWorkingDirectory() -> String? {
@@ -398,7 +444,7 @@ public final class RealPty: @unchecked Sendable {
         if let source {
             source.cancel()
         } else if fd >= 0 {
-            Darwin.close(fd)
+            sysClose(fd)
         }
     }
 
@@ -453,9 +499,10 @@ public final class RealPty: @unchecked Sendable {
         lifecycleLock.lock()
         let fd = master
         lifecycleLock.unlock()
-        var ws = Darwin.winsize()
-        if fd >= 0, ioctl(fd, TIOCGWINSZ, &ws) == 0, ws.ws_col > 0, ws.ws_row > 0 {
-            return (Int(ws.ws_col), Int(ws.ws_row))
+        var probedRows: UInt16 = 0
+        var probedCols: UInt16 = 0
+        if fd >= 0, harness_pty_get_winsize(fd, &probedRows, &probedCols) == 0, probedCols > 0, probedRows > 0 {
+            return (Int(probedCols), Int(probedRows))
         }
         return (80, 24)
     }
@@ -584,7 +631,7 @@ public final class RealPty: @unchecked Sendable {
             // NOT help: the writer is paced by our reads, so right after we drain a segment the
             // buffer is empty (FIONREAD == 0) — there is nothing accumulated to coalesce (measured).
             let n = self.readBuffer.withUnsafeMutableBufferPointer { ptr -> Int in
-                Darwin.read(fd, ptr.baseAddress, ptr.count)
+                sysRead(fd, ptr.baseAddress, ptr.count)
             }
             if n <= 0 {
                 // EOF / error: the shell for this generation ended.
@@ -595,7 +642,7 @@ public final class RealPty: @unchecked Sendable {
             self.handleOutput(data)
         }
         source.setCancelHandler {
-            Darwin.close(fd)
+            sysClose(fd)
         }
         // Install only if we're still the current generation; a concurrent
         // respawn/close may have already advanced past us, in which case cancel
@@ -699,24 +746,14 @@ public final class RealPty: @unchecked Sendable {
         if let source {
             source.cancel()
         } else if fd >= 0 {
-            Darwin.close(fd)
+            sysClose(fd)
         }
         onExit?()
     }
 
     private func deepestReadableDescendant(of pid: pid_t) -> pid_t? {
-        let count = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard count > 0 else { return nil }
-        let bufferCount = Int(count) / MemoryLayout<pid_t>.size
-        var pids = [pid_t](repeating: 0, count: bufferCount)
-        let bytes = proc_listpids(
-            UInt32(PROC_ALL_PIDS),
-            0,
-            &pids,
-            Int32(MemoryLayout<pid_t>.size * bufferCount)
-        )
-        let actual = Int(bytes) / MemoryLayout<pid_t>.size
-        let all = pids.prefix(actual).filter { $0 > 0 }
+        let all = Self.allPIDs()
+        guard !all.isEmpty else { return nil }
         var parents: [pid_t: pid_t] = [:]
         for candidate in all { parents[candidate] = Self.parentPID(candidate) }
 
@@ -738,15 +775,44 @@ public final class RealPty: @unchecked Sendable {
         return best?.pid
     }
 
+    /// Every live PID. Darwin: `proc_listpids`. Linux: numeric entries under `/proc`.
+    private static func allPIDs() -> [pid_t] {
+        #if canImport(Darwin)
+        let count = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard count > 0 else { return [] }
+        let bufferCount = Int(count) / MemoryLayout<pid_t>.size
+        var pids = [pid_t](repeating: 0, count: bufferCount)
+        let bytes = proc_listpids(
+            UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * bufferCount))
+        let actual = Int(bytes) / MemoryLayout<pid_t>.size
+        return Array(pids.prefix(actual).filter { $0 > 0 })
+        #else
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: "/proc") else { return [] }
+        return entries.compactMap { pid_t($0) }.filter { $0 > 0 }
+        #endif
+    }
+
     private static func parentPID(_ pid: pid_t) -> pid_t {
+        #if canImport(Darwin)
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         let bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
         guard bytes == size else { return 0 }
         return pid_t(info.pbi_ppid)
+        #else
+        // /proc/<pid>/stat: "pid (comm) state ppid …". `comm` can contain spaces and parens, so
+        // split *after the last ')'*; ppid is then the second whitespace field (after state).
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+              let close = stat.lastIndex(of: ")") else { return 0 }
+        let fields = stat[stat.index(after: close)...]
+            .split(separator: " ", omittingEmptySubsequences: true)
+        guard fields.count >= 2, let ppid = pid_t(fields[1]) else { return 0 }
+        return ppid
+        #endif
     }
 
     private static func cwd(for pid: pid_t) -> String? {
+        #if canImport(Darwin)
         var info = proc_vnodepathinfo()
         let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
         let bytes = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size)
@@ -756,5 +822,13 @@ public final class RealPty: @unchecked Sendable {
                 String(cString: $0)
             }
         }
+        #else
+        // /proc/<pid>/cwd is a symlink to the process's working directory.
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let len = readlink("/proc/\(pid)/cwd", &buffer, buffer.count - 1)
+        guard len > 0 else { return nil }
+        buffer[len] = 0
+        return String(cString: buffer)
+        #endif
     }
 }

@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 /// Synchronous IPC client. @unchecked Sendable: stateless between calls (each request
@@ -91,10 +95,11 @@ public final class DaemonClient: @unchecked Sendable {
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
+        let sunPathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
         path.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
-                strncpy(dest, cstr, 104)
+                strncpy(dest, cstr, sunPathCapacity)
             }
         }
         // connect() can be interrupted by a signal (EINTR). For a blocking AF_UNIX stream socket
@@ -111,8 +116,7 @@ public final class DaemonClient: @unchecked Sendable {
             close(fd)
             throw DaemonClientError.connectionFailed
         }
-        var noSigPipe: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        setNoSigPipe(fd)
         return fd
     }
 

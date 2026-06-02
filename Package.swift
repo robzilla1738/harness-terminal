@@ -9,6 +9,121 @@ import PackageDescription
 // surface framework-deprecation churn we don't want to hard-fail CI on).
 let strictFoundationSettings: [SwiftSetting] = [.unsafeFlags(["-warnings-as-errors"])]
 
+// The Package manifest is evaluated on the *host*, so on Linux the macOS-only layers (the Metal/
+// AppKit renderer + terminal kit, the SwiftUI onboarding wizard, the GUI app, and Sparkle
+// auto-update) are dropped from products/dependencies/targets. The daemon, CLI, terminal engine,
+// copy-mode model, theme catalog and core library are all first-party Foundation/POSIX and build
+// headless on Linux — which is what lets `HarnessDaemon` run on a remote/headless box.
+#if os(macOS)
+let platformDependencies: [Package.Dependency] = [
+    // Sparkle: macOS auto-update (the only external dependency, and only for the GUI app —
+    // the engine/daemon/CLI stay first-party). Appcast hosted at harnesscli.dev.
+    // Pinned to the audited 2.9.x line (`Package.resolved` locks 2.9.2): a fresh resolve can't
+    // float onto an unaudited future major/minor, while patch-level security fixes still land.
+    .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.9.2")),
+]
+let platformProducts: [Product] = [
+    // Native terminal renderer: pure-Swift color resolution + a Metal glyph/draw layer.
+    .library(name: "HarnessTerminalRenderer", targets: ["HarnessTerminalRenderer"]),
+    .library(name: "HarnessTerminalKit", targets: ["HarnessTerminalKit"]),
+    // Immersive first-run onboarding wizard (SwiftUI). Self-contained, no deps; embedded
+    // into Harness.app and shown on first launch.
+    .library(name: "HarnessOnboarding", targets: ["HarnessOnboarding"]),
+    .executable(name: "Harness", targets: ["HarnessApp"]),
+]
+// `harness-cli`'s `attach-window` compositor renders through the Metal/AppKit terminal kit, so the
+// kit dependency (and the one source file that uses it) is macOS-only; the rest of the CLI — incl.
+// single-pane `attach` — is headless.
+let cliDependencies: [Target.Dependency] = [
+    "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTerminalKit", "HarnessTheme",
+    "CHarnessSys",
+]
+let cliExclude: [String] = []
+let platformTargets: [Target] = [
+    // Native renderer — first-party frame building, CoreText glyph atlas, and Metal drawing.
+    .target(
+        name: "HarnessTerminalRenderer",
+        dependencies: ["HarnessCore", "HarnessTerminalEngine", "HarnessTheme"],
+        path: "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer"
+    ),
+    .target(
+        name: "HarnessTerminalKit",
+        dependencies: [
+            "HarnessCore",
+            "HarnessTerminalEngine",
+            "HarnessCopyMode",
+            "HarnessTerminalRenderer",
+            "HarnessTheme",
+        ],
+        path: "Packages/HarnessTerminalKit/Sources/HarnessTerminalKit"
+    ),
+    // Immersive onboarding wizard — pure SwiftUI/AppKit, no external or first-party
+    // dependencies (deliberately isolated, mirrors install paths via its own helpers).
+    .target(
+        name: "HarnessOnboarding",
+        path: "Packages/HarnessOnboarding/Sources/HarnessOnboarding"
+    ),
+    .executableTarget(
+        name: "HarnessApp",
+        dependencies: [
+            "HarnessCore",
+            "HarnessTerminalKit",
+            "HarnessTheme",
+            "HarnessOnboarding",
+            .product(name: "Sparkle", package: "Sparkle"),
+        ],
+        path: "Apps/Harness/Sources/HarnessApp",
+        exclude: ["Resources"]
+    ),
+]
+let platformTestTargets: [Target] = [
+    .testTarget(
+        name: "HarnessTerminalRendererTests",
+        dependencies: ["HarnessCore", "HarnessTerminalRenderer", "HarnessTerminalEngine", "HarnessTheme"],
+        path: "Tests/HarnessTerminalRendererTests"
+    ),
+    .testTarget(
+        name: "HarnessTerminalKitTests",
+        dependencies: [
+            "HarnessCore",
+            "HarnessTerminalEngine",
+            "HarnessCopyMode",
+            "HarnessTerminalKit",
+            "HarnessTheme",
+        ],
+        path: "Tests/HarnessTerminalKitTests"
+    ),
+    .testTarget(
+        name: "HarnessOnboardingTests",
+        dependencies: ["HarnessOnboarding"],
+        path: "Tests/HarnessOnboardingTests"
+    ),
+    // Performance baselines for the hot paths (VT parse, IPC codec, scrollback,
+    // compositor, renderer stats). Gated behind HARNESS_BENCHMARKS=1 so a normal
+    // `swift test` stays fast; run with `make bench`.
+    .testTarget(
+        name: "HarnessBenchmarks",
+        dependencies: [
+            "HarnessCore",
+            "HarnessTerminalEngine",
+            "HarnessTerminalKit",
+            "HarnessTerminalRenderer",
+            "HarnessTheme",
+        ],
+        path: "Tests/HarnessBenchmarks"
+    ),
+]
+#else
+let platformDependencies: [Package.Dependency] = []
+let platformProducts: [Product] = []
+let cliDependencies: [Target.Dependency] = [
+    "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTheme", "CHarnessSys",
+]
+let cliExclude: [String] = ["WindowAttachClient.swift"]
+let platformTargets: [Target] = []
+let platformTestTargets: [Target] = []
+#endif
+
 let package = Package(
     name: "Harness",
     platforms: [.macOS(.v15)],
@@ -22,23 +137,10 @@ let package = Package(
         .library(name: "HarnessCopyMode", targets: ["HarnessCopyMode"]),
         // Native theme catalog + the shareable `.harnesstheme` document format. Pure Swift.
         .library(name: "HarnessTheme", targets: ["HarnessTheme"]),
-        // Native terminal renderer: pure-Swift color resolution + a Metal glyph/draw layer.
-        .library(name: "HarnessTerminalRenderer", targets: ["HarnessTerminalRenderer"]),
-        .library(name: "HarnessTerminalKit", targets: ["HarnessTerminalKit"]),
-        // Immersive first-run onboarding wizard (SwiftUI). Self-contained, no deps; embedded
-        // into Harness.app and shown on first launch.
-        .library(name: "HarnessOnboarding", targets: ["HarnessOnboarding"]),
-        .executable(name: "Harness", targets: ["HarnessApp"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
         .executable(name: "harness-cli", targets: ["HarnessCLI"]),
-    ],
-    dependencies: [
-        // Sparkle: macOS auto-update (the only external dependency, and only for the GUI app —
-        // the engine/daemon/CLI stay first-party). Appcast hosted at harnesscli.dev.
-        // Pinned to the audited 2.9.x line (`Package.resolved` locks 2.9.2): a fresh resolve can't
-        // float onto an unaudited future major/minor, while patch-level security fixes still land.
-        .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.9.2")),
-    ],
+    ] + platformProducts,
+    dependencies: platformDependencies,
     targets: [
         .target(
             name: "HarnessCore",
@@ -70,28 +172,11 @@ let package = Package(
             // regenerate the embed with `EXPORT_THEMES=1 swift test --filter ThemeCatalogEmbedTests`.
             exclude: ["Resources/themes.json"]
         ),
-        // Native renderer — first-party frame building, CoreText glyph atlas, and Metal drawing.
+        // Tiny C shim wrapping the variadic `ioctl` (unavailable to Swift on Linux) into
+        // non-variadic terminal helpers used by the PTY layer and the CLI attach client.
         .target(
-            name: "HarnessTerminalRenderer",
-            dependencies: ["HarnessCore", "HarnessTerminalEngine", "HarnessTheme"],
-            path: "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer"
-        ),
-        .target(
-            name: "HarnessTerminalKit",
-            dependencies: [
-                "HarnessCore",
-                "HarnessTerminalEngine",
-                "HarnessCopyMode",
-                "HarnessTerminalRenderer",
-                "HarnessTheme",
-            ],
-            path: "Packages/HarnessTerminalKit/Sources/HarnessTerminalKit"
-        ),
-        // Immersive onboarding wizard — pure SwiftUI/AppKit, no external or first-party
-        // dependencies (deliberately isolated, mirrors install paths via its own helpers).
-        .target(
-            name: "HarnessOnboarding",
-            path: "Packages/HarnessOnboarding/Sources/HarnessOnboarding"
+            name: "CHarnessSys",
+            path: "Packages/CHarnessSys"
         ),
         // Daemon logic as a library so it is unit-testable; the executable below is a
         // thin `main.swift` wrapper over it.
@@ -99,7 +184,7 @@ let package = Package(
             name: "HarnessDaemonCore",
             // Depends on the engine so `capture-pane` reconstructs the on-screen grid
             // (faithful overwrites/clears + soft-wrap join), exactly like tmux.
-            dependencies: ["HarnessCore", "HarnessTerminalEngine"],
+            dependencies: ["HarnessCore", "HarnessTerminalEngine", "CHarnessSys"],
             path: "Packages/HarnessDaemon/Sources/HarnessDaemon"
         ),
         .executableTarget(
@@ -109,20 +194,9 @@ let package = Package(
         ),
         .executableTarget(
             name: "HarnessCLI",
-            dependencies: ["HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTerminalKit", "HarnessTheme"],
-            path: "Tools/harness/Sources/HarnessCLI"
-        ),
-        .executableTarget(
-            name: "HarnessApp",
-            dependencies: [
-                "HarnessCore",
-                "HarnessTerminalKit",
-                "HarnessTheme",
-                "HarnessOnboarding",
-                .product(name: "Sparkle", package: "Sparkle"),
-            ],
-            path: "Apps/Harness/Sources/HarnessApp",
-            exclude: ["Resources"]
+            dependencies: cliDependencies,
+            path: "Tools/harness/Sources/HarnessCLI",
+            exclude: cliExclude
         ),
         .testTarget(
             name: "HarnessCoreTests",
@@ -144,27 +218,6 @@ let package = Package(
             dependencies: ["HarnessTheme"],
             path: "Tests/HarnessThemeTests"
         ),
-        .testTarget(
-            name: "HarnessTerminalRendererTests",
-            dependencies: ["HarnessCore", "HarnessTerminalRenderer", "HarnessTerminalEngine", "HarnessTheme"],
-            path: "Tests/HarnessTerminalRendererTests"
-        ),
-        .testTarget(
-            name: "HarnessTerminalKitTests",
-            dependencies: [
-                "HarnessCore",
-                "HarnessTerminalEngine",
-                "HarnessCopyMode",
-                "HarnessTerminalKit",
-                "HarnessTheme",
-            ],
-            path: "Tests/HarnessTerminalKitTests"
-        ),
-        .testTarget(
-            name: "HarnessOnboardingTests",
-            dependencies: ["HarnessOnboarding"],
-            path: "Tests/HarnessOnboardingTests"
-        ),
         // Unit coverage for the CLI's pure argument-parsing helpers. The CLI is an executable
         // target (`@main struct HarnessCLI`); `@testable import` reaches its internal statics
         // without splitting out a library, so daemon-free helpers like `flagValue` are covered.
@@ -178,19 +231,5 @@ let package = Package(
             dependencies: ["HarnessDaemonCore", "HarnessCore", "HarnessTerminalEngine"],
             path: "Tests/HarnessDaemonTests"
         ),
-        // Performance baselines for the hot paths (VT parse, IPC codec, scrollback,
-        // compositor, renderer stats). Gated behind HARNESS_BENCHMARKS=1 so a normal
-        // `swift test` stays fast; run with `make bench`.
-        .testTarget(
-            name: "HarnessBenchmarks",
-            dependencies: [
-                "HarnessCore",
-                "HarnessTerminalEngine",
-                "HarnessTerminalKit",
-                "HarnessTerminalRenderer",
-                "HarnessTheme",
-            ],
-            path: "Tests/HarnessBenchmarks"
-        ),
-    ]
+    ] + platformTargets + platformTestTargets
 )

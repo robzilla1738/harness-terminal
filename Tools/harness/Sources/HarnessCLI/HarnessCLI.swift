@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import HarnessCore
 import HarnessTheme
@@ -153,8 +158,15 @@ struct HarnessCLI {
                 let code = try handleAttach(args)
                 exit(code)
             case "attach-window":
+                #if canImport(HarnessTerminalKit)
                 let code = try handleAttachWindow(args)
                 exit(code)
+                #else
+                // The window compositor needs the Metal/AppKit terminal kit, which isn't built on
+                // headless/Linux. Single-pane `attach` still works there.
+                fputs("harness-cli attach-window: not supported on this platform; use `attach`\n", stderr)
+                exit(64)
+                #endif
             case "record":
                 exit(handleRecord(args, client: client))
             case "replay":
@@ -711,6 +723,7 @@ struct HarnessCLI {
         return ReplayClient.run(path: file, speed: speed, honorTiming: !args.contains("--no-timing"))
     }
 
+    #if canImport(HarnessTerminalKit)
     /// Renders a whole tab (split layout) into the terminal via the compositor.
     static func handleAttachWindow(_ args: [String]) throws -> Int32 {
         let selector: WindowAttachClient.TabSelector
@@ -728,6 +741,7 @@ struct HarnessCLI {
         }
         return try WindowAttachClient.run(tab: selector, configuration: configuration)
     }
+    #endif
 
     /// Parse `C-a d`, `0x01 0x64`, or comma-separated decimal bytes into a raw
     /// byte sequence. Single-character tokens become their literal ASCII byte.
