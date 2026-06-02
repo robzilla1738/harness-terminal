@@ -93,6 +93,23 @@ public enum HarnessPaths {
         sessionsDirectory.appendingPathComponent("layout.json")
     }
 
+    /// Saved remote-host configs for the GUI/CLI to connect to daemons on other machines.
+    public static var remoteHostsURL: URL {
+        sessionsDirectory.appendingPathComponent("remote-hosts.json")
+    }
+
+    /// Local sockets that SSH forwards to remote daemons (one per connected host). Kept short and
+    /// under the runtime dir so the forwarded path comfortably fits `sockaddr_un.sun_path`.
+    public static var tunnelsDirectory: URL {
+        runtimeDirectory.appendingPathComponent("tunnels", isDirectory: true)
+    }
+
+    public static func tunnelSocketURL(forHost name: String) -> URL {
+        // Sanitize the host name into a safe, short filename component.
+        let safe = name.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" }
+        return tunnelsDirectory.appendingPathComponent("\(String(safe)).sock")
+    }
+
     public static var settingsURL: URL {
         applicationSupport.appendingPathComponent("settings.json")
     }

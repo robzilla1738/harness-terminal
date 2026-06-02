@@ -33,12 +33,16 @@ public enum AttachClient {
         public init() {}
     }
 
-    public static func run(surfaceID: String, configuration: Configuration = Configuration()) throws -> Int32 {
+    public static func run(
+        surfaceID: String,
+        configuration: Configuration = Configuration(),
+        endpoint: Endpoint = .localControlSocket
+    ) throws -> Int32 {
         guard isatty(STDIN_FILENO) != 0, isatty(STDOUT_FILENO) != 0 else {
             fputs("harness-cli attach: stdin/stdout must be a TTY\n", stderr)
             return 64
         }
-        let client = DaemonClient()
+        let client = DaemonClient(endpoint: endpoint)
 
         // Send the daemon our current size before subscribing so the first
         // repaint matches our viewport.

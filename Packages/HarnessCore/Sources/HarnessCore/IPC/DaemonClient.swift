@@ -9,8 +9,13 @@ import Foundation
 /// opens and closes its own socket) and all calls funnel through the serial `queue`.
 public final class DaemonClient: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.robert.harness.daemon-client")
+    /// Where this client connects. Defaults to the local daemon's control socket, so every existing
+    /// `DaemonClient()` call is unchanged; a remote client passes the local end of an SSH tunnel.
+    private let endpoint: Endpoint
 
-    public init() {}
+    public init(endpoint: Endpoint = .localControlSocket) {
+        self.endpoint = endpoint
+    }
 
     public func request(_ ipcRequest: IPCRequest, timeout: TimeInterval = 2) throws -> IPCResponse {
         try queue.sync {
@@ -87,37 +92,14 @@ public final class DaemonClient: @unchecked Sendable {
     }
 
     private func connectSocket() throws -> Int32 {
-        // Validate before opening the fd so an over-long path can't leak a socket — and so a deep
-        // HARNESS_HOME fails clearly instead of `strncpy`-truncating to the wrong socket.
-        let path = try HarnessPaths.validatedSocketPath()
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw DaemonClientError.connectionFailed }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let sunPathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
-        path.withCString { cstr in
-            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-                let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
-                strncpy(dest, cstr, sunPathCapacity)
-            }
-        }
-        // connect() can be interrupted by a signal (EINTR). For a blocking AF_UNIX stream socket
-        // the connect completes synchronously, so retry on EINTR rather than spuriously failing.
-        var connected: Int32 = -1
-        repeat {
-            connected = withUnsafePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-                }
-            }
-        } while connected != 0 && errno == EINTR
-        guard connected == 0 else {
-            close(fd)
+        // Establishing the byte stream is the only transport-specific step; the framing and read
+        // loop are endpoint-agnostic. `EndpointConnector` handles validation + connect for the
+        // local socket and (via an SSH tunnel) a remote one.
+        do {
+            return try EndpointConnector.connect(endpoint)
+        } catch {
             throw DaemonClientError.connectionFailed
         }
-        setNoSigPipe(fd)
-        return fd
     }
 
     private func writeAll(_ data: Data, to fd: Int32) throws {

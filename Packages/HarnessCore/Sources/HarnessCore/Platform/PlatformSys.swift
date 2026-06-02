@@ -36,6 +36,13 @@ public func sysClose(_ fd: Int32) -> Int32 {
     close(fd)
 }
 
+/// `connect(2)`, wrapped so callers (e.g. `EndpointConnector`, which has its own `connect(_:)`
+/// overload) can reach the POSIX one without name ambiguity.
+@inline(__always)
+public func sysConnect(_ fd: Int32, _ addr: UnsafePointer<sockaddr>?, _ len: socklen_t) -> Int32 {
+    connect(fd, addr, len)
+}
+
 // MARK: - Peer credentials
 
 /// The UID of the process on the other end of a connected `AF_UNIX` stream socket, or nil if it

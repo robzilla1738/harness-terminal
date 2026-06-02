@@ -23,11 +23,13 @@ struct HarnessCLI {
             case "theme-preview":
                 printThemePreview(args)
                 return
+            case "remote":
+                exit(try handleRemote(args))
             default:
                 break
             }
 
-            let client = DaemonClient()
+            let client = try makeClient(args)
             switch command {
             case "list-workspaces":
                 try printWorkspaces(args, client: client)
@@ -681,7 +683,7 @@ struct HarnessCLI {
 
     static func handleAttach(_ args: [String]) throws -> Int32 {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli attach --surface <id> [--detach-keys <bytes>]\n", stderr)
+            fputs("Usage: harness-cli attach --surface <id> [--detach-keys <bytes>] [--host <name>]\n", stderr)
             return 64
         }
         var configuration = AttachClient.Configuration()
@@ -689,7 +691,86 @@ struct HarnessCLI {
            let parsed = parseDetachSequence(raw) {
             configuration.detachSequence = parsed
         }
-        return try AttachClient.run(surfaceID: surface, configuration: configuration)
+        let endpoint = try resolveEndpoint(args)
+        return try AttachClient.run(surfaceID: surface, configuration: configuration, endpoint: endpoint)
+    }
+
+    // MARK: - Remote daemons (over SSH)
+
+    /// Build the daemon client for this invocation, honouring a global `--host <name>` flag that
+    /// connects to a remote daemon through an SSH tunnel (configured via `harness-cli remote add`).
+    static func makeClient(_ args: [String]) throws -> DaemonClient {
+        DaemonClient(endpoint: try resolveEndpoint(args))
+    }
+
+    /// Resolve the endpoint for this invocation: the local socket, or — when `--host <name>` is
+    /// given — the local end of an SSH tunnel to the named remote daemon.
+    static func resolveEndpoint(_ args: [String]) throws -> Endpoint {
+        guard let hostName = flagValue(args, flag: "--host") else { return .localControlSocket }
+        guard let host = RemoteHostStore().host(named: hostName) else {
+            fputs("harness-cli: unknown --host '\(hostName)'. Add it with `harness-cli remote add`.\n", stderr)
+            exit(64)
+        }
+        return try SSHTunnelManager.shared.endpoint(for: host)
+    }
+
+    /// `remote <list|add|remove>` — manage saved remote daemons reached over SSH.
+    static func handleRemote(_ args: [String]) throws -> Int32 {
+        let store = RemoteHostStore()
+        let sub = args.count > 1 ? args[1] : "list"
+        switch sub {
+        case "list":
+            let hosts = store.load()
+            if hosts.isEmpty {
+                print("No remote hosts. Add one with: harness-cli remote add --name <name> --ssh <user@host>")
+            }
+            for h in hosts {
+                let live = SSHTunnelManager.shared.isConnected(h.name) ? " [connected]" : ""
+                print("\(h.name)\t\(h.sshTarget)\t\(h.remoteSocketPath)\(live)")
+            }
+            return 0
+        case "add":
+            guard let name = flagValue(args, flag: "--name"), let ssh = flagValue(args, flag: "--ssh") else {
+                fputs("Usage: harness-cli remote add --name <name> --ssh <user@host> "
+                    + "[--socket <remote-path>] [--ssh-arg <arg> ...]\n", stderr)
+                return 64
+            }
+            guard let socketPath = flagValue(args, flag: "--socket") ?? defaultRemoteSocket(for: ssh) else {
+                fputs("harness-cli remote add: could not infer the remote socket path; pass --socket "
+                    + "<remote-path> (see `harness-cli doctor` on the remote for its value).\n", stderr)
+                return 64
+            }
+            var sshArgs: [String] = []
+            var i = 0
+            while i < args.count {
+                if args[i] == "--ssh-arg", i + 1 < args.count { sshArgs.append(args[i + 1]); i += 2 } else { i += 1 }
+            }
+            store.upsert(RemoteHost(name: name, sshTarget: ssh, remoteSocketPath: socketPath, sshArgs: sshArgs))
+            print("Added remote '\(name)' -> \(ssh) (\(socketPath))")
+            return 0
+        case "remove":
+            guard let name = flagValue(args, flag: "--name") else {
+                fputs("Usage: harness-cli remote remove --name <name>\n", stderr)
+                return 64
+            }
+            store.remove(name: name)
+            SSHTunnelManager.shared.stop(host: name)
+            print("Removed remote '\(name)'")
+            return 0
+        default:
+            fputs("Usage: harness-cli remote <list|add|remove> ...\n", stderr)
+            return 64
+        }
+    }
+
+    /// Best-effort default remote socket path from `user@host` — the daemon's XDG location on a
+    /// typical Linux box. `ssh -L` doesn't expand `~`, so we build an absolute path from the user.
+    static func defaultRemoteSocket(for sshTarget: String) -> String? {
+        guard sshTarget.contains("@"), let user = sshTarget.split(separator: "@").first.map(String.init) else {
+            return nil
+        }
+        let home = user == "root" ? "/root" : "/home/\(user)"
+        return "\(home)/.local/share/harness/harness.sock"
     }
 
     /// `record --surface <id> --output <file> [--display]` — record a surface's
