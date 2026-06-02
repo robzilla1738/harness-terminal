@@ -796,12 +796,12 @@ public final class RealPty: @unchecked Sendable {
             }
         }
         #else
-        // /proc/<pid>/cwd is a symlink to the process's working directory.
+        // /proc/<pid>/cwd is a symlink to the process's working directory. readlink doesn't
+        // NUL-terminate, so decode exactly the `len` bytes it wrote.
         var buffer = [CChar](repeating: 0, count: 4096)
         let len = readlink("/proc/\(pid)/cwd", &buffer, buffer.count - 1)
         guard len > 0 else { return nil }
-        buffer[len] = 0
-        return String(cString: buffer)
+        return String(decoding: buffer[0 ..< len].map { UInt8(bitPattern: $0) }, as: UTF8.self)
         #endif
     }
 }
