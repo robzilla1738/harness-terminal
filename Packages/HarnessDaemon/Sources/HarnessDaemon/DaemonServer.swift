@@ -79,7 +79,7 @@ public final class DaemonServer: @unchecked Sendable {
         // Validate the socket path fits `sun_path` before binding, so a deep HARNESS_HOME fails
         // with a clear message instead of `strncpy`-truncating and binding the wrong socket.
         let socketPath = try HarnessPaths.validatedSocketPath()
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = makeUnixStreamSocket()
         guard fd >= 0 else { throw DaemonError.socketFailed }
         setNoSigPipe(fd)
 
@@ -113,7 +113,7 @@ public final class DaemonServer: @unchecked Sendable {
         // `SOMAXCONN`, not a small fixed backlog: the daemon serves the GUI plus any number of
         // `harness-cli` clients, and a burst of near-simultaneous connects (e.g. several attach
         // clients reconnecting at once) must not overflow the accept queue and get refused.
-        guard listen(fd, SOMAXCONN) == 0 else {
+        guard listen(fd, Int32(SOMAXCONN)) == 0 else { // SOMAXCONN is `Int` on Glibc
             close(fd)
             throw DaemonError.listenFailed
         }

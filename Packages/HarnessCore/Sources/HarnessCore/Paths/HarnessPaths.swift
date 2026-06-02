@@ -105,9 +105,25 @@ public enum HarnessPaths {
     }
 
     public static func tunnelSocketURL(forHost name: String) -> URL {
-        // Sanitize the host name into a safe, short filename component.
-        let safe = name.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" }
-        return tunnelsDirectory.appendingPathComponent("\(String(safe)).sock")
+        // A readable, filesystem-safe prefix (bounded so `sun_path` doesn't overflow) disambiguated
+        // by a deterministic hash of the *full* name — so distinct hosts that sanitize to the same
+        // text (e.g. "dev.box" vs "dev-box") never share a socket path and clobber each other.
+        let safe = String(
+            name.unicodeScalars
+                .map { CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" }
+                .prefix(32))
+        return tunnelsDirectory.appendingPathComponent("\(safe)-\(fnv1aHex(name)).sock")
+    }
+
+    /// Deterministic 32-bit FNV-1a hash as 8 hex chars. `Hasher` is per-process seeded, so it can't
+    /// produce a stable on-disk name across daemon runs; this can.
+    private static func fnv1aHex(_ string: String) -> String {
+        var hash: UInt32 = 0x811c_9dc5
+        for byte in string.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 0x0100_0193
+        }
+        return String(format: "%08x", hash)
     }
 
     public static var settingsURL: URL {

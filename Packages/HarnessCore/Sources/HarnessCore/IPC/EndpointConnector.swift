@@ -28,7 +28,7 @@ public enum EndpointConnector {
         guard path.utf8.count < HarnessPaths.maxSocketPathLength else {
             throw EndpointError.pathTooLong(path: path, limit: HarnessPaths.maxSocketPathLength)
         }
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = makeUnixStreamSocket()
         guard fd >= 0 else { throw EndpointError.connectionFailed }
 
         var addr = sockaddr_un()

@@ -387,14 +387,15 @@ public final class RealPty: @unchecked Sendable {
         if pid == 0 {
             _ = setsid() // new session so the slave can become our controlling terminal
             let slave = slavePath.map { harness_open_rdwr($0) } ?? -1
-            if slave >= 0 {
-                _ = harness_pty_make_controlling(slave)
-                _ = harness_pty_set_winsize(slave, rows, cols)
-                _ = dup2(slave, 0)
-                _ = dup2(slave, 1)
-                _ = dup2(slave, 2)
-                if slave > 2 { _ = close(slave) }
-            }
+            // Without the slave we have no stdio/controlling terminal — exec'ing the shell here would
+            // leave it wired to the inherited master fd and misbehave. Bail instead.
+            if slave < 0 { _ = close(master); _exit(127) }
+            _ = harness_pty_make_controlling(slave)
+            _ = harness_pty_set_winsize(slave, rows, cols)
+            _ = dup2(slave, 0)
+            _ = dup2(slave, 1)
+            _ = dup2(slave, 2)
+            if slave > 2 { _ = close(slave) }
             _ = close(master)
             if let cwd { _ = chdir(cwd) }
             argv.withUnsafeBufferPointer { argvBuffer in

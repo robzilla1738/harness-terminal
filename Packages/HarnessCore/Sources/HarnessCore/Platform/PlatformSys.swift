@@ -25,6 +25,19 @@ public nonisolated(unsafe) let harnessStderr: UnsafeMutablePointer<FILE> = {
     return stream
 }()
 
+// MARK: - Sockets
+
+/// `socket(AF_UNIX, SOCK_STREAM, 0)`, portable: `SOCK_STREAM` is an `Int32` on Darwin but a
+/// `__socket_type` enum on Glibc, so the literal call doesn't type-check on Linux.
+@inline(__always)
+public func makeUnixStreamSocket() -> Int32 {
+    #if canImport(Glibc)
+    return socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+    #else
+    return socket(AF_UNIX, SOCK_STREAM, 0)
+    #endif
+}
+
 // MARK: - Raw syscalls that collide with same-named Swift methods
 
 // `read`/`write`/`close` clash with instance methods (e.g. `RealPty.write`) and with Foundation, so

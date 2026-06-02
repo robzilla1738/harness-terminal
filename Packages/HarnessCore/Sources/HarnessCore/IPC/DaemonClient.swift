@@ -219,7 +219,7 @@ public final class DaemonSubscription: @unchecked Sendable {
         // shutdown — paired with the read loop setting `finished` under the same lock
         // before it closes — guarantees `fd` is still open here, so we never shutdown a
         // descriptor the loop already closed and the OS may have recycled.
-        shutdown(fd, SHUT_RDWR)
+        shutdown(fd, Int32(SHUT_RDWR)) // SHUT_RDWR is `Int` on Glibc, `Int32` on Darwin
     }
 
     /// Output-stream convenience: forwards `.data` frames to `onData`.
