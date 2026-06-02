@@ -46,6 +46,20 @@ jobs:
             spm-${{ runner.os }}-${{ env.XCODE_VERSION }}-
             spm-${{ runner.os }}-
 
+      # Self-heal a poisoned cache: a cancelled run can persist a `.build` whose Sparkle binary
+      # artifact is only half-extracted, which then fails every restore with
+      # "XCFramework Info.plist not found". The `restore-keys` fallback can resurrect such a cache
+      # even after the exact-key one is deleted, so guard the build: if Sparkle's xcframework is
+      # missing, drop the extracted artifacts and let `swift build` re-fetch it cleanly (the
+      # compiled-module cache is kept).
+      - name: Heal partial Sparkle artifact
+        run: |
+          plist=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/Info.plist"
+          if [ -d .build ] && [ ! -f "$plist" ]; then
+            echo "::warning::Sparkle xcframework missing in restored cache — clearing .build/artifacts for a clean re-fetch"
+            rm -rf .build/artifacts
+          fi
+
       # Compiles every target, including the AppKit `HarnessApp` executable target,
       # so a green build proves the GUI code compiles too.
       - name: Build (debug)
@@ -83,6 +97,16 @@ jobs:
           restore-keys: |
             spm-live-${{ runner.os }}-${{ env.XCODE_VERSION }}-
             spm-${{ runner.os }}-${{ env.XCODE_VERSION }}-
+
+      # Self-heal a poisoned cache (see the build-test job): drop a half-extracted Sparkle artifact
+      # so `swift build` re-fetches it cleanly instead of failing on a missing xcframework.
+      - name: Heal partial Sparkle artifact
+        run: |
+          plist=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/Info.plist"
+          if [ -d .build ] && [ ! -f "$plist" ]; then
+            echo "::warning::Sparkle xcframework missing in restored cache — clearing .build/artifacts for a clean re-fetch"
+            rm -rf .build/artifacts
+          fi
 
       # The socket/PTY/security round-trip suites (DaemonRoundTrip, RealPtyLifecycle, contention,
       # hook-firing) are gated behind HARNESS_LIVE_DAEMON_TESTS and therefore NEVER run in the default
