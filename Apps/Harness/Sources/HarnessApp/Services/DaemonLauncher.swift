@@ -150,7 +150,7 @@ final class DaemonLauncher: @unchecked Sendable {
             _ = try LaunchAgentInstaller.install(daemonPath: executable)
             return true
         } catch {
-            fputs("Harness: LaunchAgent install failed: \(error) — using in-process daemon\n", stderr)
+            fputs("Harness: LaunchAgent install failed: \(error) — using in-process daemon\n", harnessStderr)
             return false
         }
     }
@@ -159,7 +159,7 @@ final class DaemonLauncher: @unchecked Sendable {
         // Don't stack duplicate spawns if a previous one is still coming up.
         if let existing = fallbackProcess, existing.isRunning { return }
         guard let executable = daemonExecutableURL() else {
-            fputs("Harness: could not locate HarnessDaemon executable\n", stderr)
+            fputs("Harness: could not locate HarnessDaemon executable\n", harnessStderr)
             return
         }
         let proc = Process()
@@ -174,7 +174,7 @@ final class DaemonLauncher: @unchecked Sendable {
             try proc.run()
             fallbackProcess = proc
         } catch {
-            fputs("Harness: failed to spawn HarnessDaemon at \(executable.path): \(error)\n", stderr)
+            fputs("Harness: failed to spawn HarnessDaemon at \(executable.path): \(error)\n", harnessStderr)
         }
     }
 

@@ -203,7 +203,7 @@ final class PrefixKeymap {
         do {
             try MainExecutor.shared.execute(binding.command)
         } catch {
-            fputs("PrefixKeymap: \(error)\n", stderr)
+            fputs("PrefixKeymap: \(error)\n", harnessStderr)
             NSSound.beep()
         }
     }

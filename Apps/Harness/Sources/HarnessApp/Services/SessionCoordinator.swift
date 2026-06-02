@@ -166,7 +166,7 @@ final class SessionCoordinator: NSObject {
         } catch {
             // Don't silently no-op: a failed hydration leaves the UI showing stale layout/metadata.
             // Log + throttled toast (`noteDaemonError`); the app self-heals on the next sync.
-            fputs("Harness: snapshot fetch failed: \(error)\n", stderr)
+            fputs("Harness: snapshot fetch failed: \(error)\n", harnessStderr)
             noteDaemonError(error)
             return false
         }
@@ -207,7 +207,7 @@ final class SessionCoordinator: NSObject {
             if (try? daemon.request(.closeEphemeralSessions, timeout: 4)) != nil { return }
             if attempt == 0 { Thread.sleep(forTimeInterval: 0.1) } // brief gap before the single retry
         }
-        fputs("Harness: closeEphemeralSessions did not confirm before quit\n", stderr)
+        fputs("Harness: closeEphemeralSessions did not confirm before quit\n", harnessStderr)
     }
 
     private func structureFingerprint(_ snap: SessionSnapshot) -> String {
@@ -1396,7 +1396,7 @@ final class SessionCoordinator: NSObject {
             // is still spawning at launch) must degrade gracefully. Log always,
             // and surface a non-blocking, throttled toast so the user isn't left
             // wondering — but the app keeps running and self-heals on the next sync.
-            fputs("Harness daemon request failed: \(error)\n", stderr)
+            fputs("Harness daemon request failed: \(error)\n", harnessStderr)
             noteDaemonError(error)
             return nil
         }
@@ -1418,7 +1418,7 @@ final class SessionCoordinator: NSObject {
         do {
             _ = try daemon.request(request)
         } catch {
-            fputs("Harness daemon metadata update failed: \(error)\n", stderr)
+            fputs("Harness daemon metadata update failed: \(error)\n", harnessStderr)
         }
     }
 }
@@ -1530,7 +1530,7 @@ enum DesktopNotifier {
         )
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
-                fputs("Harness notification delivery failed: \(error)\n", stderr)
+                fputs("Harness notification delivery failed: \(error)\n", harnessStderr)
             }
         }
     }

@@ -145,7 +145,7 @@ public final class RealPty: @unchecked Sendable {
         scrollbackURL: URL? = nil
     ) throws {
         self.id = id
-        self.maxScrollbackBytes = scrollbackBytes
+        self.maxScrollbackBytes = max(scrollbackBytes, ScrollbackFile.minimumRetentionCap)
         self.extraEnvironment = extraEnvironment
         self.shell = shell
 
@@ -154,8 +154,8 @@ public final class RealPty: @unchecked Sendable {
         // new output simply continues after it. Chunked (not one giant entry) so the ring's
         // per-entry eviction stays granular as new output pushes the oldest history out.
         if let scrollbackURL {
-            self.scrollbackFile = ScrollbackFile(url: scrollbackURL, retentionCap: scrollbackBytes)
-            let history = ScrollbackFile.loadTail(url: scrollbackURL, maxBytes: scrollbackBytes)
+            self.scrollbackFile = ScrollbackFile(url: scrollbackURL, retentionCap: maxScrollbackBytes)
+            let history = ScrollbackFile.loadTail(url: scrollbackURL, maxBytes: maxScrollbackBytes)
             if !history.isEmpty {
                 let chunkSize = 16 * 1024
                 var seq: UInt64 = 1
@@ -387,6 +387,8 @@ public final class RealPty: @unchecked Sendable {
         let pid = fork()
         if pid < 0 { slavePath.map { free($0) }; _ = sysClose(master); return nil }
         if pid == 0 {
+            // `slavePath` is parent-allocated so the child only uses async-signal-safe operations
+            // before exec. Do not `free` it in the child; `_exit`/`execve` release the process image.
             _ = setsid() // new session so the slave can become our controlling terminal
             let slave = slavePath.map { harness_open_rdwr($0) } ?? -1
             // Without the slave we have no stdio/controlling terminal — exec'ing the shell here would

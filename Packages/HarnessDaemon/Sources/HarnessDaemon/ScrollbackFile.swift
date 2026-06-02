@@ -18,6 +18,8 @@ import HarnessCore
 /// compacted to the retention cap once it grows to a high-water mark, the disk analog of the
 /// ring's head-index eviction. @unchecked Sendable: all disk state is confined to `queue`.
 final class ScrollbackFile: @unchecked Sendable {
+    static let minimumRetentionCap = 64 * 1024
+
     private let url: URL
     /// Retain roughly this many bytes on disk — sized to the surface's in-memory ring cap so
     /// "what survives a restart" matches "what was on screen".
@@ -39,7 +41,7 @@ final class ScrollbackFile: @unchecked Sendable {
 
     init(url: URL, retentionCap: Int) {
         self.url = url
-        self.retentionCap = max(retentionCap, 64 * 1024)
+        self.retentionCap = max(retentionCap, Self.minimumRetentionCap)
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil
         self.fileBytes = size ?? 0
     }

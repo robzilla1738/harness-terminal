@@ -534,7 +534,7 @@ public final class TerminalHostView: NSView {
                 return true
             }
         } catch {
-            fputs("Harness: ensureSurface failed for \(surfaceID.uuidString): \(error)\n", stderr)
+            fputs("Harness: ensureSurface failed for \(surfaceID.uuidString): \(error)\n", harnessStderr)
         }
         return false
     }
@@ -554,7 +554,7 @@ public final class TerminalHostView: NSView {
                 nativeView.receive(text)
             }
         } catch {
-            fputs("Harness: replayScrollback failed for \(surfaceID.uuidString): \(error)\n", stderr)
+            fputs("Harness: replayScrollback failed for \(surfaceID.uuidString): \(error)\n", harnessStderr)
         }
         do {
             outputSubscription = try daemonClient.subscribeSurfaceOutput(
@@ -568,7 +568,7 @@ public final class TerminalHostView: NSView {
             // last grid size, so a surface respawned at the daemon's placeholder size is corrected.
             io.attach(subscription: outputSubscription)
         } catch {
-            fputs("Harness: output subscription failed for \(surfaceID.uuidString): \(error)\n", stderr)
+            fputs("Harness: output subscription failed for \(surfaceID.uuidString): \(error)\n", harnessStderr)
         }
     }
 
