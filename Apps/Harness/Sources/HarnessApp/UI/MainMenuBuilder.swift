@@ -267,10 +267,16 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         guard !name.isEmpty, !ssh.isEmpty else { return }
         var socketPath = sockField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if socketPath.isEmpty {
-            let user = ssh.contains("@") ? String(ssh.split(separator: "@")[0]) : ""
-            socketPath = user == "root"
-                ? "/root/.local/share/harness/harness.sock"
-                : "/home/\(user)/.local/share/harness/harness.sock"
+            guard let inferred = RemoteHost.defaultRemoteSocketPath(forSSHTarget: ssh) else {
+                // An SSH alias (no user@host) gives nothing to infer a path from — ask for it.
+                let warn = NSAlert()
+                warn.messageText = "Remote socket path required"
+                warn.informativeText = "Couldn't infer the daemon socket from \"\(ssh)\". Re-add the "
+                    + "host with its remote socket path (see `harness-cli doctor` on the remote)."
+                warn.runModal()
+                return
+            }
+            socketPath = inferred
         }
         RemoteHostsService.shared.addHost(
             RemoteHost(name: name, sshTarget: ssh, remoteSocketPath: socketPath))

@@ -38,4 +38,15 @@ final class RemoteHostStoreTests: XCTestCase {
         XCTAssertNil(store.host(named: "devbox"))
         XCTAssertEqual(store.load().count, 1)
     }
+
+    func testDefaultRemoteSocketPath() {
+        XCTAssertEqual(
+            RemoteHost.defaultRemoteSocketPath(forSSHTarget: "rob@devbox"),
+            "/home/rob/.local/share/harness/harness.sock")
+        XCTAssertEqual(
+            RemoteHost.defaultRemoteSocketPath(forSSHTarget: "root@box"),
+            "/root/.local/share/harness/harness.sock")
+        // An SSH-config alias with no user@ can't be inferred.
+        XCTAssertNil(RemoteHost.defaultRemoteSocketPath(forSSHTarget: "devbox"))
+    }
 }

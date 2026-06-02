@@ -354,7 +354,7 @@ public final class RealPty: @unchecked Sendable {
         cols: UInt16
     ) -> (pid: pid_t, master: Int32)? {
         #if canImport(Darwin)
-        var ws = WinSize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+        var ws = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         var amaster: Int32 = -1
         let pid = forkpty(&amaster, nil, nil, &ws)
         if pid < 0 { return nil }
@@ -465,6 +465,12 @@ public final class RealPty: @unchecked Sendable {
     /// last debounce window isn't lost. No-op when the surface isn't persisted.
     public func flushScrollback() {
         scrollbackFile?.flush()
+    }
+
+    /// Permanently delete this surface's persisted scrollback — called when the surface leaves the
+    /// layout for good, so the file can't linger or be resurrected by a late flush.
+    public func deletePersistedScrollback() {
+        scrollbackFile?.delete()
     }
 
     /// The retained PTY output bytes (whole history, or the last ~16 KiB) as raw `Data`.

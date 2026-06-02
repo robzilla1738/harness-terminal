@@ -137,7 +137,8 @@ public final class DaemonServer: @unchecked Sendable {
         // euid. The kernel records the peer's credentials at connect time (Darwin `getpeereid`,
         // Linux `SO_PEERCRED`), so a process can't spoof them. Reject anything else outright. This
         // applies to the local Unix socket; a future TCP transport authenticates with a token.
-        guard let uid = peerUID(ofSocket: clientFD), uid == geteuid() else {
+        let peer = harness_peer_uid(clientFD)
+        guard peer >= 0, uid_t(peer) == geteuid() else {
             close(clientFD)
             return
         }

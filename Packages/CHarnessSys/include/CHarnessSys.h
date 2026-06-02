@@ -1,9 +1,17 @@
 #ifndef C_HARNESS_SYS_H
 #define C_HARNESS_SYS_H
 
+// `struct ucred` / `SO_PEERCRED` (Linux peer credentials) are gated behind _GNU_SOURCE, which the
+// Swift Glibc module doesn't define — so the peer-uid check lives here in C rather than Swift.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <termios.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 // `ioctl` is a C variadic function, which the Swift importer marks unavailable on Linux (and is
 // awkward to call portably on Darwin). These non-variadic `static inline` wrappers give the daemon
@@ -51,6 +59,26 @@ static inline int harness_set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+// Peer UID of a connected AF_UNIX stream socket — `getpeereid` on Darwin/BSD, `SO_PEERCRED` on
+// Linux. Both read kernel-recorded credentials that can't be spoofed. Returns the uid, or -1 on
+// failure. Kept in C so the Linux ucred path compiles without the Swift Glibc module exposing it.
+static inline long harness_peer_uid(int fd) {
+#if defined(__APPLE__)
+    uid_t uid = 0;
+    gid_t gid = 0;
+    if (getpeereid(fd, &uid, &gid) != 0) return -1;
+    return (long)uid;
+#elif defined(SO_PEERCRED)
+    struct ucred cred;
+    socklen_t len = sizeof(cred);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) return -1;
+    return (long)cred.uid;
+#else
+    (void)fd;
+    return -1;
+#endif
 }
 
 #endif /* C_HARNESS_SYS_H */

@@ -44,16 +44,10 @@ public final class SSHTunnelManager: @unchecked Sendable {
         let localSocket = HarnessPaths.tunnelSocketURL(forHost: host.name)
         let endpoint = Endpoint.unix(path: localSocket.path)
 
-        lock.lock()
-        if let existing = tunnels[host.name], existing.process.isRunning {
-            lock.unlock()
-            if isReachable(endpoint) { return endpoint }
-            // Process alive but not forwarding (e.g. remote daemon restarted): tear down + respawn.
-            stop(host: host.name)
-            lock.lock()
-        }
-        lock.unlock()
-
+        // Reuse a tunnel that's actually forwarding; otherwise tear down any dead/stale one and
+        // (re)spawn. `stop` is a no-op when there's no existing tunnel.
+        if isConnected(host.name), isReachable(endpoint) { return endpoint }
+        stop(host: host.name)
         try spawnTunnel(host: host, localSocket: localSocket)
 
         // Wait for the remote daemon to answer through the freshly forwarded socket.

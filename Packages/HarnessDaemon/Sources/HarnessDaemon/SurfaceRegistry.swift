@@ -1123,11 +1123,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) }
         )
         for surfaceID in surfaceIDs where !stillReferenced.contains(surfaceID) {
-            sessions.removeValue(forKey: surfaceID)?.close()
+            let removed = sessions.removeValue(forKey: surfaceID)
+            // The surface is gone from the layout — synchronously drop its persisted scrollback
+            // before closing, so no late debounced flush can resurrect the file.
+            removed?.deletePersistedScrollback()
+            removed?.close()
             stopPipe(surfaceID: surfaceID)
-            // The surface is gone from the layout — drop its persisted scrollback so it doesn't
-            // linger on disk (and can't be resurrected by a stale file on a future restart).
-            try? FileManager.default.removeItem(at: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID))
             // Drop the output monitor too, else it leaks across tab/session/pane churn.
             monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
         }

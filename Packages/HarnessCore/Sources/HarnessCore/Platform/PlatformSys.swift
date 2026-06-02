@@ -10,11 +10,6 @@ import Darwin
 import Glibc
 #endif
 
-/// Cross-platform terminal window size (`struct winsize`). Spelled the same on both platforms,
-/// aliased here so call sites don't have to module-qualify it (`Darwin.winsize` won't resolve on
-/// Linux).
-public typealias WinSize = winsize
-
 // MARK: - Raw syscalls that collide with same-named Swift methods
 
 // `read`/`write`/`close` clash with instance methods (e.g. `RealPty.write`) and with Foundation, so
@@ -43,27 +38,9 @@ public func sysConnect(_ fd: Int32, _ addr: UnsafePointer<sockaddr>?, _ len: soc
     connect(fd, addr, len)
 }
 
-// MARK: - Peer credentials
-
-/// The UID of the process on the other end of a connected `AF_UNIX` stream socket, or nil if it
-/// can't be determined. Uses `getpeereid` on Darwin/BSD and `SO_PEERCRED` on Linux — both read
-/// credentials the kernel recorded at connect time, so a peer can't spoof them. Returning the UID
-/// (rather than a bool) lets the daemon compare against its own `geteuid()`.
-public func peerUID(ofSocket fd: Int32) -> uid_t? {
-    #if canImport(Darwin)
-    var uid: uid_t = 0
-    var gid: gid_t = 0
-    guard getpeereid(fd, &uid, &gid) == 0 else { return nil }
-    return uid
-    #elseif canImport(Glibc)
-    var cred = ucred()
-    var len = socklen_t(MemoryLayout<ucred>.size)
-    guard getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0 else { return nil }
-    return cred.uid
-    #else
-    return nil
-    #endif
-}
+// Peer-credential lookup for the control socket lives in the `CHarnessSys` C shim
+// (`harness_peer_uid`), because Linux's `struct ucred` / `SO_PEERCRED` are gated behind
+// `_GNU_SOURCE`, which the Swift Glibc module doesn't expose.
 
 // MARK: - SIGPIPE
 

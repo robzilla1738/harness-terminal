@@ -118,12 +118,24 @@ final class SessionCoordinator: NSObject {
     /// surface a throttled error and stay on the current daemon.
     func connectToRemote(named name: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
+            // Bringing up the SSH tunnel blocks (spawns ssh + waits for the remote daemon), so it
+            // runs off-main. Carry a Sendable outcome (no non-Sendable Error) back to the main actor.
+            let outcome: Result<Endpoint, String>
             do {
-                let endpoint = try RemoteHostsService.shared.connect(named: name)
-                DispatchQueue.main.async { self.applyEndpointSwitch(endpoint) }
+                outcome = .success(try RemoteHostsService.shared.connect(named: name))
             } catch {
-                DispatchQueue.main.async { self.noteDaemonError(error) }
+                outcome = .failure("\(error)")
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    switch outcome {
+                    case let .success(endpoint):
+                        self.applyEndpointSwitch(endpoint)
+                    case let .failure(message):
+                        self.noteDaemonError(DaemonSessionError.daemonError(message))
+                    }
+                }
             }
         }
     }

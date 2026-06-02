@@ -30,6 +30,9 @@ final class ScrollbackFile: @unchecked Sendable {
     private let debounceInterval: TimeInterval = 0.5
     private var pending = Data()
     private var pendingFlush: DispatchWorkItem?
+    /// Set once the surface is gone for good; stops a late debounced flush from resurrecting a file
+    /// we just deleted.
+    private var closed = false
     /// Current on-disk size, seeded from the existing file so compaction accounting survives a
     /// restart that loaded a pre-existing log.
     private var fileBytes: Int
@@ -56,7 +59,7 @@ final class ScrollbackFile: @unchecked Sendable {
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
         queue.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.closed else { return }
             self.pending.append(data)
             self.scheduleFlush()
         }
@@ -76,7 +79,7 @@ final class ScrollbackFile: @unchecked Sendable {
     }
 
     /// Drop all persisted history (used by `respawn(clearHistory: true)` — the user asked to
-    /// start clean).
+    /// start clean). The file may be written to again afterwards.
     func reset() {
         queue.async { [weak self] in
             guard let self else { return }
@@ -87,10 +90,22 @@ final class ScrollbackFile: @unchecked Sendable {
         }
     }
 
+    /// Permanently delete the file and stop accepting writes — the surface is gone. Synchronous so
+    /// the caller (surface teardown) knows no late debounced flush can resurrect the file.
+    func delete() {
+        queue.sync {
+            self.closed = true
+            self.pendingFlush?.cancel()
+            self.pending.removeAll(keepingCapacity: false)
+            try? FileManager.default.removeItem(at: self.url)
+            self.fileBytes = 0
+        }
+    }
+
     // MARK: - queue-confined
 
     private func flushPending() {
-        guard !pending.isEmpty else { return }
+        guard !closed, !pending.isEmpty else { return }
         let chunk = pending
         pending.removeAll(keepingCapacity: true)
         guard appendToDisk(chunk) else { return }

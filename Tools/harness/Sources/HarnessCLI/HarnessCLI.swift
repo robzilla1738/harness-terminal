@@ -737,7 +737,8 @@ struct HarnessCLI {
                     + "[--socket <remote-path>] [--ssh-arg <arg> ...]\n", stderr)
                 return 64
             }
-            guard let socketPath = flagValue(args, flag: "--socket") ?? defaultRemoteSocket(for: ssh) else {
+            guard let socketPath = flagValue(args, flag: "--socket")
+                ?? RemoteHost.defaultRemoteSocketPath(forSSHTarget: ssh) else {
                 fputs("harness-cli remote add: could not infer the remote socket path; pass --socket "
                     + "<remote-path> (see `harness-cli doctor` on the remote for its value).\n", stderr)
                 return 64
@@ -765,15 +766,6 @@ struct HarnessCLI {
         }
     }
 
-    /// Best-effort default remote socket path from `user@host` — the daemon's XDG location on a
-    /// typical Linux box. `ssh -L` doesn't expand `~`, so we build an absolute path from the user.
-    static func defaultRemoteSocket(for sshTarget: String) -> String? {
-        guard sshTarget.contains("@"), let user = sshTarget.split(separator: "@").first.map(String.init) else {
-            return nil
-        }
-        let home = user == "root" ? "/root" : "/home/\(user)"
-        return "\(home)/.local/share/harness/harness.sock"
-    }
 
     /// `record --surface <id> --output <file> [--display]` — record a surface's
     /// output to a JSON Lines file (see `RecordingEvent`); `--display` also mirrors
