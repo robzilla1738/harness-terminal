@@ -1317,7 +1317,7 @@ struct HarnessCLI {
           rename-session --session <uuid> --name "..."
           rename-workspace --id <uuid> --name "..."
           detect-agent --surface <uuid>
-          install-hooks <codex|claude-code|cursor|pi|hermes|openclaw|aider|gemini|goose>
+          install-hooks <codex|claude-code|cursor|grok|opencode|pi|hermes|openclaw>
           install-shell-integration [bash|zsh|fish|all]  (OSC 133 prompt marks + gutter)
           attach --surface <uuid> [--detach-keys "C-a d"]
           record --surface <uuid> --output <file> [--display]

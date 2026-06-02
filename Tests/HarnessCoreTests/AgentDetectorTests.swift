@@ -77,6 +77,18 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertEqual(AgentTitleInference.kind(from: "Gemini-CLI"), .gemini)
         XCTAssertEqual(AgentTitleInference.kind(from: "goose run"), .goose)
         XCTAssertEqual(AgentTitleInference.kind(from: "Hermes"), .hermes)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Grok"), .grok)
+        XCTAssertEqual(AgentTitleInference.kind(from: "✱ Grok"), .grok)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Grok Build"), .grok)
+    }
+
+    /// Grok Build is detected by its binary names (`grok`, `grok-build`, `grok-cli`).
+    func testEntryMatchesGrokExecutables() throws {
+        let entry = try XCTUnwrap(AgentTable.default.entries.first { $0.kind == .grok })
+        XCTAssertTrue(entry.matchesAny(["grok"]))
+        XCTAssertTrue(entry.matchesAny(["grok-build"]))
+        XCTAssertTrue(entry.matchesAny(["grok-cli"]))
+        XCTAssertFalse(entry.matchesAny(["grokking", "node"]))
     }
 
     /// Inference must NOT match partial words inside chatty shell titles —

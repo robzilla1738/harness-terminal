@@ -123,7 +123,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         "12 Bright Blue", "13 Bright Magenta", "14 Bright Cyan", "15 Bright White",
     ]
     private static let agentColorKinds: [AgentKind] = [
-        .codex, .claudeCode, .cursor, .pi, .hermes,
+        .codex, .claudeCode, .cursor, .grok, .pi, .hermes,
         .openClaw, .openCode, .aider, .gemini, .goose,
     ]
 

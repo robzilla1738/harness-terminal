@@ -253,6 +253,7 @@ public struct AgentTable: Codable, Sendable {
         AgentTableEntry(kind: .codex, executables: ["codex", "codex-cli"]),
         AgentTableEntry(kind: .claudeCode, executables: ["claude", "claude-code", "claude-cli"]),
         AgentTableEntry(kind: .cursor, executables: ["cursor-agent", "cursor", "cursor-cli"]),
+        AgentTableEntry(kind: .grok, executables: ["grok", "grok-build", "grok-cli"]),
         AgentTableEntry(kind: .pi, executables: ["pi", "pi-cli"]),
         AgentTableEntry(kind: .hermes, executables: ["hermes"]),
         AgentTableEntry(kind: .openClaw, executables: ["openclaw", "openclaude"]),

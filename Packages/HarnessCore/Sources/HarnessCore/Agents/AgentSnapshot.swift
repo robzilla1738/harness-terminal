@@ -7,6 +7,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     case codex
     case claudeCode = "claude-code"
     case cursor
+    case grok
     case pi
     case hermes
     case openClaw = "openclaw"
@@ -21,6 +22,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .codex: return "Codex"
         case .claudeCode: return "Claude Code"
         case .cursor: return "Cursor Agent"
+        case .grok: return "Grok"
         case .pi: return "Pi"
         case .hermes: return "Hermes"
         case .openClaw: return "OpenClaw"
@@ -38,6 +40,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .codex: return "CX"
         case .claudeCode: return "CC"
         case .cursor: return "CU"
+        case .grok: return "GK"
         case .pi: return "PI"
         case .hermes: return "HM"
         case .openClaw: return "CL"
@@ -55,6 +58,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .codex: return "10a37f"
         case .claudeCode: return "c47b58"
         case .cursor: return "5cc8ff"
+        case .grok: return "1d9bf0"
         case .pi: return "b48cff"
         case .hermes: return "ff7e6b"
         case .openClaw: return "f5a623"

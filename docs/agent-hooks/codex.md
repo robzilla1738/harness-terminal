@@ -17,6 +17,9 @@ Code, deep-merged into any existing hooks):
     "PermissionRequest": [
       { "matcher": "*", "hooks": [{ "type": "command", "command": "PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Codex\" --body \"Awaiting input\"" }] }
     ],
+    "Notification": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Codex\" --body \"Notification\"" }] }
+    ],
     "Stop": [
       { "matcher": "*", "hooks": [{ "type": "command", "command": "PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli notify --surface \"$HARNESS_SURFACE\" --title \"Codex\" --body \"Done\"" }] }
     ]
@@ -24,13 +27,10 @@ Code, deep-merged into any existing hooks):
 }
 ```
 
-…and enables the hooks feature flag in `~/.codex/config.toml` (Codex won't load
-`hooks.json` without it):
-
-```toml
-[features]
-hooks = true
-```
+> **Codex hooks are enabled by default** in current releases — the old
+> `[features] hooks = true` flag only *disables* them, so Harness no longer
+> writes `~/.codex/config.toml`. On a very old Codex that ignores `hooks.json`,
+> upgrade Codex, or add `[features]` / `hooks = true` to `config.toml` yourself.
 
 ## What you'll see
 
