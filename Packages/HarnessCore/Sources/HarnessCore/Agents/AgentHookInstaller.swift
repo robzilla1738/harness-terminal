@@ -141,8 +141,38 @@ public enum AgentHookInstaller {
         }
     }
 
-    // MARK: - Strategy table
+    /// A self-contained instruction a user can paste into ANY coding agent / IDE running on their
+    /// Mac to have it wire up its own Harness hook — the escape hatch for when one-click install
+    /// can't reach a tool, or the user wants the agent to do it. Generated from the live strategy
+    /// table, so every path it cites matches exactly what `install` would write.
+    public static var setupPrompt: String {
+        let rows = installableAgents.map { kind -> String in
+            let rel = strategy(for: kind)?.filename ?? ""
+            return "  • \(kind.displayName): `harness-cli install-hooks \(kind.rawValue)`  (config: ~/\(rel))"
+        }.joined(separator: "\n")
 
+        return """
+        Set up Harness terminal notifications for the coding agent you are running inside (macOS). \
+        Goal: when you finish a turn or need my input, call Harness so it surfaces you in its \
+        menu-bar notch.
+
+        Preferred — Harness ships a CLI at "$HOME/Library/Application Support/Harness/bin/harness-cli". \
+        If it exists, run its installer for whichever tool you are (it writes the correct hook \
+        config for that tool and backs up any existing file first):
+
+        \(rows)
+
+        If that CLI is NOT installed, create the hook config yourself at the path listed above for \
+        your tool, and have it run this exact command (this is what notifies Harness):
+
+          PATH="$HOME/Library/Application Support/Harness/bin:$PATH" harness-cli notify --surface "$HARNESS_SURFACE" --title "<your tool name>" --body "Done"
+
+        $HARNESS_SURFACE is exported by Harness for every pane, so the notification reaches the right \
+        tab. Always back up a file before editing it, then tell me which file you changed.
+        """
+    }
+
+    // MARK: - Strategy table
     /// Each installable agent's real hook mechanism. Returns nil for agents Harness only detects
     /// (aider/gemini/goose) and `.generic`.
     static func strategy(for agent: AgentKind) -> AgentHookStrategy? {

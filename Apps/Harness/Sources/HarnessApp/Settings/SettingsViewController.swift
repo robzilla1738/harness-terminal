@@ -876,11 +876,23 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         let reset = makeRoundedButton("Reset Agent Colors", action: #selector(resetAgentColors))
 
+        let promptCaption = settingsCaption("Trouble with one-click install (or a tool Harness doesn't manage)? Copy this prompt and paste it into any coding agent/IDE running on this Mac — it will wire up its own Harness hook.")
+        let promptPreview = NSTextField(wrappingLabelWithString: AgentHookInstaller.setupPrompt)
+        promptPreview.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        promptPreview.textColor = .secondaryLabelColor
+        promptPreview.isSelectable = true
+        let copyPrompt = makeRoundedButton("Copy Setup Prompt", action: #selector(copySetupPrompt))
+        let promptBox = NSStackView(views: [promptCaption, promptPreview, leadingRow(copyPrompt)])
+        promptBox.orientation = .vertical
+        promptBox.alignment = .leading
+        promptBox.spacing = 12
+
         let stack = NSStackView(views: [
             header,
             notificationsGroup,
             notchGroup,
             settingsGroup("Detection & hooks", [detectionBox]),
+            settingsGroup("Set up via your IDE", [promptBox]),
             settingsGroup("Agents", Self.agentColorKinds.map(agentRow) + [leadingRow(reset)]),
         ])
         stack.orientation = .vertical
@@ -1004,6 +1016,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             self.notificationStatusField.stringValue = text
             self.notificationPermissionButton.isHidden = !needsAllow
         }
+    }
+
+    @objc private func copySetupPrompt() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(AgentHookInstaller.setupPrompt, forType: .string)
+        Toast.show("Setup prompt copied — paste it into your IDE/agent", in: view)
     }
 
     @objc private func installHooksClicked(_ sender: NSButton) {

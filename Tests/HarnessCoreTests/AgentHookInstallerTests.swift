@@ -428,6 +428,21 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertTrue(text.contains("gateway"))
     }
 
+    func testSetupPromptCoversEveryInstallableAgentAndItsRealPath() {
+        let prompt = AgentHookInstaller.setupPrompt
+        XCTAssertTrue(prompt.contains("harness-cli notify"))
+        XCTAssertTrue(prompt.contains("$HARNESS_SURFACE"))
+        XCTAssertTrue(prompt.contains("install-hooks"))
+        for kind in AgentHookInstaller.installableAgents {
+            XCTAssertTrue(prompt.contains("install-hooks \(kind.rawValue)"),
+                          "prompt should tell the IDE how to install \(kind.rawValue)")
+            if let url = AgentHookInstaller.hookConfigURL(for: kind) {
+                XCTAssertTrue(prompt.contains(url.lastPathComponent),
+                              "prompt should cite \(kind.rawValue)'s config file \(url.lastPathComponent)")
+            }
+        }
+    }
+
     func testGrokIsInstallableAndDetectable() {
         XCTAssertTrue(AgentHookInstaller.canInstall(.grok))
         XCTAssertTrue(AgentHookInstaller.installableAgents.contains(.grok))

@@ -30,6 +30,14 @@ Installed hook commands prepend Harness's app-support `bin` directory to
 `PATH`, so notifications still work when an agent subprocess does not load your
 interactive shell profile.
 
+## Set up via your IDE (copy/paste prompt)
+
+If one-click install can't reach a tool, open **Settings ▸ Agents ▸ Set up via your
+IDE** and click **Copy Setup Prompt**, then paste it into any coding agent/IDE
+running on the Mac (Claude Code, Cursor, Codex, …). The prompt instructs the agent
+to run `harness-cli install-hooks <tool>` (or write the hook config by hand if the
+CLI isn't installed) so it wires up its own Harness notifications.
+
 ## CLI notification
 
 ```bash
