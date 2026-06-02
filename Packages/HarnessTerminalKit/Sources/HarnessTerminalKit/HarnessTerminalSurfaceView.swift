@@ -1670,7 +1670,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         case 0x0D, 0x03: return .enter        // return, enter
         case 0x7F: return .backspace          // delete (backspace) key
         case 0x1B: return .escape
-        case 0x09: return .tab
+        case 0x09, 0x19: return .tab  // 0x19 = NSBackTabCharacter (Shift-Tab); encoder emits ESC[Z
         default: return nil
         }
     }
@@ -1814,7 +1814,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         if chars.count == 1, let scalar = chars.unicodeScalars.first {
             switch scalar.value {
             case 0x1B: key = "Escape"
-            case 0x09: key = "Tab"
+            case 0x09, 0x19: key = "Tab"  // 0x19 = NSBackTabCharacter (Shift-Tab)
             case 0x0D, 0x03: key = "Enter"
             case 0x7F: key = "Backspace"
             case 0x20: key = "Space"
