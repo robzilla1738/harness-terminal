@@ -1,3 +1,4 @@
+#if canImport(Darwin)
 import Darwin
 import Dispatch
 import Foundation
@@ -212,3 +213,4 @@ final class PtyDrainCeilingBenchmark: XCTestCase {
         XCTAssertGreaterThan(counter.bytes, target / 2, "should have drained most of the flood")
     }
 }
+#endif

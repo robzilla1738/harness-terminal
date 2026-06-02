@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import XCTest
 @testable import HarnessCore
 
@@ -21,25 +25,26 @@ final class DaemonClientTests: XCTestCase {
         }
 
         try HarnessPaths.ensureDirectories()
-        let serverFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        let serverFD = makeUnixStreamSocket()
         XCTAssertGreaterThanOrEqual(serverFD, 0)
-        defer { close(serverFD) }
+        defer { sysClose(serverFD) }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
+        let sunPathCapacity = MemoryLayout.size(ofValue: addr.sun_path)
         HarnessPaths.socketURL.path.withCString { cstr in
             withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
                 let dest = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
-                strncpy(dest, cstr, 104)
+                strncpy(dest, cstr, sunPathCapacity - 1)
             }
         }
         let bindResult = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(serverFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                posixBind(serverFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         XCTAssertEqual(bindResult, 0)
-        XCTAssertEqual(Darwin.listen(serverFD, 1), 0)
+        XCTAssertEqual(posixListen(serverFD, 1), 0)
 
         let accepted = expectation(description: "accepted client")
         DispatchQueue.global().async {
@@ -47,7 +52,7 @@ final class DaemonClientTests: XCTestCase {
             if clientFD >= 0 {
                 accepted.fulfill()
                 usleep(300_000)
-                close(clientFD)
+                sysClose(clientFD)
             }
         }
 
@@ -66,11 +71,11 @@ final class DaemonClientTests: XCTestCase {
     /// promptly and wake the read loop instead.
     func testSubscriptionCancelDoesNotDeadlockWhileReadLoopBlocked() throws {
         var fds: [Int32] = [0, 0]
-        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0, "socketpair failed")
+        XCTAssertEqual(makeUnixSocketPair(&fds), 0, "socketpair failed")
         let localEnd = fds[0]
         let peerEnd = fds[1]
         // peerEnd stays open and silent, so read(localEnd) blocks exactly like an idle daemon.
-        defer { close(peerEnd) }
+        defer { sysClose(peerEnd) }
 
         let readLoopEnded = expectation(description: "read loop exited")
         let subscription = DaemonSubscription(fd: localEnd)
@@ -95,7 +100,7 @@ final class DaemonClientTests: XCTestCase {
     /// `writeLock`, so `writeFrame` bails instead of writing into a stale descriptor.
     func testSendInputAfterReadLoopCloseBails() throws {
         var fds: [Int32] = [0, 0]
-        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0, "socketpair failed")
+        XCTAssertEqual(makeUnixSocketPair(&fds), 0, "socketpair failed")
         let localEnd = fds[0]
         let peerEnd = fds[1]
 
@@ -105,7 +110,7 @@ final class DaemonClientTests: XCTestCase {
 
         // Closing the peer makes read(localEnd) return EOF → the loop sets `finished` and closes
         // localEnd (under writeLock) → onEnd fires.
-        close(peerEnd)
+        sysClose(peerEnd)
         wait(for: [ended], timeout: 2)
 
         // The fd is now closed; these writes must bail on `finished`, never touch the descriptor.
@@ -117,13 +122,13 @@ final class DaemonClientTests: XCTestCase {
     /// A background reader drains the peer so the blocking writes never wedge.
     func testConcurrentSendInputDuringCancelIsSafe() throws {
         var fds: [Int32] = [0, 0]
-        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0, "socketpair failed")
+        XCTAssertEqual(makeUnixSocketPair(&fds), 0, "socketpair failed")
         let localEnd = fds[0]
         let peerEnd = fds[1]
         DispatchQueue(label: "drain").async {
             var buf = [UInt8](repeating: 0, count: 4096)
-            while read(peerEnd, &buf, buf.count) > 0 {}
-            close(peerEnd) // peer hits EOF once localEnd closes; own its close here
+            while sysRead(peerEnd, &buf, buf.count) > 0 {}
+            sysClose(peerEnd) // peer hits EOF once localEnd closes; own its close here
         }
 
         let ended = expectation(description: "read loop ended")
@@ -141,4 +146,28 @@ final class DaemonClientTests: XCTestCase {
         subscription.cancel()
         wait(for: [writersDone, ended], timeout: 5)
     }
+}
+
+private func posixBind(_ fd: Int32, _ addr: UnsafePointer<sockaddr>?, _ len: socklen_t) -> Int32 {
+    #if canImport(Darwin)
+    Darwin.bind(fd, addr, len)
+    #else
+    Glibc.bind(fd, addr, len)
+    #endif
+}
+
+private func posixListen(_ fd: Int32, _ backlog: Int32) -> Int32 {
+    #if canImport(Darwin)
+    Darwin.listen(fd, backlog)
+    #else
+    Glibc.listen(fd, backlog)
+    #endif
+}
+
+private func makeUnixSocketPair(_ fds: inout [Int32]) -> Int32 {
+    #if canImport(Darwin)
+    socketpair(AF_UNIX, SOCK_STREAM, 0, &fds)
+    #else
+    socketpair(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0, &fds)
+    #endif
 }
