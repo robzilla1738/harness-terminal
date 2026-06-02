@@ -101,6 +101,20 @@ final class AsciiFastPathTests: XCTestCase {
         }
     }
 
+    /// The SIMD16 run scanner processes 16-byte chunks then a scalar tail. Place a run-stopping
+    /// byte (a control, ESC, DEL, and a high UTF-8 lead) at every offset across two SIMD strides so
+    /// the boundary is exercised inside a chunk, exactly on a chunk edge, and in the tail — each must
+    /// match the per-byte scalar path.
+    func testSIMDRunBoundaryAtEveryOffset() {
+        for stop in ["\n", "\u{1b}[m", "\u{7f}", "é"] {
+            for offset in 0 ..< 40 {
+                let input = String(repeating: "x", count: offset) + stop
+                    + String(repeating: "y", count: 40 - offset)
+                assertRunMatchesScalar(input, cols: 24, rows: 6, line: UInt(offset))
+            }
+        }
+    }
+
     func testDECSpecialGraphicsRunStillDrawsLines() {
         // `ESC ( 0` selects line drawing; lqqk should map to box glyphs even via the run path.
         let run = TerminalEmulator(cols: 20, rows: 3)

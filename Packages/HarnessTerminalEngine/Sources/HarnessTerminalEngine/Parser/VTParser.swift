@@ -205,8 +205,7 @@ final class VTParser {
         var i = 0
         while i < n {
             if state == .ground, utf8Remaining == 0, buf[i] >= 0x20, buf[i] < 0x7F {
-                var j = i + 1
-                while j < n, buf[j] >= 0x20, buf[j] < 0x7F { j += 1 }
+                let j = printableASCIIRunEnd(buf, from: i + 1, end: n)
                 handler.parserPrintRun(UnsafeBufferPointer(rebasing: buf[i ..< j]))
                 i = j
             } else {
@@ -214,6 +213,32 @@ final class VTParser {
                 i += 1
             }
         }
+    }
+
+    /// Index of the first byte at or after `start` (bounded by `end`) that is **not** printable
+    /// ASCII (`0x20...0x7E`) — i.e. the end of a printable-ASCII run. Byte-for-byte equivalent to
+    /// the scalar scan `while j < end, buf[j] >= 0x20, buf[j] < 0x7F { j += 1 }`, but vectorized:
+    /// a byte stops the run iff `(b &- 0x20) >= 0x5F` unsigned (which is exactly `b < 0x20 ||
+    /// b >= 0x7F` — DEL `0x7F` and every high/control byte stop, `0x20...0x7E` continue). Full
+    /// 16-wide `SIMD16<UInt8>` chunks are tested at once (`any` to skip clean chunks, first set
+    /// lane for the boundary); the trailing `< 16` bytes use the scalar predicate. The 16-wide
+    /// loads are gated by `j + 16 <= end`, so it never reads past the buffer.
+    @inline(__always)
+    private func printableASCIIRunEnd(_ buf: UnsafeBufferPointer<UInt8>, from start: Int, end: Int) -> Int {
+        guard let base = buf.baseAddress else { return start }
+        var j = start
+        let bias = SIMD16<UInt8>(repeating: 0x20)
+        let threshold = SIMD16<UInt8>(repeating: 0x5F)
+        while j + 16 <= end {
+            let v = UnsafeRawPointer(base + j).loadUnaligned(as: SIMD16<UInt8>.self)
+            let stop = (v &- bias) .>= threshold
+            if any(stop) {
+                for lane in 0 ..< 16 where stop[lane] { return j + lane }
+            }
+            j += 16
+        }
+        while j < end, buf[j] >= 0x20, buf[j] < 0x7F { j += 1 }
+        return j
     }
 
     private func feed(_ byte: UInt8) {
