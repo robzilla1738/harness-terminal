@@ -1589,6 +1589,16 @@ public final class HarnessTerminalSurfaceView: NSView {
             }
         }
         wakeCursor()
+        // While an IME composition (preedit) is active, the input method owns every key:
+        // Backspace edits the preedit, arrows/Space/Tab move or pick candidates, Return
+        // commits, Escape cancels. Route the whole event through the input context — updated
+        // or committed text comes back via setMarkedText / insertText — rather than letting
+        // the special-key path below send Backspace, Return, etc. straight to the PTY (which
+        // is why the composition couldn't be edited mid-typing).
+        if hasMarkedText() {
+            interpretKeyEvents([event])
+            return
+        }
         // Shift+PageUp/PageDown page through scrollback instead of going to the app.
         if event.modifierFlags.contains(.shift), let sk = Self.specialKey(for: event),
            sk == .pageUp || sk == .pageDown {
