@@ -21,12 +21,12 @@ Run **5×** per terminal and compare **medians** (`mbps` per `benchmark`). Each 
 
 | Workload | What it stresses | Harness hot path |
 | --- | --- | --- |
-| `plain_ascii_16mib` | printable-ASCII throughput | run fast path (`printASCIIRun`) |
-| `ansi_sgr_16mib` | SGR-punctuated text | CSI param parse (allocation-free) |
+| `plain_ascii_16mib` | printable-ASCII throughput | SIMD16 run scan → `printASCIIRun` |
+| `ansi_sgr_16mib` | SGR-punctuated text | CSI param parse (allocation-free) + run fast path |
 | `attributes_8mib` | text-style storm | CSI param parse + cell attrs |
-| `unicode_mixed_8mib` | mixed-width Unicode | `CharacterWidth` O(1) table |
+| `unicode_mixed_8mib` | mixed-width Unicode | bulk UTF-8 decode → `printCodepointRun`, `CharacterWidth` O(1) table |
 | `truecolor_gradient_1200_frames` | truecolor + home-cursor redraw | frame coalescing |
-| `redraw_160x48_600_frames` | full-screen redraw | cell write + scroll |
+| `redraw_160x48_600_frames` | full-screen redraw | cell write + block-move scroll |
 | `scrollback_100k_lines` | scroll + history eviction | block-move scroll + ring |
 
 ## What it measures — and what it does NOT
@@ -53,5 +53,15 @@ same seven payloads through the real consumer pipeline — parse → `readGrid` 
 `FrameBuilder.build` — deterministically, with no daemon, contention, or window-focus confound, and
 reports `consumer_<workload>` MB/s. Higher = the terminal turns bytes into a renderable frame
 faster. That number tracks the parse/width/cell/scroll work directly; the drain table above does not.
+
+`testConsumerScoreboard` reports `feedNanos` (parse) and `frameBuildNanos` (build) separately — the
+parse half is the gate for engine work (frame build is ~0.1 ms vs ~90–140 ms of parse on a 1 MiB
+payload). To confirm an engine win survives the real daemon path, `testIPCInclusiveScoreboard` runs the
+same payloads chunked at 64 KiB / 4 KiB through the real binary output frame (`IPCCodec.encodeOutputFrame`
+→ `decodeReplyOrData`) before the engine; comparing `ipc_consumer_<workload>` to `consumer_<workload>`
+shows the framing/chunking tax (in practice: negligible — within noise, and chunk size doesn't move it).
+
+The bulk-UTF-8 codepoint fast path can be disabled at runtime with `HARNESS_DISABLE_BULK_UTF8=1`
+(falls back to the per-byte scalar decode), e.g. to A/B its effect on `unicode_mixed`.
 
 Save raw cross-terminal runs under `.benchmark-results/<date>-<desc>/` (git-ignored) with a summary.
