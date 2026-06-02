@@ -46,6 +46,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var defaultCWD: String
     public var transparentTitlebar: Bool
     public var sidebarVisible: Bool
+    /// Restore the main window's size + position across launches. When false (default),
+    /// the window opens at its built-in default size, centered. Window-level only — the
+    /// frame is persisted via `NSWindow.setFrameAutosaveName`.
+    public var restoreWindowSize: Bool
     public var backgroundOpacity: Float
     public var backgroundBlur: Int
     public var windowPaddingX: Float
@@ -193,6 +197,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
         transparentTitlebar: Bool = true,
         sidebarVisible: Bool = true,
+        restoreWindowSize: Bool = false,
         backgroundOpacity: Float = 0.63,
         backgroundBlur: Int = 16,
         windowPaddingX: Float = 14,
@@ -243,6 +248,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.defaultCWD = defaultCWD
         self.transparentTitlebar = transparentTitlebar
         self.sidebarVisible = sidebarVisible
+        self.restoreWindowSize = restoreWindowSize
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
         self.windowPaddingX = windowPaddingX
@@ -354,6 +360,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD = try container.decodeIfPresent(String.self, forKey: .defaultCWD) ?? fallback.defaultCWD
         transparentTitlebar = try container.decodeIfPresent(Bool.self, forKey: .transparentTitlebar) ?? fallback.transparentTitlebar
         sidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .sidebarVisible) ?? fallback.sidebarVisible
+        restoreWindowSize = try container.decodeIfPresent(Bool.self, forKey: .restoreWindowSize) ?? fallback.restoreWindowSize
         backgroundOpacity = try container.decodeIfPresent(Float.self, forKey: .backgroundOpacity) ?? fallback.backgroundOpacity
         backgroundBlur = try container.decodeIfPresent(Int.self, forKey: .backgroundBlur) ?? fallback.backgroundBlur
         windowPaddingX = try container.decodeIfPresent(Float.self, forKey: .windowPaddingX) ?? fallback.windowPaddingX

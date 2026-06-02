@@ -28,7 +28,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let transparentTitlebarToggle = HarnessToggle(title: "Transparent title bar")
     private let showStatusLineToggle = HarnessToggle(title: "Show status line (bottom bar)")
     private let sidebarVisibleToggle = HarnessToggle(title: "Show sidebar")
+    private let restoreWindowSizeToggle = HarnessToggle(title: "Remember window size")
     private let experienceSegment = HarnessSegmented(frame: .zero)
+    private let tmuxControlsSegment = HarnessSegmented(frame: .zero)
+    private let textRenderingSegment = HarnessSegmented(frame: .zero)
+    private let offMainPipelineToggle = HarnessToggle(title: "Off-main render pipeline")
     private let experienceSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let cursorStyleSegment = HarnessSegmented(frame: .zero)
     private let cursorBlinkToggle = HarnessToggle(title: "Blinking cursor")
@@ -37,7 +41,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let defaultTerminalButton = NSButton(title: "Set Harness as default terminal", target: nil, action: nil)
     private let defaultTerminalStatusField = NSTextField(wrappingLabelWithString: "")
     private let vividColorsToggle = HarnessToggle(title: "Vivid color rendering (Display P3 opt-in)")
-    private let linearBlendingToggle = HarnessToggle(title: "Crisp text rendering")
     private let themeTerminalOutputToggle = HarnessToggle(title: "Apply theme colors to terminal output — off = canvas matches theme, output untouched")
     private let ligaturesToggle = HarnessToggle(title: "Programming ligatures (=>, !=, ->) for fonts that have them")
     private let promptGutterToggle = HarnessToggle(title: "Prompt gutter — green/red stripe marking command success (needs shell integration)")
@@ -61,10 +64,16 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let notificationTestButton = NSButton(title: "Send Test Notification", target: nil, action: nil)
     private let notificationPermissionButton = NSButton(title: "Open System Settings…", target: nil, action: nil)
     private let notificationStatusField = NSTextField(labelWithString: "")
-    private let livePreview = LiveTerminalPreview()
     private let pageContainer = NSView()
     private var pages: [Int: NSView] = [:]
     private var currentPage: Int = 0
+    /// Group-card surfaces + hairline dividers, tracked so a live theme change can
+    /// re-skin them (they're created inline by the `settingsGroup`/`groupDivider`
+    /// factories rather than stored individually).
+    private var groupSurfaces: [NSView] = []
+    private var groupDividers: [NSView] = []
+    /// Text-link buttons (accent baked into the attributed title) re-tinted on theme change.
+    private var linkButtons: [NSButton] = []
     private var paletteWells: [HarnessSwatchWell] = []
     private var paletteHexValues: [String?] = Array(repeating: nil, count: 16)
     private var agentColorWells: [AgentKind: HarnessSwatchWell] = [:]
@@ -127,7 +136,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         configureControls()
         layoutShell()
         showPage(0)
-        refreshLivePreview()
+        observeChromeChanges()
     }
 
     // MARK: - Control configuration (initial state from settings)
@@ -293,9 +302,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         vividColorsToggle.state = settings.colorRendering == .vivid ? .on : .off
         vividColorsToggle.target = self
         vividColorsToggle.action = #selector(appearanceTextDidCommit)
-        linearBlendingToggle.state = settings.textRendering == .crisp ? .on : .off
-        linearBlendingToggle.target = self
-        linearBlendingToggle.action = #selector(appearanceTextDidCommit)
+        textRenderingSegment.setSegments(["Native", "Crisp", "Soft"])
+        textRenderingSegment.selectItem(withTitle: textRenderingTitle(settings.textRendering))
+        textRenderingSegment.target = self
+        textRenderingSegment.action = #selector(appearanceTextDidCommit)
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         themeTerminalOutputToggle.target = self
         themeTerminalOutputToggle.action = #selector(appearanceTextDidCommit)
@@ -318,6 +328,21 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         sidebarVisibleToggle.target = self
         sidebarVisibleToggle.action = #selector(sidebarVisibilityChanged)
 
+        restoreWindowSizeToggle.state = settings.restoreWindowSize ? .on : .off
+        restoreWindowSizeToggle.target = self
+        restoreWindowSizeToggle.action = #selector(appearanceTextDidCommit)
+
+        // Optional tmux controls (prefix key + status line) without switching experience
+        // mode: Auto follows the mode, On/Off force the chrome on/off via `tmuxControlsEnabled`.
+        tmuxControlsSegment.setSegments(["Auto", "On", "Off"])
+        tmuxControlsSegment.selectItem(withTitle: tmuxControlsTitle(settings.tmuxControlsEnabled))
+        tmuxControlsSegment.target = self
+        tmuxControlsSegment.action = #selector(tmuxControlsChanged)
+
+        offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
+        offMainPipelineToggle.target = self
+        offMainPipelineToggle.action = #selector(appearanceTextDidCommit)
+
         useThemeColorsButton.title = "Use Theme Colors"
         useThemeColorsButton.target = self
         useThemeColorsButton.action = #selector(useThemeColors)
@@ -329,7 +354,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             SessionCoordinator.shared.settings.prefixKey = value
             try? SessionCoordinator.shared.settings.save()
             PrefixKeymap.shared.rebuildFromSettings()
-            self?.refreshLivePreview()
+            _ = self
         }
 
         updateFontReadout()
@@ -339,7 +364,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     private func layoutShell() {
         view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        view.layer?.backgroundColor = HarnessChrome.current.terminalBackground.cgColor
 
         let sidebar = buildSidebar()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
@@ -383,35 +408,108 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         currentPage = index
     }
 
+    // MARK: - Live theme re-skin
+
+    /// Settings paints with `HarnessChrome.current`, so when the user switches theme (or
+    /// edits bg/fg/cursor) from inside this window, observe the same chrome broadcast the
+    /// main window uses and recolor every control + surface in step. Without this the
+    /// Settings window would keep the palette it opened with.
+    private func observeChromeChanges() {
+        lastChromeSignature = chromeSignature()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(chromeDidChange(_:)),
+            name: NotificationBus.shared.snapshotChanged,
+            object: nil
+        )
+    }
+
+    @objc private func chromeDidChange(_ note: Notification) {
+        guard note.userInfo?["chromeChanged"] as? Bool == true else { return }
+        // `flushAndApply` posts `chromeChanged` on every control action (including
+        // continuous opacity/blur drags), but the palette only actually changes on a
+        // theme or bg/fg/cursor edit. Skip the re-skin walk when the colors are identical
+        // so dragging a slider doesn't churn every control on each tick.
+        let signature = chromeSignature()
+        guard signature != lastChromeSignature else { return }
+        lastChromeSignature = signature
+        let c = HarnessChrome.current
+        view.layer?.backgroundColor = c.terminalBackground.cgColor
+        sidebarTitleLabel.textColor = c.textPrimary
+        // System-colored text labels track the window's light/dark appearance; updating it
+        // re-renders them for free, so only surfaces + custom controls need explicit recolor.
+        view.window?.appearance = NSAppearance(named: c.isDark ? .darkAqua : .aqua)
+        for surface in groupSurfaces {
+            surface.layer?.backgroundColor = c.surfaceElevated.cgColor
+            surface.layer?.borderColor = c.border.cgColor
+        }
+        for divider in groupDividers { divider.layer?.backgroundColor = c.border.cgColor }
+        // Re-skin every themed control. Cached pages are walked directly since only the
+        // visible page is in the view tree.
+        reskinControls(in: view)
+        for page in pages.values { reskinControls(in: page) }
+        // Re-tint links (their accent color is baked into the attributed title).
+        for link in linkButtons { styleAsLink(link) }
+    }
+
+    private var lastChromeSignature: String?
+
+    /// A cheap fingerprint of the palette colors that drive the control re-skin. Opacity /
+    /// blur changes don't alter these, so they won't trigger a needless walk.
+    private func chromeSignature() -> String {
+        let c = HarnessChrome.current
+        return [c.terminalBackground, c.textPrimary, c.accent]
+            .map(hexString)
+            .joined(separator: "|") + (c.isDark ? "·D" : "·L")
+    }
+
+    /// Recursively re-apply `applyChrome()` to every themed control under `root`.
+    private func reskinControls(in root: NSView) {
+        for sub in root.subviews {
+            switch sub {
+            case let v as HarnessTextField: v.applyChrome()
+            case let v as HarnessSearchField: v.applyChrome()
+            case let v as HarnessToggle: v.applyChrome()
+            case let v as HarnessSlider: v.applyChrome()
+            case let v as HarnessSwatchWell: v.applyChrome()
+            case let v as HarnessSegmented: v.applyChrome()
+            case let v as HarnessSelect: v.applyChrome()
+            case let v as SettingsSidebarButton: v.applyChrome()
+            default: break
+            }
+            reskinControls(in: sub)
+        }
+    }
+
     // MARK: - Sidebar
 
     private var sidebarButtons: [SettingsSidebarButton] = []
-    private let settingsSearch = NSSearchField()
+    private let settingsSearch = HarnessSearchField()
+    private let sidebarTitleLabel = NSTextField(labelWithString: "Settings")
     private static let sectionKeywords: [Int: [String]] = [
-        0: ["appearance", "theme", "opacity", "blur", "padding", "window", "transparent", "titlebar", "sidebar"],
-        1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status"],
-        2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session"],
+        0: ["appearance", "theme", "opacity", "blur", "padding", "window", "transparent", "titlebar", "sidebar", "restore", "remember", "size"],
+        1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status", "soft", "native", "crisp", "rendering", "gamma"],
+        2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session", "tmux", "controls", "experience"],
         3: ["keys", "prefix", "binding", "keybinding", "shortcut"],
         4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "detection"],
-        5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option"],
+        5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render"],
     ]
 
     private func buildSidebar() -> NSView {
-        let container = NSVisualEffectView()
-        container.material = .sidebar
-        container.blendingMode = .behindWindow
-        container.state = .active
+        // A plain layer-backed view carrying the same themed sidebar chrome (vibrancy +
+        // tint) the main window's sidebar uses — never the system `.sidebar` material,
+        // which adds a blue cast that breaks the deep-black look.
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        HarnessDesign.applySidebarChrome(to: container)
 
-        let title = NSTextField(labelWithString: "Settings")
+        let title = sidebarTitleLabel
         title.font = .systemFont(ofSize: 20, weight: .semibold)
-        title.textColor = .labelColor
+        title.textColor = HarnessChrome.current.textPrimary
         title.translatesAutoresizingMaskIntoConstraints = false
 
         settingsSearch.placeholderString = "Search"
-        settingsSearch.sendsSearchStringImmediately = true
-        settingsSearch.sendsWholeSearchString = false
-        settingsSearch.target = self
-        settingsSearch.action = #selector(settingsSearchChanged(_:))
+        settingsSearch.onChange = { [weak self] query in self?.filterSections(query) }
         settingsSearch.translatesAutoresizingMaskIntoConstraints = false
 
         let buttons = NSStackView()
@@ -470,9 +568,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
-    @objc private func settingsSearchChanged(_ sender: NSSearchField) {
-        filterSections(sender.stringValue)
-    }
 
     @objc private func sidebarItemClicked(_ sender: SettingsSidebarButton) {
         showPage(sender.tag)
@@ -482,7 +577,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     private func buildAppearancePage() -> NSView {
         let header = pageHeader(title: "Appearance", trailing: nil)
-        livePreview.translatesAutoresizingMaskIntoConstraints = false
 
         useThemeColorsButton.title = "Use theme colors"
         styleAsLink(useThemeColorsButton)
@@ -536,11 +630,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsToggleRow("Transparent title bar", transparentTitlebarToggle),
             settingsToggleRow("Status line", showStatusLineToggle),
             settingsToggleRow("Sidebar", sidebarVisibleToggle),
+            settingsToggleRow("Remember window size", restoreWindowSizeToggle,
+                              hint: "Reopen at the last size and position."),
         ])
 
         let stack = NSStackView(views: [
             header,
-            livePreview,
             themeGroup,
             windowGroup,
         ])
@@ -574,7 +669,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         let renderingGroup = settingsGroup("Color rendering", [
             settingsToggleRow("Wide gamut", vividColorsToggle, hint: "Opt-in Display P3 conversion."),
-            settingsToggleRow("Crisp text", linearBlendingToggle),
+            settingsRow("Text rendering", textRenderingSegment,
+                        hint: "Glyph weight: Native, Crisp (lighter), or Soft (heavier)."),
             settingsToggleRow("Theme program output", themeTerminalOutputToggle),
             settingsToggleRow("Ligatures", ligaturesToggle),
             settingsToggleRow("Prompt gutter", promptGutterToggle),
@@ -615,13 +711,15 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func styleAsLink(_ button: NSButton) {
         button.bezelStyle = .accessoryBarAction
         button.isBordered = false
-        let link = NSColor.controlAccentColor
+        // The theme accent (derived from the cursor color) — never the macOS system blue.
+        let link = HarnessChrome.current.accent
         let attr = NSAttributedString(string: button.title, attributes: [
             .foregroundColor: link,
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
         ])
         button.attributedTitle = attr
         button.contentTintColor = link
+        if !linkButtons.contains(where: { $0 === button }) { linkButtons.append(button) }
     }
 
     // MARK: - Page: Terminal
@@ -672,7 +770,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         experienceContent.alignment = .leading
         experienceContent.spacing = 8
         experienceSegment.widthAnchor.constraint(equalTo: experienceContent.widthAnchor).isActive = true
-        let experienceGroup = settingsGroup("Experience", [experienceContent])
+        let experienceGroup = settingsGroup("Experience", [
+            experienceContent,
+            settingsRow("Tmux controls", tmuxControlsSegment,
+                        hint: "Prefix key + status line. Auto follows the mode above."),
+        ])
 
         let stack = NSStackView(views: [
             header,
@@ -973,10 +1075,16 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Border format", advField("pane-border-format", width: 260)),
         ])
 
+        let performanceGroup = settingsGroup("Performance", [
+            settingsToggleRow("Off-main render pipeline", offMainPipelineToggle,
+                              hint: "Parse + build frames off the main thread. On is recommended."),
+        ])
+
         let intro = settingsCaption("Power-user options shared with the harness-cli set-option command surface. Changes apply globally and persist immediately.")
         let stack = NSStackView(views: [
             header,
             intro,
+            performanceGroup,
             statusGroup,
             inputGroup,
             indexGroup,
@@ -1175,12 +1283,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         let surface = NSView()
         surface.wantsLayer = true
-        surface.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        surface.layer?.cornerRadius = 9
+        surface.layer?.backgroundColor = HarnessChrome.current.surfaceElevated.cgColor
+        surface.layer?.cornerRadius = HarnessDesign.Radius.card
         surface.layer?.cornerCurve = .continuous
-        surface.layer?.borderWidth = 0.5
-        surface.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
+        surface.layer?.borderWidth = 1
+        surface.layer?.borderColor = HarnessChrome.current.border.cgColor
         surface.translatesAutoresizingMaskIntoConstraints = false
+        groupSurfaces.append(surface)
 
         let rowStack = NSStackView()
         rowStack.orientation = .vertical
@@ -1225,8 +1334,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         wrap.translatesAutoresizingMaskIntoConstraints = false
         let line = NSView()
         line.wantsLayer = true
-        line.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+        line.layer?.backgroundColor = HarnessChrome.current.border.cgColor
         line.translatesAutoresizingMaskIntoConstraints = false
+        groupDividers.append(line)
         wrap.addSubview(line)
         NSLayoutConstraint.activate([
             wrap.heightAnchor.constraint(equalToConstant: 1),
@@ -1442,6 +1552,40 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
+    private func textRenderingTitle(_ value: TerminalTextRenderingMode) -> String {
+        switch value {
+        case .crisp: return "Crisp"
+        case .soft: return "Soft"
+        case .native: return "Native"
+        }
+    }
+
+    private func textRenderingValue(_ title: String?) -> TerminalTextRenderingMode {
+        switch title {
+        case "Crisp": return .crisp
+        case "Soft": return .soft
+        default: return .native
+        }
+    }
+
+    /// Tri-state mapping for the optional tmux-controls override: Auto = `nil`
+    /// (follow the experience mode), On/Off force `true`/`false`.
+    private func tmuxControlsTitle(_ value: Bool?) -> String {
+        switch value {
+        case .some(true): return "On"
+        case .some(false): return "Off"
+        case .none: return "Auto"
+        }
+    }
+
+    private var selectedTmuxControls: Bool? {
+        switch tmuxControlsSegment.titleOfSelectedItem {
+        case "On": return true
+        case "Off": return false
+        default: return nil
+        }
+    }
+
     private func updateFontReadout() {
         let s = SessionCoordinator.shared.settings
         fontReadout.stringValue = "\(s.fontFamily) · \(Int(s.fontSize.rounded()))pt"
@@ -1467,7 +1611,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         SessionCoordinator.shared.setTheme(theme)
         syncAppearanceControlsFromSettings()
         refreshColorPlaceholders()
-        refreshLivePreview()
     }
 
     /// Re-seed all colors from the currently selected theme, discarding manual
@@ -1476,7 +1619,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         SessionCoordinator.shared.setTheme(SessionCoordinator.shared.snapshot.themeName)
         syncAppearanceControlsFromSettings()
         refreshColorPlaceholders()
-        refreshLivePreview()
     }
 
     @objc private func toggleKeepSessions() {
@@ -1561,6 +1703,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         keepSessionsToggle.state = keep ? .on : .off
     }
 
+    /// The optional tmux-controls override re-gates the prefix key + status line without
+    /// changing the experience mode. Mirrors the chrome-refresh path of `experienceModeChanged`.
+    @objc private func tmuxControlsChanged() {
+        SessionCoordinator.shared.settings.tmuxControlsEnabled = selectedTmuxControls
+        flushAndApply()
+        PrefixKeymap.shared.rebuildFromSettings()
+    }
+
     /// "Show sidebar" applies live to the main window's split (which also persists the
     /// setting), so the sidebar slides immediately rather than only on the next launch.
     @objc private func sidebarVisibilityChanged() {
@@ -1615,54 +1765,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let effective = normalizedHexOrNil(binding.field.stringValue) ?? binding.themeColor()
         binding.well.color = effective.flatMap(NSColor.fromHex) ?? HarnessChrome.current.terminalBackground
         binding.reset.isHidden = !hasOverride
-    }
-
-    /// Resolve the live context the shared preview tile renders against.
-    private func currentPreviewContext() -> ColorSamplePreview.Context {
-        func resolve(_ binding: ColorBinding) -> NSColor? {
-            let chosen = normalizedHexOrNil(binding.field.stringValue) ?? binding.themeColor()
-            return chosen.flatMap(NSColor.fromHex)
-        }
-        let c = HarnessChrome.current
-        return ColorSamplePreview.Context(
-            background: resolve(colorBindings[0]) ?? c.terminalBackground,
-            foreground: resolve(colorBindings[1]) ?? c.textPrimary,
-            cursor: resolve(colorBindings[2]) ?? c.accent,
-            cursorText: resolve(colorBindings[3]) ?? c.terminalBackground,
-            selectionBackground: resolve(colorBindings[4]) ?? c.textPrimary.withAlphaComponent(0.25),
-            selectionForeground: resolve(colorBindings[5]) ?? c.textPrimary,
-            bold: resolve(colorBindings[6]) ?? c.textPrimary
-        )
-    }
-
-    private func currentPalette() -> [NSColor] {
-        let themed = ThemeManager.paletteHex(themeName: SessionCoordinator.shared.snapshot.themeName)
-        return (0 ..< 16).map { idx -> NSColor in
-            if let override = paletteHexValues[idx], let color = NSColor.fromHex(override) { return color }
-            if idx < themed.count, let hex = themed[idx], let color = NSColor.fromHex(hex) { return color }
-            return NSColor.fromHex(Self.defaultAnsiPalette[idx]) ?? .gray
-        }
-    }
-
-    private func refreshLivePreview() {
-        let s = SessionCoordinator.shared.settings
-        let style: LiveTerminalPreview.CursorStyle
-        switch s.cursorStyle {
-        case "bar": style = .beam
-        case "underline": style = .underline
-        default: style = .block
-        }
-        livePreview.update(LiveTerminalPreview.State(
-            colors: currentPreviewContext(),
-            palette: currentPalette(),
-            fontName: s.fontFamily,
-            fontSize: CGFloat(s.fontSize),
-            opacity: CGFloat(s.backgroundOpacity),
-            blur: CGFloat(s.backgroundBlur),
-            cursorStyle: style,
-            cursorBlink: s.cursorBlink,
-            padding: CGFloat(s.windowPaddingX)
-        ))
     }
 
     private func refreshColorPlaceholders() {
@@ -1724,11 +1826,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         copyOnSelectToggle.state = settings.copyOnSelect ? .on : .off
         keepSessionsToggle.state = SessionCoordinator.shared.snapshot.keepSessionsOnQuit ? .on : .off
         vividColorsToggle.state = settings.colorRendering == .vivid ? .on : .off
-        linearBlendingToggle.state = settings.textRendering == .crisp ? .on : .off
+        textRenderingSegment.selectItem(withTitle: textRenderingTitle(settings.textRendering))
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         ligaturesToggle.state = settings.ligatures ? .on : .off
+        offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
         showStatusLineToggle.state = settings.showStatusLine ? .on : .off
         sidebarVisibleToggle.state = settings.sidebarVisible ? .on : .off
+        restoreWindowSizeToggle.state = settings.restoreWindowSize ? .on : .off
+        tmuxControlsSegment.selectItem(withTitle: tmuxControlsTitle(settings.tmuxControlsEnabled))
         systemNotificationsToggle.state = settings.systemNotificationsEnabled ? .on : .off
         notificationSoundToggle.state = settings.notificationSoundEnabled ? .on : .off
         notchModeSegment.selectItem(withTitle: notchModeTitle(settings.notchVisibilityMode))
@@ -1756,7 +1861,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func validateHexField(_ field: NSTextField) {
         let raw = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let valid = raw.isEmpty || normalizedHexOrNil(raw) != nil
-        field.textColor = valid ? .controlTextColor : .systemRed
+        field.textColor = valid ? HarnessChrome.current.textPrimary : HarnessChrome.current.danger
     }
 
     @objc private func resetToDefaults() {
@@ -1792,6 +1897,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
         coordinator.settings.showStatusLine = showStatusLineToggle.state == .on
         coordinator.settings.sidebarVisible = sidebarVisibleToggle.state == .on
+        coordinator.settings.restoreWindowSize = restoreWindowSizeToggle.state == .on
         coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
         coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
         coordinator.settings.fontSize = Float(fontSizeField.stringValue) ?? 14
@@ -1807,14 +1913,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.notchVisibilityMode = selectedNotchVisibilityMode
         coordinator.settings.notchOpenOnHover = notchOpenOnHoverToggle.state == .on
         coordinator.settings.colorRendering = vividColorsToggle.state == .on ? .vivid : .accurate
-        if linearBlendingToggle.state == .on {
-            coordinator.settings.textRendering = .crisp
-        } else if coordinator.settings.textRendering == .crisp {
-            coordinator.settings.textRendering = .native
-        }
+        coordinator.settings.textRendering = textRenderingValue(textRenderingSegment.titleOfSelectedItem)
         coordinator.settings.applyThemeToTerminalOutput = themeTerminalOutputToggle.state == .on
         coordinator.settings.ligatures = ligaturesToggle.state == .on
         coordinator.settings.showPromptGutter = promptGutterToggle.state == .on
+        coordinator.settings.offMainParserFramePipeline = offMainPipelineToggle.state == .on
         coordinator.settings.experienceMode = selectedExperienceMode
         try? coordinator.settings.save()
 
@@ -1824,7 +1927,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.applySettingsToHosts()
         NotchPanelController.shared.refreshVisibility()
         updateFontReadout()
-        refreshLivePreview()
     }
 
     /// When presented inline, the host sets this so custom dismissal can save first.
@@ -1892,24 +1994,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 @MainActor
 private final class SettingsFlippedView: NSView {
     override var isFlipped: Bool { true }
-}
-
-@MainActor
-final class ColorSamplePreview: NSView {
-    enum Role {
-        case background, foreground, cursor, cursorText
-        case selectionBackground, selectionForeground, bold
-    }
-
-    struct Context {
-        var background: NSColor
-        var foreground: NSColor
-        var cursor: NSColor
-        var cursorText: NSColor
-        var selectionBackground: NSColor
-        var selectionForeground: NSColor
-        var bold: NSColor
-    }
 }
 
 @MainActor
@@ -1982,19 +2066,20 @@ final class SettingsSidebarButton: NSControl {
         }
     }
 
-    private func applyChrome() {
+    func applyChrome() {
+        let c = HarnessChrome.current
         if isSelected {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
-            iconView.contentTintColor = .controlAccentColor
-            label.textColor = .labelColor
+            layer?.backgroundColor = c.rowSelectedFill.cgColor
+            iconView.contentTintColor = c.accent
+            label.textColor = c.textPrimary
         } else if isHovered {
-            layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.35).cgColor
-            iconView.contentTintColor = .secondaryLabelColor
-            label.textColor = .labelColor
+            layer?.backgroundColor = c.rowHoverFill.cgColor
+            iconView.contentTintColor = c.textSecondary
+            label.textColor = c.textPrimary
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
-            iconView.contentTintColor = .tertiaryLabelColor
-            label.textColor = .secondaryLabelColor
+            iconView.contentTintColor = c.textTertiary
+            label.textColor = c.textSecondary
         }
     }
 }
@@ -2020,7 +2105,9 @@ enum SettingsWindowController {
         win.minSize = NSSize(width: 840, height: 600)
         win.setContentSize(NSSize(width: 940, height: 680))
         window = win
-        win.appearance = nil
+        // Match the active theme's light/dark so the native titlebar + any system-colored
+        // text track the themed chrome (mirrors MainWindowController).
+        win.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

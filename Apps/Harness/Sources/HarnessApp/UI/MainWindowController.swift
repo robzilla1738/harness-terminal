@@ -37,7 +37,17 @@ final class MainWindowController: NSWindowController {
         // the floor exposed it).
         window.setContentSize(NSSize(width: 1280, height: 820))
         self.init(window: window)
-        window.center()
+        // Opt-in window frame persistence: when enabled, restore the saved frame (size +
+        // position) and keep it updated automatically; otherwise open centered at the
+        // default size. Window-level only — no effect on sessions or the terminal.
+        if SessionCoordinator.shared.settings.restoreWindowSize {
+            window.setFrameAutosaveName("HarnessMainWindow")
+            if !window.setFrameUsingName("HarnessMainWindow") {
+                window.center()
+            }
+        } else {
+            window.center()
+        }
         applyTransparency()
     }
 

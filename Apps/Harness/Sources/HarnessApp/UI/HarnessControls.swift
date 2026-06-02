@@ -1,11 +1,14 @@
 import AppKit
 
 // Lightweight form controls for Settings. They mirror the value/`target`-`action`
-// surface of the stock AppKit controls they replace, while drawing with system
-// semantic colors so the Settings window reads like a native macOS preferences pane.
+// surface of the stock AppKit controls they replace, while drawing with the app's
+// themed `HarnessChrome.current` palette so the Settings window reads as one surface
+// with the rest of Harness (deep, monochrome — never the macOS accent blue).
 //
 // Construction idiom matches `SoftIconButton` / `SettingsSidebarButton`: own tracking area,
 // `applyChrome()` re-derives colors on hover/state/theme changes, `.cornerCurve = .continuous`.
+// `applyChrome()` is intentionally non-private so the host (`SettingsViewController`) can
+// re-skin every control live when the theme changes while the window is open.
 
 // MARK: - Themed text field
 
@@ -87,9 +90,10 @@ final class HarnessTextField: NSTextField {
     }
 
     func applyChrome() {
-        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        layer?.borderColor = (focused ? NSColor.keyboardFocusIndicatorColor : NSColor.separatorColor).cgColor
-        textColor = .labelColor
+        let c = HarnessChrome.current
+        layer?.backgroundColor = c.surfaceElevated.cgColor
+        layer?.borderColor = (focused ? c.focusRing : c.border).cgColor
+        textColor = c.textPrimary
     }
 }
 
@@ -169,10 +173,11 @@ final class HarnessSearchField: NSView, NSTextFieldDelegate {
     }
 
     func applyChrome() {
-        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        magnifier.contentTintColor = .tertiaryLabelColor
-        field.textColor = .labelColor
+        let c = HarnessChrome.current
+        layer?.backgroundColor = c.surfaceElevated.cgColor
+        layer?.borderColor = c.border.cgColor
+        magnifier.contentTintColor = c.textTertiary
+        field.textColor = c.textPrimary
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -294,20 +299,23 @@ final class HarnessToggle: NSControl {
         if let action { _ = NSApp.sendAction(action, to: target, from: self) }
     }
 
-    private func applyChrome() {
+    func applyChrome() {
+        let c = HarnessChrome.current
         CATransaction.begin(); CATransaction.setDisableActions(true)
         if state == .on {
-            track.backgroundColor = NSColor.controlAccentColor.cgColor
+            // Monochrome ON: a near-foreground filled track with an on-canvas knob,
+            // matching `HarnessPillButton.primary`. The app never uses the macOS accent.
+            track.backgroundColor = c.textPrimary.cgColor
             track.borderWidth = 0
-            knob.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            knob.backgroundColor = c.terminalBackground.cgColor
         } else {
-            track.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.25).cgColor
+            track.backgroundColor = c.surfaceElevated.cgColor
             track.borderWidth = 1
-            track.borderColor = (isHovered ? NSColor.tertiaryLabelColor : NSColor.separatorColor).cgColor
-            knob.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            track.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
+            knob.backgroundColor = c.textSecondary.cgColor
         }
         CATransaction.commit()
-        label.textColor = .labelColor
+        label.textColor = c.textPrimary
     }
 }
 
@@ -411,13 +419,14 @@ final class HarnessSlider: NSControl {
         if commit, let action { _ = NSApp.sendAction(action, to: target, from: self) }
     }
 
-    private func applyChrome() {
+    func applyChrome() {
+        let c = HarnessChrome.current
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        trackLayer.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.35).cgColor
-        fillLayer.backgroundColor = NSColor.controlAccentColor.cgColor
-        knob.backgroundColor = (isActive ? NSColor.controlAccentColor : NSColor.controlBackgroundColor).cgColor
+        trackLayer.backgroundColor = c.surfaceElevated.cgColor
+        fillLayer.backgroundColor = c.textPrimary.cgColor
+        knob.backgroundColor = (isActive ? c.textPrimary : c.textSecondary).cgColor
         knob.borderWidth = 1
-        knob.borderColor = NSColor.separatorColor.cgColor
+        knob.borderColor = c.border.cgColor
         HarnessDesign.applyShadow(.elevation1, to: knob)
         CATransaction.commit()
     }
@@ -490,10 +499,11 @@ final class HarnessSwatchWell: NSControl {
         if let action { _ = NSApp.sendAction(action, to: target, from: self) }
     }
 
-    private func applyChrome() {
+    func applyChrome() {
+        let c = HarnessChrome.current
         CATransaction.begin(); CATransaction.setDisableActions(true)
         swatch.backgroundColor = color.cgColor
-        swatch.borderColor = (isHovered ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
+        swatch.borderColor = (isHovered ? c.focusRing : c.border).cgColor
         CATransaction.commit()
     }
 }
@@ -639,22 +649,23 @@ final class HarnessSegmented: NSControl {
         if let action { _ = NSApp.sendAction(action, to: target, from: self) }
     }
 
-    private func applyChrome() {
+    func applyChrome() {
+        let c = HarnessChrome.current
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = c.surfaceElevated.cgColor
+        layer?.borderColor = c.border.cgColor
         for (i, fill) in fills.enumerated() {
             if i == selectedIndex {
-                fill.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
+                fill.backgroundColor = c.rowSelectedFill.cgColor
             } else if i == hoverIndex {
-                fill.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.35).cgColor
+                fill.backgroundColor = c.rowHoverFill.cgColor
             } else {
                 fill.backgroundColor = NSColor.clear.cgColor
             }
         }
         CATransaction.commit()
         for (i, label) in labels.enumerated() {
-            label.textColor = (i == selectedIndex ? NSColor.labelColor : NSColor.secondaryLabelColor)
+            label.textColor = (i == selectedIndex ? c.textPrimary : c.textSecondary)
         }
     }
 }
@@ -765,11 +776,12 @@ final class HarnessSelect: NSControl {
         pop.present(anchor: screenRect, width: max(bounds.width, 280), relativeTo: window)
     }
 
-    private func applyChrome() {
-        layer?.backgroundColor = (isHovered ? NSColor.quaternaryLabelColor.withAlphaComponent(0.35) : NSColor.textBackgroundColor).cgColor
-        layer?.borderColor = (isHovered ? NSColor.tertiaryLabelColor : NSColor.separatorColor).cgColor
-        titleLabel.textColor = .labelColor
-        chevron.contentTintColor = .tertiaryLabelColor
+    func applyChrome() {
+        let c = HarnessChrome.current
+        layer?.backgroundColor = (isHovered ? c.rowHoverFill : c.surfaceElevated).cgColor
+        layer?.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
+        titleLabel.textColor = c.textPrimary
+        chevron.contentTintColor = c.textTertiary
     }
 }
 
@@ -955,15 +967,16 @@ private final class SelectRow: NSControl {
     }
 
     private func applyChrome() {
+        let c = HarnessChrome.current
         if isSelected {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
-            label.textColor = .labelColor
+            layer?.backgroundColor = c.rowSelectedFill.cgColor
+            label.textColor = c.textPrimary
         } else if isHovered {
-            layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.35).cgColor
-            label.textColor = .labelColor
+            layer?.backgroundColor = c.rowHoverFill.cgColor
+            label.textColor = c.textPrimary
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
-            label.textColor = .secondaryLabelColor
+            label.textColor = c.textSecondary
         }
     }
 }
