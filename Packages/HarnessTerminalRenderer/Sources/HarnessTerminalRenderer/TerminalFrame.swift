@@ -18,22 +18,31 @@ public struct RenderColor: Equatable, Sendable {
         self.alpha = alpha
     }
 
+    /// `Float(i) / 255` for every 0...255 byte. `FrameBuilder.appendRow` calls `renderColor` ~3–5×
+    /// per cell, so on a color-dense frame this replaces thousands of multi-cycle float divides per
+    /// build with a load. The table is computed with the *identical* `Float(i) / 255` expression, so
+    /// every produced value is bit-for-bit equal to the divide it replaces (no 1/255-reciprocal ULP
+    /// drift) — the byte-identical-output invariant holds.
+    static let byteToUnitFloat: [Float] = (0 ... 255).map { Float($0) / 255 }
+
     public init(_ c: RGBColor) {
+        let lut = RenderColor.byteToUnitFloat
         self.init(
-            red: Float(c.red) / 255,
-            green: Float(c.green) / 255,
-            blue: Float(c.blue) / 255,
-            alpha: Float(c.alpha) / 255
+            red: lut[Int(c.red)],
+            green: lut[Int(c.green)],
+            blue: lut[Int(c.blue)],
+            alpha: lut[Int(c.alpha)]
         )
     }
 
     /// RGB from the color, but with an explicit alpha (0...1) — used to make the
     /// translucent canvas background while keeping the color channels exact.
     public init(_ c: RGBColor, alpha: Float) {
+        let lut = RenderColor.byteToUnitFloat
         self.init(
-            red: Float(c.red) / 255,
-            green: Float(c.green) / 255,
-            blue: Float(c.blue) / 255,
+            red: lut[Int(c.red)],
+            green: lut[Int(c.green)],
+            blue: lut[Int(c.blue)],
             alpha: alpha
         )
     }
