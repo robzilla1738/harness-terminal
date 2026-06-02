@@ -39,12 +39,12 @@ jobs:
           path: |
             .build
             ~/Library/org.swift.swiftpm
-          # Key on the resolved dependency graph too, so a Sparkle bump invalidates the cache
-          # instead of restoring stale prebuilt artifacts.
-          key: spm-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
-          restore-keys: |
-            spm-${{ runner.os }}-${{ env.XCODE_VERSION }}-
-            spm-${{ runner.os }}-
+          # Key on the resolved dependency graph (`v2` salt escapes earlier poisoned caches). NO
+          # restore-keys: SwiftPM's `.build/artifacts` (Sparkle's binary xcframework) is specific to
+          # the resolved graph, so restoring a `.build` from a *different* Package.resolved leaves a
+          # stale artifact layout and the build fails with "XCFramework Info.plist not found". Restore
+          # only on an exact Package.swift+Package.resolved match; otherwise build fresh.
+          key: spm-v2-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
 
       # Self-heal a poisoned cache: a cancelled run can persist a `.build` whose Sparkle binary
       # artifact is only half-extracted, which then fails every restore with
@@ -93,10 +93,8 @@ jobs:
           path: |
             .build
             ~/Library/org.swift.swiftpm
-          key: spm-live-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
-          restore-keys: |
-            spm-live-${{ runner.os }}-${{ env.XCODE_VERSION }}-
-            spm-${{ runner.os }}-${{ env.XCODE_VERSION }}-
+          # See build-test: exact-match only (no cross-resolution restore-keys), `v2` salt.
+          key: spm-v2-live-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
 
       # Self-heal a poisoned cache (see the build-test job): drop a half-extracted Sparkle artifact
       # so `swift build` re-fetches it cleanly instead of failing on a missing xcframework.
