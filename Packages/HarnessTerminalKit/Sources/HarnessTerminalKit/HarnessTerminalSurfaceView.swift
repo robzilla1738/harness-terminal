@@ -1557,6 +1557,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func scrollWheel(with event: NSEvent) {
+        if event.scrollingDeltaY != 0 { clearLinkHover() }
         // In copy mode, the wheel moves the copy-mode cursor through scrollback.
         if copyMode != nil, let renderer, event.scrollingDeltaY != 0 {
             let scale = window?.backingScaleFactor ?? 2.0

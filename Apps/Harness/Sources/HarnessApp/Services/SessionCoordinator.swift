@@ -537,12 +537,12 @@ final class SessionCoordinator: NSObject {
     /// presses don't keep cloning the same tab.
     func reopenLastClosedTab() {
         guard let workspace = snapshot.activeWorkspace, let closed = lastClosedTab else { return }
-        lastClosedTab = nil
         let cwd = closed.cwd.isEmpty ? settings.defaultCWD : closed.cwd
         guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspace.id, cwd: cwd)) else {
             syncFromDaemon()
             return
         }
+        lastClosedTab = nil
         // Only re-apply a deliberately customized title (skip the default "Shell").
         if !closed.title.isEmpty, closed.title != "Shell" {
             requestDaemon(.renameTab(tabID: tabID, name: closed.title))
