@@ -116,10 +116,20 @@ jobs:
           path: |
             .build
             ~/Library/org.swift.swiftpm
-          key: spm-release-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
-          restore-keys: |
-            spm-release-${{ runner.os }}-${{ env.XCODE_VERSION }}-
-            spm-${{ runner.os }}-${{ env.XCODE_VERSION }}-
+          # Exact dependency-graph match only, `v2` salt — see ci.yml. A cross-resolution `.build`
+          # restored via restore-keys carries a stale Sparkle xcframework layout and fails the build
+          # ("XCFramework Info.plist not found"); a release must never break that way.
+          key: spm-release-v2-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+
+      # Self-heal a partial Sparkle artifact in a restored cache (see ci.yml): drop .build/artifacts
+      # if Sparkle's xcframework Info.plist is missing so the build re-fetches it cleanly.
+      - name: Heal partial Sparkle artifact
+        run: |
+          plist=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/Info.plist"
+          if [ -d .build ] && [ ! -f "$plist" ]; then
+            echo "::warning::Sparkle xcframework missing in restored cache — clearing .build/artifacts for a clean re-fetch"
+            rm -rf .build/artifacts
+          fi
 
       - name: Import signing certificate
         env:
