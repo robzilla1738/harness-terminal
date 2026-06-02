@@ -75,7 +75,7 @@ make dmg
 TAG=vX.Y.Z \
 ASC_ISSUER_ID=... ASC_KEY_ID=... ASC_KEY=/path/to/AuthKey.p8 \
 SPARKLE_EDDSA_PRIVATE_KEY_FILE=/path/to/sparkle-private-key \
-DOWNLOAD_URL_PREFIX="https://github.com/robzilla1738/harness-cli/releases/download/vX.Y.Z/" \
+DOWNLOAD_URL_PREFIX="https://github.com/robzilla1738/harness-terminal/releases/download/vX.Y.Z/" \
   make finalize
 ```
 

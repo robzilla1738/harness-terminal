@@ -129,7 +129,7 @@ private final class LinkHandler: NSObject {
     static let shared = LinkHandler()
 
     @objc func openRepo() {
-        if let url = URL(string: "https://github.com/robzilla1738/harness-cli") {
+        if let url = URL(string: "https://github.com/robzilla1738/harness-terminal") {
             NSWorkspace.shared.open(url)
         }
     }

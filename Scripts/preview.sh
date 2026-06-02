@@ -13,12 +13,30 @@ swift build --product Harness
 swift build --product HarnessDaemon
 swift build --product harness-cli
 
+BUILD_DIR="$ROOT/.build/debug"
+
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$ROOT/.build/debug/Harness" "$APP/Contents/MacOS/Harness"
 cp "$ROOT/.build/debug/HarnessDaemon" "$APP/Contents/MacOS/HarnessDaemon"
 cp "$ROOT/.build/debug/harness-cli" "$APP/Contents/MacOS/harness-cli"
 chmod +x "$APP/Contents/MacOS/"*
+for bundle in "$BUILD_DIR"/*.bundle; do
+  [[ -d "$bundle" ]] || continue
+  ditto "$bundle" "$APP/Contents/Resources/$(basename "$bundle")"
+done
+FRAMEWORK="$BUILD_DIR/Sparkle.framework"
+if [[ ! -d "$FRAMEWORK" ]]; then
+  FRAMEWORK="$(find "$ROOT/.build/artifacts" "$ROOT/.build" -name Sparkle.framework -type d 2>/dev/null | head -n1 || true)"
+fi
+if [[ -z "$FRAMEWORK" || ! -d "$FRAMEWORK" ]]; then
+  echo "error: Sparkle.framework not found under .build — build the Harness product first." >&2
+  exit 1
+fi
+ditto "$FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
+if ! otool -l "$APP/Contents/MacOS/Harness" | grep -q "@executable_path/../Frameworks"; then
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/Harness"
+fi
 if [[ -f "$ROOT/Apps/Harness/Resources/Harness.icns" ]]; then
   cp "$ROOT/Apps/Harness/Resources/Harness.icns" "$APP/Contents/Resources/Harness.icns"
 fi
@@ -59,6 +77,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+codesign --force --sign - --deep "$APP" >/dev/null
 
 cat <<EOF
 
