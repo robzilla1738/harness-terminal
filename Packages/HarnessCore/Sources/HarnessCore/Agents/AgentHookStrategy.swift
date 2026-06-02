@@ -25,14 +25,15 @@ enum AgentHookStrategy {
     /// extension (Pi) auto-discovered from a plugins/extensions directory. Overwrite is idempotent.
     case ownTextFile(filename: String, contents: String)
 
-    /// Upsert a sentinel-delimited region into a YAML config, appended at end-of-file — Hermes's
-    /// `~/.hermes/config.yaml`. `body` is the YAML inside the region. Preserves all other content.
-    case yamlEdit(filename: String, body: String)
-
-    /// Upsert a sentinel-delimited region just inside the root object of a JSON5 config — OpenClaw's
-    /// `~/.openclaw/openclaw.json`. Edited as text (never reserialized) so comments and trailing
-    /// commas survive. `body` is the JSON5 inserted after the opening `{`.
-    case json5Edit(filename: String, body: String)
+    /// Upsert a sentinel-delimited, Harness-marked region into a text config that Harness doesn't
+    /// own, editing it as text (never reserialized) so the surrounding file — comments, trailing
+    /// commas, formatting — survives. `commentToken` is the config's line-comment marker (`#` for
+    /// YAML, `//` for JSON5). `insertAtTop` puts the region just inside the root `{` (JSON5 object);
+    /// otherwise it's appended at end-of-file (YAML's flat top-level keys). `conflictKey` is the
+    /// top-level key the region introduces (e.g. `hooks`) — if the existing config already defines
+    /// it (outside our region), the installer leaves the file untouched and asks the user to merge
+    /// by hand rather than risk a duplicate-key corruption. Hermes, OpenClaw.
+    case regionEdit(filename: String, body: String, commentToken: String, insertAtTop: Bool, conflictKey: String)
 
     /// The config file's path relative to the user's home directory.
     var filename: String {
@@ -41,8 +42,7 @@ enum AgentHookStrategy {
              let .eventArrayJSON(filename, _, _),
              let .ownJSONFile(filename, _),
              let .ownTextFile(filename, _),
-             let .yamlEdit(filename, _),
-             let .json5Edit(filename, _):
+             let .regionEdit(filename, _, _, _, _):
             return filename
         }
     }

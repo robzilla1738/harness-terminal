@@ -24,11 +24,17 @@ enum AgentHookInstallerCLI {
         }
         do {
             let result = try AgentHookInstaller.install(agent: kind)
+            if result.needsManualMerge {
+                // We left the file untouched to avoid corrupting an existing config.
+                print("\(kind.displayName): \(result.path.path) already defines a hooks section (or couldn't be edited safely).")
+                print("Left it untouched — add the Harness hook by hand following 'docs/agent-hooks/\(kind.rawValue).md'.")
+                exit(0)
+            }
             if let backup = result.backedUp {
                 print("(backed up existing config to \(backup.path))")
             }
             if result.replacedInvalidJSON {
-                print("(existing config wasn't valid JSON — replacing it; the backup above has the original)")
+                print("(existing config couldn't be read as text — replacing it; the backup above has the original)")
             }
             for legacy in result.removedLegacy {
                 print("(removed legacy Harness hook file at \(legacy.path))")

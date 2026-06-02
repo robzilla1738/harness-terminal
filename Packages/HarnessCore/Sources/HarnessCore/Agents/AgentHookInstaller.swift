@@ -20,16 +20,25 @@ public enum AgentHookInstaller {
         public let path: URL
         /// The backup that was made of a pre-existing file, if any.
         public let backedUp: URL?
-        /// True when the existing file wasn't valid JSON and was replaced (backup kept).
+        /// True when the existing file wasn't valid/readable and was replaced (backup kept).
         public let replacedInvalidJSON: Bool
         /// Orphaned legacy hook files (from an older Harness, at now-wrong paths) we removed.
         public let removedLegacy: [URL]
+        /// True when an existing structured config (Hermes YAML / OpenClaw JSON5) already defines
+        /// the key we'd write, or is too malformed to edit safely — so we left it **untouched**
+        /// and the user must merge the hook in by hand (see the agent's doc). `path`/`isInstalled`
+        /// will not reflect a Harness hook in this case.
+        public let needsManualMerge: Bool
 
-        public init(path: URL, backedUp: URL?, replacedInvalidJSON: Bool, removedLegacy: [URL] = []) {
+        public init(
+            path: URL, backedUp: URL?, replacedInvalidJSON: Bool,
+            removedLegacy: [URL] = [], needsManualMerge: Bool = false
+        ) {
             self.path = path
             self.backedUp = backedUp
             self.replacedInvalidJSON = replacedInvalidJSON
             self.removedLegacy = removedLegacy
+            self.needsManualMerge = needsManualMerge
         }
     }
 
@@ -38,10 +47,9 @@ public enum AgentHookInstaller {
         case unsupported(AgentKind)
     }
 
-    /// Agents Harness can install hooks for.
-    public static let installableAgents: [AgentKind] = [
-        .codex, .claudeCode, .cursor, .grok, .openCode, .pi, .hermes, .openClaw,
-    ]
+    /// Agents Harness can install hooks for — derived from the strategy table (single source of
+    /// truth) so it can never drift from `canInstall`/`install`. Enum-declaration order.
+    public static let installableAgents: [AgentKind] = AgentKind.allCases.filter { strategy(for: $0) != nil }
 
     public static func canInstall(_ agent: AgentKind) -> Bool {
         strategy(for: agent) != nil
@@ -77,28 +85,33 @@ public enum AgentHookInstaller {
 
         var backedUp: URL?
         var replacedInvalidJSON = false
+        var needsManualMerge = false
         switch strategy {
         case let .eventMatcherJSON(_, payload, managedEvents):
             (backedUp, replacedInvalidJSON) = try mergeJSON(at: url, payload: payload) {
-                pruneStaleHarnessHooks($0, events: managedEvents)
+                pruneHooks($0, events: managedEvents, isHarnessOwned: isEventMatcherEntryHarnessOwned)
             }
         case let .eventArrayJSON(_, payload, managedEvents):
             (backedUp, replacedInvalidJSON) = try mergeJSON(at: url, payload: payload) {
-                pruneCursorHooks($0, events: managedEvents)
+                pruneHooks($0, events: managedEvents, isHarnessOwned: isFlatEntryHarnessOwned)
             }
         case let .ownJSONFile(_, payload):
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
             backedUp = try writeOwnFile(at: url, data: data)
         case let .ownTextFile(_, contents):
             backedUp = try writeOwnFile(at: url, data: Data(contents.utf8))
-        case let .yamlEdit(_, body):
-            backedUp = try upsertRegion(at: url, commentToken: "#", body: body, insertAtTop: false)
-        case let .json5Edit(_, body):
-            backedUp = try upsertRegion(at: url, commentToken: "//", body: body, insertAtTop: true)
+        case let .regionEdit(_, body, commentToken, insertAtTop, conflictKey):
+            (backedUp, replacedInvalidJSON, needsManualMerge) = try upsertRegion(
+                at: url, commentToken: commentToken, body: body,
+                insertAtTop: insertAtTop, conflictKey: conflictKey)
         }
 
-        let removedLegacy = try removeLegacyHookFiles(for: agent, home: home)
-        return InstallResult(path: url, backedUp: backedUp, replacedInvalidJSON: replacedInvalidJSON, removedLegacy: removedLegacy)
+        // Don't migrate-away the old file while the new one wasn't written (manual-merge case) —
+        // the user would lose both their working hook and the orphan cleanup signal.
+        let removedLegacy = needsManualMerge ? [] : try removeLegacyHookFiles(for: agent, home: home)
+        return InstallResult(
+            path: url, backedUp: backedUp, replacedInvalidJSON: replacedInvalidJSON,
+            removedLegacy: removedLegacy, needsManualMerge: needsManualMerge)
     }
 
     /// The installable agents that look present on this machine — any of the agent's known
@@ -158,10 +171,12 @@ public enum AgentHookInstaller {
             return .ownTextFile(filename: ".pi/agent/extensions/harness.ts", contents: piExtension)
         case .hermes:
             // Hermes declares shell hooks in `~/.hermes/config.yaml` (consent via `hermes hooks`).
-            return .yamlEdit(filename: ".hermes/config.yaml", body: hermesHookBody)
+            return .regionEdit(filename: ".hermes/config.yaml", body: hermesHookBody,
+                               commentToken: "#", insertAtTop: false, conflictKey: "hooks")
         case .openClaw:
             // OpenClaw reads a JSON5 config; edit as text to preserve comments/trailing commas.
-            return .json5Edit(filename: ".openclaw/openclaw.json", body: openClawHookBody)
+            return .regionEdit(filename: ".openclaw/openclaw.json", body: openClawHookBody,
+                               commentToken: "//", insertAtTop: true, conflictKey: "hooks")
         case .aider, .gemini, .goose, .generic:
             return nil
         }
@@ -196,23 +211,22 @@ public enum AgentHookInstaller {
         return (backedUp, replacedInvalidJSON)
     }
 
-    /// Remove Harness-owned entries (command contains `hookMarker`) from the event/matcher-shaped
-    /// `events` we manage, dropping any event array left empty. Everything else — other keys, other
-    /// events, and the user's own non-Harness entries within a managed event — is preserved.
-    private static func pruneStaleHarnessHooks(_ config: [String: Any], events: [String]) -> [String: Any] {
+    /// Drop the Harness-owned entries (per `isHarnessOwned`) from the `hooks[event]` arrays we
+    /// manage, removing any event left empty. Everything else — other keys, other events, and the
+    /// user's own non-Harness entries within a managed event — is preserved. Makes re-install
+    /// converge to exactly the current payload instead of appending a duplicate. The two hook
+    /// shapes Harness writes (Claude/Codex nested `{matcher,hooks:[{command}]}` and Cursor flat
+    /// `{command}`) differ only in this predicate.
+    private static func pruneHooks(
+        _ config: [String: Any], events: [String],
+        isHarnessOwned: ([String: Any]) -> Bool
+    ) -> [String: Any] {
         guard !events.isEmpty, var hooks = config["hooks"] as? [String: Any] else { return config }
         for event in events {
             guard let entries = hooks[event] as? [Any] else { continue }
             let kept = entries.filter { entry in
-                guard let entry = entry as? [String: Any],
-                      let commands = entry["hooks"] as? [Any]
-                else { return true } // shape we don't recognize — leave it alone
-                let isHarnessOwned = commands.contains { command in
-                    guard let command = (command as? [String: Any])?["command"] as? String
-                    else { return false }
-                    return command.contains(hookMarker)
-                }
-                return !isHarnessOwned
+                guard let entry = entry as? [String: Any] else { return true } // unknown shape — keep
+                return !isHarnessOwned(entry)
             }
             if kept.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = kept }
         }
@@ -221,21 +235,19 @@ public enum AgentHookInstaller {
         return result
     }
 
-    /// Cursor's events map to flat arrays of `{command}` objects (no nested `hooks`). Drop the
-    /// Harness-owned entries from the managed `events`, preserving the user's own.
-    private static func pruneCursorHooks(_ config: [String: Any], events: [String]) -> [String: Any] {
-        guard !events.isEmpty, var hooks = config["hooks"] as? [String: Any] else { return config }
-        for event in events {
-            guard let entries = hooks[event] as? [Any] else { continue }
-            let kept = entries.filter { entry in
-                guard let command = (entry as? [String: Any])?["command"] as? String else { return true }
-                return !command.contains(hookMarker)
-            }
-            if kept.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = kept }
+    /// Event/matcher shape (Claude Code, Codex): Harness-owned if any of `entry["hooks"]`'s
+    /// commands contains the marker.
+    private static func isEventMatcherEntryHarnessOwned(_ entry: [String: Any]) -> Bool {
+        guard let commands = entry["hooks"] as? [Any] else { return false }
+        return commands.contains { command in
+            guard let text = (command as? [String: Any])?["command"] as? String else { return false }
+            return text.contains(hookMarker)
         }
-        var result = config
-        result["hooks"] = hooks
-        return result
+    }
+
+    /// Flat shape (Cursor): Harness-owned if the entry's own `command` contains the marker.
+    private static func isFlatEntryHarnessOwned(_ entry: [String: Any]) -> Bool {
+        (entry["command"] as? String)?.contains(hookMarker) ?? false
     }
 
     // MARK: - Own-file & text-region strategies
@@ -251,40 +263,126 @@ public enum AgentHookInstaller {
         return backedUp
     }
 
-    /// Upsert a sentinel-delimited managed region into a text config, backing it up first.
-    /// `insertAtTop` inserts the region just inside the first `{` (JSON5 root object); otherwise
-    /// the region is appended at end-of-file (YAML). On reinstall the existing region is replaced
-    /// in place, so the edit is idempotent and the surrounding file — including comments — survives.
-    private static func upsertRegion(at url: URL, commentToken: String, body: String, insertAtTop: Bool) throws -> URL? {
+    /// Upsert a sentinel-delimited managed region into a text config we don't own, backing it up
+    /// first. On reinstall the existing region is replaced in place (idempotent); on first install
+    /// the region is inserted just inside the root `{` (JSON5) or appended at end-of-file (YAML),
+    /// preserving the surrounding file including comments.
+    ///
+    /// Refuses to edit — returning `needsManualMerge` and leaving the file **untouched** — when it
+    /// can't do so safely: the config already defines `conflictKey` outside our region (a duplicate
+    /// would corrupt it), exactly one sentinel survives (a torn region we can't locate), or a
+    /// JSON5 file has no balanced root object to insert into. `replacedInvalidJSON` is surfaced
+    /// when an existing file couldn't be read as text (its bytes are preserved in the backup).
+    private static func upsertRegion(
+        at url: URL, commentToken: String, body: String, insertAtTop: Bool, conflictKey: String
+    ) throws -> (backedUp: URL?, replacedInvalidJSON: Bool, needsManualMerge: Bool) {
         let begin = "\(commentToken) >>> harness-managed (do not edit) >>>"
         let end = "\(commentToken) <<< harness-managed <<<"
         let region = "\(begin)\n\(body)\n\(end)"
 
-        var backedUp: URL?
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        var replacedInvalid = false
         var text = ""
-        if FileManager.default.fileExists(atPath: url.path) {
-            backedUp = try backUp(url)
-            text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        if exists {
+            if let s = try? String(contentsOf: url, encoding: .utf8) {
+                text = s
+            } else {
+                replacedInvalid = true // unreadable as text — we'll write fresh; bytes kept in backup
+            }
         }
 
-        if let beginRange = text.range(of: begin), let endRange = text.range(of: end), beginRange.lowerBound < endRange.lowerBound {
+        let beginRange = text.range(of: begin)
+        let endRange = text.range(of: end)
+
+        var result = text
+        if let b = beginRange, let e = endRange, b.lowerBound < e.lowerBound {
             // Replace the existing managed region in place.
-            text.replaceSubrange(beginRange.lowerBound..<endRange.upperBound, with: region)
+            result.replaceSubrange(b.lowerBound..<e.upperBound, with: region)
+        } else if (beginRange == nil) != (endRange == nil) {
+            // Exactly one sentinel present — a torn region we can't safely locate. Don't guess.
+            return (nil, false, true)
+        } else if !replacedInvalid, definesKey(conflictKey, in: text, insertAtTop: insertAtTop) {
+            // The config already defines our key — a second one would corrupt it. Leave it alone.
+            return (nil, false, true)
         } else if insertAtTop {
-            if let brace = text.firstIndex(of: "{") {
-                // Insert just inside the existing root object.
-                text.insert(contentsOf: "\n\(region)\n", at: text.index(after: brace))
+            // `result` still equals `text` here, so the index is valid for `result`.
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                result = "{\n\(region)\n}\n"
+            } else if let brace = rootBraceIndex(in: result), result[brace...].contains(where: { $0 == "}" }) {
+                result.insert(contentsOf: "\n\(region)\n", at: result.index(after: brace))
             } else {
-                // No root object yet (fresh/empty config) — create one around the region.
-                text = "{\n\(region)\n}\n"
+                // Non-empty but no balanced root object to insert into — don't risk corrupting it.
+                return (nil, false, true)
             }
         } else {
             // YAML: append the region at end-of-file (multiple top-level keys are valid).
-            if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
-            text += "\(region)\n"
+            if !result.isEmpty, !result.hasSuffix("\n") { result += "\n" }
+            result += "\(region)\n"
         }
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        return backedUp
+
+        let backedUp = exists ? try backUp(url) : nil
+        try result.write(to: url, atomically: true, encoding: .utf8)
+        return (backedUp, replacedInvalid, false)
+    }
+
+    /// True if `text` defines top-level `key` outside any Harness region. For JSON5 we accept a
+    /// quoted or bare key followed by `:`; for YAML a line starting at column 0 with `key:`. This
+    /// is deliberately conservative — a false positive only downgrades us to "merge manually",
+    /// never a corrupting edit.
+    private static func definesKey(_ key: String, in text: String, insertAtTop: Bool) -> Bool {
+        if insertAtTop {
+            // JSON5: `"key"` or `key` followed by optional space then `:`.
+            for variant in ["\"\(key)\"", key] {
+                var search = text.startIndex
+                while let r = text.range(of: variant, range: search..<text.endIndex) {
+                    let after = text[r.upperBound...].drop { $0 == " " || $0 == "\t" }
+                    if after.first == ":" { return true }
+                    search = r.upperBound
+                }
+            }
+            return false
+        } else {
+            // YAML top-level key: a line (column 0, unindented) beginning `key:`.
+            return text.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+                guard let first = line.first, first != " ", first != "\t" else { return false }
+                return line.hasPrefix("\(key):")
+            }
+        }
+    }
+
+    /// Index of the JSON5 root object's opening brace, skipping leading whitespace and `//` /
+    /// `/* */` comments so a brace inside a header comment (e.g. `// see { docs }`) is never
+    /// mistaken for the root. Returns nil if no structural `{` is found.
+    private static func rootBraceIndex(in text: String) -> String.Index? {
+        var i = text.startIndex
+        let end = text.endIndex
+        while i < end {
+            let c = text[i]
+            if c == "{" { return i }
+            let afterI = text.index(after: i)
+            if c == "/", afterI < end {
+                switch text[afterI] {
+                case "/": // line comment — skip to end of line
+                    while i < end, text[i] != "\n" { i = text.index(after: i) }
+                    continue
+                case "*": // block comment — skip past the closing */
+                    i = text.index(i, offsetBy: 2, limitedBy: end) ?? end
+                    while i < end {
+                        let next = text.index(after: i)
+                        if text[i] == "*", next < end, text[next] == "/" {
+                            i = text.index(after: next)
+                            break
+                        }
+                        i = text.index(after: i)
+                    }
+                    continue
+                default:
+                    break
+                }
+            }
+            i = afterI
+        }
+        return nil
     }
 
     // MARK: - Legacy cleanup
@@ -311,7 +409,8 @@ public enum AgentHookInstaller {
                   let text = try? String(contentsOf: url, encoding: .utf8),
                   text.contains(hookMarker)
             else { continue } // absent or a user file — leave it alone
-            _ = try? backUp(url)
+            // Never delete without a recoverable backup. If the backup fails, keep the orphan.
+            guard (try? backUp(url)) != nil else { continue }
             try FileManager.default.removeItem(at: url)
             removed.append(url)
         }
@@ -407,10 +506,10 @@ public enum AgentHookInstaller {
         // harness-managed — surfaces OpenCode session events in Harness. Safe to delete.
         export const HarnessNotify = async ({ $ }) => ({
           "session.idle": async () => {
-            await $`\(notifyPrefix) --surface ${process.env.HARNESS_SURFACE} --title OpenCode --body Done`
+            await $`\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body Done`
           },
           "permission.asked": async () => {
-            await $`\(notifyPrefix) --surface ${process.env.HARNESS_SURFACE} --title OpenCode --body "Awaiting input"`
+            await $`\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body "Awaiting input"`
           },
         })
         """

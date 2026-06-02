@@ -306,6 +306,44 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertEqual(text.components(separatedBy: "harness-cli notify").count - 1, 1)
     }
 
+    func testHermesSkipsWhenConfigAlreadyDefinesHooks() throws {
+        // A user who already has a top-level `hooks:` must not get a duplicate key (invalid YAML).
+        let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .hermes, homeOverride: home))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = "model: hermes-3\nhooks:\n  - event: lint\n    command: 'echo mine'\n"
+        try original.write(to: url, atomically: true, encoding: .utf8)
+
+        let result = try AgentHookInstaller.install(agent: .hermes, homeOverride: home)
+        XCTAssertTrue(result.needsManualMerge)
+        XCTAssertFalse(AgentHookInstaller.isInstalled(agent: .hermes, homeOverride: home))
+        // File left exactly as it was — no corruption, no second `hooks:`.
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), original)
+    }
+
+    func testOpenClawSkipsWhenConfigAlreadyDefinesHooks() throws {
+        let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .openClaw, homeOverride: home))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = "{\n  \"hooks\": { \"x\": 1 },\n}\n"
+        try original.write(to: url, atomically: true, encoding: .utf8)
+
+        let result = try AgentHookInstaller.install(agent: .openClaw, homeOverride: home)
+        XCTAssertTrue(result.needsManualMerge)
+        XCTAssertFalse(AgentHookInstaller.isInstalled(agent: .openClaw, homeOverride: home))
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), original)
+    }
+
+    func testRegionEditSkipsTornSentinel() throws {
+        // Only the begin marker survives (e.g. a manual edit) — refuse to guess; leave it alone.
+        let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .hermes, homeOverride: home))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = "model: hermes-3\n# >>> harness-managed (do not edit) >>>\nhooks:\n  - event: stop\n"
+        try original.write(to: url, atomically: true, encoding: .utf8)
+
+        let result = try AgentHookInstaller.install(agent: .hermes, homeOverride: home)
+        XCTAssertTrue(result.needsManualMerge)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), original)
+    }
+
     func testFreshOpenClawInstallProducesWrappedObject() throws {
         // New user: no openclaw.json yet — install must create a valid JSON5 root object.
         let result = try AgentHookInstaller.install(agent: .openClaw, homeOverride: home)
@@ -356,6 +394,38 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertEqual(AgentHookInstaller.resolveAgentName("grok-build"), .grok)
         XCTAssertEqual(AgentHookInstaller.resolveAgentName("opencode"), .openCode)
         XCTAssertNil(AgentHookInstaller.resolveAgentName("nonsense-agent"))
+    }
+
+    /// `installableAgents` (the curated, ordered list) and `canInstall` (derived from the
+    /// strategy table) must never diverge — adding a strategy without listing the agent, or vice
+    /// versa, is a bug.
+    func testInstallableAgentsMatchStrategyCapability() {
+        XCTAssertEqual(
+            Set(AgentHookInstaller.installableAgents),
+            Set(AgentKind.allCases.filter { AgentHookInstaller.canInstall($0) })
+        )
+    }
+
+    /// A header comment containing a brace must not be mistaken for the JSON5 root object.
+    func testOpenClawJson5InsertSkipsBraceInLeadingComment() throws {
+        let url = try XCTUnwrap(AgentHookInstaller.hookConfigURL(for: .openClaw, homeOverride: home))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let json5 = """
+        // OpenClaw config — see docs at { example.com } for the schema
+        {
+          gateway: { port: 8080 },
+        }
+        """
+        try json5.write(to: url, atomically: true, encoding: .utf8)
+
+        _ = try AgentHookInstaller.install(agent: .openClaw, homeOverride: home)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        // The managed region landed inside the real root object, after the header comment.
+        let header = try XCTUnwrap(text.range(of: "see docs at"))
+        let region = try XCTUnwrap(text.range(of: "harness-managed"))
+        XCTAssertTrue(header.lowerBound < region.lowerBound, "region must come after the header comment")
+        XCTAssertTrue(text.contains("harness-cli notify"))
+        XCTAssertTrue(text.contains("gateway"))
     }
 
     func testGrokIsInstallableAndDetectable() {
