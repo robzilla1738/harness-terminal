@@ -8,12 +8,14 @@ final class IPCCodecTests: XCTestCase {
         let requests: [IPCRequest] = [
             .ping,
             .listSurfaces,
-            .newTab(workspaceID: UUID(), cwd: "/tmp/project"),
+            .newTab(workspaceID: UUID(), cwd: "/tmp/project", shell: "/opt/homebrew/bin/fish"),
+            .newSession(workspaceID: UUID(), cwd: "/tmp/project", name: "api", shell: "/bin/zsh"),
+            .newTabInWorkspace(named: "Default", cwd: "/tmp/project", shell: "/bin/bash"),
             .reorderTab(workspaceID: UUID(), tabID: UUID(), toIndex: 3),
             .resizePaneRatio(tabID: UUID(), firstPaneID: UUID(), secondPaneID: UUID(), ratio: 0.42),
             .sendData(surfaceID: "surface-1", data: Data([0, 1, 2, 254, 255])),
             .notify(surfaceID: "surface-1", title: "Agent", body: "Needs approval"),
-            .newSplit(tabID: UUID(), paneID: UUID(), direction: .vertical),
+            .newSplit(tabID: UUID(), paneID: UUID(), direction: .vertical, shell: "/opt/homebrew/bin/fish"),
             .selectPane(tabID: UUID(), paneID: UUID()),
             .identifyClient(label: "harness-cli attach"),
             .listClients,
@@ -37,6 +39,34 @@ final class IPCCodecTests: XCTestCase {
             let reencoded = try IPCCodec.encode(IPCEnvelope(request: try XCTUnwrap(decoded.request)))
             XCTAssertEqual(reencoded, original, "round-trip stable for \(request)")
         }
+    }
+
+    func testLegacyNewTabRequestsDecodeWithoutShell() throws {
+        let workspaceID = UUID()
+        let payload = #"{"request":{"newTab":{"workspaceID":"\#(workspaceID.uuidString)","cwd":"/tmp/project"}}}"#.data(using: .utf8)!
+        let envelope = try JSONDecoder().decode(IPCEnvelope.self, from: payload)
+
+        guard case let .newTab(decodedWorkspaceID, cwd, shell) = try XCTUnwrap(envelope.request) else {
+            return XCTFail("expected newTab")
+        }
+        XCTAssertEqual(decodedWorkspaceID, workspaceID)
+        XCTAssertEqual(cwd, "/tmp/project")
+        XCTAssertNil(shell)
+    }
+
+    func testLegacyNewSplitRequestsDecodeWithoutShell() throws {
+        let tabID = UUID()
+        let paneID = UUID()
+        let payload = #"{"request":{"newSplit":{"tabID":"\#(tabID.uuidString)","paneID":"\#(paneID.uuidString)","direction":"vertical"}}}"#.data(using: .utf8)!
+        let envelope = try JSONDecoder().decode(IPCEnvelope.self, from: payload)
+
+        guard case let .newSplit(decodedTabID, decodedPaneID, direction, shell) = try XCTUnwrap(envelope.request) else {
+            return XCTFail("expected newSplit")
+        }
+        XCTAssertEqual(decodedTabID, tabID)
+        XCTAssertEqual(decodedPaneID, paneID)
+        XCTAssertEqual(direction, .vertical)
+        XCTAssertNil(shell)
     }
 
     func testResponseRoundTripIsStable() throws {

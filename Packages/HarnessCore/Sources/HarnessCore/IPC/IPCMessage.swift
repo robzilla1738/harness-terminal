@@ -8,10 +8,10 @@ public enum IPCRequest: Codable, Sendable {
     /// with its workspace/session/tab/pane context, state, and `.waiting` signal.
     case listAgents
     case newWorkspace(name: String)
-    case newSession(workspaceID: UUID, cwd: String?, name: String?)
-    case newTab(workspaceID: UUID, cwd: String?)
-    case newTabInWorkspace(named: String, cwd: String?)
-    case newSplit(tabID: UUID, paneID: UUID?, direction: SplitDirection)
+    case newSession(workspaceID: UUID, cwd: String?, name: String?, shell: String? = nil)
+    case newTab(workspaceID: UUID, cwd: String?, shell: String? = nil)
+    case newTabInWorkspace(named: String, cwd: String?, shell: String? = nil)
+    case newSplit(tabID: UUID, paneID: UUID?, direction: SplitDirection, shell: String? = nil)
     case selectWorkspace(id: UUID)
     case selectWorkspaceByName(name: String)
     case selectSession(workspaceID: UUID, sessionID: UUID)
