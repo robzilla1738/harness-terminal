@@ -422,16 +422,18 @@ final class TerminalScreen {
 
         guard joinWrapped else { return phys.map { text($0.cells, trimTrailing: true) } }
 
-        // A soft-wrapped row continues onto the next, but its trailing *blank* cells are wrap
-        // padding (most importantly the gap column left when a wide glyph is deferred to the next
-        // row), not logical content — trim them so a joined wide-char line reads seamlessly and
-        // identically at any width. Typed trailing spaces are codepoint 0x20 (not `.blank`), so
-        // `text(trimTrailing:)` keeps them; only the default-blank gap is dropped.
+        // A soft-wrapped row continues onto the next; its cells are logical content and are NOT
+        // trailing-trimmed — EXCEPT the single wide-deferral gap (the blank left when a wide glyph
+        // was pushed to the next row), which is wrap padding. Dropping only that gap makes a joined
+        // wide-char line read seamlessly at any width while preserving ECH/EL-erased trailing blanks
+        // (real content). Only the hard-ended row gets the whole-line trailing trim.
         var out: [String] = []
         var current = ""
         var building = false
-        for row in phys {
-            current += text(row.cells, trimTrailing: true)
+        for (idx, row) in phys.enumerated() {
+            let drop = row.wrapped ? wideDeferralGap(row: row.cells, next: idx + 1 < phys.count ? phys[idx + 1].cells : nil) : 0
+            let cells = drop > 0 ? Array(row.cells.dropLast(drop)) : row.cells
+            current += text(cells, trimTrailing: !row.wrapped)
             building = true
             if !row.wrapped {
                 out.append(current)
@@ -497,6 +499,19 @@ final class TerminalScreen {
     /// True when a cell is the default blank (no glyph, default bg, no attributes) — used to
     /// trim trailing padding so reflow doesn't manufacture spurious blank rows.
     private func isBlank(_ cell: TerminalGridCell) -> Bool { cell == .blank }
+
+    /// How many trailing cells of a soft-wrapped row are wrap *padding* (0 or 1), to drop when
+    /// re-joining the logical line. The ONLY padding a soft wrap produces is the single gap left
+    /// when a wide glyph couldn't fit the right margin and was deferred to the next row (`wrapLine`)
+    /// — identified by the next physical row beginning with that deferred `.wide` head. A trailing
+    /// blank NOT followed by a wide head is real content (e.g. an ECH/EL erasure, which leaves the
+    /// row soft-wrapped) and MUST be preserved, or reflow/capture would shift content left. `next`
+    /// is the following physical row (nil if this is the last row).
+    private func wideDeferralGap(row: [TerminalGridCell], next: [TerminalGridCell]?) -> Int {
+        guard let next, let last = row.last, isBlank(last) else { return 0 }
+        for cell in next where cell.width != .spacerTail { return cell.width == .wide ? 1 : 0 }
+        return 0
+    }
 
     /// Whether viewport row `r` (in the live `cells` grid) is entirely default-blank.
     private func isViewportRowBlank(_ r: Int) -> Bool {
@@ -646,17 +661,16 @@ final class TerminalScreen {
                 cursorLogical = logicals.count
                 cursorLogicalCol = current.count + min(cursorCol, cols - 1)
             }
-            // A soft-wrapped row's trailing blanks are wrap padding, not content — most importantly
-            // the single gap column left when a wide glyph was deferred to the next row (`wrapLine`).
-            // Carrying that blank into the logical line shifts everything right of it and re-embeds a
-            // fresh gap on every reflow, so wide-char (CJK/emoji) lines drift and corrupt across
-            // resizes. Typed trailing spaces are codepoint 0x20 (not `.blank`), so they survive; only
-            // the default-blank gap is dropped. The final (hard-ended) row keeps its cells — step 3
-            // does the whole-logical-line trailing trim.
+            // Drop ONLY the genuine wide-deferral gap from a soft-wrapped row (the single blank left
+            // when a wide glyph couldn't fit the margin and moved to the next row). Carrying that gap
+            // into the logical line re-embeds a fresh gap on every reflow, so wide-char (CJK/emoji)
+            // lines used to drift and corrupt across resizes. Crucially we do NOT trim other trailing
+            // blanks: an ECH/EL erasure leaves the row soft-wrapped with real (intentional) blank
+            // content that must survive. The final (hard-ended) row keeps its cells — step 3 does the
+            // whole-logical-line trailing trim.
             if row.wrapped {
-                var end = row.cells.count
-                while end > 0, isBlank(row.cells[end - 1]) { end -= 1 }
-                current.append(contentsOf: row.cells[0 ..< end])
+                let drop = wideDeferralGap(row: row.cells, next: i + 1 < srcRows.count ? srcRows[i + 1].cells : nil)
+                current.append(contentsOf: row.cells[0 ..< (row.cells.count - drop)])
             } else {
                 current.append(contentsOf: row.cells)
             }

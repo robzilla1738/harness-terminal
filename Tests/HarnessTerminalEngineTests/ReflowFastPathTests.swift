@@ -100,4 +100,20 @@ final class ReflowFastPathTests: XCTestCase {
             XCTAssertEqual(fingerprint(fast), fingerprint(full), "sequence step to rows \(nr)")
         }
     }
+
+    /// A soft-wrapped row carrying an INTERIOR erased gap (EL-0 on a wrapped row leaves real default-
+    /// blank content, not the wide-deferral wrap padding) must reflow identically through the verbatim
+    /// fast path and the join-based general reflow. This is the case the greedy gap-trim corrupted:
+    /// the full reflow used to drop the erased blanks and diverge from the fast path's verbatim copy.
+    func testErasedGapOnWrappedRowMatchesFullReflow() {
+        // 30 chars at width 12 wrap across 3 rows; erase the tail of the first (wrapped) row.
+        let feed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123\u{1b}[1;7H\u{1b}[0K"
+        for nr in [2, 3, 4, 6, 8, 1] {
+            let fast = build(feed, cols: 12, rows: 5)
+            let full = build(feed, cols: 12, rows: 5)
+            fast.resize(cols: 12, rows: nr)
+            full.resizeForcingFullReflow(cols: 12, rows: nr)
+            XCTAssertEqual(fingerprint(fast), fingerprint(full), "erased-gap wrapped row, rows 5→\(nr)")
+        }
+    }
 }

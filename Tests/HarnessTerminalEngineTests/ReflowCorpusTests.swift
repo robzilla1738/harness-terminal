@@ -42,6 +42,13 @@ final class ReflowCorpusTests: XCTestCase {
                  feed: osc133("A") + "$ first command here\r\noutput line one wrapping\r\n" + osc133("A") + "$ second\r\nmore output\r\n"),
             Case(name: "cursor_midscreen", cols: 18, rows: 5,
                  feed: "line one content\r\nline two content\r\nline three\u{1b}[2;6Hmid"),
+            // A soft-wrapped logical line with an INTERIOR erased gap: write a 30-char line that wraps
+            // across rows at width 12, move the cursor back onto the first (still soft-wrapped) row and
+            // erase to end-of-line (EL-0). The 6 erased trailing cells on that wrapped row are real
+            // content (a hole inside the logical line), NOT the wide-deferral wrap padding — reflow and
+            // capture must preserve them. Regression guard for the over-greedy gap-trim.
+            Case(name: "erased_gap_wrapped", cols: 12, rows: 5,
+                 feed: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123\u{1b}[1;7H\u{1b}[0K"),
         ]
     }
 
