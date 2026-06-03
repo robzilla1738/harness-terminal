@@ -191,7 +191,7 @@ extension Command {
              .selectWindow, .moveWindow, .swapWindow, .renumberWindows, .rotateWindow,
              .selectLayout, .nextLayout, .previousLayout, .lastWindow, .linkWindow, .unlinkWindow:
             return .window
-        case .newSession, .killSession, .renameSession:
+        case .newSession, .killSession, .renameSession, .nextSession, .previousSession, .selectSession:
             return .session
         default:
             return .window
