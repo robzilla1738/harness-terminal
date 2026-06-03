@@ -16,6 +16,7 @@ final class CombiningMarkShapingTests: XCTestCase {
     func testLatinDiacriticShapesToGlyphs() {
         let rasterizer = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2)
         let glyphs = rasterizer.shape("e\u{0301}", bold: false, italic: false)
-        XCTAssertFalse(glyphs.isEmpty)
+        XCTAssertFalse(glyphs.isEmpty, "Latin base + combining diacritic must produce shaped glyphs")
+        for g in glyphs { XCTAssertGreaterThanOrEqual(g.utf16Index, 0) }
     }
 }
