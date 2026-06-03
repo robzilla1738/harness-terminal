@@ -682,6 +682,38 @@ final class PerformanceBenchmarks: XCTestCase {
         }
     }
 
+    // MARK: - Input-to-photon (CPU-side echo latency)
+
+    /// Deterministic CPU-side cost of echoing one keystroke: parse the echoed byte, then build the
+    /// frame the renderer would present, via the live incremental path (reuse the previous frame +
+    /// apply damage) — exactly what `renderNowOffMain` does per echoed chunk. This is the
+    /// CI-gatable lower bound on input-to-photon and catches parse/build regressions. It excludes
+    /// the GPU encode + drawable/vsync wait, which need a real `CAMetalLayer` (measured headfully /
+    /// via the `os_signpost` "frame" track); a tiny number here with laggy typing localizes the
+    /// latency to that downstream present path rather than the engine.
+    func testLocalEchoLatency() throws {
+        try skipUnlessEnabled()
+        let cols = 120, rows = 40
+        var times: [UInt64] = []
+        times.reserveCapacity(300)
+        for i in 0 ..< 300 {
+            let term = TerminalEmulator(cols: cols, rows: rows)
+            term.feed("user@host ~/project (main) $ ") // a realistic prompt at steady state
+            let builder = FrameBuilder(theme: theme)
+            let previous = builder.build(term.readGrid()) // prior frame the echo build reuses from
+            _ = term.consumeDamage()                      // clear warmup damage so we time only the echo
+            let ch = String(UnicodeScalar(UInt8(97 + (i % 26)))) // vary the byte = a real cell edit
+            times.append(timedNanos {
+                term.feed(ch)
+                let damage = term.consumeDamage()
+                _ = builder.build(term.readGrid(), region: nil, reusing: previous, damage: damage)
+            })
+        }
+        times.sort()
+        printBenchmark("echo_latency_local_p50", nanos: percentile(times, 0.50))
+        printBenchmark("echo_latency_local_p95", nanos: percentile(times, 0.95))
+    }
+
     // MARK: - Reflow cost (resize / re-wrap)
 
     /// Build a primary-screen emulator carrying ~`historyLines` of mixed scrollback that makes

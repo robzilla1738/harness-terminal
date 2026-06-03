@@ -484,10 +484,11 @@ public final class HarnessTerminalSurfaceView: NSView {
         let pendingFeed = pendingFeed
         emulatorState.async { [weak self] emulator in
             let beforeHistory = emulator.historyCount
-            emulator.feed(data)
+            FrameSignposter.shared.interval("parse") { emulator.feed(data) }
             pendingFeed.leave()
             let afterHistory = emulator.historyCount
             let synchronized = emulator.modes.synchronizedOutput
+            FrameSignposter.shared.event("mainHop")
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.testingMainHopCount &+= 1
@@ -1270,17 +1271,26 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// scheduler (and wake the link) to retry on the next tick rather than leaving a frame unshown.
     private func presentBuiltFrame(_ result: SurfaceFrameBuildResult) {
         guard renderGeneration == result.generation, window != nil, let renderer else { return }
-        guard let drawable = metalLayer.nextDrawable() else { scheduleRender(); return }
-        let didPresent = renderer.present(
-            result.frame,
-            to: drawable,
-            clearColor: result.clearColor,
-            origin: (originOffsetX, originOffsetY),
-            gamma: glyphGamma,
-            ligatures: ligaturesEnabled,
-            damage: result.damage,
-            frameBuildNanos: result.frameBuildNanos
-        )
+        // The `present` interval brackets nextDrawable() + the renderer's inFlightSemaphore.wait():
+        // the drawable / GPU back-pressure (vsync) stall on the main thread — the term the latency
+        // work targets (0b showed parse+build is ~16µs, so any felt lag lives here, not upstream).
+        // When signposts are enabled we also time it and log a rolling p50/p95 (see recordPresent).
+        let sp = FrameSignposter.shared
+        let presentStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
+        let didPresent = sp.interval("present") { () -> Bool in
+            guard let drawable = metalLayer.nextDrawable() else { return false }
+            return renderer.present(
+                result.frame,
+                to: drawable,
+                clearColor: result.clearColor,
+                origin: (originOffsetX, originOffsetY),
+                gamma: glyphGamma,
+                ligatures: ligaturesEnabled,
+                damage: result.damage,
+                frameBuildNanos: result.frameBuildNanos
+            )
+        }
+        if sp.enabled { sp.recordPresent(nanos: DispatchTime.now().uptimeNanoseconds &- presentStart) }
         if didPresent {
             // Remember the presented frame so a live resize can re-stretch it without rebuilding
             // (and without touching the emulator queue). See `repaintLastFrame`.
