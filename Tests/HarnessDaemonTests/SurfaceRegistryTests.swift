@@ -8,9 +8,11 @@ import XCTest
 final class SurfaceRegistryTests: XCTestCase {
     private var root: URL?
     private var previousHome: String?
+    private var previousShell: String?
 
     override func setUpWithError() throws {
         previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
+        previousShell = getenv("SHELL").map { String(cString: $0) }
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("harness-registry-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -21,6 +23,7 @@ final class SurfaceRegistryTests: XCTestCase {
 
     override func tearDownWithError() throws {
         if let previousHome { setenv("HARNESS_HOME", previousHome, 1) } else { unsetenv("HARNESS_HOME") }
+        if let previousShell { setenv("SHELL", previousShell, 1) } else { unsetenv("SHELL") }
         if let root { try? FileManager.default.removeItem(at: root) }
     }
 
@@ -80,6 +83,199 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertGreaterThan(registry.snapshot.revision, startRevision)
     }
 
+    func testNewTabUsesConfiguredShellWhenProvided() throws {
+        let registry = SurfaceRegistry()
+        let fish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        let wsID = registry.snapshot.activeWorkspaceID!
+
+        guard case let .tabID(tabID) = registry.handle(.newTab(workspaceID: wsID, cwd: "/tmp", shell: fish.path)) else {
+            return XCTFail("expected tabID")
+        }
+
+        let surfaceID = try XCTUnwrap(firstSurfaceID(for: tabID, in: registry.snapshot))
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString), fish.path)
+        XCTAssertEqual(ShellLaunchProfile.make(shell: fish.path).arguments, ["--features=no-query-term", "-l"])
+    }
+
+    func testNewSessionUsesConfiguredShellWhenProvided() throws {
+        let registry = SurfaceRegistry()
+        let fish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        let wsID = registry.snapshot.activeWorkspaceID!
+
+        guard case let .sessionID(sessionID) = registry.handle(.newSession(workspaceID: wsID, cwd: "/tmp", name: "fish", shell: fish.path)) else {
+            return XCTFail("expected sessionID")
+        }
+
+        let surfaceID = try XCTUnwrap(firstSurfaceID(forSession: sessionID, in: registry.snapshot))
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString), fish.path)
+        XCTAssertEqual(ShellLaunchProfile.make(shell: fish.path).arguments, ["--features=no-query-term", "-l"])
+    }
+
+    func testNewTabInWorkspaceUsesConfiguredShellWhenProvided() throws {
+        let registry = SurfaceRegistry()
+        let fish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        let workspaceName = try XCTUnwrap(registry.snapshot.activeWorkspace?.name)
+
+        guard case let .tabID(tabID) = registry.handle(.newTabInWorkspace(named: workspaceName, cwd: "/tmp", shell: fish.path)) else {
+            return XCTFail("expected tabID")
+        }
+
+        let surfaceID = try XCTUnwrap(firstSurfaceID(for: tabID, in: registry.snapshot))
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString), fish.path)
+        XCTAssertEqual(ShellLaunchProfile.make(shell: fish.path).arguments, ["--features=no-query-term", "-l"])
+    }
+
+    func testNewSplitUsesConfiguredShellWhenProvided() throws {
+        let registry = SurfaceRegistry()
+        let fish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        let tab = try XCTUnwrap(registry.snapshot.activeWorkspace?.activeTab)
+        let paneID = try XCTUnwrap(tab.rootPane.allPaneIDs().first)
+
+        guard case let .paneID(newPaneID) = registry.handle(.newSplit(tabID: tab.id, paneID: paneID, direction: .vertical, shell: fish.path)) else {
+            return XCTFail("expected paneID")
+        }
+
+        let surfaceID = try XCTUnwrap(surfaceID(forPaneID: newPaneID, in: registry.snapshot))
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString), fish.path)
+        XCTAssertEqual(ShellLaunchProfile.make(shell: fish.path).arguments, ["--features=no-query-term", "-l"])
+    }
+
+    func testInvalidConfiguredSplitShellFallsBackToExecutableShell() throws {
+        let registry = SurfaceRegistry()
+        let invalidShell = "/tmp/harness-missing-split-shell-\(UUID().uuidString)"
+        let tab = try XCTUnwrap(registry.snapshot.activeWorkspace?.activeTab)
+        let paneID = try XCTUnwrap(tab.rootPane.allPaneIDs().first)
+
+        guard case let .paneID(newPaneID) = registry.handle(.newSplit(tabID: tab.id, paneID: paneID, direction: .vertical, shell: invalidShell)) else {
+            return XCTFail("expected paneID")
+        }
+
+        let surfaceID = try XCTUnwrap(surfaceID(forPaneID: newPaneID, in: registry.snapshot))
+        let launchedShell = try XCTUnwrap(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString))
+        XCTAssertNotEqual(launchedShell, invalidShell)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: launchedShell))
+    }
+
+    func testInvalidConfiguredShellFallsBackToExecutableShell() throws {
+        let registry = SurfaceRegistry()
+        let invalidShell = "/tmp/harness-missing-shell-\(UUID().uuidString)"
+        let wsID = registry.snapshot.activeWorkspaceID!
+
+        guard case let .tabID(tabID) = registry.handle(.newTab(workspaceID: wsID, cwd: "/tmp", shell: invalidShell)) else {
+            return XCTFail("expected tabID")
+        }
+
+        let surfaceID = try XCTUnwrap(firstSurfaceID(for: tabID, in: registry.snapshot))
+        let launchedShell = try XCTUnwrap(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString))
+        XCTAssertNotEqual(launchedShell, invalidShell)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: launchedShell))
+    }
+
+    func testColdStartUsesPersistedDefaultShellBeforeDaemonShell() throws {
+        let daemonShell = try makeExecutable(named: "daemon-zsh", contents: "#!/bin/sh\nsleep 2\n")
+        let defaultFish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        setenv("SHELL", daemonShell.path, 1)
+        try saveSettings(defaultShell: defaultFish.path)
+
+        let registry = SurfaceRegistry()
+
+        let surfaceID = try XCTUnwrap(registry.snapshot.activeWorkspace?.activeTab?.rootPane.allSurfaceIDs().first)
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString), defaultFish.path)
+    }
+
+    func testNilAndEmptyShellIPCSurfacesUsePersistedDefaultShell() throws {
+        let daemonShell = try makeExecutable(named: "daemon-zsh", contents: "#!/bin/sh\nsleep 2\n")
+        let defaultFish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        setenv("SHELL", daemonShell.path, 1)
+        try saveSettings(defaultShell: defaultFish.path)
+        let registry = SurfaceRegistry()
+
+        guard case let .surfaceID(nilShellSurfaceID) = registry.handle(.createSurface(cwd: "/tmp", shell: nil)) else {
+            return XCTFail("expected surfaceID")
+        }
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: nilShellSurfaceID), defaultFish.path)
+
+        let emptyShellSurfaceID = UUID().uuidString
+        guard case .ok = registry.handle(.ensureSurface(surfaceID: emptyShellSurfaceID, cwd: "/tmp", shell: "", rows: 24, cols: 80, scrollbackBytes: nil)) else {
+            return XCTFail("expected ok")
+        }
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: emptyShellSurfaceID), defaultFish.path)
+    }
+
+    func testRestoredSnapshotSurfacesUsePersistedDefaultShell() throws {
+        let daemonShell = try makeExecutable(named: "daemon-zsh", contents: "#!/bin/sh\nsleep 2\n")
+        let defaultFish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        setenv("SHELL", daemonShell.path, 1)
+        try saveSettings(defaultShell: defaultFish.path)
+
+        let firstTab = Tab(cwd: "/tmp")
+        let secondTab = Tab(cwd: "/tmp")
+        let session = SessionGroup(tabs: [firstTab, secondTab], activeTabID: firstTab.id)
+        let workspace = Workspace(name: "restored", sessions: [session], activeSessionID: session.id)
+        try SessionStore().saveImmediately(SessionSnapshot(workspaces: [workspace], activeWorkspaceID: workspace.id))
+
+        let registry = SurfaceRegistry()
+
+        for surfaceID in [firstTab, secondTab].flatMap({ $0.rootPane.allSurfaceIDs() }) {
+            XCTAssertEqual(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString), defaultFish.path)
+        }
+    }
+
+    func testExplicitShellIPCSurfacesAreNotReplacedByPersistedDefaultShell() throws {
+        let daemonShell = try makeExecutable(named: "daemon-zsh", contents: "#!/bin/sh\nsleep 2\n")
+        let defaultFish = try makeExecutable(named: "fish", contents: "#!/bin/sh\nsleep 2\n")
+        let explicitShell = try makeExecutable(named: "explicit-shell", contents: "#!/bin/sh\nsleep 2\n")
+        setenv("SHELL", daemonShell.path, 1)
+        try saveSettings(defaultShell: defaultFish.path)
+        let registry = SurfaceRegistry()
+        let wsID = try XCTUnwrap(registry.snapshot.activeWorkspaceID)
+
+        guard case let .tabID(tabID) = registry.handle(.newTab(workspaceID: wsID, cwd: "/tmp", shell: explicitShell.path)) else {
+            return XCTFail("expected tabID")
+        }
+        let tabSurfaceID = try XCTUnwrap(firstSurfaceID(for: tabID, in: registry.snapshot))
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: tabSurfaceID.uuidString), explicitShell.path)
+
+        guard case let .sessionID(sessionID) = registry.handle(.newSession(workspaceID: wsID, cwd: "/tmp", name: "explicit", shell: explicitShell.path)) else {
+            return XCTFail("expected sessionID")
+        }
+        let sessionSurfaceID = try XCTUnwrap(firstSurfaceID(forSession: sessionID, in: registry.snapshot))
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: sessionSurfaceID.uuidString), explicitShell.path)
+
+        let tab = try XCTUnwrap(registry.snapshot.activeWorkspace?.activeTab)
+        let paneID = try XCTUnwrap(tab.rootPane.allPaneIDs().first)
+        guard case let .paneID(newPaneID) = registry.handle(.newSplit(tabID: tab.id, paneID: paneID, direction: .vertical, shell: explicitShell.path)) else {
+            return XCTFail("expected paneID")
+        }
+        let splitSurfaceID = try XCTUnwrap(surfaceID(forPaneID: newPaneID, in: registry.snapshot))
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: splitSurfaceID.uuidString), explicitShell.path)
+
+        guard case let .surfaceID(createdSurfaceID) = registry.handle(.createSurface(cwd: "/tmp", shell: explicitShell.path)) else {
+            return XCTFail("expected surfaceID")
+        }
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: createdSurfaceID), explicitShell.path)
+
+        let ensuredSurfaceID = UUID().uuidString
+        guard case .ok = registry.handle(.ensureSurface(surfaceID: ensuredSurfaceID, cwd: "/tmp", shell: explicitShell.path, rows: 24, cols: 80, scrollbackBytes: nil)) else {
+            return XCTFail("expected ok")
+        }
+        XCTAssertEqual(registry.launchedShellForTesting(surfaceID: ensuredSurfaceID), explicitShell.path)
+    }
+
+    func testInvalidPersistedDefaultShellFallsBackToDaemonShellForColdStart() throws {
+        let daemonShell = try makeExecutable(named: "daemon-zsh", contents: "#!/bin/sh\nsleep 2\n")
+        let invalidDefaultShell = try XCTUnwrap(root).appendingPathComponent("missing-default-shell")
+        setenv("SHELL", daemonShell.path, 1)
+        try saveSettings(defaultShell: invalidDefaultShell.path)
+
+        let registry = SurfaceRegistry()
+
+        let surfaceID = try XCTUnwrap(registry.snapshot.activeWorkspace?.activeTab?.rootPane.allSurfaceIDs().first)
+        let launchedShell = try XCTUnwrap(registry.launchedShellForTesting(surfaceID: surfaceID.uuidString))
+        XCTAssertEqual(launchedShell, daemonShell.path)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: launchedShell))
+    }
+
     func testNotifyMarksExactlyOneTabWaiting() {
         let registry = SurfaceRegistry()
         let wsID = registry.snapshot.activeWorkspaceID!
@@ -96,6 +292,50 @@ final class SurfaceRegistryTests: XCTestCase {
             .flatMap { $0.sessions.flatMap(\.tabs) }
             .filter { $0.status == .waiting }
         XCTAssertEqual(waiting.count, 1, "notify must mark exactly the one matching tab")
+    }
+
+    private func makeExecutable(named name: String, contents: String) throws -> URL {
+        let directory = try XCTUnwrap(root).appendingPathComponent("bin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(name)
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url
+    }
+
+    private func saveSettings(defaultShell: String) throws {
+        var settings = HarnessSettings(defaultShell: defaultShell)
+        settings.customBackgroundHex = "#000000"
+        settings.importedConfigSignature = TerminalConfigImporter.load()?.signature
+        try settings.save()
+    }
+
+    private func surfaceID(forPaneID paneID: PaneID, in snapshot: SessionSnapshot) -> SurfaceID? {
+        snapshot.workspaces
+            .flatMap { $0.sessions.flatMap(\.tabs) }
+            .flatMap { $0.rootPane.allLeaves() }
+            .first { $0.id == paneID }?
+            .surfaceID
+    }
+
+    private func firstSurfaceID(for tabID: TabID, in snapshot: SessionSnapshot) -> SurfaceID? {
+        snapshot.workspaces
+            .flatMap { $0.sessions.flatMap(\.tabs) }
+            .first { $0.id == tabID }?
+            .rootPane
+            .allSurfaceIDs()
+            .first
+    }
+
+    private func firstSurfaceID(forSession sessionID: SessionID, in snapshot: SessionSnapshot) -> SurfaceID? {
+        snapshot.workspaces
+            .flatMap(\.sessions)
+            .first { $0.id == sessionID }?
+            .tabs
+            .first?
+            .rootPane
+            .allSurfaceIDs()
+            .first
     }
 
     func testReorderTabViaHandleReordersWithinSession() {
