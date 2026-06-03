@@ -169,9 +169,26 @@ final class GlyphRasterizerTests: XCTestCase {
         XCTAssertGreaterThan(smoothedCoverage, nativeCoverage + nativeCoverage / 5)
     }
 
+    func test3270NerdFontThickeningStaysNoHeavierThanBold() throws {
+        let resolved = TerminalFontResolver.resolve(fontFamily: "3270 Nerd Font", size: 13)
+        try XCTSkipIf(resolved.effectiveFamily != "3270 Nerd Font", "3270 Nerd Font is not installed")
+        let normal = GlyphRasterizer(fontFamily: "3270 Nerd Font", size: 13, scale: 2)
+        let thickened = GlyphRasterizer(fontFamily: "3270 Nerd Font", size: 13, scale: 2, fontThicken: true, fontThickenStrength: 255)
+        let scalar = UInt32(UnicodeScalar("W").value)
+
+        let normalGlyph = try XCTUnwrap(normal.rasterize(codepoint: scalar))
+        let thickenedGlyph = try XCTUnwrap(thickened.rasterize(codepoint: scalar))
+        let normalCoverage = coverageSum(normalGlyph)
+        let thickenedCoverage = coverageSum(thickenedGlyph)
+
+        XCTAssertGreaterThan(thickenedCoverage, normalCoverage)
+        XCTAssertLessThanOrEqual(thickenedCoverage, normalCoverage + normalCoverage / 10)
+    }
+
     func testFontThickenIncreasesGlyphCoverageWithoutChangingMetricsOrBoxDrawing() throws {
         let normal = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2)
         let thickened = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2, fontThicken: true, fontThickenStrength: 255)
+        let lightest = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2, fontThicken: true, fontThickenStrength: 0)
 
         XCTAssertEqual(thickened.metrics(), normal.metrics())
         XCTAssertNil(thickened.rasterize(codepoint: UInt32(UnicodeScalar(" ").value)))
@@ -179,9 +196,17 @@ final class GlyphRasterizerTests: XCTestCase {
         let scalar = UInt32(UnicodeScalar("W").value)
         let normalGlyph = try XCTUnwrap(normal.rasterize(codepoint: scalar))
         let thickenedGlyph = try XCTUnwrap(thickened.rasterize(codepoint: scalar))
+        let lightestGlyph = try XCTUnwrap(lightest.rasterize(codepoint: scalar))
+        let boldGlyph = try XCTUnwrap(normal.rasterize(codepoint: scalar, bold: true))
+        let normalCoverage = coverageSum(normalGlyph)
+        let lightestCoverage = coverageSum(lightestGlyph)
+        let thickenedCoverage = coverageSum(thickenedGlyph)
+        let boldCoverage = coverageSum(boldGlyph)
         XCTAssertEqual(thickenedGlyph.width, normalGlyph.width)
         XCTAssertEqual(thickenedGlyph.height, normalGlyph.height)
-        XCTAssertGreaterThan(coverageSum(thickenedGlyph), coverageSum(normalGlyph))
+        XCTAssertGreaterThan(lightestCoverage, normalCoverage)
+        XCTAssertGreaterThan(thickenedCoverage, lightestCoverage)
+        XCTAssertLessThanOrEqual(thickenedCoverage, boldCoverage)
 
         let box = UInt32(UnicodeScalar("─").value)
         XCTAssertEqual(thickened.rasterize(codepoint: box), normal.rasterize(codepoint: box))

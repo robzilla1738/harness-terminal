@@ -500,8 +500,11 @@ public final class GlyphRasterizer {
     }
 
     private func thickenCoverage(_ coverage: [UInt8], width: Int, height: Int, strength: Int) -> [UInt8] {
-        guard strength > 0, width > 0, height > 0 else { return coverage }
-        let amount = min(255, max(0, strength))
+        guard width > 0, height > 0 else { return coverage }
+        let clampedStrength = min(255, max(0, strength))
+        let lightestSupportedBoost = 12
+        let strongestSupportedBoost = 30
+        let amount = lightestSupportedBoost + ((strongestSupportedBoost - lightestSupportedBoost) * clampedStrength + 127) / 255
         var out = coverage
         for y in 0 ..< height {
             for x in 0 ..< width {
