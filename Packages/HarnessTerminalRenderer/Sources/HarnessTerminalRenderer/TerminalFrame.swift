@@ -70,6 +70,8 @@ public struct RenderCell: Equatable, Sendable {
     /// backgrounds, inverse cells, selection, and search highlights. Defaults to `true` so any
     /// cell built without an explicit decision is still filled.
     public var drawBackground: Bool = true
+    /// Combining marks copied from the engine cell, composed by the shaping path. `nil` when none.
+    public var marks: [UInt32]? = nil
 
     /// True when there is a visible glyph to rasterize (not blank/space and not the
     /// trailing spacer of a wide cell). The cell background is filled only when
@@ -490,7 +492,8 @@ public struct FrameBuilder {
                 strikethrough: cell.strikethrough,
                 overline: cell.overline,
                 width: cell.width,
-                drawBackground: drawBackground
+                drawBackground: drawBackground,
+                marks: cell.marks
             ))
         }
     }
