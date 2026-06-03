@@ -229,6 +229,11 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// to drag-end (`scheduleResizeCommit`) — so stretching the last frame is exactly correct and
     /// never blocks main behind the parser. Main-thread only (written in `presentBuiltFrame`).
     private var lastPresentedResult: SurfaceFrameBuildResult?
+    /// The (cols, rows) the live-resize preview was last built for, so a continuous drag rebuilds the
+    /// re-wrap preview only when the cell count actually changes (sub-cell drag frames re-present the
+    /// cached preview at the new drawable size). Reset on commit so the next drag starts fresh.
+    private var previewCols = 0
+    private var previewRows = 0
     private var fontFamily: String
     private var fontSize: CGFloat
     /// The canvas (default) background — used as the Metal clear color and (at
@@ -515,6 +520,7 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     func testingResizeGrid(cols: Int, rows: Int) {
         commitGridSize(cols: cols, rows: rows)
+        emulatorState.sync { _ in } // commit now reflows off-main; flush so tests observe it synchronously
     }
 
     var testingRenderSynchronized: Bool { scheduler.synchronized }
@@ -952,10 +958,20 @@ public final class HarnessTerminalSurfaceView: NSView {
             // Live HUD tick: the integer cols/rows only change at cell boundaries (the drawable
             // resizes smoothly every frame), so this fires exactly when the displayed size ticks.
             onGridSizeWillChange?(newCols, newRows, false)
-            // Coalesce: the drawable already resized above (smooth); defer the grid reflow + PTY
-            // SIGWINCH until the size settles so a sidebar slide / window drag can't storm the
-            // shell. Each layout reschedules, so the commit fires once after the last frame.
+            // Coalesce: the drawable already resized above (smooth); defer the authoritative
+            // history-wide reflow + PTY SIGWINCH until the size settles so a sidebar slide / window
+            // drag can't storm the shell. Each layout reschedules, so the commit fires once after
+            // the last frame.
             scheduleResizeCommit(cols: newCols, rows: newRows)
+            // Live re-wrap: show the *content re-wrapped* to the new width during the drag instead of
+            // the old grid revealed/clipped — `previewViewportReflow` is O(visible) and non-mutating,
+            // so it's affordable every cell-boundary tick. Rebuild only when the cell count changes;
+            // `layout()` re-presents the cached preview at the smooth sub-cell drawable size.
+            if newCols != previewCols || newRows != previewRows {
+                previewCols = newCols
+                previewRows = newRows
+                updateResizePreview(cols: newCols, rows: newRows)
+            }
         }
     }
 
@@ -968,18 +984,29 @@ public final class HarnessTerminalSurfaceView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
     }
 
-    /// Commit the settled size to the emulator grid (reflow) and the PTY (one SIGWINCH),
-    /// keeping the two in lockstep, then repaint.
+    /// Commit the settled size to the emulator grid (reflow) and the PTY (one SIGWINCH), then
+    /// repaint. The authoritative width reflow is O(history) — tens to hundreds of ms at deep
+    /// scrollback — so it runs **off the main thread**: the emulator is confined to its serial queue
+    /// (so the resize serializes correctly with any in-flight output feed), and the rebuilt frame is
+    /// presented on completion. Main never blocks, so a drag-release never drops a frame; the live
+    /// preview (or `repaintLastFrame`) already covers the interim until the authoritative frame lands.
     private func commitGridSize(cols: Int, rows newRows: Int) {
         resizeCommitWork = nil
         guard cols != columns || newRows != rows else { return }
         columns = cols
         rows = newRows
-        emulatorSync { $0.resize(cols: cols, rows: newRows) }
-        invalidateRenderGeneration()
-        onResize?(cols, newRows)
+        invalidateRenderGeneration()              // bump generation; drop stale preview / plain-frame cache
+        onResize?(cols, newRows)                  // one PTY SIGWINCH (fire-and-forget)
         onGridSizeWillChange?(cols, newRows, true) // settled size for the HUD
-        scheduler.forceRender() // settle the new size on screen at once (prompt first paint / resize)
+        previewCols = 0; previewRows = 0           // force the next drag to rebuild a fresh preview
+        let generation = renderGeneration
+        emulatorState.async { emulator in
+            emulator.resize(cols: cols, rows: newRows)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.renderGeneration == generation else { return } // superseded by a newer resize
+                self.renderNowOffMain()
+            }
+        }
     }
 
     /// Mark the surface dirty and ensure the display link is running to present it. Every code path
@@ -1265,6 +1292,35 @@ public final class HarnessTerminalSurfaceView: NSView {
         )
         if didPresent { onRenderStats?(renderer.stats) }
         return didPresent
+    }
+
+    /// Build a live re-wrap preview of the viewport at the current drag target `nc × nr` and stash it
+    /// as `lastPresentedResult`, so `layout()`'s `repaintLastFrame` shows the content *re-wrapped to
+    /// the new width* during the drag rather than the old grid revealed/clipped. Pure: reads the
+    /// emulator via `previewViewportReflow` (O(visible), non-mutating) and never reflows history or
+    /// sends `SIGWINCH` (both deferred to `commitGridSize`), so the shell's width belief never desyncs
+    /// from the display. Skipped when an overlay the preview can't represent is active (scrollback,
+    /// selection, IME pre-edit, find, copy mode) or on the alternate screen — `repaintLastFrame` then
+    /// falls back to the cached frame. The emulator-queue read is cheap (~0.3 ms) and idle mid-drag.
+    private func updateResizePreview(cols nc: Int, rows nr: Int) {
+        guard scrollOffset == 0, copyMode == nil, currentSelectionRegion == nil,
+              markedText.isEmpty, !findActive else { return }
+        let config = frameBuildConfiguration
+        let bg = canvasBackground
+        let opacity = canvasOpacity
+        let isFocused = focused
+        let generation = renderGeneration
+        let result: SurfaceFrameBuildResult? = emulatorState.sync { emulator in
+            guard let preview = emulator.previewViewportReflow(cols: nc, rows: nr) else { return nil }
+            let builder = config.makeBuilder()
+            var frame = builder.build(preview, region: nil, imageProvider: { emulator.image(for: $0) })
+            frame.cursor.hollow = !isFocused
+            return SurfaceFrameBuildResult(
+                generation: generation, frame: frame, damage: nil,
+                frameBuildNanos: 0, clearColor: builder.renderColor(bg, alpha: opacity)
+            )
+        }
+        if let result { lastPresentedResult = result }
     }
 
     // MARK: - Cursor blink
