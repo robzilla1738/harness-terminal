@@ -212,5 +212,70 @@ final class PtyDrainCeilingBenchmark: XCTestCase {
               "\"mbps\":\(String(format: "%.3f", mbps)),\"callbacks\":\(counter.callbacks),\"avgChunkBytes\":\(avgChunk)}")
         XCTAssertGreaterThan(counter.bytes, target / 2, "should have drained most of the flood")
     }
+
+    /// Echo round-trip latency through production `RealPty`: write one byte to the master, time until
+    /// the line-discipline ECHO of it comes back through RealPty's read handler + `deliveryQueue`.
+    /// This is the local transport floor under idle-typing latency — PTY + GCD `DispatchSourceRead`
+    /// wakeup + RealPty's per-segment downstream — and excludes only the app↔daemon socket (~tens of
+    /// µs, measured in #27) and the GUI present. A `/bin/cat` child means no shell prompt/readline:
+    /// default termios echoes each char immediately, before cat reads the line. Combined with the
+    /// in-process build cost (`echo_latency_local` ~16µs) it characterizes everything up to the
+    /// drawable present, so a tiny number here localizes any felt lag to the display/vsync path.
+    private final class EchoRTT: @unchecked Sendable {
+        let lock = NSLock()
+        var sentNanos: UInt64 = 0
+        var sem: DispatchSemaphore?
+        var arrivalNanos: UInt64 = 0
+    }
+
+    func testEchoRoundTripLatency() throws {
+        try skipUnlessEnabled()
+        let pty = try RealPty(
+            id: UUID().uuidString,
+            cwd: NSTemporaryDirectory(),
+            shell: "/bin/cat",
+            rows: 48,
+            cols: 160,
+            scrollbackBytes: 1 << 20
+        )
+        defer { pty.close() }
+
+        let rtt = EchoRTT()
+        _ = pty.subscribe { _, _ in
+            let now = DispatchTime.now().uptimeNanoseconds
+            rtt.lock.lock()
+            if let sem = rtt.sem {
+                rtt.arrivalNanos = now
+                rtt.sem = nil
+                sem.signal()
+            }
+            rtt.lock.unlock()
+        }
+        Thread.sleep(forTimeInterval: 0.3) // let fork/exec + the read source settle
+
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz")
+        var samples: [UInt64] = []
+        for i in 0 ..< 200 {
+            let sem = DispatchSemaphore(value: 0)
+            rtt.lock.lock()
+            rtt.sentNanos = DispatchTime.now().uptimeNanoseconds
+            rtt.sem = sem
+            rtt.lock.unlock()
+            pty.write(String(alphabet[i % alphabet.count]))
+            if sem.wait(timeout: .now() + 1.0) == .success {
+                rtt.lock.lock()
+                samples.append(rtt.arrivalNanos &- rtt.sentNanos)
+                rtt.lock.unlock()
+            }
+            Thread.sleep(forTimeInterval: 0.002) // isolate each char's echo
+        }
+
+        guard samples.count >= 20 else { return XCTFail("captured only \(samples.count) echo round-trips") }
+        samples.sort()
+        func pct(_ p: Double) -> UInt64 { samples[min(samples.count - 1, Int(Double(samples.count) * p))] }
+        print("{\"benchmark\":\"echo_roundtrip_realpty_min\",\"nanos\":\(samples.first!),\"samples\":\(samples.count)}")
+        print("{\"benchmark\":\"echo_roundtrip_realpty_p50\",\"nanos\":\(pct(0.50)),\"samples\":\(samples.count)}")
+        print("{\"benchmark\":\"echo_roundtrip_realpty_p95\",\"nanos\":\(pct(0.95)),\"samples\":\(samples.count)}")
+    }
 }
 #endif
