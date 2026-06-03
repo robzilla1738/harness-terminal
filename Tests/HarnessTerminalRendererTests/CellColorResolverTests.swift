@@ -77,6 +77,30 @@ final class CellColorResolverTests: XCTestCase {
         }
     }
 
+    func testSystemLightANSIResolutionStaysStableAcrossRenderingModes() {
+        let systemLightPalette = [
+            "#000000", "#C41A16", "#007400", "#886A08",
+            "#0000B6", "#AA0D91", "#0071A1", "#BFBFBF",
+            "#666666", "#FF6E67", "#00A000", "#B8860B",
+            "#0000FF", "#FF00FF", "#00A2B8", "#FFFFFF",
+        ].map { RGBColor(hex: $0)! }
+        let systemResolver = CellColorResolver(
+            palette: ANSIPalette(base16: systemLightPalette),
+            defaultForeground: RGBColor(hex: "#1D1D1F")!,
+            defaultBackground: RGBColor(hex: "#F5F5F7")!
+        )
+        let cell = TerminalGridCell(codepoint: 0x41, foreground: .palette(1), background: .palette(4))
+        let resolved = systemResolver.resolve(cell)
+
+        XCTAssertEqual(resolved.foreground, RGBColor(hex: "#C41A16"))
+        XCTAssertEqual(resolved.background, RGBColor(hex: "#0000B6"))
+        for mode in [TerminalColorRenderingMode.accurate, .vivid] {
+            _ = RenderColor(resolved.foreground, renderingMode: mode, gamut: .auto)
+            _ = RenderColor(resolved.background, renderingMode: mode, gamut: .auto)
+            XCTAssertEqual(systemResolver.resolve(cell), resolved, "\(mode) must not mutate ANSI source bytes")
+        }
+    }
+
     func testBoldBrightensLowPalette() {
         // Bold + fg palette 1 -> bright variant (palette 9).
         let r = resolver.resolve(TerminalGridCell(codepoint: 0x41, foreground: .palette(1), bold: true))
