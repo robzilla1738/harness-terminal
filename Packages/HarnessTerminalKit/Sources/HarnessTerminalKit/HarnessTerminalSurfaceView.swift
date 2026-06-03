@@ -234,6 +234,19 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// cached preview at the new drawable size). Reset on commit so the next drag starts fresh.
     private var previewCols = 0
     private var previewRows = 0
+    /// In-flight `receiveOffMain` feed count: bumped on main before the emulator-queue dispatch,
+    /// dropped on the queue once the parse completes. The live-resize preview reads `isBusy` to SKIP
+    /// itself when the parser is busy — so a drag never blocks main on `emulatorState.sync` behind an
+    /// in-flight parse (the cached-frame `repaintLastFrame` covers the frame instead). Lives in a
+    /// `Sendable` lock-guarded box because it's touched from main AND the off-main emulator queue.
+    private final class FeedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func enter() { lock.lock(); count += 1; lock.unlock() }
+        func leave() { lock.lock(); count -= 1; lock.unlock() }
+        var isBusy: Bool { lock.lock(); defer { lock.unlock() }; return count > 0 }
+    }
+    private let pendingFeed = FeedCounter()
     private var fontFamily: String
     private var fontSize: CGFloat
     /// The canvas (default) background — used as the Metal clear color and (at
@@ -467,9 +480,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func receiveOffMain(_ data: Data) {
+        pendingFeed.enter() // mark parser busy so a concurrent drag preview skips (no main block)
+        let pendingFeed = pendingFeed
         emulatorState.async { [weak self] emulator in
             let beforeHistory = emulator.historyCount
             emulator.feed(data)
+            pendingFeed.leave()
             let afterHistory = emulator.historyCount
             let synchronized = emulator.modes.synchronizedOutput
             DispatchQueue.main.async { [weak self] in
@@ -999,13 +1015,24 @@ public final class HarnessTerminalSurfaceView: NSView {
         onResize?(cols, newRows)                  // one PTY SIGWINCH (fire-and-forget)
         onGridSizeWillChange?(cols, newRows, true) // settled size for the HUD
         previewCols = 0; previewRows = 0           // force the next drag to rebuild a fresh preview
-        let generation = renderGeneration
-        emulatorState.async { emulator in
-            emulator.resize(cols: cols, rows: newRows)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.renderGeneration == generation else { return } // superseded by a newer resize
-                self.renderNowOffMain()
+        if offMainParserFramePipelineEnabled {
+            // Off-main pipeline: reflow on the emulator's serial queue (serialized with the output
+            // feed), present the rebuilt frame on completion. Main never blocks on the O(history)
+            // width reflow; the live preview / repaintLastFrame covers the interim.
+            let generation = renderGeneration
+            emulatorState.async { emulator in
+                emulator.resize(cols: cols, rows: newRows)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.renderGeneration == generation else { return } // superseded by a newer resize
+                    self.renderNowOffMain()
+                }
             }
+        } else {
+            // Main-confined pipeline: the emulator lives on the main thread (no serial queue to
+            // offload to), so resize + present synchronously — the pre-existing discipline. Going
+            // off-main here would be an unsynchronized mutation of the main-confined emulator.
+            emulatorSync { $0.resize(cols: cols, rows: newRows) }
+            scheduler.forceRender()
         }
     }
 
@@ -1303,6 +1330,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// selection, IME pre-edit, find, copy mode) or on the alternate screen — `repaintLastFrame` then
     /// falls back to the cached frame. The emulator-queue read is cheap (~0.3 ms) and idle mid-drag.
     private func updateResizePreview(cols nc: Int, rows nr: Int) {
+        // Only on the off-main pipeline (the emulator lives on its serial queue; when the flag is off
+        // it is main-confined and `emulatorState.sync` would touch it off its confinement domain).
+        // And ONLY when the parser is idle — otherwise the `emulatorState.sync` below would block
+        // main behind an in-flight parse, the exact jank the cached-frame design eliminates; when
+        // busy we skip and `repaintLastFrame` re-presents the cached frame instead.
+        guard offMainParserFramePipelineEnabled, !pendingFeed.isBusy else { return }
         guard scrollOffset == 0, copyMode == nil, currentSelectionRegion == nil,
               markedText.isEmpty, !findActive else { return }
         let config = frameBuildConfiguration
