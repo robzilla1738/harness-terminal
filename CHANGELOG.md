@@ -60,6 +60,13 @@ A quality-of-life pass aimed at 1:1 parity with the polish of a mainstream GPU t
   resolve cleanly. Harness now bundles a symbols-only Nerd Font as a guaranteed fallback for icon
   codepoints and resolves the configured font more robustly, so shell prompts (Starship,
   Powerlevel10k, …) render their symbols regardless of the primary font.
+- **Thai and combining-mark rendering.** Zero-width combining marks — Thai vowels and tone marks,
+  Latin diacritics — were dropped at print time, so Thai text lost its vowels/tones and accented
+  Latin failed to compose. Marks are now stored on their base cell and composed by CoreText, so the
+  cluster renders correctly and consumes no extra columns. Marks are also preserved when copying,
+  searching, and capturing pane text. (Completes the renderer-side grapheme composition the engine
+  previously deferred.) The Thai tone-mark range U+0E47–U+0E4E was also missing from the zero-width
+  width table and has been added.
 
 ## [1.1.2] - 2026-06-02
 
