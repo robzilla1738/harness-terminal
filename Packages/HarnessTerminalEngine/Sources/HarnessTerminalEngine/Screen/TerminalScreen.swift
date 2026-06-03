@@ -915,7 +915,7 @@ final class TerminalScreen {
         // possible. Phase 1 keeps the primary scalar and drops the combining mark from
         // the grid model (renderer-side grapheme composition lands with the Metal
         // renderer); it must never advance the cursor.
-        if w == 0 { return }
+        if w == 0 { attachCombiningMark(scalar); return }
 
         // A glyph that cannot fit in the remaining columns wraps first.
         if pendingWrap {
@@ -1024,7 +1024,7 @@ final class TerminalScreen {
             let w = CharacterWidth.width(of: scalar)
             // Zero-width (combining marks etc.): attach to the previous glyph; never advance the
             // cursor — identical to `print`'s `w == 0` early return.
-            if w == 0 { continue }
+            if w == 0 { attachCombiningMark(scalar); continue }
             // A glyph that cannot fit the remaining columns wraps first (mirrors `print`).
             if pendingWrap {
                 wrapLine()
@@ -1082,6 +1082,22 @@ final class TerminalScreen {
 
     /// Set the active OSC 8 hyperlink id stamped onto subsequently-printed cells (0 = none).
     func setHyperlink(_ id: UInt32) { currentHyperlink = id }
+
+    /// Attach a zero-width combining mark to the base cell the cursor just wrote. With autowrap
+    /// armed (`pendingWrap`) the cursor is pinned on the last column it wrote, so the base is at
+    /// `cursorCol`; otherwise the base is the cell to the left. A mark with no valid base (start of
+    /// line, or a blank/erased base) is dropped — the standard terminal behavior.
+    private func attachCombiningMark(_ scalar: UInt32) {
+        guard cursorRow >= 0, cursorRow < rows else { return }
+        var col = pendingWrap ? cursorCol : cursorCol - 1
+        guard col >= 0 else { return } // start of line: no base
+        let rowBase = cursorRow * cols
+        // Step from a wide glyph's spacer tail back to its head.
+        if cells[rowBase + col].width == .spacerTail, col > 0 { col -= 1 }
+        guard cells[rowBase + col].codepoint != 0 else { return } // blank base: drop
+        cells[rowBase + col].marks = (cells[rowBase + col].marks ?? []) + [scalar]
+        markRowDirty(cursorRow)
+    }
 
     private func writeCell(_ cell: TerminalGridCell, at col: Int) {
         guard col >= 0, col < cols, cursorRow >= 0, cursorRow < rows else { return }
