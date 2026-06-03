@@ -36,9 +36,9 @@ Trigger: the prefix key (default `ctrl-a`, configurable via `settings.prefixKey`
 | `m` / `M` | mark / unmark the active pane (`join-pane` source) |
 | `j` | `join-pane` (join the marked pane into the active one) |
 | `S` | toggle `synchronize-panes` for the tab |
-| `n` / `p` | `next-window` / `previous-window` |
+| `n` / `p` | `next-session` / `previous-session` |
 | `,` | `rename-window` (interactive) |
-| `0`–`9` | `select-workspace <n>` |
+| `0`–`9` | `select-session <n>` |
 | `[` | `copy-mode` |
 | `d` | `detach-client` |
 | `?` | `show-cheatsheet` |

@@ -78,6 +78,8 @@ accepted forms; it is never silently routed to the next pane.
 | `new-session [-s name]` | Add a session row in the active workspace; in bindable form, accepts a universal `-t <session>` target for grouping with another session's windows. |
 | `kill-session` | Close the active session. |
 | `rename-session [name]` | Interactive or inline. |
+| `next-session` / `previous-session` | Cycle sessions in the active workspace. |
+| `select-session <0..N>` | Focus session by index in the active workspace. |
 | `select-workspace <0..N>` | Focus workspace by index. |
 | `next-workspace` / `previous-workspace` | Cycle workspaces. |
 | `next-pane` / `previous-pane` / `last-pane` | Cycle the active pane (sugar for `select-pane -t :.+/:.-/-l`); bindable. |
