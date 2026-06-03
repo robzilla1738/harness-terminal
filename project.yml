@@ -37,6 +37,8 @@ targets:
       - package: Harness
         product: HarnessTerminalKit
       - package: Harness
+        product: HarnessTerminalRenderer
+      - package: Harness
         product: HarnessTheme
       - package: Harness
         product: HarnessOnboarding

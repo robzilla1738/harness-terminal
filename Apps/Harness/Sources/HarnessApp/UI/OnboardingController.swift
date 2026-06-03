@@ -26,7 +26,7 @@ enum OnboardingController {
     /// step can detect installed agents and wire up notification hooks in one click.
     private static func configureEnvironment() {
         OnboardingEnvironment.detectAgents = {
-            AgentHookInstaller.detectInstalledAgents().map { kind in
+            AgentHookInstaller.detectInstalledAgents().filter(AgentHookInstaller.canInstall).map { kind in
                 OnboardingEnvironment.Agent(
                     id: kind.rawValue,
                     displayName: kind.displayName,
