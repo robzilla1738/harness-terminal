@@ -8,11 +8,13 @@ import XCTest
 /// reintroduces an 8-byte-aligned field (e.g. an `Int`/pointer), so the win can't silently regress.
 final class TerminalGridCellLayoutTests: XCTestCase {
     func testCellStaysCompact() {
-        // Upper bound, not an exact match, so it is robust across Swift versions / architectures
-        // while still catching a regression back toward the old 64-byte layout.
+        // The cell is copied per character write, per scroll, per snapshot, and compared per `==`,
+        // so its size is a throughput lever (packing colors into UInt8 took it 64 → 32 bytes).
+        // The optional `marks` array (combining-mark / grapheme storage, nil in the common case)
+        // adds one pointer word. The bound stays tight so a *further* wide field can't creep in.
         XCTAssertLessThanOrEqual(
-            MemoryLayout<TerminalGridCell>.stride, 40,
-            "TerminalGridCell grew — a wide (8-byte) field likely crept back into the per-cell hot path"
+            MemoryLayout<TerminalGridCell>.stride, 48,
+            "TerminalGridCell grew beyond the combining-mark budget — an unexpected wide field crept into the per-cell hot path"
         )
     }
 

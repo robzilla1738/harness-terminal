@@ -57,6 +57,12 @@ public struct TerminalGridCell: Equatable, Sendable {
     /// OSC 8 hyperlink id (0 = none). Resolved to a URL via `TerminalEmulator.hyperlinkURL(id:)`.
     /// Survives SGR reset (it's not a pen attribute) — only OSC 8 changes it.
     public var hyperlinkID: UInt32
+    /// Trailing zero-width combining marks (Thai vowels/tones, Latin diacritics, …) that compose
+    /// onto this cell's base glyph. `nil` in the overwhelmingly common no-mark case (no allocation).
+    /// They ride along with the cell through every value-type copy: scroll, reflow, snapshot. The
+    /// renderer appends them after the base scalar in its CoreText shaping run, anchored at this
+    /// cell's column, so the composed cluster consumes no extra columns.
+    public var marks: [UInt32]? = nil
 
     public init(
         codepoint: UInt32 = 0,
@@ -73,7 +79,8 @@ public struct TerminalGridCell: Equatable, Sendable {
         strikethrough: Bool = false,
         overline: Bool = false,
         width: TerminalCellWidth = .normal,
-        hyperlinkID: UInt32 = 0
+        hyperlinkID: UInt32 = 0,
+        marks: [UInt32]? = nil
     ) {
         self.codepoint = codepoint
         self.foreground = foreground
@@ -90,6 +97,7 @@ public struct TerminalGridCell: Equatable, Sendable {
         self.overline = overline
         self.width = width
         self.hyperlinkID = hyperlinkID
+        self.marks = marks
     }
 
     /// An empty default-styled cell (a space-equivalent with no attributes).
