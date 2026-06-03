@@ -28,6 +28,12 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
         panel.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces, .stationary]
         panel.isMovableByWindowBackground = false
         panel.alphaValue = 0.0
+        // Lock to a fixed dark appearance. The onboarding is designed dark (near-black ambient
+        // field, light text/logo), but the glass backdrop (NSGlassEffectView / NSVisualEffectView)
+        // follows the window's appearance — unpinned on a light-mode Mac it renders light and the
+        // light text becomes unreadable. Pinning darkAqua makes the backdrop dark to match the
+        // content, with no light/dark switching.
+        panel.appearance = NSAppearance(named: .darkAqua)
 
         super.init(window: panel)
         panel.delegate = self

@@ -16,7 +16,9 @@ enum BinaryInstaller {
 
         var display: String {
             switch self {
-            case .found(let v, _): "Found \(v ?? "harness-cli")"
+            // Fall back to the detected binary's name so the Daemon row reads "Found HarnessDaemon"
+            // — not the CLI's "Found harness-cli" (both rows pass version: nil today).
+            case .found(let v, let path): "Found \(v ?? path.lastPathComponent)"
             case .willInstall: "Will install"
             case .notFound: "Not found in common locations"
             }

@@ -104,6 +104,13 @@ public enum HarnessPaths {
         runtimeDirectory.appendingPathComponent("tunnels", isDirectory: true)
     }
 
+    /// Images pasted into a terminal (e.g. a screenshot on the clipboard) are written here as
+    /// PNGs and their path is pasted into the pane, so programs that accept image-file paths
+    /// (Claude Code, etc.) attach them. Transient (under `runtime/`); the writer prunes old files.
+    public static var pastedImagesDirectory: URL {
+        runtimeDirectory.appendingPathComponent("pasted-images", isDirectory: true)
+    }
+
     public static func tunnelSocketURL(forHost name: String) -> URL {
         // A readable, filesystem-safe prefix (bounded so `sun_path` doesn't overflow) disambiguated
         // by a deterministic hash of the *full* name — so distinct hosts that sanitize to the same

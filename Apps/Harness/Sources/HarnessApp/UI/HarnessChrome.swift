@@ -23,6 +23,10 @@ struct HarnessChromePalette {
     let waiting: NSColor
     let danger: NSColor
     let success: NSColor
+    /// Amber "needs you" color for agent activity dots (tab pills / sidebar / notch). Distinct
+    /// from `waiting` (the blue pane focus ring) so a finished-and-awaiting agent reads as a warm
+    /// call-to-action.
+    let attention: NSColor
     let idleStatus: NSColor
 
     /// Divider hairline on dark themes when the user hasn't set a custom `dividerHex`: a quiet
@@ -47,6 +51,7 @@ struct HarnessChromePalette {
         let waiting = NSColor(srgbRed: 0.51, green: 0.69, blue: 0.96, alpha: 1)
         let danger = NSColor(srgbRed: 0.93, green: 0.49, blue: 0.55, alpha: 1)
         let success = NSColor(srgbRed: 0.59, green: 0.83, blue: 0.55, alpha: 1)
+        let attention = NSColor(srgbRed: 0.96, green: 0.66, blue: 0.26, alpha: 1)
         let idle = blend(foreground, toward: background, fraction: 0.55)
         return build(
             background: background,
@@ -55,6 +60,7 @@ struct HarnessChromePalette {
             waiting: waiting,
             danger: danger,
             success: success,
+            attention: attention,
             idle: idle
         )
     }
@@ -66,6 +72,7 @@ struct HarnessChromePalette {
         waiting: NSColor,
         danger: NSColor,
         success: NSColor,
+        attention: NSColor,
         idle: NSColor
     ) -> HarnessChromePalette {
         let isDark = perceivedBrightness(of: background) < 0.5
@@ -98,6 +105,7 @@ struct HarnessChromePalette {
             waiting: waiting,
             danger: danger,
             success: success,
+            attention: attention,
             idleStatus: idle
         )
     }

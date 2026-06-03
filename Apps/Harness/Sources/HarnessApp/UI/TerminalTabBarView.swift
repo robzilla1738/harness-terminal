@@ -352,6 +352,9 @@ private final class TabPillView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let agentIcon = NSImageView()
+    /// Small activity badge on the agent icon's corner: a breathing brand dot while the agent
+    /// works, amber when it needs you, a brief green check when it just finished. Hidden otherwise.
+    private let activityDot = StatusDotView(diameter: 9)
     /// ⌘N hint, shown at the trailing edge for the first 9 tabs and
     /// swapped for the close button on hover. Empty for tabs past position 9.
     private let shortcutLabel = NSTextField(labelWithString: "")
@@ -422,10 +425,14 @@ private final class TabPillView: NSView {
         shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
 
+        activityDot.translatesAutoresizingMaskIntoConstraints = false
+        activityDot.isHidden = true
+
         addSubview(agentIcon)
         addSubview(titleLabel)
         addSubview(shortcutLabel)
         addSubview(closeButton)
+        addSubview(activityDot)   // above the brand icon, as a corner badge
 
         // Title centers inside the pill with the close button floating on the
         // right edge and the agent brand icon (when present) on the left. Leading
@@ -453,9 +460,13 @@ private final class TabPillView: NSView {
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeWidth,
             closeHeight,
+            // Activity badge pinned to the agent icon's bottom-trailing corner.
+            activityDot.centerXAnchor.constraint(equalTo: agentIcon.trailingAnchor),
+            activityDot.centerYAnchor.constraint(equalTo: agentIcon.bottomAnchor),
         ])
 
         setAgentIcon(for: tab)
+        updateActivityDot(for: tab)
         applyChrome(isActive: isActive)
     }
 
@@ -572,7 +583,18 @@ private final class TabPillView: NSView {
         status = tab.status
         titleLabel.stringValue = tabDisplayTitle(tab)
         setAgentIcon(for: tab)
+        updateActivityDot(for: tab)
         applyChrome(isActive: isActive)
+    }
+
+    /// Reflect the tab's live agent activity on the corner badge.
+    private func updateActivityDot(for tab: Tab) {
+        if let style = AgentActivityIndicator.dotStyle(for: tab) {
+            activityDot.style = style
+            activityDot.isHidden = false
+        } else {
+            activityDot.isHidden = true
+        }
     }
 
     /// Show the agent's brand glyph as a leading icon (tinted to its brand color)

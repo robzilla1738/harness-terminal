@@ -41,6 +41,20 @@ public final class TerminalEmulator: VTParserHandler {
     public var onSetClipboard: ((String) -> Void)?
     /// Bytes the terminal must write back to the PTY (DSR cursor report, DA, etc.).
     public var onResponse: ((Data) -> Void)?
+
+    // MARK: Terminal identity (XTVERSION / secondary DA)
+    //
+    // Capability-detecting tools probe for the terminal's identity. The host sets these from the
+    // `terminal-identity` option (HarnessCore `TerminalIdentity`) — the engine is dependency-free,
+    // so it carries plain values rather than reaching for the version constant. Mutated only on
+    // the emulator's serial queue (host calls go through `emulatorState.sync`).
+
+    /// Name reported in the XTVERSION reply (`DCS > | <name> <version> ST`).
+    public var terminalName: String = "Harness"
+    /// Version text reported in the XTVERSION reply.
+    public var terminalVersion: String = ""
+    /// Numeric firmware field of the secondary-DA reply (`CSI > 1 ; n ; 0 c`).
+    public var secondaryDAVersion: Int = 0
     /// Resolves the terminal's current colors so the engine can answer OSC 10/11/12/4 *queries*
     /// (e.g. a TUI reading the background to pick a light/dark theme). The host supplies it from
     /// the resolved theme; nil roles get no reply.
@@ -528,6 +542,19 @@ public final class TerminalEmulator: VTParserHandler {
         // modifyOtherKeys (XTMODKEYS) — `CSI > 4 ; n m`.
         if final == 0x6D, marker == 0x3E, params.first == 4 {
             modes.modifyOtherKeys = params.count > 1 ? params[1] : 0
+            return
+        }
+        // XTVERSION — `CSI > q`: reply `DCS > | <name> <version> ST`. Capability-detecting tools
+        // (Claude Code) read this to confirm which terminal they're in. Must live here: the
+        // private `>` marker means a `q`/`c` final never reaches the main `switch final` (the
+        // `isPrivate` early-return in `parserCSI` routes it straight to us).
+        if final == 0x71, marker == 0x3E, intermediates.isEmpty {
+            respond("\u{1b}P>|\(terminalName) \(terminalVersion)\u{1b}\\")
+            return
+        }
+        // Secondary DA — `CSI > c`: reply `CSI > 1 ; <version> ; 0 c` (VT220-class, firmware n).
+        if final == 0x63, marker == 0x3E, intermediates.isEmpty {
+            respond("\u{1b}[>1;\(secondaryDAVersion);0c")
             return
         }
         // DECRQM: `CSI ? Ps $ p` — report a private mode's current state.

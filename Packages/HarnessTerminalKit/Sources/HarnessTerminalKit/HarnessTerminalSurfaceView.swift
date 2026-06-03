@@ -776,6 +776,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
+    /// Set the terminal identity the engine answers in XTVERSION (`CSI > q`) and secondary DA
+    /// (`CSI > c`). Resolved by the host from the `terminal-identity` option (HarnessCore
+    /// `TerminalIdentity`). Mutated on the emulator's serial queue since the replies are produced
+    /// while feeding output off-main.
+    public func setTerminalIdentity(name: String, version: String, daVersion: Int) {
+        emulatorState.sync { emulator in
+            emulator.terminalName = name
+            emulator.terminalVersion = version
+            emulator.secondaryDAVersion = daVersion
+        }
+    }
+
     /// Program-requested mouse pointer (OSC 22); nil = system default. Applied via cursor rects.
     private var programPointerCursor: NSCursor?
 
@@ -1776,9 +1788,67 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// wrapped in bracketed-paste markers when the program enabled DECSET 2004 (so shells and
     /// editors treat it as a literal paste, not typed input). Newlines normalize to CR (the
     /// Enter byte) so multi-line pastes run line by line.
+    ///
+    /// When the clipboard holds no text but an image (a screenshot) or a copied file, the image is
+    /// written to a temp PNG and its shell-quoted path is pasted instead — so programs that accept
+    /// image-file paths (Claude Code, etc.) attach it. Mirrors the file-drop path.
     @objc public func paste(_ sender: Any?) {
-        guard let raw = NSPasteboard.general.string(forType: .string), !raw.isEmpty else { return }
-        pasteText(raw)
+        let pasteboard = NSPasteboard.general
+        // Text fast path.
+        if let raw = pasteboard.string(forType: .string), !raw.isEmpty {
+            pasteText(raw)
+            return
+        }
+        // Image on the clipboard → write a temp PNG, paste its quoted path.
+        if let path = Self.writePastedImage(from: pasteboard) {
+            pasteText(Self.shellQuotedPath(path))
+            return
+        }
+        // A file copied in Finder (⌘C → ⌘V) → paste the quoted path(s), like a drag-drop.
+        let text = Self.droppedPathText(for: Self.droppedFileURLs(from: pasteboard))
+        if !text.isEmpty { pasteText(text) }
+    }
+
+    /// If the pasteboard holds a valid image, write it to the pasted-images directory as a PNG and
+    /// return the file path. Prefers raw PNG bytes; converts TIFF / other image reps via a bitmap
+    /// rep. Returns nil when there's no usable image. Validation is via `NSBitmapImageRep` (not the
+    /// engine's `ImageDecoder`, whose inline-display pixel cap would wrongly reject a high-res
+    /// Retina/Pro-Display screenshot — pasting a *path* has no such limit).
+    static func writePastedImage(from pasteboard: NSPasteboard) -> String? {
+        guard let png = pngImageData(from: pasteboard) else { return nil }
+        let dir = HarnessPaths.pastedImagesDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        prunePastedImages(in: dir)
+        let stamp = Int(Date().timeIntervalSince1970)
+        let url = dir.appendingPathComponent("pasted-\(stamp)-\(UUID().uuidString.prefix(8)).png")
+        do { try png.write(to: url); return url.path } catch { return nil }
+    }
+
+    /// Best-effort PNG bytes for whatever image the pasteboard carries (screenshot = PNG/TIFF).
+    private static func pngImageData(from pasteboard: NSPasteboard) -> Data? {
+        // A screenshot is already PNG — trust the raw bytes once they parse as an image.
+        if let png = pasteboard.data(forType: .png), NSBitmapImageRep(data: png) != nil {
+            return png
+        }
+        // Otherwise re-encode a TIFF / NSImage payload to PNG.
+        let tiff = pasteboard.data(forType: .tiff) ?? NSImage(pasteboard: pasteboard)?.tiffRepresentation
+        if let tiff, let rep = NSBitmapImageRep(data: tiff) {
+            return rep.representation(using: .png, properties: [:])
+        }
+        return nil
+    }
+
+    /// Drop pasted-image files older than a day so the directory can't grow unbounded.
+    private static func prunePastedImages(in dir: URL, olderThan maxAge: TimeInterval = 24 * 60 * 60) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
+        ) else { return }
+        let cutoff = Date().addingTimeInterval(-maxAge)
+        for url in entries {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff { try? fm.removeItem(at: url) }
+        }
     }
 
     public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

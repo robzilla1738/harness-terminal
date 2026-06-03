@@ -728,38 +728,76 @@ final class StatusDotView: NSView {
         case waiting
         case error
         case accent
-        /// Tinted by the running agent, with optional user overrides in settings.
+        /// Tinted by the running agent (present/idle), with optional user overrides in settings.
         case agent(hex: String)
+        /// Agent actively working — a gently breathing brand-tinted halo.
+        case agentWorking(hex: String)
+        /// Agent finished and is waiting on you — amber "needs you".
+        case attention
+        /// Agent just finished cleanly — a brief green check before settling to idle.
+        case done
     }
 
     private let dot = CALayer()
     private let halo = CALayer()
+    private let checkView = NSImageView()
+    private let diameter: CGFloat
 
     var style: Style = .idle {
-        didSet { applyStyle() }
+        didSet { if style != oldValue { applyStyle() } }
     }
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(diameter: CGFloat = 14) {
+        self.diameter = diameter
+        super.init(frame: .zero)
         wantsLayer = true
         layer?.addSublayer(halo)
         layer?.addSublayer(dot)
+        checkView.translatesAutoresizingMaskIntoConstraints = false
+        checkView.imageScaling = .scaleProportionallyUpOrDown
+        checkView.isHidden = true
+        checkView.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Agent finished")
+        checkView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: max(7, diameter * 0.64), weight: .bold)
+        addSubview(checkView)
         translatesAutoresizingMaskIntoConstraints = false
-        let width = widthAnchor.constraint(equalToConstant: 14)
-        let height = heightAnchor.constraint(equalToConstant: 14)
+        let width = widthAnchor.constraint(equalToConstant: diameter)
+        let height = heightAnchor.constraint(equalToConstant: diameter)
         width.priority = .defaultHigh
         height.priority = .defaultHigh
-        NSLayoutConstraint.activate([width, height])
+        NSLayoutConstraint.activate([
+            width, height,
+            checkView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            checkView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            checkView.topAnchor.constraint(equalTo: topAnchor),
+            checkView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
         applyStyle()
+        // Re-evaluate the breathing pulse when the user toggles Reduce Motion mid-session, so the
+        // dot matches the live setting even while an agent keeps working (the style — and thus
+        // applyStyle — would otherwise not change). Mirrors the notch's environment reactivity.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(reduceMotionDidChange),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    @objc private func reduceMotionDidChange() {
+        applyStyle()
+    }
+
     override func layout() {
         super.layout()
-        let dotSize: CGFloat = 7
-        let haloSize: CGFloat = 14
+        let dotSize: CGFloat = diameter * 0.5
+        let haloSize: CGFloat = diameter
         dot.frame = CGRect(
             x: (bounds.width - dotSize) / 2,
             y: (bounds.height - dotSize) / 2,
@@ -778,21 +816,40 @@ final class StatusDotView: NSView {
 
     func applyStyle() {
         let c = HarnessDesign.chrome
+        // The "done" check is its own affordance — swap the dot/halo out for a green checkmark.
+        if case .done = style {
+            HarnessMotion.stopPulse(halo)
+            dot.isHidden = true
+            halo.isHidden = true
+            checkView.isHidden = false
+            checkView.contentTintColor = c.success
+            return
+        }
+        checkView.isHidden = true
+        dot.isHidden = false
+
         let color: NSColor
+        var working = false
         switch style {
         case .idle: color = c.idleStatus
         case .waiting: color = c.waiting
         case .error: color = c.danger
         case .accent: color = c.accent
         case let .agent(hex): color = NSColor.fromHex(hex) ?? c.accent
+        case let .agentWorking(hex): color = NSColor.fromHex(hex) ?? c.accent; working = true
+        case .attention: color = c.attention
+        case .done: color = c.success // unreachable (handled above); keeps the switch exhaustive
         }
         dot.backgroundColor = color.cgColor
-        halo.backgroundColor = color.withAlphaComponent(0.20).cgColor
-        halo.isHidden = style == .idle
-        // The dot stays static for every state — the halo is a quiet ring for live
-        // activity (agent working / waiting), but no breathing pulse. The animation
-        // read as busy/distracting, so we always clear any in-flight pulse.
-        HarnessMotion.stopPulse(halo)
+        halo.backgroundColor = color.withAlphaComponent(working ? 0.30 : 0.20).cgColor
+        halo.isHidden = (style == .idle)
+        // Only a working agent breathes — a calm, low-amplitude pulse (the earlier 1.55×/0.45
+        // version read as busy). Everything else is a static ring. Honor Reduce Motion.
+        if working, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            HarnessMotion.startPulse(halo, minScale: 1.0, maxScale: 1.32, duration: 1.6)
+        } else {
+            HarnessMotion.stopPulse(halo)
+        }
     }
 }
 

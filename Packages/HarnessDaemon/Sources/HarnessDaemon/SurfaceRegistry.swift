@@ -1002,6 +1002,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
         do {
             let shellPath = Self.resolveShell(shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
             let workDir = existingWorkingDirectory(cwd)
+            // Terminal identity advertised to the child shell (TERM_PROGRAM). Single source: the
+            // `terminal-identity` option the GUI/CLI sets; the app reads the same value for its
+            // XTVERSION reply.
+            let identity = TerminalIdentity.spec(forOption: optionStore.get(TerminalIdentity.optionKey)?.stringValue)
             let session = try RealPty(
                 id: surfaceID,
                 cwd: workDir,
@@ -1010,6 +1014,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 cols: cols,
                 scrollbackBytes: scrollbackBytes ?? 1024 * 1024,
                 extraEnvironment: extraEnvironment(forSurfaceKey: surfaceID),
+                termProgram: identity.name,
+                termProgramVersion: identity.version,
                 scrollbackURL: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
             )
             session.onExit = { [weak self, weak session] in

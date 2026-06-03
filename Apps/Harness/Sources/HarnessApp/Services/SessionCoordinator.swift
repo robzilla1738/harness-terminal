@@ -230,10 +230,18 @@ final class SessionCoordinator: NSObject {
             host.applyTheme(named: snapshot.themeName)
             host.applySettings(settings)
             host.allowProgramClipboardAccess = allowClipboard
+            applyTerminalIdentity(to: host)
             pushBorderColors(to: host)
         }
         refreshSyncSiblings()
         reassertMarkedPane()
+    }
+
+    /// Push the current `terminal-identity` option to a host so its XTVERSION / secondary-DA
+    /// replies match the `TERM_PROGRAM` the daemon exports (single source: `options.json`).
+    private func applyTerminalIdentity(to host: TerminalHostView) {
+        let spec = TerminalIdentity.spec(forOption: HarnessOptions.shared.get(TerminalIdentity.optionKey)?.stringValue)
+        host.setTerminalIdentity(name: spec.name, version: spec.version, daVersion: spec.daVersion)
     }
 
     /// Push the theme's focus-ring / waiting colors into a host (the terminal package
@@ -312,6 +320,13 @@ final class SessionCoordinator: NSObject {
                     let previous = lastAgentActivity[key]
                     lastAgentActivity[key] = agent.activity
 
+                    // Visual "just finished" check: working → idle (a clean finish, not awaiting
+                    // input — that's the amber/attention state). Drives the brief green check on
+                    // tab pills + sidebar rows.
+                    if previous == .working, agent.activity == .idle, tab.status != .waiting {
+                        AgentFinishTracker.shared.noteFinished(tabID: tab.id)
+                    }
+
                     // Only the working → (idle|awaiting) edge counts as "stopped".
                     let stopped = previous == .working
                         && (agent.activity == .idle || agent.activity == .awaiting)
@@ -383,6 +398,7 @@ final class SessionCoordinator: NSObject {
             host.applyTheme(named: snapshot.themeName)
             host.applySettings(settings)
             host.allowProgramClipboardAccess = allowClipboard
+            applyTerminalIdentity(to: host)
             pushBorderColors(to: host)
         }
         NotificationCenter.default.post(
@@ -1214,6 +1230,7 @@ final class SessionCoordinator: NSObject {
         host.hostDelegate = self
         host.applyTheme(named: snapshot.themeName)
         host.applySettings(settings)
+        applyTerminalIdentity(to: host)
         pushBorderColors(to: host)
         terminalHosts.register(host)
         return host

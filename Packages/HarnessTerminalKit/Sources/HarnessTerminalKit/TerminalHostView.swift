@@ -416,6 +416,12 @@ public final class TerminalHostView: NSView {
         set { nativeView.allowProgramClipboardAccess = newValue }
     }
 
+    /// Set the terminal identity the engine answers in XTVERSION / secondary DA. The app resolves
+    /// this from the `terminal-identity` option (HarnessCore `TerminalIdentity`).
+    public func setTerminalIdentity(name: String, version: String, daVersion: Int) {
+        nativeView.setTerminalIdentity(name: name, version: version, daVersion: daVersion)
+    }
+
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window?.firstResponder !== nativeView {

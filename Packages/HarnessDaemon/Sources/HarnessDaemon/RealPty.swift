@@ -134,6 +134,13 @@ public final class RealPty: @unchecked Sendable {
     /// pane keeps the exact shell it started with (not whatever `$SHELL` happens to be now).
     private let shell: String
 
+    /// `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` exported to the child — the terminal-identity the
+    /// daemon advertises so capability-detecting tools (Claude Code) recognize Harness and enable
+    /// the Kitty keyboard protocol. Empty = not set. Captured at init and reused verbatim on
+    /// respawn, so an identity change applies to newly-created panes (like `TERM`).
+    private let termProgram: String
+    private let termProgramVersion: String
+
     public init(
         id: DaemonSurfaceID,
         cwd: String,
@@ -142,9 +149,13 @@ public final class RealPty: @unchecked Sendable {
         cols: UInt16 = 80,
         scrollbackBytes: Int = 1024 * 1024,
         extraEnvironment: [String: String] = [:],
+        termProgram: String = "",
+        termProgramVersion: String = "",
         scrollbackURL: URL? = nil
     ) throws {
         self.id = id
+        self.termProgram = termProgram
+        self.termProgramVersion = termProgramVersion
         self.maxScrollbackBytes = scrollbackURL == nil
             ? scrollbackBytes
             : max(scrollbackBytes, ScrollbackFile.minimumRetentionCap)
@@ -193,6 +204,12 @@ public final class RealPty: @unchecked Sendable {
         // verbatim, so program output renders exactly as the program intends.
         environment["COLORTERM"] = "truecolor"
         environment["HARNESS_SURFACE"] = id
+        // Terminal identity. Set alongside TERM/COLORTERM (intrinsic terminal vars, not user env)
+        // and BEFORE the extraEnvironment merge so a user `set-environment TERM_PROGRAM=…` wins.
+        if !termProgram.isEmpty {
+            environment["TERM_PROGRAM"] = termProgram
+            environment["TERM_PROGRAM_VERSION"] = termProgramVersion
+        }
         // `HARNESS` (the $TMUX analog the OSC 133 scripts gate on) + session `set-environment`
         // vars come in via extraEnvironment from SurfaceRegistry.
         for (key, value) in extraEnvironment { environment[key] = value }
@@ -329,6 +346,10 @@ public final class RealPty: @unchecked Sendable {
         // verbatim, so program output renders exactly as the program intends.
         environment["COLORTERM"] = "truecolor"
         environment["HARNESS_SURFACE"] = id
+        if !termProgram.isEmpty {
+            environment["TERM_PROGRAM"] = termProgram
+            environment["TERM_PROGRAM_VERSION"] = termProgramVersion
+        }
         for (key, value) in extraEnvironment { environment[key] = value }
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
         let cwdC = strdup(cwd)

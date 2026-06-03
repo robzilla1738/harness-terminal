@@ -380,6 +380,40 @@ final class EngineConformanceTests: XCTestCase {
         XCTAssertEqual(String(data: response, encoding: .utf8), "\u{1b}[?1;2c")
     }
 
+    func testSecondaryDeviceAttributesResponse() {
+        // `CSI > c` — secondary DA. The `>` private marker routes it through handlePrivateMode;
+        // it must still produce a `CSI > 1 ; <ver> ; 0 c` identity reply, not be dropped.
+        let emu = TerminalEmulator(cols: 80, rows: 24)
+        emu.secondaryDAVersion = 110
+        var response = Data()
+        emu.onResponse = { response.append($0) }
+        emu.feed("\u{1b}[>c")
+        XCTAssertEqual(String(data: response, encoding: .utf8), "\u{1b}[>1;110;0c")
+    }
+
+    func testXTVersionResponse() {
+        // `CSI > q` — XTVERSION. Reply is `DCS > | <name> <version> ST`. Capability-detecting
+        // tools (Claude Code) read this to recognize which terminal they're in.
+        let emu = TerminalEmulator(cols: 80, rows: 24)
+        emu.terminalName = "Harness"
+        emu.terminalVersion = "1.1.2"
+        var response = Data()
+        emu.onResponse = { response.append($0) }
+        emu.feed("\u{1b}[>q")
+        XCTAssertEqual(String(data: response, encoding: .utf8), "\u{1b}P>|Harness 1.1.2\u{1b}\\")
+    }
+
+    func testXTVersionUsesCompatibleIdentityWhenSet() {
+        // Compatible mode reports `ghostty` so tools enable Kitty-keyboard / Shift+Enter today.
+        let emu = TerminalEmulator(cols: 80, rows: 24)
+        emu.terminalName = "ghostty"
+        emu.terminalVersion = "1.1.2"
+        var response = Data()
+        emu.onResponse = { response.append($0) }
+        emu.feed("\u{1b}[>q")
+        XCTAssertEqual(String(data: response, encoding: .utf8), "\u{1b}P>|ghostty 1.1.2\u{1b}\\")
+    }
+
     func testTitleOSC() {
         let emu = TerminalEmulator(cols: 80, rows: 24)
         var title: String?

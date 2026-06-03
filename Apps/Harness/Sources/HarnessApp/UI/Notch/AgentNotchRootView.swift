@@ -115,7 +115,7 @@ struct AgentNotchRootView: View {
             model.openRow(row)
         } label: {
             rowShell(
-                dot: statusDot(kind: row.agentKind, waiting: row.waitingCount > 0),
+                dot: statusDot(kind: row.agentKind, waiting: row.waitingCount > 0, working: row.agentActivity == .working),
                 title: rowTitle(row),
                 subtitle: rowSubtitle(row),
                 badge: rowBadge(row)
@@ -166,18 +166,20 @@ struct AgentNotchRootView: View {
     private func agentDots(limit: Int) -> some View {
         HStack(spacing: -3) {
             ForEach(Array(model.agents.prefix(limit).enumerated()), id: \.element.id) { _, agent in
-                statusDot(kind: agent.kind, waiting: agent.waiting)
+                statusDot(kind: agent.kind, waiting: agent.waiting, working: agent.activity == .working)
                     .overlay(Circle().stroke(Color.black, lineWidth: 1.5))
             }
         }
         .accessibilityHidden(true)
     }
 
-    private func statusDot(kind: AgentKind?, waiting: Bool) -> some View {
-        Circle()
-            .fill(dotColor(kind: kind, waiting: waiting))
-            .frame(width: 9, height: 9)
-            .shadow(color: dotColor(kind: kind, waiting: waiting).opacity(waiting ? 0.6 : 0.25), radius: waiting ? 5 : 2)
+    private func statusDot(kind: AgentKind?, waiting: Bool, working: Bool) -> some View {
+        NotchStatusDot(
+            color: dotColor(kind: kind, waiting: waiting),
+            working: working,
+            waiting: waiting,
+            reduceMotion: reduceMotion
+        )
     }
 
     private func dotColor(kind: AgentKind?, waiting: Bool) -> Color {
@@ -262,5 +264,38 @@ struct AgentNotchRootView: View {
         if row.agentActivity == .working { return "working" }
         if row.rowKind == .session, row.tabCount > 1 { return "\(row.tabCount) tabs" }
         return nil
+    }
+}
+
+/// A notch status dot that gently breathes while its agent is working (honoring Reduce Motion),
+/// and is a calm static dot otherwise. The breathing is the closed-view "agent is still working"
+/// signal that pairs with the red waiting badge.
+private struct NotchStatusDot: View {
+    let color: Color
+    let working: Bool
+    let waiting: Bool
+    let reduceMotion: Bool
+    @State private var pulse = false
+
+    private var animates: Bool { working && !reduceMotion }
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 9, height: 9)
+            .scaleEffect(animates && pulse ? 1.18 : 1.0)
+            .opacity(animates && pulse ? 0.62 : 1.0)
+            .shadow(color: color.opacity(waiting ? 0.6 : 0.25), radius: waiting ? 5 : 2)
+            .onAppear { syncPulse() }
+            .onChange(of: working) { _, _ in syncPulse() }
+            .onChange(of: reduceMotion) { _, _ in syncPulse() }
+    }
+
+    private func syncPulse() {
+        if animates {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { pulse = true }
+        } else {
+            withAnimation(.easeOut(duration: 0.2)) { pulse = false }
+        }
     }
 }

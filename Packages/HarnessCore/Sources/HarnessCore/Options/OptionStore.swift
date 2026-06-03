@@ -140,6 +140,11 @@ public final class OptionStore: @unchecked Sendable {
         // `repeat-time` (ms): how long the prefix stays armed after a repeatable binding
         // (`bind -r`) so the key repeats without re-pressing the prefix. Read by `PrefixKeymap`.
         "repeat-time": .int(500),
+        // How Harness identifies itself to programs (`TERM_PROGRAM` env + XTVERSION/secondary-DA
+        // replies). `compatible` (default) reports a protocol-compatible identity so tools like
+        // Claude Code enable Kitty-keyboard / Shift+Enter immediately; `harness` reports the true
+        // name. Read by the daemon (env, via `TerminalIdentity`) and the app (XTVERSION reply).
+        TerminalIdentity.optionKey: .string(TerminalIdentity.Mode.compatible.rawValue),
     ]
 
     /// Values that shipped as defaults in an earlier build and have since been

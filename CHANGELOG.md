@@ -33,8 +33,28 @@ A quality-of-life pass aimed at 1:1 parity with the polish of a mainstream GPU t
   timing; off by default, Settings ▸ Agents).
 - **Non-native ("fast") full screen.** A new ⌃⌘⇧F fills the screen without the macOS Spaces
   animation, alongside the existing native ⌃⌘F.
+- **Terminal identity (`TERM_PROGRAM`, XTVERSION, secondary DA).** Harness now introduces itself to
+  programs: it exports `TERM_PROGRAM`/`TERM_PROGRAM_VERSION` and answers the XTVERSION (`CSI > q`) and
+  secondary-DA (`CSI > c`) identity queries. A new Settings ▸ Advanced ▸ "Terminal identity" control
+  (also `harness-cli set-option terminal-identity …`) chooses between **Compatible** (default —
+  reports a protocol-compatible identity so tools like Claude Code enable the Kitty keyboard protocol
+  immediately) and **Harness** (the true name + version).
+- **Paste a screenshot.** ⌘V with an image on the clipboard now writes it to a temp PNG and pastes
+  the file path (bracketed-paste-wrapped), so agents that accept image-file paths — Claude Code, etc.
+  — attach it. Pasting a file copied in Finder works the same way.
+- **Agent activity indicators.** Tab pills, sidebar session rows, and the notch HUD now show a gentle
+  breathing dot while an agent is working, a brief green check when it finishes, and an amber dot when
+  it's waiting on you — alongside the existing red waiting count. Honors Reduce Motion.
 
 ### Fixed
+- **Shift+Enter inserts a newline in Claude Code (#39).** Claude Code only enables native Shift+Enter
+  once it recognizes the terminal; Harness previously advertised no identity, so the Kitty keyboard
+  protocol stayed off and Shift+Enter submitted. Harness now reports a compatible identity by default
+  (see "Terminal identity" above), so Shift+Enter works out of the box.
+- **Onboarding is readable in light mode.** The onboarding window is now pinned to a fixed dark
+  appearance, so its light text/logo no longer rendered invisibly on a light glass panel on
+  light-mode Macs. The install screen's Daemon row now reports "Found HarnessDaemon" instead of
+  duplicating the CLI's "Found harness-cli".
 - **Nerd Font / Powerline glyphs render correctly (#37).** Prompt icons and Powerline separators
   rendered as "tofu" boxes (□) when the configured font wasn't a Nerd Font or its name didn't
   resolve cleanly. Harness now bundles a symbols-only Nerd Font as a guaranteed fallback for icon

@@ -551,7 +551,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session", "harness", "controls", "experience"],
         3: ["keys", "prefix", "binding", "keybinding", "shortcut"],
         4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "detection"],
-        5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render"],
+        5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"],
     ]
 
     private func buildSidebar() -> NSView {
@@ -1148,6 +1148,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsToggleRow("OSC 52 clipboard", advToggle("set-clipboard", "")),
         ])
 
+        let identityGroup = settingsGroup("Terminal identity", [
+            settingsCaption("How Harness identifies itself to programs (TERM_PROGRAM + XTVERSION). Compatible reports a protocol-compatible identity so tools like Claude Code enable Shift+Enter immediately. Harness reports its true name and version. Applies to newly-opened panes."),
+            settingsRow("Reported identity", advSegment(TerminalIdentity.optionKey, TerminalIdentity.Mode.allCases.map(\.rawValue))),
+        ])
+
         let indexGroup = settingsGroup("Indexing", [
             settingsRow("Window base index", advSegment("base-index", ["0", "1"])),
             settingsRow("Pane base index", advSegment("pane-base-index", ["0", "1"])),
@@ -1185,6 +1190,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             performanceGroup,
             statusGroup,
             inputGroup,
+            identityGroup,
             indexGroup,
             titleGroup,
             lifecycleGroup,
