@@ -1141,6 +1141,12 @@ public final class TerminalMetalRenderer {
                 let scalar = Unicode.Scalar(rc.codepoint) ?? " "
                 let before = runText.utf16.count
                 runText.unicodeScalars.append(scalar)
+                // Append this cell's combining marks into the same cluster so CoreText composes
+                // them. Every UTF-16 unit they contribute maps to the base cell's column `c`, so all
+                // composed glyphs anchor on the base cell and consume no extra columns.
+                for m in rc.marks ?? [] {
+                    if let ms = Unicode.Scalar(m) { runText.unicodeScalars.append(ms) }
+                }
                 for _ in before ..< runText.utf16.count { utf16ToColumn.append(c) }
                 c += 1
             }
