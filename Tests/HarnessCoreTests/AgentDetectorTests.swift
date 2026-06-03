@@ -57,6 +57,12 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertTrue(defaultEntry?.matchesAny(["2.1.152", "claude"]) ?? false)
     }
 
+    func testDefaultTableResolvesOpenCodeExecutable() throws {
+        let entry = try XCTUnwrap(AgentTable.default.entries.first { $0.matches(executable: "opencode") })
+        XCTAssertEqual(entry.kind, .openCode)
+        XCTAssertTrue(entry.matchesAny(["opencode"]))
+    }
+
     /// Title-based fallback for when the daemon proc-tree scan can't see the
     /// agent (the case the user reported: Claude Code shown as raw text in
     /// the sidebar instead of a chip).
@@ -84,6 +90,8 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertEqual(AgentTitleInference.kind(from: "Grok"), .grok)
         XCTAssertEqual(AgentTitleInference.kind(from: "✱ Grok"), .grok)
         XCTAssertEqual(AgentTitleInference.kind(from: "Grok Build"), .grok)
+        XCTAssertEqual(AgentTitleInference.kind(from: "OpenCode"), .openCode)
+        XCTAssertEqual(AgentTitleInference.kind(from: "opencode session"), .openCode)
     }
 
     /// Grok Build is detected by its binary names (`grok`, `grok-build`, `grok-cli`).
