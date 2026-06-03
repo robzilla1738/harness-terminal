@@ -1,4 +1,5 @@
 import Foundation
+import HarnessCore
 import HarnessTheme
 
 @MainActor
@@ -20,6 +21,22 @@ public enum ThemeManager {
         "#666666", "#d54e53", "#b9ca4a", "#e7c547",
         "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
     ]
+
+    public static let systemLightBackgroundHex = "#F5F5F7"
+    public static let systemLightForegroundHex = "#1D1D1F"
+    public static let systemLightCursorHex = "#0066CC"
+    public static let systemLightPaletteHex = [
+        "#000000", "#C41A16", "#007400", "#886A08",
+        "#0000B6", "#AA0D91", "#0071A1", "#BFBFBF",
+        "#666666", "#FF6E67", "#00A000", "#B8860B",
+        "#0000FF", "#FF00FF", "#00A2B8", "#FFFFFF",
+    ]
+    public static let systemDarkBackgroundHex = defaultBaselineBackgroundHex
+    public static let systemDarkForegroundHex = defaultBaselineForegroundHex
+    public static let systemDarkCursorHex = defaultBaselineForegroundHex
+    public static let systemDarkPaletteHex = defaultBaselinePaletteHex
+    public static let defaultSystemLightThemeName = "Zenwritten Light"
+    public static let defaultSystemDarkThemeName = HarnessThemeCatalog.defaultThemeName
 
     public static let featuredThemes = [
         HarnessThemeCatalog.defaultThemeName,
@@ -60,18 +77,146 @@ public enum ThemeManager {
         public let cursorHex: String
     }
 
+    public struct ResolvedAppearance: Sendable, Equatable {
+        public let canvas: ResolvedCanvas
+        public let paletteHex: [String?]
+    }
+
     /// Single source of truth for the canvas colors. Resolution order:
-    /// explicit custom hex > named theme preset > black/white baseline.
+    /// explicit custom hex > Harness appearance mode palette > black/white baseline.
     public static func resolvedCanvas(
         themeName: String,
         customBackgroundHex: String?,
         customForegroundHex: String?,
         customCursorHex: String?
     ) -> ResolvedCanvas {
-        let bg = customBackgroundHex ?? backgroundHex(themeName: themeName) ?? defaultBaselineBackgroundHex
-        let fg = customForegroundHex ?? foregroundHex(themeName: themeName) ?? defaultBaselineForegroundHex
-        let cursor = customCursorHex ?? cursorHex(themeName: themeName) ?? fg
-        return ResolvedCanvas(backgroundHex: bg, foregroundHex: fg, cursorHex: cursor)
+        resolvedCanvas(
+            themeName: themeName,
+            appearanceMode: .theme,
+            systemAppearance: .dark,
+            systemLightThemeName: nil,
+            systemDarkThemeName: nil,
+            customBackgroundHex: customBackgroundHex,
+            customForegroundHex: customForegroundHex,
+            customCursorHex: customCursorHex
+        )
+    }
+
+    public static func resolvedCanvas(
+        themeName: String,
+        appearanceMode: HarnessAppearanceMode,
+        systemAppearance: HarnessSystemAppearance,
+        systemLightThemeName: String? = nil,
+        systemDarkThemeName: String? = nil,
+        customBackgroundHex: String?,
+        customForegroundHex: String?,
+        customCursorHex: String?
+    ) -> ResolvedCanvas {
+        resolvedAppearance(
+            themeName: themeName,
+            appearanceMode: appearanceMode,
+            systemAppearance: systemAppearance,
+            systemLightThemeName: systemLightThemeName,
+            systemDarkThemeName: systemDarkThemeName,
+            customBackgroundHex: customBackgroundHex,
+            customForegroundHex: customForegroundHex,
+            customCursorHex: customCursorHex
+        ).canvas
+    }
+
+    public static func resolvedAppearance(
+        themeName: String,
+        appearanceMode: HarnessAppearanceMode,
+        systemAppearance: HarnessSystemAppearance,
+        systemLightThemeName: String? = nil,
+        systemDarkThemeName: String? = nil,
+        customBackgroundHex: String?,
+        customForegroundHex: String?,
+        customCursorHex: String?
+    ) -> ResolvedAppearance {
+        let base: ResolvedAppearance
+        switch appearanceMode {
+        case .theme:
+            let fg = foregroundHex(themeName: themeName) ?? defaultBaselineForegroundHex
+            base = ResolvedAppearance(
+                canvas: ResolvedCanvas(
+                    backgroundHex: backgroundHex(themeName: themeName) ?? defaultBaselineBackgroundHex,
+                    foregroundHex: fg,
+                    cursorHex: cursorHex(themeName: themeName) ?? fg
+                ),
+                paletteHex: paletteHex(themeName: themeName)
+            )
+        case .macOSSystem:
+            if let theme = systemTheme(
+                systemAppearance: systemAppearance,
+                systemLightThemeName: systemLightThemeName,
+                systemDarkThemeName: systemDarkThemeName
+            ) {
+                let foreground = theme.foregroundHex
+                base = ResolvedAppearance(
+                    canvas: ResolvedCanvas(
+                        backgroundHex: theme.backgroundHex,
+                        foregroundHex: foreground,
+                        cursorHex: theme.cursorHex ?? foreground
+                    ),
+                    paletteHex: theme.paletteHex
+                )
+            } else {
+                let palette = systemPaletteHex(systemAppearance: systemAppearance)
+                let background: String
+                let foreground: String
+                let cursor: String
+                switch systemAppearance {
+                case .light:
+                    background = systemLightBackgroundHex
+                    foreground = systemLightForegroundHex
+                    cursor = systemLightCursorHex
+                case .dark:
+                    background = systemDarkBackgroundHex
+                    foreground = systemDarkForegroundHex
+                    cursor = systemDarkCursorHex
+                }
+                base = ResolvedAppearance(
+                    canvas: ResolvedCanvas(backgroundHex: background, foregroundHex: foreground, cursorHex: cursor),
+                    paletteHex: palette
+                )
+            }
+        }
+        let foreground = customForegroundHex ?? base.canvas.foregroundHex
+        let canvas = ResolvedCanvas(
+            backgroundHex: customBackgroundHex ?? base.canvas.backgroundHex,
+            foregroundHex: foreground,
+            cursorHex: customCursorHex ?? base.canvas.cursorHex
+        )
+        return ResolvedAppearance(canvas: canvas, paletteHex: base.paletteHex)
+    }
+
+    public static func systemPaletteHex(systemAppearance: HarnessSystemAppearance) -> [String?] {
+        switch systemAppearance {
+        case .light: return systemLightPaletteHex
+        case .dark: return systemDarkPaletteHex
+        }
+    }
+
+    private static func systemTheme(
+        systemAppearance: HarnessSystemAppearance,
+        systemLightThemeName: String?,
+        systemDarkThemeName: String?
+    ) -> HarnessThemeDefinition? {
+        switch systemAppearance {
+        case .light:
+            return exactTheme(named: systemLightThemeName)
+                ?? exactTheme(named: defaultSystemLightThemeName)
+        case .dark:
+            return exactTheme(named: systemDarkThemeName)
+                ?? exactTheme(named: defaultSystemDarkThemeName)
+        }
+    }
+
+    private static func exactTheme(named name: String?) -> HarnessThemeDefinition? {
+        guard let name else { return nil }
+        if name == defaultDisplayName { return HarnessThemeCatalog.theme(named: defaultThemeName) }
+        return HarnessThemeCatalog.theme(named: name)
     }
 
     public static func cursorTextHex(themeName: String) -> String? {
