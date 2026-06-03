@@ -1334,9 +1334,6 @@ final class SessionCardRowView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let agentChip = AgentChipView()
-    /// Activity badge on the agent chip's corner: breathing brand dot while working, amber when it
-    /// needs you, a brief green check when it just finished. Aggregated across the session's tabs.
-    private let activityDot = StatusDotView(diameter: 10)
     private var isSelected = false
     private var isHovered = false
     private var trackingArea: NSTrackingArea?
@@ -1370,14 +1367,10 @@ final class SessionCardRowView: NSView {
         agentChip.translatesAutoresizingMaskIntoConstraints = false
         agentChip.isHidden = true
 
-        activityDot.translatesAutoresizingMaskIntoConstraints = false
-        activityDot.isHidden = true
-
         addSubview(fill)
         fill.addSubview(titleLabel)
         fill.addSubview(metaLabel)
         fill.addSubview(agentChip)
-        fill.addSubview(activityDot)   // corner badge, above the chip
 
         NSLayoutConstraint.activate([
             fill.topAnchor.constraint(equalTo: topAnchor, constant: 2),
@@ -1395,10 +1388,6 @@ final class SessionCardRowView: NSView {
             agentChip.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             agentChip.heightAnchor.constraint(equalToConstant: 18),
             agentChip.widthAnchor.constraint(lessThanOrEqualToConstant: 140),
-
-            // Activity badge on the chip's top-trailing corner (overlay — doesn't affect layout).
-            activityDot.centerXAnchor.constraint(equalTo: agentChip.trailingAnchor),
-            activityDot.centerYAnchor.constraint(equalTo: agentChip.topAnchor),
 
             metaLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             metaLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
@@ -1445,13 +1434,6 @@ final class SessionCardRowView: NSView {
             agentChip.isHidden = false
         } else {
             agentChip.isHidden = true
-        }
-
-        if let style = AgentActivityIndicator.dotStyle(forSession: session) {
-            activityDot.style = style
-            activityDot.isHidden = false
-        } else {
-            activityDot.isHidden = true
         }
 
         setSelected(isSelected)

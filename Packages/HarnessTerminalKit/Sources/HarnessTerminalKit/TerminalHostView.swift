@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import HarnessCore
+import HarnessTerminalEngine
 import HarnessTheme
 
 @MainActor
@@ -12,12 +13,17 @@ public protocol TerminalHostDelegate: AnyObject {
     /// A shell command finished (OSC 133) after running `duration` seconds, with `exitCode`.
     func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID)
     func terminalHostDidRequestDesktopNotification(title: String, body: String, surfaceID: SurfaceID)
+    /// ConEmu progress report (OSC 9;4) from the program in this pane — drives the tab's
+    /// working indicator (Claude Code 2.0+ keep-alives one across each turn).
+    func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID)
     func terminalHostDidClose(surfaceID: SurfaceID)
 }
 
 extension TerminalHostDelegate {
     /// Default no-op so non-GUI conformers (e.g. the compositor) need not handle command timing.
     public func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID) {}
+    /// Default no-op — only the GUI tab strip renders progress.
+    public func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID) {}
 }
 
 /// Hosts one terminal pane: Harness's native `HarnessTerminalSurfaceView` (GPU renderer +
@@ -102,6 +108,7 @@ public final class TerminalHostView: NSView {
     /// Live "120 × 32" resize overlay (Ghostty's resize-overlay). Floats above the surface; its
     /// position constraints are toggled from settings and it auto-hides on its own.
     private let resizeHUD = ResizeHUDView()
+    private let scrollbar = TerminalScrollbarView()
     private var resizeHUDConstraints: [ResizeOverlayPosition: [NSLayoutConstraint]] = [:]
     private var resizeHUDPosition: ResizeOverlayPosition?
     /// The terminal's initial sizing isn't a resize — `after-first` skips the overlay for it.
@@ -202,6 +209,10 @@ public final class TerminalHostView: NSView {
             guard let self else { return }
             self.hostDelegate?.terminalHostDidChangeTitle(title, surfaceID: self.surfaceID)
         }
+        native.onProgress = { [weak self] report in
+            guard let self else { return }
+            self.hostDelegate?.terminalHostDidUpdateProgress(report, surfaceID: self.surfaceID)
+        }
         native.onPwd = { [weak self] path in
             guard let self else { return }
             self.hostDelegate?.terminalHostDidChangeWorkingDirectory(path, surfaceID: self.surfaceID)
@@ -292,6 +303,20 @@ public final class TerminalHostView: NSView {
             guard !self.nativeView.isInCopyMode else { return }
             self.resizeHUD.show(cols: cols, rows: rows)
         }
+
+        // Transient scrollbar — added last so the thumb floats above the surface and frame.
+        // A thin strip pinned to the trailing edge, full height; flashes on scroll then fades.
+        addSubview(scrollbar)
+        NSLayoutConstraint.activate([
+            scrollbar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollbar.topAnchor.constraint(equalTo: topAnchor),
+            scrollbar.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scrollbar.widthAnchor.constraint(equalToConstant: TerminalScrollbarView.stripWidth),
+        ])
+        native.onScrollChanged = { [weak self] topLine, totalLines, visibleRows in
+            self?.scrollbar.show(topLine: topLine, totalLines: totalLines, visibleRows: visibleRows)
+        }
+
         applyNativeAppearance()
     }
 
@@ -351,6 +376,7 @@ public final class TerminalHostView: NSView {
             text: Self.nsColor(hex: canvasBg, fallback: .windowBackgroundColor),
             fill: Self.nsColor(hex: canvasFg, fallback: .labelColor)
         )
+        scrollbar.applyColor(Self.nsColor(hex: canvasFg, fallback: .labelColor))
         applyResizeHUDPosition(settings.resizeOverlayPosition)
     }
 
@@ -430,19 +456,11 @@ public final class TerminalHostView: NSView {
     }
 
     fileprivate func drawTerminalOverlay(in bounds: NSRect) {
-        // The waiting ring (urgent) takes precedence over the quieter active-pane
-        // border so a pane that needs attention never reads as merely focused.
-        if isWaiting {
-            // Two-stroke ring: a soft outer halo + a crisp inner stroke. Reads as
-            // "needs attention" without screaming.
-            strokeIndicator(in: bounds, color: waitingRingColor, lineWidth: 4, alpha: 0.18, inset: 1)
-            strokeIndicator(in: bounds, color: waitingRingColor, lineWidth: 1.5, alpha: 0.85, inset: 2)
-        } else if isActiveBorder {
-            // Minimal focused-pane hairline — only ever drawn when a tab is split
-            // (gated in SessionCoordinator.setActiveSurface). A lone terminal keeps only
-            // the neutral frame; split focus adds this subtle edge light.
-            strokeIndicator(in: bounds, color: activeBorderColor, lineWidth: 1, alpha: 0.42, inset: 1)
-        }
+        // Note: neither `isWaiting` nor `isActiveBorder` draws a pane border anymore — both
+        // read as an unwanted blue edge around the terminal. Waiting/attention surfaces via
+        // the tab activity dot, sidebar dot, bell badge, and notifications instead; the
+        // states are still tracked (`showsWaitingRing`/`showsActiveBorder`) for the
+        // focus-change side effects (pane-style dimming + border-label tint).
         // The marked pane (join-pane source) gets a distinct dashed accent on top,
         // so it reads as "marked" independently of focus.
         if isMarked {
@@ -457,25 +475,6 @@ public final class TerminalHostView: NSView {
             waitingRingColor.withAlphaComponent(0.9).setStroke()
             path.stroke()
         }
-    }
-
-    private func strokeIndicator(
-        in bounds: NSRect,
-        color: NSColor,
-        lineWidth: CGFloat,
-        alpha: CGFloat,
-        inset: CGFloat? = nil
-    ) {
-        let effectiveInset = inset ?? lineWidth
-        let rect = bounds.insetBy(dx: effectiveInset, dy: effectiveInset)
-        let path = NSBezierPath(
-            roundedRect: rect,
-            xRadius: Self.terminalOverlayCornerRadius,
-            yRadius: Self.terminalOverlayCornerRadius
-        )
-        color.withAlphaComponent(alpha).setStroke()
-        path.lineWidth = lineWidth
-        path.stroke()
     }
 
     /// Push theme-derived indicator colors from the app's palette.

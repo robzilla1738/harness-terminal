@@ -7,6 +7,10 @@ final class MainWindowController: NSWindowController {
     /// restore and the live "Remember window size" toggle use the exact same name.
     static let frameAutosaveName = "HarnessMainWindow"
 
+    /// Faint hairline around the whole window edge (Ghostty parity). Color/opacity from
+    /// settings (`windowBorderHex`/`windowBorderOpacity`); re-applied in `applyTransparency`.
+    private let borderOverlay = WindowBorderOverlayView()
+
     convenience init() {
         HarnessChrome.update(
             themeName: SessionCoordinator.shared.snapshot.themeName,
@@ -41,6 +45,18 @@ final class MainWindowController: NSWindowController {
         // the floor exposed it).
         window.setContentSize(NSSize(width: 1280, height: 820))
         self.init(window: window)
+        // Window-edge hairline — topmost subview of the root contentView (added after the
+        // split view loads, so it stays above all chrome). Click-through; layer island only.
+        if let contentView = window.contentView {
+            borderOverlay.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(borderOverlay)
+            NSLayoutConstraint.activate([
+                borderOverlay.topAnchor.constraint(equalTo: contentView.topAnchor),
+                borderOverlay.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+                borderOverlay.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+                borderOverlay.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            ])
+        }
         // Opt-in window frame persistence: when enabled, restore the saved frame (size +
         // position) and keep it updated automatically; otherwise open centered at the
         // default size. Window-level only — no effect on sessions or the terminal.
@@ -125,6 +141,12 @@ final class MainWindowController: NSWindowController {
         // it as a plain `NSView`, and `MainSplitViewController.applyChrome` must NOT `makeClear`
         // the root (`makeClear` sets `wantsLayer`) — that re-layer-backs it on every chrome
         // refresh and the dark seam returns. So simply not touching it here keeps it correct.
+
+        // Window-edge hairline: custom hex wins; otherwise a theme-derived faint grey
+        // (white on dark themes, black on light — the opacity makes it read as grey).
+        let borderColor = settings.windowBorderHex.flatMap { NSColor.fromHex($0) }
+            ?? (HarnessChrome.current.isDark ? .white : .black)
+        borderOverlay.update(color: borderColor, opacity: CGFloat(settings.windowBorderOpacity))
 
         // One uniform blur for the whole window — the same private CGS surface blur
         // modern terminals use on macOS. This is the single blur source: the terminal keeps

@@ -190,8 +190,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// `committed` is false for the live (mid-drag) tick and true once the size settles. Never
     /// fires for the terminal's initial sizing live tick (opening a window isn't a resize).
     public var onGridSizeWillChange: ((_ cols: Int, _ rows: Int, _ committed: Bool) -> Void)?
+    /// Fires when the scrollback position changes (wheel, page keys, jump-to-prompt) so the host
+    /// can show a transient scrollbar. `topLine` is the buffer index of the top visible row,
+    /// `totalLines` the whole buffer (history + viewport), `visibleRows` the viewport height.
+    public var onScrollChanged: ((_ topLine: Int, _ totalLines: Int, _ visibleRows: Int) -> Void)?
     /// Window/tab title (OSC 0 / OSC 2) — the host forwards this to its delegate.
     public var onTitle: ((String) -> Void)?
+    /// ConEmu progress report (OSC 9;4) — the host forwards this to its delegate, which
+    /// drives the tab's working indicator (Claude Code 2.0+ keep-alives it per turn).
+    public var onProgress: ((TerminalProgressReport) -> Void)?
     /// Reported working directory (OSC 7) — the host forwards this to its delegate.
     public var onPwd: ((String) -> Void)?
     /// Terminal bell (BEL) — the host forwards this to its delegate.
@@ -297,6 +304,11 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var pasteProtection = true
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
+    /// Sub-line wheel remainder carried between scroll events so small trackpad movements
+    /// accumulate into whole lines instead of each snapping a full line (see `consumeWheelLines`).
+    private var wheelLineRemainder: CGFloat = 0
+    /// Lines per notch for a discrete (non-precise) mouse wheel — the classic 3-line step.
+    private static let mouseWheelLinesPerTick: CGFloat = 3
     /// Test-only: counts main-thread consume hops (one per `receiveOffMain` main bounce). The
     /// latency-under-load benchmark reads this to measure how aggressively the consume path
     /// coalesces a flood of small chunks. Never read in production; a single `Int` add on main.
@@ -737,6 +749,13 @@ public final class HarnessTerminalSurfaceView: NSView {
                 self?.onTitle?(title)
             } else {
                 DispatchQueue.main.async { [weak self] in self?.onTitle?(title) }
+            }
+        }
+        emulator.onProgress = { [weak self] report in
+            if Thread.isMainThread {
+                self?.onProgress?(report)
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.onProgress?(report) }
             }
         }
         emulator.onWorkingDirectoryChange = { [weak self] path in
@@ -1404,6 +1423,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard target != scrollOffset else { return }
         scrollOffset = target
         clearSelection()
+        notifyScrollChanged(historyCount: historyCount)
         scheduleRender()
     }
 
@@ -1411,7 +1431,13 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func snapToBottom() {
         guard scrollOffset != 0 else { return }
         scrollOffset = 0
+        notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })
         scheduleRender()
+    }
+
+    /// Tell the host the scroll position changed so it can flash the transient scrollbar.
+    private func notifyScrollChanged(historyCount: Int) {
+        onScrollChanged?(historyCount - scrollOffset, historyCount + rows, rows)
     }
 
     // MARK: - Jump to prompt (OSC 133)
@@ -1443,6 +1469,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard target != scrollOffset else { return }
         scrollOffset = target
         clearSelection()
+        notifyScrollChanged(historyCount: historyCount)
         scheduleRender()
     }
 
@@ -1854,9 +1881,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         if copyMode != nil, let renderer, event.scrollingDeltaY != 0 {
             let scale = window?.backingScaleFactor ?? 2.0
             let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
-            let steps = max(1, Int((abs(event.scrollingDeltaY) / cellH).rounded()))
-            let action: CopyModeAction = event.scrollingDeltaY > 0 ? .cursorUp : .cursorDown
-            for _ in 0 ..< steps { handleCopyModeAction(action) }
+            let lines = consumeWheelLines(event, cellHeight: cellH)
+            guard lines != 0 else { return }
+            let action: CopyModeAction = lines > 0 ? .cursorUp : .cursorDown
+            for _ in 0 ..< abs(lines) { handleCopyModeAction(action) }
             return
         }
         if isMouseReporting(event) {
@@ -1868,8 +1896,27 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard event.scrollingDeltaY != 0, let renderer else { return }
         let scale = window?.backingScaleFactor ?? 2.0
         let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
-        let steps = max(1, Int((abs(event.scrollingDeltaY) / cellH).rounded()))
-        scrollBy(lines: event.scrollingDeltaY > 0 ? steps : -steps)
+        let lines = consumeWheelLines(event, cellHeight: cellH)
+        guard lines != 0 else { return }
+        scrollBy(lines: lines)
+    }
+
+    /// Convert a wheel/trackpad event into a signed whole-line scroll count, carrying the
+    /// sub-line remainder across events. Precise (trackpad) deltas are pixel-based, so dividing
+    /// by the cell height maps a line's worth of finger travel to one line *and* lets small
+    /// movements accumulate — the old `max(1, …rounded())` forced a full line per event, which
+    /// made trackpad scrolling feel hair-trigger. Non-precise mouse wheels report in line units,
+    /// scaled to the classic 3-line notch.
+    private func consumeWheelLines(_ event: NSEvent, cellHeight: CGFloat) -> Int {
+        let delta = event.scrollingDeltaY
+        if event.hasPreciseScrollingDeltas {
+            wheelLineRemainder += delta / cellHeight
+        } else {
+            wheelLineRemainder += delta * Self.mouseWheelLinesPerTick
+        }
+        let whole = wheelLineRemainder < 0 ? wheelLineRemainder.rounded(.up) : wheelLineRemainder.rounded(.down)
+        wheelLineRemainder -= whole
+        return Int(whole)
     }
 
     /// Standard responder copy (Edit ▸ Copy / ⌘C via the menu).

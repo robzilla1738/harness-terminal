@@ -126,6 +126,12 @@ final class NotificationBellButton: NSControl {
         // sidebar toggle, footer gear/＋/palette, tab strip ＋) so the whole icon set
         // reads as one themed pack that follows the theme like the session cards.
         HarnessDesign.applyIconButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
+        // Re-clear clipping every pass: AppKit re-syncs `masksToBounds` from `clipsToBounds`
+        // during layout (which calls this), and the circular `cornerRadius` would otherwise
+        // shear off the badge's top-right corner where it pokes past the disc. The init-only
+        // set isn't enough — it gets overwritten before the badge is ever shown.
+        clipsToBounds = false
+        layer?.masksToBounds = false
         let hasUnread = waitingCount > 0
         // Theme accent (the cursor/foreground-derived hue), never a hardcoded blue, so the
         // bell follows the active theme like the rest of the chrome.

@@ -23,19 +23,23 @@ final class AgentDetectorTests: XCTestCase {
             AgentTableEntry(kind: .generic, executables: ["sleep"]),
         ])
 
-        _ = AgentDetector.scan(table: table)
+        // Short window so the decay assertion doesn't sleep through the real
+        // (deliberately generous) `AgentDetector.workingWindow`.
+        let window: TimeInterval = 1
+
+        _ = AgentDetector.scan(table: table, workingWindow: window)
         XCTAssertEqual(AgentDetector.snapshot(forSurfaceKey: surfaceKey)?.activity, .idle)
-        XCTAssertTrue(AgentDetector.scan(table: table).isEmpty)
+        XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
 
         AgentDetector.recordActivity(forSurfaceKey: surfaceKey)
-        _ = AgentDetector.scan(table: table)
+        _ = AgentDetector.scan(table: table, workingWindow: window)
         XCTAssertEqual(AgentDetector.snapshot(forSurfaceKey: surfaceKey)?.activity, .working)
-        XCTAssertTrue(AgentDetector.scan(table: table).isEmpty)
+        XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
 
-        Thread.sleep(forTimeInterval: 3.2)
-        _ = AgentDetector.scan(table: table)
+        Thread.sleep(forTimeInterval: 1.2)
+        _ = AgentDetector.scan(table: table, workingWindow: window)
         XCTAssertEqual(AgentDetector.snapshot(forSurfaceKey: surfaceKey)?.activity, .idle)
-        XCTAssertTrue(AgentDetector.scan(table: table).isEmpty)
+        XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
     }
 
     /// Regression: native Claude Code installs symlink `claude` to a version-numbered

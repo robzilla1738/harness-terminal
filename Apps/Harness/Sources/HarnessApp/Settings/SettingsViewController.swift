@@ -56,6 +56,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let cursorTextWell = HarnessSwatchWell(frame: .zero)
     private let dividerWell = HarnessSwatchWell(frame: .zero)
     private let statusLineWell = HarnessSwatchWell(frame: .zero)
+    private let windowBorderHexField = HarnessTextField()
+    private let windowBorderWell = HarnessSwatchWell(frame: .zero)
+    private let windowBorderOpacitySlider = HarnessSlider(frame: .zero)
+    private let windowBorderOpacityLabel = NSTextField(labelWithString: "")
     private let systemNotificationsToggle = HarnessToggle(title: "macOS banner when an agent stops or needs input")
     private let notificationSoundToggle = HarnessToggle(title: "Play a chime with notifications")
     private let notchModeSegment = HarnessSegmented(frame: .zero)
@@ -205,6 +209,17 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         blurLabel.textColor = .secondaryLabelColor
         blurSlider.toolTip = "Backdrop blur for the whole window (terminal + chrome), 0–100 px."
 
+        windowBorderOpacitySlider.minValue = 0
+        windowBorderOpacitySlider.maxValue = 1
+        windowBorderOpacitySlider.doubleValue = Double(settings.windowBorderOpacity)
+        windowBorderOpacitySlider.target = self
+        windowBorderOpacitySlider.action = #selector(windowBorderOpacityDidChange)
+        windowBorderOpacitySlider.isContinuous = true
+        windowBorderOpacityLabel.stringValue = formatPercent(settings.windowBorderOpacity)
+        windowBorderOpacityLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        windowBorderOpacityLabel.textColor = .secondaryLabelColor
+        windowBorderOpacitySlider.toolTip = "Faint hairline around the window edge — 0% hides it. Color in Colors ▸ Chrome."
+
         paddingXField.stringValue = String(format: "%.0f", settings.windowPaddingX)
         paddingXField.target = self
         paddingXField.action = #selector(appearanceTextDidCommit)
@@ -265,6 +280,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
                 field: statusLineHexField, well: statusLineWell, reset: makeResetButton(),
                 keyPath: \.statusLineHex,
                 themeColor: { ThemeManager.foregroundHex(themeName: SessionCoordinator.shared.snapshot.themeName) }
+            ),
+            ColorBinding(
+                field: windowBorderHexField, well: windowBorderWell, reset: makeResetButton(),
+                keyPath: \.windowBorderHex,
+                // Match MainWindowController.applyTransparency: white on dark themes, black on
+                // light (opacity makes the hairline read as a faint grey).
+                themeColor: { HarnessChrome.current.isDark ? "#FFFFFF" : "#000000" }
             ),
         ]
         for binding in colorBindings {
@@ -661,6 +683,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         blurLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
         blurLabel.alignment = .right
 
+        let windowBorderRow = NSStackView(views: [windowBorderOpacitySlider, windowBorderOpacityLabel])
+        windowBorderRow.orientation = .horizontal
+        windowBorderRow.spacing = 12
+        windowBorderOpacitySlider.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        windowBorderOpacityLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        windowBorderOpacityLabel.alignment = .right
+
         paddingXField.widthAnchor.constraint(equalToConstant: 70).isActive = true
         paddingYField.widthAnchor.constraint(equalToConstant: 70).isActive = true
         let paddingRow = NSStackView(views: [
@@ -691,6 +720,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let windowGroup = settingsGroup("Window", [
             settingsRow("Opacity", opacityRow),
             settingsRow("Blur", blurRow),
+            settingsRow("Edge border", windowBorderRow,
+                        hint: "Faint hairline around the window edge — 0% hides it."),
             settingsRow("Padding", paddingRow),
             settingsToggleRow("Center grid", paddingBalanceToggle,
                               hint: "Distribute leftover padding evenly so the grid is centered."),
@@ -755,7 +786,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         ])
 
         let chromeAccents = colorGrid(
-            left: [("Divider lines", colorBindings[7])],
+            left: [("Divider lines", colorBindings[7]), ("Window border", colorBindings[9])],
             right: [("Status line text", colorBindings[8])]
         )
 
@@ -1708,6 +1739,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         flushAndApply()
     }
 
+    @objc private func windowBorderOpacityDidChange() {
+        windowBorderOpacityLabel.stringValue = formatPercent(Float(windowBorderOpacitySlider.doubleValue))
+        flushAndApply()
+    }
+
     @objc private func themeDidChange() {
         guard let theme = themePopup.titleOfSelectedItem else { return }
         // A theme is a starting preset: seed the full editable color set, then
@@ -1987,6 +2023,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         opacityLabel.stringValue = formatPercent(settings.backgroundOpacity)
         blurSlider.doubleValue = Double(settings.backgroundBlur)
         blurLabel.stringValue = formatBlur(settings.backgroundBlur)
+        windowBorderOpacitySlider.doubleValue = Double(settings.windowBorderOpacity)
+        windowBorderOpacityLabel.stringValue = formatPercent(settings.windowBorderOpacity)
         paddingXField.stringValue = String(Int(settings.windowPaddingX.rounded()))
         paddingYField.stringValue = String(Int(settings.windowPaddingY.rounded()))
         fontFamilyField.stringValue = settings.fontFamily
@@ -2073,6 +2111,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let coordinator = SessionCoordinator.shared
         coordinator.settings.backgroundOpacity = HarnessSettings.clampedOpacity(Float(opacitySlider.doubleValue))
         coordinator.settings.backgroundBlur = HarnessSettings.clampedBlur(Int(blurSlider.doubleValue.rounded()))
+        coordinator.settings.windowBorderOpacity = max(0, min(1, Float(windowBorderOpacitySlider.doubleValue)))
         // Read every editable color from its control (bg/fg/cursor/cursor-text/
         // selection/bold + divider/status accents). nil = fall back to theme preset.
         for binding in colorBindings {

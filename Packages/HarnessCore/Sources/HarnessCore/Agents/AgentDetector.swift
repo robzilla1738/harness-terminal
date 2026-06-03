@@ -83,11 +83,22 @@ public enum AgentDetector {
         snapshotsLock.unlock()
     }
 
+    /// How long after the last PTY output an agent still counts as `.working`. Deliberately
+    /// generous: agents go quiet for long stretches mid-task (API first-token latency, extended
+    /// thinking, silent tool runs), and a tight window made the working indicator drop out while
+    /// Claude was merely thinking. The cost is a short working linger after the final answer —
+    /// and hook-equipped agents cancel even that, because their stop hook marks the tab `waiting`
+    /// (the UI treats a waiting tab as not-working regardless of this window).
+    public static let workingWindow: TimeInterval = 15
+
     /// Run a scan of every surface's child process tree. The daemon calls this
     /// every ~1.5s. Returns the surfaces whose agent detection changed (so the
     /// caller can post a single batched IPC update).
     @discardableResult
-    public static func scan(table: AgentTable = .default) -> [String: AgentSnapshot?] {
+    public static func scan(
+        table: AgentTable = .default,
+        workingWindow: TimeInterval = AgentDetector.workingWindow
+    ) -> [String: AgentSnapshot?] {
         rootsLock.lock()
         let roots = surfaceRoots
         rootsLock.unlock()
@@ -102,7 +113,7 @@ public enum AgentDetector {
             let prior = lastSurfaceSnapshots[key]
             var resolved = detected
             if var r = resolved {
-                if let lastOutput, Date().timeIntervalSince(lastOutput) <= 3 {
+                if let lastOutput, Date().timeIntervalSince(lastOutput) <= workingWindow {
                     r.activity = .working
                     r.lastActivityAt = lastOutput
                 } else {

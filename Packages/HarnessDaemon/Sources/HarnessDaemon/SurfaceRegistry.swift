@@ -801,9 +801,29 @@ public final class SurfaceRegistry: @unchecked Sendable {
             let before = agentActivityString(forSurfaceKey: surfaceKey)
             editor.setAgent(snapshot, forSurfaceKey: surfaceKey)
             if before != snapshot?.activity.rawValue { transitioned.append(surfaceKey) }
+            // An agent that resumed producing output is no longer "waiting on the user" —
+            // clear a stale `waiting` status (left by a notify/stop hook) on the transition
+            // into working. Without this, a tab once marked waiting suppressed the working
+            // indicator for the whole next turn.
+            if snapshot?.activity == .working, before != AgentActivity.working.rawValue {
+                clearWaitingStatusLocked(surfaceKey: surfaceKey)
+            }
         }
         commit()
         for surfaceKey in transitioned { fireHookLocked(.agentStateChanged, surfaceKey: surfaceKey) }
+    }
+
+    /// Reset a `waiting` tab back to idle (clearing its notification text). No-op — and no
+    /// revision bump — when the tab isn't waiting. Caller must hold `lock`.
+    private func clearWaitingStatusLocked(surfaceKey: String) {
+        guard let surfaceID = SurfaceID(uuidString: surfaceKey),
+              let match = editor.tab(forSurfaceKey: surfaceKey),
+              editor.snapshot.workspaces
+                  .first(where: { $0.id == match.workspaceID })?
+                  .sessions.flatMap(\.tabs)
+                  .first(where: { $0.id == match.tabID })?.status == .waiting
+        else { return }
+        editor.clearTabNotification(surfaceID: surfaceID)
     }
 
     /// Current agent activity (raw) for the tab backing `surfaceKey`, or nil. Caller

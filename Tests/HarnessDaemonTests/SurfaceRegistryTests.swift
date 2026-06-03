@@ -181,4 +181,40 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertTrue(agents[0].waiting, "notify marks the tab .waiting, which must surface as waiting")
         XCTAssertEqual(agents[0].notificationText, "Approve?")
     }
+
+    func testTransitionToWorkingClearsStaleWaitingStatus() {
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(surfaces) = registry.handle(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        // Agent stops and notifies → tab goes .waiting (the stop-hook path).
+        registry.applyAgentChanges([
+            target.surfaceID: AgentSnapshot(kind: .codex, executable: "/bin/codex", pid: 7, activity: .idle),
+        ])
+        guard case .ok = registry.handle(.notify(surfaceID: target.surfaceID, title: "Codex", body: "Done")) else {
+            return XCTFail("expected ok")
+        }
+        XCTAssertEqual(statusOfTab(backing: target.surfaceID, in: registry), .waiting)
+
+        // The agent starts a new turn (idle → working): the stale waiting must clear,
+        // otherwise it suppresses the tab's working indicator for the whole turn.
+        registry.applyAgentChanges([
+            target.surfaceID: AgentSnapshot(kind: .codex, executable: "/bin/codex", pid: 7, activity: .working),
+        ])
+        XCTAssertEqual(statusOfTab(backing: target.surfaceID, in: registry), .idle)
+
+        // A steady working stream must not keep rewriting the status.
+        registry.applyAgentChanges([
+            target.surfaceID: AgentSnapshot(kind: .codex, executable: "/bin/codex", pid: 7, activity: .working),
+        ])
+        XCTAssertEqual(statusOfTab(backing: target.surfaceID, in: registry), .idle)
+    }
+
+    private func statusOfTab(backing surfaceID: String, in registry: SurfaceRegistry) -> TabStatus? {
+        guard let uuid = UUID(uuidString: surfaceID) else { return nil }
+        return registry.snapshot.workspaces
+            .flatMap { $0.sessions.flatMap(\.tabs) }
+            .first { $0.rootPane.allSurfaceIDs().contains(uuid) }?
+            .status
+    }
 }

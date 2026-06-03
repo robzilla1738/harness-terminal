@@ -110,6 +110,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var dividerHex: String?
     /// Color of the bottom status line's text. nil → derive from the theme.
     public var statusLineHex: String?
+    /// Hairline border around the entire window edge (Ghostty's faint perimeter line),
+    /// helping the window stand out from same-tone backgrounds. nil → derive from the
+    /// theme (light grey on dark themes, dark grey on light).
+    public var windowBorderHex: String?
+    /// Opacity of the window-edge hairline, 0–1. 0 hides it entirely.
+    public var windowBorderOpacity: Float
     /// Fire a macOS system notification when an agent transitions to `waiting`
     /// (e.g. Codex needs approval, Claude completed a task). When false, the
     /// in-window bell badge still updates but the OS notification banner is
@@ -262,6 +268,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // on every theme, so leave it unset.
         dividerHex: String? = nil,
         statusLineHex: String? = nil,
+        windowBorderHex: String? = nil,
+        windowBorderOpacity: Float = 0.25,
         systemNotificationsEnabled: Bool = true,
         notificationSoundEnabled: Bool = true,
         notchVisibilityMode: NotchVisibilityMode = .automatic,
@@ -319,6 +327,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColorOverrides)
         self.dividerHex = dividerHex
         self.statusLineHex = statusLineHex
+        self.windowBorderHex = windowBorderHex
+        self.windowBorderOpacity = max(0, min(1, windowBorderOpacity))
         self.systemNotificationsEnabled = systemNotificationsEnabled
         self.notificationSoundEnabled = notificationSoundEnabled
         self.notchVisibilityMode = notchVisibilityMode
@@ -395,6 +405,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         cursorTextHex = imported?.cursorTextHex
         dividerHex = nil
         statusLineHex = nil
+        windowBorderHex = nil
+        windowBorderOpacity = defaults.windowBorderOpacity
         paletteHex = HarnessSettings.normalizedPalette(imported?.paletteHex ?? Array(repeating: nil, count: 16))
         fontFamily = imported?.fontFamily ?? defaults.fontFamily
         fontSize = defaults.fontSize // Harness-owned (import the face, not the size).
@@ -443,6 +455,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColors)
         dividerHex = try container.decodeIfPresent(String.self, forKey: .dividerHex)
         statusLineHex = try container.decodeIfPresent(String.self, forKey: .statusLineHex)
+        windowBorderHex = try container.decodeIfPresent(String.self, forKey: .windowBorderHex)
+        windowBorderOpacity = max(0, min(1,
+            try container.decodeIfPresent(Float.self, forKey: .windowBorderOpacity) ?? fallback.windowBorderOpacity))
         systemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? true
         notificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationSoundEnabled) ?? true
         notchVisibilityMode = try container.decodeIfPresent(NotchVisibilityMode.self, forKey: .notchVisibilityMode) ?? .automatic

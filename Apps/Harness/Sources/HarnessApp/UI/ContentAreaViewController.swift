@@ -4,6 +4,7 @@ import HarnessTerminalKit
 
 @MainActor
 final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate {
+    private let titleStrip = WindowTitleStripView()
     private let tabBar = TerminalTabBarView()
     private let terminalHost = NSView()
     private var paneContainer: PaneContainerView?
@@ -27,8 +28,22 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     func applyChrome() {
         HarnessDesign.makeClear(view)
         refreshTerminalHostFill()
+        titleStrip.applyColors()
         tabBar.applyChrome()
         paneContainer?.applyChrome()
+    }
+
+    /// Reflect the active tab's cwd in the title strip's folder/path readout. Hidden while a
+    /// CLI agent (claude, codex, cursor-agent, …) owns the pane: the agent's own UI is the
+    /// context then, and a shell-cwd readout over it is just noise. Returns when the tool exits.
+    private func updateTitleStripPath() {
+        let snap = SessionCoordinator.shared.snapshot
+        guard let tab = snap.activeWorkspace?.activeTab else {
+            titleStrip.setPath("")
+            return
+        }
+        let agentActive = tab.agent != nil || AgentTitleInference.kind(from: tab.title) != nil
+        titleStrip.setPath(agentActive ? "" : tab.cwd)
     }
 
     /// Back the terminal host so the canvas reads the same as the rest of the window.
@@ -54,11 +69,19 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         terminalHost.translatesAutoresizingMaskIntoConstraints = false
         refreshTerminalHostFill()
 
+        view.addSubview(titleStrip)
         view.addSubview(tabBar)
         view.addSubview(terminalHost)
 
         NSLayoutConstraint.activate([
-            tabBar.topAnchor.constraint(equalTo: view.topAnchor),
+            // Draggable title strip above the tabs: window-move grab area + Ghostty-style
+            // folder/path readout. Pushes the tab pills below the traffic-light band.
+            titleStrip.topAnchor.constraint(equalTo: view.topAnchor),
+            titleStrip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            titleStrip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            titleStrip.heightAnchor.constraint(equalToConstant: WindowTitleStripView.height),
+
+            tabBar.topAnchor.constraint(equalTo: titleStrip.bottomAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
@@ -125,17 +148,21 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     func reloadTabBar() {
         let snap = SessionCoordinator.shared.snapshot
         tabBar.reload(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
+        updateTitleStripPath()
     }
 
-    /// Leading inset for the tab strip so it clears the macOS traffic lights when the
-    /// sidebar is collapsed. Driven by `MainSplitViewController` during the toggle.
+    /// Leading inset so the title strip's path readout clears the macOS traffic lights when
+    /// the sidebar is collapsed. Driven by `MainSplitViewController` during the toggle. The
+    /// tab bar itself sits below the lights (the strip pushes it down) and needs no inset.
     func setTabBarLeadingInset(_ inset: CGFloat) {
-        tabBar.setLeadingInset(inset)
+        titleStrip.setLeadingInset(inset)
+        tabBar.setLeadingInset(0)
     }
 
     func refreshTabBarMetadata() {
         let snap = SessionCoordinator.shared.snapshot
         tabBar.refreshMetadata(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
+        updateTitleStripPath()
     }
 
     func tabBarDidSelect(tabID: TabID) {

@@ -25,6 +25,64 @@ final class TerminalProtocolCompatibilityTests: XCTestCase {
         XCTAssertEqual(got?.1, "succeeded")
     }
 
+    // MARK: OSC 9;4 progress reports (ConEmu)
+
+    func testOSC94IndeterminateProgress() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var reports: [TerminalProgressReport] = []
+        var notified = false
+        term.onProgress = { reports.append($0) }
+        term.onNotification = { _, _ in notified = true }
+        term.feed("\u{1b}]9;4;3;0\u{07}")        // BEL terminator, Claude Code style
+        term.feed("\u{1b}]9;4;3\u{1b}\\")        // ST terminator, no value
+        XCTAssertEqual(reports, [
+            TerminalProgressReport(state: .indeterminate, value: 0),
+            TerminalProgressReport(state: .indeterminate, value: nil),
+        ])
+        XCTAssertFalse(notified, "9;4 must never surface as a notification (Ghostty parity)")
+    }
+
+    func testOSC94SetRemoveAndClamp() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var reports: [TerminalProgressReport] = []
+        term.onProgress = { reports.append($0) }
+        term.feed("\u{1b}]9;4;1;50\u{07}")
+        term.feed("\u{1b}]9;4;1;250\u{07}")      // out-of-range value clamps to 100
+        term.feed("\u{1b}]9;4;2\u{07}")          // error, no value
+        term.feed("\u{1b}]9;4;4;30\u{07}")       // paused at 30
+        term.feed("\u{1b}]9;4;0;0\u{07}")        // remove
+        XCTAssertEqual(reports, [
+            TerminalProgressReport(state: .set, value: 50),
+            TerminalProgressReport(state: .set, value: 100),
+            TerminalProgressReport(state: .error, value: nil),
+            TerminalProgressReport(state: .paused, value: 30),
+            TerminalProgressReport(state: .remove, value: 0),
+        ])
+    }
+
+    func testOSC94UnknownStateIsIgnoredNotNotified() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var reports: [TerminalProgressReport] = []
+        var notified = false
+        term.onProgress = { reports.append($0) }
+        term.onNotification = { _, _ in notified = true }
+        term.feed("\u{1b}]9;4;9;0\u{07}")        // state 9 doesn't exist
+        XCTAssertTrue(reports.isEmpty)
+        XCTAssertFalse(notified)
+    }
+
+    func testOSC9BodyStartingWithFourStillNotifiesUnlessSubCodeFour() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var reports: [TerminalProgressReport] = []
+        var bodies: [String] = []
+        term.onProgress = { reports.append($0) }
+        term.onNotification = { bodies.append($1) }
+        term.feed("\u{1b}]9;42 tests passed\u{07}") // "42…" is a body, not sub-code 4
+        term.feed("\u{1b}]9;hello\u{07}")
+        XCTAssertTrue(reports.isEmpty)
+        XCTAssertEqual(bodies, ["42 tests passed", "hello"])
+    }
+
     // MARK: OSC 22 pointer shape
 
     func testOSC22SetsPointerShape() {

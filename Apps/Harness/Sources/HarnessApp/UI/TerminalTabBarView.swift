@@ -352,9 +352,9 @@ private final class TabPillView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let agentIcon = NSImageView()
-    /// Small activity badge on the agent icon's corner: a breathing brand dot while the agent
-    /// works, amber when it needs you, a brief green check when it just finished. Hidden otherwise.
-    private let activityDot = StatusDotView(diameter: 9)
+    /// Ghostty-style "AI is working" indicator: a tiny dot before the title that discretely
+    /// shuttles between two spots while the tab's agent is producing output. Hidden otherwise.
+    private let workingDot = NSView()
     /// ⌘N hint, shown at the trailing edge for the first 9 tabs and
     /// swapped for the close button on hover. Empty for tabs past position 9.
     private let shortcutLabel = NSTextField(labelWithString: "")
@@ -425,14 +425,16 @@ private final class TabPillView: NSView {
         shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        activityDot.translatesAutoresizingMaskIntoConstraints = false
-        activityDot.isHidden = true
+        workingDot.wantsLayer = true
+        workingDot.layer?.cornerRadius = 1
+        workingDot.translatesAutoresizingMaskIntoConstraints = false
+        workingDot.isHidden = true
 
         addSubview(agentIcon)
         addSubview(titleLabel)
         addSubview(shortcutLabel)
         addSubview(closeButton)
-        addSubview(activityDot)   // above the brand icon, as a corner badge
+        addSubview(workingDot)
 
         // Title centers inside the pill with the close button floating on the
         // right edge and the agent brand icon (when present) on the left. Leading
@@ -460,14 +462,29 @@ private final class TabPillView: NSView {
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeWidth,
             closeHeight,
-            // Activity badge pinned to the agent icon's bottom-trailing corner.
-            activityDot.centerXAnchor.constraint(equalTo: agentIcon.trailingAnchor),
-            activityDot.centerYAnchor.constraint(equalTo: agentIcon.bottomAnchor),
+            // Working dot sits just before the title, Ghostty-style ("· title"). Overlay only —
+            // it never affects the centered title layout; the shuttle animation gives it room.
+            workingDot.trailingAnchor.constraint(equalTo: titleLabel.leadingAnchor, constant: -7),
+            workingDot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            workingDot.widthAnchor.constraint(equalToConstant: 2),
+            workingDot.heightAnchor.constraint(equalToConstant: 2),
         ])
 
         setAgentIcon(for: tab)
-        updateActivityDot(for: tab)
+        setWorkingDotVisible(Self.isAgentWorking(tab))
         applyChrome(isActive: isActive)
+    }
+
+    /// Primary signal: a live OSC 9;4 progress report — terminal-native, exactly what Ghostty
+    /// renders (Claude Code 2.0+ keep-alives one across each full turn, including thinking).
+    /// Fallback: the process detector's output recency, for agents that don't emit 9;4 (codex).
+    /// `waiting` only vetoes the fallback — an explicit progress report outranks a stale
+    /// waiting status.
+    private static func isAgentWorking(_ tab: Tab) -> Bool {
+        if tab.rootPane.allSurfaceIDs().contains(where: { SurfaceProgressTracker.shared.isActive($0) }) {
+            return true
+        }
+        return tab.agent?.activity == .working && tab.status != .waiting
     }
 
     @available(*, unavailable)
@@ -583,17 +600,26 @@ private final class TabPillView: NSView {
         status = tab.status
         titleLabel.stringValue = tabDisplayTitle(tab)
         setAgentIcon(for: tab)
-        updateActivityDot(for: tab)
+        setWorkingDotVisible(Self.isAgentWorking(tab))
         applyChrome(isActive: isActive)
     }
 
-    /// Reflect the tab's live agent activity on the corner badge.
-    private func updateActivityDot(for tab: Tab) {
-        if let style = AgentActivityIndicator.dotStyle(for: tab) {
-            activityDot.style = style
-            activityDot.isHidden = false
+    /// Show/hide the working dot and run its shuttle: a gentle glide between two spots —
+    /// Ghostty's indeterminate-progress motion (easeInOut, 1.2s, autoreversing forever).
+    private func setWorkingDotVisible(_ visible: Bool) {
+        workingDot.isHidden = !visible
+        if visible {
+            guard workingDot.layer?.animation(forKey: "shuttle") == nil else { return }
+            let anim = CABasicAnimation(keyPath: "transform.translation.x")
+            anim.fromValue = -2.5
+            anim.toValue = 2.5
+            anim.duration = 1.2
+            anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            anim.autoreverses = true
+            anim.repeatCount = .infinity
+            workingDot.layer?.add(anim, forKey: "shuttle")
         } else {
-            activityDot.isHidden = true
+            workingDot.layer?.removeAnimation(forKey: "shuttle")
         }
     }
 
@@ -643,6 +669,8 @@ private final class TabPillView: NSView {
 
         closeButton.contentTintColor = c.textTertiary
         closeButton.layer?.backgroundColor = NSColor.clear.cgColor
+        // Working dot follows the title color so it reads as part of the label, not a badge.
+        workingDot.layer?.backgroundColor = titleLabel.textColor?.cgColor
         // ⌘N hint: a touch brighter on the active tab, quiet otherwise.
         shortcutLabel.textColor = isActive ? c.textSecondary : c.textTertiary
     }

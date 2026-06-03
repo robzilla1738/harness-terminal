@@ -17,9 +17,6 @@ final class MainSplitViewController: NSViewController {
     /// Owned (not a singleton) so collapse state is per-window. Carries the
     /// `allowFullCollapse` flag the divider min-coordinate reads.
     private let splitDelegate = SplitChromeDelegate()
-    /// Leading inset the tab strip needs to clear the macOS traffic lights when the
-    /// sidebar is fully collapsed (content shifts to x=0 under `.fullSizeContentView`).
-    private let trafficLightInset: CGFloat = 72
 
     override func loadView() {
         // The root contentView must stay a plain, NON-layer-backed NSView. A plain NSView
@@ -237,7 +234,12 @@ final class MainSplitViewController: NSViewController {
         }
     }
 
-    /// Inset the tab strip proportionally to how collapsed the sidebar is: full inset
+    /// Leading inset the title strip's path readout needs to clear the macOS traffic lights
+    /// when the sidebar is fully collapsed (content shifts to x=0 under `.fullSizeContentView`).
+    /// The tab bar itself sits below the lights and never needs one.
+    private let trafficLightInset: CGFloat = 72
+
+    /// Inset the strip readout proportionally to how collapsed the sidebar is: full inset
     /// at width 0, none once the sidebar is wide enough to cover the traffic lights.
     private func setContentLeadingInset(forSidebarWidth width: CGFloat) {
         let t = max(0, min(1, 1 - width / trafficLightInset))

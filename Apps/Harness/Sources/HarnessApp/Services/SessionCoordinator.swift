@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import HarnessCore
+import HarnessTerminalEngine
 import HarnessTerminalKit
 import UserNotifications
 
@@ -319,13 +320,6 @@ final class SessionCoordinator: NSObject {
                     live.insert(key)
                     let previous = lastAgentActivity[key]
                     lastAgentActivity[key] = agent.activity
-
-                    // Visual "just finished" check: working → idle (a clean finish, not awaiting
-                    // input — that's the amber/attention state). Drives the brief green check on
-                    // tab pills + sidebar rows.
-                    if previous == .working, agent.activity == .idle, tab.status != .waiting {
-                        AgentFinishTracker.shared.noteFinished(tabID: tab.id)
-                    }
 
                     // Only the working → (idle|awaiting) edge counts as "stopped".
                     let stopped = previous == .working
@@ -1457,6 +1451,13 @@ extension SessionCoordinator: TerminalHostDelegate {
         syncFromDaemon(metadataOnly: true)
     }
 
+    /// OSC 9;4 progress — ephemeral GUI state (Ghostty parity), deliberately NOT mirrored
+    /// to the daemon: keep-alives arrive ~1/s per working agent and must not churn
+    /// layout.json commits. The tracker nudges a metadata-only tab refresh on transitions.
+    func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID) {
+        SurfaceProgressTracker.shared.update(report, forSurface: surfaceID)
+    }
+
     func terminalHostDidChangeWorkingDirectory(_ path: String, surfaceID: SurfaceID) {
         logIfFailed(.updateTabCwd(surfaceID: surfaceID.uuidString, path: path))
         syncFromDaemon(metadataOnly: true)
@@ -1511,6 +1512,7 @@ extension SessionCoordinator: TerminalHostDelegate {
 
     func terminalHostDidClose(surfaceID: SurfaceID) {
         terminalHosts.removeHost(for: surfaceID)
+        SurfaceProgressTracker.shared.forget(surfaceID)
     }
 }
 

@@ -62,6 +62,11 @@ public final class TerminalEmulator: VTParserHandler {
     /// Desktop notification requested by a program (OSC 9 = `(nil, body)`; OSC 777 =
     /// `(title, body)`). The host routes it to the system notification path.
     public var onNotification: ((_ title: String?, _ body: String) -> Void)?
+    /// ConEmu progress report (OSC 9;4) — `ESC ] 9 ; 4 ; <state> ; <value> ST`. Emitted by
+    /// Claude Code 2.0+, amp, zig build, systemd, … while they work. Like Ghostty, any
+    /// `9;4;…` payload is always a progress report, never a notification (the accepted
+    /// iTerm2 OSC 9 collision). The host drives its working indicator from this.
+    public var onProgress: ((TerminalProgressReport) -> Void)?
     /// Mouse pointer shape requested via OSC 22 (e.g. `text`, `pointer`, `default`); nil clears.
     public var onPointerShapeChange: ((String?) -> Void)?
     /// Last OSC-22 pointer shape (nil = terminal default). Surfaced for hosts that prefer polling.
@@ -401,13 +406,30 @@ public final class TerminalEmulator: VTParserHandler {
         case "12": handleColorQuery(code: "12", role: .cursor, payload: payload)
         case "4": handlePaletteColorQuery(payload)         // OSC 4 ; index ; ?
         case "52": handleClipboardOSC(payload)             // clipboard set (OSC 52)
-        case "9": onNotification?(nil, payload)            // OSC 9 ; <body> — desktop notification
+        case "9": handleOSC9(payload)                      // notification, or ConEmu progress (9;4)
         case "777": handleNotify777(payload)               // OSC 777 ; notify ; <title> ; <body>
         case "22": setPointerShape(payload)                // OSC 22 ; <shape> — mouse cursor shape
         case "133": handleSemanticPrompt(payload)          // OSC 133 ; A/B/C/D — shell integration
         case "1337": handleITerm2Image(payload)            // iTerm2 inline image (File=…)
         default: break
         }
+    }
+
+    /// OSC 9 carries two protocols: `9;4;<state>[;<value>]` is a ConEmu progress report;
+    /// anything else is an iTerm2-style desktop notification with the payload as body.
+    /// Ghostty parity: `9;4` always wins the collision (a notification can't start with "4;").
+    private func handleOSC9(_ payload: String) {
+        guard payload == "4" || payload.hasPrefix("4;") else {
+            onNotification?(nil, payload)
+            return
+        }
+        let parts = payload.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+        // parts[0] == "4"; parts[1] = state; parts[2] = optional 0–100 value.
+        guard parts.count >= 2, let raw = Int(parts[1]),
+              let state = TerminalProgressReport.State(rawValue: raw)
+        else { return } // unknown state: ignore (don't fall back to a notification)
+        let value = parts.count >= 3 ? Int(parts[2]).map { max(0, min(100, $0)) } : nil
+        onProgress?(TerminalProgressReport(state: state, value: value))
     }
 
     /// OSC 133 shell integration. `A` marks a prompt line, `D[;exit]`
