@@ -98,6 +98,11 @@ let platformTestTargets: [Target] = [
         dependencies: ["HarnessOnboarding"],
         path: "Tests/HarnessOnboardingTests"
     ),
+    .testTarget(
+        name: "HarnessAppTests",
+        dependencies: ["HarnessApp"],
+        path: "Tests/HarnessAppTests"
+    ),
     // Performance baselines for the hot paths (VT parse, IPC codec, scrollback,
     // compositor, renderer stats). Gated behind HARNESS_BENCHMARKS=1 so a normal
     // `swift test` stays fast; run with `make bench`.

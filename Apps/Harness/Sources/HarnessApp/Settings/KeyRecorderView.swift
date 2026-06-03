@@ -1,4 +1,5 @@
 import AppKit
+import HarnessCore
 
 /// A focusable pill that captures the next keystroke and emits a normalized
 /// prefix-key string (e.g. `ctrl-a`, `cmd-shift-p`) in the same format
@@ -85,23 +86,41 @@ final class KeyRecorderView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func becomeFirstResponder() -> Bool { startRecording(); return true }
     override func resignFirstResponder() -> Bool { stopRecording(); return true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else { return nil }
+        if !clearButton.isHidden,
+           clearButton.bounds.contains(clearButton.convert(point, from: self)) {
+            return clearButton
+        }
+        return self
+    }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeKey()
         window?.makeFirstResponder(self)
+        startRecording()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard recording else { super.keyDown(with: event); return }
+        if event.keyCode == 53 {
+            stopRecording()
+            return
+        }
+        _ = record(event)
     }
 
     private func startRecording() {
         guard !recording else { return }
         recording = true
+        refresh()
+        PrefixKeymap.shared.setShortcutRecordingActive(true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            // Escape cancels without changing the value.
             if event.keyCode == 53 { self.stopRecording(); return nil }
-            guard let serialized = self.serialize(event) else { return nil }
-            self.value = serialized
-            self.onChange?(serialized)
-            self.stopRecording()
-            return nil
+            return self.record(event) ? nil : event
         }
     }
 
@@ -109,6 +128,7 @@ final class KeyRecorderView: NSView {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         recording = false
+        PrefixKeymap.shared.setShortcutRecordingActive(false)
         refresh()
     }
 
@@ -129,7 +149,7 @@ final class KeyRecorderView: NSView {
             hint.stringValue = "Press a key… (Esc to cancel)"
         } else {
             hint.isHidden = true
-            label.stringValue = value.isEmpty ? "No prefix" : Self.glyphString(for: value)
+            label.stringValue = value.isEmpty ? "No prefix" : ShortcutRecorderSerializer.glyphString(for: value)
             label.textColor = value.isEmpty ? c.textSecondary : c.textPrimary
         }
     }
@@ -142,51 +162,24 @@ final class KeyRecorderView: NSView {
         layer?.borderColor = (recording ? c.borderStrong : c.border).cgColor
     }
 
-    /// Serialize an NSEvent into the dash-delimited form `ParsedShortcut.parse` reads.
-    /// Returns nil for plain modifier-only events so the user can still press shift
-    /// to compose a real shortcut.
-    private func serialize(_ event: NSEvent) -> String? {
-        guard let raw = event.charactersIgnoringModifiers, !raw.isEmpty else { return nil }
-        let key: String
-        if raw.count == 1, let scalar = raw.unicodeScalars.first {
-            switch scalar.value {
-            case 0x1B: key = "escape"
-            case 0x09: key = "tab"
-            case 0x0D: key = "enter"
-            case 0x7F: key = "backspace"
-            case 0x20: key = "space"
-            case 0xF700: key = "up"
-            case 0xF701: key = "down"
-            case 0xF702: key = "left"
-            case 0xF703: key = "right"
-            default:    key = raw.lowercased()
-            }
-        } else {
-            key = raw.lowercased()
-        }
-        var parts: [String] = []
-        let mods = event.modifierFlags
-        if mods.contains(.control) { parts.append("ctrl") }
-        if mods.contains(.option)  { parts.append("opt") }
-        if mods.contains(.shift), key.count > 1 { parts.append("shift") }
-        if mods.contains(.command) { parts.append("cmd") }
-        parts.append(key)
-        return parts.joined(separator: "-")
+    private func record(_ event: NSEvent) -> Bool {
+        guard let serialized = ShortcutRecorderSerializer.serialize(
+            raw: event.charactersIgnoringModifiers,
+            modifiers: Self.keyModifiers(from: event.modifierFlags)
+        ) else { return false }
+        value = serialized
+        onChange?(serialized)
+        stopRecording()
+        return true
     }
 
-    private static func glyphString(for raw: String) -> String {
-        let parts = raw.lowercased().split(separator: "-").map(String.init)
-        guard let last = parts.last else { return raw }
-        var glyphs = ""
-        for component in parts.dropLast() {
-            switch component {
-            case "ctrl", "control": glyphs += "⌃"
-            case "opt", "alt", "option": glyphs += "⌥"
-            case "shift": glyphs += "⇧"
-            case "cmd", "command": glyphs += "⌘"
-            default: break
-            }
-        }
-        return glyphs + last.uppercased()
+    private static func keyModifiers(from flags: NSEvent.ModifierFlags) -> KeySpec.Modifiers {
+        var modifiers: KeySpec.Modifiers = []
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        return modifiers
     }
+
 }
