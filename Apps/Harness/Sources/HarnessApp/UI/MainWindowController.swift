@@ -16,6 +16,9 @@ final class MainWindowController: NSWindowController {
             themeName: SessionCoordinator.shared.snapshot.themeName,
             opacity: CGFloat(SessionCoordinator.shared.settings.backgroundOpacity),
             blur: SessionCoordinator.shared.settings.backgroundBlur,
+            appearanceMode: SessionCoordinator.shared.settings.appearanceMode,
+            systemLightThemeName: SessionCoordinator.shared.settings.systemLightThemeName,
+            systemDarkThemeName: SessionCoordinator.shared.settings.systemDarkThemeName,
             backgroundHex: SessionCoordinator.shared.settings.customBackgroundHex,
             foregroundHex: SessionCoordinator.shared.settings.customForegroundHex,
             cursorHex: SessionCoordinator.shared.settings.customCursorHex
@@ -37,7 +40,7 @@ final class MainWindowController: NSWindowController {
         if #available(macOS 11.0, *) {
             window.titlebarSeparatorStyle = .none
         }
-        window.appearance = Self.resolvedWindowAppearance()
+        Self.applyWindowAppearance(window)
         window.contentViewController = MainSplitViewController()
         // Assigning `contentViewController` resizes the window to the split view's
         // fitting size (~sidebar width). Re-assert the intended default explicitly —
@@ -72,7 +75,7 @@ final class MainWindowController: NSWindowController {
     }
 
     func applyChrome() {
-        window?.appearance = Self.resolvedWindowAppearance()
+        if let window { Self.applyWindowAppearance(window) }
         applyTransparency()
         (contentViewController as? MainSplitViewController)?.applyChrome()
     }
@@ -97,13 +100,22 @@ final class MainWindowController: NSWindowController {
         }
     }
 
-    /// Under auto light/dark (both theme names set), the window follows the macOS system appearance
-    /// (`nil`) so the chosen theme + native controls track Light/Dark. Otherwise it's pinned from the
-    /// active theme's darkness, so e.g. a dark theme forces dark chrome even under a light system.
-    private static func resolvedWindowAppearance() -> NSAppearance? {
-        let settings = SessionCoordinator.shared.settings
-        if settings.lightThemeName != nil, settings.darkThemeName != nil { return nil }
-        return NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
+    func effectiveAppearanceDidChange() {
+        guard let window else { return }
+        let didRefresh = SessionCoordinator.shared.refreshChromeForEffectiveAppearanceChange(
+            systemAppearance: HarnessChrome.systemAppearance(from: window.effectiveAppearance)
+        )
+        if didRefresh {
+            applyChrome()
+        }
+    }
+
+    private static func applyWindowAppearance(_ window: NSWindow) {
+        if SessionCoordinator.shared.settings.appearanceMode == .macOSSystem {
+            window.appearance = nil
+        } else {
+            window.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
+        }
     }
 
     /// Re-reads opacity from settings and applies window chrome (not terminal blur).

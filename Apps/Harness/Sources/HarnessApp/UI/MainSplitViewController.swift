@@ -3,6 +3,14 @@ import HarnessCore
 import QuartzCore
 
 @MainActor
+private final class EffectiveAppearanceReportingView: NSView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        (window?.windowController as? MainWindowController)?.effectiveAppearanceDidChange()
+    }
+}
+
+@MainActor
 final class MainSplitViewController: NSViewController {
     private let split = NSSplitView()
     private let sidebar = HarnessSidebarPanelViewController()
@@ -25,7 +33,7 @@ final class MainSplitViewController: NSViewController {
         // together. Calling `makeClear` here would set `wantsLayer` and
         // layer-back the whole window, which clips the blur to a rectangle and leaves a dark
         // compositing seam at the rounded edge. See MainWindowController.applyTransparency.
-        view = NSView()
+        view = EffectiveAppearanceReportingView()
     }
 
     override func viewDidLoad() {

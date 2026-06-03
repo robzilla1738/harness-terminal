@@ -1,4 +1,5 @@
 import AppKit
+import HarnessCore
 import HarnessTerminalKit
 
 @MainActor
@@ -156,6 +157,10 @@ enum HarnessChrome {
         themeName: String,
         opacity: CGFloat,
         blur: Int = 0,
+        appearanceMode: HarnessAppearanceMode = .theme,
+        systemAppearance: HarnessSystemAppearance? = nil,
+        systemLightThemeName: String? = nil,
+        systemDarkThemeName: String? = nil,
         backgroundHex: String? = nil,
         foregroundHex: String? = nil,
         cursorHex: String? = nil
@@ -164,6 +169,10 @@ enum HarnessChrome {
         // uses, so chrome and terminal paint the identical canvas color.
         let canvas = ThemeManager.resolvedCanvas(
             themeName: themeName,
+            appearanceMode: appearanceMode,
+            systemAppearance: systemAppearance ?? currentSystemAppearance(),
+            systemLightThemeName: systemLightThemeName,
+            systemDarkThemeName: systemDarkThemeName,
             customBackgroundHex: backgroundHex,
             customForegroundHex: foregroundHex,
             customCursorHex: cursorHex
@@ -175,5 +184,13 @@ enum HarnessChrome {
         )
         backgroundOpacity = max(0, min(1, opacity))
         backgroundBlur = max(0, min(100, blur))
+    }
+
+    static func systemAppearance(from appearance: NSAppearance) -> HarnessSystemAppearance {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+    }
+
+    private static func currentSystemAppearance() -> HarnessSystemAppearance {
+        systemAppearance(from: NSApp.effectiveAppearance)
     }
 }
