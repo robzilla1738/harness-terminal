@@ -450,7 +450,7 @@ final class SessionCoordinator: NSObject {
     }
 
     func addSession(to workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) {
-        requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, name: name))
+        requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, name: name, shell: settings.defaultShell))
         syncFromDaemon()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             SurfaceShellTracker.shared.bumpScan()
@@ -458,7 +458,7 @@ final class SessionCoordinator: NSObject {
     }
 
     func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) {
-        requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD))
+        requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, shell: settings.defaultShell))
         syncFromDaemon()
         // The shell will spawn imminently — kick the cwd tracker so the new
         // tab's path lights up without waiting for the next 500ms tick.
@@ -470,7 +470,7 @@ final class SessionCoordinator: NSObject {
     func openDefaultTerminalLaunch(_ launch: DefaultTerminalLaunchRequest) {
         guard let workspaceID = snapshot.activeWorkspace?.id ?? snapshot.workspaces.first?.id else { return }
         let cwd = launch.cwd ?? settings.defaultCWD
-        guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd)) else {
+        guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd, shell: settings.defaultShell)) else {
             syncFromDaemon()
             return
         }
@@ -492,7 +492,7 @@ final class SessionCoordinator: NSObject {
               let paneID = activeSurfaceID.flatMap({ paneID(for: $0, in: tab.rootPane) })
                 ?? tab.rootPane.allPaneIDs().last
         else { return }
-        requestDaemon(.newSplit(tabID: tab.id, paneID: paneID, direction: direction))
+        requestDaemon(.newSplit(tabID: tab.id, paneID: paneID, direction: direction, shell: settings.defaultShell))
         syncFromDaemon()
     }
 
@@ -593,7 +593,7 @@ final class SessionCoordinator: NSObject {
     func reopenLastClosedTab() {
         guard let workspace = snapshot.activeWorkspace, let closed = lastClosedTab else { return }
         let cwd = closed.cwd.isEmpty ? settings.defaultCWD : closed.cwd
-        guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspace.id, cwd: cwd)) else {
+        guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspace.id, cwd: cwd, shell: settings.defaultShell)) else {
             syncFromDaemon()
             return
         }

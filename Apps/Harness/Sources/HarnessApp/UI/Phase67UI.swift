@@ -129,7 +129,7 @@ enum Phase67UI {
     private static var popups: [PopupWindow] = []
 
     static func presentPopup(command: String?, coordinator: SessionCoordinator) {
-        guard case let .surfaceID(surfaceID)? = coordinator.requestDaemon(.createSurface(cwd: coordinator.settings.defaultCWD, shell: nil)),
+        guard case let .surfaceID(surfaceID)? = coordinator.requestDaemon(.createSurface(cwd: coordinator.settings.defaultCWD, shell: coordinator.settings.defaultShell)),
               let uuid = SurfaceID(uuidString: surfaceID)
         else { return }
         let host = coordinator.terminalHost(for: uuid, cwd: coordinator.settings.defaultCWD)
