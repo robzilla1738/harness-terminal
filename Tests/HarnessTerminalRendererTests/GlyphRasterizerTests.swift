@@ -13,6 +13,12 @@ final class GlyphRasterizerTests: XCTestCase {
 
     // Menlo ships with every macOS, so these tests are environment-stable.
     private let rasterizer = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2)
+    private let screenshotMetricStrings = [
+        "hello",
+        "Sisyphus - Ultraworker · GPT-5.5 · low",
+        "Greeting and context setup",
+        "iiii WWWW ||||",
+    ]
 
     func testMetricsArePositiveAndMonospace() {
         let m = rasterizer.metrics()
@@ -24,14 +30,81 @@ final class GlyphRasterizerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(m.height, (m.ascent + m.descent).rounded(.up) - 1)
     }
 
-    func testMissingFamilyFallsBackToMonospaceMenlo() {
-        // A configured family that isn't installed (fresh machine without the default Nerd Font)
-        // must NOT land on CoreText's silent substitute — a proportional system face whose
-        // advances disagree with the cell grid (the broken-letter-spacing first-run bug).
-        let missing = GlyphRasterizer(fontFamily: "Definitely Not An Installed Font 9C41", size: 14, scale: 2)
-        XCTAssertEqual(missing.primaryFamilyName, "Menlo")
-        XCTAssertEqual(missing.metrics(), rasterizer.metrics(),
-                       "fallback metrics must match Menlo so the cell grid stays monospace-coherent")
+    func testUnavailableConfiguredFontReportsFallbackStatus() {
+        let missingFamily = "Harness Missing Font \(UUID().uuidString)"
+        let resolved = TerminalFontResolver.resolve(fontFamily: missingFamily, size: 14)
+        let missingRasterizer = GlyphRasterizer(fontFamily: missingFamily, size: 14, scale: 2)
+
+        XCTAssertTrue(resolved.fallbackUsed)
+        XCTAssertEqual(resolved.requestedFamily, missingFamily)
+        XCTAssertNotEqual(resolved.effectiveFamily, missingFamily)
+        XCTAssertNotNil(resolved.fallbackFamily)
+        XCTAssertEqual(missingRasterizer.fontResolution, resolved)
+    }
+
+    func testCompactUnavailableNerdFontDoesNotResolveToHelvetica() {
+        let resolved = TerminalFontResolver.resolve(fontFamily: "JetBrainsMonoNerdFont", size: 14)
+
+        XCTAssertTrue(resolved.fallbackUsed)
+        XCTAssertNotEqual(resolved.effectiveFamily, "Helvetica")
+        XCTAssertNotEqual(resolved.effectivePostScriptName, "Helvetica")
+        XCTAssertNotEqual(resolved.effectiveFamily, "JetBrainsMonoNerdFont")
+    }
+
+    func testRasterizerCanUsePreResolvedFontIdentity() {
+        let resolved = TerminalFontResolver.resolve(fontFamily: "Menlo", size: 14)
+        let rasterizer = GlyphRasterizer(resolvedFont: resolved, scale: 2)
+
+        XCTAssertEqual(rasterizer.fontResolution, resolved)
+    }
+
+    func testDefaultFontResolutionMatchesRasterizerConstruction() {
+        let resolved = TerminalFontResolver.resolve(
+            fontFamily: TerminalFontResolver.defaultFontFamily,
+            size: 16
+        )
+        let defaultRasterizer = GlyphRasterizer(
+            fontFamily: TerminalFontResolver.defaultFontFamily,
+            size: 16,
+            scale: 2
+        )
+
+        XCTAssertEqual(defaultRasterizer.fontResolution, resolved)
+        XCTAssertFalse(resolved.effectiveFamily.isEmpty)
+        XCTAssertFalse(resolved.effectivePostScriptName.isEmpty)
+    }
+
+    func testScreenshotLikeStringsDoNotExceedMonospaceCellBudget() {
+        let resolved = TerminalFontResolver.resolve(
+            fontFamily: TerminalFontResolver.defaultFontFamily,
+            size: 16
+        )
+        let metricRasterizer = GlyphRasterizer(
+            fontFamily: TerminalFontResolver.defaultFontFamily,
+            size: 16,
+            scale: 2
+        )
+        let metrics = metricRasterizer.metrics()
+        let font = CTFontCreateWithName(resolved.effectivePostScriptName as CFString, 16, nil)
+        var evidence: [String] = [
+            "requested=\(resolved.requestedFamily)",
+            "effective=\(resolved.effectiveFamily)",
+            "postScript=\(resolved.effectivePostScriptName)",
+            "fallbackUsed=\(resolved.fallbackUsed)",
+            "cellWidth=\(metrics.width)",
+        ]
+
+        for text in screenshotMetricStrings {
+            let width = typographicWidth(text, font: font)
+            let cellBudget = CGFloat(text.count) * metrics.width
+            evidence.append("\(text) | glyphWidth=\(width) | cellBudget=\(cellBudget)")
+            XCTAssertLessThanOrEqual(
+                width,
+                cellBudget + 0.5,
+                "\(text) should fit inside its monospace cell budget without extra spacing"
+            )
+        }
+        emitEvidence(evidence.joined(separator: "\n"))
     }
 
     func testEmptyFamilyFallsBackToMonospaceMenlo() {
@@ -69,6 +142,49 @@ final class GlyphRasterizerTests: XCTestCase {
             nativeCoverage + nativeCoverage / 5,
             "CoreGraphics font smoothing materially thickens grayscale coverage"
         )
+    }
+
+    func test3270NerdFontRasterizationUsesNativeCoverage() throws {
+        let resolved = TerminalFontResolver.resolve(fontFamily: "3270 Nerd Font", size: 16)
+        try XCTSkipIf(resolved.effectiveFamily != "3270 Nerd Font", "3270 Nerd Font is not installed")
+        let rasterizer = GlyphRasterizer(fontFamily: "3270 Nerd Font", size: 16, scale: 2)
+        let scalar = UnicodeScalar("W").value
+        let glyph = try XCTUnwrap(rasterizer.rasterize(codepoint: scalar))
+
+        let actualCoverage = glyph.coverage.reduce(0) { $0 + Int($1) }
+        let nativeCoverage = referenceCoverageSum(
+            codepoint: scalar,
+            fontName: "3270 Nerd Font",
+            size: 16,
+            smoothFonts: false
+        )
+        let smoothedCoverage = referenceCoverageSum(
+            codepoint: scalar,
+            fontName: "3270 Nerd Font",
+            size: 16,
+            smoothFonts: true
+        )
+
+        XCTAssertEqual(actualCoverage, nativeCoverage)
+        XCTAssertGreaterThan(smoothedCoverage, nativeCoverage + nativeCoverage / 5)
+    }
+
+    func testFontThickenIncreasesGlyphCoverageWithoutChangingMetricsOrBoxDrawing() throws {
+        let normal = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2)
+        let thickened = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2, fontThicken: true, fontThickenStrength: 255)
+
+        XCTAssertEqual(thickened.metrics(), normal.metrics())
+        XCTAssertNil(thickened.rasterize(codepoint: UInt32(UnicodeScalar(" ").value)))
+
+        let scalar = UInt32(UnicodeScalar("W").value)
+        let normalGlyph = try XCTUnwrap(normal.rasterize(codepoint: scalar))
+        let thickenedGlyph = try XCTUnwrap(thickened.rasterize(codepoint: scalar))
+        XCTAssertEqual(thickenedGlyph.width, normalGlyph.width)
+        XCTAssertEqual(thickenedGlyph.height, normalGlyph.height)
+        XCTAssertGreaterThan(coverageSum(thickenedGlyph), coverageSum(normalGlyph))
+
+        let box = UInt32(UnicodeScalar("─").value)
+        XCTAssertEqual(thickened.rasterize(codepoint: box), normal.rasterize(codepoint: box))
     }
 
     func testSpaceHasNoInk() {
@@ -190,8 +306,28 @@ final class GlyphRasterizerTests: XCTestCase {
         }
     }
 
-    private func referenceCoverageSum(codepoint: UInt32, smoothFonts: Bool) -> Int {
-        let font = CTFontCreateWithName("Menlo" as CFString, 14, nil)
+    private func typographicWidth(_ text: String, font: CTFont) -> CGFloat {
+        let fontKey = NSAttributedString.Key(kCTFontAttributeName as String)
+        let attributed = NSAttributedString(string: text, attributes: [fontKey: font])
+        let line = CTLineCreateWithAttributedString(attributed)
+        return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    }
+
+    private func emitEvidence(_ text: String) {
+        FileHandle.standardError.write(Data((text + "\n").utf8))
+    }
+
+    private func coverageSum(_ glyph: RasterizedGlyph) -> Int {
+        glyph.coverage.reduce(0) { $0 + Int($1) }
+    }
+
+    private func referenceCoverageSum(
+        codepoint: UInt32,
+        fontName: String = "Menlo",
+        size: CGFloat = 14,
+        smoothFonts: Bool
+    ) -> Int {
+        let font = CTFontCreateWithName(fontName as CFString, size, nil)
         guard let scalar = Unicode.Scalar(codepoint) else { return 0 }
         var utf16 = Array(String(scalar).utf16)
         var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
