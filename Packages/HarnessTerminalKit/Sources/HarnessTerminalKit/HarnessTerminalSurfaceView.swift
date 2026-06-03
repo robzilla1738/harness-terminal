@@ -814,6 +814,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         canvasForegroundHex: String,
         cursorHex: String,
         outputPaletteHex: [String?],
+        oscPaletteHex: [String?]? = nil,
         canvasOpacity: Float,
         cursorStyle: String,
         cursorBlink: Bool,
@@ -869,6 +870,12 @@ public final class HarnessTerminalSurfaceView: NSView {
                 ?? ThemeManager.defaultBaselinePaletteHex[i]
             return RGBColor(hex: hex) ?? RGBColor(red: 0, green: 0, blue: 0)
         }
+        let queryPalette: [RGBColor] = (0 ..< 16).map { i in
+            let hex = (oscPaletteHex.flatMap { i < $0.count ? $0[i] : nil })
+                ?? (i < outputPaletteHex.count ? outputPaletteHex[i] : nil)
+                ?? ThemeManager.defaultBaselinePaletteHex[i]
+            return RGBColor(hex: hex) ?? RGBColor(red: 0, green: 0, blue: 0)
+        }
         self.fontFamily = fontFamily
         self.fontSize = fontSize
         self.colorRendering = resolvedColorRendering
@@ -887,7 +894,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.selectionForeground = selFg
         self.copyOnSelect = copyOnSelect
         self.pasteProtection = pasteProtection
-        colorProviderState.update(foreground: fg, background: bg, cursor: cursor, palette: palette)
+        colorProviderState.update(foreground: fg, background: bg, cursor: cursor, palette: queryPalette)
         let resolver = CellColorResolver(
             palette: ANSIPalette(base16: palette),
             defaultForeground: fg,

@@ -26,6 +26,17 @@ extension TerminalHostDelegate {
     public func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID) {}
 }
 
+struct TerminalHostResolvedAppearance: Equatable {
+    let canvasBackgroundHex: String
+    let canvasForegroundHex: String
+    let cursorHex: String
+    let outputPaletteHex: [String?]
+    let oscPaletteHex: [String?]?
+    let selectionBackgroundHex: String?
+    let selectionForegroundHex: String?
+    let cursorTextHex: String?
+}
+
 /// Hosts one terminal pane: Harness's native `HarnessTerminalSurfaceView` (GPU renderer +
 /// engine) wired to the daemon-owned PTY. Input/resize go to the daemon; output is streamed
 /// back and fed to the surface. The pane border/ring/mark overlays are drawn here.
@@ -333,18 +344,17 @@ public final class TerminalHostView: NSView {
     /// backgrounds stay opaque.
     private func applyNativeAppearance() {
         guard let settings = cachedSettings else { return }
-        let canvas = ThemeManager.resolvedCanvas(
+        let resolved = Self.resolvedNativeAppearance(
             themeName: cachedThemeName,
-            customBackgroundHex: settings.customBackgroundHex,
-            customForegroundHex: settings.customForegroundHex,
-            customCursorHex: settings.customCursorHex
+            settings: settings,
+            systemAppearance: Self.systemAppearance(for: effectiveAppearance)
         )
         // `window-style`/`pane-style`: a parsed base color overrides the canvas default for
         // this pane's default-colored cells (so an inactive pane dims). `.none` channels keep
         // the theme canvas. The active pane uses the `*-active-style` base.
         let styleBase = paneStyles.base(active: isActiveBorder)
-        let canvasBg = Self.hexString(styleBase.bg) ?? canvas.backgroundHex
-        let canvasFg = Self.hexString(styleBase.fg) ?? canvas.foregroundHex
+        let canvasBg = Self.hexString(styleBase.bg) ?? resolved.canvasBackgroundHex
+        let canvasFg = Self.hexString(styleBase.fg) ?? resolved.canvasForegroundHex
         nativeView.configureAppearance(
             fontFamily: settings.fontFamily,
             fontSize: CGFloat(settings.fontSize),
@@ -353,20 +363,18 @@ public final class TerminalHostView: NSView {
             colorGamut: settings.colorGamut,
             canvasBackgroundHex: canvasBg,
             canvasForegroundHex: canvasFg,
-            cursorHex: canvas.cursorHex,
-            outputPaletteHex: nativeOutputPaletteHex(settings: settings),
+            cursorHex: resolved.cursorHex,
+            outputPaletteHex: resolved.outputPaletteHex,
+            oscPaletteHex: resolved.oscPaletteHex,
             canvasOpacity: HarnessSettings.clampedOpacity(settings.backgroundOpacity),
             cursorStyle: settings.cursorStyle,
             cursorBlink: settings.cursorBlink,
             paddingX: CGFloat(settings.windowPaddingX),
             paddingY: CGFloat(settings.windowPaddingY),
             paddingBalance: settings.windowPaddingBalance,
-            selectionBackgroundHex: settings.selectionBackgroundHex
-                ?? ThemeManager.selectionBackgroundHex(themeName: cachedThemeName),
-            selectionForegroundHex: settings.selectionForegroundHex
-                ?? ThemeManager.selectionForegroundHex(themeName: cachedThemeName),
-            cursorTextHex: settings.cursorTextHex
-                ?? ThemeManager.cursorTextHex(themeName: cachedThemeName),
+            selectionBackgroundHex: resolved.selectionBackgroundHex,
+            selectionForegroundHex: resolved.selectionForegroundHex,
+            cursorTextHex: resolved.cursorTextHex,
             copyOnSelect: settings.copyOnSelect,
             pasteProtection: settings.pasteProtection,
             scrollbackLines: settings.scrollbackLines,
@@ -410,6 +418,40 @@ public final class TerminalHostView: NSView {
         return String(format: "#%02X%02X%02X", rgb.r, rgb.g, rgb.b)
     }
 
+    private static func systemAppearance(for appearance: NSAppearance) -> HarnessSystemAppearance {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+    }
+
+    static func resolvedNativeAppearance(
+        themeName: String,
+        settings: HarnessSettings,
+        systemAppearance: HarnessSystemAppearance
+    ) -> TerminalHostResolvedAppearance {
+        let appearance = ThemeManager.resolvedAppearance(
+            themeName: themeName,
+            appearanceMode: settings.appearanceMode,
+            systemAppearance: systemAppearance,
+            systemLightThemeName: settings.systemLightThemeName,
+            systemDarkThemeName: settings.systemDarkThemeName,
+            customBackgroundHex: settings.customBackgroundHex,
+            customForegroundHex: settings.customForegroundHex,
+            customCursorHex: settings.customCursorHex
+        )
+        return TerminalHostResolvedAppearance(
+            canvasBackgroundHex: appearance.canvas.backgroundHex,
+            canvasForegroundHex: appearance.canvas.foregroundHex,
+            cursorHex: appearance.canvas.cursorHex,
+            outputPaletteHex: nativeOutputPaletteHex(settings: settings, appearance: appearance),
+            oscPaletteHex: nativeOSCPaletteHex(settings: settings, appearance: appearance),
+            selectionBackgroundHex: settings.selectionBackgroundHex
+                ?? ThemeManager.selectionBackgroundHex(themeName: themeName),
+            selectionForegroundHex: settings.selectionForegroundHex
+                ?? ThemeManager.selectionForegroundHex(themeName: themeName),
+            cursorTextHex: settings.cursorTextHex
+                ?? ThemeManager.cursorTextHex(themeName: themeName)
+        )
+    }
+
     /// Mirror a copy into the daemon paste buffer (parity with copy-mode), so `paste-buffer`
     /// and the buffer list see selections made by mouse.
     private func storeCopyBuffer(_ text: String) {
@@ -425,12 +467,21 @@ public final class TerminalHostView: NSView {
     /// the theme's palette (seeded into settings, with theme fallback) recolors output;
     /// otherwise nil slots let the surface fall back to its untouched default palette so
     /// programs render their true colors.
-    private func nativeOutputPaletteHex(settings: HarnessSettings) -> [String?] {
+    private static func nativeOutputPaletteHex(
+        settings: HarnessSettings,
+        appearance: ThemeManager.ResolvedAppearance
+    ) -> [String?] {
         guard settings.applyThemeToTerminalOutput else {
             return Array(repeating: nil, count: 16)
         }
-        let themePalette = ThemeManager.paletteHex(themeName: cachedThemeName)
-        return (0 ..< 16).map { settings.paletteHex[$0] ?? themePalette[$0] }
+        return (0 ..< 16).map { settings.paletteHex[$0] ?? appearance.paletteHex[$0] }
+    }
+
+    private static func nativeOSCPaletteHex(
+        settings: HarnessSettings,
+        appearance: ThemeManager.ResolvedAppearance
+    ) -> [String?]? {
+        settings.appearanceMode == .macOSSystem ? appearance.paletteHex : nil
     }
 
     public func applyTheme(named name: String) {
@@ -441,6 +492,15 @@ public final class TerminalHostView: NSView {
     public func applySettings(_ settings: HarnessSettings) {
         cachedSettings = settings
         applyNativeAppearance()
+    }
+
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if HarnessEffectiveAppearanceRefreshPolicy.shouldRefreshOnEffectiveAppearanceChange(
+            appearanceMode: cachedSettings?.appearanceMode ?? .theme
+        ) {
+            applyNativeAppearance()
+        }
     }
 
     /// Honor tmux `set-clipboard`: when false, programs cannot set the system

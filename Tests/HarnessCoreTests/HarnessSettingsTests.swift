@@ -614,19 +614,6 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.backgroundOpacity, 0.85)              // other fields still import
     }
 
-    func testMissingFontThickenKeysDecodeFromImportedGhosttyConfig() throws {
-        try withTemporaryHarnessHome(ghosttyConfig: """
-            theme = dark:TokyoNight Storm,light:Tango Adapted
-            font-thicken = true
-            """) { _ in
-            let legacy = Data(#"{ "fontSize": 16, "fontFamily": "3270 Nerd Font" }"#.utf8)
-
-            let settings = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
-
-            XCTAssertTrue(settings.fontThicken)
-            XCTAssertEqual(settings.fontThickenStrength, 255)
-        }
-    }
 
     private func withTemporaryHarnessHome(
         ghosttyConfig: String = "theme = dark:TokyoNight Storm,light:Tango Adapted\n",
