@@ -33,4 +33,22 @@ final class CombiningMarkTests: XCTestCase {
         XCTAssertEqual(g.cell(row: 0, col: 0)?.codepoint, 0x61) // 'a' — the mark did not occupy col 0
         XCTAssertNil(g.cell(row: 0, col: 0)?.marks)
     }
+
+    func testCombiningMarkAttachesToWideBaseHead() {
+        // A wide CJK base (中 = U+4E2D) occupies col 0 (head) + col 1 (spacer tail). A following
+        // combining mark must walk back from the spacer tail to the head, not land on the tail.
+        let g = feed("中\u{0301}")
+        XCTAssertEqual(g.cell(row: 0, col: 0)?.codepoint, 0x4E2D)
+        XCTAssertEqual(g.cell(row: 0, col: 0)?.marks ?? [], [0x0301])
+        XCTAssertEqual(g.cell(row: 0, col: 1)?.width, .spacerTail)
+        XCTAssertNil(g.cell(row: 0, col: 1)?.marks)
+    }
+
+    func testCombiningMarkAttachesWhenPendingWrapArmed() {
+        // In a 3-column grid, "abe" leaves the cursor pinned on the last column (col 2) with
+        // pendingWrap armed. A combining mark then must attach to that last-column base.
+        let g = feed("abe\u{0301}", cols: 3)
+        XCTAssertEqual(g.cell(row: 0, col: 2)?.codepoint, 0x65) // 'e'
+        XCTAssertEqual(g.cell(row: 0, col: 2)?.marks ?? [], [0x0301])
+    }
 }
