@@ -14,10 +14,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     public var windowPaddingX: Float?
     public var windowPaddingY: Float?
     public var themeName: String?
-    /// Ghostty dual-appearance `theme = light:Name,dark:Name` — mapped onto Harness's
-    /// auto light/dark theme pair so the import follows the system appearance.
-    public var lightThemeName: String?
-    public var darkThemeName: String?
+    public var systemLightThemeName: String?
+    public var systemDarkThemeName: String?
     public var backgroundHex: String?
     public var foregroundHex: String?
     public var cursorColorHex: String?
@@ -46,8 +44,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         parts.append(windowPaddingX.map { String($0) } ?? "")
         parts.append(windowPaddingY.map { String($0) } ?? "")
         parts.append(themeName ?? "")
-        parts.append(lightThemeName ?? "")
-        parts.append(darkThemeName ?? "")
+        parts.append(systemLightThemeName ?? "")
+        parts.append(systemDarkThemeName ?? "")
         parts.append(backgroundHex ?? "")
         parts.append(foregroundHex ?? "")
         parts.append(cursorColorHex ?? "")
@@ -73,8 +71,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         windowPaddingX: Float? = nil,
         windowPaddingY: Float? = nil,
         themeName: String? = nil,
-        lightThemeName: String? = nil,
-        darkThemeName: String? = nil,
+        systemLightThemeName: String? = nil,
+        systemDarkThemeName: String? = nil,
         backgroundHex: String? = nil,
         foregroundHex: String? = nil,
         cursorColorHex: String? = nil,
@@ -97,8 +95,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         self.windowPaddingX = windowPaddingX
         self.windowPaddingY = windowPaddingY
         self.themeName = themeName
-        self.lightThemeName = lightThemeName
-        self.darkThemeName = darkThemeName
+        self.systemLightThemeName = systemLightThemeName
+        self.systemDarkThemeName = systemDarkThemeName
         self.backgroundHex = backgroundHex
         self.foregroundHex = foregroundHex
         self.cursorColorHex = cursorColorHex
@@ -232,14 +230,9 @@ public enum TerminalConfigImporter {
             defaults.windowPaddingY = max(0, value)
         }
         if let value = values["theme"], !value.isEmpty {
-            // Ghostty's `theme` accepts a dual-appearance form: `light:Name,dark:Name`.
-            // Storing that string verbatim would miss the theme catalog lookup and
-            // silently fall back to the default theme — split it into the auto
-            // light/dark pair instead (in either order), with dark as the base theme.
-            if let dual = Self.parseDualTheme(value) {
-                defaults.lightThemeName = dual.light
-                defaults.darkThemeName = dual.dark
-                defaults.themeName = dual.dark
+            if let split = parseSplitTheme(value) {
+                defaults.systemLightThemeName = split.light
+                defaults.systemDarkThemeName = split.dark
             } else {
                 defaults.themeName = value
             }
@@ -283,24 +276,6 @@ public enum TerminalConfigImporter {
         return defaults
     }
 
-    /// Parse Ghostty's dual-appearance theme value `light:Name,dark:Name` (order-independent).
-    /// Returns nil unless BOTH appearances are present — a single `light:`/`dark:` prefix with
-    /// no counterpart is not a valid dual form and falls through to the literal-name path.
-    static func parseDualTheme(_ raw: String) -> (light: String, dark: String)? {
-        var light: String?
-        var dark: String?
-        for part in raw.split(separator: ",") {
-            let entry = part.trimmingCharacters(in: .whitespaces)
-            if entry.lowercased().hasPrefix("light:") {
-                light = String(entry.dropFirst("light:".count)).trimmingCharacters(in: .whitespaces)
-            } else if entry.lowercased().hasPrefix("dark:") {
-                dark = String(entry.dropFirst("dark:".count)).trimmingCharacters(in: .whitespaces)
-            }
-        }
-        guard let light, let dark, !light.isEmpty, !dark.isEmpty else { return nil }
-        return (light, dark)
-    }
-
     private static func normalizeHex(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         return HarnessSettings.normalizedHex(trimmed)
@@ -313,6 +288,25 @@ public enum TerminalConfigImporter {
               (0 ..< 16).contains(index)
         else { return nil }
         return (index, normalizeHex(parts[1]))
+    }
+
+    private static func parseSplitTheme(_ raw: String) -> (light: String, dark: String)? {
+        var light: String?
+        var dark: String?
+        for part in raw.split(separator: ",") {
+            let pieces = part.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard pieces.count == 2 else { continue }
+            switch pieces[0].lowercased() {
+            case "light" where !pieces[1].isEmpty:
+                light = pieces[1]
+            case "dark" where !pieces[1].isEmpty:
+                dark = pieces[1]
+            default:
+                continue
+            }
+        }
+        guard let light, let dark else { return nil }
+        return (light, dark)
     }
 
     private static func parseBool(_ raw: String) -> Bool? {
@@ -335,11 +329,8 @@ private extension ImportedTerminalConfig {
             windowPaddingX: newer.windowPaddingX ?? windowPaddingX,
             windowPaddingY: newer.windowPaddingY ?? windowPaddingY,
             themeName: newer.themeName ?? themeName,
-            // The theme trio travels together: when the newer file sets any `theme`, its
-            // light/dark pair wins wholesale (nil clears an older dual pair) so a later
-            // single-theme override doesn't leave a stale auto light/dark pairing behind.
-            lightThemeName: newer.themeName != nil ? newer.lightThemeName : lightThemeName,
-            darkThemeName: newer.themeName != nil ? newer.darkThemeName : darkThemeName,
+            systemLightThemeName: newer.themeName != nil ? newer.systemLightThemeName : systemLightThemeName,
+            systemDarkThemeName: newer.themeName != nil ? newer.systemDarkThemeName : systemDarkThemeName,
             backgroundHex: newer.backgroundHex ?? backgroundHex,
             foregroundHex: newer.foregroundHex ?? foregroundHex,
             cursorColorHex: newer.cursorColorHex ?? cursorColorHex,

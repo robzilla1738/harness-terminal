@@ -19,23 +19,23 @@ final class TerminalConfigImporterTests: XCTestCase {
         let imported = TerminalConfigImporter.parse("""
         theme = light:Catppuccin Latte,dark:Catppuccin Mocha
         """)
-        XCTAssertEqual(imported.lightThemeName, "Catppuccin Latte")
-        XCTAssertEqual(imported.darkThemeName, "Catppuccin Mocha")
+        XCTAssertEqual(imported.systemLightThemeName, "Catppuccin Latte")
+        XCTAssertEqual(imported.systemDarkThemeName, "Catppuccin Mocha")
         // The dark variant doubles as the base theme so non-auto consumers stay sane.
-        XCTAssertEqual(imported.themeName, "Catppuccin Mocha")
+        XCTAssertNil(imported.themeName)
 
         let settings = HarnessSettings.makeDefaults(imported: imported)
-        XCTAssertEqual(settings.lightThemeName, "Catppuccin Latte")
-        XCTAssertEqual(settings.darkThemeName, "Catppuccin Mocha")
+        XCTAssertEqual(settings.systemLightThemeName, "Catppuccin Latte")
+        XCTAssertEqual(settings.systemDarkThemeName, "Catppuccin Mocha")
     }
 
     func testDualAppearanceThemeAcceptsReversedOrder() {
         let imported = TerminalConfigImporter.parse("""
         theme = dark:One Dark, light:One Light
         """)
-        XCTAssertEqual(imported.lightThemeName, "One Light")
-        XCTAssertEqual(imported.darkThemeName, "One Dark")
-        XCTAssertEqual(imported.themeName, "One Dark")
+        XCTAssertEqual(imported.systemLightThemeName, "One Light")
+        XCTAssertEqual(imported.systemDarkThemeName, "One Dark")
+        XCTAssertNil(imported.themeName)
     }
 
     func testSingleThemeStaysLiteralEvenWithColonInName() {
@@ -44,8 +44,8 @@ final class TerminalConfigImporterTests: XCTestCase {
         theme = Builtin Solarized Dark
         """)
         XCTAssertEqual(imported.themeName, "Builtin Solarized Dark")
-        XCTAssertNil(imported.lightThemeName)
-        XCTAssertNil(imported.darkThemeName)
+        XCTAssertNil(imported.systemLightThemeName)
+        XCTAssertNil(imported.systemDarkThemeName)
     }
 
     func testLaterSingleThemeOverrideClearsEarlierDualPairOnMerge() throws {
@@ -62,8 +62,8 @@ final class TerminalConfigImporterTests: XCTestCase {
 
         let merged = try XCTUnwrap(TerminalConfigImporter.load(from: [earlier.path, later.path]))
         XCTAssertEqual(merged.themeName, "C")
-        XCTAssertNil(merged.lightThemeName)
-        XCTAssertNil(merged.darkThemeName)
+        XCTAssertNil(merged.systemLightThemeName)
+        XCTAssertNil(merged.systemDarkThemeName)
     }
 
     func testParsesExactVisualDefaults() {
@@ -106,7 +106,7 @@ final class TerminalConfigImporterTests: XCTestCase {
         XCTAssertEqual(imported.cursorStyle, "block")
         XCTAssertEqual(imported.cursorBlink, false)
         XCTAssertEqual(imported.copyOnSelect, true)
-        XCTAssertTrue(imported.signature.hasPrefix("v4|"))
+        XCTAssertTrue(imported.signature.hasPrefix("v6|"))
         XCTAssertEqual(imported.fontFamily, "JetBrainsMono Nerd Font")
         XCTAssertEqual(imported.fontSize, 17)
         XCTAssertEqual(imported.windowPaddingX, 14)
@@ -114,6 +114,37 @@ final class TerminalConfigImporterTests: XCTestCase {
         XCTAssertEqual(imported.backgroundOpacity, 0.85)
         XCTAssertEqual(imported.backgroundBlur, 12)
         XCTAssertEqual(imported.defaultShell, "/opt/homebrew/bin/fish")
+    }
+
+    func testParsesGhosttySplitThemeAsSystemThemeNames() {
+        let imported = TerminalConfigImporter.parse("""
+        theme = dark:TokyoNight Storm,light:Tango Adapted
+        """)
+
+        XCTAssertNil(imported.themeName)
+        XCTAssertEqual(imported.systemLightThemeName, "Tango Adapted")
+        XCTAssertEqual(imported.systemDarkThemeName, "TokyoNight Storm")
+    }
+
+    func testParsesGhosttySplitThemeInAnyOrderAndWithQuotes() {
+        let imported = TerminalConfigImporter.parse("""
+        theme = "light:Tango Adapted,dark:TokyoNight Storm"
+        """)
+
+        XCTAssertNil(imported.themeName)
+        XCTAssertEqual(imported.systemLightThemeName, "Tango Adapted")
+        XCTAssertEqual(imported.systemDarkThemeName, "TokyoNight Storm")
+    }
+
+
+    func testKeepsSingleGhosttyThemeAsThemeName() {
+        let imported = TerminalConfigImporter.parse("""
+        theme = Dracula
+        """)
+
+        XCTAssertEqual(imported.themeName, "Dracula")
+        XCTAssertNil(imported.systemLightThemeName)
+        XCTAssertNil(imported.systemDarkThemeName)
     }
 
     func testMergesMultipleConfigLocations() throws {

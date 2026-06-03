@@ -23,6 +23,75 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.customForegroundHex, "#ffffff")
     }
 
+    func testAppearanceModeDefaultsToThemeAndRoundTripsMacOSSystem() throws {
+        XCTAssertEqual(HarnessSettings().appearanceMode, .theme)
+
+        var settings = HarnessSettings(appearanceMode: .macOSSystem)
+        let encoded = try JSONEncoder().encode(settings)
+        let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: encoded)
+
+        XCTAssertTrue(json.contains("\"appearanceMode\":\"macos-system\""))
+        XCTAssertEqual(decoded.appearanceMode, .macOSSystem)
+        settings.appearanceMode = .theme
+        XCTAssertEqual(settings.appearanceMode, .theme)
+    }
+
+    func testSystemThemeNamesDefaultAndRoundTrip() throws {
+        XCTAssertEqual(HarnessSettings().systemLightThemeName, "Zenwritten Light")
+        XCTAssertEqual(HarnessSettings().systemDarkThemeName, "Harness Default")
+
+        let settings = HarnessSettings(
+            appearanceMode: .macOSSystem,
+            systemLightThemeName: "GitHub Light",
+            systemDarkThemeName: "Dracula"
+        )
+        let encoded = try JSONEncoder().encode(settings)
+        let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: encoded)
+
+        XCTAssertTrue(json.contains("\"systemLightThemeName\":\"GitHub Light\""))
+        XCTAssertTrue(json.contains("\"systemDarkThemeName\":\"Dracula\""))
+        XCTAssertEqual(decoded.systemLightThemeName, "GitHub Light")
+        XCTAssertEqual(decoded.systemDarkThemeName, "Dracula")
+    }
+
+    func testEffectiveAppearanceRefreshPolicyOnlyRefreshesMacOSSystem() {
+        XCTAssertFalse(
+            HarnessEffectiveAppearanceRefreshPolicy.shouldRefreshOnEffectiveAppearanceChange(appearanceMode: .theme)
+        )
+        XCTAssertTrue(
+            HarnessEffectiveAppearanceRefreshPolicy.shouldRefreshOnEffectiveAppearanceChange(appearanceMode: .macOSSystem)
+        )
+    }
+
+    func testAppearanceModeMissingFromLegacySettingsMigratesToTheme() throws {
+        let legacy = Data("""
+        { "fontSize": 14, "customBackgroundHex": "#000000" }
+        """.utf8)
+
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+
+        XCTAssertEqual(migrated.appearanceMode, .theme)
+        XCTAssertEqual(migrated.systemLightThemeName, "Zenwritten Light")
+        XCTAssertEqual(migrated.systemDarkThemeName, "Harness Default")
+    }
+
+    func testAppearanceModeLoadMigrationPreservesMacOSSystemChoice() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            try Data("""
+            { "fontSize": 14, "appearanceMode": "macos-system" }
+            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+
+            let settings = HarnessSettings.load()
+
+            XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+            XCTAssertEqual(settings.systemLightThemeName, "Zenwritten Light")
+            XCTAssertEqual(settings.systemDarkThemeName, "Harness Default")
+        }
+    }
+
     func testVividColorsDefaultsToAccurateSRGBWhenMissing() throws {
         XCTAssertFalse(HarnessSettings().vividColors)
         XCTAssertEqual(HarnessSettings().colorRendering, .accurate)
@@ -312,6 +381,87 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertTrue(settings.copyOnSelect)
     }
 
+    func testImportedSplitThemesSeedMacOSSystemAppearance() {
+        let imported = ImportedTerminalConfig(
+            systemLightThemeName: "Tango Adapted",
+            systemDarkThemeName: "TokyoNight Storm"
+        )
+
+        let settings = HarnessSettings.makeDefaults(imported: imported)
+
+        XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+        XCTAssertEqual(settings.systemLightThemeName, "Tango Adapted")
+        XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
+    }
+
+    func testResetToImportedSplitThemeClearsStalePaletteWhenImportHasNoExplicitPalette() {
+        var settings = HarnessSettings()
+        settings.paletteHex[0] = "#ABCDEF"
+
+        let imported = ImportedTerminalConfig(
+            systemLightThemeName: "Tango Adapted",
+            systemDarkThemeName: "TokyoNight Storm"
+        )
+        settings.resetToImportedConfig(imported: imported)
+
+        XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+        XCTAssertEqual(settings.systemLightThemeName, "Tango Adapted")
+        XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
+        XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
+    }
+
+    func testLoadMigrationClearsPaletteOnlyStaleImportWhenNewImportHasNoPalette() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            try Data("""
+            {
+              "paletteHex": ["#ABCDEF", null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+              "importedConfigSignature": "old"
+            }
+            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+
+            let settings = HarnessSettings.load()
+
+            XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+            XCTAssertEqual(settings.systemLightThemeName, "Tango Adapted")
+            XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
+            XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
+        }
+    }
+
+    func testLoadMigrationRefreshesPreviouslyImportedSystemThemesAndClearsStalePalette() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            try Data("""
+            {
+              "appearanceMode": "macos-system",
+              "systemLightThemeName": "3024 Day",
+              "systemDarkThemeName": "Seoulbones Dark",
+              "paletteHex": ["#1D1F21", "#CC6666", "#B5BD68", "#F0C674", "#81A2BE", "#B294BB", "#8ABEB7", "#C5C8C6", "#666666", "#D54E53", "#B9CA4A", "#E7C547", "#7AA6DA", "#C397D8", "#70C0B1", "#EAEAEA"],
+              "importedConfigSignature": "v5|old-import"
+            }
+            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+
+            let settings = HarnessSettings.load()
+
+            XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+            XCTAssertEqual(settings.systemLightThemeName, "Tango Adapted")
+            XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
+            XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
+            XCTAssertTrue(settings.importedConfigSignature?.hasPrefix("v6|") == true)
+        }
+    }
+
+    func testExplicitImportedPaletteIsPreserved() {
+        let imported = ImportedTerminalConfig(
+            paletteHex: ["#111111"] + Array(repeating: nil, count: 15)
+        )
+
+        let settings = HarnessSettings.makeDefaults(imported: imported)
+
+        XCTAssertEqual(settings.paletteHex[0], "#111111")
+    }
+
     func testClampedOpacityAllowsFullRangeAboveTinyFloor() {
         // Power-user range: anything from "barely visible" to fully solid is allowed.
         // The 0.05 floor only exists so a slammed-to-zero slider doesn't leave the
@@ -464,10 +614,33 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.backgroundOpacity, 0.85)              // other fields still import
     }
 
-    private func withTemporaryHarnessHome(_ body: (URL) throws -> Void) throws {
+    func testMissingFontThickenKeysDecodeFromImportedGhosttyConfig() throws {
+        try withTemporaryHarnessHome(ghosttyConfig: """
+            theme = dark:TokyoNight Storm,light:Tango Adapted
+            font-thicken = true
+            """) { _ in
+            let legacy = Data(#"{ "fontSize": 16, "fontFamily": "3270 Nerd Font" }"#.utf8)
+
+            let settings = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+
+            XCTAssertTrue(settings.fontThicken)
+            XCTAssertEqual(settings.fontThickenStrength, 255)
+        }
+    }
+
+    private func withTemporaryHarnessHome(
+        ghosttyConfig: String = "theme = dark:TokyoNight Storm,light:Tango Adapted\n",
+        _ body: (URL) throws -> Void
+    ) throws {
         let previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
         let root = URL(fileURLWithPath: "/tmp/harness-settings-\(UUID().uuidString.prefix(8))", isDirectory: true)
         setenv("HARNESS_HOME", root.path, 1)
+        try? FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Library/Application Support/com.mitchellh.ghostty"),
+            withIntermediateDirectories: true
+        )
+        try? Data(ghosttyConfig.utf8)
+            .write(to: root.appendingPathComponent("Library/Application Support/com.mitchellh.ghostty/config"))
         defer {
             if let previousHome {
                 setenv("HARNESS_HOME", previousHome, 1)
