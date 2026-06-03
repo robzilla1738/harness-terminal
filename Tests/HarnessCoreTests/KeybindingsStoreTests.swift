@@ -92,4 +92,39 @@ final class KeybindingsStoreTests: XCTestCase {
             XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
         }
     }
+
+    func testStoredShippedPrefixDefaultsMigrateToSessionNavigation() throws {
+        try withTemporaryHarnessHome { _ in
+            var stored = KeyTableSet.defaults
+            stored.setBinding(table: .prefix, binding: Binding(spec: KeySpec(key: "n"), command: .nextWindow, note: "Next tab"))
+            stored.setBinding(table: .prefix, binding: Binding(spec: KeySpec(key: "p"), command: .previousWindow, note: "Previous tab"))
+            for index in 0 ... 9 {
+                stored.setBinding(
+                    table: .prefix,
+                    binding: Binding(spec: KeySpec(key: String(index)), command: .selectWorkspace(index: index), note: "Workspace \(index)")
+                )
+            }
+            try KeybindingsStore.save(stored)
+
+            let loaded = KeybindingsStore.load()
+            let prefix = try XCTUnwrap(loaded.table(.prefix))
+            XCTAssertEqual(prefix.lookup(KeySpec(key: "n"))?.command, .nextSession)
+            XCTAssertEqual(prefix.lookup(KeySpec(key: "p"))?.command, .previousSession)
+            for index in 0 ... 9 {
+                XCTAssertEqual(prefix.lookup(KeySpec(key: String(index)))?.command, .selectSession(index: index))
+            }
+        }
+    }
+
+    func testCustomPrefixBindingsAreNotMigrated() throws {
+        try withTemporaryHarnessHome { _ in
+            var stored = KeyTableSet.defaults
+            stored.setBinding(table: .prefix, binding: Binding(spec: KeySpec(key: "n"), command: .nextWindow, note: "Custom next tab"))
+            try KeybindingsStore.save(stored)
+
+            let loaded = KeybindingsStore.load()
+            XCTAssertEqual(loaded.table(.prefix)?.lookup(KeySpec(key: "n"))?.command, .nextWindow)
+            XCTAssertEqual(loaded.table(.prefix)?.lookup(KeySpec(key: "n"))?.note, "Custom next tab")
+        }
+    }
 }
