@@ -416,6 +416,9 @@ final class TerminalScreen {
                 let cell = cells[i]
                 if cell.width == .spacerTail { continue } // wide head already emitted
                 s.unicodeScalars.append(cell.codepoint == 0 ? " " : (Unicode.Scalar(cell.codepoint) ?? " "))
+                if cell.codepoint != 0, let marks = cell.marks {
+                    for m in marks { if let sc = Unicode.Scalar(m) { s.unicodeScalars.append(sc) } }
+                }
             }
             return s
         }

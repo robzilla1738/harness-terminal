@@ -2088,6 +2088,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             if cell?.width == .spacerTail { col += 1; continue }
             if let codepoint = cell?.codepoint, codepoint != 0, let scalar = Unicode.Scalar(codepoint) {
                 line.unicodeScalars.append(scalar)
+                for m in cell?.marks ?? [] { if let sc = Unicode.Scalar(m) { line.unicodeScalars.append(sc) } }
             } else {
                 line += " "
             }

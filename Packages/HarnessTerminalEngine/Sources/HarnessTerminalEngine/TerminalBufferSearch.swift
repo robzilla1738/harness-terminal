@@ -28,7 +28,11 @@ public enum TerminalBufferSearch {
             // One lowercased character per cell, preserving column alignment.
             let hay: [String] = cells.map { cell in
                 if cell.width == .spacerTail || cell.codepoint == 0 { return " " }
-                return String(Unicode.Scalar(cell.codepoint) ?? " ").lowercased()
+                var s = String(Unicode.Scalar(cell.codepoint) ?? " ")
+                if let marks = cell.marks {
+                    for m in marks { if let sc = Unicode.Scalar(m) { s.unicodeScalars.append(sc) } }
+                }
+                return s.lowercased()
             }
             var c = 0
             let last = hay.count - needle.count

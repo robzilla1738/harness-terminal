@@ -51,4 +51,16 @@ final class CombiningMarkTests: XCTestCase {
         XCTAssertEqual(g.cell(row: 0, col: 2)?.codepoint, 0x65) // 'e'
         XCTAssertEqual(g.cell(row: 0, col: 2)?.marks ?? [], [0x0301])
     }
+
+    func testTextExtractionIncludesMarks() {
+        let emu = TerminalEmulator(cols: 20, rows: 3)
+        emu.feed(Array("ที่".utf8))
+        // Reconstruct from cells directly — this is the contract every extraction site must meet.
+        let line = emu.readGrid().cells.prefix(3).reduce(into: "") { acc, cell in
+            guard cell.codepoint != 0 else { return }
+            acc.unicodeScalars.append(Unicode.Scalar(cell.codepoint)!)
+            for m in cell.marks ?? [] { acc.unicodeScalars.append(Unicode.Scalar(m)!) }
+        }
+        XCTAssertEqual(line, "ที่")
+    }
 }
