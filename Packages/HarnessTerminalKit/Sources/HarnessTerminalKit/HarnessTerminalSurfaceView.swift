@@ -186,12 +186,19 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onInput: ((Data) -> Void)?
     /// New grid size after a resize (columns, rows) — the host forwards this to the daemon.
     public var onResize: ((Int, Int) -> Void)?
+    /// Fires while the grid size changes during a resize so the host can show a dimensions HUD.
+    /// `committed` is false for the live (mid-drag) tick and true once the size settles. Never
+    /// fires for the terminal's initial sizing live tick (opening a window isn't a resize).
+    public var onGridSizeWillChange: ((_ cols: Int, _ rows: Int, _ committed: Bool) -> Void)?
     /// Window/tab title (OSC 0 / OSC 2) — the host forwards this to its delegate.
     public var onTitle: ((String) -> Void)?
     /// Reported working directory (OSC 7) — the host forwards this to its delegate.
     public var onPwd: ((String) -> Void)?
     /// Terminal bell (BEL) — the host forwards this to its delegate.
     public var onBell: (() -> Void)?
+    /// A shell command finished (OSC 133), with its run duration + exit code — the host forwards
+    /// this for the long-running-command-finished notification.
+    public var onCommandFinished: ((_ duration: TimeInterval, _ exitCode: Int?) -> Void)?
     /// Desktop notification requested by a program (OSC 9 → nil title; OSC 777 → title+body)
     /// — the host forwards this to its delegate.
     public var onDesktopNotification: ((_ title: String?, _ body: String) -> Void)?
@@ -235,10 +242,17 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// pixels and used both as the grid inset and the renderer's draw origin.
     private var paddingPointsX: CGFloat = 0
     private var paddingPointsY: CGFloat = 0
-    /// Device-pixel grid origin (= padding × scale), reused by `renderNow` and (later)
-    /// mouse→cell mapping.
+    /// Center the grid by splitting the sub-cell remainder onto both sides (`window-padding-balance`).
+    private var paddingBalanced = true
+    /// Device-pixel grid origin (padding × scale, plus the centering half-offset when balanced).
+    /// Reused by `renderNow` as the draw origin and by mouse→cell mapping via `gridOriginPoints*`.
     private var originOffsetX = 0
     private var originOffsetY = 0
+    /// The grid's left/top origin in points (device-px `originOffset` ÷ backing scale). Equals the
+    /// window padding when unbalanced; when balanced it includes the centering half-offset, so
+    /// mouse hit-testing, link-hover, and IME anchoring stay aligned with the centered grid.
+    private var gridOriginPointsX: CGFloat { CGFloat(originOffsetX) / (window?.backingScaleFactor ?? 2.0) }
+    private var gridOriginPointsY: CGFloat { CGFloat(originOffsetY) / (window?.backingScaleFactor ?? 2.0) }
     /// Cursor shape + blink (`cursor-style` / `cursor-style-blink`).
     private var cursorStyle: CursorStyle = .block
     private var cursorBlinkEnabled = true
@@ -248,13 +262,21 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// First-responder state — the cursor only blinks while focused.
     private var focused = false
     /// Mouse selection endpoints (anchor = where the drag started, head = current). A
-    /// `TerminalSelection` is derived from these for both highlight and text extraction.
+    /// `SelectionRegion` is derived from these (expanded by granularity) for highlight + extraction.
     private var selectionAnchor: (row: Int, column: Int)?
     private var selectionHead: (row: Int, column: Int)?
+    /// Selection unit set by click count: 1 = character, 2 = word, 3 = line. A drag extends by
+    /// the unit; word/line ranges reuse copy-mode's word definition.
+    private enum SelectionGranularity { case character, word, line }
+    private var selectionGranularity: SelectionGranularity = .character
+    /// Option-drag makes a rectangular (block) selection instead of a linear one.
+    private var selectionRectangular = false
     private var selectionBackground: RGBColor?
     private var selectionForeground: RGBColor?
     /// Copy the selection to the pasteboard automatically when a drag ends.
     private var copyOnSelect = false
+    /// Confirm before pasting risky (multi-line / control-char) text when bracketed paste is off.
+    private var pasteProtection = true
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
     /// Test-only: counts main-thread consume hops (one per `receiveOffMain` main bounce). The
@@ -520,13 +542,16 @@ public final class HarnessTerminalSurfaceView: NSView {
         cursorBlink: Bool,
         paddingX: CGFloat,
         paddingY: CGFloat,
+        paddingBalance: Bool = true,
         selectionBackgroundHex: String?,
         selectionForegroundHex: String?,
         copyOnSelect: Bool,
+        pasteProtection: Bool = true,
         scrollbackLines: Int,
         linearBlending: Bool,
         textRendering: TerminalTextRenderingMode? = nil,
         ligatures: Bool,
+        minimumContrast: Double = 1,
         promptGutter: Bool = false,
         offMainParserFramePipeline: Bool = true
     ) {
@@ -574,14 +599,17 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.cursorBlinkEnabled = cursorBlink
         self.paddingPointsX = max(0, paddingX)
         self.paddingPointsY = max(0, paddingY)
+        self.paddingBalanced = paddingBalance
         self.selectionBackground = selBg
         self.selectionForeground = selFg
         self.copyOnSelect = copyOnSelect
+        self.pasteProtection = pasteProtection
         colorProviderState.update(foreground: fg, background: bg, cursor: cursor, palette: palette)
         let resolver = CellColorResolver(
             palette: ANSIPalette(base16: palette),
             defaultForeground: fg,
-            defaultBackground: bg
+            defaultBackground: bg,
+            minimumContrast: minimumContrast
         )
         self.frameBuildConfiguration = SurfaceFrameBuildConfiguration(
             resolver: resolver,
@@ -700,6 +728,13 @@ public final class HarnessTerminalSurfaceView: NSView {
                 self?.onBell?()
             } else {
                 DispatchQueue.main.async { [weak self] in self?.onBell?() }
+            }
+        }
+        emulator.onCommandFinished = { [weak self] duration, exitCode in
+            if Thread.isMainThread {
+                self?.onCommandFinished?(duration, exitCode)
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.onCommandFinished?(duration, exitCode) }
             }
         }
         emulator.onNotification = { [weak self] title, body in
@@ -887,12 +922,24 @@ public final class HarnessTerminalSurfaceView: NSView {
 
         let newCols = max(1, usableWidth / renderer.cellPixelWidth)
         let newRows = max(1, usableHeight / renderer.cellPixelHeight)
+        if paddingBalanced {
+            // Center the grid: split the sub-cell remainder onto both sides instead of letting
+            // `.topLeft` gravity park it all at the bottom-right. The renderer draws from this
+            // origin and the leftover on every side reads as canvas; the odd pixel (integer / 2)
+            // stays bottom-right and is invisible. Updated even when the cell count is unchanged
+            // so a sub-cell resize re-centers on the next paint.
+            originOffsetX += (usableWidth - newCols * renderer.cellPixelWidth) / 2
+            originOffsetY += (usableHeight - newRows * renderer.cellPixelHeight) / 2
+        }
         guard newCols != columns || newRows != rows else { return }
         if !hasSizedGrid {
             // First real layout: size immediately so the terminal opens correct (no flash).
             hasSizedGrid = true
             commitGridSize(cols: newCols, rows: newRows)
         } else {
+            // Live HUD tick: the integer cols/rows only change at cell boundaries (the drawable
+            // resizes smoothly every frame), so this fires exactly when the displayed size ticks.
+            onGridSizeWillChange?(newCols, newRows, false)
             // Coalesce: the drawable already resized above (smooth); defer the grid reflow + PTY
             // SIGWINCH until the size settles so a sidebar slide / window drag can't storm the
             // shell. Each layout reschedules, so the commit fires once after the last frame.
@@ -919,6 +966,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         emulatorSync { $0.resize(cols: cols, rows: newRows) }
         invalidateRenderGeneration()
         onResize?(cols, newRows)
+        onGridSizeWillChange?(cols, newRows, true) // settled size for the HUD
         scheduler.forceRender() // settle the new size on screen at once (prompt first paint / resize)
     }
 
@@ -967,7 +1015,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         let findHits = findActive
             ? Self.viewportFindHighlights(findMatches, scrollOffset: scrollOffset, historyCount: emulator.historyCount, rows: rows)
             : []
-        let plain = scrollOffset == 0 && currentSelection == nil && markedText.isEmpty && findHits.isEmpty
+        let selectionRegion = currentSelectionRegion
+        let plain = scrollOffset == 0 && selectionRegion == nil && markedText.isEmpty && findHits.isEmpty
         let frameBuildStart = DispatchTime.now().uptimeNanoseconds
         var frame: TerminalFrame
         if plain {
@@ -975,7 +1024,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                                        imageProvider: { emulator.image(for: $0) },
                                        reusing: lastPlainFrame, damage: damage)
         } else {
-            frame = frameBuilder.build(grid, region: currentSelection.map(SelectionRegion.linear),
+            frame = frameBuilder.build(grid, region: selectionRegion,
                                        searchHighlights: findHits,
                                        imageProvider: { emulator.image(for: $0) })
         }
@@ -998,6 +1047,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         if frame.cursor.visible, focused, blinkEnabled, !cursorBlinkVisible {
             frame.cursor.visible = false
         }
+        // Unfocused → hollow cursor (outline block / dimmed bar-underline), never blinking.
+        frame.cursor.hollow = !focused
         // Clear to the canvas color at canvas opacity so any cell-rounding remainder reads
         // as the canvas (no seam, and translucent when opacity < 1). The grid draws at the
         // padding origin so the inset region shows the canvas.
@@ -1037,7 +1088,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let state = emulatorState
         let config = frameBuildConfiguration
         let requestedScrollOffset = scrollOffset
-        let selection = currentSelection
+        let selectionRegion = currentSelectionRegion
         let preedit = markedText
         let blinkSetting = cursorBlinkEnabled
         let blinkVisible = cursorBlinkVisible
@@ -1090,7 +1141,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 let findHits = findIsActive
                     ? Self.viewportFindHighlights(findMatchesSnapshot, scrollOffset: requestedScrollOffset, historyCount: emulator.historyCount, rows: viewRows)
                     : []
-                let plain = requestedScrollOffset == 0 && selection == nil && preedit.isEmpty && findHits.isEmpty
+                let plain = requestedScrollOffset == 0 && selectionRegion == nil && preedit.isEmpty && findHits.isEmpty
                 if plain {
                     // Only reuse a cached frame built for THIS generation — a stale-generation frame
                     // describes the old grid and would tear when diffed against fresh damage.
@@ -1100,7 +1151,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                                           reusing: reuse, damage: damage)
                     renderDamage = damage
                 } else {
-                    frame = builder.build(grid, region: selection.map(SelectionRegion.linear),
+                    frame = builder.build(grid, region: selectionRegion,
                                           searchHighlights: findHits,
                                           imageProvider: { emulator.image(for: $0) })
                 }
@@ -1117,6 +1168,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 if frame.cursor.visible, isFocused, blinkEnabled, !blinkVisible {
                     frame.cursor.visible = false
                 }
+                frame.cursor.hollow = !isFocused // unfocused → hollow outline / dimmed cursor
                 state.lastPlainFrame = plain ? frame : nil
                 state.lastPlainFrameGeneration = generation
             }
@@ -1285,13 +1337,43 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     // MARK: - Selection & copy
 
-    /// The active selection span (nil when nothing is selected).
-    private var currentSelection: TerminalSelection? {
+    /// The active selection region (nil when nothing is selected): rectangular for an Option-drag,
+    /// else linear with the endpoints expanded by the current granularity (word / line).
+    private var currentSelectionRegion: SelectionRegion? {
         guard let a = selectionAnchor, let h = selectionHead else { return nil }
-        return TerminalSelection((a.row, a.column), (h.row, h.column))
+        if selectionRectangular { return .block(BlockSelection((a.row, a.column), (h.row, h.column))) }
+        guard selectionGranularity != .character else {
+            return .linear(TerminalSelection((a.row, a.column), (h.row, h.column)))
+        }
+        // Order the endpoints, then expand the lower one to the start of its unit and the higher
+        // one to the end of its unit (unioning when both are on the same row).
+        let (lo, hi) = (a.row, a.column) <= (h.row, h.column) ? (a, h) : (h, a)
+        let loRange = unitColumnRange(viewportRow: lo.row, column: lo.column)
+        let hiRange = unitColumnRange(viewportRow: hi.row, column: hi.column)
+        if lo.row == hi.row {
+            return .linear(TerminalSelection((lo.row, min(loRange.lowerBound, hiRange.lowerBound)),
+                                             (lo.row, max(loRange.upperBound, hiRange.upperBound))))
+        }
+        return .linear(TerminalSelection((lo.row, loRange.lowerBound), (hi.row, hiRange.upperBound)))
+    }
+
+    /// Columns spanned by the current granularity at a viewport cell: the whole row for `.line`,
+    /// the whitespace-delimited word for `.word` (shared with copy mode), else the single column.
+    private func unitColumnRange(viewportRow row: Int, column: Int) -> ClosedRange<Int> {
+        switch selectionGranularity {
+        case .character: return column ... column
+        case .line: return 0 ... max(0, columns - 1)
+        case .word:
+            return emulatorSync { emu in
+                let virtualLine = emu.historyCount - scrollOffset + row
+                return emu.wordColumnRange(line: virtualLine, column: column)
+            }
+        }
     }
 
     private func clearSelection() {
+        selectionGranularity = .character
+        selectionRectangular = false
         guard selectionAnchor != nil || selectionHead != nil else { return }
         selectionAnchor = nil
         selectionHead = nil
@@ -1307,8 +1389,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         let cellH = CGFloat(renderer.cellPixelHeight) / scale
         guard cellW > 0, cellH > 0 else { return nil }
         let p = convert(locationInWindow, from: nil)
-        let x = p.x - paddingPointsX
-        let yFromTop = bounds.height - p.y - paddingPointsY
+        let x = p.x - gridOriginPointsX
+        let yFromTop = bounds.height - p.y - gridOriginPointsY
         let col = Int((x / cellW).rounded(.down))
         let row = Int((yFromTop / cellH).rounded(.down))
         return (max(0, min(rows - 1, row)), max(0, min(columns - 1, col)))
@@ -1354,6 +1436,13 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
         guard let pos = cell(at: event.locationInWindow) else { return }
+        // Click count picks the selection unit (1 = char, 2 = word, 3 = line); Option = rectangle.
+        switch event.clickCount {
+        case 2: selectionGranularity = .word
+        case let n where n >= 3: selectionGranularity = .line
+        default: selectionGranularity = .character
+        }
+        selectionRectangular = event.modifierFlags.contains(.option)
         selectionAnchor = pos
         selectionHead = pos
         scheduleRender()
@@ -1417,8 +1506,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             reportMouse(event, button: .left, kind: .release)
             return
         }
-        // A click with no drag clears the selection; a real drag optionally copies.
-        if let a = selectionAnchor, let h = selectionHead, a == h {
+        // A single-cell *character* click with no drag clears; a word/line click (or any drag)
+        // makes a real selection that copy-on-select copies.
+        if let a = selectionAnchor, let h = selectionHead, a == h, selectionGranularity == .character {
             clearSelection()
             return
         }
@@ -1460,8 +1550,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// `row` and half-open `columns` span.
     private func cellRect(row: Int, columns: Range<Int>) -> CGRect? {
         guard let (w, h) = cellSizePoints(), !columns.isEmpty else { return nil }
-        let x = paddingPointsX + CGFloat(columns.lowerBound) * w
-        let y = bounds.height - paddingPointsY - CGFloat(row + 1) * h
+        let x = gridOriginPointsX + CGFloat(columns.lowerBound) * w
+        let y = bounds.height - gridOriginPointsY - CGFloat(row + 1) * h
         return CGRect(x: x, y: y, width: CGFloat(columns.count) * w, height: h)
     }
 
@@ -1720,14 +1810,47 @@ public final class HarnessTerminalSurfaceView: NSView {
         let normalized = raw
             .replacingOccurrences(of: "\r\n", with: "\r")
             .replacingOccurrences(of: "\n", with: "\r")
+        // Paste protection: confirm risky text when the program hasn't enabled bracketed paste
+        // (which would otherwise run embedded newlines as commands the moment they're pasted).
+        let bracketed = emulatorSync { $0.modes.bracketedPaste }
+        if pasteProtection, !bracketed, Self.isUnsafePaste(normalized), let window {
+            confirmPaste(normalized, in: window)
+            return
+        }
+        deliverPaste(normalized)
+    }
+
+    private func deliverPaste(_ normalized: String) {
         snapToBottom()
         clearSelection()
         emit(inputEncoder.encodePaste(normalized, modes: emulatorSync { $0.modes }))
     }
 
+    /// Unsafe = contains a line break (would run as a command without bracketed paste) or another
+    /// control character. Newlines are already normalized to `\r` before this check.
+    private static func isUnsafePaste(_ text: String) -> Bool {
+        text.unicodeScalars.contains { $0.value < 0x20 && $0 != "\t" }
+    }
+
+    private func confirmPaste(_ normalized: String, in window: NSWindow) {
+        let lineCount = normalized.split(separator: "\r", omittingEmptySubsequences: false).count
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = lineCount > 1 ? "Paste \(lineCount) lines into the terminal?" : "Paste into the terminal?"
+        alert.informativeText = "The clipboard contains line breaks or control characters that can run commands immediately. Review before pasting."
+        alert.addButton(withTitle: "Paste")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.deliverPaste(normalized)
+        }
+    }
+
     /// Select the entire visible viewport (Edit ▸ Select All / ⌘A).
     @objc public override func selectAll(_ sender: Any?) {
         guard rows > 0, columns > 0 else { return }
+        selectionGranularity = .character
+        selectionRectangular = false
         selectionAnchor = (row: 0, column: 0)
         selectionHead = (row: rows - 1, column: columns - 1)
         scheduleRender()
@@ -1752,8 +1875,14 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func copySelection() {
-        guard let sel = currentSelection else { return }
-        let text = emulatorSync { selectedText(sel, $0.readGrid()) }
+        guard let region = currentSelectionRegion else { return }
+        let text = emulatorSync { emu -> String in
+            let snapshot = scrollOffset > 0 ? emu.readGrid(scrollbackOffset: scrollOffset) : emu.readGrid()
+            switch region {
+            case let .linear(sel): return selectedText(sel, snapshot)
+            case let .block(blk): return blockSelectedText(blk, snapshot)
+            }
+        }
         guard !text.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -1768,25 +1897,35 @@ public final class HarnessTerminalSurfaceView: NSView {
         for row in sel.startRow ... sel.endRow {
             let startCol = (row == sel.startRow) ? sel.startColumn : 0
             let endCol = (row == sel.endRow) ? sel.endColumn : snapshot.cols - 1
-            var line = ""
-            var col = startCol
-            while col <= endCol {
-                let cell = snapshot.cell(row: row, col: col)
-                if cell?.width == .spacerTail {
-                    col += 1
-                    continue
-                }
-                if let codepoint = cell?.codepoint, codepoint != 0, let scalar = Unicode.Scalar(codepoint) {
-                    line.unicodeScalars.append(scalar)
-                } else {
-                    line += " "
-                }
-                col += 1
-            }
-            while line.hasSuffix(" ") { line.removeLast() }
-            lines.append(line)
+            lines.append(rowText(row: row, startCol: startCol, endCol: endCol, snapshot: snapshot))
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Extract a rectangular (block) selection: the same column span on every row, rows joined by \n.
+    private func blockSelectedText(_ blk: BlockSelection, _ snapshot: TerminalGridSnapshot) -> String {
+        (blk.startRow ... blk.endRow)
+            .map { rowText(row: $0, startCol: blk.startColumn, endCol: blk.endColumn, snapshot: snapshot) }
+            .joined(separator: "\n")
+    }
+
+    /// One row's text over `[startCol, endCol]`: drop wide-char spacer tails, blanks → space,
+    /// trailing whitespace trimmed.
+    private func rowText(row: Int, startCol: Int, endCol: Int, snapshot: TerminalGridSnapshot) -> String {
+        var line = ""
+        var col = startCol
+        while col <= endCol {
+            let cell = snapshot.cell(row: row, col: col)
+            if cell?.width == .spacerTail { col += 1; continue }
+            if let codepoint = cell?.codepoint, codepoint != 0, let scalar = Unicode.Scalar(codepoint) {
+                line.unicodeScalars.append(scalar)
+            } else {
+                line += " "
+            }
+            col += 1
+        }
+        while line.hasSuffix(" ") { line.removeLast() }
+        return line
     }
 
     // MARK: - IME preedit
@@ -1883,7 +2022,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "c", "x":
                 // Copy/cut the selection; with no selection, let the app handle ⌘C/⌘X.
-                if currentSelection != nil { copySelection(); return }
+                if currentSelectionRegion != nil { copySelection(); return }
                 super.keyDown(with: event)
                 return
             case "v":
@@ -2331,9 +2470,9 @@ extension HarnessTerminalSurfaceView: @preconcurrency NSTextInputClient {
         let cellW = CGFloat(renderer.cellPixelWidth) / scale
         let cellH = CGFloat(renderer.cellPixelHeight) / scale
         let snapshot = emulatorSync { $0.readGrid() }
-        let x = paddingPointsX + CGFloat(snapshot.cursor.col) * cellW
+        let x = gridOriginPointsX + CGFloat(snapshot.cursor.col) * cellW
         // Convert grid-from-top to AppKit bottom-left origin.
-        let yTop = paddingPointsY + CGFloat(snapshot.cursor.row) * cellH
+        let yTop = gridOriginPointsY + CGFloat(snapshot.cursor.row) * cellH
         let viewRect = NSRect(x: x, y: bounds.height - yTop - cellH, width: cellW, height: cellH)
         let windowRect = convert(viewRect, to: nil)
         return window.convertToScreen(windowRect)

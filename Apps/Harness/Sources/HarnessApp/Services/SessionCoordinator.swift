@@ -444,6 +444,17 @@ final class SessionCoordinator: NSObject {
         syncFromDaemon()
     }
 
+    /// When auto light/dark is configured (both `lightThemeName` + `darkThemeName` set), switch the
+    /// active theme to the one matching the current macOS system appearance. No-op when auto is off
+    /// or already on the matching theme. Called at startup and on every system appearance change.
+    func applyAutoThemeForCurrentAppearance() {
+        guard let light = settings.lightThemeName, let dark = settings.darkThemeName else { return }
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let target = isDark ? dark : light
+        guard target != snapshot.themeName else { return }
+        setTheme(target, seedColors: true)
+    }
+
     func addWorkspace(name: String) {
         requestDaemon(.newWorkspace(name: name))
         syncFromDaemon()
@@ -1456,6 +1467,25 @@ extension SessionCoordinator: TerminalHostDelegate {
 
     func terminalHostDidRingBell(surfaceID: SurfaceID) {
         handleNotification(for: surfaceID, title: "Terminal", body: "Bell")
+    }
+
+    func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID) {
+        guard settings.commandFinishedNotifications,
+              duration >= Double(max(0, settings.commandFinishedThresholdSeconds)) else { return }
+        // Only notify when this pane isn't the one being actively watched.
+        if NSApp.isActive, surfaceID == activeSurfaceID { return }
+        let code = exitCode ?? 0
+        let status = code == 0 ? "succeeded" : "failed (exit \(code))"
+        deliverAgentAlert(title: "Command \(status)", body: "Ran for \(Self.formatDuration(duration)).")
+    }
+
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        if total < 60 { return "\(total)s" }
+        let minutes = total / 60, secs = total % 60
+        if minutes < 60 { return secs == 0 ? "\(minutes)m" : "\(minutes)m \(secs)s" }
+        let hours = minutes / 60, mins = minutes % 60
+        return mins == 0 ? "\(hours)h" : "\(hours)h \(mins)m"
     }
 
     func terminalHostDidRequestDesktopNotification(title: String, body: String, surfaceID: SurfaceID) {

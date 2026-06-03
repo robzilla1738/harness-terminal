@@ -113,4 +113,48 @@ final class CellColorResolverTests: XCTestCase {
         XCTAssertEqual(r.foreground, r.background)
         XCTAssertEqual(r.foreground, theme.palette[4])
     }
+
+    // MARK: Minimum contrast (T5)
+
+    func testContrastRatioBlackOnWhiteIsMax() {
+        let white = HarnessTheme.RGBColor(red: 255, green: 255, blue: 255)
+        let black = HarnessTheme.RGBColor(red: 0, green: 0, blue: 0)
+        XCTAssertEqual(CellColorResolver.contrastRatio(black, white), 21, accuracy: 0.01)
+        XCTAssertEqual(CellColorResolver.contrastRatio(white, white), 1, accuracy: 0.01)
+    }
+
+    func testMinimumContrastOfOneIsByteIdentical() {
+        // ratio 1 = off: a low-contrast gray-on-gray cell is left exactly as the default resolver leaves it.
+        let off = CellColorResolver(palette: ANSIPalette(base16: theme.palette),
+                                    defaultForeground: theme.foreground, defaultBackground: theme.background)
+        let on = CellColorResolver(palette: ANSIPalette(base16: theme.palette),
+                                   defaultForeground: theme.foreground, defaultBackground: theme.background,
+                                   minimumContrast: 1)
+        let cell = TerminalGridCell(codepoint: 0x41,
+                                    foreground: .rgb(r: 90, g: 90, b: 90), background: .rgb(r: 80, g: 80, b: 80))
+        XCTAssertEqual(off.resolve(cell), on.resolve(cell))
+    }
+
+    func testMinimumContrastLiftsLowContrastForeground() {
+        let resolver = CellColorResolver(palette: ANSIPalette(base16: theme.palette),
+                                         defaultForeground: theme.foreground, defaultBackground: theme.background,
+                                         minimumContrast: 7)
+        // Dark gray text on a near-black background — well below ratio 7.
+        let cell = TerminalGridCell(codepoint: 0x41,
+                                    foreground: .rgb(r: 60, g: 60, b: 60), background: .rgb(r: 10, g: 10, b: 10))
+        let r = resolver.resolve(cell)
+        XCTAssertGreaterThanOrEqual(CellColorResolver.contrastRatio(r.foreground, r.background), 7 - 0.05)
+        // The background is untouched; only the foreground is lifted (toward white on a dark bg).
+        XCTAssertEqual(r.background, RGBColor(red: 10, green: 10, blue: 10))
+        XCTAssertGreaterThan(Int(r.foreground.red), 60)
+    }
+
+    func testMinimumContrastSkipsConcealedCells() {
+        let resolver = CellColorResolver(palette: ANSIPalette(base16: theme.palette),
+                                         defaultForeground: theme.foreground, defaultBackground: theme.background,
+                                         minimumContrast: 7)
+        let cell = TerminalGridCell(codepoint: 0x41, foreground: .palette(1), background: .palette(4), invisible: true)
+        let r = resolver.resolve(cell)
+        XCTAssertEqual(r.foreground, r.background) // conceal still wins (fg == bg)
+    }
 }

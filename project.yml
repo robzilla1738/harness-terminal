@@ -27,6 +27,10 @@ targets:
       - Apps/Harness/Resources/Harness.icns
       - Apps/Harness/Resources/HarnessLogo.png
       - Apps/Harness/Resources/Assets.xcassets
+      # Bundled "Symbols Nerd Font Mono" (MIT). A folder reference so it lands at
+      # Contents/Resources/Fonts/ verbatim, matching ATSApplicationFontsPath = Fonts.
+      - path: Apps/Harness/Resources/Fonts
+        type: folder
     dependencies:
       - target: HarnessDaemon
         embed: false

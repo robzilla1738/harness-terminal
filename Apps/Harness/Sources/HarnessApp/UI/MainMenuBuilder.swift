@@ -168,6 +168,14 @@ enum MainMenuBuilder {
         let fullScreen = NSMenuItem(title: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
         windowMenu.addItem(fullScreen)
+        // Non-native ("fast") full screen: fills the screen without the macOS Space animation.
+        let fastFullScreen = NSMenuItem(
+            title: "Toggle Fast Full Screen",
+            action: #selector(MainWindowController.toggleNonNativeFullscreen(_:)),
+            keyEquivalent: "f"
+        )
+        fastFullScreen.keyEquivalentModifierMask = [.command, .control, .shift]
+        windowMenu.addItem(fastFullScreen)
         windowMenu.addItem(.separator())
         windowMenu.addItem(NSMenuItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: ""))
         main.addItem(window)

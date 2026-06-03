@@ -60,6 +60,14 @@ if [[ -f "$LOGO" ]]; then
   cp "$LOGO" "$APP/Contents/Resources/HarnessLogo.png"
 fi
 
+# Bundled "Symbols Nerd Font Mono" (MIT) — auto-activated via Info.plist's
+# ATSApplicationFontsPath = Fonts so Nerd Font / Powerline glyphs always have a coverage font
+# even when the user's primary font isn't a Nerd Font. Copied verbatim (incl. its LICENSE).
+FONTS="$ROOT/Apps/Harness/Resources/Fonts"
+if [[ -d "$FONTS" ]]; then
+  ditto "$FONTS" "$APP/Contents/Resources/Fonts"
+fi
+
 chmod +x "$APP/Contents/MacOS/"*
 
 echo "Created $APP"

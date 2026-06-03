@@ -6,6 +6,41 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+A quality-of-life pass aimed at 1:1 parity with the polish of a mainstream GPU terminal.
+
+### Added
+- **Live resize overlay.** Resizing the window shows the live grid size (e.g. `120 × 32`) and fades
+  out once it settles. Configurable in Settings ▸ Appearance (`after-first` / `always` / `never`).
+- **Balanced window padding.** The grid is now centered — the leftover sub-cell space is split
+  evenly on both sides instead of being parked at the bottom-right edge. Toggle "Center grid" in
+  Settings ▸ Appearance.
+- **Word, line, and rectangular selection.** Double-click selects a word, triple-click selects a
+  line, and Option-drag makes a rectangular (block) selection — using the same word rule as copy
+  mode. Copy-on-select copies the expanded selection.
+- **Hollow cursor when unfocused.** When the window loses focus the cursor becomes a hollow box
+  outline (standard macOS behavior), so it's clear which window is active.
+- **Minimum contrast.** An optional WCAG contrast floor lifts dim foreground text to a chosen ratio
+  (Settings ▸ Colors, 1 = off). Honored from an imported `minimum-contrast` config value.
+- **Automatic light/dark theme.** Pick a light and a dark theme and Harness follows the macOS system
+  appearance, switching live (Settings ▸ Appearance ▸ "Auto light/dark").
+- **Paste protection.** Pasting text with line breaks or control characters now asks for
+  confirmation when the program hasn't enabled bracketed paste — guarding against blind command
+  execution. On by default (Settings ▸ Terminal).
+- **Long-running command notifications.** Optionally get a desktop notification when a command that
+  ran longer than a threshold finishes in an unfocused window (uses OSC 133 shell-integration
+  timing; off by default, Settings ▸ Agents).
+- **Non-native ("fast") full screen.** A new ⌃⌘⇧F fills the screen without the macOS Spaces
+  animation, alongside the existing native ⌃⌘F.
+
+### Fixed
+- **Nerd Font / Powerline glyphs render correctly (#37).** Prompt icons and Powerline separators
+  rendered as "tofu" boxes (□) when the configured font wasn't a Nerd Font or its name didn't
+  resolve cleanly. Harness now bundles a symbols-only Nerd Font as a guaranteed fallback for icon
+  codepoints and resolves the configured font more robustly, so shell prompts (Starship,
+  Powerlevel10k, …) render their symbols regardless of the primary font.
+
 ## [1.1.2] - 2026-06-02
 
 ### Added

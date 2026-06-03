@@ -32,6 +32,9 @@ public final class TerminalEmulator: VTParserHandler {
     public var onWorkingDirectoryChange: ((String) -> Void)?
     /// Terminal bell (BEL / `\a`).
     public var onBell: (() -> Void)?
+    /// A shell command finished (OSC 133 `D`), with how long it ran (since the `C`/`B` mark) and
+    /// its exit code. Drives the "long command finished in an unfocused window" notification.
+    public var onCommandFinished: ((_ duration: TimeInterval, _ exitCode: Int?) -> Void)?
     /// Clipboard text set by a program via OSC 52 (already base64-decoded). The
     /// consumer gates this on the `set-clipboard` option before writing the system
     /// pasteboard; the engine only decodes.
@@ -49,6 +52,8 @@ public final class TerminalEmulator: VTParserHandler {
     public var onPointerShapeChange: ((String?) -> Void)?
     /// Last OSC-22 pointer shape (nil = terminal default). Surfaced for hosts that prefer polling.
     public private(set) var pointerShape: String?
+    /// When the current command started running (OSC 133 `C`/`B`), for command-duration timing.
+    private var commandStartedAt: Date?
 
     /// Active character set per designation slot (`ESC ( …` / `ESC ) …`). DEC special graphics
     /// turns letters into line-drawing glyphs; ASCII is the default. `glUsesG1` is toggled by
@@ -378,9 +383,19 @@ public final class TerminalEmulator: VTParserHandler {
         let parts = payload.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
         guard let kind = parts.first?.first else { return }
         switch kind {
-        case "A": current.markPromptStart()
-        case "D": current.markCommandFinished(exit: parts.count >= 2 ? Int(parts[1]) : nil)
-        case "B", "C": break
+        case "A":
+            current.markPromptStart()
+            commandStartedAt = nil // new prompt: no command running yet
+        case "B", "C":
+            // Command execution begins (C = output start, B = command start for shells without C).
+            commandStartedAt = Date()
+        case "D":
+            let exitCode = parts.count >= 2 ? Int(parts[1]) : nil
+            current.markCommandFinished(exit: exitCode)
+            if let started = commandStartedAt {
+                onCommandFinished?(Date().timeIntervalSince(started), exitCode)
+                commandStartedAt = nil
+            }
         default: break
         }
     }

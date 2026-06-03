@@ -155,6 +155,10 @@ public struct CursorRender: Equatable, Sendable {
     /// theme cursor-text / canvas background.
     public var textColor: RenderColor
     public var style: CursorStyle
+    /// Drawn as a 1px box outline (regardless of style) when the surface is unfocused, so an
+    /// inactive window reads as such — standard macOS/Ghostty behavior. A hollow block also does
+    /// NOT invert the glyph under it (the cell shows through the outline).
+    public var hollow: Bool
 
     public init(
         row: Int,
@@ -162,7 +166,8 @@ public struct CursorRender: Equatable, Sendable {
         visible: Bool,
         color: RenderColor,
         textColor: RenderColor,
-        style: CursorStyle = .block
+        style: CursorStyle = .block,
+        hollow: Bool = false
     ) {
         self.row = row
         self.column = column
@@ -170,6 +175,7 @@ public struct CursorRender: Equatable, Sendable {
         self.color = color
         self.textColor = textColor
         self.style = style
+        self.hollow = hollow
     }
 }
 

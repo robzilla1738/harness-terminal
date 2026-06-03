@@ -60,7 +60,18 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let notificationSoundToggle = HarnessToggle(title: "Play a chime with notifications")
     private let notchModeSegment = HarnessSegmented(frame: .zero)
     private let notchOpenOnHoverToggle = HarnessToggle(title: "Open when I hover near the macOS notch")
+    private let commandFinishedToggle = HarnessToggle(title: "Notify when a long command finishes in a background window")
     private let notchSummaryLabel = NSTextField(wrappingLabelWithString: "")
+    // QoL additions: resize overlay (T1), balanced padding (T2), minimum contrast (T5),
+    // auto light/dark (T6), paste protection (E).
+    private let resizeOverlaySegment = HarnessSegmented(frame: .zero)
+    private let paddingBalanceToggle = HarnessToggle(title: "Center grid (distribute padding evenly)")
+    private let autoThemeToggle = HarnessToggle(title: "Match the macOS light/dark appearance")
+    private let lightThemePopup = HarnessSelect(frame: .zero)
+    private let darkThemePopup = HarnessSelect(frame: .zero)
+    private let minContrastSlider = HarnessSlider(frame: .zero)
+    private let minContrastLabel = NSTextField(labelWithString: "")
+    private let pasteProtectionToggle = HarnessToggle(title: "Confirm risky pastes (multi-line or control characters)")
     private let notificationTestButton = NSButton(title: "Send Test Notification", target: nil, action: nil)
     private let notificationPermissionButton = NSButton(title: "Open System Settings…", target: nil, action: nil)
     private let notificationStatusField = NSTextField(labelWithString: "")
@@ -350,6 +361,48 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         offMainPipelineToggle.target = self
         offMainPipelineToggle.action = #selector(appearanceTextDidCommit)
 
+        // Resize overlay (T1)
+        resizeOverlaySegment.setSegments(["After first", "Always", "Never"])
+        resizeOverlaySegment.selectItem(withTitle: resizeOverlayTitle(settings.resizeOverlay))
+        resizeOverlaySegment.target = self
+        resizeOverlaySegment.action = #selector(appearanceTextDidCommit)
+        // Balanced padding (T2)
+        paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
+        paddingBalanceToggle.target = self
+        paddingBalanceToggle.action = #selector(appearanceTextDidCommit)
+        // Minimum contrast (T5)
+        minContrastSlider.minValue = 1
+        minContrastSlider.maxValue = 21
+        minContrastSlider.doubleValue = settings.minimumContrast
+        minContrastSlider.isContinuous = true
+        minContrastSlider.target = self
+        minContrastSlider.action = #selector(minContrastChanged)
+        updateMinContrastLabel()
+        // Paste protection (E)
+        pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
+        pasteProtectionToggle.target = self
+        pasteProtectionToggle.action = #selector(appearanceTextDidCommit)
+        // Command-finished notifications (E)
+        commandFinishedToggle.state = settings.commandFinishedNotifications ? .on : .off
+        commandFinishedToggle.target = self
+        commandFinishedToggle.action = #selector(appearanceTextDidCommit)
+        // Auto light/dark (T6): both pickers seed from the current theme when unset; the single
+        // theme picker is disabled while auto drives the active theme.
+        let autoThemeOn = settings.lightThemeName != nil && settings.darkThemeName != nil
+        autoThemeToggle.state = autoThemeOn ? .on : .off
+        autoThemeToggle.target = self
+        autoThemeToggle.action = #selector(autoThemeChanged)
+        for popup in [lightThemePopup, darkThemePopup] {
+            popup.removeAllItems()
+            for name in ThemeManager.allThemeNames() { popup.addItem(withTitle: name) }
+            popup.target = self
+            popup.action = #selector(autoThemeChanged)
+            popup.isEnabled = autoThemeOn
+        }
+        lightThemePopup.selectItem(withTitle: settings.lightThemeName ?? coordinator.snapshot.themeName)
+        darkThemePopup.selectItem(withTitle: settings.darkThemeName ?? coordinator.snapshot.themeName)
+        themePopup.isEnabled = !autoThemeOn
+
         useThemeColorsButton.title = "Use Theme Colors"
         useThemeColorsButton.target = self
         useThemeColorsButton.action = #selector(useThemeColors)
@@ -625,14 +678,24 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         themeActions.spacing = 16
         themeActions.alignment = .centerY
 
+        lightThemePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
+        darkThemePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
         let themeGroup = settingsGroup("Theme", [
             settingsRow("Theme", themePopup),
+            settingsToggleRow("Auto light/dark", autoThemeToggle,
+                              hint: "Switch theme with the macOS system appearance."),
+            settingsRow("Light theme", lightThemePopup),
+            settingsRow("Dark theme", darkThemePopup),
             settingsRow("", themeActions),
         ])
         let windowGroup = settingsGroup("Window", [
             settingsRow("Opacity", opacityRow),
             settingsRow("Blur", blurRow),
             settingsRow("Padding", paddingRow),
+            settingsToggleRow("Center grid", paddingBalanceToggle,
+                              hint: "Distribute leftover padding evenly so the grid is centered."),
+            settingsRow("Resize overlay", resizeOverlaySegment,
+                        hint: "Show the grid size while resizing the window."),
             settingsToggleRow("Transparent title bar", transparentTitlebarToggle),
             settingsToggleRow("Status line", showStatusLineToggle),
             settingsToggleRow("Sidebar", sidebarVisibleToggle),
@@ -673,10 +736,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             ]
         )
 
+        let minContrastRow = NSStackView(views: [minContrastSlider, minContrastLabel])
+        minContrastRow.orientation = .horizontal
+        minContrastRow.spacing = 12
+        minContrastSlider.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        minContrastLabel.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        minContrastLabel.alignment = .right
+
         let renderingGroup = settingsGroup("Color rendering", [
             settingsToggleRow("Wide gamut", vividColorsToggle, hint: "Opt-in Display P3 conversion."),
             settingsRow("Text rendering", textRenderingSegment,
                         hint: "Glyph weight: Native, Crisp (lighter), or Soft (heavier)."),
+            settingsRow("Minimum contrast", minContrastRow,
+                        hint: "Lift dim text to a WCAG contrast ratio (1 = off)."),
             settingsToggleRow("Theme program output", themeTerminalOutputToggle),
             settingsToggleRow("Ligatures", ligaturesToggle),
             settingsToggleRow("Prompt gutter", promptGutterToggle),
@@ -764,6 +836,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Scrollback", scrollbackField),
             settingsToggleRow("Blink cursor", cursorBlinkToggle),
             settingsToggleRow("Copy on select", copyOnSelectToggle),
+            settingsToggleRow("Paste protection", pasteProtectionToggle),
             settingsToggleRow("Keep sessions running", keepSessionsToggle),
         ])
 
@@ -858,6 +931,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         refreshNotificationStatus()
         let notificationsGroup = settingsGroup("Notifications", [
             settingsToggleRow("Agent notifications", systemNotificationsToggle),
+            settingsToggleRow("Command finished", commandFinishedToggle),
             settingsToggleRow("Sound", notificationSoundToggle),
             notifStatusBlock,
         ])
@@ -1637,6 +1711,54 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         refreshColorPlaceholders()
     }
 
+    private func resizeOverlayTitle(_ mode: ResizeOverlayMode) -> String {
+        switch mode {
+        case .afterFirst: return "After first"
+        case .always: return "Always"
+        case .never: return "Never"
+        }
+    }
+
+    func resizeOverlayValue(_ title: String?) -> ResizeOverlayMode {
+        switch title {
+        case "Always": return .always
+        case "Never": return .never
+        default: return .afterFirst
+        }
+    }
+
+    private func updateMinContrastLabel() {
+        let value = minContrastSlider.doubleValue
+        minContrastLabel.stringValue = value <= 1.01 ? "Off" : String(format: "%.1f:1", value)
+    }
+
+    @objc private func minContrastChanged() {
+        updateMinContrastLabel()
+        appearanceTextDidCommit()
+    }
+
+    /// Enable/disable auto light/dark and apply it. Both theme names are set together (seeding from
+    /// the current theme when unset); clearing either turns the feature off.
+    @objc private func autoThemeChanged() {
+        let coordinator = SessionCoordinator.shared
+        let enabled = autoThemeToggle.state == .on
+        coordinator.settings.lightThemeName = enabled
+            ? (lightThemePopup.titleOfSelectedItem ?? coordinator.snapshot.themeName) : nil
+        coordinator.settings.darkThemeName = enabled
+            ? (darkThemePopup.titleOfSelectedItem ?? coordinator.snapshot.themeName) : nil
+        try? coordinator.settings.save()
+        lightThemePopup.isEnabled = enabled
+        darkThemePopup.isEnabled = enabled
+        themePopup.isEnabled = !enabled
+        // Apply immediately (picks the theme matching the current system), then refresh the main
+        // window chrome so it follows / un-follows the system appearance.
+        coordinator.applyAutoThemeForCurrentAppearance()
+        let mainWindow = NSApp.windows.first { $0.contentViewController is MainSplitViewController }
+        (mainWindow?.windowController as? MainWindowController)?.applyChrome()
+        syncAppearanceControlsFromSettings()
+        refreshColorPlaceholders()
+    }
+
     /// Re-seed all colors from the currently selected theme, discarding manual
     /// edits ("Reset to theme").
     @objc private func useThemeColors() {
@@ -1874,6 +1996,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         ligaturesToggle.state = settings.ligatures ? .on : .off
         offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
+        resizeOverlaySegment.selectItem(withTitle: resizeOverlayTitle(settings.resizeOverlay))
+        paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
+        minContrastSlider.doubleValue = settings.minimumContrast
+        updateMinContrastLabel()
+        pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
+        commandFinishedToggle.state = settings.commandFinishedNotifications ? .on : .off
+        let autoThemeOn = settings.lightThemeName != nil && settings.darkThemeName != nil
+        autoThemeToggle.state = autoThemeOn ? .on : .off
+        lightThemePopup.isEnabled = autoThemeOn
+        darkThemePopup.isEnabled = autoThemeOn
+        themePopup.isEnabled = !autoThemeOn
+        lightThemePopup.selectItem(withTitle: settings.lightThemeName ?? SessionCoordinator.shared.snapshot.themeName)
+        darkThemePopup.selectItem(withTitle: settings.darkThemeName ?? SessionCoordinator.shared.snapshot.themeName)
         showStatusLineToggle.state = settings.showStatusLine ? .on : .off
         sidebarVisibleToggle.state = settings.sidebarVisible ? .on : .off
         restoreWindowSizeToggle.state = settings.restoreWindowSize ? .on : .off
@@ -1962,6 +2097,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.ligatures = ligaturesToggle.state == .on
         coordinator.settings.showPromptGutter = promptGutterToggle.state == .on
         coordinator.settings.offMainParserFramePipeline = offMainPipelineToggle.state == .on
+        coordinator.settings.resizeOverlay = resizeOverlayValue(resizeOverlaySegment.titleOfSelectedItem)
+        coordinator.settings.windowPaddingBalance = paddingBalanceToggle.state == .on
+        coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)
+        coordinator.settings.pasteProtection = pasteProtectionToggle.state == .on
+        coordinator.settings.commandFinishedNotifications = commandFinishedToggle.state == .on
         coordinator.settings.experienceMode = selectedExperienceMode
         coordinator.settings.harnessControlsEnabled = selectedHarnessControls
         try? coordinator.settings.save()

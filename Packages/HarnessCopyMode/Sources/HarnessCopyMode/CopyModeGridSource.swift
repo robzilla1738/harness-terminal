@@ -77,6 +77,26 @@ struct CopyModeLine {
 }
 
 extension CopyModeGridSource {
+    /// Grid columns `[start, end]` of the whitespace-delimited word at `column` on virtual `line`,
+    /// using the same separator rule as copy-mode word motion (space / tab). When `column` lands on
+    /// whitespace or past the content, returns just that column. Shared so mouse double-click word
+    /// selection matches copy mode exactly.
+    public func wordColumnRange(line: Int, column: Int) -> ClosedRange<Int> {
+        func isSeparator(_ c: Character) -> Bool { c == " " || c == "\t" }
+        let rl = renderedLine(line)
+        let idx = rl.charIndex(atOrBefore: column)
+        guard idx < rl.chars.count else { return column ... column }
+        let charStart = rl.columnOf[idx]
+        let charEnd = charStart + rl.widthOf[idx] - 1
+        guard column >= charStart, column <= charEnd, !isSeparator(rl.chars[idx]) else {
+            return column ... column
+        }
+        var lo = idx, hi = idx
+        while lo > 0, !isSeparator(rl.chars[lo - 1]) { lo -= 1 }
+        while hi + 1 < rl.chars.count, !isSeparator(rl.chars[hi + 1]) { hi += 1 }
+        return rl.columnOf[lo] ... (rl.columnOf[hi] + rl.widthOf[hi] - 1)
+    }
+
     /// Decompose a virtual line for column/character mapping (handles wide chars + blanks).
     func renderedLine(_ index: Int) -> CopyModeLine {
         let cells = line(index)

@@ -21,8 +21,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     public var selectionForegroundHex: String?
     public var boldColorHex: String?
     public var cursorTextHex: String?
-    /// Parsed for the config fingerprint only — Harness no longer surfaces a
-    /// minimum-contrast setting, so this value is not applied to `HarnessSettings`.
+    /// WCAG minimum-contrast ratio (1…21). Applied to `HarnessSettings.minimumContrast` and
+    /// enforced by the renderer's `CellColorResolver`.
     public var minimumContrast: Double?
     public var paletteHex: [String?]
     public var cursorStyle: String?

@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
     private var notchController: NotchPanelController?
     private var terminalServicesProvider: TerminalServicesProvider?
+    /// Observes the macOS system appearance so auto light/dark theme switching can follow it.
+    private var appearanceObservation: NSKeyValueObservation?
     private var externalOpenReady = false
     private var queuedExternalOpens: [QueuedExternalOpen] = []
 
@@ -39,6 +41,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notchController?.start()
         PrefixKeymap.shared.install()
         SurfaceShellTracker.shared.start()
+        // Follow the macOS system appearance for auto light/dark theme switching. The startup
+        // application happens post-daemon-sync below (so the theme change reaches a ready daemon);
+        // this observer handles every later Light/Dark flip.
+        appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                SessionCoordinator.shared.applyAutoThemeForCurrentAppearance()
+                self?.mainWindowController?.applyChrome()
+            }
+        }
         // Request notification authorization once at launch instead of on every
         // notification post. macOS only shows the system prompt the first time
         // and silently denies after; doing it eagerly means notifications can
@@ -52,6 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !ok || !synced {
                 SessionCoordinator.shared.noteDaemonError(DaemonClientError.timeout)
             }
+            // Apply the auto light/dark theme now that the daemon is hydrated (so the theme change
+            // lands), then refresh the window chrome to match.
+            SessionCoordinator.shared.applyAutoThemeForCurrentAppearance()
+            self.mainWindowController?.applyChrome()
             Self.reconcileSessionPersistenceWithModeOnce()
             OnboardingController.presentIfNeeded()
             self.externalOpenReady = true

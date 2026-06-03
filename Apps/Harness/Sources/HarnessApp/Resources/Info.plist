@@ -134,6 +134,12 @@
     <false/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <!-- Auto-activate the bundled "Symbols Nerd Font Mono" (Contents/Resources/Fonts/) at
+         launch so Nerd Font / Powerline prompt glyphs (PUA codepoints) always have a coverage
+         font even when the user's primary font isn't a Nerd Font — the renderer falls back to
+         it for those ranges (see GlyphRasterizer.symbolFont). MIT-licensed; ships in Fonts/. -->
+    <key>ATSApplicationFontsPath</key>
+    <string>Fonts</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <!-- Sparkle auto-update. Appcast hosted on the website; updates are EdDSA-signed

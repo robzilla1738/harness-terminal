@@ -39,6 +39,22 @@ public enum TerminalTextRenderingMode: String, Codable, Sendable {
     }
 }
 
+/// When the live grid-size overlay ("120 × 32") is shown while resizing the window (Ghostty's
+/// `resize-overlay`). `afterFirst` (default) skips the overlay on the terminal's first sizing
+/// (opening a window isn't a resize) but shows it on every interactive resize after.
+public enum ResizeOverlayMode: String, Codable, Sendable, CaseIterable {
+    case afterFirst = "after-first"
+    case always
+    case never
+}
+
+/// Where the resize overlay is drawn within the surface.
+public enum ResizeOverlayPosition: String, Codable, Sendable, CaseIterable {
+    case center
+    case topRight = "top-right"
+    case bottomRight = "bottom-right"
+}
+
 private enum LegacyHarnessSettingsCodingKeys: String, CodingKey {
     case tmuxControlsEnabled
 }
@@ -174,6 +190,27 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// without switching to Full Terminal, or a Full Terminal user turn the controls off without
     /// changing modes.
     public var harnessControlsEnabled: Bool?
+    /// When the live resize dimensions overlay ("120 × 32") is shown while resizing the window.
+    public var resizeOverlay: ResizeOverlayMode
+    /// Where the resize overlay is positioned within the surface.
+    public var resizeOverlayPosition: ResizeOverlayPosition
+    /// Distribute the leftover sub-cell space evenly so the grid is centered, instead of parking
+    /// the remainder at the bottom-right edge (Ghostty's `window-padding-balance`).
+    public var windowPaddingBalance: Bool
+    /// Minimum WCAG contrast ratio (1…21) forced between a cell's foreground and its background.
+    /// 1 = off (no adjustment). Imported from a terminal config's `minimum-contrast`.
+    public var minimumContrast: Double
+    /// When both are set, the active theme follows the macOS system appearance: `lightThemeName`
+    /// under Light, `darkThemeName` under Dark. nil = off (the single `themeName` is used).
+    public var lightThemeName: String?
+    public var darkThemeName: String?
+    /// Confirm before pasting text containing newlines / control characters when the program has
+    /// not enabled bracketed paste — guards against blind multi-line command execution.
+    public var pasteProtection: Bool
+    /// Post a desktop notification when a command that ran longer than
+    /// `commandFinishedThresholdSeconds` finishes in an unfocused pane (uses OSC 133 timing).
+    public var commandFinishedNotifications: Bool
+    public var commandFinishedThresholdSeconds: Int
 
     /// Whether Harness controls (prefix-key handling, prefix indicator, and status line)
     /// should be active. The explicit override wins; otherwise the mode decides. The single
@@ -243,7 +280,16 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // Existing installs migrate to `.full` in `init(from:)` so no
         // current user loses the prefix/status they already have.
         experienceMode: ExperienceMode = .plain,
-        harnessControlsEnabled: Bool? = nil
+        harnessControlsEnabled: Bool? = nil,
+        resizeOverlay: ResizeOverlayMode = .afterFirst,
+        resizeOverlayPosition: ResizeOverlayPosition = .center,
+        windowPaddingBalance: Bool = true,
+        minimumContrast: Double = 1,
+        lightThemeName: String? = nil,
+        darkThemeName: String? = nil,
+        pasteProtection: Bool = true,
+        commandFinishedNotifications: Bool = false,
+        commandFinishedThresholdSeconds: Int = 10
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -291,6 +337,15 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.showStatusLine = showStatusLine
         self.experienceMode = experienceMode
         self.harnessControlsEnabled = harnessControlsEnabled
+        self.resizeOverlay = resizeOverlay
+        self.resizeOverlayPosition = resizeOverlayPosition
+        self.windowPaddingBalance = windowPaddingBalance
+        self.minimumContrast = HarnessSettings.clampedContrast(minimumContrast)
+        self.lightThemeName = lightThemeName
+        self.darkThemeName = darkThemeName
+        self.pasteProtection = pasteProtection
+        self.commandFinishedNotifications = commandFinishedNotifications
+        self.commandFinishedThresholdSeconds = max(0, commandFinishedThresholdSeconds)
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -348,6 +403,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         cursorStyle = imported?.cursorStyle ?? defaults.cursorStyle
         cursorBlink = imported?.cursorBlink ?? defaults.cursorBlink
         copyOnSelect = imported?.copyOnSelect ?? defaults.copyOnSelect
+        minimumContrast = HarnessSettings.clampedContrast(imported?.minimumContrast ?? defaults.minimumContrast)
         importedConfigSignature = imported?.signature
     }
 
@@ -420,6 +476,18 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         harnessControlsEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .harnessControlsEnabled)
             ?? legacyContainer.decodeIfPresent(Bool.self, forKey: .tmuxControlsEnabled)
+        resizeOverlay = try container.decodeIfPresent(ResizeOverlayMode.self, forKey: .resizeOverlay) ?? fallback.resizeOverlay
+        resizeOverlayPosition = try container.decodeIfPresent(ResizeOverlayPosition.self, forKey: .resizeOverlayPosition) ?? fallback.resizeOverlayPosition
+        windowPaddingBalance = try container.decodeIfPresent(Bool.self, forKey: .windowPaddingBalance) ?? fallback.windowPaddingBalance
+        minimumContrast = HarnessSettings.clampedContrast(
+            try container.decodeIfPresent(Double.self, forKey: .minimumContrast) ?? fallback.minimumContrast)
+        lightThemeName = try container.decodeIfPresent(String.self, forKey: .lightThemeName)
+        darkThemeName = try container.decodeIfPresent(String.self, forKey: .darkThemeName)
+        pasteProtection = try container.decodeIfPresent(Bool.self, forKey: .pasteProtection) ?? fallback.pasteProtection
+        commandFinishedNotifications =
+            try container.decodeIfPresent(Bool.self, forKey: .commandFinishedNotifications) ?? fallback.commandFinishedNotifications
+        commandFinishedThresholdSeconds =
+            try container.decodeIfPresent(Int.self, forKey: .commandFinishedThresholdSeconds) ?? fallback.commandFinishedThresholdSeconds
     }
 
     public static func load() -> HarnessSettings {
@@ -520,6 +588,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         max(0, min(100, value))
     }
 
+    /// Minimum-contrast WCAG ratio bounds. 1 = off (no adjustment); 21 = maximum (black on white).
+    public static func clampedContrast(_ value: Double) -> Double {
+        max(1, min(21, value))
+    }
+
     public func save() throws {
         try HarnessPaths.ensureDirectories()
         let data = try JSONEncoder().encode(self)
@@ -544,6 +617,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.cursorStyle { settings.cursorStyle = value }
         if let value = imported.cursorBlink { settings.cursorBlink = value }
         if let value = imported.copyOnSelect { settings.copyOnSelect = value }
+        if let value = imported.minimumContrast { settings.minimumContrast = HarnessSettings.clampedContrast(value) }
         settings.selectionBackgroundHex = imported.selectionBackgroundHex
         settings.selectionForegroundHex = imported.selectionForegroundHex
         settings.boldColorHex = imported.boldColorHex
@@ -567,6 +641,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.cursorStyle { cursorStyle = value }
         if let value = imported.cursorBlink { cursorBlink = value }
         if let value = imported.copyOnSelect { copyOnSelect = value }
+        if let value = imported.minimumContrast { minimumContrast = HarnessSettings.clampedContrast(value) }
         selectionBackgroundHex = imported.selectionBackgroundHex
         selectionForegroundHex = imported.selectionForegroundHex
         boldColorHex = imported.boldColorHex

@@ -33,7 +33,7 @@ final class MainWindowController: NSWindowController {
         if #available(macOS 11.0, *) {
             window.titlebarSeparatorStyle = .none
         }
-        window.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
+        window.appearance = Self.resolvedWindowAppearance()
         window.contentViewController = MainSplitViewController()
         // Assigning `contentViewController` resizes the window to the split view's
         // fitting size (~sidebar width). Re-assert the intended default explicitly —
@@ -56,9 +56,38 @@ final class MainWindowController: NSWindowController {
     }
 
     func applyChrome() {
-        window?.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
+        window?.appearance = Self.resolvedWindowAppearance()
         applyTransparency()
         (contentViewController as? MainSplitViewController)?.applyChrome()
+    }
+
+    /// Frame saved before entering non-native fullscreen; nil when not in it.
+    private var preFullscreenFrame: NSRect?
+
+    /// Non-native ("fast") full screen — fill the screen without the macOS Space transition the
+    /// native ⌃⌘F uses. Auto-hides the menu bar + Dock and resizes to the screen frame; toggles
+    /// back to the saved frame. Deliberately does NOT touch the style mask, so the transparent
+    /// titlebar, tabs-in-titlebar, and the single window-wide blur are all preserved.
+    @objc func toggleNonNativeFullscreen(_ sender: Any?) {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        if let saved = preFullscreenFrame {
+            NSApp.presentationOptions = []
+            window.setFrame(saved, display: true, animate: false)
+            preFullscreenFrame = nil
+        } else if let screen = window.screen ?? NSScreen.main {
+            preFullscreenFrame = window.frame
+            NSApp.presentationOptions = [.autoHideMenuBar, .autoHideDock]
+            window.setFrame(screen.frame, display: true, animate: false)
+        }
+    }
+
+    /// Under auto light/dark (both theme names set), the window follows the macOS system appearance
+    /// (`nil`) so the chosen theme + native controls track Light/Dark. Otherwise it's pinned from the
+    /// active theme's darkness, so e.g. a dark theme forces dark chrome even under a light system.
+    private static func resolvedWindowAppearance() -> NSAppearance? {
+        let settings = SessionCoordinator.shared.settings
+        if settings.lightThemeName != nil, settings.darkThemeName != nil { return nil }
+        return NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
     }
 
     /// Re-reads opacity from settings and applies window chrome (not terminal blur).

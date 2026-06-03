@@ -88,8 +88,12 @@ private struct CursorCacheKey: Equatable {
     var visible: Bool
     var style: CursorStyle
     var textColor: RenderColor
+    var hollow: Bool
 
-    var invertsGlyph: Bool { visible && style == .block }
+    /// A solid block inverts the glyph under it for legibility; a hollow (unfocused) block does
+    /// not — the cell shows through the outline. So a focus change flips this, which dirties the
+    /// cursor row below (via `previousCursor != cursorKey`) and re-renders the glyph correctly.
+    var invertsGlyph: Bool { visible && style == .block && !hollow }
 }
 
 private struct RowInstanceCache {
@@ -432,33 +436,46 @@ public final class TerminalMetalRenderer {
             }
         }
 
-        // Cursor: block fills the cell (glyphs still draw on top); bar is a thin left
-        // edge; underline is a thin bottom edge. All respect the grid origin offset.
+        // Cursor: block fills the cell (glyphs still draw on top); bar is a thin left edge;
+        // underline is a thin bottom edge. When unfocused (`hollow`), the cursor becomes a 1px box
+        // outline regardless of style — the standard macOS/Ghostty "inactive window" cursor — so
+        // the glyph shows through. Full alpha (the bg pipeline doesn't blend). Respects the origin.
         if frame.cursor.visible {
             let cellX = ox + Float(frame.cursor.column * cellPixelWidth)
             let cellY = oy + Float(frame.cursor.row * cellPixelHeight)
             let cellW = Float(cellPixelWidth)
             let cellH = Float(cellPixelHeight)
-            let cursorOrigin: SIMD2<Float>
-            let cursorSize: SIMD2<Float>
-            switch frame.cursor.style {
-            case .block:
-                cursorOrigin = SIMD2(cellX, cellY)
-                cursorSize = SIMD2(cellW, cellH)
-            case .bar:
-                let w = max(1, round(Float(cellPixelWidth) / 12))
-                cursorOrigin = SIMD2(cellX, cellY)
-                cursorSize = SIMD2(w, cellH)
-            case .underline:
-                let h = max(1, round(Float(cellPixelHeight) / 16))
-                cursorOrigin = SIMD2(cellX, cellY + cellH - h)
-                cursorSize = SIMD2(cellW, h)
+            let color = vector(frame.cursor.color)
+            if frame.cursor.hollow {
+                let t = max(1, round(cellH / 16)) // stroke thickness (matches the underline idiom)
+                // Four edge rects forming the outline (corners double-draw harmlessly).
+                let edges: [(SIMD2<Float>, SIMD2<Float>)] = [
+                    (SIMD2(cellX, cellY), SIMD2(cellW, t)),                 // top
+                    (SIMD2(cellX, cellY + cellH - t), SIMD2(cellW, t)),     // bottom
+                    (SIMD2(cellX, cellY), SIMD2(t, cellH)),                 // left
+                    (SIMD2(cellX + cellW - t, cellY), SIMD2(t, cellH)),     // right
+                ]
+                for (cursorOrigin, cursorSize) in edges {
+                    backgrounds.append(BgInstance(origin: cursorOrigin, size: cursorSize, color: color))
+                }
+            } else {
+                let cursorOrigin: SIMD2<Float>
+                let cursorSize: SIMD2<Float>
+                switch frame.cursor.style {
+                case .block:
+                    cursorOrigin = SIMD2(cellX, cellY)
+                    cursorSize = SIMD2(cellW, cellH)
+                case .bar:
+                    let w = max(1, round(Float(cellPixelWidth) / 12))
+                    cursorOrigin = SIMD2(cellX, cellY)
+                    cursorSize = SIMD2(w, cellH)
+                case .underline:
+                    let h = max(1, round(Float(cellPixelHeight) / 16))
+                    cursorOrigin = SIMD2(cellX, cellY + cellH - h)
+                    cursorSize = SIMD2(cellW, h)
+                }
+                backgrounds.append(BgInstance(origin: cursorOrigin, size: cursorSize, color: color))
             }
-            backgrounds.append(BgInstance(
-                origin: cursorOrigin,
-                size: cursorSize,
-                color: vector(frame.cursor.color)
-            ))
         }
         frameStats.bgInstances = backgrounds.count
         frameStats.bgSpans = encoded.bgSpans
@@ -704,7 +721,8 @@ public final class TerminalMetalRenderer {
             column: frame.cursor.column,
             visible: frame.cursor.visible,
             style: frame.cursor.style,
-            textColor: frame.cursor.textColor
+            textColor: frame.cursor.textColor,
+            hollow: frame.cursor.hollow
         )
         let cacheMatches = rowInstanceCache.columns == frame.columns
             && rowInstanceCache.rows == frame.rows
@@ -813,7 +831,8 @@ public final class TerminalMetalRenderer {
                     column: frame.cursor.column,
                     visible: frame.cursor.visible,
                     style: frame.cursor.style,
-                    textColor: frame.cursor.textColor
+                    textColor: frame.cursor.textColor,
+                    hollow: frame.cursor.hollow
                 ),
                 thickness: thickness,
                 underlineY: underlineY,
@@ -1097,6 +1116,15 @@ public final class TerminalMetalRenderer {
                 col += 1
                 continue
             }
+            // Nerd Font / Powerline icons (PUA) must not be shaped: when the primary font lacks
+            // them CoreText substitutes a LastResort "missing glyph" box (the tofu bug, #37).
+            // Emit per-cell so they route through the rasterizer's bundled symbol-font fallback.
+            if GlyphRasterizer.isNerdFontCodepoint(cell.codepoint) {
+                emitSingleGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                                color: vector(cell.foreground), into: &glyphs)
+                col += 1
+                continue
+            }
             // Accumulate a run of contiguous, same-style, same-color glyph cells.
             var runText = ""
             var utf16ToColumn: [Int] = []
@@ -1107,6 +1135,7 @@ public final class TerminalMetalRenderer {
                 if !rc.hasGlyph { break }
                 if Self.isBlockElement(rc.codepoint) { break } // drawn procedurally
                 if BoxDrawing.supported(rc.codepoint) { break } // procedural box sprite
+                if GlyphRasterizer.isNerdFontCodepoint(rc.codepoint) { break } // icon → per-cell symbol fallback
                 if let cur = cursorCell, cur.row == row, cur.column == c { break }
                 if rc.bold != bold || rc.italic != italic || rc.foreground != fg { break }
                 let scalar = Unicode.Scalar(rc.codepoint) ?? " "

@@ -28,11 +28,14 @@ external package is Sparkle, GUI auto-update only). `TerminalHostView`
 hosts `HarnessTerminalSurfaceView` (a `CAMetalLayer` view) driving `HarnessTerminalEngine`
 (VT parser + screen/scrollback), `HarnessTheme` (490-theme catalog + `.harnesstheme`), and
 `HarnessTerminalRenderer` (CoreText atlas + Metal). Features: themed translucent canvas with
-untouched program output (`applyThemeToTerminalOutput` toggles theme-colored output), window
-padding, cursor styles + blink, text selection + copy / paste (bracketed-paste aware) /
-copy-on-select / right-click menu, mouse reporting (SGR 1006), scrollback (wheel /
-Shift+PageUp/Down), reflow on resize, procedurally-rendered block elements + box-drawing
-(seamless, font-independent), and IME / dead keys (`NSTextInputClient`).
+untouched program output (`applyThemeToTerminalOutput` toggles theme-colored output), balanced
+window padding (centered grid) + a live resize HUD, cursor styles + blink (a hollow box when the
+window is unfocused), word/line (double/triple-click) + Option-rectangle text selection + copy /
+paste (bracketed-paste aware, with paste protection) / copy-on-select / right-click menu, mouse
+reporting (SGR 1006), scrollback (wheel / Shift+PageUp/Down), reflow on resize, optional WCAG
+`minimum-contrast`, a bundled Nerd Font symbol fallback (Powerline/icon glyphs always render),
+procedurally-rendered block elements + box-drawing (seamless, font-independent), and IME / dead
+keys (`NSTextInputClient`).
 
 The opt-in config import (`TerminalConfigImporter`) reads compatible source-terminal configs so
 users moving in keep their colors/font — kept by product decision.
@@ -94,6 +97,29 @@ users moving in keep their colors/font — kept by product decision.
   independently (the old path) left a sub-pixel residual per glyph — a wavy / "squiggly" baseline.
   Glyph rasterization uses grayscale antialiasing with CoreGraphics font smoothing disabled; the
   explicit `textRendering`/glyph-gamma setting is the only intentional text-weight control.
+- **Nerd Font / Powerline glyphs never tofu:** the app bundles **Symbols Nerd Font Mono** (MIT,
+  `Apps/Harness/Resources/Fonts/`) auto-activated via Info.plist `ATSApplicationFontsPath` — NOT a
+  SwiftPM `Bundle.module` resource (that footgun crashed the app for the theme catalog; see the
+  `Package.swift` note). `GlyphRasterizer` resolves the user font robustly (a family-name
+  descriptor retry when `CTFontCreateWithName` silently substitutes a non-Nerd system font) and
+  falls back to the bundled symbol font for PUA codepoints (`isNerdFontCodepoint`: `U+E000–F8FF`,
+  `U+F0000–FFFFD`); `TerminalMetalRenderer` routes those codepoints out of the ligature shaper to
+  the per-cell path (where the fallback applies), since CoreText shaping is what substituted a
+  LastResort "missing glyph" box. The fallback ships in three build paths (`package-app.sh`,
+  `preview.sh`, `project.yml`).
+- **Hollow cursor:** unfocused (`CursorRender.hollow = !focused`) the cursor draws as a 1px box
+  outline regardless of style (full alpha — `bgPipeline` has `blending: false`, so a dim-via-alpha
+  approach would be a no-op), and a hollow block does not invert its glyph
+  (`CursorCacheKey.invertsGlyph` folds in `!hollow`, dirtying the cursor row on a focus change).
+- **Minimum contrast** (`CellColorResolver.minimumContrast`, default 1 = off, byte-identical):
+  after faint / before inverse, the foreground is lifted toward black/white until it meets the WCAG
+  ratio (symmetric, so it survives an inverse swap; conceal still wins). Imported from a source
+  config's `minimum-contrast`.
+- **Balanced padding** (`window-padding-balance`, default on): `updateGridSize` splits the sub-cell
+  remainder onto both sides so the grid is centered, and `gridOriginPoints*` keeps mouse
+  hit-testing / link-hover / IME anchoring aligned with the centered origin. The **resize HUD**
+  (`ResizeHUDView`, hosted by `TerminalHostView`) shows the live grid size via the surface's
+  `onGridSizeWillChange` callback, gated by the `resize-overlay` setting (suppressed on first open).
 
 ---
 
@@ -321,8 +347,14 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `importedConfigSignature` | Fingerprint of last imported terminal config (migration) |
 | `transparentTitlebar`, `sidebarVisible` | Chrome |
 | `showStatusLine` | GUI hard override for the bottom status band (independent of the tmux `status` option); off collapses the band height to 0 |
+| `resizeOverlay`, `resizeOverlayPosition` | Live resize HUD: when shown (`after-first`/`always`/`never`) + placement; rendered by `ResizeHUDView` |
+| `windowPaddingBalance` | Center the grid by distributing the sub-cell remainder onto both sides (default on) |
+| `minimumContrast` | WCAG fg/bg contrast floor (1 = off … 21); imported from `minimum-contrast`, enforced by `CellColorResolver` |
+| `lightThemeName`, `darkThemeName` | Both set ⇒ the active theme follows the macOS appearance (KVO on `NSApp.effectiveAppearance` in `SessionCoordinator`); the window then follows the system appearance |
+| `pasteProtection` | Confirm pastes containing newlines / control chars when bracketed paste is off (default on) |
+| `commandFinishedNotifications`, `commandFinishedThresholdSeconds` | Notify when a command that ran longer than the threshold (OSC 133 timing) finishes in an unfocused pane (default off / 10s) |
 
-**Terminal config import** (`TerminalConfigImporter`): reads a compatible source terminal config so users migrating in keep their colors/font. The font **face** is imported but the font **size** is not — `fontSize` is Harness-owned (default 16); `makeDefaults`/`applyImportedDefaults`/`resetToImportedConfig` deliberately don't pull `font-size` from the source terminal (a terminal's size preference doesn't carry over). **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is parsed for the fingerprint only — not stored in `settings.json`.
+**Terminal config import** (`TerminalConfigImporter`): reads a compatible source terminal config so users migrating in keep their colors/font. The font **face** is imported but the font **size** is not — `fontSize` is Harness-owned (default 16); `makeDefaults`/`applyImportedDefaults`/`resetToImportedConfig` deliberately don't pull `font-size` from the source terminal (a terminal's size preference doesn't carry over). **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is imported into `settings.json` and enforced by the renderer (`CellColorResolver`).
 
 **Apply colors (single source of truth):** `ThemeManager.resolvedCanvas(themeName:custom*Hex:)` resolves the canvas bg/fg/cursor (explicit custom > theme preset > baseline). **Both** `TerminalHostView.applyNativeAppearance` (→ `HarnessTerminalSurfaceView.configureAppearance`) and `HarnessChrome.update` consume it, so terminal canvas and chrome paint the **identical** color — no seam. `CellColorResolver` stays byte-exact and gamut-free; `FrameBuilder` is the RGBColor→RenderColor boundary, and the Metal clear color must use the same converter as default cell backgrounds. Chrome is **fully flat**: `HarnessChromePalette` paints the resting sidebar/tab/status background as the *exact* terminal color (no lift), so the window reads as one seamless surface — only interaction states (active/hover) blend toward the foreground. Program **output** keeps untouched/default ANSI colors unless `applyThemeToTerminalOutput` is on; the daemon PTY exports `COLORTERM=truecolor` (with `TERM=xterm-256color`, see `RealPty`) so TUIs like Claude Code emit true 24-bit color instead of a washed 256-color fallback, and the off-mode baseline ANSI palette (`ThemeManager.defaultBaselinePaletteHex`) is the bundled muted ANSI-16 set. Selecting a theme seeds the full editable color set into `settings.json` (`SessionCoordinator.setTheme` + `ThemeManager.presetColors`); colors flow from settings. **Translucency + blur:** the native canvas honors `backgroundOpacity` (default-bg cells get the alpha so the one window-wide CGS `WindowBlur` shows through), while glyphs and explicit program backgrounds stay opaque so output reads true. Chrome backdrop: `ChromeBackdrop` with `.underWindowBackground` or Liquid Glass — **not** `.sidebar` / `.titlebar` (blue tint).
 

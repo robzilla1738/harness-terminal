@@ -43,6 +43,11 @@ fi
 if [[ -f "$ROOT/Apps/Harness/Resources/HarnessLogo.png" ]]; then
   cp "$ROOT/Apps/Harness/Resources/HarnessLogo.png" "$APP/Contents/Resources/HarnessLogo.png"
 fi
+# Bundled "Symbols Nerd Font Mono" (MIT) — auto-activated via ATSApplicationFontsPath below
+# so Nerd Font / Powerline glyphs render in the preview too.
+if [[ -d "$ROOT/Apps/Harness/Resources/Fonts" ]]; then
+  ditto "$ROOT/Apps/Harness/Resources/Fonts" "$APP/Contents/Resources/Fonts"
+fi
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -70,6 +75,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>ATSApplicationFontsPath</key>
+  <string>Fonts</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>HarnessPreviewHome</key>

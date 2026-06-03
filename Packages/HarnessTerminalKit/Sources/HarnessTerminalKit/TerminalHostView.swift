@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import HarnessCore
+import HarnessTheme
 
 @MainActor
 public protocol TerminalHostDelegate: AnyObject {
@@ -8,8 +9,15 @@ public protocol TerminalHostDelegate: AnyObject {
     func terminalHostDidChangeWorkingDirectory(_ path: String, surfaceID: SurfaceID)
     func terminalHostDidChangeFocus(_ focused: Bool, surfaceID: SurfaceID)
     func terminalHostDidRingBell(surfaceID: SurfaceID)
+    /// A shell command finished (OSC 133) after running `duration` seconds, with `exitCode`.
+    func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID)
     func terminalHostDidRequestDesktopNotification(title: String, body: String, surfaceID: SurfaceID)
     func terminalHostDidClose(surfaceID: SurfaceID)
+}
+
+extension TerminalHostDelegate {
+    /// Default no-op so non-GUI conformers (e.g. the compositor) need not handle command timing.
+    public func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID) {}
 }
 
 /// Hosts one terminal pane: Harness's native `HarnessTerminalSurfaceView` (GPU renderer +
@@ -90,6 +98,14 @@ public final class TerminalHostView: NSView {
     private let borderLabelField = NSTextField(labelWithString: "")
     private var borderLabelTop: NSLayoutConstraint?
     private var borderLabelBottom: NSLayoutConstraint?
+
+    /// Live "120 × 32" resize overlay (Ghostty's resize-overlay). Floats above the surface; its
+    /// position constraints are toggled from settings and it auto-hides on its own.
+    private let resizeHUD = ResizeHUDView()
+    private var resizeHUDConstraints: [ResizeOverlayPosition: [NSLayoutConstraint]] = [:]
+    private var resizeHUDPosition: ResizeOverlayPosition?
+    /// The terminal's initial sizing isn't a resize — `after-first` skips the overlay for it.
+    private var hasSeenInitialGridSize = false
 
     /// Shown over the pane while it is detached from the daemon (output subscription dropped):
     /// a dimmed "released — click to re-grab" affordance. nil while attached.
@@ -194,6 +210,11 @@ public final class TerminalHostView: NSView {
             guard let self else { return }
             self.hostDelegate?.terminalHostDidRingBell(surfaceID: self.surfaceID)
         }
+        native.onCommandFinished = { [weak self] duration, exitCode in
+            guard let self else { return }
+            self.hostDelegate?.terminalHostDidFinishCommand(
+                duration: duration, exitCode: exitCode, surfaceID: self.surfaceID)
+        }
         native.onDesktopNotification = { [weak self] title, body in
             guard let self else { return }
             // OSC 9 carries no title; fall back to the app name so the banner reads sensibly.
@@ -240,6 +261,37 @@ public final class TerminalHostView: NSView {
             borderLabelField.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -8),
             top,
         ])
+
+        // Resize dimensions overlay — added last so it floats above the surface, frame, and
+        // border label. The active position constraint set is toggled in applyNativeAppearance.
+        addSubview(resizeHUD)
+        let hudInset: CGFloat = 12
+        resizeHUDConstraints = [
+            .center: [
+                resizeHUD.centerXAnchor.constraint(equalTo: centerXAnchor),
+                resizeHUD.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ],
+            .topRight: [
+                resizeHUD.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -hudInset),
+                resizeHUD.topAnchor.constraint(equalTo: topAnchor, constant: hudInset),
+            ],
+            .bottomRight: [
+                resizeHUD.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -hudInset),
+                resizeHUD.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -hudInset),
+            ],
+        ]
+        native.onGridSizeWillChange = { [weak self] cols, rows, _ in
+            guard let self, let settings = self.cachedSettings else { return }
+            let isInitial = !self.hasSeenInitialGridSize
+            self.hasSeenInitialGridSize = true
+            switch settings.resizeOverlay {
+            case .never: return
+            case .afterFirst where isInitial: return // opening a window isn't a resize
+            default: break
+            }
+            guard !self.nativeView.isInCopyMode else { return }
+            self.resizeHUD.show(cols: cols, rows: rows)
+        }
         applyNativeAppearance()
     }
 
@@ -278,18 +330,42 @@ public final class TerminalHostView: NSView {
             cursorBlink: settings.cursorBlink,
             paddingX: CGFloat(settings.windowPaddingX),
             paddingY: CGFloat(settings.windowPaddingY),
+            paddingBalance: settings.windowPaddingBalance,
             selectionBackgroundHex: settings.selectionBackgroundHex
                 ?? ThemeManager.selectionBackgroundHex(themeName: cachedThemeName),
             selectionForegroundHex: settings.selectionForegroundHex
                 ?? ThemeManager.selectionForegroundHex(themeName: cachedThemeName),
             copyOnSelect: settings.copyOnSelect,
+            pasteProtection: settings.pasteProtection,
             scrollbackLines: settings.scrollbackLines,
             linearBlending: settings.linearBlending,
             textRendering: settings.textRendering,
             ligatures: settings.ligatures,
+            minimumContrast: HarnessSettings.clampedContrast(settings.minimumContrast),
             promptGutter: settings.showPromptGutter,
             offMainParserFramePipeline: settings.offMainParserFramePipeline
         )
+        // Resize overlay: legible on any theme via the canvas FG fill + BG text (same trick as the
+        // pane-border label), positioned per settings.
+        resizeHUD.applyColors(
+            text: Self.nsColor(hex: canvasBg, fallback: .windowBackgroundColor),
+            fill: Self.nsColor(hex: canvasFg, fallback: .labelColor)
+        )
+        applyResizeHUDPosition(settings.resizeOverlayPosition)
+    }
+
+    /// Activate only the constraint set for the configured overlay position.
+    private func applyResizeHUDPosition(_ position: ResizeOverlayPosition) {
+        guard position != resizeHUDPosition else { return }
+        resizeHUDConstraints.values.forEach { NSLayoutConstraint.deactivate($0) }
+        if let constraints = resizeHUDConstraints[position] { NSLayoutConstraint.activate(constraints) }
+        resizeHUDPosition = position
+    }
+
+    private static func nsColor(hex: String, fallback: NSColor) -> NSColor {
+        guard let c = RGBColor(hex: hex) else { return fallback }
+        return NSColor(srgbRed: CGFloat(c.red) / 255, green: CGFloat(c.green) / 255,
+                       blue: CGFloat(c.blue) / 255, alpha: 1)
     }
 
     /// A parsed `window-style`/`pane-style` color as `#rrggbb` (xterm-256 resolved), or nil

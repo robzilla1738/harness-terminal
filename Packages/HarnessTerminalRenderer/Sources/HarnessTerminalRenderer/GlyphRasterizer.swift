@@ -73,6 +73,13 @@ public final class GlyphRasterizer {
     private let boldPSName: String
     private let italicPSName: String
     private let boldItalicPSName: String
+    /// Bundled "Symbols Nerd Font Mono" (PostScript name `SymbolsNFM`), auto-activated by the app
+    /// via Info.plist `ATSApplicationFontsPath`. A guaranteed coverage font for Nerd Font /
+    /// Powerline icon codepoints (PUA) the primary font lacks, so they never fall through to a
+    /// CoreText LastResort "missing glyph" box (issue #37). `nil` for non-app consumers (the CLI
+    /// compositor / headless tests) where the font isn't activated — they keep the existing
+    /// `CTFontCreateForString` path unchanged.
+    private let symbolFont: CTFont?
     private let grayColorSpace = CGColorSpaceCreateDeviceGray()
     private let shapedRunCacheLimit: Int
     // Stores non-Sendable CTFont-bearing shaped glyphs; this rasterizer is single-surface,
@@ -101,9 +108,11 @@ public final class GlyphRasterizer {
         // does NOT rasterize any glyphs. Rasterization is on demand per codepoint via
         // `rasterize(...)`, so startup never pays to pre-rasterize ASCII or any warm-up set.
         // Keep it that way: no eager glyph loop here.
-        // CTFontCreateWithName substitutes a system font if the name is unknown, so this
-        // never fails — a deliberately forgiving path for user-supplied font names.
-        let base = CTFontCreateWithName(fontFamily as CFString, size, nil)
+        // Resolve the family to a real face, detecting `CTFontCreateWithName`'s silent
+        // substitution (it would otherwise return a glyph-less system font for an unmatched
+        // family — the root of the Nerd Font tofu bug, #37). Never fails — falls back to the
+        // substitute, which the symbol font then covers for icons.
+        let base = Self.resolvePrimaryFont(family: fontFamily, size: size)
         regular = base
         bold = Self.applyTraits(base, size: size, add: .traitBold)
         italic = Self.applyTraits(base, size: size, add: .traitItalic)
@@ -112,10 +121,63 @@ public final class GlyphRasterizer {
         boldPSName = CTFontCopyPostScriptName(bold) as String
         italicPSName = CTFontCopyPostScriptName(italic) as String
         boldItalicPSName = CTFontCopyPostScriptName(boldItalic) as String
+        symbolFont = Self.resolveSymbolFallback(size: size)
     }
 
     private static func applyTraits(_ font: CTFont, size: CGFloat, add traits: CTFontSymbolicTraits) -> CTFont {
         CTFontCreateCopyWithSymbolicTraits(font, size, nil, traits, traits) ?? font
+    }
+
+    /// Resolve the user's font family to a real `CTFont`, working around `CTFontCreateWithName`'s
+    /// silent substitution. It resolves PostScript names first and only loosely matches family /
+    /// display names; when it can't match, it returns a system font with no Nerd glyphs (the root
+    /// of #37). If the resolved face's family/PostScript name doesn't match what was requested,
+    /// retry via an explicit family-name descriptor before accepting the substitute (which the
+    /// bundled symbol font then covers for icon codepoints).
+    private static func resolvePrimaryFont(family: String, size: CGFloat) -> CTFont {
+        let byName = CTFontCreateWithName(family as CFString, size, nil)
+        if fontNameMatches(byName, requested: family) { return byName }
+        let descriptor = CTFontDescriptorCreateWithAttributes(
+            [kCTFontFamilyNameAttribute as String: family] as CFDictionary
+        )
+        let byFamily = CTFontCreateWithFontDescriptor(descriptor, size, nil)
+        return fontNameMatches(byFamily, requested: family) ? byFamily : byName
+    }
+
+    /// Resolve the bundled "Symbols Nerd Font Mono" by name, verifying it actually activated
+    /// (PostScript name `SymbolsNFM`) rather than silently substituting. `nil` when the font isn't
+    /// available to this process (headless tests / the CLI compositor).
+    private static func resolveSymbolFallback(size: CGFloat) -> CTFont? {
+        let font = CTFontCreateWithName("Symbols Nerd Font Mono" as CFString, size, nil)
+        return (CTFontCopyPostScriptName(font) as String) == "SymbolsNFM" ? font : nil
+    }
+
+    /// Whether a resolved font's family or PostScript name matches the requested family, ignoring
+    /// case / spaces / hyphens / underscores. The common case (`CTFontCreateWithName` already
+    /// resolved correctly) matches on the family name and returns immediately, so this never
+    /// changes behavior for a correctly-resolved font.
+    private static func fontNameMatches(_ font: CTFont, requested: String) -> Bool {
+        let want = normalizedFontName(requested)
+        guard !want.isEmpty else { return true }
+        return normalizedFontName(CTFontCopyFamilyName(font) as String) == want
+            || normalizedFontName(CTFontCopyPostScriptName(font) as String) == want
+    }
+
+    private static func normalizedFontName(_ name: String) -> String {
+        name.lowercased().filter { !$0.isWhitespace && $0 != "-" && $0 != "_" }
+    }
+
+    private static func isLastResort(_ font: CTFont) -> Bool {
+        (CTFontCopyPostScriptName(font) as String).contains("LastResort")
+    }
+
+    /// Nerd Font / Powerline icon ranges: the BMP Private Use Area (U+E000–U+F8FF — covers
+    /// Powerline U+E0A0–E0D4, Devicons, Font Awesome, Seti, Octicons, Weather, …) and the
+    /// supplementary PUA-A plane (U+F0000–U+FFFFD, used by newer Material Design icons). The
+    /// renderer routes these to the bundled symbol fallback and never CoreText-shapes them
+    /// (shaping is where the LastResort tofu originated), mirroring how box-drawing is handled.
+    static func isNerdFontCodepoint(_ codepoint: UInt32) -> Bool {
+        (0xE000 ... 0xF8FF).contains(codepoint) || (0xF0000 ... 0xFFFFD).contains(codepoint)
     }
 
     private func font(bold isBold: Bool, italic isItalic: Bool) -> CTFont {
@@ -166,11 +228,21 @@ public final class GlyphRasterizer {
         let glyph: CGGlyph
         if let g = glyphID(for: codepoint, in: chosenFont) {
             glyph = g
+        } else if Self.isNerdFontCodepoint(codepoint), let sym = symbolFont,
+                  let g = glyphID(for: codepoint, in: sym) {
+            // Nerd Font / Powerline icon the primary font lacks → draw it from the bundled symbol
+            // font instead of letting CoreText hand back a LastResort "missing glyph" box (#37).
+            chosenFont = sym
+            glyph = g
         } else {
             // Fall back to a font that has this scalar (CJK, emoji, symbols).
             let s = String(scalar)
             let fallback = CTFontCreateForString(chosenFont, s as CFString, CFRange(location: 0, length: s.utf16.count))
-            guard let fg = glyphID(for: codepoint, in: fallback) else { return nil }
+            // For a Nerd icon with no real coverage anywhere, render nothing rather than the
+            // LastResort tofu box; non-icon codepoints keep their existing fallback behavior.
+            guard let fg = glyphID(for: codepoint, in: fallback),
+                  !(Self.isNerdFontCodepoint(codepoint) && Self.isLastResort(fallback))
+            else { return nil }
             chosenFont = fallback
             glyph = fg
         }
