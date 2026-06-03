@@ -321,18 +321,11 @@ final class TerminalTabBarView: NSView {
     }
 }
 
-/// Display label shared by pills and the overflow menu. When an agent has a brand
-/// icon, the pill shows that icon as a leading glyph + the folder, so the title is
-/// just the folder (e.g. "harness"). Agents without an icon keep "folder · Agent"
-/// so they're still identifiable. Otherwise: folder, then a custom shell title.
 @MainActor
 private func tabDisplayTitle(_ tab: Tab) -> String {
     let folder = HarnessDesign.pathDisplayName(tab.cwd)
     if let kind = tabAgentKind(for: tab) {
-        if AgentIconRenderer.hasIcon(for: kind) {
-            return folder.isEmpty ? kind.displayName : folder
-        }
-        return folder.isEmpty ? kind.displayName : "\(folder) · \(kind.displayName)"
+        return folder.isEmpty ? kind.displayName : folder
     }
     let titleIsAgentBranding = !tab.title.isEmpty && AgentTitleInference.kind(from: tab.title) != nil
     let hasCustomTitle = !tab.title.isEmpty && tab.title != "Shell" && !titleIsAgentBranding
@@ -658,8 +651,8 @@ private final class TabPillView: NSView {
     /// Show the agent's brand glyph as a leading icon (tinted to its brand color)
     /// when one exists; collapse the slot otherwise.
     private func setAgentIcon(for tab: Tab) {
-        if let kind = tabAgentKind(for: tab), let icon = AgentIconRenderer.templateImage(for: kind, size: 14) {
-            agentIcon.image = icon
+        if let kind = tabAgentKind(for: tab) {
+            agentIcon.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: 14)
             agentIcon.contentTintColor = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: kind))
                 ?? HarnessDesign.chrome.textSecondary
             agentIcon.isHidden = false

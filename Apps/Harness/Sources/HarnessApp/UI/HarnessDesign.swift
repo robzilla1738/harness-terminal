@@ -824,35 +824,20 @@ final class StatusDotView: NSView {
     }
 }
 
-/// Clean capsule that names the running agent (e.g. "Codex", "Claude Code") on
-/// each session card: a small brand-colored dot followed by the tool's name on a
-/// faint brand-tinted fill.
 @MainActor
 final class AgentChipView: NSView {
-    private let label = NSTextField(labelWithString: "")
     private let iconView = NSImageView()
-    /// Icon edge length when a brand mark is shown.
     private let iconSize: CGFloat = 16
-    private var showingIcon = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.cornerCurve = .continuous
 
-        label.font = .systemFont(ofSize: 10.5, weight: .semibold)
-        label.alignment = .left
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.isHidden = true
         addSubview(iconView)
-        addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
             iconView.widthAnchor.constraint(equalToConstant: iconSize),
@@ -864,49 +849,21 @@ final class AgentChipView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override var intrinsicContentSize: NSSize {
-        showingIcon
-            ? NSSize(width: iconSize, height: iconSize)
-            : NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+        NSSize(width: iconSize, height: iconSize)
     }
 
     override func layout() {
         super.layout()
-        layer?.cornerRadius = showingIcon ? 0 : bounds.height / 2
+        layer?.cornerRadius = 0
     }
 
-    /// Brand identity for an agent: the tinted vector icon when one exists, else a
-    /// hairline-outlined name pill. The dot was removed; the icon carries the brand.
     func configure(kind: AgentKind, hex: String) {
         let tint = NSColor.fromHex(hex) ?? HarnessDesign.chrome.accent
-        if let icon = AgentIconRenderer.templateImage(for: kind, size: iconSize) {
-            showingIcon = true
-            iconView.image = icon
-            iconView.contentTintColor = tint
-            iconView.isHidden = false
-            label.isHidden = true
-            layer?.backgroundColor = NSColor.clear.cgColor
-            layer?.borderWidth = 0
-            toolTip = kind.displayName
-        } else {
-            configure(text: kind.displayName, hex: hex)
-        }
-        invalidateIntrinsicContentSize()
-        needsLayout = true
-    }
-
-    /// Outline-only name pill (no washed fill) — used for agents without a brand mark.
-    func configure(text: String, hex: String) {
-        showingIcon = false
-        iconView.isHidden = true
-        label.isHidden = false
-        label.stringValue = text
-        toolTip = text
-        let tint = NSColor.fromHex(hex) ?? HarnessDesign.chrome.accent
-        let c = HarnessDesign.chrome
+        iconView.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: iconSize)
+        iconView.contentTintColor = tint
         layer?.backgroundColor = NSColor.clear.cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = tint.withAlphaComponent(c.isDark ? 0.55 : 0.45).cgColor
-        label.textColor = c.textPrimary.withAlphaComponent(0.94)
+        layer?.borderWidth = 0
+        toolTip = kind.displayName
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
