@@ -1,0 +1,16 @@
+cols=5 rows=5 history=10 cursor=(4,0) visible=true
+[0000] |$ fir| <mark exit=nil>
+[0001] |st co|
+[0002] |mmand|
+[0003] | here|
+[0004] |outpu|
+[0005] |t lin|
+[0006] |e one|
+[0007] | wrap|
+[0008] |ping|
+[0009] |$ sec| <mark exit=nil>
+[0010] |ond|
+[0011] |more|
+[0012] |outpu|
+[0013] |t|
+[0014] ||

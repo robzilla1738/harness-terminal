@@ -422,13 +422,16 @@ final class TerminalScreen {
 
         guard joinWrapped else { return phys.map { text($0.cells, trimTrailing: true) } }
 
-        // A soft-wrapped row continues onto the next; don't trim its trailing cells (they're
-        // part of the logical line). Only trim where the logical line actually ends.
+        // A soft-wrapped row continues onto the next, but its trailing *blank* cells are wrap
+        // padding (most importantly the gap column left when a wide glyph is deferred to the next
+        // row), not logical content — trim them so a joined wide-char line reads seamlessly and
+        // identically at any width. Typed trailing spaces are codepoint 0x20 (not `.blank`), so
+        // `text(trimTrailing:)` keeps them; only the default-blank gap is dropped.
         var out: [String] = []
         var current = ""
         var building = false
         for row in phys {
-            current += text(row.cells, trimTrailing: !row.wrapped)
+            current += text(row.cells, trimTrailing: true)
             building = true
             if !row.wrapped {
                 out.append(current)
@@ -446,15 +449,24 @@ final class TerminalScreen {
     /// into logical lines (following soft-wrap flags), re-wrapped to the new width, and the
     /// cursor is mapped to its new position. The alternate screen just clamps (full-screen
     /// TUIs redraw on SIGWINCH, so reflowing them would corrupt their layout).
-    func resize(cols newCols: Int, rows newRows: Int) {
+    func resize(cols newCols: Int, rows newRows: Int, forceFullReflow: Bool = false) {
         let nc = max(1, newCols)
         let nr = max(1, newRows)
         guard nc != cols || nr != rows else { return }
 
         if recordsHistory {
-            // The primary screen reflows; image anchors are re-mapped onto their logical line so
-            // they survive the geometry change (see `reflow`).
-            reflow(toCols: nc, rows: nr)
+            if !forceFullReflow, nc == cols, nr != rows {
+                // Width-unchanged fast path: no row's wrap can change, so a full O(history) reflow is
+                // pure waste (a vertical window drag, or a sidebar that only changes the row count).
+                // Move just the history↔viewport boundary — O(|Δrows| + trailing-blank rows), not
+                // O(history). `forceFullReflow` (tests) routes the same change through the general
+                // path; `ReflowFastPathTests` proves the two are byte-identical.
+                resizeHeightOnly(toRows: nr)
+            } else {
+                // The primary screen reflows; image anchors are re-mapped onto their logical line so
+                // they survive the geometry change (see `reflow`).
+                reflow(toCols: nc, rows: nr)
+            }
         } else {
             var next = Array(repeating: TerminalGridCell.blank, count: nc * nr)
             let copyRows = min(rows, nr)
@@ -486,6 +498,296 @@ final class TerminalScreen {
     /// trim trailing padding so reflow doesn't manufacture spurious blank rows.
     private func isBlank(_ cell: TerminalGridCell) -> Bool { cell == .blank }
 
+    /// Whether viewport row `r` (in the live `cells` grid) is entirely default-blank.
+    private func isViewportRowBlank(_ r: Int) -> Bool {
+        let base = r * cols
+        for c in 0 ..< cols where !isBlank(cells[base + c]) { return false }
+        return true
+    }
+
+    /// A copy of viewport row `r`'s cells from the live grid.
+    private func viewportRowCells(_ r: Int) -> [TerminalGridCell] {
+        Array(cells[r * cols ..< (r + 1) * cols])
+    }
+
+    /// Width-unchanged resize (the common vertical drag): re-home the history↔viewport boundary
+    /// without re-wrapping. Because the width is unchanged every physical row keeps its exact cells
+    /// and wrap flag — only the split between scrollback and the live viewport moves — so this is
+    /// byte-identical to `reflow(toCols: cols, rows: nr)` (asserted by `ReflowFastPathTests` across
+    /// cursor positions, history depths, content, grow and shrink) but costs O(|Δrows| + trailing
+    /// blank rows) instead of O(history). Mirrors reflow step 5's trailing-blank trim, split, cap,
+    /// cursor mapping, and image re-anchor for the identity-rewrap case.
+    private func resizeHeightOnly(toRows nr: Int) {
+        let oldRows = rows
+        let historyCount = history.count
+        let cursorViewportRow = min(cursorRow, oldRows - 1)
+        let cursorAbs = historyCount + cursorViewportRow
+
+        // 1) Drop trailing blank viewport rows *below* the cursor (no empty scrollback under the
+        //    cursor). The trim stops at the cursor's row, which is in the viewport, so it never
+        //    reaches into history.
+        var surviving = oldRows
+        while surviving > cursorViewportRow + 1, isViewportRowBlank(surviving - 1) { surviving -= 1 }
+        let total = historyCount + surviving
+
+        // 2) New viewport = the bottom `nr` rows of [history ++ surviving viewport]; `boundary` is
+        //    the absolute index of its first row, everything above is scrollback.
+        let boundary = max(0, total - nr)
+        let blank = TerminalGridCell.blank
+
+        // 3) Materialize the new viewport by reading rows [boundary, boundary+nr) from whichever side
+        //    of the (old) boundary they live on, padding past `total` with blanks. Reads old state
+        //    only; history is re-homed afterward.
+        var newCells = [TerminalGridCell](); newCells.reserveCapacity(cols * nr)
+        var newWrapped = [Bool](repeating: false, count: nr)
+        var newMarks = [SemanticMark?](repeating: nil, count: nr)
+        for slot in 0 ..< nr {
+            let idx = boundary + slot
+            if idx < total {
+                if idx < historyCount {
+                    let line = history[idx]
+                    newCells.append(contentsOf: line.cells)
+                    newWrapped[slot] = line.wrapped
+                    newMarks[slot] = line.mark
+                } else {
+                    let r = idx - historyCount
+                    newCells.append(contentsOf: viewportRowCells(r))
+                    newWrapped[slot] = rowWrapped[r]
+                    newMarks[slot] = rowMarks[r]
+                }
+            } else {
+                newCells.append(contentsOf: repeatElement(blank, count: cols))
+            }
+        }
+
+        // 4) Re-home history to [0 ..< boundary]: shrink pushes top viewport rows up; grow pulls the
+        //    recent history tail down (already copied into the viewport above).
+        if boundary > historyCount {
+            for r in 0 ..< (boundary - historyCount) {
+                history.append(HistoryLine(cells: viewportRowCells(r), wrapped: rowWrapped[r], mark: rowMarks[r]))
+            }
+        } else if boundary < historyCount {
+            history.removeLast(historyCount - boundary)
+        }
+        // Scrollback cap, exactly as reflow applies it (drop oldest overflow).
+        let trimmedFront = max(0, boundary - maxHistoryLines)
+        if history.count > maxHistoryLines { history.removeFirst(history.count - maxHistoryLines) }
+
+        cells = newCells
+        rowWrapped = newWrapped
+        rowMarks = newMarks
+        rows = nr
+        cursorRow = clamp(cursorAbs - boundary, 0, nr - 1)
+        cursorCol = min(cursorCol, cols - 1)
+
+        // 5) Re-anchor images by the same boundary shift (width unchanged → columns untouched);
+        //    evict any whose row fell below the trimmed tail or off the front of capped scrollback.
+        if !placements.isEmpty {
+            for i in placements.indices {
+                let src = placements[i].absRow
+                let mapped = src - trimmedFront
+                placements[i].absRow = (src >= 0 && src < total && mapped >= 0) ? mapped : -1
+            }
+            placements.removeAll { p in
+                if p.absRow < 0 {
+                    if let bytes = imageStore.removeValue(forKey: p.id)?.byteCount { imageByteTotal -= bytes }
+                    return true
+                }
+                return false
+            }
+        }
+    }
+
+    /// Output of `rewrapRows`: the re-wrapped physical rows plus the bookkeeping `reflow` needs to
+    /// split scrollback/viewport, re-anchor marks, re-home images, and map the cursor.
+    private struct RewrapResult {
+        var out: [[TerminalGridCell]]
+        var wrapped: [Bool]
+        var marks: [SemanticMark?]
+        var logicalOf: [Int]            // source-row index → its logical line index
+        var logicalFirstOutRow: [Int]   // logical line index → its first output row
+        var cursorOutRow: Int
+        var cursorOutCol: Int
+    }
+
+    /// Steps 2-4 of reflow, factored out so the authoritative `reflow` (whole buffer) and the live
+    /// `previewViewportReflow` (visible suffix) wrap *identically*: join `srcRows` into logical lines
+    /// (concatenating a row onto the previous when it soft-wrapped, dropping wide-deferral wrap
+    /// padding), trim each logical line's trailing blanks (with a cursor floor), then re-wrap to
+    /// width `nc` keeping wide glyphs whole and mapping the cursor. Reads only `cols`/`cursorCol`;
+    /// mutates no `self` state.
+    private func rewrapRows(
+        _ srcRows: [(cells: [TerminalGridCell], wrapped: Bool)],
+        marks srcMarks: [SemanticMark?],
+        cursorAbsRow: Int,
+        toCols nc: Int
+    ) -> RewrapResult {
+        // 2) Build logical lines by joining a row onto the previous when it soft-wrapped.
+        var logicals: [[TerminalGridCell]] = []
+        var logicalMarks: [SemanticMark?] = []
+        var logicalOf = [Int](repeating: 0, count: srcRows.count)
+        var current: [TerminalGridCell] = []
+        var currentMark: SemanticMark? = nil
+        var building = false
+        var prevWrapped = false
+        var cursorLogical = 0
+        var cursorLogicalCol = 0
+        for (i, row) in srcRows.enumerated() {
+            if building, !prevWrapped {
+                logicals.append(current)
+                logicalMarks.append(currentMark)
+                current = []
+                currentMark = nil
+            }
+            if current.isEmpty { currentMark = srcMarks[i] }
+            logicalOf[i] = logicals.count
+            building = true
+            if i == cursorAbsRow {
+                cursorLogical = logicals.count
+                cursorLogicalCol = current.count + min(cursorCol, cols - 1)
+            }
+            // A soft-wrapped row's trailing blanks are wrap padding, not content — most importantly
+            // the single gap column left when a wide glyph was deferred to the next row (`wrapLine`).
+            // Carrying that blank into the logical line shifts everything right of it and re-embeds a
+            // fresh gap on every reflow, so wide-char (CJK/emoji) lines drift and corrupt across
+            // resizes. Typed trailing spaces are codepoint 0x20 (not `.blank`), so they survive; only
+            // the default-blank gap is dropped. The final (hard-ended) row keeps its cells — step 3
+            // does the whole-logical-line trailing trim.
+            if row.wrapped {
+                var end = row.cells.count
+                while end > 0, isBlank(row.cells[end - 1]) { end -= 1 }
+                current.append(contentsOf: row.cells[0 ..< end])
+            } else {
+                current.append(contentsOf: row.cells)
+            }
+            prevWrapped = row.wrapped
+        }
+        if building { logicals.append(current); logicalMarks.append(currentMark) }
+
+        // 3) Trim each logical line's trailing blank cells (but never below the cursor column on the
+        //    cursor's own line, so the cursor keeps its place). Empty lines are preserved.
+        for i in logicals.indices {
+            var end = logicals[i].count
+            let floorCol = (i == cursorLogical) ? min(cursorLogicalCol, logicals[i].count) : 0
+            while end > floorCol, isBlank(logicals[i][end - 1]) { end -= 1 }
+            logicals[i] = Array(logicals[i].prefix(end))
+        }
+        cursorLogicalCol = min(cursorLogicalCol, logicals.indices.contains(cursorLogical) ? logicals[cursorLogical].count : 0)
+
+        // 4) Re-wrap each logical line into rows of width `nc` (wide chars never split). Each logical
+        //    line yields at least one row (preserving blank lines). Map the cursor.
+        var out: [[TerminalGridCell]] = []
+        var outWrapped: [Bool] = []
+        var outMarks: [SemanticMark?] = []
+        var logicalFirstOutRow = [Int](repeating: 0, count: logicals.count)
+        var cursorOutRow = 0
+        var cursorOutCol = 0
+        let blank = TerminalGridCell.blank
+        for (li, line) in logicals.enumerated() {
+            logicalFirstOutRow[li] = out.count
+            var rowBuf = Array(repeating: blank, count: nc)
+            var col = 0
+            var firstRowOfLogical = true
+            func flush(soft: Bool) {
+                out.append(rowBuf)
+                outWrapped.append(soft)
+                outMarks.append(firstRowOfLogical ? logicalMarks[li] : nil)
+                firstRowOfLogical = false
+                rowBuf = Array(repeating: blank, count: nc)
+                col = 0
+            }
+            var k = 0
+            while k < line.count {
+                let cell = line[k]
+                if cell.width == .spacerTail { k += 1; continue }
+                let wcols = (cell.width == .wide) ? 2 : 1
+                if col + wcols > nc { flush(soft: true) }
+                if li == cursorLogical, k == cursorLogicalCol {
+                    cursorOutRow = out.count
+                    cursorOutCol = col
+                }
+                rowBuf[col] = cell
+                if cell.width == .wide, col + 1 < nc {
+                    rowBuf[col + 1] = TerminalGridCell(width: .spacerTail)
+                }
+                col += wcols
+                k += 1
+            }
+            if li == cursorLogical, cursorLogicalCol >= line.count {
+                cursorOutRow = out.count
+                cursorOutCol = min(col, nc - 1)
+            }
+            flush(soft: false)
+        }
+
+        return RewrapResult(
+            out: out, wrapped: outWrapped, marks: outMarks,
+            logicalOf: logicalOf, logicalFirstOutRow: logicalFirstOutRow,
+            cursorOutRow: cursorOutRow, cursorOutCol: cursorOutCol
+        )
+    }
+
+    /// Pure (non-mutating) preview of the primary-screen viewport after a hypothetical reflow to
+    /// `nc × nr`, computed in O(visible content) by re-wrapping only the logical lines that land in
+    /// the bottom `nr` rows. Drives live re-wrap during a resize drag while the authoritative
+    /// history-wide reflow + PTY `SIGWINCH` are deferred. Byte-identical to the viewport that
+    /// `reflow(toCols: nc, rows: nr)` would produce (proven by `ReflowPreviewTests`); touches no
+    /// `self` state, so it is safe to call every drag frame. Primary screen only.
+    func previewViewportReflow(toCols ncIn: Int, rows nrIn: Int)
+        -> (cells: [TerminalGridCell], cursorRow: Int, cursorCol: Int) {
+        let nc = max(1, ncIn)
+        let nr = max(1, nrIn)
+        let totalSrc = history.count + rows
+        let cursorAbsFull = history.count + min(cursorRow, rows - 1)
+        let blank = TerminalGridCell.blank
+
+        func sourceRow(_ i: Int) -> (cells: [TerminalGridCell], wrapped: Bool, mark: SemanticMark?) {
+            if i < history.count {
+                let h = history[i]
+                return (h.cells, h.wrapped, h.mark)
+            }
+            let r = i - history.count
+            return (viewportRowCells(r), rowWrapped[r], rowMarks[r])
+        }
+
+        // Gather a suffix [start, totalSrc) that begins at a hard-line boundary (so its first logical
+        // line is complete) and re-wraps to at least `nr` rows. Extend back by doubling chunks until
+        // satisfied or the whole buffer is included. Because output rows below `start` are determined
+        // solely by complete logical lines inside the suffix, the last `nr` rows — and the viewport-
+        // relative cursor — match the full reflow exactly. Bounded by visible content.
+        var start = totalSrc
+        var chunk = max(nr, 8)
+        while true {
+            start = max(0, start - chunk)
+            while start > 0, sourceRow(start - 1).wrapped { start -= 1 } // back up to a hard boundary
+            var rows2: [(cells: [TerminalGridCell], wrapped: Bool)] = []
+            var marks2: [SemanticMark?] = []
+            rows2.reserveCapacity(totalSrc - start)
+            for i in start ..< totalSrc {
+                let s = sourceRow(i)
+                rows2.append((s.cells, s.wrapped))
+                marks2.append(s.mark)
+            }
+            let result = rewrapRows(rows2, marks: marks2, cursorAbsRow: cursorAbsFull - start, toCols: nc)
+            var total = result.out.count
+            while total - 1 > result.cursorOutRow, isRowBlank(result.out[total - 1]) { total -= 1 }
+            if total >= nr || start == 0 {
+                let viewportTop = max(0, total - nr)
+                var cellsOut = [TerminalGridCell]()
+                cellsOut.reserveCapacity(nc * nr)
+                for r in 0 ..< nr {
+                    let idx = viewportTop + r
+                    if idx < total { cellsOut.append(contentsOf: result.out[idx]) }
+                    else { cellsOut.append(contentsOf: repeatElement(blank, count: nc)) }
+                }
+                return (cellsOut,
+                        clamp(result.cursorOutRow - viewportTop, 0, nr - 1),
+                        clamp(result.cursorOutCol, 0, nc - 1))
+            }
+            chunk *= 2
+        }
+    }
+
     /// Reflow the primary screen to `nc × nr`: rebuild logical lines from history + viewport
     /// (joining rows whose predecessor soft-wrapped), trim each line's trailing blanks, re-wrap
     /// to `nc` (keeping wide chars whole), then split the result into scrollback + viewport with
@@ -507,98 +809,17 @@ final class TerminalScreen {
         for r in 0 ..< rows { srcMarks.append(rowMarks[r]) }
         let cursorAbsRow = history.count + min(cursorRow, rows - 1)
 
-        // 2) Build logical lines by joining a row onto the previous when it soft-wrapped.
-        //    Record the cursor's (logical line index, column within that line).
-        var logicals: [[TerminalGridCell]] = []
-        var logicalMarks: [SemanticMark?] = []
-        // Source-row index → the logical line it joins into, so an image anchored on that source
-        // row can be re-anchored to the logical line's first re-wrapped row below.
-        var logicalOf = [Int](repeating: 0, count: srcRows.count)
-        var current: [TerminalGridCell] = []
-        var currentMark: SemanticMark? = nil
-        var building = false
-        var prevWrapped = false
-        var cursorLogical = 0
-        var cursorLogicalCol = 0
-        for (i, row) in srcRows.enumerated() {
-            if building, !prevWrapped {
-                // The previous logical line ended with a hard break — finalize it.
-                logicals.append(current)
-                logicalMarks.append(currentMark)
-                current = []
-                currentMark = nil
-            }
-            // A logical line's mark is the mark of its first physical row.
-            if current.isEmpty { currentMark = srcMarks[i] }
-            logicalOf[i] = logicals.count   // the index this logical line will occupy
-            building = true
-            if i == cursorAbsRow {
-                cursorLogical = logicals.count
-                cursorLogicalCol = current.count + min(cursorCol, cols - 1)
-            }
-            current.append(contentsOf: row.cells)
-            prevWrapped = row.wrapped
-        }
-        if building { logicals.append(current); logicalMarks.append(currentMark) }
-
-        // 3) Trim each logical line's trailing blank cells (but never below the cursor column on
-        //    the cursor's own line, so the cursor keeps its place). Empty lines are preserved.
-        for i in logicals.indices {
-            var end = logicals[i].count
-            let floorCol = (i == cursorLogical) ? min(cursorLogicalCol, logicals[i].count) : 0
-            while end > floorCol, isBlank(logicals[i][end - 1]) { end -= 1 }
-            logicals[i] = Array(logicals[i].prefix(end))
-        }
-        cursorLogicalCol = min(cursorLogicalCol, logicals.indices.contains(cursorLogical) ? logicals[cursorLogical].count : 0)
-
-        // 4) Re-wrap each logical line into rows of width `nc` (wide chars never split). Each
-        //    logical line yields at least one row (preserving blank lines). Map the cursor.
-        var out: [[TerminalGridCell]] = []
-        var outWrapped: [Bool] = []
-        var outMarks: [SemanticMark?] = []
-        // Logical line index → index of its first re-wrapped output row (for image re-anchoring).
-        var logicalFirstOutRow = [Int](repeating: 0, count: logicals.count)
-        var cursorOutRow = 0
-        var cursorOutCol = 0
+        // 2-4) Join soft-wrapped rows into logical lines, trim, and re-wrap to `nc`. Shared with
+        //      `previewViewportReflow` so the live drag preview wraps byte-identically.
+        let rw = rewrapRows(srcRows, marks: srcMarks, cursorAbsRow: cursorAbsRow, toCols: nc)
+        var out = rw.out
+        var outWrapped = rw.wrapped
+        var outMarks = rw.marks
+        let logicalOf = rw.logicalOf
+        let logicalFirstOutRow = rw.logicalFirstOutRow
+        let cursorOutRow = rw.cursorOutRow
+        let cursorOutCol = rw.cursorOutCol
         let blank = TerminalGridCell.blank
-        for (li, line) in logicals.enumerated() {
-            logicalFirstOutRow[li] = out.count
-            var rowBuf = Array(repeating: blank, count: nc)
-            var col = 0
-            var firstRowOfLogical = true
-            func flush(soft: Bool) {
-                out.append(rowBuf)
-                outWrapped.append(soft)
-                // The logical line's mark lands on its first re-wrapped row only.
-                outMarks.append(firstRowOfLogical ? logicalMarks[li] : nil)
-                firstRowOfLogical = false
-                rowBuf = Array(repeating: blank, count: nc)
-                col = 0
-            }
-            var k = 0
-            while k < line.count {
-                let cell = line[k]
-                if cell.width == .spacerTail { k += 1; continue } // emitted with its wide head
-                let wcols = (cell.width == .wide) ? 2 : 1
-                if col + wcols > nc { flush(soft: true) }
-                if li == cursorLogical, k == cursorLogicalCol {
-                    cursorOutRow = out.count
-                    cursorOutCol = col
-                }
-                rowBuf[col] = cell
-                if cell.width == .wide, col + 1 < nc {
-                    rowBuf[col + 1] = TerminalGridCell(width: .spacerTail)
-                }
-                col += wcols
-                k += 1
-            }
-            // Cursor at end-of-line (past the last cell).
-            if li == cursorLogical, cursorLogicalCol >= line.count {
-                cursorOutRow = out.count
-                cursorOutCol = min(col, nc - 1)
-            }
-            flush(soft: false) // hard end of this logical line
-        }
 
         // 5) Drop trailing blank rows that sit *below* the cursor (a terminal doesn't keep empty
         //    space under the cursor as scrollback), then split into scrollback + viewport.
@@ -1206,9 +1427,10 @@ final class TerminalScreen {
     /// ECH — erase `n` cells at the cursor in place (no shifting).
     func eraseCharacters(_ n: Int) {
         let count = clamp(n, 1, cols - cursorCol)
-        let blank = erasedCell()
-        let rowStart = cursorRow * cols
-        for c in cursorCol ..< (cursorCol + count) { cells[rowStart + c] = blank }
+        // Bulk fill via `fillCells` (vectorized `update(repeating:)`) instead of a scalar per-cell
+        // loop — the last edit primitive that still looped. Byte-identical (ECH fills with the
+        // background-colored `erasedCell`).
+        fillCells(cursorRow * cols + cursorCol, count, with: erasedCell())
         markRowDirty(cursorRow)
     }
 

@@ -1,0 +1,13 @@
+cols=7 rows=6 history=6 cursor=(5,0) visible=true
+[0000] |$ first| <mark exit=nil>
+[0001] | comman|
+[0002] |d here|
+[0003] |output|
+[0004] |line on|
+[0005] |e wrapp|
+[0006] |ing|
+[0007] |$ secon| <mark exit=nil>
+[0008] |d|
+[0009] |more ou|
+[0010] |tput|
+[0011] ||

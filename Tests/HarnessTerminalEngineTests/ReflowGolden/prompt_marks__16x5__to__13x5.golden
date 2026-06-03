@@ -1,0 +1,8 @@
+cols=13 rows=5 history=2 cursor=(4,0) visible=true
+[0000] |$ first comma| <mark exit=nil>
+[0001] |nd here|
+[0002] |output line o|
+[0003] |ne wrapping|
+[0004] |$ second| <mark exit=nil>
+[0005] |more output|
+[0006] ||

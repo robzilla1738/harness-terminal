@@ -1,0 +1,5 @@
+cols=48 rows=4 history=0 cursor=(3,0) visible=true
+[0000] |宽字符测试一二三四五六七八九十|
+[0001] |漢字テストの行が折り返す|
+[0002] |mixed 宽 ascii 字 here|
+[0003] ||

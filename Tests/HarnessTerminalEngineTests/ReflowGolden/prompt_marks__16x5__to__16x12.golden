@@ -1,0 +1,13 @@
+cols=16 rows=12 history=0 cursor=(6,0) visible=true
+[0000] |$ first command| <mark exit=nil>
+[0001] |here|
+[0002] |output line one|
+[0003] |wrapping|
+[0004] |$ second| <mark exit=nil>
+[0005] |more output|
+[0006] ||
+[0007] ||
+[0008] ||
+[0009] ||
+[0010] ||
+[0011] ||

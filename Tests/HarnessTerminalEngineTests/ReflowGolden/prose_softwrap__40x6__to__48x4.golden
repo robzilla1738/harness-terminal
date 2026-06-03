@@ -1,0 +1,9 @@
+cols=48 rows=4 history=4 cursor=(3,0) visible=true
+[0000] |the quick brown fox jumps over the lazy dog and|
+[0001] |then keeps on running far past the edge of the v|
+[0002] |isible viewport so this line must soft-wrap seve|
+[0003] |ral times|
+[0004] |second paragraph also long enough to wrap across|
+[0005] | the narrow width more than once for good measur|
+[0006] |e|
+[0007] ||

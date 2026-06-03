@@ -126,6 +126,28 @@ public final class TerminalEmulator: VTParserHandler {
         alternate.resize(cols: cols, rows: rows)
     }
 
+    /// Test-only seam: resize routing the primary screen through the general reflow path even when
+    /// the width is unchanged, so `ReflowFastPathTests` can A/B the width-unchanged fast path
+    /// against the authoritative reflow. Not used in production (`resize` picks the fast path).
+    func resizeForcingFullReflow(cols: Int, rows: Int) {
+        primary.resize(cols: cols, rows: rows, forceFullReflow: true)
+        alternate.resize(cols: cols, rows: rows, forceFullReflow: true)
+    }
+
+    /// Cheap, non-mutating preview of the primary-screen viewport after a hypothetical reflow to
+    /// `cols × rows` — for live re-wrap during a resize drag while the authoritative history-wide
+    /// reflow and PTY `SIGWINCH` are deferred to drag-end. O(visible content), not O(history).
+    /// Byte-identical to `resize(...)`'s resulting viewport (proven by `ReflowPreviewTests`).
+    /// Returns nil on the alternate screen (full-screen TUIs redraw on `SIGWINCH`; no live reflow).
+    public func previewViewportReflow(cols: Int, rows: Int) -> TerminalGridSnapshot? {
+        guard !onAlternateScreen else { return nil }
+        let preview = primary.previewViewportReflow(toCols: cols, rows: rows)
+        return TerminalGridSnapshot(
+            cols: max(1, cols), rows: max(1, rows), cells: preview.cells,
+            cursor: TerminalCursor(row: preview.cursorRow, col: preview.cursorCol, visible: true)
+        )
+    }
+
     public func readGrid() -> TerminalGridSnapshot {
         current.snapshot()
     }

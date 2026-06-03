@@ -682,6 +682,118 @@ final class PerformanceBenchmarks: XCTestCase {
         }
     }
 
+    // MARK: - Reflow cost (resize / re-wrap)
+
+    /// Build a primary-screen emulator carrying ~`historyLines` of mixed scrollback that makes
+    /// reflow do real work: long lines that soft-wrap across rows (join + re-wrap), short hard
+    /// lines, wide-char (CJK/emoji) runs that exercise the wrap-boundary path, and periodic OSC-133
+    /// prompt marks (re-anchored on reflow). Scrollback cap is set high so the build never trims.
+    private func deepHistoryEmulator(cols: Int, rows: Int, historyLines: Int) -> TerminalEmulator {
+        let term = TerminalEmulator(cols: cols, rows: rows)
+        term.maxScrollbackLines = historyLines + rows + 2_048
+        let words = "the quick brown fox jumps over the lazy dog "
+        var produced = 0
+        var stream = ""
+        while produced < historyLines {
+            switch produced % 4 {
+            case 0:
+                // ~2.5× cols of text → soft-wraps across ~3 physical rows.
+                var line = ""
+                while line.count < cols * 5 / 2 { line += words }
+                stream += String(line.prefix(cols * 5 / 2)) + "\r\n"
+                produced += 3
+            case 1:
+                stream += "\u{1b}]133;A\u{07}$ short prompt \(produced)\r\n"
+                produced += 1
+            case 2:
+                stream += "wide 宽字符 漢字 テスト ☕📦🚀 row \(produced)\r\n"
+                produced += 1
+            default:
+                stream += "plain hard-wrapped line number \(produced)\r\n"
+                produced += 1
+            }
+            if stream.utf8.count > (1 << 16) { term.feed(stream); stream = "" }
+        }
+        term.feed(stream)
+        return term
+    }
+
+    /// Median wall-clock of a single `resize()` from a freshly-built deep history (rebuilt per
+    /// sample so every reflow starts from the identical state — the cost is attributable to
+    /// `historyLines`, not to a geometry left over from the previous sample).
+    private func medianResizeNanos(
+        historyLines: Int, from: (cols: Int, rows: Int), to: (cols: Int, rows: Int), samples: Int = 3
+    ) -> UInt64 {
+        var times: [UInt64] = []
+        for _ in 0 ..< samples {
+            let term = deepHistoryEmulator(cols: from.cols, rows: from.rows, historyLines: historyLines)
+            times.append(timedNanos { term.resize(cols: to.cols, rows: to.rows) })
+        }
+        times.sort()
+        return times[times.count / 2]
+    }
+
+    /// Reflow cost as a function of scrollback depth across a WIDTH sweep. `TerminalScreen.reflow`
+    /// is currently a full O(history + viewport) rebuild, so these numbers scale ~linearly with
+    /// `historyLines` — that scaling is the cost the 60 ms resize debounce hides, and the baseline
+    /// the incremental-reflow work (logical-line history model) must beat.
+    func testReflowCostAcrossWidths() throws {
+        try skipUnlessEnabled()
+        let rows = 48
+        for historyLines in [2_000, 10_000, 50_000] {
+            for (from, to) in [(160, 120), (120, 200), (200, 80)] {
+                let nanos = medianResizeNanos(
+                    historyLines: historyLines, from: (from, rows), to: (to, rows)
+                )
+                printBenchmark("reflow_cost_width", nanos: nanos, fields: [
+                    ("historyLines", "\(historyLines)"), ("fromCols", "\(from)"), ("toCols", "\(to)"),
+                ])
+            }
+        }
+    }
+
+    /// Reflow cost across a HEIGHT-ONLY sweep (width unchanged). No row's wrap can change, so this
+    /// is pure waste today — it runs the same full O(history) reflow as a width change. After the
+    /// width-unchanged fast path lands, `reflow_cost_height` should go near-flat vs `historyLines`
+    /// while `reflow_cost_width` keeps scaling; that divergence is the proof the fast path works.
+    func testReflowCostHeightOnly() throws {
+        try skipUnlessEnabled()
+        let cols = 120
+        for historyLines in [2_000, 10_000, 50_000] {
+            for (fromRows, toRows) in [(48, 24), (24, 60)] {
+                let nanos = medianResizeNanos(
+                    historyLines: historyLines, from: (cols, fromRows), to: (cols, toRows)
+                )
+                printBenchmark("reflow_cost_height", nanos: nanos, fields: [
+                    ("historyLines", "\(historyLines)"), ("cols", "\(cols)"),
+                    ("fromRows", "\(fromRows)"), ("toRows", "\(toRows)"),
+                ])
+            }
+        }
+    }
+
+    /// Cost of the live-drag viewport preview (`previewViewportReflow`) vs the authoritative width
+    /// reflow above: it re-wraps only the visible rows, so it must be ~flat (sub-ms) vs scrollback
+    /// depth where `reflow_cost_width` scales O(history). This is what makes live re-wrap during a
+    /// drag affordable every frame.
+    func testPreviewReflowCost() throws {
+        try skipUnlessEnabled()
+        let rows = 48
+        for historyLines in [2_000, 10_000, 50_000] {
+            for (from, to) in [(160, 120), (120, 200), (200, 80)] {
+                let term = deepHistoryEmulator(cols: from, rows: rows, historyLines: historyLines)
+                var times: [UInt64] = []
+                for _ in 0 ..< 5 {
+                    times.append(timedNanos { _ = term.previewViewportReflow(cols: to, rows: rows) })
+                }
+                times.sort()
+                printBenchmark("preview_reflow_cost", nanos: times[times.count / 2], fields: [
+                    ("historyLines", "\(historyLines)"), ("fromCols", "\(from)"), ("toCols", "\(to)"),
+                ])
+            }
+        }
+    }
+
     // MARK: - IPC codec round trip (large capture-pane / sendData payload)
 
     func testIPCCodecRoundTrip4MiB() throws {

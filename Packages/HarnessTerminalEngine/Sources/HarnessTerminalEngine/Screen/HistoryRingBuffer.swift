@@ -79,6 +79,17 @@ struct HistoryRingBuffer<Element> {
         count -= drop
     }
 
+    /// Drop the newest `n` entries (clamped to `count`). Decrements `count` and niles the vacated
+    /// tail slots so their elements release. The mirror of `removeFirst` for the tail — used by the
+    /// width-unchanged resize fast path, which moves the history↔viewport boundary by pulling the
+    /// most-recent history lines back down into the viewport (grow).
+    mutating func removeLast(_ n: Int = 1) {
+        let drop = Swift.min(Swift.max(0, n), count)
+        guard drop > 0 else { return }
+        for i in (count - drop) ..< count { storage[backingIndex(i)] = nil }
+        count -= drop
+    }
+
     mutating func removeAll() {
         storage = []
         head = 0

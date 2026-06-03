@@ -1,0 +1,7 @@
+cols=24 rows=6 history=0 cursor=(4,0) visible=true
+[0000] |$ first command here| <mark exit=nil>
+[0001] |output line one wrapping|
+[0002] |$ second| <mark exit=nil>
+[0003] |more output|
+[0004] ||
+[0005] ||

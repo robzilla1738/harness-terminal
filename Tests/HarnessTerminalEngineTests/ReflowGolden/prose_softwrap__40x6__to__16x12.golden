@@ -1,0 +1,19 @@
+cols=16 rows=12 history=6 cursor=(11,0) visible=true
+[0000] |the quick brown|
+[0001] |fox jumps over t|
+[0002] |he lazy dog and|
+[0003] |then keeps on ru|
+[0004] |nning far past t|
+[0005] |he edge of the v|
+[0006] |isible viewport|
+[0007] |so this line mus|
+[0008] |t soft-wrap seve|
+[0009] |ral times|
+[0010] |second paragraph|
+[0011] | also long enoug|
+[0012] |h to wrap across|
+[0013] | the narrow widt|
+[0014] |h more than once|
+[0015] | for good measur|
+[0016] |e|
+[0017] ||
