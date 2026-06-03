@@ -14,6 +14,7 @@ final class PrefixKeymap {
     /// instead of `.prefix`. One-shot — cleared once a key is handled (unless that key's
     /// command switches again, chaining a multi-key sequence).
     private var pendingTable: KeyTableID?
+    private var suspendedForShortcutRecording = false
     /// The armed prefix, or `nil` when Harness controls are disabled, or a blanked
     /// `prefixKey`. When `nil` the key monitor is removed entirely so plain mode does no
     /// multiplexer key handling at all (it feels like a normal terminal).
@@ -56,6 +57,7 @@ final class PrefixKeymap {
 
     /// Returns nil to swallow the event or the original event to forward it.
     private func handle(_ event: NSEvent) -> NSEvent? {
+        if suspendedForShortcutRecording { return event }
         if armed {
             consume(event: event)
             return nil
@@ -126,10 +128,15 @@ final class PrefixKeymap {
     /// Returns `nil` for events whose characters we can't represent (dead keys).
     private func makeSpec(from event: NSEvent) -> KeySpec? {
         guard let chars = event.charactersIgnoringModifiers else { return nil }
+        let mask = event.modifierFlags
+        let normalizedChars = ControlKeyNormalizer.normalizedKey(
+            from: chars,
+            controlPressed: mask.contains(.control)
+        )
         // For ASCII printable letters, prefer the lowercase form so bindings
         // for `c` work regardless of caps lock; honor shift only for symbols.
         let key: String
-        if chars.count == 1, let scalar = chars.unicodeScalars.first {
+        if normalizedChars.count == 1, let scalar = normalizedChars.unicodeScalars.first {
             switch scalar.value {
             case 0x1B: key = "Escape"
             case 0x09: key = "Tab"
@@ -144,13 +151,12 @@ final class PrefixKeymap {
             case 0xF72C: key = "PageUp"
             case 0xF72D: key = "PageDown"
             case 0xF704...0xF70F: key = "F\(Int(scalar.value) - 0xF703)"
-            default: key = chars
+            default: key = normalizedChars
             }
         } else {
-            key = chars
+            key = normalizedChars
         }
         var modifiers: KeySpec.Modifiers = []
-        let mask = event.modifierFlags
         if mask.contains(.control) { modifiers.insert(.control) }
         if mask.contains(.option)  { modifiers.insert(.option) }
         if mask.contains(.command) { modifiers.insert(.command) }
@@ -217,6 +223,11 @@ final class PrefixKeymap {
     private func hideIndicator() {
         indicator?.dismiss()
     }
+
+    func setShortcutRecordingActive(_ active: Bool) {
+        suspendedForShortcutRecording = active
+        if active { disarm() }
+    }
 }
 
 struct ParsedShortcut: Equatable {
@@ -238,14 +249,23 @@ struct ParsedShortcut: Equatable {
             default: return nil
             }
         }
-        return ParsedShortcut(modifiers: modifiers, key: last)
+        let key = ControlKeyNormalizer.normalizedKey(
+            from: last,
+            controlPressed: modifiers.contains(.control)
+        )
+        return ParsedShortcut(modifiers: modifiers, key: key)
     }
 
     func matches(_ event: NSEvent) -> Bool {
-        guard let chars = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        guard let raw = event.charactersIgnoringModifiers else { return false }
         // Mask out caps lock + numeric noise — only the four real modifiers count.
         let mask: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
-        return event.modifierFlags.intersection(mask) == modifiers && chars == key
+        let actualModifiers = event.modifierFlags.intersection(mask)
+        let chars = ControlKeyNormalizer.normalizedKey(
+            from: raw,
+            controlPressed: actualModifiers.contains(.control)
+        ).lowercased()
+        return actualModifiers == modifiers && chars == key
     }
 
     /// Human-readable glyph form, e.g. `⌃A`, for the prefix indicator.

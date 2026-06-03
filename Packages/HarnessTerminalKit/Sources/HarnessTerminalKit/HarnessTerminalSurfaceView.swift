@@ -1936,7 +1936,11 @@ public final class HarnessTerminalSurfaceView: NSView {
         // dead keys and IME composition work — committed text arrives via `insertText`.
         let reportAllKeys = modes.kittyKeyboardFlags & 0b1000 != 0
         if mods.contains(.control) || mods.contains(.option) || reportAllKeys {
-            let unshifted = event.charactersIgnoringModifiers ?? ""
+            let rawUnshifted = event.charactersIgnoringModifiers ?? ""
+            let unshifted = ControlKeyNormalizer.normalizedKey(
+                from: rawUnshifted,
+                controlPressed: mods.contains(.control)
+            )
             emit(inputEncoder.encode(
                 text: unshifted,
                 shifted: event.characters,
