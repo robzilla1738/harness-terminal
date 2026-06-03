@@ -19,7 +19,7 @@ struct AgentVectorIcon {
 }
 
 enum AgentIconArt {
-    /// Keyed by `AgentKind.rawValue`. Agents without a brand mark fall back to text.
+    /// Keyed by `AgentKind.rawValue`. Agents without a brand mark fall back to a monogram.
     static let icons: [String: AgentVectorIcon] = [
         "codex": AgentVectorIcon(
             viewBox: CGSize(width: 24, height: 24),
