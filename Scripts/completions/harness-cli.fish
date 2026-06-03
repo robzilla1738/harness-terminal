@@ -29,7 +29,7 @@ complete -c harness-cli -n "__fish_seen_subcommand_from bind-key unbind-key list
 complete -c harness-cli -n "__fish_seen_subcommand_from bind-hook unbind-hook list-hooks" -l event \
     -a "after-new-tab after-new-session after-kill-tab after-split-pane after-kill-pane after-resize-pane pane-exited client-attached client-detached agent-state-changed notification-posted"
 complete -c harness-cli -n "__fish_seen_subcommand_from install-hooks" \
-    -a "codex claude-code cursor pi hermes openclaw aider gemini goose"
+    -a "codex claude-code cursor grok opencode pi hermes openclaw"
 complete -c harness-cli -n "__fish_seen_subcommand_from completions" -a "zsh fish bash" -d "Shell"
 complete -c harness-cli -n "__fish_seen_subcommand_from list-agents" -l waiting -d "Only agents waiting on you"
 complete -c harness-cli -n "__fish_seen_subcommand_from doctor daemon-stats list-workspaces list-surfaces list-sessions list-windows list-panes list-agents list-clients list-buffers show-options show-environment list-hooks" -l json   -d "Machine-readable JSON output"

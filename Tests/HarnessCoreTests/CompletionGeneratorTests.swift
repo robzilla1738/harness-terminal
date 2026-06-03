@@ -20,6 +20,7 @@ final class CompletionGeneratorTests: XCTestCase {
         XCTAssertTrue(fish.contains("-l json"), "JSON-capable commands get a --json completion")
         XCTAssertTrue(fish.contains("-l pretty"))
         XCTAssertTrue(fish.contains("-a \"zsh fish bash\""), "completions arg values")
+        XCTAssertTrue(fish.contains("codex claude-code cursor grok opencode pi hermes openclaw"), "install-hooks arg values")
     }
 
     func testZshIsACompdefWithDescriptions() {
