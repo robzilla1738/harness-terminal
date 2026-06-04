@@ -53,17 +53,29 @@ public struct Binding: Codable, Sendable, Equatable {
 public struct KeyTable: Codable, Sendable, Equatable {
     public let id: KeyTableID
     public private(set) var bindings: [Binding]
+    /// Tombstones for explicitly unbound specs. Without them, unbinding a DEFAULT binding
+    /// cannot survive a reload: `KeybindingsStore.load()` merges defaults back for every
+    /// spec missing from the saved file, so a plain delete is indistinguishable from an
+    /// uncustomized default and silently resurrects. Re-binding a spec clears its tombstone.
+    public private(set) var disabledSpecs: [KeySpec]
 
-    public init(id: KeyTableID, bindings: [Binding] = []) {
+    public init(id: KeyTableID, bindings: [Binding] = [], disabledSpecs: [KeySpec] = []) {
         self.id = id
         self.bindings = bindings
+        self.disabledSpecs = disabledSpecs
     }
 
     public func lookup(_ spec: KeySpec) -> Binding? {
         bindings.first(where: { $0.spec == spec })
     }
 
+    /// Whether `spec` was explicitly unbound (so the load-time default merge must skip it).
+    public func isDisabled(_ spec: KeySpec) -> Bool {
+        disabledSpecs.contains(spec)
+    }
+
     public mutating func set(_ binding: Binding) {
+        disabledSpecs.removeAll { $0 == binding.spec }
         if let index = bindings.firstIndex(where: { $0.spec == binding.spec }) {
             bindings[index] = binding
         } else {
@@ -73,6 +85,29 @@ public struct KeyTable: Codable, Sendable, Equatable {
 
     public mutating func remove(spec: KeySpec) {
         bindings.removeAll { $0.spec == spec }
+        if !disabledSpecs.contains(spec) {
+            disabledSpecs.append(spec)
+        }
+    }
+
+    // Tolerant decode so older keybindings.json files (no `disabledSpecs`) still load.
+    enum CodingKeys: String, CodingKey { case id, bindings, disabledSpecs }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(KeyTableID.self, forKey: .id)
+        bindings = try c.decode([Binding].self, forKey: .bindings)
+        disabledSpecs = try c.decodeIfPresent([KeySpec].self, forKey: .disabledSpecs) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(bindings, forKey: .bindings)
+        // Keep user files tidy: tables with no tombstones encode exactly as before.
+        if !disabledSpecs.isEmpty {
+            try c.encode(disabledSpecs, forKey: .disabledSpecs)
+        }
     }
 }
 

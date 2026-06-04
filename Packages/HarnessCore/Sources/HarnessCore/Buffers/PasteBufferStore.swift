@@ -117,10 +117,17 @@ public final class PasteBufferStore: @unchecked Sendable {
     }
 
     private static func loadFromDisk(at url: URL) -> [Buffer] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard let data = try? Data(contentsOf: url) else { return [] } // absent → empty
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([Buffer].self, from: data)) ?? []
+        guard let buffers = try? decoder.decode([Buffer].self, from: data) else {
+            // Present but unparseable: preserve it as `.corrupt` for recovery rather than
+            // silently discarding the user's buffers (mirrors the other stores) — the next
+            // save() would otherwise atomically overwrite the only copy.
+            HarnessPaths.backupCorruptFile(at: url, label: "HarnessDaemon")
+            return []
+        }
+        return buffers
     }
 
     private func save(_ snapshot: [Buffer]) {

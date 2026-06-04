@@ -58,4 +58,37 @@ final class PasteBufferStoreTests: XCTestCase {
         XCTAssertNil(store.get("x"))
         XCTAssertFalse(store.delete("x"))
     }
+
+    func testCorruptBuffersFileIsBackedUpNotDiscarded() throws {
+        let url = tmpURL()
+        let backup = url.appendingPathExtension("corrupt")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: backup)
+        }
+        try Data("{ not valid buffers json ".utf8).write(to: url)
+
+        // Unreadable file: the store starts empty but preserves the bad file as `.corrupt`
+        // (mirrors hooks/environment/keybindings) instead of letting the next save
+        // atomically overwrite the only copy.
+        let store = PasteBufferStore(url: url)
+        XCTAssertTrue(store.list().isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path), "the unreadable file is renamed .corrupt")
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "{ not valid buffers json ")
+
+        // A normal mutation then writes fresh state without touching the backup.
+        store.set(Data("new".utf8), name: "x")
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "{ not valid buffers json ")
+        XCTAssertEqual(PasteBufferStore(url: url).get("x")?.data, Data("new".utf8))
+    }
+
+    func testAbsentBuffersFileStartsEmptyWithoutBackup() throws {
+        let url = tmpURL()
+        let store = PasteBufferStore(url: url)
+        XCTAssertTrue(store.list().isEmpty)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: url.appendingPathExtension("corrupt").path),
+            "a missing file is the normal first run, not corruption"
+        )
+    }
 }

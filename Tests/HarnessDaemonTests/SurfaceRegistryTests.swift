@@ -76,6 +76,23 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertNil(tab()?.exitStatus, "revival must clear the recorded exit status")
     }
 
+    /// Scoped option reads resolve by exact target (falling back only toward broader scopes),
+    /// so a nil-target non-global option is stored but unreachable by every read path. The
+    /// daemon must reject it rather than persist a dead entry.
+    func testScopedSetOptionWithoutTargetIsRejected() {
+        let registry = SurfaceRegistry()
+        guard case .error = registry.handle(.setOption(scope: "tab", target: nil, key: "status", rawValue: "off")) else {
+            return XCTFail("expected error for a nil-target scoped option")
+        }
+        // Global without a target and scoped WITH a target both remain accepted.
+        guard case .ok = registry.handle(.setOption(scope: "global", target: nil, key: "status", rawValue: "off")) else {
+            return XCTFail("expected ok for a global option")
+        }
+        guard case .ok = registry.handle(.setOption(scope: "tab", target: UUID().uuidString, key: "status", rawValue: "off")) else {
+            return XCTFail("expected ok for a targeted tab option")
+        }
+    }
+
     func testRevisionMatchesSnapshotAndAdvancesOnMutation() {
         let registry = SurfaceRegistry()
         // The lightweight accessor must agree with the full snapshot's revision...

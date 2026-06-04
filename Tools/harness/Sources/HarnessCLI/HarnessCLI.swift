@@ -402,10 +402,15 @@ struct HarnessCLI {
     }
 
     /// `list-windows [--session <name|uuid>]` — all tabs, or one session's when targeted.
+    /// A provided-but-unresolvable target is a hard error, never a silent fall-back to all
+    /// windows — scripts must not receive plausible-but-wrong data for a typo'd target.
     static func printWindows(_ args: [String], client: DaemonClient) throws {
         let snap = try snapshot(client)
-        if let target = flagValue(args, flag: "--session"),
-           let session = resolveSession(snap, nameOrID: target) {
+        if let target = flagValue(args, flag: "--session") {
+            guard let session = resolveSession(snap, nameOrID: target) else {
+                fputs("list-windows: no session matches '\(target)'\n", harnessStderr)
+                exit(1)
+            }
             try emit(SnapshotQueryFormatter.windowRows(in: session), args) {
                 SnapshotQueryFormatter.windows(in: session).forEach { print($0) }
             }
@@ -416,11 +421,16 @@ struct HarnessCLI {
         }
     }
 
-    /// `list-panes [--tab <uuid>]` — panes of the targeted tab, or the active tab.
+    /// `list-panes [--tab <uuid>]` — panes of the targeted tab, or the active tab. A malformed
+    /// `--tab` is a hard error, never a silent fall-back to the active tab (see list-windows).
     static func printPanes(_ args: [String], client: DaemonClient) throws {
         let snap = try snapshot(client)
         let tab: Tab?
-        if let raw = flagValue(args, flag: "--tab"), let tabID = UUID(uuidString: raw) {
+        if let raw = flagValue(args, flag: "--tab") {
+            guard let tabID = UUID(uuidString: raw) else {
+                fputs("list-panes: --tab must be a tab UUID (got '\(raw)')\n", harnessStderr)
+                exit(1)
+            }
             tab = snap.workspaces.flatMap(\.sessions).flatMap(\.tabs).first { $0.id == tabID }
         } else {
             tab = snap.activeWorkspace?.activeTab
@@ -1073,7 +1083,18 @@ struct HarnessCLI {
             fputs("Usage: harness-cli move-pane --src <uuid> --dst <uuid> [--direction horizontal|vertical]\n", harnessStderr)
             exit(1)
         }
-        let direction = flagValue(args, flag: "--direction").flatMap(SplitDirection.init(rawValue:)) ?? .horizontal
+        // Absent --direction defaults to horizontal (tmux move-pane); a provided-but-invalid
+        // value is an error, never a silent horizontal move (join-pane validates the same way).
+        let direction: SplitDirection
+        if let dirStr = flagValue(args, flag: "--direction") {
+            guard let parsed = SplitDirection(rawValue: dirStr) else {
+                fputs("move-pane: --direction must be horizontal|vertical (got '\(dirStr)')\n", harnessStderr)
+                exit(1)
+            }
+            direction = parsed
+        } else {
+            direction = .horizontal
+        }
         let response = try checkedRequest(client, .joinPane(sourcePaneID: src, destPaneID: dst, direction: direction))
         if case let .paneID(id) = response { print(id.uuidString) }
     }
@@ -1120,6 +1141,13 @@ struct HarnessCLI {
         if args.contains("-t") { scope = "tab" }
         if args.contains("-p") { scope = "pane" }
         let target = flagValue(args, flag: "-T")
+        // Scoped options resolve by exact target — a nil-target workspace/session/tab/pane
+        // entry is stored but unreachable by every read path (the fallback chain only widens
+        // toward global). Require the target instead of silently writing a dead option.
+        if scope != "global", target == nil {
+            fputs("set-option: \(scope) scope requires -T <target>\n", harnessStderr)
+            exit(1)
+        }
         // `positionalArgs` skips the subcommand at index 0 plus `-T <target>` (and any
         // lone scope flags), so `<key>` isn't mis-read as the subcommand name.
         let positional = positionalArgs(args, skippingValuesFor: ["-T"])
@@ -1150,18 +1178,28 @@ struct HarnessCLI {
         }
     }
 
+    /// Resolve a `-s <name|uuid>` environment target to a session ID, or exit. An invalid
+    /// target must NEVER fall through to nil: the IPC contract treats `sessionID == nil` as
+    /// the GLOBAL environment, so a typo'd session would silently inject the variable (often
+    /// a secret) into every new pane on the machine.
+    private static func requireSessionID(_ nameOrID: String, client: DaemonClient, command: String) throws -> SessionID {
+        if let session = resolveSession(try snapshot(client), nameOrID: nameOrID) { return session.id }
+        fputs("\(command): no session matches '\(nameOrID)'\n", harnessStderr)
+        exit(1)
+    }
+
     static func handleSetEnvironment(_ args: [String], client: DaemonClient) throws {
-        // Usage: set-environment [-g] [-u] [-s <sessionID>] <key> [value]
+        // Usage: set-environment [-g] [-u] [-s <session name|uuid>] <key> [value]
         // -g = global (default when no -s); -u = unset; -s targets a session.
         let global = args.contains("-g")
         let unset = args.contains("-u")
-        let sessionRaw = flagValue(args, flag: "-s")
-        let sessionID = (global ? nil : sessionRaw).flatMap(UUID.init(uuidString:))
+        let sessionRaw = global ? nil : flagValue(args, flag: "-s")
+        let sessionID = try sessionRaw.map { try requireSessionID($0, client: client, command: "set-environment") }
         // `positionalArgs` skips the subcommand at index 0 plus `-s <session>` (and lone
         // flags like `-g`/`-u`), so `<key>` isn't mis-read as the subcommand name.
         let positional = positionalArgs(args, skippingValuesFor: ["-s"])
         guard let key = positional.first else {
-            fputs("Usage: harness-cli set-environment [-g] [-u] [-s <sessionID>] <key> [value]\n", harnessStderr)
+            fputs("Usage: harness-cli set-environment [-g] [-u] [-s <session name|uuid>] <key> [value]\n", harnessStderr)
             exit(1)
         }
         let value = unset ? nil : positional.dropFirst().joined(separator: " ")
@@ -1169,7 +1207,8 @@ struct HarnessCLI {
     }
 
     static func handleShowEnvironment(_ args: [String], client: DaemonClient) throws {
-        let sessionID = args.contains("-g") ? nil : flagValue(args, flag: "-s").flatMap(UUID.init(uuidString:))
+        let sessionRaw = args.contains("-g") ? nil : flagValue(args, flag: "-s")
+        let sessionID = try sessionRaw.map { try requireSessionID($0, client: client, command: "show-environment") }
         let response = try checkedRequest(client, .showEnvironment(sessionID: sessionID))
         guard case let .options(items) = response else { throw DaemonClientError.unexpectedResponse }
         try emit(items, args) {

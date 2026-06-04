@@ -26,11 +26,14 @@ public enum KeybindingsStore {
         }
         // Merge: stored tables win for any spec they explicitly define, but
         // defaults fill in unset spec slots and unset tables. Removing an
-        // entry from the file = falling back to default.
+        // entry from the file = falling back to default — EXCEPT specs the
+        // user explicitly unbound (tombstoned via `unbind-key`), which must
+        // not resurrect on reload.
         var merged = stored
         for defaultTable in defaults.tableList {
             if var existing = merged.table(defaultTable.id) {
-                for binding in defaultTable.bindings where existing.lookup(binding.spec) == nil {
+                for binding in defaultTable.bindings
+                where existing.lookup(binding.spec) == nil && !existing.isDisabled(binding.spec) {
                     existing.set(binding)
                 }
                 if let i = merged.tableList.firstIndex(where: { $0.id == defaultTable.id }) {

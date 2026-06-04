@@ -124,7 +124,7 @@ reuses your existing SSH trust (keys/agent/config); no new credentials or crypto
 | `remote add --name <name> --ssh <user@host> --socket <remote-path> [--ssh-arg <arg> …]` | Register a remote daemon. `--socket` is the daemon's control-socket path on the remote (run `harness-cli doctor` there to print it). Repeat `--ssh-arg` to pass extra ssh options. |
 | `remote list` | List registered remotes (`name  ssh-target  socket`). |
 | `remote remove --name <name>` | Forget a remote and tear down its tunnel. |
-| `<command> … --host <name>` | Run any client command against the named remote instead of the local daemon (`ping`, `new-session`, `send-keys`, `capture-pane`, `doctor`, …). |
+| `<command> … --host <name>` | Run any client command against the named remote instead of the local daemon (`ping`, `new-session`, `send-keys`, `capture-pane`, `doctor`, …). Exception: `attach-window` always renders the **local** daemon — run it on the machine whose daemon you want to see (see the multiplexer guide). |
 
 Allowed `--ssh-arg` options are validated: `-p` (port), `-i` (identity file), `-J` (jump
 host), `-l` (login user), and the flag-only `-4 -6 -A -T -q -v`. Example:

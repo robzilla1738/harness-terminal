@@ -727,6 +727,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard !key.contains(":"), !(target?.contains(":") ?? false) else {
                 return .error("Option name/target must not contain ':'")
             }
+            // Scoped reads resolve by exact target and only fall back toward broader scopes —
+            // a nil-target non-global option is stored but unreachable by every read path.
+            // Reject it (defense in depth behind the CLI's own -T requirement).
+            guard scope == .global || target != nil else {
+                return .error("\(scopeRaw) scope requires a target")
+            }
             optionStore.set(.init(parsing: raw), key: key, scope: scope, target: target)
             // Nudge snapshot subscribers (the attach-window compositor) so a runtime option
             // change — status-*, mouse, pane-style, mode-keys — reaches attached clients instead
