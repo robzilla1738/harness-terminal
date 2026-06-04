@@ -223,6 +223,12 @@ public final class TerminalHostView: NSView {
             self.hostDelegate?.terminalHostDidRequestDesktopNotification(
                 title: title ?? "Harness", body: body, surfaceID: self.surfaceID)
         }
+        native.onBecameFocused = { [weak self] in
+            guard let self else { return }
+            // Focusing a pane (click, ⌘-Tab back to the app, window key) clears its pending
+            // notification — the same delegate path a programmatic tab switch already uses.
+            self.hostDelegate?.terminalHostDidChangeFocus(true, surfaceID: self.surfaceID)
+        }
         native.onCopy = { [weak self] text in
             self?.storeCopyBuffer(text)
         }

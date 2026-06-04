@@ -250,6 +250,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Desktop notification requested by a program (OSC 9 → nil title; OSC 777 → title+body)
     /// — the host forwards this to its delegate.
     public var onDesktopNotification: ((_ title: String?, _ body: String) -> Void)?
+    /// This surface became effectively focused (first responder × key window). The host
+    /// bridges it to the focus delegate so focusing a pane by click or app re-activation —
+    /// not only a programmatic tab switch — clears its pending notification.
+    public var onBecameFocused: (() -> Void)?
     /// Copied selection text — the host mirrors it into the daemon paste buffer (the
     /// system pasteboard is written here directly).
     public var onCopy: ((String) -> Void)?
@@ -2925,7 +2929,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let now = effectivelyFocused
         if lastReportedFocus != now {
             lastReportedFocus = now
-            if now { cursorBlinkVisible = true }
+            if now { cursorBlinkVisible = true; onBecameFocused?() }
             if inputModes().focusReporting {
                 emit([0x1B, 0x5B, now ? 0x49 : 0x4F]) // ESC [ I / ESC [ O
             }
