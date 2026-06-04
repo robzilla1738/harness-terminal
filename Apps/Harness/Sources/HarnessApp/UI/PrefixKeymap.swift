@@ -428,7 +428,8 @@ final class PrefixCheatsheetWindow {
             case .splitWindow, .killPane, .zoomPane, .selectPane, .swapPane, .resizePane:
                 panes.append(entry)
             case .newWindow, .killWindow, .renameWindow, .nextWindow, .previousWindow, .selectWindow,
-                 .newSession, .killSession, .renameSession, .selectWorkspace, .nextWorkspace, .previousWorkspace:
+                 .newSession, .killSession, .renameSession, .nextSession, .previousSession, .selectSession,
+                 .selectWorkspace, .nextWorkspace, .previousWorkspace:
                 tabs.append(entry)
             default:
                 modes.append(entry)
