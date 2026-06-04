@@ -201,6 +201,111 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertFalse(accA.contains(after), "a detached client must stop receiving the surface's output")
     }
 
+    /// Multi-client sizing contract (tmux `window-size smallest`): size votes ride the persistent
+    /// subscription connection as binary resize frames, so (1) with two live subscribers the PTY
+    /// sizes to the smallest vote, (2) an unrelated one-shot RPC resize cannot leave a stale size
+    /// behind when its socket closes, and (3) cancelling the small subscriber drops its vote and
+    /// the surface grows back to the remaining client's size. Regression for votes keyed to
+    /// short-lived RPC fds, which collapsed the contract to last-resize-wins.
+    func testResizeVotesOnSubscriptionsHoldSmallestThenGrowBack() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let sid = target.surfaceID
+        // The LARGE subscriber doubles as the output capture so it survives the small one's cancel.
+        let output = OutputAccumulator()
+        let subLarge = try client.subscribeSurfaceOutput(surfaceID: sid) { data, _ in
+            _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "")
+        }
+        let subSmall = try client.subscribeSurfaceOutput(surfaceID: sid) { _, _ in }
+        defer { subLarge.cancel(); subSmall.cancel() }
+        usleep(200_000)
+
+        subLarge.resize(sid, rows: 50, cols: 200)
+        subSmall.resize(sid, rows: 24, cols: 80)
+        usleep(300_000)
+        var size = try queryPTYSize(client, surfaceID: sid, output: output)
+        XCTAssertEqual(size?.rows, 24, "smallest vote across live subscriptions must win (rows)")
+        XCTAssertEqual(size?.cols, 80, "smallest vote across live subscriptions must win (cols)")
+
+        // A one-shot RPC resize applies while its socket lives, then the vote dies with the fd —
+        // the daemon must re-apply the remaining live votes, not leave the one-shot size behind.
+        _ = try client.request(.resizeSurface(surfaceID: sid, rows: 10, cols: 60))
+        usleep(300_000)
+        size = try queryPTYSize(client, surfaceID: sid, output: output)
+        XCTAssertEqual(size?.rows, 24, "a dead one-shot vote must not stick (rows)")
+        XCTAssertEqual(size?.cols, 80, "a dead one-shot vote must not stick (cols)")
+
+        // Dropping the small subscriber releases its vote; the surface grows back.
+        subSmall.cancel()
+        usleep(300_000)
+        size = try queryPTYSize(client, surfaceID: sid, output: output)
+        XCTAssertEqual(size?.rows, 50, "surface must grow back when the small client detaches (rows)")
+        XCTAssertEqual(size?.cols, 200, "surface must grow back when the small client detaches (cols)")
+    }
+
+    /// `detachSurface` (per-surface release, connection stays open) must also drop the caller's
+    /// size vote so the surface grows back to the remaining clients' smallest size.
+    func testDetachSurfaceDropsResizeVote() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let sid = target.surfaceID
+        let output = OutputAccumulator()
+        let subLarge = try client.subscribeSurfaceOutput(surfaceID: sid) { data, _ in
+            _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "")
+        }
+        let subSmall = try client.subscribeSurfaceOutput(surfaceID: sid) { _, _ in }
+        defer { subLarge.cancel(); subSmall.cancel() }
+        usleep(200_000)
+
+        subLarge.resize(sid, rows: 48, cols: 190)
+        subSmall.resize(sid, rows: 30, cols: 100)
+        usleep(300_000)
+        var size = try queryPTYSize(client, surfaceID: sid, output: output)
+        XCTAssertEqual(size?.rows, 30)
+        XCTAssertEqual(size?.cols, 100)
+
+        subSmall.detachSurface(sid)
+        usleep(300_000)
+        size = try queryPTYSize(client, surfaceID: sid, output: output)
+        XCTAssertEqual(size?.rows, 48, "detachSurface must release the caller's size vote (rows)")
+        XCTAssertEqual(size?.cols, 190, "detachSurface must release the caller's size vote (cols)")
+    }
+
+    /// Read the PTY's actual size end-to-end: drive `echo <nonce>; stty size` through the shell
+    /// and parse the first "rows cols" line after the nonce's *output* (the echoed command also
+    /// contains the nonce, but followed by `;`, never a newline).
+    private func queryPTYSize(
+        _ client: DaemonClient,
+        surfaceID: String,
+        output: OutputAccumulator,
+        timeout: TimeInterval = 8
+    ) throws -> (rows: Int, cols: Int)? {
+        let nonce = "SZQ\(UUID().uuidString.prefix(8))"
+        _ = try client.request(.sendData(surfaceID: surfaceID, data: Data("echo \(nonce); stty size\n".utf8)))
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let text = output.snapshot
+            if let nonceRange = text.range(of: "\(nonce)\r\n") ?? text.range(of: "\(nonce)\n") {
+                let after = text[nonceRange.upperBound...]
+                // "\r\n" is a single grapheme cluster in Swift, so it must be matched as its own
+                // separator Character — `== "\r"` / `== "\n"` alone never split CRLF PTY output.
+                for line in after.split(omittingEmptySubsequences: true, whereSeparator: { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }) {
+                    let parts = line.split(separator: " ")
+                    if parts.count == 2, let rows = Int(parts[0]), let cols = Int(parts[1]) {
+                        return (rows, cols)
+                    }
+                }
+            }
+            usleep(100_000)
+        }
+        XCTFail("stty size output did not arrive within \(timeout)s — stream so far: \(output.snapshot.suffix(600).debugDescription)")
+        return nil
+    }
+
     /// The `subscribeSnapshot` push: a layout mutation must deliver a `snapshotChanged`
     /// revision to subscribers (replaces the compositor's old 0.5s poll).
     func testSnapshotSubscriptionPushesRevisionOnMutation() throws {

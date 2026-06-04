@@ -41,6 +41,12 @@ final class OutputAccumulator: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return text.contains(marker)
     }
+
+    /// Everything accumulated so far (for parsing values out of the stream, not just markers).
+    var snapshot: String {
+        lock.lock(); defer { lock.unlock() }
+        return text
+    }
 }
 
 /// Thread-safe integer counter for asserting how many times an off-thread callback

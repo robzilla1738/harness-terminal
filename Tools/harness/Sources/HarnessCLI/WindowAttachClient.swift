@@ -265,15 +265,18 @@ private final class WindowSession: @unchecked Sendable {
             let sid = rect.surfaceID.uuidString
             if let term = terminals[sid] {
                 term.resize(cols: rect.cols, rows: rect.rows)
+                // Re-vote the new pane size on the persistent subscription so the daemon's
+                // smallest-of-attached-clients sizing tracks this client through TTY resizes.
+                subscriptions[sid]?.resize(sid, rows: UInt16(rect.rows), cols: UInt16(rect.cols))
             } else {
                 guard let term = HarnessGridTerminal(cols: rect.cols, rows: rect.rows) else { continue }
                 terminals[sid] = term
                 // OSC 52 from a pane → set the client's own clipboard (gated on set-clipboard)
                 // and mirror into the daemon buffer so other clients see it.
                 term.onSetClipboard = { [weak self] text in self?.handleProgramClipboard(text, surface: sid) }
-                // Tell the daemon this pane's PTY size, seed with scrollback,
-                // then stream live output into the terminal.
-                _ = try? client.request(.resizeSurface(surfaceID: sid, rows: UInt16(rect.rows), cols: UInt16(rect.cols)), timeout: 1)
+                // Seed with scrollback, subscribe, then vote this pane's PTY size on the
+                // subscription fd — a one-shot resize request loses its vote when its socket
+                // closes, so it can't hold the smallest-size contract while we stay attached.
                 if case let .text(text)? = try? client.request(.replayScrollback(surfaceID: sid, fromSequence: nil), timeout: 5),
                    !text.isEmpty {
                     term.feed(text)
@@ -284,6 +287,7 @@ private final class WindowSession: @unchecked Sendable {
                     self?.scheduleStructureCheck()
                 }) {
                     subscriptions[sid] = sub
+                    sub.resize(sid, rows: UInt16(rect.rows), cols: UInt16(rect.cols))
                 }
             }
         }

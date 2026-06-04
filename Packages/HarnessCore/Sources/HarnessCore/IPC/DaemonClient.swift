@@ -187,6 +187,27 @@ public final class DaemonSubscription: @unchecked Sendable {
         writeFrame(payload)
     }
 
+    /// Record this client's PTY size vote for `surfaceID` over the persistent connection. The
+    /// daemon keys size votes by fd and drops them when the fd closes — so a vote sent through
+    /// one-shot `DaemonClient.request(.resizeSurface:)` dies with its socket and multi-client
+    /// smallest-size sizing degrades to last-resize-wins. Sending the vote on this connection
+    /// ties its lifetime to the subscription: it holds while attached and is released exactly
+    /// on `detachSurface`/disconnect, letting the surface grow back.
+    ///
+    /// Deliberately the plain JSON `.resizeSurface` request, NOT a new binary frame: every
+    /// daemon (including older builds) already handles it per-fd on any connection, so this is
+    /// compatible in both directions — a new binary magic would read as an oversized JSON
+    /// length on an old daemon, which drops the connection. The daemon's `.ok` ack arrives
+    /// interleaved with the output stream and is ignored by the read loop, exactly like
+    /// `detachSurface`'s; resizes are far too infrequent for the ack to matter.
+    public func resize(_ surfaceID: String, rows: UInt16, cols: UInt16) {
+        lock.lock(); let dead = cancelled || finished; lock.unlock()
+        guard !dead,
+              let payload = try? IPCCodec.encode(IPCEnvelope(request: .resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols)))
+        else { return }
+        writeFrame(payload)
+    }
+
     /// Write one complete framed message to `fd`, retrying partial/interrupted writes. Holds
     /// `writeLock` for the whole frame so two writers can't interleave bytes. A hard error (peer
     /// gone) just stops — the read loop independently observes EOF and tears down.

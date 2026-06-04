@@ -14,9 +14,11 @@ import HarnessCore
 ///
 /// Implementation notes:
 /// - Two sockets are used. A persistent `DaemonSubscription` carries push
-///   output from the daemon; a synchronous `DaemonClient` is used for stdin
-///   `sendData`, `resizeSurface` on SIGWINCH, and final `detachSurface`.
-///   Splitting them avoids interleaving `.ok` replies into the byte stream.
+///   output from the daemon plus this client's PTY size votes (the daemon keys
+///   votes by fd, so they must ride the long-lived connection to hold while
+///   attached; the `.ok` acks come back interleaved and are ignored); a
+///   synchronous `DaemonClient` is used for stdin `sendData` and final
+///   `detachSurface`.
 /// - The local TTY is switched to raw mode for the duration of the session and
 ///   restored on every exit path (normal detach, signal, error).
 /// - The detach key sequence is configurable (default `Ctrl-A d`). The matcher
@@ -43,12 +45,6 @@ public enum AttachClient {
             return 64
         }
         let client = DaemonClient(endpoint: endpoint)
-
-        // Send the daemon our current size before subscribing so the first
-        // repaint matches our viewport.
-        if let size = ttySize() {
-            _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols), timeout: 1)
-        }
 
         // Replay scrollback so the user sees what's already on screen before
         // live output begins. We write it to the local TTY before raw-mode
@@ -128,6 +124,14 @@ private final class LiveSession: @unchecked Sendable {
             self?.requestDetach()
         })
         subscription = sub
+
+        // Establish this client's size vote on the subscription fd, where it holds
+        // until detach. (A one-shot `.resizeSurface` request loses its vote the
+        // moment its socket closes, so a smaller attach client couldn't keep a
+        // larger GUI client from enlarging the PTY out from under it.)
+        if let size = AttachClient.ttySize() {
+            sub.resize(surfaceID, rows: size.rows, cols: size.cols)
+        }
 
         // stdin loop — `poll(2)` on (stdin, wakeRead) so a detach request from
         // any thread interrupts the read promptly. Forwarded bytes are coalesced
@@ -241,10 +245,9 @@ private final class LiveSession: @unchecked Sendable {
         let winch = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .global())
         winch.setEventHandler { [weak self] in
             guard let self, let size = AttachClient.ttySize() else { return }
-            _ = try? self.client.request(
-                .resizeSurface(surfaceID: self.surfaceID, rows: size.rows, cols: size.cols),
-                timeout: 1
-            )
+            // Over the subscription, not a one-shot request: the vote must stay on
+            // the persistent fd so it keeps holding the smallest-size contract.
+            self.subscription?.resize(self.surfaceID, rows: size.rows, cols: size.cols)
         }
         winch.resume()
         sigwinchSource = winch

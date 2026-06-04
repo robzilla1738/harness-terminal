@@ -81,7 +81,10 @@ public enum IPCCodec {
     // prefix, which for any payload <= `maxPayloadLength` (16 MiB = 0x01000000) is 0x00 or 0x01. The
     // binary magics 0xF5/0xF6 can never collide with that, so a reader branches on byte 0 with no
     // version negotiation. (Keep `maxPayloadLength` <= 16 MiB so the JSON length high byte never
-    // reaches a magic value.)
+    // reaches a magic value.) NOTE: a new magic is NOT free to add — an OLD reader sees it as a
+    // huge JSON length (`tooLarge`) and drops the connection, so any new frame type needs a
+    // version/capability gate first. Low-frequency messages should ride the existing JSON path
+    // instead (see `DaemonSubscription.resize`).
     static let outputFrameMagic: UInt8 = 0xF5
     static let inputFrameMagic: UInt8 = 0xF6
 

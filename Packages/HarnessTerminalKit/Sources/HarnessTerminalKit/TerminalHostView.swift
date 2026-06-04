@@ -854,10 +854,12 @@ private final class SurfaceIO: @unchecked Sendable {
         let rows = lastRows, cols = lastCols
         lock.unlock()
         // Re-assert the grid size on attach: a surface respawned by a restarted daemon comes up at
-        // the daemon's placeholder size until a client resize vote arrives.
-        if subscription != nil, rows > 0, cols > 0 {
-            queue.async { [client, surfaceID] in
-                _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols))
+        // the daemon's placeholder size until a client resize vote arrives. Send it on the
+        // subscription itself so the vote lives on the persistent fd (one-shot votes are dropped
+        // the moment their socket closes, defeating smallest-of-attached-clients sizing).
+        if let subscription, rows > 0, cols > 0 {
+            queue.async { [surfaceID] in
+                subscription.resize(surfaceID, rows: rows, cols: cols)
             }
         }
     }
@@ -881,8 +883,16 @@ private final class SurfaceIO: @unchecked Sendable {
 
     func resize(rows: UInt16, cols: UInt16) {
         lock.lock(); lastRows = rows; lastCols = cols; lock.unlock()
-        queue.async { [client, surfaceID] in
-            _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols))
+        // Prefer the persistent subscription (mirrors `send`): the daemon keys size votes by fd,
+        // so a vote on the subscription holds until detach — a one-shot vote evaporates with its
+        // socket. Before the subscription exists, fall back to the per-call client (apply-then-drop
+        // is correct for a not-yet-attached client).
+        queue.async { [weak self, client, surfaceID] in
+            if let sub = self?.currentSubscription {
+                sub.resize(surfaceID, rows: rows, cols: cols)
+            } else {
+                _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols))
+            }
         }
     }
 }

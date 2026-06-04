@@ -178,6 +178,33 @@ final class IPCCodecTests: XCTestCase {
         XCTAssertTrue(buffer.isEmpty, "buffer fully consumed")
     }
 
+    func testMixedInputFramesAndJSONResizeRequestsDecodeSequentially() throws {
+        // A live attach connection interleaves binary input frames (keystrokes) with JSON
+        // `.resizeSurface` requests (SIGWINCH votes — deliberately JSON, not a new binary magic,
+        // so OLD daemons keep working; see DaemonSubscription.resize). All must decode in order
+        // off a single buffer.
+        var buffer = Data()
+        buffer.append(try IPCCodec.encode(IPCEnvelope(request: .subscribeSurfaceOutput(surfaceID: "s", label: "t"))))
+        buffer.append(try IPCCodec.encode(IPCEnvelope(request: .resizeSurface(surfaceID: "s", rows: 24, cols: 80))))
+        buffer.append(try IPCCodec.encodeInputFrame(surfaceID: "s", payload: Data("ls\r".utf8)))
+        buffer.append(try IPCCodec.encode(IPCEnvelope(request: .resizeSurface(surfaceID: "s", rows: 50, cols: 200))))
+
+        guard case .request(.subscribeSurfaceOutput("s", "t"))? = try IPCCodec.decodeRequestOrInput(from: &buffer) else {
+            return XCTFail("subscribe")
+        }
+        guard case .request(.resizeSurface("s", 24, 80))? = try IPCCodec.decodeRequestOrInput(from: &buffer) else {
+            return XCTFail("first resize")
+        }
+        guard case let .input(sid, payload)? = try IPCCodec.decodeRequestOrInput(from: &buffer) else {
+            return XCTFail("input")
+        }
+        XCTAssertEqual(sid, "s"); XCTAssertEqual(payload, Data("ls\r".utf8))
+        guard case .request(.resizeSurface("s", 50, 200))? = try IPCCodec.decodeRequestOrInput(from: &buffer) else {
+            return XCTFail("second resize")
+        }
+        XCTAssertTrue(buffer.isEmpty)
+    }
+
     func testEmptyPayloadFramesRoundTrip() throws {
         var outBuffer = try IPCCodec.encodeOutputFrame(Data(), sequence: 0)
         guard case let .output(outPayload, seq)? = try IPCCodec.decodeReplyOrData(from: &outBuffer) else {
