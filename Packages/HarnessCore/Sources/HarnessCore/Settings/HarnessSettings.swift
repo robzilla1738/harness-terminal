@@ -639,8 +639,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         boldIsBright = try container.decodeIfPresent(Bool.self, forKey: .boldIsBright) ?? fallback.boldIsBright
     }
 
-    public static func load() -> HarnessSettings {
-        let imported = TerminalConfigImporter.load()
+    public static func load(imported: ImportedTerminalConfig? = TerminalConfigImporter.load()) -> HarnessSettings {
         let url = HarnessPaths.settingsURL
         if FileManager.default.fileExists(atPath: url.path), let data = try? Data(contentsOf: url) {
             guard var settings = try? JSONDecoder().decode(HarnessSettings.self, from: data) else {
