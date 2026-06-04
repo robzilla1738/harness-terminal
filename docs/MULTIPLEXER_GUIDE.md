@@ -105,8 +105,9 @@ sidebar rather than something you "attach" to one at a time.
 
 - New session / workspace from the sidebar `+`, the palette, or `harness-cli new-session` /
   `new-workspace`.
-- `prefix n` / `prefix p` move to the next / previous session in the active workspace.
-- `prefix 0` ... `prefix 9` jump to session 0 through 9 in the active workspace.
+- `prefix n` / `prefix p` move to the next / previous tab in the active session.
+- `prefix (` / `prefix )` move to the previous / next session in the active workspace.
+- `prefix 0` ... `prefix 9` jump to workspace 0 through 9.
 - **Persistence** (see [MODES.md](MODES.md)): a session survives a *clean* quit if the global
   "keep sessions on quit" is on **or** the session is pinned. Pin/unpin from the sidebar context
   menu or `harness-cli promote-session` / `demote-session`. A crash leaves everything running.

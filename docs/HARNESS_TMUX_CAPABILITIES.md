@@ -168,8 +168,9 @@ visible instead of being hidden behind an attach prompt.
 | `Cmd-T` | New tab. |
 | `Cmd-1` through `Cmd-9` | Jump to tab 1 through 9. |
 | `Cmd-Shift-[` / `Cmd-Shift-]` | Previous / next tab. |
-| `prefix n` / `prefix p` | Next / previous session. |
-| `prefix 0` through `prefix 9` | Jump to session 0 through 9. |
+| `prefix n` / `prefix p` | Next / previous tab. |
+| `prefix (` / `prefix )` | Previous / next session. |
+| `prefix 0` through `prefix 9` | Jump to workspace 0 through 9. |
 | `Cmd-Shift-N` | New workspace. |
 
 Useful CLI commands:
@@ -266,7 +267,8 @@ Inside `attach-window`:
 | `prefix z` | Zoom. |
 | `prefix x` | Kill pane. |
 | `prefix c` | New tab. |
-| `prefix n` / `prefix p` | Next / previous session. |
+| `prefix n` / `prefix p` | Next / previous tab. |
+| `prefix (` / `prefix )` | Previous / next session. |
 | `prefix d` | Detach the attached client. |
 | `prefix [` | Copy mode. |
 
