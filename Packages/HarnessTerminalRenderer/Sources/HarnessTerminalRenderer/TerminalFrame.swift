@@ -55,6 +55,11 @@ public struct RenderCell: Equatable, Sendable {
     public var row: Int
     public var column: Int
     public var codepoint: UInt32
+    /// Stacked combining scalars (0 = none), mirrored from the engine cell so the rasterizer can
+    /// compose the full grapheme (e.g. a Thai base + upper vowel + tone). Part of `Equatable` so a
+    /// combining-only change (same `codepoint`) still repaints the cell.
+    public var combining0: UInt32 = 0
+    public var combining1: UInt32 = 0
     public var foreground: RenderColor
     public var background: RenderColor
     public var underlineColor: RenderColor
@@ -77,6 +82,17 @@ public struct RenderCell: Equatable, Sendable {
     public var hasGlyph: Bool {
         guard width != .spacerTail else { return false }
         return codepoint != 0 && codepoint != 0x20
+    }
+
+    /// The full grapheme to rasterize: the base scalar plus any combining marks. A no-mark cell
+    /// yields a single-scalar string, so the atlas key and bitmap are identical to the old
+    /// per-codepoint behavior for ASCII/CJK; Thai and other combining scripts compose correctly.
+    public var cluster: String {
+        var s = String()
+        if codepoint != 0, let b = Unicode.Scalar(codepoint) { s.unicodeScalars.append(b) }
+        if combining0 != 0, let m = Unicode.Scalar(combining0) { s.unicodeScalars.append(m) }
+        if combining1 != 0, let m = Unicode.Scalar(combining1) { s.unicodeScalars.append(m) }
+        return s
     }
 }
 
@@ -494,6 +510,8 @@ public struct FrameBuilder {
                 row: row,
                 column: column,
                 codepoint: cell.codepoint,
+                combining0: cell.combining0,
+                combining1: cell.combining1,
                 foreground: foreground,
                 background: background,
                 underlineColor: renderColor(underline),

@@ -2285,8 +2285,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         while col <= endCol {
             let cell = snapshot.cell(row: row, col: col)
             if cell?.width == .spacerTail { col += 1; continue }
-            if let codepoint = cell?.codepoint, codepoint != 0, let scalar = Unicode.Scalar(codepoint) {
-                line.unicodeScalars.append(scalar)
+            if let cell, cell.codepoint != 0 {
+                line += cell.cluster // base + combining marks
             } else {
                 line += " "
             }
@@ -2299,8 +2299,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     // MARK: - IME preedit
 
     /// Draw the marked (composing) text over the grid starting at the cursor, and park the
-    /// cursor at its end. Best-effort: one cell per scalar (wide composition may pack
-    /// loosely until full-width preedit handling lands).
+    /// cursor at its end. Combining marks (Thai vowels/tones, accents) are folded onto the base
+    /// cell — never given their own column — so composing Thai through the IME renders the same as
+    /// committed text, instead of dropping vowels / exploding tone marks.
     private func overlayPreedit(into frame: inout TerminalFrame) {
         Self.applyPreedit(into: &frame, text: markedText, builder: frameBuilder, canvasForeground: canvasForeground)
     }
@@ -2315,12 +2316,25 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard row >= 0, row < frame.rows else { return }
         var col = frame.cursor.column
         let fg = builder.renderColor(canvasForeground)
+        var lastBaseIdx: Int? = nil
         for scalar in text.unicodeScalars {
+            // Zero-width scalar: fold a TRUE combining mark onto the preceding preedit base cell
+            // (mirrors the engine's attachCombining); drop a non-extending format scalar (ZWSP, BOM,
+            // bidi) so the cell's cluster stays one grapheme. Never advances the column.
+            if CharacterWidth.width(of: scalar) == 0 {
+                if scalar.properties.isGraphemeExtend, let bi = lastBaseIdx {
+                    if frame.cells[bi].combining0 == 0 { frame.cells[bi].combining0 = scalar.value }
+                    else if frame.cells[bi].combining1 == 0 { frame.cells[bi].combining1 = scalar.value }
+                }
+                continue
+            }
             let width = max(1, CharacterWidth.width(of: scalar))
             guard col >= 0, col + width <= frame.columns else { break }
             let idx = row * frame.columns + col
             guard idx >= 0, idx < frame.cells.count else { break }
             frame.cells[idx].codepoint = scalar.value
+            frame.cells[idx].combining0 = 0
+            frame.cells[idx].combining1 = 0
             frame.cells[idx].foreground = fg
             frame.cells[idx].underline = .single
             frame.cells[idx].width = (width == 2) ? .wide : .normal
@@ -2330,6 +2344,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 frame.cells[idx + 1].width = .spacerTail
                 frame.cells[idx + 1].underline = .single
             }
+            lastBaseIdx = idx
             col += width
         }
         frame.cursor.column = min(col, frame.columns - 1)
@@ -2806,9 +2821,27 @@ public final class HarnessTerminalSurfaceView: NSView {
             frame.cells[idx].strikethrough = false
             frame.cells[idx].overline = false
             frame.cells[idx].width = .normal
+            frame.cells[idx].combining0 = 0
+            frame.cells[idx].combining1 = 0
         }
-        for (i, scalar) in text.unicodeScalars.enumerated() where i < frame.columns {
-            frame.cells[row * frame.columns + i].codepoint = scalar.value
+        // Write the status text one base scalar per column, folding combining marks onto their base
+        // so a Thai search query renders correctly instead of exploding across the band.
+        var col = 0
+        var lastBaseIdx: Int? = nil
+        for scalar in text.unicodeScalars {
+            if CharacterWidth.width(of: scalar) == 0 {
+                // Fold a true combining mark onto the base; drop non-extending format scalars.
+                if scalar.properties.isGraphemeExtend, let bi = lastBaseIdx {
+                    if frame.cells[bi].combining0 == 0 { frame.cells[bi].combining0 = scalar.value }
+                    else if frame.cells[bi].combining1 == 0 { frame.cells[bi].combining1 = scalar.value }
+                }
+                continue
+            }
+            guard col < frame.columns else { break }
+            let idx = row * frame.columns + col
+            frame.cells[idx].codepoint = scalar.value
+            lastBaseIdx = idx
+            col += 1
         }
     }
 }

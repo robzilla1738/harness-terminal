@@ -415,7 +415,8 @@ final class TerminalScreen {
             for i in 0 ..< end {
                 let cell = cells[i]
                 if cell.width == .spacerTail { continue } // wide head already emitted
-                s.unicodeScalars.append(cell.codepoint == 0 ? " " : (Unicode.Scalar(cell.codepoint) ?? " "))
+                if cell.codepoint == 0 { s.unicodeScalars.append(" ") } else { s += cell.cluster } // base + combining marks
+
             }
             return s
         }
@@ -922,11 +923,10 @@ final class TerminalScreen {
     func print(_ scalar: UInt32) {
         let w = CharacterWidth.width(of: scalar)
 
-        // Zero-width (combining marks etc.): attach to the previous cell's glyph when
-        // possible. Phase 1 keeps the primary scalar and drops the combining mark from
-        // the grid model (renderer-side grapheme composition lands with the Metal
-        // renderer); it must never advance the cursor.
-        if w == 0 { return }
+        // Zero-width (combining marks etc.): stack onto the preceding base cell's grapheme
+        // instead of dropping it, so Thai vowels/tones survive. Never advances the cursor, and
+        // runs before the pending-wrap check below so a mark can't trigger a line wrap.
+        if w == 0 { attachCombining(scalar); return }
 
         // A glyph that cannot fit in the remaining columns wraps first.
         if pendingWrap {
@@ -1033,9 +1033,11 @@ final class TerminalScreen {
             let scalar = codepoints[i]
             i += 1
             let w = CharacterWidth.width(of: scalar)
-            // Zero-width (combining marks etc.): attach to the previous glyph; never advance the
-            // cursor — identical to `print`'s `w == 0` early return.
-            if w == 0 { continue }
+            // Zero-width (combining marks etc.): stack onto the preceding base cell — identical to
+            // `print`'s `w == 0` path. attachCombining does a read-modify-write on `cells`; this is
+            // safe only because the writes in this loop use plain `cells[...]` indexing, NOT an open
+            // `withUnsafeMutableBufferPointer` scope (that would be a simultaneous-access trap).
+            if w == 0 { attachCombining(scalar); continue }
             // A glyph that cannot fit the remaining columns wraps first (mirrors `print`).
             if pendingWrap {
                 wrapLine()
@@ -1097,6 +1099,41 @@ final class TerminalScreen {
     private func writeCell(_ cell: TerminalGridCell, at col: Int) {
         guard col >= 0, col < cols, cursorRow >= 0, cursorRow < rows else { return }
         cells[cursorRow * cols + col] = cell
+        markRowDirty(cursorRow)
+    }
+
+    /// Stack a zero-width combining scalar onto the base glyph it belongs to, instead of dropping
+    /// it. Called from `print`/`printCodepointRun` for every `width == 0` scalar; never advances the
+    /// cursor. Finds the base cell and folds the mark in via `TerminalGridCell.appendCombining`.
+    private func attachCombining(_ scalar: UInt32) {
+        // Only fold TRUE grapheme-extending marks (Thai vowels/tones, accents, variation selectors)
+        // onto the base. Width-0 FORMAT scalars (ZWSP, BOM, word joiner, bidi LRM/RLM/overrides) are
+        // not grapheme extenders: folding them would make the cell's `cluster` span two extended
+        // grapheme clusters — which crashes `Character(cluster)` on the copy-mode read path and is
+        // semantically wrong — so drop them, exactly as the pre-cluster code did for all width-0.
+        guard let s = Unicode.Scalar(scalar), s.properties.isGraphemeExtend else { return }
+        guard cursorRow >= 0, cursorRow < rows else { return }
+        let rowBase = cursorRow * cols
+        var baseCol: Int
+        if pendingWrap {
+            // Cursor is pinned at the last column with the just-written base sitting THERE (not at
+            // cursorCol - 1). Leave pendingWrap armed so the NEXT base glyph still wraps.
+            baseCol = cols - 1
+        } else if cursorCol > 0 {
+            baseCol = cursorCol - 1
+        } else {
+            // Leading mark with no base on this row (col 0, fresh or explicitly-repositioned row):
+            // drop it, matching prior behavior. (A dotted-circle U+25CC base is a later option.)
+            return
+        }
+        // Wide base: the cell at baseCol is the reserved `.spacerTail`; step back to its `.wide`
+        // head and decorate that, never the spacer.
+        if cells[rowBase + baseCol].width == .spacerTail, baseCol > 0 { baseCol -= 1 }
+        // Base is blank padding (codepoint 0): drop rather than make padding non-blank, which would
+        // break trailing-trim and the wide-deferral gap. A real space is 0x20 (!= 0) and DOES take a
+        // mark.
+        guard cells[rowBase + baseCol].codepoint != 0 else { return }
+        cells[rowBase + baseCol].appendCombining(scalar)
         markRowDirty(cursorRow)
     }
 

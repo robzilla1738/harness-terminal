@@ -108,8 +108,12 @@ extension CopyModeGridSource {
         while c < cells.count {
             let cell = cells[c]
             if cell.width == .spacerTail { c += 1; continue }
-            let scalar = cell.codepoint == 0 ? UInt32(0x20) : cell.codepoint
-            chars.append(UnicodeScalar(scalar).map(Character.init) ?? " ")
+            // One Character per cell = base scalar + any combining marks (a Thai cluster is a single
+            // grapheme), so column/character mapping stays 1:1. `cluster.first` takes that single
+            // grapheme; the engine guarantees one (combining marks fold into the base, non-extending
+            // format scalars are dropped), but `.first` guards defensively so a stray multi-grapheme
+            // cell can never trap `Character(_:)`. Blank cells render as a space.
+            chars.append(cell.cluster.first ?? " ")
             columnOf.append(c)
             widthOf.append(cell.width == .wide ? 2 : 1)
             c += 1

@@ -33,6 +33,7 @@ let zeroWidthRanges: [ClosedRange<UInt32>] = [
     0x0941 ... 0x0948,
     0x0E31 ... 0x0E31,
     0x0E34 ... 0x0E3A,
+    0x0E47 ... 0x0E4E, // Thai: MAITAIKHU, MAI EK/THO/TRI/CHATTAWA, THANTHAKHAT, NIKHAHIT, YAMAKKAN
     0x1AB0 ... 0x1AFF,
     0x1DC0 ... 0x1DFF,
     0x200B ... 0x200F,

@@ -256,6 +256,62 @@ public final class GlyphRasterizer {
         return render(glyph: glyph, font: font)
     }
 
+    /// Rasterize a grapheme CLUSTER (a base scalar plus combining marks, e.g. a Thai consonant +
+    /// upper vowel + tone) as ONE composed bitmap. CoreText lays out the marks over the base
+    /// contextually — a tone above the vowel when present, shifted over tall ascenders — and
+    /// substitutes a Thai-capable font if the configured one lacks the glyphs. A single-scalar
+    /// cluster routes to the per-glyph path so ASCII/CJK bitmaps and box/nerd/fallback handling are
+    /// byte-identical. Returns nil for no-ink clusters.
+    public func rasterize(cluster: String, bold isBold: Bool = false, italic isItalic: Bool = false) -> RasterizedGlyph? {
+        let scalars = Array(cluster.unicodeScalars)
+        if scalars.count <= 1 {
+            return scalars.first.flatMap { rasterize(codepoint: $0.value, bold: isBold, italic: isItalic) }
+        }
+        let base = font(bold: isBold, italic: isItalic)
+        let fontKey = NSAttributedString.Key(kCTFontAttributeName as String)
+        // Draw with the context's fill color (white), not the attributed string's default (black) —
+        // CTLineDraw, unlike CTFontDrawGlyphs, honors the string's foreground color, and black ink on
+        // the zero-cleared (black) coverage bitmap would be invisible.
+        let fromContextKey = NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String)
+        let attributed = NSAttributedString(string: cluster, attributes: [fontKey: base, fromContextKey: true])
+        let line = CTLineCreateWithAttributedString(attributed)
+
+        // Tight ink bounds (glyph path), in points, with the pen origin at (0,0) and the baseline at
+        // y = 0. Marks above the cap give maxY > ascent; left-overhang gives minX < 0.
+        let bounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+
+        // Mirror `render(glyph:font:)`: snap the baseline + left edge to the device-pixel grid so a
+        // composed cluster sits on the SAME baseline as every other glyph.
+        let pad = 1
+        let leftPx = Int(floor(bounds.minX * scale))
+        let rightPx = Int(ceil(bounds.maxX * scale))
+        let topPx = Int(ceil(bounds.maxY * scale))
+        let botPx = Int(floor(bounds.minY * scale))
+        let pxW = (rightPx - leftPx) + 2 * pad
+        let pxH = (topPx - botPx) + 2 * pad
+        guard pxW > 0, pxH > 0 else { return nil }
+
+        guard let ctx = CGContext(
+            data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
+            bytesPerRow: 0, space: grayColorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return nil }
+        ctx.setAllowsAntialiasing(true)
+        ctx.setShouldAntialias(true)
+        ctx.setShouldSmoothFonts(false)
+        ctx.setFillColor(gray: 1, alpha: 1)
+        ctx.scaleBy(x: scale, y: scale)
+        // Pen origin at integer device pixels (CG is y-up from the bitmap bottom); CTLineDraw draws
+        // from `textPosition`. Same alignment math as the single-glyph path.
+        ctx.textPosition = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
+        CTLineDraw(line, ctx)
+
+        let coverage = readCoverage(ctx, width: pxW, height: pxH)
+        return RasterizedGlyph(
+            width: pxW, height: pxH, bearingX: leftPx - pad, bearingY: topPx + pad, coverage: coverage
+        )
+    }
+
     /// One shaped glyph from `shape(_:)`: a glyph id in a resolved font, plus the UTF-16
     /// index of the source character (so the renderer can place it on the right cell).
     /// Not `Sendable` — `CTFont` isn't; shaped glyphs are consumed synchronously per frame.

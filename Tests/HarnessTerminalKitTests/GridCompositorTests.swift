@@ -120,21 +120,31 @@ final class GridCompositorTests: XCTestCase {
 
     func testPaneBorderLabelWidthAware() {
         // The label is centered + placed by display width, not scalar count. A combining mark is
-        // zero-width (skipped, not given its own cell), and a wide glyph advances two cells so a
-        // following character isn't clobbered.
+        // zero-width (folded onto its base cell, not given its own column), and a wide glyph advances
+        // two cells so a following character isn't clobbered.
         let comp = GridCompositor(cols: 80, rows: 24)
         let grid = snapshot(80, 23, "x")
         let rect = PaneRect(paneID: UUID(), surfaceID: UUID(), x: 0, y: 1, cols: 80, rows: 23, labelRow: 0)
 
-        // NFD "café" = c a f e + combining acute (5 scalars, 4 display columns).
+        // NFD "café" = c a f e + combining acute (5 scalars, 4 display columns). The acute folds onto
+        // the 'e' cell and is re-emitted, so the label reads "café" (canonically equal to NFC "café").
         let nfd = CompositorPane(rect: rect, grid: grid, isActive: true, borderLabel: "cafe\u{0301}")
-        XCTAssertTrue(comp.render(panes: [nfd]).contains("cafe"), "base letters render; combining mark skipped")
+        XCTAssertTrue(comp.render(panes: [nfd]).contains("café"), "base letters + folded combining mark render as café")
 
         // A wide CJK glyph followed by ASCII: both must survive (the ASCII lands two cells over).
         let wide = CompositorPane(rect: rect, grid: grid, isActive: true, borderLabel: "中A")
         let out = comp.render(panes: [wide])
         XCTAssertTrue(out.contains("中"), "wide glyph renders")
         XCTAssertTrue(out.contains("A"), "following ASCII letter still renders")
+    }
+
+    func testReemitsThaiPaneContentWithCombiningMarks() {
+        // A remote pane's Thai content must be re-emitted to the client terminal with its combining
+        // marks intact (the engine stored them on the base cell), not dropped to bare consonants.
+        let comp = GridCompositor(cols: 40, rows: 6)
+        let grid = snapshot(40, 6, "ที่นี่")
+        let out = comp.render(panes: [pane(0, 0, 40, 6, grid)])
+        XCTAssertTrue(out.contains("ที่นี่"), "composited frame re-emits the Thai cluster")
     }
 
     func testNoBaseStyleLeavesCellsUntouched() {

@@ -47,6 +47,15 @@ struct GlyphKey: Hashable {
     let italic: Bool
 }
 
+/// Identifies a rasterized grapheme CLUSTER (base + combining marks) in the atlas cache. Used for
+/// cells carrying combining marks (e.g. Thai base + vowel + tone), which are composed by CoreText
+/// into a single bitmap so the marks are positioned contextually.
+struct ClusterGlyphKey: Hashable {
+    let cluster: String
+    let bold: Bool
+    let italic: Bool
+}
+
 /// Identifies a shaped glyph (ligature path): a glyph id within a specific font.
 struct ShapedGlyphKey: Hashable {
     let glyph: UInt16
@@ -75,6 +84,7 @@ final class GlyphAtlas {
     private let rasterizer: GlyphRasterizer
     private var cache: [GlyphKey: AtlasEntry?] = [:]
     private var shapedCache: [ShapedGlyphKey: AtlasEntry?] = [:]
+    private var clusterCache: [ClusterGlyphKey: AtlasEntry?] = [:]
     /// Hard ceiling on cached glyph entries (rasterized + shaped). The texture itself bounds *inked*
     /// glyphs — a full atlas triggers `resetPacker` — but a `nil` (no-ink: space, zero-width
     /// combining mark) entry is cached WITHOUT consuming texture space, so a stream of many distinct
@@ -150,6 +160,22 @@ final class GlyphAtlas {
         return entry
     }
 
+    /// Atlas entry for a grapheme cluster (base + combining marks), composed by CoreText into one
+    /// bitmap so the marks are positioned contextually. Single-scalar clusters fall through to the
+    /// per-glyph rasterizer, so ASCII/CJK behavior and cache cost are unchanged.
+    func entry(forCluster cluster: String, bold: Bool, italic: Bool) -> AtlasEntry? {
+        let key = ClusterGlyphKey(cluster: cluster, bold: bold, italic: italic)
+        if let cached = clusterCache[key] {
+            hits += 1
+            return cached
+        }
+        misses += 1
+        let entry = rasterizer.rasterize(cluster: cluster, bold: bold, italic: italic).flatMap(place)
+        clusterCache[key] = entry
+        capCachesIfNeeded()
+        return entry
+    }
+
     /// Atlas entry for a shaped glyph id (ligature path), keyed by glyph id + font.
     func entry(forShaped glyph: CGGlyph, font: CTFont) -> AtlasEntry? {
         let key = ShapedGlyphKey(glyph: glyph, fontName: CTFontCopyPostScriptName(font) as String)
@@ -168,7 +194,7 @@ final class GlyphAtlas {
     /// from scratch (the atlas-full self-heal path). The just-returned entry may show stale UVs for
     /// at most one frame, then heals on re-rasterization — exactly the `resetPacker` contract.
     private func capCachesIfNeeded() {
-        if cache.count + shapedCache.count > maxCacheEntries { resetPacker() }
+        if cache.count + shapedCache.count + clusterCache.count > maxCacheEntries { resetPacker() }
     }
 
     /// Shape a run for ligatures (delegates to the rasterizer's CoreText shaper).
@@ -201,6 +227,7 @@ final class GlyphAtlas {
         shelfHeight = 0
         cache.removeAll(keepingCapacity: true)
         shapedCache.removeAll(keepingCapacity: true)
+        clusterCache.removeAll(keepingCapacity: true)
     }
 
     /// Shelf-pack one inked glyph, uploading its coverage. Returns nil when the atlas is full.

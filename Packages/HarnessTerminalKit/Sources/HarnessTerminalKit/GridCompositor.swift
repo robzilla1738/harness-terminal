@@ -238,13 +238,23 @@ public final class GridCompositor {
         let fg: TerminalGridColor = active ? .palette(15) : .palette(8)
         let limit = min(cols, paneX + paneCols)
         var x = paneX + max(0, (paneCols - width) / 2)
+        var lastBaseIdx: Int? = nil
         for scalar in scalars {
             let w = CharacterWidth.width(of: scalar)
-            if w == 0 { continue } // combining mark — a single-codepoint cell can't carry it
+            if w == 0 {
+                // Combining mark — fold onto the label's preceding base cell rather than drop it.
+                if let bi = lastBaseIdx {
+                    if buffer[bi].combining0 == 0 { buffer[bi].combining0 = scalar.value }
+                    else if buffer[bi].combining1 == 0 { buffer[bi].combining1 = scalar.value }
+                }
+                continue
+            }
             guard x >= 0, x + w <= limit else { break }
-            buffer[row * cols + x] = RenderCell(codepoint: scalar.value, fg: fg, bold: active)
+            let idx = row * cols + x
+            buffer[idx] = RenderCell(codepoint: scalar.value, fg: fg, bold: active)
             // Blank a wide glyph's continuation cell so the border char beneath it doesn't show.
             if w == 2, x + 1 < limit { buffer[row * cols + x + 1] = RenderCell(codepoint: 0x20, fg: fg, bold: active) }
+            lastBaseIdx = idx
             x += w
         }
     }
@@ -347,7 +357,7 @@ public final class GridCompositor {
                     out += sgr
                     lastSGR = sgr
                 }
-                out.unicodeScalars.append(cell.scalar)
+                out += cell.cluster // base + combining marks (one display column)
                 penX = x + 1
                 penY = y
             }
@@ -369,6 +379,11 @@ public final class GridCompositor {
 /// state we re-emit. `Equatable` drives the back-buffer diff.
 struct RenderCell: Equatable {
     var codepoint: UInt32
+    /// Stacked combining scalars (0 = none), carried so a remote pane's Thai vowels/tones (and
+    /// pane-label marks) are re-emitted to the client terminal instead of dropped. Part of
+    /// `Equatable` so a combining-only change still repaints in the diff emitter.
+    var combining0: UInt32 = 0
+    var combining1: UInt32 = 0
     var fg: TerminalGridColor
     var bg: TerminalGridColor
     var underlineColor: TerminalGridColor
@@ -384,6 +399,8 @@ struct RenderCell: Equatable {
 
     init(
         codepoint: UInt32,
+        combining0: UInt32 = 0,
+        combining1: UInt32 = 0,
         fg: TerminalGridColor = .none,
         bg: TerminalGridColor = .none,
         underlineColor: TerminalGridColor = .none,
@@ -398,6 +415,8 @@ struct RenderCell: Equatable {
         overline: Bool = false
     ) {
         self.codepoint = codepoint
+        self.combining0 = combining0
+        self.combining1 = combining1
         self.fg = fg
         self.bg = bg
         self.underlineColor = underlineColor
@@ -414,6 +433,8 @@ struct RenderCell: Equatable {
 
     init(_ c: TerminalGridCell) {
         codepoint = c.codepoint
+        combining0 = c.combining0
+        combining1 = c.combining1
         fg = c.foreground
         bg = c.background
         underlineColor = c.underlineColor
@@ -437,6 +458,17 @@ struct RenderCell: Equatable {
     /// The glyph to draw (empty cells render as a space).
     var scalar: Unicode.Scalar {
         guard codepoint != 0, let s = Unicode.Scalar(codepoint) else { return Self.space }
+        return s
+    }
+
+    /// The full grapheme to emit: base scalar plus any combining marks. Empty cells render as a
+    /// space. A no-mark cell yields a single scalar, so ASCII/CJK output is byte-identical.
+    var cluster: String {
+        guard codepoint != 0, let base = Unicode.Scalar(codepoint) else { return " " }
+        var s = String()
+        s.unicodeScalars.append(base)
+        if combining0 != 0, let m = Unicode.Scalar(combining0) { s.unicodeScalars.append(m) }
+        if combining1 != 0, let m = Unicode.Scalar(combining1) { s.unicodeScalars.append(m) }
         return s
     }
 

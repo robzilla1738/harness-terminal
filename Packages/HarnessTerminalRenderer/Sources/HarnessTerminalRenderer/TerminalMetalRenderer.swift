@@ -1072,9 +1072,15 @@ public final class TerminalMetalRenderer {
         let start = row * frame.columns
         let end = start + frame.columns
         for cell in frame.cells[start ..< end] {
-            guard cell.hasGlyph, !Self.isBlockElement(cell.codepoint),
-                  let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
-            else { continue }
+            // Render when there's a base glyph OR a combining mark — a mark stacked on a space
+            // (hasGlyph == false for 0x20) must still draw, matching what copy/search/capture see.
+            guard cell.hasGlyph || cell.combining0 != 0, !Self.isBlockElement(cell.codepoint) else { continue }
+            // A cell carrying combining marks composes as one CoreText cluster bitmap; otherwise the
+            // plain per-codepoint atlas entry (unchanged for ASCII/CJK).
+            let entry = cell.combining0 != 0
+                ? atlas.entry(forCluster: cell.cluster, bold: cell.bold, italic: cell.italic)
+                : atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
+            guard let entry else { continue }
             let isCursor = cursorCell.map { $0.row == cell.row && $0.column == cell.column } ?? false
             let color = isCursor ? vector(cursorTextColor) : vector(cell.foreground)
             glyphs.append(glyphInstance(
@@ -1097,7 +1103,7 @@ public final class TerminalMetalRenderer {
         let cols = frame.columns
         var col = 0
         while col < cols {
-            guard let cell = frame.cell(row: row, column: col), cell.hasGlyph,
+            guard let cell = frame.cell(row: row, column: col), cell.hasGlyph || cell.combining0 != 0,
                   !Self.isBlockElement(cell.codepoint) else {
                 col += 1
                 continue
@@ -1125,6 +1131,15 @@ public final class TerminalMetalRenderer {
                 col += 1
                 continue
             }
+            // A cell carrying combining marks (Thai vowel/tone, etc.) is composed by CoreText as a
+            // single cluster bitmap with contextual mark positioning — never shaped into a ligature
+            // run (the run path discards CoreText's per-glyph positions, which marks depend on).
+            if cell.combining0 != 0 {
+                emitClusterGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                                 color: vector(cell.foreground), into: &glyphs)
+                col += 1
+                continue
+            }
             // Accumulate a run of contiguous, same-style, same-color glyph cells.
             var runText = ""
             var utf16ToColumn: [Int] = []
@@ -1136,6 +1151,7 @@ public final class TerminalMetalRenderer {
                 if Self.isBlockElement(rc.codepoint) { break } // drawn procedurally
                 if BoxDrawing.supported(rc.codepoint) { break } // procedural box sprite
                 if GlyphRasterizer.isNerdFontCodepoint(rc.codepoint) { break } // icon → per-cell symbol fallback
+                if rc.combining0 != 0 { break } // composed separately as a CoreText cluster bitmap
                 if let cur = cursorCell, cur.row == row, cur.column == c { break }
                 if rc.bold != bold || rc.italic != italic || rc.foreground != fg { break }
                 let scalar = Unicode.Scalar(rc.codepoint) ?? " "
@@ -1165,8 +1181,29 @@ public final class TerminalMetalRenderer {
         _ cell: RenderCell, row: Int, col: Int, ox: Float, oy: Float,
         color: SIMD4<Float>, into glyphs: inout [GlyphInstance]
     ) {
-        guard cell.hasGlyph, !Self.isBlockElement(cell.codepoint),
-              let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
+        guard cell.hasGlyph || cell.combining0 != 0, !Self.isBlockElement(cell.codepoint) else { return }
+        if cell.combining0 != 0 {
+            emitClusterGlyph(cell, row: row, col: col, ox: ox, oy: oy, color: color, into: &glyphs)
+            return
+        }
+        guard let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
+        else { return }
+        glyphs.append(glyphInstance(
+            entry,
+            originX: ox + Float(col * cellPixelWidth),
+            originY: oy + Float(row * cellPixelHeight),
+            color: color
+        ))
+    }
+
+    /// Place a base+combining cell as a single CoreText-composed cluster bitmap at the cell origin.
+    /// The mark overhang (above the cap, slightly left) is carried by the entry's bearings and is
+    /// drawn outside the cell box without clipping — the same as a tall single glyph.
+    private func emitClusterGlyph(
+        _ cell: RenderCell, row: Int, col: Int, ox: Float, oy: Float,
+        color: SIMD4<Float>, into glyphs: inout [GlyphInstance]
+    ) {
+        guard let entry = atlas.entry(forCluster: cell.cluster, bold: cell.bold, italic: cell.italic)
         else { return }
         glyphs.append(glyphInstance(
             entry,

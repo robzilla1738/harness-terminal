@@ -41,6 +41,12 @@ public enum TerminalCellWidth: Equatable, Sendable {
 public struct TerminalGridCell: Equatable, Sendable {
     /// Primary Unicode scalar of the cell's grapheme. `0` renders as blank.
     public var codepoint: UInt32
+    /// First stacked combining scalar (0 = none) — e.g. a Thai upper vowel or tone mark.
+    /// Stored inline so it rides every value copy (scroll/snapshot/reflow) with no side table.
+    public var combining0: UInt32
+    /// Second stacked combining scalar (0 = none) — e.g. a Thai tone over an upper vowel.
+    /// A Thai syllable stacks at most base + upper-vowel + tone, so two slots cover it fully.
+    public var combining1: UInt32
     public var foreground: TerminalGridColor
     public var background: TerminalGridColor
     public var underlineColor: TerminalGridColor
@@ -60,6 +66,8 @@ public struct TerminalGridCell: Equatable, Sendable {
 
     public init(
         codepoint: UInt32 = 0,
+        combining0: UInt32 = 0,
+        combining1: UInt32 = 0,
         foreground: TerminalGridColor = .none,
         background: TerminalGridColor = .none,
         underlineColor: TerminalGridColor = .none,
@@ -76,6 +84,8 @@ public struct TerminalGridCell: Equatable, Sendable {
         hyperlinkID: UInt32 = 0
     ) {
         self.codepoint = codepoint
+        self.combining0 = combining0
+        self.combining1 = combining1
         self.foreground = foreground
         self.background = background
         self.underlineColor = underlineColor
@@ -94,6 +104,28 @@ public struct TerminalGridCell: Equatable, Sendable {
 
     /// An empty default-styled cell (a space-equivalent with no attributes).
     public static let blank = TerminalGridCell()
+
+    /// The cell's full grapheme as a string: the base scalar followed by any stacked combining
+    /// marks. Every read-side surface (copy, search, capture, render) routes through this so the
+    /// "one scalar per cell" assumption is removed in exactly one place. A no-mark cell yields a
+    /// single-scalar string, identical to reading `codepoint` directly.
+    public var cluster: String {
+        var s = String()
+        if codepoint != 0, let b = Unicode.Scalar(codepoint) { s.unicodeScalars.append(b) }
+        if combining0 != 0, let m = Unicode.Scalar(combining0) { s.unicodeScalars.append(m) }
+        if combining1 != 0, let m = Unicode.Scalar(combining1) { s.unicodeScalars.append(m) }
+        return s
+    }
+
+    /// Stack a combining (width-0) scalar onto this cell's grapheme. Returns `false` if both
+    /// inline slots are full (>2 marks): the MVP drops the excess. A Thai syllable never needs
+    /// more than two, so this only loses coverage for emoji ZWJ / deep Indic (a Phase 3 concern).
+    @discardableResult
+    public mutating func appendCombining(_ scalar: UInt32) -> Bool {
+        if combining0 == 0 { combining0 = scalar; return true }
+        if combining1 == 0 { combining1 = scalar; return true }
+        return false
+    }
 }
 
 /// A terminal color an OSC 10/11/12/4 query can read (for dynamic-color / theme detection).

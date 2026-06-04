@@ -78,4 +78,31 @@ final class CharacterWidthTests: XCTestCase {
         XCTAssertEqual(CharacterWidth.width(of: 0x1F650), 1) // just above
         XCTAssertEqual(CharacterWidth.width(of: 0x10FFFF), 1) // top of Unicode
     }
+
+    /// Thai combining marks must ALL be zero-width. The upper/lower vowels (0x0E31, 0x0E34–0x0E3A)
+    /// were already correct; the tone-mark run 0x0E47–0x0E4E was missing from the table, so each
+    /// tone mark wrongly consumed its own grid column ("สระไทยระเบิด"). Boundaries on either side
+    /// stay single-width.
+    func testThaiCombiningMarkWidths() {
+        // The newly-added tone-mark run — every one is a nonspacing mark (Mn).
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E47), 0) // ◌็ MAITAIKHU
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E48), 0) // ◌่ MAI EK
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E49), 0) // ◌้ MAI THO
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E4A), 0) // ◌๊ MAI TRI
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E4B), 0) // ◌๋ MAI CHATTAWA
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E4C), 0) // ◌์ THANTHAKHAT
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E4D), 0) // ◌ํ NIKHAHIT
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E4E), 0) // ◌๎ YAMAKKAN
+
+        // Regression: the upper/lower vowels that were already in the table stay zero-width.
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E31), 0) // ◌ั MAI HAN-AKAT
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E34), 0) // ◌ิ SARA I (run start)
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E3A), 0) // ◌ฺ PHINTHU (run end)
+
+        // Boundaries: spacing characters around the run keep single width.
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E46), 1) // ๆ MAIYAMOK (spacing)
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E3F), 1) // ฿ BAHT SIGN
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E4F), 1) // ๏ FONGMAN (spacing)
+        XCTAssertEqual(CharacterWidth.width(of: 0x0E33), 1) // ำ SARA AM (spacing)
+    }
 }
