@@ -318,6 +318,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Sub-line wheel remainder carried between scroll events so small trackpad movements
     /// accumulate into whole lines instead of each snapping a full line (see `consumeWheelLines`).
     private var wheelLineRemainder: CGFloat = 0
+    /// Horizontal counterpart for mouse-reported wheel-left/right (see `consumeWheelColumns`).
+    private var wheelColumnRemainder: CGFloat = 0
     /// Lines per notch for a discrete (non-precise) mouse wheel — the classic 3-line step.
     private static let mouseWheelLinesPerTick: CGFloat = 3
     /// Test-only: counts main-thread consume hops (one per `receiveOffMain` main bounce). The
@@ -512,11 +514,17 @@ public final class HarnessTerminalSurfaceView: NSView {
             FrameSignposter.shared.interval("parse") { emulator.feed(data) }
             pendingFeed.leave()
             let afterHistory = emulator.historyCount
-            let synchronized = emulator.modes.synchronizedOutput
+            let modesAfterFeed = emulator.modes
+            let altScreenAfterFeed = emulator.isAlternateScreenActive
+            let synchronized = modesAfterFeed.synchronizedOutput
             FrameSignposter.shared.event("mainHop")
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.testingMainHopCount &+= 1
+                // Refresh the input-side mirror (see `inputModes()`); chunks hop in FIFO order, so
+                // the mirror always converges on the emulator's latest state.
+                self.inputModesMirror = modesAfterFeed
+                self.altScreenMirror = altScreenAfterFeed
                 if self.scrollOffset > 0 {
                     let added = afterHistory - beforeHistory
                     if added > 0 { self.scrollOffset = min(afterHistory, self.scrollOffset + added) }
@@ -559,6 +567,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     func testingWaitForEmulatorIdle() {
         emulatorState.sync { _ in }
     }
+
+    func testingInputModes() -> TerminalModes { inputModes() }
 
     func testingResizeGrid(cols: Int, rows: Int) {
         commitGridSize(cols: cols, rows: rows)
@@ -709,6 +719,26 @@ public final class HarnessTerminalSurfaceView: NSView {
             return emulatorState.sync(body)
         }
         return body(emulatorState.emulator)
+    }
+
+    /// Main-thread mirror of the emulator state the *input* paths need (key/mouse/paste encoding),
+    /// refreshed by every parsed chunk's main hop in `receiveOffMain`. Reading the mirror keeps a
+    /// keystroke from doing a `queue.sync` against the parser — a held arrow key must never stall
+    /// the main thread behind a busy parse. At most one in-flight chunk stale, the same window the
+    /// old synchronous read had (those bytes were simply still unparsed then). Defaults match a
+    /// fresh `TerminalEmulator`, so reads before the first output are correct.
+    private var inputModesMirror = TerminalModes()
+    private var altScreenMirror = false
+
+    /// The terminal modes input encoding should honor right now (mirror on the off-main pipeline;
+    /// direct read when the emulator lives on main).
+    private func inputModes() -> TerminalModes {
+        offMainParserFramePipelineEnabled ? inputModesMirror : emulatorState.emulator.modes
+    }
+
+    /// Whether the alternate screen is active, for input-side decisions (alternate scroll).
+    private func inputAltScreenActive() -> Bool {
+        offMainParserFramePipelineEnabled ? altScreenMirror : emulatorState.emulator.isAlternateScreenActive
     }
 
     private func invalidateRenderGeneration() {
@@ -1586,7 +1616,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Mouse goes to the program when it enabled tracking — unless Shift is held, which
     /// always forces local selection (the standard terminal override).
     private func isMouseReporting(_ event: NSEvent) -> Bool {
-        emulatorSync { $0.modes.mouseTrackingEnabled } && !event.modifierFlags.contains(.shift)
+        inputModes().mouseTrackingEnabled && !event.modifierFlags.contains(.shift)
     }
 
     private func mouseModifiers(_ event: NSEvent) -> KeyModifiers {
@@ -1600,7 +1630,7 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func reportMouse(_ event: NSEvent, button: MouseButton, kind: MouseEventKind) {
         guard let pos = cell(at: event.locationInWindow) else { return }
-        let modes = emulatorSync { $0.modes }
+        let modes = inputModes()
         emit(inputEncoder.encodeMouse(
             button: button, kind: kind,
             column: pos.column, row: pos.row,
@@ -1678,7 +1708,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         if copyMode != nil { return }
         if isMouseReporting(event) {
             // Only report motion when the app asked for drag / any-motion tracking.
-            let modes = emulatorSync { $0.modes }
+            let modes = inputModes()
             if modes.mouseDrag || modes.mouseAny {
                 reportMouse(event, button: .left, kind: .drag)
             }
@@ -1800,7 +1830,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// additionally require "report event types" (0b10). No-op otherwise — modifiers normally emit
     /// nothing on their own.
     private func reportModifierKeyIfNeeded(_ event: NSEvent) {
-        let modes = emulatorSync { $0.modes }
+        let modes = inputModes()
         guard modes.kittyKeyboardFlags & 0b1000 != 0 else { pressedModifierKeyCodes.removeAll(); return }
         guard copyMode == nil, let key = Self.modifierSpecialKey(forKeyCode: event.keyCode) else { return }
         // flagsChanged toggles: if we already recorded this key down, this event is its release.
@@ -1950,8 +1980,25 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
         if isMouseReporting(event) {
-            let button: MouseButton = event.scrollingDeltaY > 0 ? .wheelUp : .wheelDown
-            if event.scrollingDeltaY != 0 { reportMouse(event, button: button, kind: .press) }
+            guard let renderer else { return }
+            let scale = window?.backingScaleFactor ?? 2.0
+            // One wheel report per *line* of travel (cell-height accumulated, remainder carried),
+            // not per NSEvent — a trackpad fires a ~120Hz stream of tiny deltas plus momentum
+            // events, and reporting each one flooded TUIs (Claude Code) with wheel events, making
+            // scroll feel hair-trigger. Matches Ghostty's pending-scroll accumulation.
+            let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
+            let lines = consumeWheelLines(event, cellHeight: cellH)
+            if lines != 0 {
+                let button: MouseButton = lines > 0 ? .wheelUp : .wheelDown
+                for _ in 0 ..< min(abs(lines), 32) { reportMouse(event, button: button, kind: .press) }
+            }
+            // Horizontal wheel: buttons 66/67, one report per cell-width column (Ghostty parity).
+            let cellW = max(1, CGFloat(renderer.cellPixelWidth) / scale)
+            let cols = consumeWheelColumns(event, cellWidth: cellW)
+            if cols != 0 {
+                let button: MouseButton = cols > 0 ? .wheelLeft : .wheelRight
+                for _ in 0 ..< min(abs(cols), 32) { reportMouse(event, button: button, kind: .press) }
+            }
             return
         }
         // Local scrollback: positive deltaY (content moves down) scrolls back into history.
@@ -1963,7 +2010,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         // The alternate screen has no scrollback — synthesize arrow keys instead (DECSET
         // 1007 "alternate scroll", on by default) so the wheel scrolls less/man/vim when
         // the program didn't enable mouse reporting (that case already returned above).
-        let (onAltScreen, modes) = emulatorSync { ($0.isAlternateScreenActive, $0.modes) }
+        let onAltScreen = inputAltScreenActive()
+        let modes = inputModes()
         if onAltScreen, modes.alternateScroll {
             let key: SpecialKey = lines > 0 ? .up : .down
             let perLine = inputEncoder.encode(key, modifiers: [], modes: modes)
@@ -1993,11 +2041,29 @@ public final class HarnessTerminalSurfaceView: NSView {
         if event.hasPreciseScrollingDeltas {
             wheelLineRemainder += delta / cellHeight
         } else {
-            wheelLineRemainder += delta * Self.mouseWheelLinesPerTick
+            // macOS simulates acceleration on non-precise wheels by ramping the delta from 0.1
+            // upward — a slow single notch would otherwise accumulate 0.3 lines and do nothing
+            // until the fourth click. Clamp a notch to at least one full tick (Ghostty parity).
+            let ticks = delta > 0 ? max(delta, 1) : min(delta, -1)
+            wheelLineRemainder += ticks * Self.mouseWheelLinesPerTick
         }
         let whole = wheelLineRemainder < 0 ? wheelLineRemainder.rounded(.up) : wheelLineRemainder.rounded(.down)
         wheelLineRemainder -= whole
         return Int(whole)
+    }
+
+    /// Horizontal counterpart of `consumeWheelLines` for mouse-reported wheel-left/right: precise
+    /// deltas accumulate by cell width (remainder carried); non-precise ticks map 1:1 to columns.
+    private func consumeWheelColumns(_ event: NSEvent, cellWidth: CGFloat) -> Int {
+        let delta = event.scrollingDeltaX
+        guard delta != 0 else { return 0 }
+        if event.hasPreciseScrollingDeltas {
+            wheelColumnRemainder += delta / cellWidth
+            let whole = wheelColumnRemainder < 0 ? wheelColumnRemainder.rounded(.up) : wheelColumnRemainder.rounded(.down)
+            wheelColumnRemainder -= whole
+            return Int(whole)
+        }
+        return Int(delta.rounded())
     }
 
     /// Standard responder copy (Edit ▸ Copy / ⌘C via the menu).
@@ -2109,7 +2175,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             .replacingOccurrences(of: "\n", with: "\r")
         // Paste protection: confirm risky text when the program hasn't enabled bracketed paste
         // (which would otherwise run embedded newlines as commands the moment they're pasted).
-        let bracketed = emulatorSync { $0.modes.bracketedPaste }
+        let bracketed = inputModes().bracketedPaste
         if pasteProtection, !bracketed, Self.isUnsafePaste(normalized), let window {
             confirmPaste(normalized, in: window)
             return
@@ -2120,7 +2186,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func deliverPaste(_ normalized: String) {
         snapToBottom()
         clearSelection()
-        emit(inputEncoder.encodePaste(normalized, modes: emulatorSync { $0.modes }))
+        emit(inputEncoder.encodePaste(normalized, modes: inputModes()))
     }
 
     /// Unsafe = contains a line break (would run as a command without bracketed paste) or another
@@ -2298,7 +2364,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         if lastReportedFocus != now {
             lastReportedFocus = now
             if now { cursorBlinkVisible = true }
-            if emulatorSync({ $0.modes.focusReporting }) {
+            if inputModes().focusReporting {
                 emit([0x1B, 0x5B, now ? 0x49 : 0x4F]) // ESC [ I / ESC [ O
             }
         }
@@ -2378,7 +2444,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         if flags.contains(.option) { mods.insert(.option) }
         if flags.contains(.control) { mods.insert(.control) }
 
-        let modes = emulatorSync { $0.modes }
+        let modes = inputModes()
         // A held key auto-repeats; under Kitty "report event types" each repeat is tagged `:2`.
         let eventType: KeyEventType = event.isARepeat ? .repeat : .press
 
@@ -2410,7 +2476,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func keyUp(with event: NSEvent) {
         // Terminals never report key release — except under the Kitty keyboard protocol's "report
         // event types" flag (0b10), which a program must explicitly enable. No-op otherwise.
-        let modes = emulatorSync { $0.modes }
+        let modes = inputModes()
         guard modes.kittyKeyboardFlags & 0b10 != 0,
               copyMode == nil, !hasMarkedText(),
               !event.modifierFlags.contains(.command) else { return }
@@ -2504,6 +2570,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
         scrollOffset = 0
         wheelLineRemainder = 0 // don't carry a sub-line wheel remainder across the mode boundary
+        wheelColumnRemainder = 0
         notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })
         scheduleRender()
     }
@@ -2515,6 +2582,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         copyModeSearchEntry = nil
         scrollOffset = 0
         wheelLineRemainder = 0
+        wheelColumnRemainder = 0
         notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })
         scheduleRender()
     }

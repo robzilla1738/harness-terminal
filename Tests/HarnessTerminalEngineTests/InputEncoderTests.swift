@@ -147,6 +147,17 @@ final class InputEncoderTests: XCTestCase {
                        bytes("\u{1b}[<64;3;4M"))
     }
 
+    func testMouseSGRHorizontalWheel() {
+        var modes = TerminalModes()
+        modes.mouseAny = true
+        modes.mouseSGR = true
+        // Horizontal wheel: left = 66, right = 67 (xterm wheel button codes).
+        XCTAssertEqual(encoder.encodeMouse(button: .wheelLeft, kind: .press, column: 2, row: 3, modes: modes),
+                       bytes("\u{1b}[<66;3;4M"))
+        XCTAssertEqual(encoder.encodeMouse(button: .wheelRight, kind: .press, column: 2, row: 3, modes: modes),
+                       bytes("\u{1b}[<67;3;4M"))
+    }
+
     func testMouseLegacyX10() {
         var modes = TerminalModes()
         modes.mouseClick = true // no SGR -> legacy byte form

@@ -189,6 +189,11 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "l"), command: .copyModeCommand(.cursorRight), note: "Cursor right"),
             Binding(spec: KeySpec(key: "j"), command: .copyModeCommand(.cursorDown), note: "Cursor down"),
             Binding(spec: KeySpec(key: "k"), command: .copyModeCommand(.cursorUp), note: "Cursor up"),
+            // Arrow keys mirror hjkl (tmux parity) — without these, copy mode swallows arrows.
+            Binding(spec: KeySpec(key: "Left"), command: .copyModeCommand(.cursorLeft), note: "Cursor left"),
+            Binding(spec: KeySpec(key: "Right"), command: .copyModeCommand(.cursorRight), note: "Cursor right"),
+            Binding(spec: KeySpec(key: "Down"), command: .copyModeCommand(.cursorDown), note: "Cursor down"),
+            Binding(spec: KeySpec(key: "Up"), command: .copyModeCommand(.cursorUp), note: "Cursor up"),
             Binding(spec: KeySpec(key: "0"), command: .copyModeCommand(.startOfLine), note: "Start of line"),
             Binding(spec: KeySpec(key: "$"), command: .copyModeCommand(.endOfLine), note: "End of line"),
             Binding(spec: KeySpec(key: "w"), command: .copyModeCommand(.nextWord), note: "Next word"),
@@ -221,6 +226,11 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "f", modifiers: .control), command: .copyModeCommand(.cursorRight), note: "Cursor right"),
             Binding(spec: KeySpec(key: "n", modifiers: .control), command: .copyModeCommand(.cursorDown), note: "Cursor down"),
             Binding(spec: KeySpec(key: "p", modifiers: .control), command: .copyModeCommand(.cursorUp), note: "Cursor up"),
+            // Arrow keys mirror the C-bfnp motions (tmux parity).
+            Binding(spec: KeySpec(key: "Left"), command: .copyModeCommand(.cursorLeft), note: "Cursor left"),
+            Binding(spec: KeySpec(key: "Right"), command: .copyModeCommand(.cursorRight), note: "Cursor right"),
+            Binding(spec: KeySpec(key: "Down"), command: .copyModeCommand(.cursorDown), note: "Cursor down"),
+            Binding(spec: KeySpec(key: "Up"), command: .copyModeCommand(.cursorUp), note: "Cursor up"),
             Binding(spec: KeySpec(key: "a", modifiers: .control), command: .copyModeCommand(.startOfLine), note: "Start of line"),
             Binding(spec: KeySpec(key: "e", modifiers: .control), command: .copyModeCommand(.endOfLine), note: "End of line"),
             Binding(spec: KeySpec(key: "f", modifiers: .option), command: .copyModeCommand(.nextWord), note: "Next word"),

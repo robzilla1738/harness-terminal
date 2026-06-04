@@ -45,6 +45,8 @@ public enum MouseButton: Int, Sendable {
     case right = 2
     case wheelUp = 64
     case wheelDown = 65
+    case wheelLeft = 66
+    case wheelRight = 67
 }
 
 /// The kind of mouse event being reported.
@@ -116,7 +118,10 @@ public struct InputEncoder: Sendable {
             return (kittyOff && modifiers == [.option]) ? esc("d") : tilde(3, modifiers, modes, event)
         case .f1: return ss3("P", modifiers, modes, event)
         case .f2: return ss3("Q", modifiers, modes, event)
-        case .f3: return ss3("R", modifiers, modes, event)
+        // Kitty reports F3 as `CSI 13~` — its CSI `R` form would collide with the cursor
+        // position report (`CSI row;col R`). Legacy keeps SS3 R / CSI 1;mods R.
+        case .f3:
+            return kittyOff ? ss3("R", modifiers, modes, event) : tilde(13, modifiers, modes, event)
         case .f4: return ss3("S", modifiers, modes, event)
         case .f5: return tilde(15, modifiers, modes, event)
         case .f6: return tilde(17, modifiers, modes, event)
@@ -254,6 +259,10 @@ public struct InputEncoder: Sendable {
     private func cursor(_ final: Character, _ m: KeyModifiers, _ modes: TerminalModes, _ event: KeyEventType) -> [UInt8] {
         let evt = eventSuffix(event, modes.kittyKeyboardFlags)
         if m.isEmpty, evt.isEmpty {
+            // Active Kitty flags supersede DECCKM: always the CSI form, never SS3 (a Kitty-mode
+            // parser treats `ESC O A` as Alt+O A). Matches Ghostty, whose kitty path ignores
+            // cursor-key mode entirely.
+            if modes.kittyKeyboardFlags != 0 { return esc("[\(final)") }
             return modes.cursorKeysApplication ? esc("O\(final)") : esc("[\(final)")
         }
         return esc("[1;\(modifierParam(m))\(evt)\(final)")
@@ -261,7 +270,10 @@ public struct InputEncoder: Sendable {
 
     private func ss3(_ final: Character, _ m: KeyModifiers, _ modes: TerminalModes, _ event: KeyEventType) -> [UInt8] {
         let evt = eventSuffix(event, modes.kittyKeyboardFlags)
-        if m.isEmpty, evt.isEmpty { return esc("O\(final)") }
+        if m.isEmpty, evt.isEmpty {
+            // Same Kitty rule as `cursor`: SS3 is a legacy-only form (F1/F2/F4 become CSI P/Q/S).
+            return modes.kittyKeyboardFlags != 0 ? esc("[\(final)") : esc("O\(final)")
+        }
         return esc("[1;\(modifierParam(m))\(evt)\(final)")
     }
 

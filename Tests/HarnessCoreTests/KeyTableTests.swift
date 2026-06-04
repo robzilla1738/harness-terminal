@@ -62,6 +62,18 @@ final class KeyTableTests: XCTestCase {
         XCTAssertNil(emacs?.lookup(KeySpec(key: "[")), "bare [ is unbound in emacs copy-mode")
     }
 
+    func testCopyModeArrowKeysMirrorMotions() {
+        // Arrows must move the cursor in both copy-mode tables (tmux parity) — unbound keys are
+        // swallowed in copy mode, which used to make arrows dead there.
+        for table in [KeyTableSet.defaults.table(.copyMode),
+                      KeyTableSet.defaults.table(.copyModeEmacs)].compactMap({ $0 }) {
+            XCTAssertEqual(table.lookup(KeySpec(key: "Up"))?.command, .copyModeCommand(.cursorUp), table.id.rawValue)
+            XCTAssertEqual(table.lookup(KeySpec(key: "Down"))?.command, .copyModeCommand(.cursorDown), table.id.rawValue)
+            XCTAssertEqual(table.lookup(KeySpec(key: "Left"))?.command, .copyModeCommand(.cursorLeft), table.id.rawValue)
+            XCTAssertEqual(table.lookup(KeySpec(key: "Right"))?.command, .copyModeCommand(.cursorRight), table.id.rawValue)
+        }
+    }
+
     func testNoDuplicateKeySpecsInDefaultTables() {
         // Each default table must map every KeySpec at most once — guards against a new binding
         // silently shadowing an existing one (e.g. the copy-mode prompt-jump keys).

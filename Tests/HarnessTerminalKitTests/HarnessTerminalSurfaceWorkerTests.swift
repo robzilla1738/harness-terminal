@@ -94,6 +94,27 @@ final class HarnessTerminalSurfaceWorkerTests: XCTestCase {
         XCTAssertEqual(grid.rows, 30)
     }
 
+    func testInputModesMirrorTracksModeChangesAcrossMainHop() async {
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        XCTAssertFalse(view.testingInputModes().cursorKeysApplication)
+        XCTAssertEqual(view.testingInputModes().kittyKeyboardFlags, 0)
+
+        // The shape fish 4.x sets at its prompt: DECCKM + Kitty flags 5 in one chunk. The input
+        // paths read a main-thread mirror (no queue.sync against the parser); it must reflect the
+        // change once the chunk's main hop lands.
+        view.receive("\u{1b}[?1h\u{1b}[=5u")
+        view.testingWaitForEmulatorIdle()
+        await drainMainQueue()
+        XCTAssertTrue(view.testingInputModes().cursorKeysApplication)
+        XCTAssertEqual(view.testingInputModes().kittyKeyboardFlags, 5)
+
+        view.receive("\u{1b}[?1l\u{1b}[=0u")
+        view.testingWaitForEmulatorIdle()
+        await drainMainQueue()
+        XCTAssertFalse(view.testingInputModes().cursorKeysApplication)
+        XCTAssertEqual(view.testingInputModes().kittyKeyboardFlags, 0)
+    }
+
     func testOffMainPipelineCanBeDisabledWithoutRacingQueuedWork() {
         let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
         view.frame = CGRect(x: 0, y: 0, width: 800, height: 400)

@@ -62,6 +62,34 @@ final class KittyKeyboardTests: XCTestCase {
         XCTAssertEqual(enc.encode(.up, modes: kittyModes(0b1000)), enc.encode(.up, modes: TerminalModes()))
     }
 
+    func testKittySupersedesDECCKMForCursorKeys() {
+        // DECCKM (application cursor keys) must be ignored while any Kitty flags are active: a
+        // Kitty-mode parser reads `ESC O A` as Alt+O A. Ghostty's kitty path never consults DECCKM.
+        var m = kittyModes(1)
+        m.cursorKeysApplication = true
+        XCTAssertEqual(String(decoding: enc.encode(.up, modes: m), as: UTF8.self), "\u{1b}[A")
+        XCTAssertEqual(String(decoding: enc.encode(.down, modes: m), as: UTF8.self), "\u{1b}[B")
+        XCTAssertEqual(String(decoding: enc.encode(.home, modes: m), as: UTF8.self), "\u{1b}[H")
+        XCTAssertEqual(String(decoding: enc.encode(.end, modes: m), as: UTF8.self), "\u{1b}[F")
+        // Kitty off: DECCKM honored as before.
+        var legacy = TerminalModes()
+        legacy.cursorKeysApplication = true
+        XCTAssertEqual(String(decoding: enc.encode(.up, modes: legacy), as: UTF8.self), "\u{1b}OA")
+    }
+
+    func testFunctionKeysF1toF4UnderKitty() {
+        // Under Kitty, F1/F2/F4 take the CSI specials (P/Q/S) instead of SS3, and F3 becomes
+        // `CSI 13~` — its CSI `R` form would collide with the cursor position report.
+        let m = kittyModes(1)
+        XCTAssertEqual(String(decoding: enc.encode(.f1, modes: m), as: UTF8.self), "\u{1b}[P")
+        XCTAssertEqual(String(decoding: enc.encode(.f2, modes: m), as: UTF8.self), "\u{1b}[Q")
+        XCTAssertEqual(String(decoding: enc.encode(.f3, modes: m), as: UTF8.self), "\u{1b}[13~")
+        XCTAssertEqual(String(decoding: enc.encode(.f4, modes: m), as: UTF8.self), "\u{1b}[S")
+        XCTAssertEqual(String(decoding: enc.encode(.f3, modifiers: .shift, modes: m), as: UTF8.self), "\u{1b}[13;2~")
+        // Kitty off: unchanged SS3 forms (guarded fully by InputEncoderTests).
+        XCTAssertEqual(String(decoding: enc.encode(.f3, modes: TerminalModes()), as: UTF8.self), "\u{1b}OR")
+    }
+
     // MARK: Event types (flag 0b10)
 
     private func str(_ bytes: [UInt8]) -> String { String(decoding: bytes, as: UTF8.self) }
