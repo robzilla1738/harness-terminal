@@ -202,6 +202,36 @@ final class FrameBuilderTests: XCTestCase {
         XCTAssertEqual(f.cell(row: 0, column: 0)!.background, RenderColor(theme.background))
     }
 
+    func testSelectionForegroundFallbackReContrastsAgainstSelectionBackground() {
+        // Dim grey text on a near-black bg with minimum contrast on: the resolver lifts the
+        // fg against the CELL background (dark -> lifts toward white). The selection draws a
+        // LIGHT background, so forwarding that lifted fg verbatim would be unreadable — the
+        // builder must re-ensure the ratio against the background it actually draws.
+        let dark = RGBColor(red: 10, green: 10, blue: 12)
+        let dim = RGBColor(red: 70, green: 70, blue: 74)
+        let selBg = RGBColor(red: 200, green: 205, blue: 215)
+        let resolver = CellColorResolver(
+            palette: ANSIPalette(base16: theme.palette),
+            defaultForeground: dim,
+            defaultBackground: dark,
+            minimumContrast: 4.5
+        )
+        let b = FrameBuilder(resolver: resolver, cursorColor: dim, selectionBackground: selBg)
+        let term = HarnessGridTerminal(cols: 6, rows: 1)!
+        term.feed("ABC")
+        let f = b.build(term.readGrid()!, selection: TerminalSelection((0, 0), (0, 2)))
+        let fg = f.cell(row: 0, column: 0)!.foreground
+        let fgRGB = RGBColor(
+            red: UInt8(min(255, max(0, (fg.red * 255).rounded()))),
+            green: UInt8(min(255, max(0, (fg.green * 255).rounded()))),
+            blue: UInt8(min(255, max(0, (fg.blue * 255).rounded())))
+        )
+        XCTAssertGreaterThanOrEqual(
+            CellColorResolver.contrastRatio(fgRGB, selBg), 4.4,
+            "selected-cell fg must meet the contrast floor against the selection background"
+        )
+    }
+
     // MARK: - Incremental rebuild (dirty-row reuse)
 
     func testIncrementalRebuildMatchesFullRebuild() {

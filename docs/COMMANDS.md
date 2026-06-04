@@ -66,6 +66,9 @@ form; `select-window -t session:N` is supported.
 | `select-workspace <0..N>` | Focus workspace by index. |
 | `next-workspace` / `previous-workspace` | Cycle workspaces. |
 | `next-pane` / `previous-pane` / `last-pane` | Cycle the active pane (sugar for `select-pane -t :.+/:.-/-l`); bindable. |
+| `choose-tree` | Open an interactive session/tab/pane picker showing the full tree. |
+| `choose-session` | Open an interactive session picker. |
+| `choose-window` | Open an interactive tab picker for the active session. |
 
 ### Inspection (CLI / control mode)
 
@@ -78,6 +81,7 @@ These query the current Harness state and do not change your layout.
 | `list-panes [--tab <uuid>]` | Panes of the targeted (or active) tab, index-prefixed, active flagged. |
 | `has-session --session <name\|uuid>` | Scripting verb: exit `0` if it exists, `1` if not; prints nothing. |
 | `list-commands` | Print the bindable command vocabulary. |
+| `list-agents [--waiting]` | List all running agents with state, age, and surface ID. `--waiting` filters to agents that need a response. |
 
 ### Local diagnostics
 
@@ -92,6 +96,8 @@ These CLI commands are pure local output and do not require the daemon.
 
 | Command | Effect |
 |---|---|
+| `jump-previous-prompt` | Scroll the active pane up to the previous OSC 133 shell prompt mark. Requires shell integration. |
+| `jump-next-prompt` | Scroll the active pane down to the next OSC 133 shell prompt mark. Requires shell integration. |
 | `copy-mode` | Open the vim-style copy-mode viewer for the active pane. |
 | `copy-mode -X <action> [arg]` | Run an in-mode copy command: `cursor-left/right/up/down`, `next-word`/`previous-word`, `start-of-line`/`end-of-line`, `history-top`/`history-bottom`, `page-up`/`page-down`/`halfpage-up`/`halfpage-down`, `begin-selection`/`select-line`/`rectangle-toggle`/`clear-selection`, `search-forward`/`search-backward`/`search-again`/`search-reverse`, `copy-selection`/`copy-selection-and-cancel`/`copy-pipe "<cmd>"`, `paste`, `cancel`. Also `send-keys -X <action>`. Rebind with `bind-key -T copy-mode <key> <command>`. |
 | `detach-client` | Detach the calling client (CLI attach) or fire SIGTERM-like handling. |
@@ -178,6 +184,10 @@ Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pan
 |---|---|
 | `send-keys <tokens…>` | Inject keystrokes (`C-c`, `Up`, `Enter`, etc.) into the active pane. |
 | `display-message <format>` | Render a `FormatString` and surface as a non-blocking status toast. |
+| `command-prompt [-p <prompt1,prompt2,…>] "<template>"` | Open the command prompt pre-filled with a template; `%%` / `%1` are replaced by user-typed values. Multiple `-p` prompts are asked in sequence. |
+| `display-popup [-E <command>]` | Open a floating terminal pane. With `-E <command>`, run `<command>` in the popup and close it on exit. |
+| `display-menu [-T <title>] <name> <key> <command> …` | Show a native popup menu built from `name`/`key`/`command` triples. Key may be empty (`""`). |
+| `wait-for [-S \| -L \| -U] <channel>` | Named-channel synchronisation. No flag: block until the channel is signalled. `-S`: signal the channel (unblocking any waiters). `-L`: lock (exclusive, blocks if held). `-U`: unlock. Alias `wait`. |
 | `run-shell [-b] <command>` | Spawn a subprocess. `-b` captures stdout into a paste buffer. |
 | `if-shell <condition> <then> [<else>]` | Run `<condition>` in the shell; on exit 0 run `<then>`, else `<else>`. |
 | `source-config` (alias `source`, `reload-config`) | Re-import the imported terminal config and refresh chrome. |

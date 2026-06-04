@@ -49,6 +49,7 @@ Copy mode is fully rebindable via `bind-key -T copy-mode <spec> <command>`. Defa
 | `j` / `k` | Cursor down / up |
 | `0` / `$` | Line start / end |
 | `g` / `G` | Top / bottom |
+| `[` / `]` | Jump to previous / next OSC 133 prompt mark (requires shell integration) |
 | `w` / `b` | Next / previous word |
 | `PageUp` / `PageDown` | Page up / down |
 | `C-u` / `C-d` | Half page up / down |
@@ -60,6 +61,23 @@ Copy mode is fully rebindable via `bind-key -T copy-mode <spec> <command>`. Defa
 | `q` / `Escape` | Exit copy mode |
 
 Copy-mode is rebindable: `bind-key -T copy-mode <key> <command>` where `<command>` is `copy-mode -X <action>` (e.g. `copy-pipe "pbcopy"`).
+
+## Global menu shortcuts
+
+These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefix-table entries and not rebindable via `keybindings.json`.
+
+| Action | Shortcut |
+|--------|----------|
+| New tab | `⌘T` |
+| Close tab | `⌘W` |
+| Split horizontal / vertical | `⌘D` / `⌘⇧D` |
+| Command palette | `⌘K` |
+| Command prompt | `⌘;` |
+| Toggle sidebar | `⌘\` |
+| Jump to notification | `⌘⇧U` |
+| Settings | `⌘,` |
+| Enter Full Screen (native, macOS Space transition) | `⌃⌘F` |
+| Toggle Fast Full Screen (non-native, instant fill, no Space animation) | `⌃⌘⇧F` |
 
 ## Command prompt
 

@@ -217,6 +217,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// `commandFinishedThresholdSeconds` finishes in an unfocused pane (uses OSC 133 timing).
     public var commandFinishedNotifications: Bool
     public var commandFinishedThresholdSeconds: Int
+    /// Map bold + palette colors 0–7 to their bright variants 8–15 (classic terminal
+    /// behavior, Ghostty `bold-is-bright`). Off keeps the theme's exact colors for bold text.
+    public var boldIsBright: Bool
 
     /// Whether Harness controls (prefix-key handling, prefix indicator, and status line)
     /// should be active. The explicit override wins; otherwise the mode decides. The single
@@ -297,7 +300,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         darkThemeName: String? = nil,
         pasteProtection: Bool = true,
         commandFinishedNotifications: Bool = false,
-        commandFinishedThresholdSeconds: Int = 10
+        commandFinishedThresholdSeconds: Int = 10,
+        boldIsBright: Bool = true
     ) {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
@@ -356,6 +360,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.pasteProtection = pasteProtection
         self.commandFinishedNotifications = commandFinishedNotifications
         self.commandFinishedThresholdSeconds = max(0, commandFinishedThresholdSeconds)
+        self.boldIsBright = boldIsBright
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -503,6 +508,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             try container.decodeIfPresent(Bool.self, forKey: .commandFinishedNotifications) ?? fallback.commandFinishedNotifications
         commandFinishedThresholdSeconds =
             try container.decodeIfPresent(Int.self, forKey: .commandFinishedThresholdSeconds) ?? fallback.commandFinishedThresholdSeconds
+        boldIsBright = try container.decodeIfPresent(Bool.self, forKey: .boldIsBright) ?? fallback.boldIsBright
     }
 
     public static func load() -> HarnessSettings {
@@ -633,6 +639,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.cursorBlink { settings.cursorBlink = value }
         if let value = imported.copyOnSelect { settings.copyOnSelect = value }
         if let value = imported.minimumContrast { settings.minimumContrast = HarnessSettings.clampedContrast(value) }
+        if let value = imported.boldIsBright { settings.boldIsBright = value }
+        // Ghostty `theme = light:X,dark:Y` → Harness auto light/dark pair.
+        if let light = imported.lightThemeName, let dark = imported.darkThemeName {
+            settings.lightThemeName = light
+            settings.darkThemeName = dark
+        }
         settings.selectionBackgroundHex = imported.selectionBackgroundHex
         settings.selectionForegroundHex = imported.selectionForegroundHex
         settings.boldColorHex = imported.boldColorHex
@@ -657,6 +669,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.cursorBlink { cursorBlink = value }
         if let value = imported.copyOnSelect { copyOnSelect = value }
         if let value = imported.minimumContrast { minimumContrast = HarnessSettings.clampedContrast(value) }
+        if let value = imported.boldIsBright { boldIsBright = value }
+        if let light = imported.lightThemeName, let dark = imported.darkThemeName {
+            lightThemeName = light
+            darkThemeName = dark
+        }
         selectionBackgroundHex = imported.selectionBackgroundHex
         selectionForegroundHex = imported.selectionForegroundHex
         boldColorHex = imported.boldColorHex

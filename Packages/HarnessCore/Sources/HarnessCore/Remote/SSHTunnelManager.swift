@@ -36,6 +36,8 @@ public final class SSHTunnelManager: @unchecked Sendable {
 
     private let lock = NSLock()
     private var tunnels: [String: Tunnel] = [:]
+    /// Whether the process-exit cleanup hook has been installed (guarded by `lock`).
+    private var exitCleanupRegistered = false
 
     public init() {}
 
@@ -116,7 +118,15 @@ public final class SSHTunnelManager: @unchecked Sendable {
         }
         lock.lock()
         tunnels[host.name] = Tunnel(process: process, localSocket: localSocket)
+        let needsCleanupHook = !exitCleanupRegistered
+        exitCleanupRegistered = true
         lock.unlock()
+        // Reap the ssh child + forwarded socket on normal process exit — without this,
+        // every harness-cli invocation that opened a tunnel leaves an orphaned ssh
+        // process and a stale socket in runtime/tunnels/ behind.
+        if needsCleanupHook {
+            atexit { SSHTunnelManager.shared.stopAll() }
+        }
     }
 
     static func sshArguments(for host: RemoteHost, localSocket: URL) throws -> [String] {

@@ -38,6 +38,25 @@ final class ScrollbackFileTests: XCTestCase {
         XCTAssertEqual(String(decoding: loaded, as: UTF8.self), "hello world")
     }
 
+    func testAppendFallbackPreservesExistingLogWhenOpenForWritingFails() throws {
+        let fileURL = url()
+        let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        file.append(Data("first".utf8))
+        file.flush()
+
+        // Make the file unopenable for writing so appendToDisk takes the atomic-rewrite
+        // fallback. The fallback must rewrite existing+new — not replace the whole log
+        // with just the pending chunk.
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: fileURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path) }
+
+        file.append(Data("second".utf8))
+        file.flush()
+
+        let loaded = try Data(contentsOf: fileURL)
+        XCTAssertEqual(String(decoding: loaded, as: UTF8.self), "firstsecond")
+    }
+
     func testLoadTailReturnsSuffixWhenLargerThanMax() throws {
         let fileURL = url()
         let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)

@@ -746,10 +746,10 @@ final class HarnessSidebarPanelViewController: NSViewController {
         alert.addButton(withTitle: "Close Session")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        if activeSessionID != session.id, let activeWorkspaceID {
-            SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: session.id)
-        }
-        SessionCoordinator.shared.closeActiveSession()
+        // Close by ID — selecting first and then closing "the active session" could
+        // close the wrong session if the selection IPC failed or raced a snapshot change
+        // while the confirmation alert was up.
+        SessionCoordinator.shared.closeSession(session)
     }
 
     private func sessionTitle(for session: SessionGroup) -> String {

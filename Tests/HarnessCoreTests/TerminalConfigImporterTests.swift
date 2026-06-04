@@ -15,6 +15,57 @@ final class TerminalConfigImporterTests: XCTestCase {
         ])
     }
 
+    func testDualAppearanceThemeImportsAsAutoLightDarkPair() {
+        let imported = TerminalConfigImporter.parse("""
+        theme = light:Catppuccin Latte,dark:Catppuccin Mocha
+        """)
+        XCTAssertEqual(imported.lightThemeName, "Catppuccin Latte")
+        XCTAssertEqual(imported.darkThemeName, "Catppuccin Mocha")
+        // The dark variant doubles as the base theme so non-auto consumers stay sane.
+        XCTAssertEqual(imported.themeName, "Catppuccin Mocha")
+
+        let settings = HarnessSettings.makeDefaults(imported: imported)
+        XCTAssertEqual(settings.lightThemeName, "Catppuccin Latte")
+        XCTAssertEqual(settings.darkThemeName, "Catppuccin Mocha")
+    }
+
+    func testDualAppearanceThemeAcceptsReversedOrder() {
+        let imported = TerminalConfigImporter.parse("""
+        theme = dark:One Dark, light:One Light
+        """)
+        XCTAssertEqual(imported.lightThemeName, "One Light")
+        XCTAssertEqual(imported.darkThemeName, "One Dark")
+        XCTAssertEqual(imported.themeName, "One Dark")
+    }
+
+    func testSingleThemeStaysLiteralEvenWithColonInName() {
+        // A lone light:/dark: prefix without its counterpart is not the dual form.
+        let imported = TerminalConfigImporter.parse("""
+        theme = Builtin Solarized Dark
+        """)
+        XCTAssertEqual(imported.themeName, "Builtin Solarized Dark")
+        XCTAssertNil(imported.lightThemeName)
+        XCTAssertNil(imported.darkThemeName)
+    }
+
+    func testLaterSingleThemeOverrideClearsEarlierDualPairOnMerge() throws {
+        // Two config files in merge order: the later single-theme override must clear
+        // the earlier dual pair, not leave a stale auto light/dark pairing behind.
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("harness-importer-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let earlier = dir.appendingPathComponent("config-early")
+        let later = dir.appendingPathComponent("config-late")
+        try "theme = light:A,dark:B".write(to: earlier, atomically: true, encoding: .utf8)
+        try "theme = C".write(to: later, atomically: true, encoding: .utf8)
+
+        let merged = try XCTUnwrap(TerminalConfigImporter.load(from: [earlier.path, later.path]))
+        XCTAssertEqual(merged.themeName, "C")
+        XCTAssertNil(merged.lightThemeName)
+        XCTAssertNil(merged.darkThemeName)
+    }
+
     func testParsesExactVisualDefaults() {
         let imported = TerminalConfigImporter.parse("""
         # comment

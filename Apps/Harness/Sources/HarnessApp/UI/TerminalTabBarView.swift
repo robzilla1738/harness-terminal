@@ -100,6 +100,9 @@ final class TerminalTabBarView: NSView {
     }
 
     func reload(tabs: [Tab], activeTabID: TabID?) {
+        // A metadata-driven reload can land mid-drag (agent status updates fire often);
+        // commit the in-flight reorder first instead of silently discarding the gesture.
+        if let dragging = draggingPill { handleDragEnded(dragging) }
         self.tabs = tabs
         self.activeTabID = activeTabID
         for pill in orderedPills { pill.removeFromSuperview() }
@@ -302,7 +305,11 @@ final class TerminalTabBarView: NSView {
             let item = NSMenuItem(title: tabDisplayTitle(tab), action: #selector(overflowItemSelected(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = tab.id.uuidString
-            item.state = tab.status == .waiting ? .on : .off
+            // A waiting tab gets the bell glyph (same vocabulary as the tab pill) — a
+            // checkmark would read as "this item is selected", not "needs attention".
+            if tab.status == .waiting {
+                item.image = NSImage(systemSymbolName: "bell.fill", accessibilityDescription: "Waiting")
+            }
             menu.addItem(item)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: overflowButton.frame.minX, y: overflowButton.frame.minY), in: self)
@@ -473,6 +480,24 @@ private final class TabPillView: NSView {
         setAgentIcon(for: tab)
         setWorkingDotVisible(Self.isAgentWorking(tab))
         applyChrome(isActive: isActive)
+
+        // Re-evaluate the shuttle animation when the user toggles Reduce Motion mid-session,
+        // matching the StatusDotView pattern so the dot follows the live setting immediately.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(reduceMotionDidChange),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    @objc private func reduceMotionDidChange() {
+        // Re-apply the current dot visibility to pick up the new Reduce Motion setting.
+        setWorkingDotVisible(!workingDot.isHidden)
     }
 
     /// Primary signal: a live OSC 9;4 progress report — terminal-native, exactly what Ghostty
@@ -606,18 +631,25 @@ private final class TabPillView: NSView {
 
     /// Show/hide the working dot and run its shuttle: a gentle glide between two spots —
     /// Ghostty's indeterminate-progress motion (easeInOut, 1.2s, autoreversing forever).
+    /// Honors Reduce Motion: when enabled, the dot is shown statically without animation.
     private func setWorkingDotVisible(_ visible: Bool) {
         workingDot.isHidden = !visible
         if visible {
-            guard workingDot.layer?.animation(forKey: "shuttle") == nil else { return }
-            let anim = CABasicAnimation(keyPath: "transform.translation.x")
-            anim.fromValue = -2.5
-            anim.toValue = 2.5
-            anim.duration = 1.2
-            anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            anim.autoreverses = true
-            anim.repeatCount = .infinity
-            workingDot.layer?.add(anim, forKey: "shuttle")
+            let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            if reduceMotion {
+                // Static dot — remove any shuttle that may already be running.
+                workingDot.layer?.removeAnimation(forKey: "shuttle")
+            } else {
+                guard workingDot.layer?.animation(forKey: "shuttle") == nil else { return }
+                let anim = CABasicAnimation(keyPath: "transform.translation.x")
+                anim.fromValue = -2.5
+                anim.toValue = 2.5
+                anim.duration = 1.2
+                anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                anim.autoreverses = true
+                anim.repeatCount = .infinity
+                workingDot.layer?.add(anim, forKey: "shuttle")
+            }
         } else {
             workingDot.layer?.removeAnimation(forKey: "shuttle")
         }

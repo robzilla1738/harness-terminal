@@ -274,7 +274,7 @@ public final class RealPty: @unchecked Sendable {
     /// start clean depending on intent. Surface subscribers keep their
     /// subscription (it's keyed by surface ID, not shell PID), so the GUI and
     /// any `harness-cli attach` simply see fresh output begin.
-    public func respawn(clearHistory: Bool) {
+    public func respawn(clearHistory: Bool, fallbackCwd: String? = nil) {
         lifecycleLock.lock()
         let oldPID = childPID
         let oldFD = master
@@ -300,6 +300,9 @@ public final class RealPty: @unchecked Sendable {
         isClosed = false
         lifecycleLock.unlock()
 
+        // Probe the old child's cwd while it may still be alive — after SIGTERM the PID
+        // disappears and proc_pidinfo fails, which would lose the directory the user was in.
+        let inheritedCwd = oldPID > 0 ? Self.cwd(for: oldPID) : nil
         if oldPID > 0 { kill(oldPID, SIGTERM) }
         if let oldSource {
             oldSource.cancel()
@@ -317,10 +320,12 @@ public final class RealPty: @unchecked Sendable {
             // user just cleared.
             scrollbackFile?.reset()
         }
-        // Spawn a new shell, reusing the cwd of the previous process if we can
-        // still read it from the dead PID's last-known location, otherwise the
-        // home directory. The shell is the one this surface was created with.
-        let cwd = Self.cwd(for: oldPID) ?? FileManager.default.homeDirectoryForCurrentUser.path
+        // Spawn a new shell, reusing the cwd of the previous process when it was still
+        // alive to probe, else the caller-supplied last-known tab cwd (a shell that
+        // exited naturally has no PID to probe), else the home directory. The shell is
+        // the one this surface was created with.
+        let rememberedCwd = (fallbackCwd?.isEmpty == false) ? fallbackCwd : nil
+        let cwd = inheritedCwd ?? rememberedCwd ?? FileManager.default.homeDirectoryForCurrentUser.path
         do {
             try restartChild(cwd: cwd, shell: shell, rows: oldRows, cols: oldCols)
         } catch {

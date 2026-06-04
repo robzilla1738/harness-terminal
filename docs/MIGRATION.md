@@ -43,7 +43,7 @@ memory works immediately:
 
 - **Prefix key** `Ctrl-A` (change in Settings → Keys, or blank it to disable).
 - **Splits / panes** — `prefix %` / `prefix "`, `prefix z` zoom, `prefix x` kill,
-  `prefix hjkl`/arrows to move, `prefix o`/`;` cycle, `prefix Space` cycle layouts.
+  `prefix` arrows to move (GUI; hjkl navigate panes in `attach-window` compositor only), `prefix o`/`;` cycle, `prefix Space` cycle layouts.
 - **Copy mode**, **paste buffers**, **`-t session:window.pane` targets**, **`base-index` /
   `pane-base-index`**, **command prompt** (`prefix :`), **attach/detach**.
 - **Detach / reattach** — `harness-cli attach` (one pane) or `harness-cli attach-window` (the

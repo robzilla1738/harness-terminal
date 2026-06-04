@@ -507,6 +507,14 @@ final class TerminalScreen {
     /// blank NOT followed by a wide head is real content (e.g. an ECH/EL erasure, which leaves the
     /// row soft-wrapped) and MUST be preserved, or reflow/capture would shift content left. `next`
     /// is the following physical row (nil if this is the last row).
+    ///
+    /// KNOWN RESIDUAL CORNER: a default-pen ECH/EL that erases exactly the last column of a
+    /// soft-wrapped row whose continuation happens to start with a wide glyph is
+    /// indistinguishable from a genuine deferral gap at the cell level, and that erased blank
+    /// is dropped on reflow. Distinguishing them requires a per-row "deferral" flag set only
+    /// by the wide-wrap path in `print()` and carried through every row-mutation site —
+    /// deferred (tracked in the release-audit backlog) because the plumbing risk outweighs
+    /// this corner's likelihood.
     private func wideDeferralGap(row: [TerminalGridCell], next: [TerminalGridCell]?) -> Int {
         guard let next, let last = row.last, isBlank(last) else { return 0 }
         for cell in next where cell.width != .spacerTail { return cell.width == .wide ? 1 : 0 }
@@ -770,7 +778,10 @@ final class TerminalScreen {
         // solely by complete logical lines inside the suffix, the last `nr` rows — and the viewport-
         // relative cursor — match the full reflow exactly. Bounded by visible content.
         var start = totalSrc
-        var chunk = max(nr, 8)
+        // The first suffix must already contain the cursor row: rewrapRows receives
+        // `cursorAbsFull - start`, and a negative index would never match its row scan,
+        // silently mapping the preview cursor to (0,0).
+        var chunk = max(nr, 8, totalSrc - cursorAbsFull)
         while true {
             start = max(0, start - chunk)
             while start > 0, sourceRow(start - 1).wrapped { start -= 1 } // back up to a hard boundary

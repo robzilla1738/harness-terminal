@@ -104,7 +104,6 @@ final class SessionCoordinator: NSObject {
     @objc private func notificationPosted(_ note: Notification) {
         guard let notification = note.userInfo?["notification"] as? AgentNotification else { return }
         if let surfaceID = notification.surfaceID {
-            terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
         }
         NotificationCenter.default.post(name: NotificationBus.shared.tabStatusChanged, object: nil)
     }
@@ -260,7 +259,6 @@ final class SessionCoordinator: NSObject {
             if let match = snapshot.workspaces.flatMap({ workspace in workspace.sessions.flatMap { $0.tabs } }).first(where: { tab in
                 tab.rootPane.allSurfaceIDs().contains(host.surfaceID)
             }) {
-                host.showsWaitingRing = match.status == .waiting
             }
         }
     }
@@ -277,7 +275,6 @@ final class SessionCoordinator: NSObject {
                     // Always surface the waiting ring; but don't fire a banner for the pane you're
                     // actively watching — its output + the ring already show it. Defer (don't mark
                     // pushed) so it still fires once you look away, matching the activity path.
-                    terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
                     if NSApp.isActive, surfaceID == activeSurfaceID { continue }
                     pushedNotificationKeys.insert(key)
                     let agentLabel = effectiveAgentKind(for: tab)?.displayName ?? "Harness"
@@ -725,13 +722,19 @@ final class SessionCoordinator: NSObject {
 
     func closeActiveSession() {
         guard let session = snapshot.activeWorkspace?.activeSession else { return }
+        closeSession(session)
+    }
+
+    /// Close a specific session by ID. The daemon resolves the ID directly — no
+    /// select-first dance, so a failed/raced selection can never close a different
+    /// session than the one the user confirmed.
+    func closeSession(_ session: SessionGroup) {
         if let tab = session.activeTab { rememberTabForReopen(tab) }
-        let sessionID = session.id
         let surfaces = session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
-        requestDaemon(.closeSession(sessionID: sessionID))
+        requestDaemon(.closeSession(sessionID: session.id))
         syncFromDaemon()
     }
 
@@ -1180,6 +1183,9 @@ final class SessionCoordinator: NSObject {
             } else {
                 setTheme(ThemeManager.defaultDisplayName, seedColors: false)
             }
+            // A dual `theme = light:X,dark:Y` import seeds the auto light/dark pair;
+            // immediately resolve it for the current system appearance (no-op otherwise).
+            applyAutoThemeForCurrentAppearance()
             applySettingsToHosts()
         }
     }
@@ -1338,7 +1344,6 @@ final class SessionCoordinator: NSObject {
         // The key is cleared once the tab stops being `.waiting` (see `pushNewRemoteNotifications`),
         // so a genuinely new alert after dismissal still fires.
         guard !pushedNotificationKeys.contains(key) else {
-            terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
             return
         }
         requestDaemon(.notify(
@@ -1347,7 +1352,6 @@ final class SessionCoordinator: NSObject {
             body: body
         ))
         pushedNotificationKeys.insert(key)
-        terminalHosts.host(for: surfaceID)?.showsWaitingRing = true
         if NSApp.isActive == false {
             deliverAgentAlert(title: title, body: body)
         }
@@ -1356,7 +1360,6 @@ final class SessionCoordinator: NSObject {
 
     func clearNotification(for surfaceID: SurfaceID) {
         requestDaemon(.clearNotification(surfaceID: surfaceID.uuidString))
-        terminalHosts.host(for: surfaceID)?.showsWaitingRing = false
         syncFromDaemon()
     }
 

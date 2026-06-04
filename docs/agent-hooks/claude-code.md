@@ -1,7 +1,7 @@
 # Claude Code → Harness
 
 Make Claude Code surface its `Notification` and `Stop` events as Harness pane
-notifications (yellow ring, sidebar dot, and macOS notification banner), so you
+notifications (tab-pill working dot, sidebar bell, and macOS notification banner), so you
 can leave a long edit running and pop back when it's actually waiting on you.
 
 ## One-line install
@@ -56,7 +56,7 @@ its `message` field for the notification body.
    (Harness detected `claude` in the process tree).
 3. When Claude Code emits a permission request or finishes, you see:
    - macOS notification banner.
-   - Harness pane's amber ring.
+   - The tab pill's working dot lights up (waiting state).
    - "Claude Code: <message>" in the sidebar card meta line.
 4. Press `Cmd+Shift+U` to jump back to the pane.
 

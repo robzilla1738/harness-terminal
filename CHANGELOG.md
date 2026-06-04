@@ -6,11 +6,38 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
-## [Unreleased]
+## [1.2.0] - 2026-06-03
 
-A quality-of-life pass aimed at 1:1 parity with the polish of a mainstream GPU terminal.
+A quality-of-life release aimed at 1:1 parity with the polish of a mainstream GPU terminal:
+resize that feels instant, Ghostty-minimal chrome, protocol fills (focus reporting, alternate
+scroll, OSC 9;4 progress), and a pre-release audit's worth of bug fixes.
 
 ### Added
+- **Live re-wrap while resizing.** Dragging the window edge now re-wraps the visible viewport
+  every frame (at viewport cost, not history cost) and the full reflow commits when the drag
+  settles — with a byte-identical wide-character (CJK/emoji) reflow fix and a height-only
+  resize fast path that skips re-wrapping entirely when the width didn't change.
+- **Agent working dot (OSC 9;4).** Agents that emit ConEmu progress reports (Claude Code, …)
+  drive a working indicator on the tab pill directly from the protocol — same handling as
+  Ghostty, including consuming `OSC 9;4` so it never fires as a desktop notification. Agents
+  that don't emit it fall back to output-recency detection.
+- **Transient scrollbar.** A thumb-only overlay scrollbar appears on the right edge while
+  scrolling and fades out once the viewport settles.
+- **Draggable title strip.** A slim strip above the tab bar shows the active tab's folder
+  icon + basename and gives the window a generous drag target (hidden while an agent owns
+  the pane).
+- **Window edge hairline.** A faint perimeter line around the window (Ghostty-style), themed
+  and configurable (`windowBorderHex` / `windowBorderOpacity` in Settings ▸ Colors).
+- **Alternate-screen wheel scrolling (DECSET 1007).** The scroll wheel/trackpad now scrolls
+  `less`, `man`, and other full-screen TUIs by synthesizing arrow keys when the program didn't
+  enable mouse reporting — on by default, programs can opt out with `CSI ? 1007 l`.
+- **Middle-click paste.** Middle click pastes the current selection (the X11/Ghostty primary-
+  paste convention), falling back to the clipboard — with bracketed paste and paste protection
+  applied exactly like ⌘V.
+- **Bold is bright toggle.** Settings ▸ Colors can now disable the classic bold→bright-palette
+  mapping (`bold-is-bright` in an imported Ghostty config is honored too).
+- **Command-finished threshold control.** The long-running-command notification threshold is
+  now editable in Settings ▸ Agents (previously JSON-only).
 - **Live resize overlay.** Resizing the window shows the live grid size (e.g. `120 × 32`) and fades
   out once it settles. Configurable in Settings ▸ Appearance (`after-first` / `always` / `never`).
 - **Balanced window padding.** The grid is now centered — the leftover sub-cell space is split
@@ -42,11 +69,72 @@ A quality-of-life pass aimed at 1:1 parity with the polish of a mainstream GPU t
 - **Paste a screenshot.** ⌘V with an image on the clipboard now writes it to a temp PNG and pastes
   the file path (bracketed-paste-wrapped), so agents that accept image-file paths — Claude Code, etc.
   — attach it. Pasting a file copied in Finder works the same way.
-- **Agent activity indicators.** Tab pills, sidebar session rows, and the notch HUD now show a gentle
-  breathing dot while an agent is working, a brief green check when it finishes, and an amber dot when
-  it's waiting on you — alongside the existing red waiting count. Honors Reduce Motion.
+- **Agent activity indicators.** Tab pills and the notch HUD show a working dot while an agent
+  is busy (driven by OSC 9;4 when the agent emits it, output recency otherwise) — alongside the
+  existing red waiting count and sidebar bell. Honors Reduce Motion.
+
+### Changed
+- **Ghostty-minimal pane chrome.** Pane borders, waiting rings, and corner badges are removed
+  by design — the tab dot (plus the sidebar bell and desktop notifications) is the working /
+  attention indicator. Unfocused panes still dim. If you relied on the blue waiting ring,
+  watch the tab pill instead.
+- **Typing latency.** A measurement pass confirmed keystroke→photon latency is at the local
+  floor; input handling gained no extra cost from this release's features.
 
 ### Fixed
+- **Resize-drag preview cursor.** With the cursor parked well above the bottom of a filled
+  viewport, the live re-wrap preview mapped the cursor to the top-left corner for the duration
+  of the drag (it snapped back on release). The preview also no longer flashes a cursor that
+  the program explicitly hid (DECTCEM).
+- **Selected text honors minimum contrast.** With a contrast floor set, selected cells lifted
+  their text color against the cell's own background, not the selection highlight actually
+  drawn behind them — dim text could turn unreadable while selected.
+- **Cursor-text color is honored.** The theme/imported `cursor-text` color (the glyph under a
+  block cursor) was accepted by Settings but never reached the renderer, silently drawing the
+  canvas background color instead.
+- **Working state agrees everywhere.** The notch HUD now consumes the same OSC 9;4 progress
+  signal as the tab-pill dot, so the two can't disagree about whether an agent is busy; the
+  tab dot's animation now honors Reduce Motion.
+- **Settings: toggling auto light/dark no longer drops in-flight edits.** The toggle bypassed
+  the normal flush path, losing e.g. a color-well change made just before it.
+- **`ESC c` (RIS) abandons command timing.** A full reset no longer lets a later OSC 133;D
+  report a spurious "command finished" measured from before the reset. (Plus: XTVERSION replies
+  no longer carry a trailing space when no version is set.)
+- **Copy-mode scroll state stays in sync.** Entering/leaving copy mode resets the scrollbar
+  and the sub-line wheel remainder, so the first wheel tick afterwards isn't swallowed.
+- **Focus reporting (DECSET 1004) now actually reports.** The mode was tracked but `CSI I`/
+  `CSI O` were never sent on focus changes — vim/tmux autocommands now fire, including when
+  the whole window activates or deactivates (which also fixes the hollow-cursor state for
+  window-level focus changes).
+- **Ghostty `theme = light:Name,dark:Name` imports correctly.** The dual-appearance form was
+  stored verbatim, failed the catalog lookup, and silently fell back to the default theme; it
+  now maps onto the auto light/dark theme pair.
+- **Unterminated escape strings can no longer eat your output.** CAN/SUB now abort an
+  in-progress OSC/DCS/APC sequence (VT500 "anywhere" rule); previously an unterminated string
+  left the parser consuming everything until the next ESC.
+- **Scrollback persistence can no longer truncate itself.** If the scrollback log couldn't be
+  opened for append, the fallback rewrote the whole file with just the newest chunk —
+  discarding all prior history. The fallback now rewrites existing + new content, and drops
+  the write rather than the history when the file can't be read.
+- **`respawn-pane` keeps your working directory.** The cwd is probed before the old shell is
+  signalled (not after, when the PID is already gone), and a shell that exited on its own
+  respawns into the tab's last-known cwd instead of `$HOME`.
+- **Command palette covers every tab.** The Tabs section listed only the active session's
+  tabs; tabs in other sessions were unreachable. It now lists all sessions' tabs (labelled by
+  session) and removes a duplicate "New Session" entry that corrupted the recents list.
+- **Command prompt history navigation.** Down from a blank prompt no longer recalls history,
+  and Down past the newest entry returns to your in-progress draft (readline behavior).
+- **Tab drag survives background reloads.** A metadata refresh landing mid-drag (e.g. an
+  agent status update) silently cancelled the reorder; the drag now commits first.
+- **Waiting tabs in the overflow menu show a bell, not a checkmark.**
+- **Security: OSC 8 hyperlinks no longer open `file://` URLs.** Terminal output (including
+  from remote hosts) could plant a ⌘-clickable link to an arbitrary local path —
+  NSWorkspace executes `.app`/`.command` targets on open. `http(s)`, `mailto`, `ftp(s)`
+  remain allowed.
+- **Daemon shutdown no longer truncates in-flight replies.** Pending client responses (e.g. a
+  large `capture-pane`) get a bounded drain before the sockets close.
+- **`harness-cli` reaps its SSH tunnels.** Tunnel `ssh` processes and forwarded sockets in
+  `runtime/tunnels/` are cleaned up on process exit instead of lingering.
 - **Shift+Enter inserts a newline in Claude Code (#39).** Claude Code only enables native Shift+Enter
   once it recognizes the terminal; Harness previously advertised no identity, so the Kitty keyboard
   protocol stayed off and Shift+Enter submitted. Harness now reports a compatible identity by default
@@ -114,7 +202,7 @@ A quality-of-life pass aimed at 1:1 parity with the polish of a mainstream GPU t
   addition to the macOS app.
 - **Persistent scrollback.** A pane's scrollback is persisted to disk per surface and
   restored when the daemon restarts, so history survives a daemon restart or crash.
-  `respawn-pane --clear-history` drops the persisted history.
+  `respawn-pane -k` drops the persisted history.
 
 ### Changed
 - **Settings overhaul.** A native, themed Settings window with grouped sections
@@ -160,6 +248,9 @@ and a signed/notarized DMG with Sparkle auto-update. See the
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases) for the
 per-patch detail.
 
+[1.2.0]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.2.0
+[1.1.2]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.1.2
+[1.1.1]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.1.1
 [1.1.0]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.1.0
 [1.0.6]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.0.6
 [1.0.5]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.0.5

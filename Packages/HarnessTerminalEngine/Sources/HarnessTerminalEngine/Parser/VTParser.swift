@@ -328,6 +328,19 @@ final class VTParser {
     }
 
     private func feed(_ byte: UInt8) {
+        // VT500 "anywhere" rule (Williams state machine, events 18/1A): CAN and SUB
+        // abort any in-progress sequence and return to ground. Without this, an
+        // unterminated OSC/DCS/APC string state would keep consuming output until
+        // the next ESC or BEL arrives.
+        if byte == 0x18 || byte == 0x1A, state != .ground {
+            oscBuffer.removeAll(keepingCapacity: true)
+            stringBuffer.removeAll(keepingCapacity: true)
+            sawESCInString = false
+            clearCSI()
+            state = .ground
+            handler.parserExecute(byte)
+            return
+        }
         switch state {
         case .ground: ground(byte)
         case .escape: escape(byte)

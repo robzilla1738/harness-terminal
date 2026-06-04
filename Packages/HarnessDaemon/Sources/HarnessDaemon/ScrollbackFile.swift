@@ -132,9 +132,15 @@ final class ScrollbackFile: @unchecked Sendable {
             return HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon scrollback")
         }
         guard let handle = try? FileHandle(forWritingTo: url) else {
-            // Fall back to a full rewrite if we somehow can't open for append; better a slow
-            // write than silently losing scrollback.
-            return HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon scrollback")
+            // Fall back to a full rewrite if we somehow can't open for append. The rewrite
+            // must include the existing log — writing just `data` would atomically replace
+            // the entire history with the latest chunk. If the existing bytes can't be read
+            // either, drop this flush (the chunk stays lost, but the on-disk log survives).
+            guard let existing = try? Data(contentsOf: url) else {
+                fputs("HarnessDaemon scrollback: append-open and read both failed for \(url.lastPathComponent); dropping flush\n", harnessStderr)
+                return false
+            }
+            return HarnessPaths.atomicWrite(existing + data, to: url, label: "HarnessDaemon scrollback")
         }
         defer { try? handle.close() }
         do {

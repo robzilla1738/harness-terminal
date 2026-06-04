@@ -25,6 +25,59 @@ final class TerminalProtocolCompatibilityTests: XCTestCase {
         XCTAssertEqual(got?.1, "succeeded")
     }
 
+    // MARK: DECSET 1007 alternate scroll
+
+    func testAlternateScrollModeDefaultsOnAndToggles() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var replies: [String] = []
+        term.onResponse = { replies.append(String(decoding: $0, as: UTF8.self)) }
+        XCTAssertTrue(term.modes.alternateScroll, "1007 defaults on (iTerm2/Ghostty convention)")
+        term.feed("\u{1b}[?1007$p") // DECRQM
+        XCTAssertEqual(replies.last, "\u{1b}[?1007;1$y")
+        term.feed("\u{1b}[?1007l")
+        XCTAssertFalse(term.modes.alternateScroll)
+        term.feed("\u{1b}[?1007$p")
+        XCTAssertEqual(replies.last, "\u{1b}[?1007;2$y")
+        term.feed("\u{1b}[?1007h")
+        XCTAssertTrue(term.modes.alternateScroll)
+    }
+
+    func testAlternateScreenActiveFlagTracksSwitches() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        XCTAssertFalse(term.isAlternateScreenActive)
+        term.feed("\u{1b}[?1049h")
+        XCTAssertTrue(term.isAlternateScreenActive)
+        term.feed("\u{1b}[?1049l")
+        XCTAssertFalse(term.isAlternateScreenActive)
+    }
+
+    // MARK: DECSET 1004 focus reporting mode (the kit layer emits CSI I/O on focus changes)
+
+    func testFocusReportingModeTogglesAndReports() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var replies: [String] = []
+        term.onResponse = { replies.append(String(decoding: $0, as: UTF8.self)) }
+        XCTAssertFalse(term.modes.focusReporting)
+        term.feed("\u{1b}[?1004h")
+        XCTAssertTrue(term.modes.focusReporting)
+        term.feed("\u{1b}[?1004$p")
+        XCTAssertEqual(replies.last, "\u{1b}[?1004;1$y")
+        term.feed("\u{1b}[?1004l")
+        XCTAssertFalse(term.modes.focusReporting)
+    }
+
+    // MARK: XTVERSION formatting
+
+    func testXTVERSIONReplyOmitsTrailingSpaceWhenVersionEmpty() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var replies: [String] = []
+        term.onResponse = { replies.append(String(decoding: $0, as: UTF8.self)) }
+        term.feed("\u{1b}[>q") // XTVERSION with the default (empty) version string
+        let last = replies.last ?? ""
+        XCTAssertTrue(last.hasPrefix("\u{1b}P>|"), "XTVERSION reply shape: \(last.debugDescription)")
+        XCTAssertFalse(last.contains(" \u{1b}\\"), "no trailing space before ST: \(last.debugDescription)")
+    }
+
     // MARK: OSC 9;4 progress reports (ConEmu)
 
     func testOSC94IndeterminateProgress() {
@@ -40,6 +93,17 @@ final class TerminalProtocolCompatibilityTests: XCTestCase {
             TerminalProgressReport(state: .indeterminate, value: nil),
         ])
         XCTAssertFalse(notified, "9;4 must never surface as a notification (Ghostty parity)")
+    }
+
+    func testOSC94BareFourIsConsumedSilently() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var reports: [TerminalProgressReport] = []
+        var notified = false
+        term.onProgress = { reports.append($0) }
+        term.onNotification = { _, _ in notified = true }
+        term.feed("\u{1b}]9;4\u{07}") // progress-shaped but stateless: dropped entirely
+        XCTAssertTrue(reports.isEmpty)
+        XCTAssertFalse(notified, "bare 9;4 must not surface as a notification either")
     }
 
     func testOSC94SetRemoveAndClamp() {

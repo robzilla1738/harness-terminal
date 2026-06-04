@@ -119,18 +119,6 @@ enum CommandPaletteController {
                 if let id = coordinator.snapshot.activeWorkspaceID { coordinator.addSession(to: id) }
             },
             PaletteAction(
-                id: "action.newSession",
-                title: "New Session",
-                subtitle: "Add a sidebar session row",
-                symbol: "square.split.bottomrightquarter",
-                shortcut: "",
-                section: .actions
-            ) {
-                if let id = coordinator.snapshot.activeWorkspaceID {
-                    coordinator.addSession(to: id)
-                }
-            },
-            PaletteAction(
                 id: "action.newTab",
                 title: "New Tab",
                 subtitle: "Open a new shell in the active session",
@@ -278,22 +266,33 @@ enum CommandPaletteController {
             },
         ])
 
-        // MARK: - Tabs in active workspace
+        // MARK: - Tabs in active workspace (every session, not just the active one — the
+        // palette is the only flat "jump anywhere" surface, so all tabs must be reachable).
         if let workspace = snapshot.activeWorkspace {
-            for (idx, tab) in workspace.tabs.enumerated() {
-                let folder = HarnessDesign.pathDisplayName(tab.cwd)
-                let title = !folder.isEmpty ? folder : (tab.title.isEmpty ? "Terminal" : tab.title)
-                let subtitle = HarnessDesign.shortenPath(tab.cwd)
-                actions.append(PaletteAction(
-                    id: "tab.\(tab.id.uuidString)",
-                    title: title,
-                    subtitle: subtitle,
-                    symbol: tab.status == .waiting ? "bell.fill" : (tab.agent != nil ? "sparkles" : "terminal"),
-                    shortcut: idx < 9 ? "⌘\(idx + 1)" : "",
-                    section: .tabs
-                ) {
-                    coordinator.selectTab(workspaceID: workspace.id, tabID: tab.id)
-                })
+            let activeSessionID = workspace.activeSessionID
+            let multipleSessions = workspace.sessions.count > 1
+            for session in workspace.sessions {
+                let isActiveSession = session.id == activeSessionID
+                for (idx, tab) in session.tabs.enumerated() {
+                    let folder = HarnessDesign.pathDisplayName(tab.cwd)
+                    let title = !folder.isEmpty ? folder : (tab.title.isEmpty ? "Terminal" : tab.title)
+                    var subtitle = HarnessDesign.shortenPath(tab.cwd)
+                    if multipleSessions, !session.name.isEmpty {
+                        subtitle = subtitle.isEmpty ? session.name : "\(session.name) · \(subtitle)"
+                    }
+                    actions.append(PaletteAction(
+                        id: "tab.\(tab.id.uuidString)",
+                        title: title,
+                        subtitle: subtitle,
+                        symbol: tab.status == .waiting ? "bell.fill" : (tab.agent != nil ? "sparkles" : "terminal"),
+                        // ⌘N only addresses the active session's tabs — don't advertise it
+                        // on tabs the shortcut can't actually reach.
+                        shortcut: isActiveSession && idx < 9 ? "⌘\(idx + 1)" : "",
+                        section: .tabs
+                    ) {
+                        coordinator.selectTab(workspaceID: workspace.id, tabID: tab.id)
+                    })
+                }
             }
         }
 

@@ -700,7 +700,18 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .paneID(newPane)
         case let .respawnPane(surfaceID, keepHistory):
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
-            session.respawn(clearHistory: !keepHistory)
+            // Last-known tab cwd as the fallback: after a natural shell exit there is no
+            // live PID left to probe, and respawning into $HOME instead of where the user
+            // was working would lose their place.
+            var fallbackCwd: String?
+            if let match = editor.tab(forSurfaceKey: surfaceID) {
+                fallbackCwd = editor.snapshot.workspaces
+                    .first(where: { $0.id == match.workspaceID })?
+                    .sessions.flatMap { $0.tabs }
+                    .first(where: { $0.id == match.tabID })?
+                    .cwd
+            }
+            session.respawn(clearHistory: !keepHistory, fallbackCwd: fallbackCwd)
             return .ok
         case let .setOption(scopeRaw, target, key, raw):
             guard let scope = OptionStore.Scope(rawValue: scopeRaw) else {

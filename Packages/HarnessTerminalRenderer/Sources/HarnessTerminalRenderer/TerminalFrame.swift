@@ -349,6 +349,14 @@ public struct FrameBuilder {
         colorConverter.color(color, alpha: alpha)
     }
 
+    /// Re-apply the resolver's minimum-contrast floor against a highlight background
+    /// (selection/search) that replaces the cell's own background at draw time. No-op
+    /// when minimum contrast is off (ratio 1) — byte-identical to the pre-contrast path.
+    private func contrasted(_ fg: RGBColor, against bg: RGBColor) -> RGBColor {
+        guard resolver.minimumContrast > 1 else { return fg }
+        return CellColorResolver.ensureContrast(foreground: fg, background: bg, ratio: resolver.minimumContrast)
+    }
+
     /// Build a frame with an optional linear selection. The original entry point — kept so
     /// existing callers (mouse selection, search-free render) are byte-identical.
     public func build(_ snapshot: TerminalGridSnapshot, selection: TerminalSelection? = nil,
@@ -462,11 +470,16 @@ public struct FrameBuilder {
             let drawBackground: Bool
             if selected, let selBg = selectionBackground {
                 background = renderColor(selBg)
-                foreground = selectionForeground.map { renderColor($0) } ?? renderColor(colors.foreground)
+                // The resolver's minimum-contrast lift was keyed to the CELL's background;
+                // the rendered background here is the selection color, so re-ensure
+                // contrast against what's actually drawn.
+                foreground = selectionForeground.map { renderColor($0) }
+                    ?? renderColor(contrasted(colors.foreground, against: selBg))
                 drawBackground = true
             } else if isSearchHit, let searchBg = searchBackground {
                 background = renderColor(searchBg)
-                foreground = searchForeground.map { renderColor($0) } ?? renderColor(colors.foreground)
+                foreground = searchForeground.map { renderColor($0) }
+                    ?? renderColor(contrasted(colors.foreground, against: searchBg))
                 drawBackground = true
             } else {
                 background = isCanvasBackground

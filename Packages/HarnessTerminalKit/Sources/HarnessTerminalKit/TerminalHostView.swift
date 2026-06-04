@@ -41,7 +41,6 @@ public final class TerminalHostView: NSView {
     private let io: SurfaceIO
     private let inputGate: InputGate
     private var outputSubscription: DaemonSubscription?
-    private var isWaiting = false
     private var isActiveBorder = false
     private var cachedSettings: HarnessSettings?
     private var cachedThemeName: String
@@ -62,14 +61,6 @@ public final class TerminalHostView: NSView {
     public var waitingRingColor: NSColor = .systemBlue
 
     static let terminalOverlayCornerRadius: CGFloat = 10
-
-    public var showsWaitingRing: Bool {
-        get { isWaiting }
-        set {
-            isWaiting = newValue
-            borderOverlayView.needsDisplay = true
-        }
-    }
 
     public var showsActiveBorder: Bool {
         get { isActiveBorder }
@@ -360,6 +351,8 @@ public final class TerminalHostView: NSView {
                 ?? ThemeManager.selectionBackgroundHex(themeName: cachedThemeName),
             selectionForegroundHex: settings.selectionForegroundHex
                 ?? ThemeManager.selectionForegroundHex(themeName: cachedThemeName),
+            cursorTextHex: settings.cursorTextHex
+                ?? ThemeManager.cursorTextHex(themeName: cachedThemeName),
             copyOnSelect: settings.copyOnSelect,
             pasteProtection: settings.pasteProtection,
             scrollbackLines: settings.scrollbackLines,
@@ -367,6 +360,7 @@ public final class TerminalHostView: NSView {
             textRendering: settings.textRendering,
             ligatures: settings.ligatures,
             minimumContrast: HarnessSettings.clampedContrast(settings.minimumContrast),
+            boldIsBright: settings.boldIsBright,
             promptGutter: settings.showPromptGutter,
             offMainParserFramePipeline: settings.offMainParserFramePipeline
         )
@@ -456,11 +450,10 @@ public final class TerminalHostView: NSView {
     }
 
     fileprivate func drawTerminalOverlay(in bounds: NSRect) {
-        // Note: neither `isWaiting` nor `isActiveBorder` draws a pane border anymore — both
-        // read as an unwanted blue edge around the terminal. Waiting/attention surfaces via
-        // the tab activity dot, sidebar dot, bell badge, and notifications instead; the
-        // states are still tracked (`showsWaitingRing`/`showsActiveBorder`) for the
-        // focus-change side effects (pane-style dimming + border-label tint).
+        // Note: no pane border is drawn for focus or waiting state — both read as an
+        // unwanted edge around the terminal. Waiting/attention surfaces via the tab
+        // working dot, bell badge, and notifications; `showsActiveBorder` is kept for
+        // its focus-change side effects only (pane-style dimming + border-label tint).
         // The marked pane (join-pane source) gets a distinct dashed accent on top,
         // so it reads as "marked" independently of focus.
         if isMarked {

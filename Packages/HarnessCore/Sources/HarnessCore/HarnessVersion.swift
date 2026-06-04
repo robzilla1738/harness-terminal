@@ -11,7 +11,7 @@ import Foundation
 /// in the release runbook.
 public enum HarnessVersion {
     /// Marketing version, matches `CFBundleShortVersionString`.
-    public static let short = "1.1.2"
+    public static let short = "1.2.0"
     /// Build number, matches `CFBundleVersion`. Used as the secondary-DA firmware field.
-    public static let build = 110
+    public static let build = 111
 }

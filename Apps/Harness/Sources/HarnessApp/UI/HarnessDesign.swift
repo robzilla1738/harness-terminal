@@ -732,15 +732,10 @@ final class StatusDotView: NSView {
         case agent(hex: String)
         /// Agent actively working — a gently breathing brand-tinted halo.
         case agentWorking(hex: String)
-        /// Agent finished and is waiting on you — amber "needs you".
-        case attention
-        /// Agent just finished cleanly — a brief green check before settling to idle.
-        case done
     }
 
     private let dot = CALayer()
     private let halo = CALayer()
-    private let checkView = NSImageView()
     private let diameter: CGFloat
 
     var style: Style = .idle {
@@ -753,24 +748,12 @@ final class StatusDotView: NSView {
         wantsLayer = true
         layer?.addSublayer(halo)
         layer?.addSublayer(dot)
-        checkView.translatesAutoresizingMaskIntoConstraints = false
-        checkView.imageScaling = .scaleProportionallyUpOrDown
-        checkView.isHidden = true
-        checkView.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Agent finished")
-        checkView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: max(7, diameter * 0.64), weight: .bold)
-        addSubview(checkView)
         translatesAutoresizingMaskIntoConstraints = false
         let width = widthAnchor.constraint(equalToConstant: diameter)
         let height = heightAnchor.constraint(equalToConstant: diameter)
         width.priority = .defaultHigh
         height.priority = .defaultHigh
-        NSLayoutConstraint.activate([
-            width, height,
-            checkView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            checkView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            checkView.topAnchor.constraint(equalTo: topAnchor),
-            checkView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        NSLayoutConstraint.activate([width, height])
         applyStyle()
         // Re-evaluate the breathing pulse when the user toggles Reduce Motion mid-session, so the
         // dot matches the live setting even while an agent keeps working (the style — and thus
@@ -816,16 +799,6 @@ final class StatusDotView: NSView {
 
     func applyStyle() {
         let c = HarnessDesign.chrome
-        // The "done" check is its own affordance — swap the dot/halo out for a green checkmark.
-        if case .done = style {
-            HarnessMotion.stopPulse(halo)
-            dot.isHidden = true
-            halo.isHidden = true
-            checkView.isHidden = false
-            checkView.contentTintColor = c.success
-            return
-        }
-        checkView.isHidden = true
         dot.isHidden = false
 
         let color: NSColor
@@ -837,8 +810,6 @@ final class StatusDotView: NSView {
         case .accent: color = c.accent
         case let .agent(hex): color = NSColor.fromHex(hex) ?? c.accent
         case let .agentWorking(hex): color = NSColor.fromHex(hex) ?? c.accent; working = true
-        case .attention: color = c.attention
-        case .done: color = c.success // unreachable (handled above); keeps the switch exhaustive
         }
         dot.backgroundColor = color.cgColor
         halo.backgroundColor = color.withAlphaComponent(working ? 0.30 : 0.20).cgColor

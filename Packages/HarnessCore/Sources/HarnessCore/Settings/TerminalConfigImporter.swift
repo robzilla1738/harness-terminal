@@ -14,6 +14,10 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     public var windowPaddingX: Float?
     public var windowPaddingY: Float?
     public var themeName: String?
+    /// Ghostty dual-appearance `theme = light:Name,dark:Name` — mapped onto Harness's
+    /// auto light/dark theme pair so the import follows the system appearance.
+    public var lightThemeName: String?
+    public var darkThemeName: String?
     public var backgroundHex: String?
     public var foregroundHex: String?
     public var cursorColorHex: String?
@@ -28,6 +32,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     public var cursorStyle: String?
     public var cursorBlink: Bool?
     public var copyOnSelect: Bool?
+    /// Ghostty `bold-is-bright`: bold + palette 0-7 maps to bright 8-15.
+    public var boldIsBright: Bool?
 
     public var signature: String {
         var parts: [String] = []
@@ -40,6 +46,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         parts.append(windowPaddingX.map { String($0) } ?? "")
         parts.append(windowPaddingY.map { String($0) } ?? "")
         parts.append(themeName ?? "")
+        parts.append(lightThemeName ?? "")
+        parts.append(darkThemeName ?? "")
         parts.append(backgroundHex ?? "")
         parts.append(foregroundHex ?? "")
         parts.append(cursorColorHex ?? "")
@@ -52,6 +60,7 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         parts.append(cursorStyle ?? "")
         parts.append(cursorBlink.map { String($0) } ?? "")
         parts.append(copyOnSelect.map { String($0) } ?? "")
+        parts.append(boldIsBright.map { String($0) } ?? "")
         return parts.joined(separator: "|")
     }
 
@@ -64,6 +73,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         windowPaddingX: Float? = nil,
         windowPaddingY: Float? = nil,
         themeName: String? = nil,
+        lightThemeName: String? = nil,
+        darkThemeName: String? = nil,
         backgroundHex: String? = nil,
         foregroundHex: String? = nil,
         cursorColorHex: String? = nil,
@@ -75,7 +86,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         paletteHex: [String?] = Array(repeating: nil, count: 16),
         cursorStyle: String? = nil,
         cursorBlink: Bool? = nil,
-        copyOnSelect: Bool? = nil
+        copyOnSelect: Bool? = nil,
+        boldIsBright: Bool? = nil
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -85,6 +97,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         self.windowPaddingX = windowPaddingX
         self.windowPaddingY = windowPaddingY
         self.themeName = themeName
+        self.lightThemeName = lightThemeName
+        self.darkThemeName = darkThemeName
         self.backgroundHex = backgroundHex
         self.foregroundHex = foregroundHex
         self.cursorColorHex = cursorColorHex
@@ -97,6 +111,7 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         self.cursorStyle = cursorStyle
         self.cursorBlink = cursorBlink
         self.copyOnSelect = copyOnSelect
+        self.boldIsBright = boldIsBright
     }
 
     public var hasTerminalColorOverrides: Bool {
@@ -217,7 +232,17 @@ public enum TerminalConfigImporter {
             defaults.windowPaddingY = max(0, value)
         }
         if let value = values["theme"], !value.isEmpty {
-            defaults.themeName = value
+            // Ghostty's `theme` accepts a dual-appearance form: `light:Name,dark:Name`.
+            // Storing that string verbatim would miss the theme catalog lookup and
+            // silently fall back to the default theme — split it into the auto
+            // light/dark pair instead (in either order), with dark as the base theme.
+            if let dual = Self.parseDualTheme(value) {
+                defaults.lightThemeName = dual.light
+                defaults.darkThemeName = dual.dark
+                defaults.themeName = dual.dark
+            } else {
+                defaults.themeName = value
+            }
         }
         if let value = values["background"], !value.isEmpty {
             defaults.backgroundHex = normalizeHex(value)
@@ -252,7 +277,28 @@ public enum TerminalConfigImporter {
         if let value = values["copy-on-select"].flatMap(parseBool) {
             defaults.copyOnSelect = value
         }
+        if let value = values["bold-is-bright"].flatMap(parseBool) {
+            defaults.boldIsBright = value
+        }
         return defaults
+    }
+
+    /// Parse Ghostty's dual-appearance theme value `light:Name,dark:Name` (order-independent).
+    /// Returns nil unless BOTH appearances are present — a single `light:`/`dark:` prefix with
+    /// no counterpart is not a valid dual form and falls through to the literal-name path.
+    static func parseDualTheme(_ raw: String) -> (light: String, dark: String)? {
+        var light: String?
+        var dark: String?
+        for part in raw.split(separator: ",") {
+            let entry = part.trimmingCharacters(in: .whitespaces)
+            if entry.lowercased().hasPrefix("light:") {
+                light = String(entry.dropFirst("light:".count)).trimmingCharacters(in: .whitespaces)
+            } else if entry.lowercased().hasPrefix("dark:") {
+                dark = String(entry.dropFirst("dark:".count)).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        guard let light, let dark, !light.isEmpty, !dark.isEmpty else { return nil }
+        return (light, dark)
     }
 
     private static func normalizeHex(_ raw: String) -> String? {
@@ -289,6 +335,11 @@ private extension ImportedTerminalConfig {
             windowPaddingX: newer.windowPaddingX ?? windowPaddingX,
             windowPaddingY: newer.windowPaddingY ?? windowPaddingY,
             themeName: newer.themeName ?? themeName,
+            // The theme trio travels together: when the newer file sets any `theme`, its
+            // light/dark pair wins wholesale (nil clears an older dual pair) so a later
+            // single-theme override doesn't leave a stale auto light/dark pairing behind.
+            lightThemeName: newer.themeName != nil ? newer.lightThemeName : lightThemeName,
+            darkThemeName: newer.themeName != nil ? newer.darkThemeName : darkThemeName,
             backgroundHex: newer.backgroundHex ?? backgroundHex,
             foregroundHex: newer.foregroundHex ?? foregroundHex,
             cursorColorHex: newer.cursorColorHex ?? cursorColorHex,
@@ -300,7 +351,8 @@ private extension ImportedTerminalConfig {
             paletteHex: mergePalette(newer.paletteHex, over: paletteHex),
             cursorStyle: newer.cursorStyle ?? cursorStyle,
             cursorBlink: newer.cursorBlink ?? cursorBlink,
-            copyOnSelect: newer.copyOnSelect ?? copyOnSelect
+            copyOnSelect: newer.copyOnSelect ?? copyOnSelect,
+            boldIsBright: newer.boldIsBright ?? boldIsBright
         )
     }
 

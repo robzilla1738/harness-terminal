@@ -65,6 +65,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let notchModeSegment = HarnessSegmented(frame: .zero)
     private let notchOpenOnHoverToggle = HarnessToggle(title: "Open when I hover near the macOS notch")
     private let commandFinishedToggle = HarnessToggle(title: "Notify when a long command finishes in a background window")
+    private let commandFinishedThresholdField = HarnessTextField()
     private let notchSummaryLabel = NSTextField(wrappingLabelWithString: "")
     // QoL additions: resize overlay (T1), balanced padding (T2), minimum contrast (T5),
     // auto light/dark (T6), paste protection (E).
@@ -76,6 +77,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let minContrastSlider = HarnessSlider(frame: .zero)
     private let minContrastLabel = NSTextField(labelWithString: "")
     private let pasteProtectionToggle = HarnessToggle(title: "Confirm risky pastes (multi-line or control characters)")
+    private let boldIsBrightToggle = HarnessToggle(title: "Bold uses bright colors")
     private let notificationTestButton = NSButton(title: "Send Test Notification", target: nil, action: nil)
     private let notificationPermissionButton = NSButton(title: "Open System Settings…", target: nil, action: nil)
     private let notificationStatusField = NSTextField(labelWithString: "")
@@ -404,10 +406,16 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
         pasteProtectionToggle.target = self
         pasteProtectionToggle.action = #selector(appearanceTextDidCommit)
+        boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
+        boldIsBrightToggle.target = self
+        boldIsBrightToggle.action = #selector(appearanceTextDidCommit)
         // Command-finished notifications (E)
         commandFinishedToggle.state = settings.commandFinishedNotifications ? .on : .off
         commandFinishedToggle.target = self
         commandFinishedToggle.action = #selector(appearanceTextDidCommit)
+        commandFinishedThresholdField.stringValue = String(settings.commandFinishedThresholdSeconds)
+        commandFinishedThresholdField.target = self
+        commandFinishedThresholdField.action = #selector(appearanceTextDidCommit)
         // Auto light/dark (T6): both pickers seed from the current theme when unset; the single
         // theme picker is disabled while auto drives the active theme.
         let autoThemeOn = settings.lightThemeName != nil && settings.darkThemeName != nil
@@ -780,6 +788,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
                         hint: "Glyph weight: Native, Crisp (lighter), or Soft (heavier)."),
             settingsRow("Minimum contrast", minContrastRow,
                         hint: "Lift dim text to a WCAG contrast ratio (1 = off)."),
+            settingsToggleRow("Bold is bright", boldIsBrightToggle,
+                              hint: "Bold text in colors 0–7 uses the bright palette (8–15)."),
             settingsToggleRow("Theme program output", themeTerminalOutputToggle),
             settingsToggleRow("Ligatures", ligaturesToggle),
             settingsToggleRow("Prompt gutter", promptGutterToggle),
@@ -960,9 +970,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         notifStatusBlock.alignment = .leading
         notifStatusBlock.spacing = 10
         refreshNotificationStatus()
+        commandFinishedThresholdField.widthAnchor.constraint(equalToConstant: 60).isActive = true
         let notificationsGroup = settingsGroup("Notifications", [
             settingsToggleRow("Agent notifications", systemNotificationsToggle),
             settingsToggleRow("Command finished", commandFinishedToggle),
+            settingsRow("Threshold (seconds)", commandFinishedThresholdField,
+                        hint: "Only commands that ran at least this long trigger the notification."),
             settingsToggleRow("Sound", notificationSoundToggle),
             notifStatusBlock,
         ])
@@ -1761,7 +1774,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
-    func resizeOverlayValue(_ title: String?) -> ResizeOverlayMode {
+    private func resizeOverlayValue(_ title: String?) -> ResizeOverlayMode {
         switch title {
         case "Always": return .always
         case "Never": return .never
@@ -1782,6 +1795,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// Enable/disable auto light/dark and apply it. Both theme names are set together (seeding from
     /// the current theme when unset); clearing either turns the feature off.
     @objc private func autoThemeChanged() {
+        // Flush any pending control edits (e.g. an unsaved color field) before
+        // mutating theme names, so in-flight changes aren't silently discarded.
+        flushAndApply()
         let coordinator = SessionCoordinator.shared
         let enabled = autoThemeToggle.state == .on
         coordinator.settings.lightThemeName = enabled
@@ -2045,7 +2061,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         minContrastSlider.doubleValue = settings.minimumContrast
         updateMinContrastLabel()
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
+        boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
         commandFinishedToggle.state = settings.commandFinishedNotifications ? .on : .off
+        commandFinishedThresholdField.stringValue = String(settings.commandFinishedThresholdSeconds)
         let autoThemeOn = settings.lightThemeName != nil && settings.darkThemeName != nil
         autoThemeToggle.state = autoThemeOn ? .on : .off
         lightThemePopup.isEnabled = autoThemeOn
@@ -2146,7 +2164,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.windowPaddingBalance = paddingBalanceToggle.state == .on
         coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)
         coordinator.settings.pasteProtection = pasteProtectionToggle.state == .on
+        coordinator.settings.boldIsBright = boldIsBrightToggle.state == .on
         coordinator.settings.commandFinishedNotifications = commandFinishedToggle.state == .on
+        coordinator.settings.commandFinishedThresholdSeconds = max(1, Int(commandFinishedThresholdField.stringValue) ?? 10)
         coordinator.settings.experienceMode = selectedExperienceMode
         coordinator.settings.harnessControlsEnabled = selectedHarnessControls
         try? coordinator.settings.save()

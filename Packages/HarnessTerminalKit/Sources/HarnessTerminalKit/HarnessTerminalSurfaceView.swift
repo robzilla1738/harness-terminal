@@ -14,6 +14,7 @@ private typealias RGBColor = HarnessTheme.RGBColor
 private struct SurfaceFrameBuildConfiguration: Sendable {
     var resolver: CellColorResolver
     var cursorColor: RGBColor
+    var cursorTextColor: RGBColor?
     var canvasOpacity: Float
     var colorRendering: TerminalColorRenderingMode
     var colorGamut: TerminalColorGamut
@@ -26,6 +27,7 @@ private struct SurfaceFrameBuildConfiguration: Sendable {
         FrameBuilder(
             resolver: resolver,
             cursorColor: cursorColor,
+            cursorTextColor: cursorTextColor,
             canvasOpacity: canvasOpacity,
             colorRendering: colorRendering,
             colorGamut: colorGamut,
@@ -286,6 +288,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var blinkTimer: Timer?
     /// First-responder state — the cursor only blinks while focused.
     private var focused = false
+    /// Whether the host window is key. Combined with `focused` for the user-visible focus
+    /// state (hollow cursor, blink) and DECSET 1004 focus reporting — a first responder in a
+    /// deactivated window is not focused.
+    private var windowIsKey = false
+    private var windowKeyObservers: [NSObjectProtocol] = []
+    /// Last focus value reported via DECSET 1004, so window-key and first-responder
+    /// transitions never double-report the same state.
+    private var lastReportedFocus: Bool?
+    private var effectivelyFocused: Bool { focused && windowIsKey }
     /// Mouse selection endpoints (anchor = where the drag started, head = current). A
     /// `SelectionRegion` is derived from these (expanded by granularity) for highlight + extraction.
     private var selectionAnchor: (row: Int, column: Int)?
@@ -418,6 +429,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.frameBuildConfiguration = SurfaceFrameBuildConfiguration(
             resolver: resolver,
             cursorColor: theme.cursor ?? theme.foreground,
+            cursorTextColor: theme.cursorText,
             canvasOpacity: 1,
             colorRendering: resolvedColorRendering,
             colorGamut: resolvedGamut,
@@ -580,6 +592,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         paddingBalance: Bool = true,
         selectionBackgroundHex: String?,
         selectionForegroundHex: String?,
+        cursorTextHex: String? = nil,
         copyOnSelect: Bool,
         pasteProtection: Bool = true,
         scrollbackLines: Int,
@@ -587,6 +600,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         textRendering: TerminalTextRenderingMode? = nil,
         ligatures: Bool,
         minimumContrast: Double = 1,
+        boldIsBright: Bool = true,
         promptGutter: Bool = false,
         offMainParserFramePipeline: Bool = true
     ) {
@@ -615,6 +629,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         let selBg = selectionBackgroundHex.flatMap { RGBColor(hex: $0) }
             ?? RGBColor(red: 68, green: 78, blue: 102)
         let selFg = selectionForegroundHex.flatMap { RGBColor(hex: $0) }
+        // Cursor-text (the glyph under a block cursor); nil falls back to the canvas bg.
+        let cursorText = cursorTextHex.flatMap { RGBColor(hex: $0) }
         // 16 ANSI colors for program output; nil slots fall back to the default palette.
         let palette: [RGBColor] = (0 ..< 16).map { i in
             let hex = (i < outputPaletteHex.count ? outputPaletteHex[i] : nil)
@@ -644,11 +660,13 @@ public final class HarnessTerminalSurfaceView: NSView {
             palette: ANSIPalette(base16: palette),
             defaultForeground: fg,
             defaultBackground: bg,
+            boldBrightens: boldIsBright,
             minimumContrast: minimumContrast
         )
         self.frameBuildConfiguration = SurfaceFrameBuildConfiguration(
             resolver: resolver,
             cursorColor: cursor,
+            cursorTextColor: cursorText,
             canvasOpacity: self.canvasOpacity,
             colorRendering: resolvedColorRendering,
             colorGamut: resolvedGamut,
@@ -888,14 +906,39 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
+        windowKeyObservers.forEach(NotificationCenter.default.removeObserver(_:))
+        windowKeyObservers.removeAll()
+        if let window {
             StartupMetrics.shared.mark(.firstSurfaceAttached) // idempotent: first surface in a window
             buildRenderer() // pick up the real backing scale
             startDisplayLink()
             updateGridSize()
             restartBlinkTimer()
             scheduleRender()
-            window?.makeFirstResponder(self)
+            // Track the window's key state: focus (hollow cursor, blink, DECSET 1004
+            // reports) means "first responder in the key window", not just first responder.
+            windowIsKey = window.isKeyWindow
+            let nc = NotificationCenter.default
+            windowKeyObservers.append(nc.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.windowIsKey = true
+                    self.focusStateChanged()
+                }
+            })
+            windowKeyObservers.append(nc.addObserver(
+                forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.windowIsKey = false
+                    self.focusStateChanged()
+                }
+            })
+            window.makeFirstResponder(self)
+            focusStateChanged()
         } else {
             // Removed from the window (pane closed / re-mounted): stop the blink timer so
             // it doesn't keep the run loop (and a dangling render) alive. The timer holds
@@ -1134,7 +1177,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             frame.cursor.visible = false
         }
         // Unfocused → hollow cursor (outline block / dimmed bar-underline), never blinking.
-        frame.cursor.hollow = !focused
+        frame.cursor.hollow = !effectivelyFocused
         // Clear to the canvas color at canvas opacity so any cell-rounding remainder reads
         // as the canvas (no seam, and translucent when opacity < 1). The grid draws at the
         // padding origin so the inset region shows the canvas.
@@ -1178,7 +1221,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let preedit = markedText
         let blinkSetting = cursorBlinkEnabled
         let blinkVisible = cursorBlinkVisible
-        let isFocused = focused
+        let isFocused = effectivelyFocused
         let copyModeState = copyMode
         let searchEntry = copyModeSearchEntry
         let viewRows = rows
@@ -1370,7 +1413,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let config = frameBuildConfiguration
         let bg = canvasBackground
         let opacity = canvasOpacity
-        let isFocused = focused
+        let isFocused = effectivelyFocused
         let generation = renderGeneration
         let result: SurfaceFrameBuildResult? = emulatorState.sync { emulator in
             guard let preview = emulator.previewViewportReflow(cols: nc, rows: nr) else { return nil }
@@ -1395,7 +1438,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let timer = Timer(timeInterval: 0.53, repeats: true) { [weak self] _ in
             guard let self else { return }
             MainActor.assumeIsolated {
-                guard self.focused else { return }
+                guard self.effectivelyFocused else { return }
                 self.cursorBlinkVisible.toggle()
                 self.scheduleRender()
             }
@@ -1500,6 +1543,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func unitColumnRange(viewportRow row: Int, column: Int) -> ClosedRange<Int> {
         switch selectionGranularity {
         case .character: return column ... column
+        // Line selection covers the DISPLAY row, consistent with copy mode's line ops.
+        // Most terminals (Ghostty/iTerm2/kitty) triple-click the LOGICAL line across
+        // soft wraps — that needs wrap-flag plumbing through the selection region;
+        // tracked in the release-audit backlog.
         case .line: return 0 ... max(0, columns - 1)
         case .word:
             return emulatorSync { emu in
@@ -1616,10 +1663,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     /// Open a clicked link, restricted to safe schemes so terminal output can't trigger a
-    /// surprising handler (e.g. a custom app scheme) on ⌘-click.
+    /// surprising handler (e.g. a custom app scheme) on ⌘-click. No `file:` — an OSC 8
+    /// hyperlink comes from terminal output (possibly a remote host), and opening an
+    /// arbitrary local path via NSWorkspace executes .app bundles and .command scripts.
     private func openLink(_ string: String) {
         guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
-              ["http", "https", "mailto", "ftp", "ftps", "file"].contains(scheme) else { return }
+              ["http", "https", "mailto", "ftp", "ftps"].contains(scheme) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1664,8 +1713,19 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func otherMouseDown(with event: NSEvent) {
-        if isMouseReporting(event) { reportMouse(event, button: .middle, kind: .press) }
-        else { super.otherMouseDown(with: event) }
+        if isMouseReporting(event) {
+            reportMouse(event, button: .middle, kind: .press)
+        } else if event.buttonNumber == 2 {
+            // Middle-click pastes the current selection (the X11/Ghostty primary-paste
+            // convention), falling back to the clipboard. Routed through pasteText so
+            // bracketed paste and paste protection apply exactly like ⌘V.
+            if let text = selectionTextIfAny() ?? NSPasteboard.general.string(forType: .string),
+               !text.isEmpty {
+                pasteText(text)
+            }
+        } else {
+            super.otherMouseDown(with: event)
+        }
     }
 
     public override func otherMouseUp(with event: NSEvent) {
@@ -1898,6 +1958,20 @@ public final class HarnessTerminalSurfaceView: NSView {
         let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
         let lines = consumeWheelLines(event, cellHeight: cellH)
         guard lines != 0 else { return }
+        // The alternate screen has no scrollback — synthesize arrow keys instead (DECSET
+        // 1007 "alternate scroll", on by default) so the wheel scrolls less/man/vim when
+        // the program didn't enable mouse reporting (that case already returned above).
+        let (onAltScreen, modes) = emulatorSync { ($0.isAlternateScreenActive, $0.modes) }
+        if onAltScreen, modes.alternateScroll {
+            let key: SpecialKey = lines > 0 ? .up : .down
+            let perLine = inputEncoder.encode(key, modifiers: [], modes: modes)
+            guard !perLine.isEmpty else { return }
+            var bytes: [UInt8] = []
+            bytes.reserveCapacity(perLine.count * min(abs(lines), 32))
+            for _ in 0 ..< min(abs(lines), 32) { bytes.append(contentsOf: perLine) }
+            emit(bytes)
+            return
+        }
         scrollBy(lines: lines)
     }
 
@@ -2091,7 +2165,16 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func copySelection() {
-        guard let region = currentSelectionRegion else { return }
+        guard let text = selectionTextIfAny() else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        onCopy?(text)
+    }
+
+    /// The current selection's text, or nil when there is no selection (or it's empty).
+    private func selectionTextIfAny() -> String? {
+        guard let region = currentSelectionRegion else { return nil }
         let text = emulatorSync { emu -> String in
             let snapshot = scrollOffset > 0 ? emu.readGrid(scrollbackOffset: scrollOffset) : emu.readGrid()
             switch region {
@@ -2099,11 +2182,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             case let .block(blk): return blockSelectedText(blk, snapshot)
             }
         }
-        guard !text.isEmpty else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        onCopy?(text)
+        return text.isEmpty ? nil : text
     }
 
     /// Extract the selected text from the grid: per row, the in-range columns, skipping the
@@ -2190,7 +2269,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func becomeFirstResponder() -> Bool {
         focused = true
         cursorBlinkVisible = true
-        scheduleRender()
+        focusStateChanged()
         return true
     }
 
@@ -2199,8 +2278,24 @@ public final class HarnessTerminalSurfaceView: NSView {
         // A modifier released while we're unfocused never reaches `flagsChanged`, so drop the
         // press-tracking state to keep Kitty modifier-key press/release reporting in sync on return.
         pressedModifierKeyCodes.removeAll()
-        scheduleRender()
+        focusStateChanged()
         return true
+    }
+
+    /// React to any change of the effective focus state (first responder × key window):
+    /// repaint (hollow cursor) and report DECSET 1004 focus in/out to the program exactly
+    /// once per transition. Programs that enabled it (vim, tmux, …) get `CSI I` on
+    /// focus-in and `CSI O` on focus-out.
+    private func focusStateChanged() {
+        let now = effectivelyFocused
+        if lastReportedFocus != now {
+            lastReportedFocus = now
+            if now { cursorBlinkVisible = true }
+            if emulatorSync({ $0.modes.focusReporting }) {
+                emit([0x1B, 0x5B, now ? 0x49 : 0x4F]) // ESC [ I / ESC [ O
+            }
+        }
+        scheduleRender()
     }
 
     public override func keyDown(with event: NSEvent) {
@@ -2401,6 +2496,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             return CopyModeReducer.initialState(grid: emulator, cursorLine: cursorLine, cursorColumn: live.cursor.col)
         }
         scrollOffset = 0
+        wheelLineRemainder = 0 // don't carry a sub-line wheel remainder across the mode boundary
+        notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })
         scheduleRender()
     }
 
@@ -2410,6 +2507,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         copyMode = nil
         copyModeSearchEntry = nil
         scrollOffset = 0
+        wheelLineRemainder = 0
+        notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })
         scheduleRender()
     }
 

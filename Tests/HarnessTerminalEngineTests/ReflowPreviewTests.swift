@@ -32,6 +32,35 @@ final class ReflowPreviewTests: XCTestCase {
         ]
     }
 
+    /// Regression: the first gathered suffix must already include the cursor row. With the
+    /// cursor parked many rows above the bottom (CUP) and >= 8 filled rows below it, the old
+    /// chunk seed (`max(nr, 8)`) excluded the cursor row, `rewrapRows` received a negative
+    /// cursorAbsRow, and the preview cursor mapped to (0,0) — visibly jumping during a drag.
+    func testPreviewCursorCorrectWhenCursorFarAboveBottom() {
+        let feed = (0 ..< 20).map { "line \($0) with some text content" }.joined(separator: "\r\n")
+            + "\u{1b}[1;5H" // park the cursor at viewport row 0, col 4
+        for target in [(cols: 80, rows: 6), (cols: 60, rows: 6), (cols: 40, rows: 5)] {
+            let t = build(feed, cols: 80, rows: 10)
+            guard let preview = t.previewViewportReflow(cols: target.cols, rows: target.rows) else {
+                XCTFail("nil preview on primary screen"); continue
+            }
+            t.resize(cols: target.cols, rows: target.rows)
+            let actual = t.readGrid()
+            XCTAssertEqual(preview.cells, actual.cells, "cells \(target)")
+            XCTAssertEqual(preview.cursor.row, actual.cursor.row, "cursor row \(target)")
+            XCTAssertEqual(preview.cursor.col, actual.cursor.col, "cursor col \(target)")
+        }
+    }
+
+    /// DECTCEM: a program that hid its cursor must not see it flash back in the drag preview.
+    func testPreviewHonorsCursorVisibility() {
+        let t = build("hello\r\nworld", cols: 40, rows: 6)
+        t.feed("\u{1b}[?25l")
+        XCTAssertEqual(t.previewViewportReflow(cols: 30, rows: 5)?.cursor.visible, false)
+        t.feed("\u{1b}[?25h")
+        XCTAssertEqual(t.previewViewportReflow(cols: 30, rows: 5)?.cursor.visible, true)
+    }
+
     /// The preview viewport must equal the authoritative reflow's viewport for every target geometry.
     func testPreviewMatchesAuthoritativeReflow() {
         let inits: [(cols: Int, rows: Int)] = [(40, 6), (24, 8), (13, 5), (80, 10)]

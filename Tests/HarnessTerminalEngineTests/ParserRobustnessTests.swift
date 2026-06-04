@@ -47,6 +47,57 @@ final class ParserRobustnessTests: XCTestCase {
         XCTAssertEqual(grid.cell(row: 0, col: 1)?.codepoint, UInt32(UnicodeScalar("i").value))
     }
 
+    func testCANAbortsOSCStringAndRecovers() {
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        // VT500 "anywhere" rule: CAN (0x18) aborts an in-progress OSC and returns to
+        // ground. Everything after the CAN must render as plain text instead of being
+        // swallowed into the (unterminated) OSC payload.
+        var bytes = Array("\u{1b}]0;stuck title".utf8)
+        bytes.append(0x18) // CAN
+        bytes.append(contentsOf: Array("ok".utf8))
+        term.feed(bytes)
+        let grid = term.readGrid()!
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, UInt32(UnicodeScalar("o").value))
+        XCTAssertEqual(grid.cell(row: 0, col: 1)?.codepoint, UInt32(UnicodeScalar("k").value))
+    }
+
+    func testSUBAbortsDCSCaptureAndRecovers() {
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        // SUB (0x1A) aborts an unterminated DCS capture; without it the parser stays in
+        // .stringCapture and silently consumes all subsequent output.
+        var bytes = Array("\u{1b}Pq#0;2;0;0;0".utf8) // Sixel-ish DCS payload, never terminated
+        bytes.append(0x1A) // SUB
+        bytes.append(contentsOf: Array("ok".utf8))
+        term.feed(bytes)
+        let grid = term.readGrid()!
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, UInt32(UnicodeScalar("o").value))
+        XCTAssertEqual(grid.cell(row: 0, col: 1)?.codepoint, UInt32(UnicodeScalar("k").value))
+    }
+
+    func testCANAbortsAPCCaptureAndRecovers() {
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        var bytes = Array("\u{1b}_Gf=100,t=d;QUJD".utf8) // Kitty graphics APC, never terminated
+        bytes.append(0x18) // CAN
+        bytes.append(contentsOf: Array("ok".utf8))
+        term.feed(bytes)
+        let grid = term.readGrid()!
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, UInt32(UnicodeScalar("o").value))
+        XCTAssertEqual(grid.cell(row: 0, col: 1)?.codepoint, UInt32(UnicodeScalar("k").value))
+    }
+
+    func testCANAbortsCSIWithoutDispatch() {
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        // Move to row 2 first so an (incorrectly dispatched) cursor-up would be visible.
+        term.feed("\r\n\r\n")
+        var bytes = Array("\u{1b}[5".utf8) // CSI with a pending parameter…
+        bytes.append(0x18) // …aborted by CAN — must NOT dispatch with the next byte as final
+        bytes.append(contentsOf: Array("A".utf8)) // would be CSI 5 A (cursor up 5) if mis-dispatched
+        term.feed(bytes)
+        let grid = term.readGrid()!
+        // 'A' must print as a glyph on row 2, not act as a cursor-up final byte.
+        XCTAssertEqual(grid.cell(row: 2, col: 0)?.codepoint, UInt32(UnicodeScalar("A").value))
+    }
+
     func testUnterminatedDCSConsumesWithoutGrowthThenRecovers() {
         let term = HarnessGridTerminal(cols: 20, rows: 4)!
         // A long DCS payload (consumed, not accumulated) then a proper ST and printable text.

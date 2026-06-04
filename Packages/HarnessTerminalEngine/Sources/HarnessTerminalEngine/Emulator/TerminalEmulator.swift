@@ -103,6 +103,11 @@ public final class TerminalEmulator: VTParserHandler {
     /// Scrollback lines available on the current screen (0 on the alternate screen).
     public var historyCount: Int { current.historyCount }
 
+    /// Whether the alternate screen is active (full-screen TUIs like less/vim). The surface
+    /// view uses this to synthesize arrow keys for the scroll wheel — the alternate screen
+    /// has no scrollback to scroll.
+    public var isAlternateScreenActive: Bool { onAlternateScreen }
+
     /// Cap on retained primary-screen scrollback.
     public var maxScrollbackLines: Int {
         get { primary.maxHistoryLines }
@@ -149,7 +154,9 @@ public final class TerminalEmulator: VTParserHandler {
         let preview = primary.previewViewportReflow(toCols: cols, rows: rows)
         return TerminalGridSnapshot(
             cols: max(1, cols), rows: max(1, rows), cells: preview.cells,
-            cursor: TerminalCursor(row: preview.cursorRow, col: preview.cursorCol, visible: true)
+            // Honor DECTCEM — a program that hid its cursor must not see it flash
+            // back during the drag preview.
+            cursor: TerminalCursor(row: preview.cursorRow, col: preview.cursorCol, visible: primary.cursorVisible)
         )
     }
 
@@ -445,7 +452,10 @@ public final class TerminalEmulator: VTParserHandler {
             current.markPromptStart()
             commandStartedAt = nil // new prompt: no command running yet
         case "B", "C":
-            // Command execution begins (C = output start, B = command start for shells without C).
+            // Command execution begins. C (output/exec start) deliberately overwrites B
+            // (prompt-end/input start): duration must measure execution (C→D), not the time
+            // the user spent typing at the prompt. B alone still covers integrations that
+            // never emit C.
             commandStartedAt = Date()
         case "D":
             let exitCode = parts.count >= 2 ? Int(parts[1]) : nil
@@ -593,7 +603,9 @@ public final class TerminalEmulator: VTParserHandler {
         // private `>` marker means a `q`/`c` final never reaches the main `switch final` (the
         // `isPrivate` early-return in `parserCSI` routes it straight to us).
         if final == 0x71, marker == 0x3E, intermediates.isEmpty {
-            respond("\u{1b}P>|\(terminalName) \(terminalVersion)\u{1b}\\")
+            // No trailing space when the version is empty — strict DCS parsers choke on it.
+            let versionPart = terminalVersion.isEmpty ? "" : " \(terminalVersion)"
+            respond("\u{1b}P>|\(terminalName)\(versionPart)\u{1b}\\")
             return
         }
         // Secondary DA — `CSI > c`: reply `CSI > 1 ; <version> ; 0 c` (VT220-class, firmware n).
@@ -617,6 +629,7 @@ public final class TerminalEmulator: VTParserHandler {
             case 1003: modes.mouseAny = set                // any-event tracking
             case 1006: modes.mouseSGR = set                // SGR extended coordinates
             case 1004: modes.focusReporting = set          // focus in/out reporting
+            case 1007: modes.alternateScroll = set         // wheel → arrows on alt screen
             case 2004: modes.bracketedPaste = set          // bracketed paste
             case 2026: modes.synchronizedOutput = set      // synchronized output (no tearing)
             case 1: modes.cursorKeysApplication = set      // DECCKM
@@ -639,6 +652,7 @@ public final class TerminalEmulator: VTParserHandler {
         case 1003: state = modes.mouseAny ? 1 : 2
         case 1006: state = modes.mouseSGR ? 1 : 2
         case 1004: state = modes.focusReporting ? 1 : 2
+        case 1007: state = modes.alternateScroll ? 1 : 2
         case 2004: state = modes.bracketedPaste ? 1 : 2
         case 2026: state = modes.synchronizedOutput ? 1 : 2
         case 1: state = modes.cursorKeysApplication ? 1 : 2
@@ -741,6 +755,9 @@ public final class TerminalEmulator: VTParserHandler {
         hyperlinks.removeAll()
         hyperlinkKeys.removeAll()
         nextHyperlinkID = 1
+        // A full reset abandons any in-flight command timing — otherwise a 133;D after
+        // ESC c reports a spurious command-finished with a pre-reset start time.
+        commandStartedAt = nil
         parser.reset()
     }
 }
@@ -752,6 +769,10 @@ public struct TerminalModes: Sendable, Equatable {
     public var keypadApplication = false
     public var bracketedPaste = false
     public var focusReporting = false
+    /// DECSET 1007 "alternate scroll": wheel events on the alternate screen become arrow
+    /// keys. On by default (the iTerm2/Ghostty convention) so less/man/vim scroll out of
+    /// the box; programs can opt out with `CSI ? 1007 l`.
+    public var alternateScroll = true
     public var mouseClick = false
     public var mouseDrag = false
     public var mouseAny = false

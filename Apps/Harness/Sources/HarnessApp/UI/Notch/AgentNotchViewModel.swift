@@ -69,7 +69,26 @@ final class AgentNotchViewModel: ObservableObject {
         openOnHover = coordinator.settings.notchOpenOnHover
         let currentAgents = coordinator.agentsList()
         agents = AgentNotchProjection.sortedAgents(currentAgents)
-        rows = AgentNotchProjection.rows(from: coordinator.snapshot, agents: currentAgents)
+        var updatedRows = AgentNotchProjection.rows(from: coordinator.snapshot, agents: currentAgents)
+        // Reconcile OSC 9;4 progress state with detector-driven activity. The projection
+        // derives agentActivity from the daemon snapshot (AgentDetector), which Claude Code
+        // doesn't keep at .working between turns. SurfaceProgressTracker is the
+        // terminal-native signal (OSC 9;4); promote a row to .working when any of its tab's
+        // surfaces has an active progress report, so the notch agrees with the tab-bar dot.
+        let tracker = SurfaceProgressTracker.shared
+        let tabSurfaces: [UUID: [SurfaceID]] = coordinator.snapshot.workspaces
+            .flatMap(\.sessions)
+            .flatMap(\.tabs)
+            .reduce(into: [:]) { map, tab in
+                map[tab.id] = tab.rootPane.allSurfaceIDs()
+            }
+        for i in updatedRows.indices {
+            guard let tabID = updatedRows[i].tabID else { continue }
+            if let surfaces = tabSurfaces[tabID], surfaces.contains(where: { tracker.isActive($0) }) {
+                updatedRows[i].agentActivity = .working
+            }
+        }
+        rows = updatedRows
         sessionCount = Set(rows.map(\.sessionID)).count
     }
 

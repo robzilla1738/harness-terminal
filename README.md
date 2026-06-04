@@ -14,7 +14,7 @@ One self-contained app. The terminal engine, daemon, and CLI are all first-party
 
 Open the DMG, drag `Harness.app` to Applications, and launch it normally. The release is signed, notarized, and built for Apple silicon Macs running macOS 15 or later.
 
-SHA-256: `fcfd70bded44d8c8c3d2c43144c7101b4ac960b46c4e6342234e5010b90ccb17`
+Verify the SHA-256 checksum against the value published on the [GitHub release page](https://github.com/robzilla1738/harness-terminal/releases/latest).
 
 Prefer to build it yourself? Jump to [Build from source](#build-from-source).
 
@@ -47,8 +47,8 @@ New installs start in Plain. Moving over from another setup? See [docs/MIGRATION
 - Color/theme diagnostics from the CLI: `harness-cli color-check` and `harness-cli theme-preview --theme <name>` print deterministic SGR pages for eyeballing fidelity in Harness itself
 - Command set: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`, and more
 - Command prefix keymap (default `Ctrl-A`) with a live cheatsheet (prefix `?`)
-- Agent detection for Claude Code, Codex, Cursor, Pi, Hermes, OpenClaw, OpenCode, Aider, Gemini, and Goose — each with a brand color and a sidebar chip
-- Agent alerts as desktop banners, a sidebar bell, and pane rings; `Cmd+Shift+U` jumps to whoever is waiting
+- Agent detection for Claude Code, Codex, Cursor, Grok, Pi, Hermes, OpenClaw, OpenCode, Aider, Gemini, and Goose — each with a brand color and a sidebar chip
+- Agent alerts as desktop banners and a sidebar bell; `Cmd+Shift+U` jumps to whoever is waiting
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`) and a native macOS Settings window (`Cmd+,`)
 - 490 built-in color themes with a muted Harness default, plus `.harnesstheme` export / import for sharing
@@ -129,7 +129,7 @@ Per-agent setup lives in [docs/agent-hooks/README.md](docs/agent-hooks/README.md
 | Action | Shortcut |
 |--------|----------|
 | New tab | `Cmd+T` |
-| New workspace | `Cmd+Shift+N` |
+| New session | `Cmd+Shift+N` |
 | Close tab | `Cmd+W` |
 | Split horizontal / vertical | `Cmd+D` / `Cmd+Shift+D` |
 | Switch to tab 1–9 | `Cmd+1` … `Cmd+9` |

@@ -13,6 +13,8 @@ final class CommandPromptController: NSObject, NSTextFieldDelegate {
     private let field = NSTextField()
     private var history: [String] = []
     private var historyCursor: Int = -1
+    /// In-progress text saved when history recall begins, restored on Down past the newest entry.
+    private var draft = ""
 
     private static var historyURL: URL {
         HarnessPaths.applicationSupport.appendingPathComponent("command-history.json")
@@ -128,9 +130,25 @@ final class CommandPromptController: NSObject, NSTextFieldDelegate {
 
     private func recallHistory(direction: Int) {
         guard !history.isEmpty else { return }
-        if historyCursor == -1 { historyCursor = history.count }
-        historyCursor = max(0, min(history.count - 1, historyCursor + direction))
+        if historyCursor == -1 {
+            // Down from the blank/draft state is a no-op — there is nothing newer.
+            guard direction < 0 else { return }
+            draft = field.stringValue
+            historyCursor = history.count - 1
+        } else if direction > 0, historyCursor == history.count - 1 {
+            // Down past the newest entry returns to the in-progress draft (readline behavior).
+            historyCursor = -1
+            field.stringValue = draft
+            moveInsertionPointToEnd()
+            return
+        } else {
+            historyCursor = max(0, min(history.count - 1, historyCursor + direction))
+        }
         field.stringValue = history[historyCursor]
+        moveInsertionPointToEnd()
+    }
+
+    private func moveInsertionPointToEnd() {
         if let editor = field.currentEditor() {
             editor.selectedRange = NSRange(location: field.stringValue.count, length: 0)
         }

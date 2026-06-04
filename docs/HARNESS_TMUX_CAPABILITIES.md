@@ -380,8 +380,8 @@ pane. It supports bash, zsh, and fish.
 ## 12. Agent notifications
 
 Harness watches coding agents in panes and can surface approval or completion
-states through desktop notifications, the sidebar bell, pane rings, and
-`Cmd-Shift-U`.
+states through desktop notifications, the sidebar bell, the tab-pill
+working dot, and `Cmd-Shift-U`.
 
 Install hooks where the agent supports hooks:
 

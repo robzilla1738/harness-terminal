@@ -569,6 +569,15 @@ public final class DaemonServer: @unchecked Sendable {
         queue.sync {
             listener?.cancel() // cancel handler closes the listener fd
             listener = nil
+            // Give pending replies a bounded chance to drain before the fds close — a
+            // client mid-`capture-pane` would otherwise receive a truncated response on
+            // an orderly shutdown. Whatever hasn't drained by the deadline is dropped,
+            // exactly as before.
+            let drainDeadline = DispatchTime.now() + .milliseconds(250)
+            while !writeBuffers.isEmpty, DispatchTime.now() < drainDeadline {
+                for fd in Array(writeBuffers.keys) { flushWrites(fd: fd) }
+                if !writeBuffers.isEmpty { usleep(5_000) }
+            }
             for (fd, source) in clientSources {
                 cancelSubscriptions(for: fd)
                 source.cancel()

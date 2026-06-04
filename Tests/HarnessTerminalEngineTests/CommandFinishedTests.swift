@@ -37,6 +37,16 @@ final class CommandFinishedTests: XCTestCase {
         XCTAssertEqual(fired?.exit, 1)
     }
 
+    func testFullResetAbandonsInFlightCommandTiming() {
+        let term = TerminalEmulator(cols: 20, rows: 4)
+        var fired = false
+        term.onCommandFinished = { _, _ in fired = true }
+        term.feed("\u{1b}]133;C\u{07}") // command clock starts
+        term.feed("\u{1b}c")             // RIS full reset
+        term.feed("\u{1b}]133;D;0\u{07}")
+        XCTAssertFalse(fired, "RIS must abandon the in-flight command clock")
+    }
+
     func testNewPromptResetsTimerSoStaleCommandDoesNotFire() {
         // A fresh prompt (A) after a command must clear the clock, so a subsequent D with no new
         // C/B (an empty Enter) does not report the previous command again.

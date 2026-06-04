@@ -305,7 +305,6 @@ final class PaneContainerView: NSView {
             if let match = tabFor(surfaceID: surfaceID, in: snapshot),
                let host = TerminalPaneRegistryAccess.host(for: surfaceID)
             {
-                host.showsWaitingRing = match.status == .waiting
             }
         }
     }
@@ -334,7 +333,6 @@ final class PaneContainerView: NSView {
                 host.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
             ])
             if let tab = coordinator.snapshot.activeWorkspace?.activeTab {
-                host.showsWaitingRing = tab.status == .waiting
             }
         case let .branch(direction, ratio, firstNode, secondNode):
             let split = HarnessSplitView()
