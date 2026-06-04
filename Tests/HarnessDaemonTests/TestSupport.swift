@@ -43,6 +43,21 @@ final class OutputAccumulator: @unchecked Sendable {
     }
 }
 
+/// Thread-safe single-value box for capturing an off-thread callback's payload
+/// (e.g. the exit status `RealPty.onExit` delivers).
+final class AtomicBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value?
+
+    func set(_ value: Value?) {
+        lock.lock(); stored = value; lock.unlock()
+    }
+
+    var value: Value? {
+        lock.lock(); defer { lock.unlock() }; return stored
+    }
+}
+
 /// Thread-safe integer counter for asserting how many times an off-thread callback
 /// (e.g. `RealPty.onExit`) fired.
 final class AtomicCounter: @unchecked Sendable {

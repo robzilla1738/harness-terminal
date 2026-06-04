@@ -426,11 +426,17 @@ public struct SessionEditor: Sendable {
         setTabAlerts(workspaceID: workspaceID, tabID: tabID, activity: false, silence: false, bell: false)
     }
 
-    /// Set/clear a dead pane's exit status (`remain-on-exit`).
-    public mutating func setTabExitStatus(surfaceID: SurfaceID, status: Int?) {
-        guard let match = tabIndex(surfaceID: surfaceID) else { return }
+    /// Set/clear a dead pane's exit status (`remain-on-exit`). No-ops (and reports false)
+    /// when the value is already current, so revive paths can call it unconditionally
+    /// without churning revisions.
+    @discardableResult
+    public mutating func setTabExitStatus(surfaceID: SurfaceID, status: Int?) -> Bool {
+        guard let match = tabIndex(surfaceID: surfaceID),
+              snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].exitStatus != status
+        else { return false }
         snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].exitStatus = status
         bumpRevision()
+        return true
     }
 
     /// Whether `tabID` is the currently-viewed tab (active tab of the active session in the
@@ -1017,6 +1023,25 @@ public struct SessionEditor: Sendable {
         destPaneID: PaneID,
         direction: SplitDirection
     ) -> PaneID? {
+        // Validate BOTH ends before mutating (the swapPanes pattern). The removal below writes
+        // into `snapshot` immediately, so failing the destination lookup afterwards would leave
+        // the source pane silently dropped from its tab — corruption that every read serves and
+        // the next unrelated commit persists. CLI/IPC pass arbitrary --src/--dst UUIDs here.
+        guard sourcePaneID != destPaneID else { return nil }
+        var destinationExists = false
+        var sourceJoinable = false
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if leaf(in: tab.rootPane, paneID: destPaneID) != nil { destinationExists = true }
+                    if leaf(in: tab.rootPane, paneID: sourcePaneID) != nil {
+                        // A lone pane can't be joined away — it would orphan an empty tab.
+                        sourceJoinable = tab.rootPane.allPaneIDs().count > 1
+                    }
+                }
+            }
+        }
+        guard destinationExists, sourceJoinable else { return nil }
         var sourceLeaf: PaneLeaf?
         for workspaceIndex in snapshot.workspaces.indices {
             for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {

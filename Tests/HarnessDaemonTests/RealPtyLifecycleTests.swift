@@ -44,11 +44,29 @@ final class RealPtyLifecycleTests: XCTestCase {
     func testOnExitFiresWhenShellExits() throws {
         let pty = try makePty()
         let exited = expectation(description: "child exited")
-        pty.onExit = { exited.fulfill() }
+        pty.onExit = { _ in exited.fulfill() }
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
             pty.write("exit\n")
         }
         wait(for: [exited], timeout: 8)
+    }
+
+    /// The decoded child exit status reaches `onExit` (best-effort: the EOF path reaps with
+    /// WNOHANG when it wins the race against the waitpid watcher) so the daemon can record
+    /// it on a retained dead pane (`remain-on-exit` → `Tab.exitStatus`).
+    func testOnExitCarriesExitStatus() throws {
+        let pty = try makePty()
+        let exited = expectation(description: "child exited")
+        let status = AtomicBox<Int32>()
+        pty.onExit = { code in
+            status.set(code)
+            exited.fulfill()
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            pty.write("exit 3\n")
+        }
+        wait(for: [exited], timeout: 8)
+        XCTAssertEqual(status.value, 3, "decoded exit code must reach onExit")
     }
 
     func testCloseIsIdempotent() throws {
@@ -64,7 +82,7 @@ final class RealPtyLifecycleTests: XCTestCase {
         let pty = try makePty()
         defer { pty.close() }
         let exits = AtomicCounter()
-        pty.onExit = { exits.increment() }
+        pty.onExit = { _ in exits.increment() }
 
         Thread.sleep(forTimeInterval: 0.3) // let the first shell come up
         pty.respawn(clearHistory: true)

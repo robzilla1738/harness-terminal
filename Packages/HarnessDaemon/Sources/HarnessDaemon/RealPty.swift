@@ -61,6 +61,11 @@ public final class RealPty: @unchecked Sendable {
     /// `onExit` for — the child that replaced it. The previous code let the old
     /// exit-watcher's `close()` kill the freshly respawned shell.
     private var generation: UInt64 = 0
+    /// Exit status the `waitpid` watcher reaped, tagged with its child's generation. The EOF
+    /// path usually wins the `isClosed` race but cannot reap the zombie (the watcher's blocked
+    /// `waitpid` claims it) — it reads this record to still deliver a real status to `onExit`.
+    /// Guarded by `lifecycleLock`.
+    private var reapedExit: (generation: UInt64, status: Int32?)?
     private let lifecycleLock = NSLock()
 
     private let readQueue = DispatchQueue(label: "com.robert.harness.realpty.read")
@@ -91,7 +96,11 @@ public final class RealPty: @unchecked Sendable {
     private let writeQueue = DispatchQueue(label: "com.robert.harness.realpty.write")
 
     public var onOutput: ((Data) -> Void)?
-    public var onExit: (() -> Void)?
+    /// Fired once when the child for the current generation dies. Carries the decoded exit
+    /// status when the `waitpid` watcher observed it (exit code, or 128+signal for a signalled
+    /// child, shell-convention); nil when only EOF was observed (e.g. the read loop won the
+    /// race, or a failed respawn tears the surface down with no child to reap).
+    public var onExit: ((_ exitStatus: Int32?) -> Void)?
 
     /// Append-only ring buffer of terminal output bytes. Indexed by sequence
     /// number so reattaching clients can request "give me everything since N".
@@ -800,9 +809,24 @@ public final class RealPty: @unchecked Sendable {
         DispatchQueue.global().async { [weak self] in
             guard let self, pid > 0 else { return }
             var status: Int32 = 0
-            _ = waitpid(pid, &status, 0)
-            self.childEnded(generation: gen)
+            let reaped = waitpid(pid, &status, 0)
+            let decoded = reaped == pid ? Self.decodeWaitStatus(status) : nil
+            // Record before calling childEnded: when the EOF path wins the isClosed race it
+            // can't reap the zombie (this blocked waitpid claims it) — it polls for this
+            // generation-tagged record instead, so the real status still reaches onExit.
+            self.lifecycleLock.lock()
+            self.reapedExit = (gen, decoded)
+            self.lifecycleLock.unlock()
+            self.childEnded(generation: gen, exitStatus: decoded)
         }
+    }
+
+    /// Decode a `waitpid` status by hand (the C macros aren't imported into Swift):
+    /// exited → its exit code; signalled → 128 + signo, the shell convention; stopped → nil.
+    private static func decodeWaitStatus(_ status: Int32) -> Int32? {
+        if (status & 0x7F) == 0 { return (status >> 8) & 0xFF } // WIFEXITED → WEXITSTATUS
+        if (status & 0x7F) != 0x7F { return 128 + (status & 0x7F) } // WIFSIGNALED → 128 + WTERMSIG
+        return nil
     }
 
     /// Called when a child for generation `gen` ends (read EOF or `waitpid`
@@ -811,7 +835,7 @@ public final class RealPty: @unchecked Sendable {
     /// superseded child whose death must NOT touch the live one. The EOF path and
     /// the `waitpid` path both call this; the `isClosed` guard makes the second a
     /// no-op so `onExit` fires once.
-    private func childEnded(generation gen: UInt64) {
+    private func childEnded(generation gen: UInt64, exitStatus: Int32? = nil) {
         lifecycleLock.lock()
         guard generation == gen, !isClosed else {
             lifecycleLock.unlock()
@@ -821,10 +845,38 @@ public final class RealPty: @unchecked Sendable {
         generation &+= 1
         let source = readSource
         let fd = master
+        let pid = childPID
         readSource = nil
         master = -1
         childPID = -1
         lifecycleLock.unlock()
+
+        // The read loop's EOF usually wins the race against the `waitpid` watcher, so an
+        // EOF-path call carries no status — and it cannot reap the zombie itself, because the
+        // watcher's blocked `waitpid` claims it. Poll briefly for the watcher's recorded
+        // status (generation-tagged so a respawned child never reads its predecessor's), with
+        // a direct WNOHANG attempt in case this path got here before the watcher even ran.
+        // Bounded: the child is already dead, so this resolves in a few milliseconds; the
+        // deadline only guards pathological cases. Best-effort — nil if it never resolves.
+        var exitStatus = exitStatus
+        if exitStatus == nil, pid > 0 {
+            var status: Int32 = 0
+            let deadline = DispatchTime.now() + .milliseconds(500)
+            while DispatchTime.now() < deadline {
+                lifecycleLock.lock()
+                let recorded = reapedExit
+                lifecycleLock.unlock()
+                if let recorded, recorded.generation == gen {
+                    exitStatus = recorded.status
+                    break
+                }
+                if waitpid(pid, &status, WNOHANG) == pid {
+                    exitStatus = Self.decodeWaitStatus(status)
+                    break
+                }
+                usleep(5_000)
+            }
+        }
 
         AgentDetector.unregisterRootPID(forSurfaceKey: id)
         if let source {
@@ -832,7 +884,7 @@ public final class RealPty: @unchecked Sendable {
         } else if fd >= 0 {
             sysClose(fd)
         }
-        onExit?()
+        onExit?(exitStatus)
     }
 
     private func deepestReadableDescendant(of pid: pid_t) -> pid_t? {

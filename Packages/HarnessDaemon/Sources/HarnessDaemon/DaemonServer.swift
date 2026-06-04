@@ -483,6 +483,12 @@ public final class DaemonServer: @unchecked Sendable {
             let record = ClientRecord(id: UUID(), label: label ?? "subscriber", connectedAt: Date())
             clients[fd] = record
             clientFDsByID[record.id] = fd
+            // A new long-lived client just attached. Fire the hook here (not only in
+            // identifyClient) so attach/detach hooks stay paired: the cancel handler fires
+            // client-detached for every registered record, including subscription-registered
+            // ones — without this, every real client (GUI, attach, attach-window) produced a
+            // detached event with no matching attached.
+            registry.fireClientAttached(label: record.label)
         }
         send(.ok, to: fd)
     }
@@ -518,6 +524,8 @@ public final class DaemonServer: @unchecked Sendable {
             let record = ClientRecord(id: UUID(), label: label ?? "snapshot-subscriber", connectedAt: Date())
             clients[fd] = record
             clientFDsByID[record.id] = fd
+            // Pair with the cancel handler's client-detached (see handleSubscribe).
+            registry.fireClientAttached(label: record.label)
         }
         send(.ok, to: fd)
     }

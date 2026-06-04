@@ -64,6 +64,62 @@ final class SessionEditorPhase4Tests: XCTestCase {
         XCTAssertNil(editor.breakPane(paneID: lone))
     }
 
+    /// joinPane with an unknown destination must be a complete no-op. It previously removed
+    /// the source pane from its tab BEFORE the destination lookup and returned nil without
+    /// rollback — silently corrupting the persistent editor snapshot while the caller saw
+    /// "Cannot join pane".
+    func testJoinPaneWithUnknownDestinationLeavesSnapshotUnchanged() throws {
+        var editor = SessionEditor()
+        let (ws, tabID, original) = try defaultTab(editor)
+        let secondPane = try XCTUnwrap(editor.splitPane(
+            in: ws, tabID: tabID, paneID: original, direction: .vertical
+        ))
+        let revisionBefore = editor.snapshot.revision
+        XCTAssertNil(editor.joinPane(sourcePaneID: secondPane, destPaneID: UUID(), direction: .horizontal))
+        let tab = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs.first { $0.id == tabID })
+        XCTAssertEqual(Set(tab.rootPane.allPaneIDs()), Set([original, secondPane]),
+                       "a refused join must not drop the source pane")
+        XCTAssertEqual(editor.snapshot.revision, revisionBefore, "no revision bump on a refused join")
+    }
+
+    func testJoinPaneRefusesSamePane() throws {
+        var editor = SessionEditor()
+        let (ws, tabID, original) = try defaultTab(editor)
+        let secondPane = try XCTUnwrap(editor.splitPane(
+            in: ws, tabID: tabID, paneID: original, direction: .vertical
+        ))
+        XCTAssertNil(editor.joinPane(sourcePaneID: secondPane, destPaneID: secondPane, direction: .horizontal))
+        let tab = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs.first { $0.id == tabID })
+        XCTAssertEqual(Set(tab.rootPane.allPaneIDs()), Set([original, secondPane]),
+                       "src == dst must refuse without mutating")
+    }
+
+    func testJoinPaneMovesPaneIntoDestinationTab() throws {
+        var editor = SessionEditor()
+        let (ws, tabID, original) = try defaultTab(editor)
+        let secondPane = try XCTUnwrap(editor.splitPane(
+            in: ws, tabID: tabID, paneID: original, direction: .vertical
+        ))
+        // Carve the second pane into its own tab, split it there, then join the new
+        // sibling back next to `original` — a multi-pane source tab, as required.
+        let newTabID = try XCTUnwrap(editor.breakPane(paneID: secondPane))
+        let movedPane = try XCTUnwrap(
+            editor.snapshot.activeWorkspace?.activeSession?.tabs
+                .first { $0.id == newTabID }?.rootPane.allPaneIDs().first
+        )
+        let sibling = try XCTUnwrap(editor.splitPane(
+            in: ws, tabID: newTabID, paneID: movedPane, direction: .horizontal
+        ))
+        let joined = try XCTUnwrap(editor.joinPane(
+            sourcePaneID: sibling, destPaneID: original, direction: .horizontal
+        ))
+        let destTab = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs.first { $0.id == tabID })
+        XCTAssertTrue(destTab.rootPane.allPaneIDs().contains(joined), "joined pane lands in the destination tab")
+        XCTAssertEqual(destTab.rootPane.allPaneIDs().count, 2)
+        let sourceTab = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs.first { $0.id == newTabID })
+        XCTAssertEqual(sourceTab.rootPane.allPaneIDs(), [movedPane], "source tab keeps only the remaining pane")
+    }
+
     func testLayoutTemplateCycleIsRoundTrip() {
         XCTAssertEqual(LayoutTemplate.evenHorizontal.next(), .evenVertical)
         XCTAssertEqual(LayoutTemplate.evenVertical.previous(), .evenHorizontal)

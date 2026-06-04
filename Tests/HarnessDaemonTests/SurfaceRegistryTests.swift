@@ -31,6 +31,51 @@ final class SurfaceRegistryTests: XCTestCase {
         guard case .pong = SurfaceRegistry().handle(.ping) else { return XCTFail("expected pong") }
     }
 
+    /// `remain-on-exit` (default on): a naturally exited pane is retained, but its
+    /// live-looking metadata must be cleared — waiting status/notification reset, agent
+    /// cleared, exit status recorded — and a revival via `ensureSurface` clears the exit
+    /// status again. Regression for the exit path unregistering detector state without
+    /// ever touching the snapshot (stale agent/notification on a dead pane; exitStatus
+    /// was dead code).
+    func testRetainedDeadPaneClearsMetadataAndRecordsExitStatus() throws {
+        try skipUnlessLiveDaemonTests() // depends on the spawned shell executing `exit 3`
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(initial) = registry.handle(.listSurfaces), let target = initial.first else {
+            return XCTFail("expected a default surface")
+        }
+        let sid = target.surfaceID
+
+        func tab() -> Tab? {
+            registry.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+                .first { $0.rootPane.allSurfaceIDs().map(\.uuidString).contains(sid) }
+        }
+
+        // Put live-looking metadata on the tab, as an agent flow would.
+        _ = registry.handle(.notify(surfaceID: sid, title: "Agent", body: "Needs approval"))
+        XCTAssertEqual(tab()?.status, .waiting)
+        XCTAssertNotNil(tab()?.notificationText)
+
+        // Let the shell come up, then exit with a known code.
+        usleep(400_000)
+        _ = registry.handle(.sendData(surfaceID: sid, data: Data("exit 3\n".utf8)))
+        var deadTab: Tab?
+        for _ in 0 ..< 100 {
+            if let candidate = tab(), candidate.exitStatus != nil { deadTab = candidate; break }
+            usleep(100_000)
+        }
+        let dead = try XCTUnwrap(deadTab, "retained pane should record an exit status")
+        XCTAssertEqual(dead.exitStatus, 3)
+        XCTAssertEqual(dead.status, .idle, "waiting status must not survive the pane's death")
+        XCTAssertNil(dead.notificationText, "notification must not survive the pane's death")
+        XCTAssertNil(dead.agent, "agent metadata must not survive the pane's death")
+
+        // Revival clears the exit status.
+        guard case .ok = registry.handle(.ensureSurface(
+            surfaceID: sid, cwd: NSTemporaryDirectory(), shell: nil, rows: 24, cols: 80, scrollbackBytes: nil
+        )) else { return XCTFail("expected ensureSurface to revive the pane") }
+        XCTAssertNil(tab()?.exitStatus, "revival must clear the recorded exit status")
+    }
+
     func testRevisionMatchesSnapshotAndAdvancesOnMutation() {
         let registry = SurfaceRegistry()
         // The lightweight accessor must agree with the full snapshot's revision...

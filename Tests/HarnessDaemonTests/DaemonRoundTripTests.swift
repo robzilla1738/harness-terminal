@@ -220,6 +220,43 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertGreaterThan(seen.value, 0)
     }
 
+    /// Hook symmetry for long-lived subscription clients: registering a subscription must fire
+    /// `client-attached`, and its disconnect must fire `client-detached`. Regression for the
+    /// attach hook only firing on explicit `identifyClient` — every real client (GUI, attach,
+    /// attach-window) subscribed without identifying, producing detached-without-attached.
+    func testSubscriptionClientFiresAttachedAndDetachedHooks() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let attachedMarker = "HOOK_CLIENT_ATTACHED_\(UUID().uuidString.prefix(8))"
+        let detachedMarker = "HOOK_CLIENT_DETACHED_\(UUID().uuidString.prefix(8))"
+        let attached = expectation(description: "client-attached hook fired")
+        let detached = expectation(description: "client-detached hook fired")
+        attached.assertForOverFulfill = false
+        detached.assertForOverFulfill = false
+        let token = NotificationCenter.default.addObserver(
+            forName: NotificationBus.shared.notificationPosted, object: nil, queue: .main
+        ) { note in
+            guard let n = note.userInfo?["notification"] as? AgentNotification else { return }
+            if n.body.contains(attachedMarker) { attached.fulfill() }
+            if n.body.contains(detachedMarker) { detached.fulfill() }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        guard case .hookID = try client.request(.bindHook(
+            event: "client-attached", source: "display-message \"\(attachedMarker)\"", condition: nil
+        )) else { return XCTFail("expected hookID") }
+        guard case .hookID = try client.request(.bindHook(
+            event: "client-detached", source: "display-message \"\(detachedMarker)\"", condition: nil
+        )) else { return XCTFail("expected hookID") }
+
+        let subscription = try client.subscribeSurfaceOutput(surfaceID: target.surfaceID, label: "hook-test") { _, _ in }
+        wait(for: [attached], timeout: 5)
+        subscription.cancel()
+        wait(for: [detached], timeout: 5)
+    }
+
     /// A frame that de-frames cleanly but carries no request (a `{}` / `{"request":null}`
     /// envelope, e.g. from a newer client or schema skew) must get an explicit `.error` reply,
     /// not silence — otherwise the client blocks until its timeout. Regression for the daemon

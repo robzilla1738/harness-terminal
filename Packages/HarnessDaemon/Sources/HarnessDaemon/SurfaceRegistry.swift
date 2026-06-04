@@ -1053,13 +1053,19 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 termProgramVersion: identity.version,
                 scrollbackURL: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
             )
-            session.onExit = { [weak self, weak session] in
-                self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session)
+            session.onExit = { [weak self, weak session] exitStatus in
+                self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session, exitStatus: exitStatus)
             }
             // Internal monitor subscription (Phase 5): cheap output/bell/idle tracking, drained
             // by `processMonitors`. Lives for the surface's lifetime (cleared on teardown).
             _ = session.subscribe { [weak self] data, _ in self?.noteSurfaceOutput(surfaceKey: surfaceID, data: data) }
             sessions[surfaceID] = session
+            // A dead retained pane (`remain-on-exit`) carries its exit status until revived —
+            // this spawn IS the revival, so clear it. Idempotent: a plain ensure on a live
+            // surface reports no change and commits nothing.
+            if let sid = UUID(uuidString: surfaceID), editor.setTabExitStatus(surfaceID: sid, status: nil) {
+                commit()
+            }
             return surfaceID
         } catch {
             fputs("HarnessDaemon surface launch failed for \(surfaceID): \(error)\n", harnessStderr)
@@ -1373,7 +1379,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
     }
 
-    private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?) {
+    private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?, exitStatus: Int32? = nil) {
         lock.lock()
         guard let session, sessions[surfaceID] === session else { lock.unlock(); return }
         sessions.removeValue(forKey: surfaceID)
@@ -1388,6 +1394,18 @@ public final class SurfaceRegistry: @unchecked Sendable {
         // handlers, so it must run off the registry lock — resolve the target here, dispatch
         // there.
         let keep = optionStore.get("remain-on-exit")?.boolValue ?? true
+        if keep {
+            // The retained dead pane must not keep live-looking metadata: the detector was just
+            // unregistered, so no later scanner pass can emit a nil change for this surface —
+            // without these clears, list-agents/the notch/tab chips keep showing the old agent
+            // and any waiting-notification on a dead pane until respawn.
+            editor.setAgent(nil, forSurfaceKey: surfaceID)
+            if let sid = UUID(uuidString: surfaceID) {
+                editor.clearTabNotification(surfaceID: sid)
+                editor.setTabExitStatus(surfaceID: sid, status: exitStatus.map(Int.init))
+            }
+            commit()
+        }
         let toClose = keep ? nil : editor.paneLocation(forSurfaceKey: surfaceID)
         fireHookLocked(.paneExited, surfaceKey: surfaceID)
         lock.unlock()
