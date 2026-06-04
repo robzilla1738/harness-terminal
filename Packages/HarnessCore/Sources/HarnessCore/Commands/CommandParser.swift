@@ -320,7 +320,7 @@ public enum CommandParser {
         case "break-pane":
             return .breakPane
         case "respawn-pane":
-            return .respawnPane(keepHistory: !tokens.contains("-k"))
+            return .respawnPane(keepHistory: !(tokens.contains("-k") || tokens.contains("--clear-history")))
         case "move-pane":
             // move-pane -s <src> [-t <dst>] [-h|-v] — like join-pane with an
             // explicit source. `-v` stacks (horizontal divider); default/`-h` is

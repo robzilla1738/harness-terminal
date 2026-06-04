@@ -871,7 +871,9 @@ final class HarnessSidebarPanelViewController: NSViewController {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         for session in others {
-            SessionCoordinator.shared.requestDaemon(.closeSession(sessionID: session.id))
+            // Through closeSession (not raw IPC) so each session's terminal hosts are
+            // torn down too — otherwise stale TerminalHostViews linger in the registry.
+            SessionCoordinator.shared.closeSession(session)
         }
         SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: id)
         SessionCoordinator.shared.syncFromDaemon()

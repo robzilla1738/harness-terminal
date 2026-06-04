@@ -1085,10 +1085,10 @@ struct HarnessCLI {
 
     static func handleRespawnPane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli respawn-pane --surface <id> [--clear-history]\n", harnessStderr)
+            fputs("Usage: harness-cli respawn-pane --surface <id> [--clear-history|-k]\n", harnessStderr)
             exit(1)
         }
-        let keepHistory = !args.contains("--clear-history")
+        let keepHistory = !(args.contains("--clear-history") || args.contains("-k"))
         _ = try checkedRequest(client, .respawnPane(surfaceID: surface, keepHistory: keepHistory))
     }
 
@@ -1454,7 +1454,7 @@ struct HarnessCLI {
           rotate-window --tab <uuid> [--reverse]
           break-pane --pane <uuid>
           join-pane --src <uuid> --dst <uuid> --direction horizontal|vertical
-          respawn-pane --surface <id> [--clear-history]
+          respawn-pane --surface <id> [--clear-history|-k]
           select-pane --pane <uuid> --dir L|R|U|D
           set-option [-g|-w|-s|-t|-p] [-T target] <key> <value>
           show-options [-g|-w|-s|-t|-p] [--json] [--pretty]

@@ -102,6 +102,9 @@ scroll, OSC 9;4 progress), and a pre-release audit's worth of bug fixes.
   no longer carry a trailing space when no version is set.)
 - **Copy-mode scroll state stays in sync.** Entering/leaving copy mode resets the scrollbar
   and the sub-line wheel remainder, so the first wheel tick afterwards isn't swallowed.
+- **`respawn-pane` clear-history flags unified.** `harness-cli respawn-pane` accepts `-k`
+  alongside `--clear-history`, and the command grammar accepts `--clear-history` alongside
+  `-k` — the two layers previously each understood only their own spelling.
 - **Focus reporting (DECSET 1004) now actually reports.** The mode was tracked but `CSI I`/
   `CSI O` were never sent on focus changes — vim/tmux autocommands now fire, including when
   the whole window activates or deactivates (which also fixes the hollow-cursor state for
@@ -202,7 +205,7 @@ scroll, OSC 9;4 progress), and a pre-release audit's worth of bug fixes.
   addition to the macOS app.
 - **Persistent scrollback.** A pane's scrollback is persisted to disk per surface and
   restored when the daemon restarts, so history survives a daemon restart or crash.
-  `respawn-pane -k` drops the persisted history.
+  `respawn-pane --clear-history` drops the persisted history.
 
 ### Changed
 - **Settings overhaul.** A native, themed Settings window with grouped sections

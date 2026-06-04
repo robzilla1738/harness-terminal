@@ -17,9 +17,12 @@ final class SurfaceProgressTracker {
     private var reports: [SurfaceID: TerminalProgressReport] = [:]
     private var staleTimers: [SurfaceID: DispatchWorkItem] = [:]
 
-    /// True while the surface has a live (non-removed, non-stale) progress report.
+    /// True while the surface has a live (non-removed, non-stale) progress report in a
+    /// state that means "busy". `error`/`paused` are NOT working — showing the working
+    /// dot for a stalled or errored agent would say the opposite of the truth.
     func isActive(_ id: SurfaceID) -> Bool {
-        reports[id] != nil
+        guard let state = reports[id]?.state else { return false }
+        return state == .set || state == .indeterminate
     }
 
     func update(_ report: TerminalProgressReport, forSurface id: SurfaceID) {

@@ -13,6 +13,14 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("resize-pane -Z"), .zoomPane)
     }
 
+    func testRespawnPaneAcceptsBothClearHistoryForms() throws {
+        // `-k` is the tmux-style grammar flag; `--clear-history` is the harness-cli long
+        // form. Both must work in both layers so the docs can't be wrong.
+        XCTAssertEqual(try CommandParser.parse("respawn-pane"), .respawnPane(keepHistory: true))
+        XCTAssertEqual(try CommandParser.parse("respawn-pane -k"), .respawnPane(keepHistory: false))
+        XCTAssertEqual(try CommandParser.parse("respawn-pane --clear-history"), .respawnPane(keepHistory: false))
+    }
+
     func testParsesNavigationAndSessions() throws {
         XCTAssertEqual(try CommandParser.parse("next-window"), .nextWindow)
         XCTAssertEqual(try CommandParser.parse("previous-window"), .previousWindow)

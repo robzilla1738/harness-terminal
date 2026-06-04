@@ -423,6 +423,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.frameBuilder = FrameBuilder(
             resolver: resolver,
             cursorColor: theme.cursor ?? theme.foreground,
+            cursorTextColor: theme.cursorText,
             colorRendering: resolvedColorRendering,
             colorGamut: resolvedGamut
         )
@@ -678,6 +679,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.frameBuilder = FrameBuilder(
             resolver: resolver,
             cursorColor: cursor,
+            cursorTextColor: cursorText,
             canvasOpacity: self.canvasOpacity,
             colorRendering: resolvedColorRendering,
             colorGamut: resolvedGamut,
@@ -1966,9 +1968,14 @@ public final class HarnessTerminalSurfaceView: NSView {
             let key: SpecialKey = lines > 0 ? .up : .down
             let perLine = inputEncoder.encode(key, modifiers: [], modes: modes)
             guard !perLine.isEmpty else { return }
+            // Cap one event's burst (don't flood the PTY on a violent fling) but carry
+            // the excess back into the remainder so momentum isn't silently truncated.
+            let send = min(abs(lines), 32)
+            let excess = abs(lines) - send
+            if excess > 0 { wheelLineRemainder += CGFloat(lines > 0 ? excess : -excess) }
             var bytes: [UInt8] = []
-            bytes.reserveCapacity(perLine.count * min(abs(lines), 32))
-            for _ in 0 ..< min(abs(lines), 32) { bytes.append(contentsOf: perLine) }
+            bytes.reserveCapacity(perLine.count * send)
+            for _ in 0 ..< send { bytes.append(contentsOf: perLine) }
             emit(bytes)
             return
         }
