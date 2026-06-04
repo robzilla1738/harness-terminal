@@ -14,9 +14,11 @@ import os
 /// parse+build is ~16µs, so if typing feels laggy the `present` interval is where the time is, and
 /// that is what the vsync/drawable-pacing work targets.
 ///
-/// Subsystem `com.robert.harness`, category `frame`. Profile a `make preview` run with
-/// `HARNESS_FRAME_SIGNPOSTS=1` set in the app's environment, or `xctrace record --template
-/// 'os_signpost'`.
+/// Subsystem `com.robert.harness`, category `frame`. Enable with `PREVIEW_SIGNPOSTS=1 make preview`
+/// (which launches `open … --args -HARNESS_FRAME_SIGNPOSTS 1`), by setting
+/// `HARNESS_FRAME_SIGNPOSTS=1` in the app's launch environment (direct binary launch /
+/// `xctrace record --template 'os_signpost' --launch …`), then read with
+/// `log stream --predicate 'subsystem == "com.robert.harness"'`.
 final class FrameSignposter: @unchecked Sendable {
     static let shared = FrameSignposter()
 
@@ -42,7 +44,13 @@ final class FrameSignposter: @unchecked Sendable {
     private let presentLogEvery = 120
 
     init() {
+        // `open` (Finder, `make preview`) does not forward the calling shell's environment to a
+        // GUI app, so the env var alone is unreachable in practice. Also accept the argument
+        // domain — `open -n Harness.app --args -HARNESS_FRAME_SIGNPOSTS 1` lands in
+        // `UserDefaults.standard` via NSArgumentDomain. One read at init; the hot path still
+        // branches on the stored `enabled`.
         enabled = ProcessInfo.processInfo.environment["HARNESS_FRAME_SIGNPOSTS"] == "1"
+            || UserDefaults.standard.bool(forKey: "HARNESS_FRAME_SIGNPOSTS")
         #if canImport(os)
         signposter = OSSignposter(subsystem: "com.robert.harness", category: "frame")
         logger = Logger(subsystem: "com.robert.harness", category: "frame")

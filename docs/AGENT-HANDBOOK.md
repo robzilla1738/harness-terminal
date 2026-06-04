@@ -32,7 +32,13 @@ untouched program output (`applyThemeToTerminalOutput` toggles theme-colored out
 window padding (centered grid) + a live resize HUD, cursor styles + blink (a hollow box when the
 window is unfocused), word/line (double/triple-click) + Option-rectangle text selection + copy /
 paste (bracketed-paste aware, with paste protection) / copy-on-select / right-click menu, mouse
-reporting (SGR 1006), scrollback (wheel / Shift+PageUp/Down), reflow on resize, optional WCAG
+reporting (SGR 1006), pixel-smooth scrollback (wheel / Shift+PageUp/Down; trackpad scrolls by
+sub-line fractions — `scrollFraction` renders as a whole-device-pixel vertex `scrollPx` uniform
+over the unchanged row-instance cache, with a display-only peek row appended to scrolled frames
+and a grid-box scissor; consumers stay line-based on the integer `scrollOffset`), reflow on
+resize (drag repaints reuse the renderer row cache under the frozen origin — empty damage when
+`lastPresentedResultIsRendererCoherent`, `encodedRows == 0` per sub-cell tick — and output/tick
+presents defer to the layout repaint while `presentsWithTransaction` is on), optional WCAG
 `minimum-contrast`, a bundled Nerd Font symbol fallback (Powerline/icon glyphs always render),
 procedurally-rendered block elements + box-drawing (seamless, font-independent), and IME / dead
 keys (`NSTextInputClient`).
@@ -494,7 +500,7 @@ App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The lau
 
 **HarnessBenchmarks** (opt-in perf baselines for VT parse / readGrid / scrollback / IPC codec / compositor / frame building / renderer stats / atlas caches / off-main stall sampling): `make bench` or `HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks` (skipped otherwise so `swift test` stays fast). Benchmarks print JSON timing lines; do not gate CI on absolute timings. The engine gate is `testConsumerScoreboard` (`consumer_<workload>` with the `feedNanos`/`frameBuildNanos` split — parse dominates, frame build is ~0.1 ms); `testIPCInclusiveScoreboard` runs the same payloads through the real `IPCCodec` output frame to confirm the daemon framing/chunking tax is negligible. The cross-terminal `Scripts/benchmarks/terminal_stress_runner.py` drain is **not** an engine measure (PTY-drain, ±25–33% on window focus, can move opposite to engine speed) — gate on the in-process scoreboard, not the drain ratios.
 
-**Frame signpost instrumentation (`HARNESS_FRAME_SIGNPOSTS=1`):** `FrameSignposter` (`HarnessTerminalKit`) is gated off by default (each call is a single branch when disabled, so it is safe on the hot path). Set `HARNESS_FRAME_SIGNPOSTS=1` in the app's launch environment to enable `os_signpost` intervals around the per-frame `parse → build → present` pipeline on the `com.robert.harness / frame` track. The `present` interval is the most informative: it wraps `nextDrawable()` + `inFlightSemaphore.wait()` on the main thread and captures the vsync / GPU back-pressure stall. Every 120 frames it also logs p50/p95/max present latency (µs) to the unified log, readable with `log stream --predicate 'subsystem == "com.robert.harness"'` without Instruments. Profile with `xctrace record --template 'os_signpost'` on a `make preview` run.
+**Frame signpost instrumentation (`HARNESS_FRAME_SIGNPOSTS=1`):** `FrameSignposter` (`HarnessTerminalKit`) is gated off by default (each call is a single branch when disabled, so it is safe on the hot path). Enable with `PREVIEW_SIGNPOSTS=1 make preview` — `open` strips the shell environment, so the preview script passes the flag as a launch argument (`open -n … --args -HARNESS_FRAME_SIGNPOSTS 1`, read via `UserDefaults`); setting `HARNESS_FRAME_SIGNPOSTS=1` in the launch environment also works for direct binary launches (`xctrace … --launch`). This enables `os_signpost` intervals around the per-frame `parse → build → present` pipeline on the `com.robert.harness / frame` track. The `present` interval is the most informative: it wraps `nextDrawable()` + `inFlightSemaphore.wait()` on the main thread and captures the vsync / GPU back-pressure stall. Every 120 frames it also logs p50/p95/max present latency (µs) to the unified log, readable with `log stream --predicate 'subsystem == "com.robert.harness"'` without Instruments. Profile with `xctrace record --template 'os_signpost'` on a `make preview` run.
 
 New mode/persistence/security tests also live in **HarnessCoreTests** (`ExperienceModeTests`, `SessionPersistenceTests`, `HookRegistryTests`, perms in `HarnessPathsTests`) and **HarnessDaemonTests** (`closeEphemeralSessions` + socket-perms in `DaemonRoundTripTests`).
 

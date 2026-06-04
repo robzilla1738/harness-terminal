@@ -210,6 +210,74 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertEqual(mismatches, 0, "rotated render must be pixel-identical to a full render")
     }
 
+    /// Pixel-smooth scrolling, renderer half. Fraction 0 with no clip must be byte-identical to
+    /// the pre-uniform pipeline (the at-rest pin); a whole-pixel translate must move every drawn
+    /// pixel up by exactly that amount (uniform-only — the instances are untouched); and the
+    /// scissor must hold content inside the grid box (the peek row stays hidden at fraction 0).
+    func testScrollFractionTranslateAndClipReadback() throws {
+        let (device, renderer) = try makeRenderer()
+        let cols = 12, rows = 4
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 10 {
+            term.feed("\u{1b}[3\(i % 8)mf\(i)\u{1b}[0m \u{1b}[4mu\(i)\u{1b}[24m \u{1b}[4\(i % 8)m#\u{1b}[0m\r\n")
+        }
+        let builder = FrameBuilder(theme: theme)
+        let testFrame = builder.build(term.readGrid(scrollbackOffset: 1)!)
+        let clear = RenderColor(theme.background)
+        let (w, h) = renderer.surfacePixelSize(columns: cols, rows: rows)
+
+        // Reference: plain render, no smooth-scroll parameters.
+        guard let refTarget = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        renderer.render(testFrame, to: refTarget, clearColor: clear)
+        let reference = readPixelBytes(refTarget, width: w, height: h)
+
+        // At-rest pin: explicit fraction 0 / nil clip is byte-identical.
+        guard let zeroTarget = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        renderer.render(testFrame, to: zeroTarget, clearColor: clear,
+                        scrollFractionPx: 0, smoothScrollClipRows: nil)
+        XCTAssertEqual(readPixelBytes(zeroTarget, width: w, height: h), reference,
+                       "fraction 0 must be byte-identical to the plain pipeline")
+
+        // Whole-pixel translate: every output row equals the reference row `n` pixels below.
+        let n = renderer.cellPixelHeight / 2
+        guard let shifted = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        renderer.render(testFrame, to: shifted, clearColor: clear,
+                        scrollFractionPx: Float(n), smoothScrollClipRows: rows)
+        let translated = readPixelBytes(shifted, width: w, height: h)
+        var mismatches = 0
+        for y in 0 ..< (h - n) {
+            let out = translated[(y * w * 4) ..< ((y + 1) * w * 4)]
+            let ref = reference[((y + n) * w * 4) ..< ((y + n + 1) * w * 4)]
+            if !out.elementsEqual(ref) { mismatches += 1 }
+        }
+        XCTAssertEqual(mismatches, 0, "translated content must match the reference shifted by \(n)px")
+
+        // Clip: with the scissor bounding the first `rows - 1` rows, the last row's box must be
+        // pure clear color even though the (untranslated) frame draws content there.
+        guard let clipped = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        renderer.render(testFrame, to: clipped, clearColor: clear,
+                        scrollFractionPx: 0, smoothScrollClipRows: rows - 1)
+        let clippedPixel = readPixels(clipped, width: w, height: h)
+        let referencePixel = readPixels(refTarget, width: w, height: h)
+        let clearBytes = (UInt8(clear.red * 255), UInt8(clear.green * 255), UInt8(clear.blue * 255))
+        // Find a pixel the reference genuinely draws in the last row (e.g. the colored `#` cell),
+        // then assert the clip leaves that exact pixel at the clear color.
+        let lastRowY = (rows - 1) * renderer.cellPixelHeight + renderer.cellPixelHeight / 2
+        var drawnX: Int?
+        for x in 0 ..< w {
+            let c = referencePixel(x, lastRowY)
+            if abs(Int(c.0) - Int(clearBytes.0)) > 8 || abs(Int(c.1) - Int(clearBytes.1)) > 8
+                || abs(Int(c.2) - Int(clearBytes.2)) > 8 {
+                drawnX = x
+                break
+            }
+        }
+        let x = try XCTUnwrap(drawnX, "the reference must draw something in the last row")
+        assertColor(clippedPixel(x, lastRowY),
+                    r: Int(clear.red * 255), g: Int(clear.green * 255), b: Int(clear.blue * 255),
+                    label: "clipped pixel x=\(x)")
+    }
+
     /// Rotation across a shift matrix — positive, negative, and multi-row. Pins the baked-Y
     /// rewrite sign (dy = shift·cellH in BOTH directions), the fall-off end (top rows drop for
     /// negative shifts, bottom for positive), and the exposed band, all at the pixel level —

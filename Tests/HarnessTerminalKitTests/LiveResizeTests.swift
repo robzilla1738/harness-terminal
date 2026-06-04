@@ -284,4 +284,167 @@ final class LiveResizeTests: XCTestCase {
         }
         XCTAssertFalse(view.testingPresentsWithTransaction)
     }
+
+    // MARK: - Near-free drag repaints (row-cache reuse under the frozen origin)
+
+    private func makeHostedView(in window: NSWindow) throws -> HarnessTerminalSurfaceView {
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        window.contentView = view
+        guard view.testingHasRenderer else { throw XCTSkip("renderer unavailable") }
+        view.layoutSubtreeIfNeeded()
+        return view
+    }
+
+    func testSubCellDragRepaintsReuseEveryRow() throws {
+        // The resize-lag fix: once the renderer cache holds the presented frame's rows, a sub-cell
+        // drag tick must encode ZERO rows — the cache keys (cols/rows/origin) are all stable under
+        // the frozen origin, so the repaint is an empty-damage full-reuse present.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+
+        for i in 0 ..< 50 { view.receive("line \(i)\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender() // damage-path present → cache holds this frame's rows
+        guard view.testingRepaintCacheCoherent else { throw XCTSkip("no present happened (drawable unavailable)") }
+        let rows = view.testingGridSize.rows
+
+        view.viewWillStartLiveResize()
+        defer { view.viewDidEndLiveResize() }
+        // A 1px growth stays inside the current cell column: pure drawable-size change.
+        var frame = window.frame
+        frame.size.width += 1
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        guard let stats = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        XCTAssertEqual(stats.encodedRows, 0, "sub-cell drag tick must reuse every row")
+        XCTAssertEqual(stats.reusedRows, rows)
+
+        // Second sub-cell tick: the first 0-encode present stored the uploaded-instance cache,
+        // so this one binds it zero-copy — no instance bytes cross to the GPU at all.
+        frame.size.width += 1
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        guard let second = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        XCTAssertEqual(second.encodedRows, 0)
+        XCTAssertEqual(second.instanceUploadBytes, 0, "steady-state drag ticks bind the uploaded cache zero-copy")
+    }
+
+    func testRepaintAfterPreviewPaysExactlyOneCachePopulatingRebuild() throws {
+        // The coherence gate: a preview reflow replaces `lastPresentedResult` WITHOUT presenting,
+        // so the next repaint must rebuild through the cache-populating path (all rows encoded) —
+        // and the tick after that must be free again. Asserted via the coherence seam + stats.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+
+        for i in 0 ..< 50 { view.receive("wrap test line \(i) abcdefghij\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard view.testingRepaintCacheCoherent else { throw XCTSkip("no present happened (drawable unavailable)") }
+
+        view.viewWillStartLiveResize()
+        defer { view.viewDidEndLiveResize() }
+        // Grow far enough to cross a cell-column boundary → updateGridSize runs the re-wrap
+        // preview, which replaces the cached frame without presenting it.
+        guard let renderer = view.testingLastRenderStats else { throw XCTSkip("no stats") }
+        _ = renderer
+        var frame = window.frame
+        frame.size.width += 40 // ≥ one cell column at any reasonable font size
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        guard let rebuild = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        let rows = view.testingGridSize.rows
+        XCTAssertEqual(rebuild.encodedRows, rows, "first repaint after a preview rebuilds every row")
+        XCTAssertTrue(view.testingRepaintCacheCoherent, "the rebuild repopulated the cache")
+
+        // Next sub-cell tick: free again.
+        frame.size.width += 1
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        guard let reuse = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        XCTAssertEqual(reuse.encodedRows, 0, "the tick after the rebuild reuses every row")
+    }
+
+    func testOutputPresentsDeferDuringDragAndFlushAfter() throws {
+        // Single present source during a drag: output arriving mid-drag must not present through
+        // the scheduler's async path (it marks dirty instead); the deferred work flushes once the
+        // drag ends and the mode clears.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        view.receive("before drag\r\n")
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+
+        view.viewWillStartLiveResize()
+        var presents = 0
+        view.onRenderStats = { _ in presents += 1 }
+        view.receive("mid-drag output\r\n")
+        view.testingWaitForEmulatorIdle()
+        // Drain the main hop the parse completion queued; its presentNow must hit the hold.
+        let hop = expectation(description: "main hop drained")
+        DispatchQueue.main.async { hop.fulfill() }
+        wait(for: [hop], timeout: 2)
+        XCTAssertEqual(presents, 0, "mid-drag output must not present through the async path")
+        XCTAssertTrue(view.testingRenderPending, "the deferred output stays marked dirty")
+
+        view.viewDidEndLiveResize()
+        XCTAssertFalse(view.testingPresentsWithTransaction)
+        // The next scheduler tick (display cadence) presents the freshest frame; drive it directly.
+        view.testingForceRender()
+        XCTAssertGreaterThan(presents, 0, "deferred output flushes after the drag")
+    }
+
+    func testAsyncRenderPathStillPresentsOutsideDrag() throws {
+        // The guard that defers the scheduler's async render entry during a drag must be inert
+        // outside one: a display tick with pending output presents instead of re-marking dirty.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        view.receive("warmup\r\n")
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+
+        var presents = 0
+        view.onRenderStats = { _ in presents += 1 }
+        view.receive("echo\r\n")
+        view.testingWaitForEmulatorIdle()
+        // Drain the parse-completion main hop so the output's dirty mark has landed.
+        let hop = expectation(description: "main hop drained")
+        DispatchQueue.main.async { hop.fulfill() }
+        wait(for: [hop], timeout: 2)
+        XCTAssertTrue(view.testingRenderPending, "output marked the surface dirty")
+        XCTAssertTrue(view.testingSchedulerTick(), "the tick must run the async render, not defer")
+        // The off-main build presents on the next main hop; drain it.
+        let settle = expectation(description: "off-main build presented")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { settle.fulfill() }
+        wait(for: [settle], timeout: 2)
+        XCTAssertGreaterThan(presents, 0, "output outside a drag presents through the async path")
+        XCTAssertFalse(view.testingRenderPending, "nothing re-marked dirty (the hold is inert)")
+    }
 }

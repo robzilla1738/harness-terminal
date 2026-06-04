@@ -48,6 +48,10 @@ private struct SurfaceFrameBuildResult: Sendable {
     /// by the same amount instead of re-encoding the kept rows. `damage` then lists exactly the
     /// newly-exposed rows.
     var scrollShift: Int = 0
+    /// True when the frame carries the display-only smooth-scroll peek row: one extra row below
+    /// the viewport (built whenever the view is scrolled into history) that the fraction translate
+    /// reveals. The renderer clips it behind the grid box at fraction 0.
+    var hasPeekRow: Bool = false
     var frameBuildNanos: UInt64
     var clearColor: RenderColor
 }
@@ -254,6 +258,16 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// to drag-end (`scheduleResizeCommit`) — so stretching the last frame is exactly correct and
     /// never blocks main behind the parser. Main-thread only (written in `presentBuiltFrame`).
     private var lastPresentedResult: SurfaceFrameBuildResult?
+    /// True when the renderer's row-instance cache verifiably holds exactly
+    /// `lastPresentedResult.frame`'s rows — i.e. the last renderer encode was of that frame through
+    /// the cache-updating path (non-nil damage, no images). Then `repaintLastFrame` can present with
+    /// EMPTY damage and reuse every row (`encodedRows == 0`, zero-copy instance bind): under the
+    /// drag-frozen origin all cache keys are stable, so the per-tick cost collapses to the viewport
+    /// uniform + draw. Anything that lets the cache and the frame disagree — a preview replacing the
+    /// frame without a present, a dropped present wiping the cache, an overlay/image frame bypassing
+    /// it, a renderer rebuild — clears the flag, and the next repaint pays one cache-populating full
+    /// rebuild before ticks turn free again. Main-thread only, like `lastPresentedResult`.
+    private var lastPresentedResultIsRendererCoherent = false
     /// The (cols, rows) the live-resize preview was last built for, so a continuous drag rebuilds the
     /// re-wrap preview only when the cell count actually changes (sub-cell drag frames re-present the
     /// cached preview at the new drawable size). Reset on commit so the next drag starts fresh.
@@ -331,6 +345,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var pasteProtection = true
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
+    /// Smooth-scroll sub-line position. The continuous scrollback position is
+    /// `P = scrollOffset - scrollFraction` (lines): the frame is built at the integer
+    /// `scrollOffset = ceil(P)` — one line further back — and translated UP by
+    /// `scrollFraction` of a cell at present time (a vertex-stage uniform; render-only, never
+    /// baked into instances). The peek row fills the gap the translate opens at the bottom.
+    /// Always 0 at the live bottom and whenever resting exactly on a line; every line-based
+    /// consumer (hit-testing, copy mode, find, pinning, mouse reporting) keeps reading the
+    /// integer `scrollOffset`.
+    private var scrollFraction: CGFloat = 0
     /// Sub-line wheel remainder carried between scroll events so small trackpad movements
     /// accumulate into whole lines instead of each snapping a full line (see `consumeWheelLines`).
     private var wheelLineRemainder: CGFloat = 0
@@ -547,6 +570,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 // the mirror always converges on the emulator's latest state.
                 self.inputModesMirror = modesAfterFeed
                 self.altScreenMirror = altScreenAfterFeed
+                self.historyCountMirror = afterHistory
                 if self.scrollOffset > 0 {
                     let added = afterHistory - beforeHistory
                     if added > 0 { self.scrollOffset = min(afterHistory, self.scrollOffset + added) }
@@ -587,7 +611,11 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     func testingWaitForEmulatorIdle() {
-        emulatorState.sync { _ in }
+        // Drain the parse queue AND refresh the main-thread mirrors the parse hop would have
+        // refreshed — tests call this in place of spinning the runloop, so the mirrors must not
+        // lag the drained state (smooth scrolling clamps against `historyCountMirror`).
+        let history = emulatorState.sync { $0.historyCount }
+        historyCountMirror = history
     }
 
     func testingInputModes() -> TerminalModes { inputModes() }
@@ -611,9 +639,19 @@ public final class HarnessTerminalSurfaceView: NSView {
     var testingOriginOffset: (x: Int, y: Int) { (originOffsetX, originOffsetY) }
     var testingHasRenderer: Bool { renderer != nil }
     var testingLastPresentScheduleNanos: UInt64 { renderer?.stats.presentScheduleNanos ?? 0 }
+    // Full renderer stats for the frame-pacing harness (encodedRows/reusedRows/uploadBytes/...).
+    var testingLastRenderStats: TerminalRenderStats? { renderer?.stats }
+    var testingRepaintCacheCoherent: Bool { lastPresentedResultIsRendererCoherent }
     func testingRepaintLastFrame() -> Bool { repaintLastFrame() }
     // Scroll-reuse seams: drive a synchronous build+present and a scrollback scroll headlessly.
     func testingForceRender() { scheduler.forceRender() }
+    // Smooth-scroll seams: continuous (sub-line) scrolling and the resulting offset/fraction split.
+    func testingScrollByContinuous(lines: CGFloat) { scrollByContinuous(lines: lines) }
+    var testingScrollPosition: (offset: Int, fraction: CGFloat) { (scrollOffset, scrollFraction) }
+    // Drive one display-cadence tick (the scheduler's ASYNC render entry — the path the live-drag
+    // hold defers); tests use it where the real CADisplayLink would fire.
+    @discardableResult
+    func testingSchedulerTick() -> Bool { scheduler.tick() }
     func testingScrollBy(lines: Int) { scrollBy(lines: lines) }
 
     /// The full appearance the host computes from settings + theme:
@@ -767,6 +805,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// fresh `TerminalEmulator`, so reads before the first output are correct.
     private var inputModesMirror = TerminalModes()
     private var altScreenMirror = false
+    /// History line count, same mirror discipline: smooth scrolling clamps against it on EVERY
+    /// precise wheel event (sub-line deltas included), so the clamp must not `queue.sync` behind
+    /// a busy parse — that per-event stall is the scroll-jank class. At most one chunk stale;
+    /// history only moves via parsed output, and the output-pinning hop re-aligns the offset with
+    /// the real count anyway, so a momentarily-short clamp self-corrects on the next event.
+    private var historyCountMirror = 0
 
     /// The terminal modes input encoding should honor right now (mirror on the off-main pipeline;
     /// direct read when the emulator lives on main).
@@ -782,6 +826,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func invalidateRenderGeneration() {
         renderGeneration &+= 1
         emulatorState.resetPlainFrame()
+        lastPresentedResultIsRendererCoherent = false
     }
 
     private func configureLayer() {
@@ -1026,6 +1071,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             // not flushed: re-attach runs `layout()`, which re-schedules a commit if the size
             // really differs.
             metalLayer.presentsWithTransaction = false
+            metalLayer.maximumDrawableCount = 2 // unwind the drag-scoped third drawable too
             liveResizeFrozenOrigin = nil
             resizeCommitWork?.cancel()
             resizeCommitWork = nil
@@ -1076,6 +1122,13 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func viewWillStartLiveResize() {
         super.viewWillStartLiveResize()
         metalLayer.presentsWithTransaction = true
+        // Transaction-mode presents hand their drawable to the window server until the CA commit
+        // completes, so with the steady-state pool of 2 (kept for keystroke echo latency) the
+        // next drag tick parks in `nextDrawable()` for most of a frame (measured p50 ~12ms on
+        // 120Hz hardware). A third drawable for the duration of the drag keeps one free while two
+        // ride their transactions; the in-flight semaphore stays at 2 — GPU completion is not the
+        // bottleneck here (semaphoreWait measured 0), the held presents are.
+        metalLayer.maximumDrawableCount = 3
         // Anchor the grid for the whole drag; re-centered once in `viewDidEndLiveResize`.
         // Before the first real layout there's no meaningful origin to freeze — leave nil so
         // `updateGridSize` computes normally.
@@ -1085,6 +1138,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         metalLayer.presentsWithTransaction = false
+        metalLayer.maximumDrawableCount = 2 // restore the low-latency echo pool (see configureLayer)
         // Flush the debounced grid+PTY commit now: the size is settled the moment the drag ends,
         // so the shell shouldn't wait out the coalescing delay (which exists for *animated*
         // resizes — sidebar slides, tiling — that never enter live resize). `perform` runs the
@@ -1291,7 +1345,20 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
-    private func renderNow() {
+    private func renderNow(forced: Bool = false) {
+        // Single present source during a live drag: while the layer presents with the CA
+        // transaction, an ad-hoc output/tick present would pay the synchronized
+        // commit→waitUntilScheduled stall on main AND replace `lastPresentedResult` with a fresh
+        // frame the renderer cache hasn't seen — forcing the next layout repaint back onto the
+        // full-rebuild path (defeating the empty-damage reuse that makes drag ticks near-free).
+        // Defer instead: re-mark dirty so the work is never lost (`presentNow`/`tick` cleared the
+        // flag before calling here); `layout()`'s repaint carries the visual per drag step, and
+        // the first tick after `viewDidEndLiveResize` flushes the freshest frame. `forced` keeps
+        // the synchronous path (first paint / no-cached-frame fallback inside layout) open.
+        if !forced, metalLayer.presentsWithTransaction {
+            scheduler.markDirty()
+            return
+        }
         if offMainParserFramePipelineEnabled {
             renderNowOffMain()
             return
@@ -1374,11 +1441,17 @@ public final class HarnessTerminalSurfaceView: NSView {
         if offMainParserFramePipelineEnabled {
             renderNowOffMain(synchronous: true)
         } else {
-            renderNow()
+            renderNow(forced: true)
         }
     }
 
     private func renderNowOffMain(synchronous: Bool = false) {
+        // Mirror of `renderNow`'s live-drag hold for the scheduler's async entry; the synchronous
+        // (layout/forceRender) entry must keep presenting — it IS the drag's single present source.
+        if !synchronous, metalLayer.presentsWithTransaction {
+            scheduler.markDirty()
+            return
+        }
         guard renderer != nil else { return }
         let generation = renderGeneration
         let state = emulatorState
@@ -1408,6 +1481,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             var frame: TerminalFrame
             var renderDamage: TerminalDamage?
             var scrollShift = 0
+            var peekRow = false
             if let cm = copyModeState {
                 let offset = cm.scrollbackOffset(historyCount: emulator.historyCount)
                 let grid = emulator.readGrid(scrollbackOffset: offset)
@@ -1432,8 +1506,17 @@ public final class HarnessTerminalSurfaceView: NSView {
                 state.lastPlainFrame = nil
                 state.lastViewportFrame = nil // copy-mode frames bake overlays — not a shift source
             } else {
-                let grid = requestedScrollOffset > 0
-                    ? emulator.readGrid(scrollbackOffset: requestedScrollOffset)
+                // Scrolled views build with the smooth-scroll peek row appended (rows+1 tall) so
+                // the fraction translate always has real content to reveal; the live view (offset
+                // 0) stays byte-identical. Augmenting whenever scrolled — not just when a fraction
+                // is active — keeps the frame shape uniform across the whole scrolled regime, so
+                // `buildShifted` keeps rotating instead of bailing on a rows mismatch.
+                peekRow = requestedScrollOffset > 0
+                let grid = peekRow
+                    ? Self.appendingPeekRow(
+                        to: emulator.readGrid(scrollbackOffset: requestedScrollOffset),
+                        emulator: emulator, offset: requestedScrollOffset
+                    )
                     : emulator.readGrid()
                 let damage = emulator.consumeDamage()
                 let findHits = findIsActive
@@ -1457,9 +1540,11 @@ public final class HarnessTerminalSurfaceView: NSView {
                    let shifted = builder.buildShifted(grid, reusing: previous, shift: scrollDelta) {
                     frame = shifted
                     scrollShift = scrollDelta
+                    // Exposed band in FRAME rows (grid.rows == viewRows + 1 when the peek row is
+                    // appended): a shift toward live exposes the bottom band including the peek.
                     let exposed = scrollDelta > 0
-                        ? IndexSet(integersIn: 0 ..< min(scrollDelta, viewRows))
-                        : IndexSet(integersIn: max(0, viewRows + scrollDelta) ..< viewRows)
+                        ? IndexSet(integersIn: 0 ..< min(scrollDelta, grid.rows))
+                        : IndexSet(integersIn: max(0, grid.rows + scrollDelta) ..< grid.rows)
                     renderDamage = TerminalDamage(rows: exposed)
                 } else if plain {
                     // Only reuse a cached frame built for THIS generation — a stale-generation frame
@@ -1473,6 +1558,15 @@ public final class HarnessTerminalSurfaceView: NSView {
                     frame = builder.build(grid, region: selectionRegion,
                                           searchHighlights: findHits,
                                           imageProvider: { emulator.image(for: $0) })
+                    // Overlay-free full rebuilds (scrolled views) present with FULL damage, not
+                    // nil: the instances are identical, but the encode routes through the
+                    // cache-populating path, so the row cache is warm for the next scroll
+                    // rotation or fraction-only repaint (nil would reset it and force the next
+                    // tick to re-encode everything). Overlay frames keep nil — their baked
+                    // highlight cells must not poison the cache.
+                    if overlayFree, frame.images.isEmpty {
+                        renderDamage = TerminalDamage(full: true)
+                    }
                 }
                 if !preedit.isEmpty, requestedScrollOffset == 0 {
                     Self.applyPreedit(into: &frame, text: preedit, builder: builder, canvasForeground: fg)
@@ -1506,6 +1600,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 frame: frame,
                 damage: renderDamage,
                 scrollShift: scrollShift,
+                hasPeekRow: peekRow,
                 frameBuildNanos: DispatchTime.now().uptimeNanoseconds &- frameBuildStart,
                 clearColor: builder.renderColor(bg, alpha: opacity)
             )
@@ -1538,6 +1633,11 @@ public final class HarnessTerminalSurfaceView: NSView {
             // Remember the presented frame so a live resize can re-stretch it without rebuilding
             // (and without touching the emulator queue). See `repaintLastFrame`.
             lastPresentedResult = result
+            // The renderer reports whether the encode left its row cache holding exactly this
+            // frame's rows — false for the cache-bypassing paths (nil damage, images) AND for a
+            // mid-encode atlas reset that wiped the cache (which a damage-only heuristic here
+            // could not distinguish from a normal full encode).
+            lastPresentedResultIsRendererCoherent = renderer.stats.rowCacheCoherent
             onRenderStats?(renderer.stats)
         } else {
             // A genuine drop: nothing reached the glass this turn (repaintLastFrame failures
@@ -1549,6 +1649,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             // failed after mutating them). Either way the cache and the next frame's damage
             // disagree about what's on the glass, so drop the cache: the retry re-encodes fully.
             renderer.invalidateRowReuseCache()
+            lastPresentedResultIsRendererCoherent = false
             FrameSignposter.shared.recordFrameDrop()
             scheduleRender() // transient encode/present failure — retry next tick
         }
@@ -1574,6 +1675,23 @@ public final class HarnessTerminalSurfaceView: NSView {
         _ result: SurfaceFrameBuildResult, damage: TerminalDamage?, scrollShift: Int = 0
     ) -> Bool {
         guard let renderer else { return false }
+        // Smooth scroll is applied at present time from the CURRENT fraction (render-only state):
+        // a fraction-only tick re-presents the same frame with just a new uniform. Rounded to
+        // whole device pixels so glyphs stay crisp mid-scroll (no sub-pixel resampling).
+        // The translate is gated on the FRAME, not just the fraction: (1) a frame without the
+        // peek row (built at offset 0 — e.g. the cached live frame re-presented while the first
+        // scrolled build is still in flight) must present untranslated, or the translate would
+        // open a background gap at the bottom with no row to fill it — the worst case is one
+        // un-smooth frame, never a hole; (2) image-bearing frames present untranslated too
+        // (`image_vertex` has no scrollPx), so an image scrolling INTO a fractional viewport
+        // can never sit misaligned against its text — `scrollByContinuous` quantizes the next
+        // position the same way. The clip rides the peek row itself: hidden at fraction 0, and
+        // rows slide out of the fixed grid box mid-fraction.
+        let canTranslate = result.hasPeekRow && result.frame.images.isEmpty
+        let fractionPx = canTranslate && scrollFraction > 0
+            ? Float((scrollFraction * CGFloat(renderer.cellPixelHeight)).rounded())
+            : 0
+        let clipRows = result.hasPeekRow ? result.frame.rows - 1 : nil
         let sp = FrameSignposter.shared
         let presentStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
         var drawableWaitNanos: UInt64 = 0
@@ -1591,6 +1709,8 @@ public final class HarnessTerminalSurfaceView: NSView {
                 ligatures: ligaturesEnabled,
                 damage: damage,
                 scrollShift: scrollShift,
+                scrollFractionPx: fractionPx,
+                smoothScrollClipRows: clipRows,
                 frameBuildNanos: result.frameBuildNanos,
                 synchronizedWithTransaction: metalLayer.presentsWithTransaction
             )
@@ -1606,22 +1726,62 @@ public final class HarnessTerminalSurfaceView: NSView {
         return didPresent
     }
 
+    /// Append the buffer line just below the scrolled viewport as a display-only (rows+1)th row —
+    /// the smooth-scroll peek row the fraction translate reveals. The snapshot stays a uniform
+    /// window over `[history ++ viewport]`, so `buildShifted` rotates it like any other row.
+    /// `offset ≥ 1` guarantees the line below the viewport exists (it is at worst the live bottom
+    /// row); a defensive blank-pad covers width races during reflow. Runs on the emulator queue
+    /// (called from the build closure).
+    private nonisolated static func appendingPeekRow(
+        to snapshot: TerminalGridSnapshot, emulator: TerminalEmulator, offset: Int
+    ) -> TerminalGridSnapshot {
+        let peekIndex = emulator.historyCount - offset + snapshot.rows
+        var line = peekIndex >= 0 && peekIndex < emulator.bufferLineCount
+            ? emulator.bufferLine(peekIndex) : []
+        if line.count < snapshot.cols {
+            line.append(contentsOf: Array(repeating: .blank, count: snapshot.cols - line.count))
+        } else if line.count > snapshot.cols {
+            line.removeLast(line.count - snapshot.cols)
+        }
+        return TerminalGridSnapshot(
+            cols: snapshot.cols, rows: snapshot.rows + 1, cells: snapshot.cells + line,
+            cursor: snapshot.cursor, images: snapshot.images, marks: snapshot.marks
+        )
+    }
+
     /// Re-present the last built frame at the *current* drawable size with no emulator-queue access
     /// — the smooth-resize fast path. Used by `layout()` during a live drag/animation: the grid
     /// hasn't reflowed yet (deferred to drag-end), so the cached frame is still the correct content;
     /// we just need to redraw it into the freshly-resized drawable. Returns false when there's no
     /// valid cached frame for this generation, so the caller falls back to a full synchronous build.
     ///
-    /// `damage: nil` forces a full instance rebuild + redraw: the renderer always clears and draws
-    /// the complete frame (loadAction `.clear`), but the per-row instance-upload cache is keyed to
-    /// the old origin/viewport, so a full rebuild avoids reusing buffers built for the prior size.
+    /// Damage selection is the per-tick cost lever. Under the drag-frozen origin every row-cache
+    /// key (cols/rows/origin/atlas) is stable, so when the cache verifiably holds this exact
+    /// frame's rows (`lastPresentedResultIsRendererCoherent`) an EMPTY damage reuses every row —
+    /// `encodedRows == 0`, zero-copy instance bind, only the viewport uniform changes. When it
+    /// doesn't (preview reflow replaced the frame, a drop wiped the cache), a `full` damage pays
+    /// one rebuild *through the cache-populating path* so the very next tick is free again —
+    /// unlike `damage: nil`, which rebuilds AND leaves the cache empty, making every sub-cell drag
+    /// tick a full re-encode (the pre-#57 resize-lag source). Image frames keep `nil` (the
+    /// renderer's cache path requires `images.isEmpty`).
     @discardableResult
     private func repaintLastFrame() -> Bool {
         guard let result = lastPresentedResult,
               result.generation == renderGeneration,
               window != nil, let renderer else { return false }
-        let didPresent = presentFrame(result, damage: nil)
-        if didPresent { onRenderStats?(renderer.stats) }
+        let damage: TerminalDamage?
+        if !result.frame.images.isEmpty {
+            damage = nil
+        } else if lastPresentedResultIsRendererCoherent {
+            damage = TerminalDamage(rows: [], full: false)
+        } else {
+            damage = TerminalDamage(full: true)
+        }
+        let didPresent = presentFrame(result, damage: damage)
+        if didPresent {
+            lastPresentedResultIsRendererCoherent = renderer.stats.rowCacheCoherent
+            onRenderStats?(renderer.stats)
+        }
         return didPresent
     }
 
@@ -1657,7 +1817,12 @@ public final class HarnessTerminalSurfaceView: NSView {
                 frameBuildNanos: 0, clearColor: builder.renderColor(bg, alpha: opacity)
             )
         }
-        if let result { lastPresentedResult = result }
+        if let result {
+            lastPresentedResult = result
+            // The preview replaced the frame WITHOUT a present: the renderer cache still holds the
+            // previous frame's rows, so the next repaint must take the cache-populating full path.
+            lastPresentedResultIsRendererCoherent = false
+        }
     }
 
     // MARK: - Cursor blink
@@ -1690,22 +1855,67 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     // MARK: - Scrollback
 
-    /// Scroll the viewport by `lines` (positive = back into history). Clamped to the
-    /// available history; clears any selection (its coordinates are viewport-relative).
+    /// Scroll the viewport by whole `lines` (positive = back into history) — keyboard paging and
+    /// programmatic scrolls. Routed through the continuous path so a fractional rest position is
+    /// preserved (a page-up while half a line into a scroll stays half a line offset).
     private func scrollBy(lines: Int) {
-        let historyCount = emulatorSync { $0.historyCount }
-        let target = max(0, min(historyCount, scrollOffset + lines))
-        guard target != scrollOffset else { return }
-        scrollOffset = target
+        scrollByContinuous(lines: CGFloat(lines))
+    }
+
+    /// Smooth scroll: advance the continuous position `P = scrollOffset - scrollFraction` by
+    /// `delta` lines (positive = back into history), clamped to `[0, historyCount]`. The integer
+    /// offset is `ceil(P)` — the frame one line further back — and the fraction is the upward
+    /// translate that slides it to the exact position. An offset change rebuilds via the existing
+    /// shift path; a fraction-only change re-presents the cached frame with a new uniform (the
+    /// near-free tick that makes trackpad scrolling pixel-smooth). Clamping to 0 lands exactly on
+    /// the live view (fraction 0 — byte-identical frame).
+    private func scrollByContinuous(lines delta: CGFloat) {
+        guard delta != 0 else { return }
+        // Mirror read on the off-main pipeline (see `historyCountMirror`): a precise trackpad
+        // fires this at event rate, and a `queue.sync` here would stall every wheel event behind
+        // an in-flight parse. Direct read when the emulator is main-confined (legacy pipeline).
+        let historyCount = offMainParserFramePipelineEnabled
+            ? historyCountMirror
+            : emulatorState.emulator.historyCount
+        var position = CGFloat(scrollOffset) - scrollFraction + delta
+        position = max(0, min(CGFloat(historyCount), position))
+        // Snap float dust onto whole lines: P fractionally ABOVE an integer would ceil to the
+        // next offset with fraction ≈ 1 — render-identical, but every line-based consumer
+        // (hit-test, prompt jump, scrollbar) would report one line further back for that tick.
+        let nearest = position.rounded()
+        if abs(position - nearest) < 0.0005 { position = nearest }
+        // Inline images don't ride the smooth-scroll translate (image quads draw window-relative,
+        // outside the scrollPx uniform); quantize to whole lines while any are visible so they
+        // never sit misaligned mid-cell. The legacy on-main pipeline quantizes too: it presents
+        // without the fraction uniform (and never builds the peek row), so a fractional position
+        // there would render one whole line off instead of in between.
+        if !offMainParserFramePipelineEnabled
+            || lastPresentedResult.map({ !$0.frame.images.isEmpty }) == true {
+            position = position.rounded()
+        }
+        let newOffset = Int(position.rounded(.up))
+        let newFraction = CGFloat(newOffset) - position
+        guard newOffset != scrollOffset || newFraction != scrollFraction else { return }
+        let offsetChanged = newOffset != scrollOffset
+        scrollOffset = newOffset
+        scrollFraction = newFraction
         clearSelection()
         notifyScrollChanged(historyCount: historyCount)
-        scheduleRender()
+        if offsetChanged {
+            scheduleRender()
+        } else if !repaintLastFrame() {
+            // Fraction-only tick: the frame is unchanged, only the translate moved. The repaint
+            // applies the new uniform over the cached instances; fall back to a build only when
+            // there is no presentable cached frame (e.g. generation just changed).
+            scheduleRender()
+        }
     }
 
     /// Jump back to the live bottom (e.g. on typing).
     private func snapToBottom() {
-        guard scrollOffset != 0 else { return }
+        guard scrollOffset != 0 || scrollFraction != 0 else { return }
         scrollOffset = 0
+        scrollFraction = 0
         notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })
         scheduleRender()
     }
@@ -1741,8 +1951,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func scrollToBufferLine(_ index: Int) {
         let historyCount = emulatorSync { $0.historyCount }
         let target = max(0, min(historyCount, historyCount - index))
-        guard target != scrollOffset else { return }
+        guard target != scrollOffset || scrollFraction != 0 else { return }
         scrollOffset = target
+        scrollFraction = 0 // prompt jumps anchor on a whole line
         clearSelection()
         notifyScrollChanged(historyCount: historyCount)
         scheduleRender()
@@ -1807,7 +2018,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard cellW > 0, cellH > 0 else { return nil }
         let p = convert(locationInWindow, from: nil)
         let x = p.x - gridOriginPointsX
-        let yFromTop = bounds.height - p.y - gridOriginPointsY
+        // The smooth-scroll translate slides content UP by `scrollFraction` of a cell, so what's
+        // visually under the pointer is the content that fraction further down — add it back so
+        // clicks/selections land on the row the user sees, not the untranslated grid slot.
+        let yFromTop = bounds.height - p.y - gridOriginPointsY + scrollFraction * cellH
         let col = Int((x / cellW).rounded(.down))
         let row = Int((yFromTop / cellH).rounded(.down))
         return (max(0, min(rows - 1, row)), max(0, min(columns - 1, col)))
@@ -2205,14 +2419,16 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard event.scrollingDeltaY != 0, let renderer else { return }
         let scale = window?.backingScaleFactor ?? 2.0
         let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
-        let lines = consumeWheelLines(event, cellHeight: cellH)
-        guard lines != 0 else { return }
         // The alternate screen has no scrollback — synthesize arrow keys instead (DECSET
         // 1007 "alternate scroll", on by default) so the wheel scrolls less/man/vim when
         // the program didn't enable mouse reporting (that case already returned above).
+        // Arrow synthesis is inherently line-based, so it keeps the whole-line accumulator;
+        // local scrollback below scrolls by the continuous (pixel-smooth) delta instead.
         let onAltScreen = inputAltScreenActive()
         let modes = inputModes()
         if onAltScreen, modes.alternateScroll {
+            let lines = consumeWheelLines(event, cellHeight: cellH)
+            guard lines != 0 else { return }
             let key: SpecialKey = lines > 0 ? .up : .down
             let perLine = inputEncoder.encode(key, modifiers: [], modes: modes)
             guard !perLine.isEmpty else { return }
@@ -2227,7 +2443,19 @@ public final class HarnessTerminalSurfaceView: NSView {
             emit(bytes)
             return
         }
-        scrollBy(lines: lines)
+        scrollByContinuous(lines: continuousWheelLines(event, cellHeight: cellH))
+    }
+
+    /// Continuous (sub-line) wheel delta in lines for local-scrollback smooth scrolling. Precise
+    /// (trackpad) deltas are pixel-based; the fraction itself is the carry, so no remainder
+    /// accumulator is needed. Non-precise mouse wheels keep the classic whole-notch step
+    /// (clamped to a full tick like `consumeWheelLines`) — a clicky wheel jumping 3 lines per
+    /// notch is the expected feel; only the trackpad scrolls by pixels.
+    private func continuousWheelLines(_ event: NSEvent, cellHeight: CGFloat) -> CGFloat {
+        let delta = event.scrollingDeltaY
+        if event.hasPreciseScrollingDeltas { return delta / cellHeight }
+        let ticks = delta > 0 ? max(delta, 1) : min(delta, -1)
+        return ticks * Self.mouseWheelLinesPerTick
     }
 
     /// Convert a wheel/trackpad event into a signed whole-line scroll count, carrying the
@@ -2773,6 +3001,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             return CopyModeReducer.initialState(grid: emulator, cursorLine: cursorLine, cursorColumn: live.cursor.col)
         }
         scrollOffset = 0
+        scrollFraction = 0 // copy mode is line-based; don't carry a smooth-scroll fraction in
         wheelLineRemainder = 0 // don't carry a sub-line wheel remainder across the mode boundary
         wheelColumnRemainder = 0
         notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })
@@ -2785,6 +3014,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         copyMode = nil
         copyModeSearchEntry = nil
         scrollOffset = 0
+        scrollFraction = 0
         wheelLineRemainder = 0
         wheelColumnRemainder = 0
         notifyScrollChanged(historyCount: emulatorSync { $0.historyCount })

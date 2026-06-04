@@ -101,4 +101,10 @@ Preview CLI while it is running:
 
 EOF
 
-open -n "$APP"
+# PREVIEW_SIGNPOSTS=1: turn on the frame signposter (FrameSignposter). `open` strips the shell
+# environment, so the flag travels as a launch argument (NSArgumentDomain → UserDefaults).
+if [[ "${PREVIEW_SIGNPOSTS:-0}" == "1" ]]; then
+  open -n "$APP" --args -HARNESS_FRAME_SIGNPOSTS 1
+else
+  open -n "$APP"
+fi

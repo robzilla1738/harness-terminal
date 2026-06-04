@@ -25,6 +25,12 @@ public struct TerminalRenderStats: Equatable, Sendable {
     /// Transaction-synchronized presents only: time from `commit()` to `waitUntilScheduled()`
     /// returning (the bounded main-thread wait of the glitchless-resize path). 0 for async presents.
     public var presentScheduleNanos: UInt64
+    /// True iff this encode left the row-instance cache holding exactly the encoded frame's rows —
+    /// the surface's repaint-coherence signal. False for the cache-bypassing paths (nil damage,
+    /// image frames) AND for a mid-encode atlas reset that wiped the cache after reuse: those
+    /// present correct pixels but leave the cache empty, so an empty-damage repaint must not
+    /// assume reuse. Only the renderer can tell these apart from a normal full encode.
+    public var rowCacheCoherent: Bool
 
     public init(
         cells: Int = 0,
@@ -41,7 +47,8 @@ public struct TerminalRenderStats: Equatable, Sendable {
         frameBuildNanos: UInt64 = 0,
         encodeNanos: UInt64 = 0,
         semaphoreWaitNanos: UInt64 = 0,
-        presentScheduleNanos: UInt64 = 0
+        presentScheduleNanos: UInt64 = 0,
+        rowCacheCoherent: Bool = false
     ) {
         self.cells = cells
         self.bgInstances = bgInstances
@@ -58,6 +65,7 @@ public struct TerminalRenderStats: Equatable, Sendable {
         self.encodeNanos = encodeNanos
         self.semaphoreWaitNanos = semaphoreWaitNanos
         self.presentScheduleNanos = presentScheduleNanos
+        self.rowCacheCoherent = rowCacheCoherent
     }
 }
 
@@ -91,6 +99,10 @@ private struct EncodedFrameInstances {
     var bgCells = 0
     var encodedRows = 0
     var reusedRows = 0
+    /// Whether the row-instance cache holds exactly this frame's rows on exit — false for the
+    /// cache-bypassing builds (nil damage, images, shape guards) and the mid-encode atlas-reset
+    /// fallback. Feeds `TerminalRenderStats.rowCacheCoherent`.
+    var cachePopulated = false
 }
 
 private struct CursorCacheKey: Equatable {
@@ -347,11 +359,14 @@ public final class TerminalMetalRenderer {
         ligatures: Bool = false,
         damage: TerminalDamage? = nil,
         scrollShift: Int = 0,
+        scrollFractionPx: Float = 0,
+        smoothScrollClipRows: Int? = nil,
         frameBuildNanos: UInt64 = 0
     ) -> Bool {
         guard let commandBuffer = encode(
             frame, target: target, clearColor: clearColor, origin: origin,
             gamma: gamma, ligatures: ligatures, damage: damage, scrollShift: scrollShift,
+            scrollFractionPx: scrollFractionPx, smoothScrollClipRows: smoothScrollClipRows,
             frameBuildNanos: frameBuildNanos
         ) else { return false }
         commandBuffer.commit()
@@ -374,6 +389,12 @@ public final class TerminalMetalRenderer {
     /// bounded by GPU *scheduling*, not completion — typically well under a millisecond — and is
     /// paid only while the layer is in transaction mode; the async path is byte-identical to
     /// before, preserving present-on-echo latency.
+    /// `scrollFractionPx` / `smoothScrollClipRows`: pixel-smooth scrolling. The fraction is a
+    /// whole-device-pixel upward translate applied as a vertex-stage uniform — instances (and the
+    /// row-instance / uploaded-instance caches keyed on them) are untouched, so a pure-fraction
+    /// scroll tick re-encodes nothing. `smoothScrollClipRows` scissors the draw to the first N
+    /// rows' box so content slides out of a fixed window (and the frame's display-only peek row —
+    /// built one row below the viewport to fill the translate's gap — stays hidden at fraction 0).
     @discardableResult
     public func present(
         _ frame: TerminalFrame,
@@ -384,12 +405,15 @@ public final class TerminalMetalRenderer {
         ligatures: Bool = false,
         damage: TerminalDamage? = nil,
         scrollShift: Int = 0,
+        scrollFractionPx: Float = 0,
+        smoothScrollClipRows: Int? = nil,
         frameBuildNanos: UInt64 = 0,
         synchronizedWithTransaction: Bool = false
     ) -> Bool {
         guard let commandBuffer = encode(
             frame, target: drawable.texture, clearColor: clearColor, origin: origin,
             gamma: gamma, ligatures: ligatures, damage: damage, scrollShift: scrollShift,
+            scrollFractionPx: scrollFractionPx, smoothScrollClipRows: smoothScrollClipRows,
             frameBuildNanos: frameBuildNanos
         ) else { return false }
         if synchronizedWithTransaction {
@@ -418,6 +442,8 @@ public final class TerminalMetalRenderer {
         ligatures: Bool,
         damage: TerminalDamage? = nil,
         scrollShift: Int = 0,
+        scrollFractionPx: Float = 0,
+        smoothScrollClipRows: Int? = nil,
         frameBuildNanos: UInt64 = 0
     ) -> MTLCommandBuffer? {
         let encodeStart = DispatchTime.now().uptimeNanoseconds
@@ -520,6 +546,7 @@ public final class TerminalMetalRenderer {
         frameStats.decoInstances = decorations.count
         frameStats.encodedRows = encoded.encodedRows
         frameStats.reusedRows = encoded.reusedRows
+        frameStats.rowCacheCoherent = encoded.cachePopulated
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
@@ -546,7 +573,22 @@ public final class TerminalMetalRenderer {
         // so the retained handler can't form a reference cycle with the renderer.
         commandBuffer.addCompletedHandler { [inFlightSemaphore] _ in inFlightSemaphore.signal() }
 
+        // Smooth-scroll clip: rows slide out of the fixed grid box instead of bleeding into the
+        // window padding, and the peek row (one row below the viewport) stays hidden until the
+        // translate reveals it. Scissor only constrains draws — the clear above already painted
+        // the padding — and is skipped entirely on the non-scrolling path (byte-identical).
+        if let clipRows = smoothScrollClipRows, clipRows > 0 {
+            let top = max(0, origin.y)
+            let bottom = min(target.height, origin.y + clipRows * cellPixelHeight)
+            if bottom > top {
+                renderEncoder.setScissorRect(MTLScissorRect(
+                    x: 0, y: top, width: target.width, height: bottom - top
+                ))
+            }
+        }
+
         var vp = viewport
+        var scrollPx = scrollFractionPx
         let instanceBuffers = bindableInstanceBuffers(
             backgrounds: backgrounds,
             glyphs: glyphs,
@@ -566,6 +608,7 @@ public final class TerminalMetalRenderer {
             renderEncoder.setRenderPipelineState(bgPipeline)
             renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            renderEncoder.setVertexBytes(&scrollPx, length: MemoryLayout<Float>.stride, index: 2)
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceBuffers.backgroundCount)
         }
 
@@ -581,6 +624,7 @@ public final class TerminalMetalRenderer {
             renderEncoder.setRenderPipelineState(glyphPipeline)
             renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            renderEncoder.setVertexBytes(&scrollPx, length: MemoryLayout<Float>.stride, index: 2)
             renderEncoder.setFragmentTexture(atlas.texture, index: 0)
             renderEncoder.setFragmentSamplerState(sampler, index: 0)
             renderEncoder.setFragmentBytes(&glyphGamma, length: MemoryLayout<Float>.stride, index: 0)
@@ -592,6 +636,7 @@ public final class TerminalMetalRenderer {
             renderEncoder.setRenderPipelineState(decoPipeline)
             renderEncoder.setVertexBuffer(buffer, offset: 0, index: 0)
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            renderEncoder.setVertexBytes(&scrollPx, length: MemoryLayout<Float>.stride, index: 2)
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceBuffers.decorationCount)
         }
 
@@ -839,10 +884,12 @@ public final class TerminalMetalRenderer {
             append(rowInstances, into: &encoded)
         }
         rowInstanceCache.previousCursor = cursorKey
+        encoded.cachePopulated = true // every row now lives in the cache (encoded or reused)
 
         if atlas.stats.resets != atlasResetsBefore {
             let reusedRows = encoded.reusedRows
             resetRowInstanceCache()
+            encoded.cachePopulated = false // the reset wiped it; a repaint must not assume reuse
             // If a reset happened after reusing rows, cached glyph UVs may reference the old
             // atlas contents. Redo this frame from cells so the already-present stale-frame
             // fallback never becomes a persistent cache bug.

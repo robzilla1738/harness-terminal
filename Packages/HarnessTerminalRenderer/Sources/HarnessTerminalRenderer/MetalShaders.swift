@@ -59,13 +59,19 @@ enum MetalShaders {
         return float2(px.x / viewport.x * 2.0 - 1.0, 1.0 - px.y / viewport.y * 2.0);
     }
 
+    // `scrollPx` (buffer 2, all three instanced stages): smooth-scroll translate in device
+    // pixels — the whole grid slides UP by this amount, leaving the per-instance origins (and
+    // the row-instance caches keyed on them) untouched. 0 == byte-identical to the pre-uniform
+    // pipeline. Whole-pixel values keep glyphs crisp mid-scroll.
     vertex VOut bg_vertex(uint vid [[vertex_id]],
                           uint iid [[instance_id]],
                           constant BgInstance *instances [[buffer(0)]],
-                          constant float2 &viewport [[buffer(1)]]) {
+                          constant float2 &viewport [[buffer(1)]],
+                          constant float &scrollPx [[buffer(2)]]) {
         BgInstance inst = instances[iid];
         float2 corner = quadVerts[vid];
         float2 px = inst.origin + corner * inst.size;
+        px.y -= scrollPx;
         VOut out;
         out.position = float4(pixelToNDC(px, viewport), 0.0, 1.0);
         out.color = inst.color;
@@ -81,10 +87,12 @@ enum MetalShaders {
     vertex VOut glyph_vertex(uint vid [[vertex_id]],
                              uint iid [[instance_id]],
                              constant GlyphInstance *instances [[buffer(0)]],
-                             constant float2 &viewport [[buffer(1)]]) {
+                             constant float2 &viewport [[buffer(1)]],
+                             constant float &scrollPx [[buffer(2)]]) {
         GlyphInstance inst = instances[iid];
         float2 corner = quadVerts[vid];
         float2 px = inst.origin + corner * inst.size;
+        px.y -= scrollPx;
         VOut out;
         out.position = float4(pixelToNDC(px, viewport), 0.0, 1.0);
         out.color = inst.color;
@@ -129,10 +137,12 @@ enum MetalShaders {
     vertex DecoOut deco_vertex(uint vid [[vertex_id]],
                                uint iid [[instance_id]],
                                constant DecoInstance *instances [[buffer(0)]],
-                               constant float2 &viewport [[buffer(1)]]) {
+                               constant float2 &viewport [[buffer(1)]],
+                               constant float &scrollPx [[buffer(2)]]) {
         DecoInstance inst = instances[iid];
         float2 corner = quadVerts[vid];
         float2 px = inst.origin + corner * inst.size;
+        px.y -= scrollPx;
         DecoOut out;
         out.position = float4(pixelToNDC(px, viewport), 0.0, 1.0);
         out.color = inst.color;
