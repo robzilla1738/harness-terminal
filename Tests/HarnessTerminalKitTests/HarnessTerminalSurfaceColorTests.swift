@@ -1,12 +1,13 @@
 import HarnessCore
 import HarnessTerminalEngine
+import HarnessTerminalRenderer
 import HarnessTheme
 @testable import HarnessTerminalKit
 import XCTest
 
 @MainActor
 final class HarnessTerminalSurfaceColorTests: XCTestCase {
-    func testOSCSystemPaletteDoesNotRecolorProgramANSIOutputWhenThemeOutputIsOff() {
+    func testOSCSystemPaletteDoesNotRecolorProgramANSIOutputWhenThemeOutputIsOff() throws {
         var systemPalette = Array(repeating: Optional<String>.none, count: 16)
         systemPalette[1] = "#112233"
         let (view, responses) = configuredSurface(
@@ -14,10 +15,12 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
             oscPaletteHex: systemPalette
         )
 
-        let sgrRed = view.testingResolveCellColors(
+        let sgrRed = try resolveCellColors(
+            outputPaletteHex: Array(repeating: nil, count: 16),
             TerminalGridCell(codepoint: 0x41, foreground: .palette(1))
         ).foreground
-        let sgrRedBackground = view.testingResolveCellColors(
+        let sgrRedBackground = try resolveCellColors(
+            outputPaletteHex: Array(repeating: nil, count: 16),
             TerminalGridCell(codepoint: 0x41, background: .palette(1))
         ).background
         XCTAssertEqual(sgrRed, RGBColor(hex: ThemeManager.defaultBaselinePaletteHex[1]))
@@ -29,7 +32,7 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
     }
 
 
-    func testResolvedSystemThemeOSCAnswersDoNotRecolorProgramANSIOutputWhenThemeOutputIsOff() {
+    func testResolvedSystemThemeOSCAnswersDoNotRecolorProgramANSIOutputWhenThemeOutputIsOff() throws {
         let resolved = ThemeManager.resolvedAppearance(
             themeName: "Harness Default",
             appearanceMode: .macOSSystem,
@@ -48,7 +51,10 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
             cursorHex: resolved.canvas.cursorHex
         )
 
-        let sgrRed = view.testingResolveCellColors(
+        let sgrRed = try resolveCellColors(
+            outputPaletteHex: Array(repeating: nil, count: 16),
+            canvasBackgroundHex: resolved.canvas.backgroundHex,
+            canvasForegroundHex: resolved.canvas.foregroundHex,
             TerminalGridCell(codepoint: 0x41, foreground: .palette(1))
         ).foreground
         XCTAssertEqual(sgrRed, RGBColor(hex: ThemeManager.defaultBaselinePaletteHex[1]))
@@ -82,12 +88,12 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
         ])
     }
 
-    func testANSIOutputUsesThemePaletteOnlyWhenThemeOutputIsOn() {
+    func testANSIOutputUsesThemePaletteOnlyWhenThemeOutputIsOn() throws {
         var themedOutput = Array(repeating: Optional<String>.none, count: 16)
         themedOutput[1] = "#445566"
-        let (view, _) = configuredSurface(outputPaletteHex: themedOutput, oscPaletteHex: nil)
 
-        let sgrRed = view.testingResolveCellColors(
+        let sgrRed = try resolveCellColors(
+            outputPaletteHex: themedOutput,
             TerminalGridCell(codepoint: 0x41, foreground: .palette(1))
         ).foreground
 
@@ -132,7 +138,10 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
             cursorHex: resolved.cursorHex
         )
 
-        let sgrRed = view.testingResolveCellColors(
+        let sgrRed = try resolveCellColors(
+            outputPaletteHex: resolved.outputPaletteHex,
+            canvasBackgroundHex: resolved.canvasBackgroundHex,
+            canvasForegroundHex: resolved.canvasForegroundHex,
             TerminalGridCell(codepoint: 0x41, foreground: .palette(1))
         ).foreground
         XCTAssertEqual(sgrRed, RGBColor(hex: ThemeManager.defaultBaselinePaletteHex[1]))
@@ -189,6 +198,24 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
             offMainParserFramePipeline: false
         )
         return (view, responses)
+    }
+
+    private func resolveCellColors(
+        outputPaletteHex: [String?],
+        canvasBackgroundHex: String = "#F5F5F7",
+        canvasForegroundHex: String = "#1D1D1F",
+        _ cell: TerminalGridCell
+    ) throws -> ResolvedCellColors {
+        let normalizedOutputPalette = HarnessSettings.normalizedPalette(outputPaletteHex)
+        let palette = try (0 ..< 16).map { index in
+            try XCTUnwrap(RGBColor(hex: normalizedOutputPalette[index] ?? ThemeManager.defaultBaselinePaletteHex[index]))
+        }
+        let resolver = CellColorResolver(
+            palette: ANSIPalette(base16: palette),
+            defaultForeground: try XCTUnwrap(RGBColor(hex: canvasForegroundHex)),
+            defaultBackground: try XCTUnwrap(RGBColor(hex: canvasBackgroundHex))
+        )
+        return resolver.resolve(cell)
     }
 
     private func oscColorResponse(_ selector: String, hex: String) -> String {

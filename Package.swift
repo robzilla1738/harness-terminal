@@ -89,6 +89,7 @@ let platformTestTargets: [Target] = [
             "HarnessTerminalEngine",
             "HarnessCopyMode",
             "HarnessTerminalKit",
+            "HarnessTerminalRenderer",
             "HarnessTheme",
         ],
         path: "Tests/HarnessTerminalKitTests"
