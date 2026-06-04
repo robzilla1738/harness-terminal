@@ -24,6 +24,16 @@ final class GlyphRasterizerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(m.height, (m.ascent + m.descent).rounded(.up) - 1)
     }
 
+    func testMissingFamilyFallsBackToMonospaceMenlo() {
+        // A configured family that isn't installed (fresh machine without the default Nerd Font)
+        // must NOT land on CoreText's silent substitute — a proportional system face whose
+        // advances disagree with the cell grid (the broken-letter-spacing first-run bug).
+        let missing = GlyphRasterizer(fontFamily: "Definitely Not An Installed Font 9C41", size: 14, scale: 2)
+        XCTAssertEqual(missing.primaryFamilyName, "Menlo")
+        XCTAssertEqual(missing.metrics(), rasterizer.metrics(),
+                       "fallback metrics must match Menlo so the cell grid stays monospace-coherent")
+    }
+
     func testRasterizesLetterWithInk() {
         guard let glyph = rasterizer.rasterize(codepoint: UInt32(UnicodeScalar("A").value)) else {
             return XCTFail("expected a glyph for 'A'")

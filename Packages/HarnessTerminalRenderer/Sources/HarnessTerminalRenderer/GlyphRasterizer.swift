@@ -110,8 +110,8 @@ public final class GlyphRasterizer {
         // Keep it that way: no eager glyph loop here.
         // Resolve the family to a real face, detecting `CTFontCreateWithName`'s silent
         // substitution (it would otherwise return a glyph-less system font for an unmatched
-        // family — the root of the Nerd Font tofu bug, #37). Never fails — falls back to the
-        // substitute, which the symbol font then covers for icons.
+        // family — the root of the Nerd Font tofu bug, #37). Never fails — an unresolvable
+        // family falls back to Menlo (monospace), and the symbol font covers icons on top.
         let base = Self.resolvePrimaryFont(family: fontFamily, size: size)
         regular = base
         bold = Self.applyTraits(base, size: size, add: .traitBold)
@@ -130,10 +130,14 @@ public final class GlyphRasterizer {
 
     /// Resolve the user's font family to a real `CTFont`, working around `CTFontCreateWithName`'s
     /// silent substitution. It resolves PostScript names first and only loosely matches family /
-    /// display names; when it can't match, it returns a system font with no Nerd glyphs (the root
-    /// of #37). If the resolved face's family/PostScript name doesn't match what was requested,
-    /// retry via an explicit family-name descriptor before accepting the substitute (which the
-    /// bundled symbol font then covers for icon codepoints).
+    /// display names; if the resolved face's family/PostScript name doesn't match what was
+    /// requested, retry via an explicit family-name descriptor.
+    /// When NEITHER resolves (the configured family simply isn't installed — e.g. a fresh machine
+    /// without the default Nerd Font), do NOT accept the substitute: it is a PROPORTIONAL system
+    /// face whose advances disagree with the monospace cell grid, so every glyph lands at its
+    /// natural width inside cells sized for a font that isn't there — text renders with broken
+    /// letter-spacing. Fall back to Menlo instead: monospaced, ships with every macOS, and the
+    /// bundled symbol font still covers Nerd icon codepoints on top of it.
     private static func resolvePrimaryFont(family: String, size: CGFloat) -> CTFont {
         let byName = CTFontCreateWithName(family as CFString, size, nil)
         if fontNameMatches(byName, requested: family) { return byName }
@@ -141,8 +145,13 @@ public final class GlyphRasterizer {
             [kCTFontFamilyNameAttribute as String: family] as CFDictionary
         )
         let byFamily = CTFontCreateWithFontDescriptor(descriptor, size, nil)
-        return fontNameMatches(byFamily, requested: family) ? byFamily : byName
+        if fontNameMatches(byFamily, requested: family) { return byFamily }
+        return CTFontCreateWithName("Menlo" as CFString, size, nil)
     }
+
+    /// The resolved primary face's family name — internal so the missing-font fallback test can
+    /// pin that an unresolvable family lands on Menlo rather than the proportional substitute.
+    var primaryFamilyName: String { CTFontCopyFamilyName(regular) as String }
 
     /// Resolve the bundled "Symbols Nerd Font Mono" by name, verifying it actually activated
     /// (PostScript name `SymbolsNFM`) rather than silently substituting. `nil` when the font isn't
