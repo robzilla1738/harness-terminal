@@ -25,6 +25,13 @@ final class SurfaceProgressTracker {
         return state == .set || state == .indeterminate
     }
 
+    /// The determinate progress percent (0–100) when the surface's live report carries one
+    /// (`state == .set`); nil for indeterminate/none. The notch HUD renders this on its rows.
+    func progressPercent(_ id: SurfaceID) -> Int? {
+        guard let report = reports[id], report.state == .set else { return nil }
+        return report.value.map { max(0, min(100, $0)) }
+    }
+
     func update(_ report: TerminalProgressReport, forSurface id: SurfaceID) {
         let wasActive = reports[id] != nil
         if report.state == .remove {

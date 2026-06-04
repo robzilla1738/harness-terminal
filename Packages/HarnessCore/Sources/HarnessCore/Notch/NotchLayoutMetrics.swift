@@ -57,6 +57,11 @@ public struct NotchLayoutMetrics: Sendable, Equatable {
     public var openHeight: Double
     public var panelFrame: NotchRect
 
+    /// Transient peek card (one-row live activity): slightly wider than the closed notch so
+    /// the dropped row reads as the notch stretching, never as a detached toast.
+    public var peekWidth: Double { closedWidth + 144 }
+    public var peekHeight: Double { closedHeight + 26 }
+
     public init(
         hasPhysicalNotch: Bool,
         closedWidth: Double,

@@ -175,6 +175,67 @@ final class AgentNotchProjectionTests: XCTestCase {
         XCTAssertEqual(rows[0].tabID, firstTab.id)
     }
 
+    func testAgentRowsCarryNotificationTextBranchAndPathFirstDetail() {
+        let tab = Tab(
+            title: "Claude Code",
+            cwd: "/Users/robert/api",
+            gitBranch: "feat/login",
+            status: .waiting,
+            rootPane: .leaf(PaneLeaf(id: UUID(), surfaceID: UUID()))
+        )
+        let session = SessionGroup(name: "backend", tabs: [tab], activeTabID: tab.id)
+        let workspace = Workspace(name: "Dev", sessions: [session])
+        let snapshot = SessionSnapshot(workspaces: [workspace])
+        let agent = AgentSessionSummary(
+            workspaceName: workspace.name,
+            sessionID: session.id,
+            sessionName: session.name,
+            tabID: tab.id,
+            tabTitle: tab.title,
+            surfaceID: tab.rootPane.allSurfaceIDs().first!.uuidString,
+            paneID: nil,
+            kind: .claudeCode,
+            activity: .working,
+            waiting: true,
+            lastActivityAt: .now,
+            notificationText: "Permission needed: run tests?"
+        )
+
+        let rows = AgentNotchProjection.rows(from: snapshot, agents: [agent])
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].notificationText, "Permission needed: run tests?")
+        XCTAssertEqual(rows[0].gitBranch, "feat/login")
+        // Path (with branch) leads; activity is no longer part of the detail string.
+        XCTAssertEqual(rows[0].detail, "api (feat/login) · Dev · backend")
+        XCTAssertFalse(rows[0].detail.contains("working"))
+    }
+
+    func testSessionRowDetailLeadsWithPathAndBranch() {
+        let tab = Tab(
+            title: "Shell",
+            cwd: "/Users/robert/web",
+            gitBranch: "main",
+            rootPane: .leaf(PaneLeaf(id: UUID(), surfaceID: UUID()))
+        )
+        let session = SessionGroup(name: "Default", tabs: [tab], activeTabID: tab.id)
+        let snapshot = SessionSnapshot(workspaces: [Workspace(name: "Dev", sessions: [session])])
+
+        let rows = AgentNotchProjection.rows(from: snapshot)
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].detail, "web (main) · Dev")
+        XCTAssertEqual(rows[0].gitBranch, "main")
+    }
+
+    func testHeaderSummaryPluralizesAndDropsZeroSegments() {
+        XCTAssertEqual(AgentNotchProjection.headerSummary(workingCount: 0, waitingCount: 0, sessionCount: 1), "1 session")
+        XCTAssertEqual(AgentNotchProjection.headerSummary(workingCount: 2, waitingCount: 1, sessionCount: 3),
+                       "2 working · 1 waiting · 3 sessions")
+        XCTAssertEqual(AgentNotchProjection.headerSummary(workingCount: 0, waitingCount: 1, sessionCount: 2),
+                       "1 waiting · 2 sessions")
+    }
+
     private func agent(
         kind: AgentKind,
         activity: AgentActivity,

@@ -20,6 +20,11 @@ public struct AgentNotchRowSummary: Sendable, Equatable, Identifiable {
     public var agentKind: AgentKind?
     public var agentActivity: AgentActivity?
     public var lastActivityAt: Date?
+    /// The most recent hook-notification body when the agent is waiting — the densest
+    /// "why is it blocked" signal, rendered as the row subtitle while waiting.
+    public var notificationText: String?
+    /// The tab's git branch, shown next to the cwd in the subtitle.
+    public var gitBranch: String?
 
     public init(
         id: String,
@@ -35,7 +40,9 @@ public struct AgentNotchRowSummary: Sendable, Equatable, Identifiable {
         waitingCount: Int,
         agentKind: AgentKind?,
         agentActivity: AgentActivity?,
-        lastActivityAt: Date? = nil
+        lastActivityAt: Date? = nil,
+        notificationText: String? = nil,
+        gitBranch: String? = nil
     ) {
         self.id = id
         self.rowKind = rowKind
@@ -51,6 +58,8 @@ public struct AgentNotchRowSummary: Sendable, Equatable, Identifiable {
         self.agentKind = agentKind
         self.agentActivity = agentActivity
         self.lastActivityAt = lastActivityAt
+        self.notificationText = notificationText
+        self.gitBranch = gitBranch
     }
 }
 
@@ -129,7 +138,9 @@ public enum AgentNotchProjection {
                 waitingCount: agent.waiting ? 1 : 0,
                 agentKind: agent.kind,
                 agentActivity: agent.activity,
-                lastActivityAt: agent.lastActivityAt
+                lastActivityAt: agent.lastActivityAt,
+                notificationText: agent.notificationText,
+                gitBranch: context.tab.gitBranch
             ))
         }
 
@@ -151,13 +162,25 @@ public enum AgentNotchProjection {
                         tabCount: session.tabs.count,
                         waitingCount: session.tabs.filter { $0.status == .waiting }.count,
                         agentKind: nil,
-                        agentActivity: nil
+                        agentActivity: nil,
+                        gitBranch: activeTab?.gitBranch
                     ))
                 }
             }
         }
 
         return sortedRows(rows)
+    }
+
+    /// Header summary line: only nonzero segments, correctly pluralized —
+    /// "2 working · 1 waiting · 3 sessions"; quiet fallback "1 session" when nothing is active.
+    /// (The old header printed "0 agents / 1 sessions".)
+    public static func headerSummary(workingCount: Int, waitingCount: Int, sessionCount: Int) -> String {
+        var parts: [String] = []
+        if workingCount > 0 { parts.append("\(workingCount) working") }
+        if waitingCount > 0 { parts.append("\(waitingCount) waiting") }
+        parts.append(sessionCount == 1 ? "1 session" : "\(sessionCount) sessions")
+        return parts.joined(separator: " · ")
     }
 
     public static func sortedAgents(_ agents: [AgentSessionSummary]) -> [AgentSessionSummary] {
@@ -223,31 +246,40 @@ public enum AgentNotchProjection {
         }.map(\.element)
     }
 
+    /// Row subtitle: most-specific first — `cwd (branch) · tab-title · workspace · session`.
+    /// Activity is *not* part of the detail (the dot + badge carry state); the old
+    /// "working / Default / robert" wasted the densest slot on a word the UI already shows.
     private static func agentDetail(
         workspace: Workspace,
         session: SessionGroup,
         tab: Tab,
         agent: AgentSessionSummary
     ) -> String {
-        var parts: [String] = [agent.activity.rawValue, workspace.name]
-        if !session.name.isEmpty { parts.append(session.name) }
-        let title = displayTitle(for: tab)
+        var parts: [String] = []
         let path = pathDisplayName(tab.cwd)
+        if !path.isEmpty {
+            parts.append(tab.gitBranch.map { "\(path) (\($0))" } ?? path)
+        }
+        let title = displayTitle(for: tab)
         if !title.isEmpty, title != agent.kind.displayName, title != path {
             parts.append(title)
         }
-        if !path.isEmpty { parts.append(path) }
-        return parts.joined(separator: " / ")
+        parts.append(workspace.name)
+        if !session.name.isEmpty, session.name != path { parts.append(session.name) }
+        return parts.joined(separator: " · ")
     }
 
     private static func sessionDetail(workspace: Workspace, session: SessionGroup, tab: Tab?) -> String {
-        var parts: [String] = [workspace.name]
-        if session.tabs.count != 1 { parts.append("\(session.tabs.count) tabs") }
+        var parts: [String] = []
         if let tab {
             let path = pathDisplayName(tab.cwd)
-            if !path.isEmpty { parts.append(path) }
+            if !path.isEmpty {
+                parts.append(tab.gitBranch.map { "\(path) (\($0))" } ?? path)
+            }
         }
-        return parts.joined(separator: " / ")
+        if session.tabs.count != 1 { parts.append("\(session.tabs.count) tabs") }
+        parts.append(workspace.name)
+        return parts.joined(separator: " · ")
     }
 
     private static func displayTitle(for tab: Tab?) -> String {

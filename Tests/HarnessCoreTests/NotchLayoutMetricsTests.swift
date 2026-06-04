@@ -34,6 +34,25 @@ final class NotchLayoutMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.closedHeight, 37)
     }
 
+    func testPeekSizeStretchesFromClosedShape() {
+        let metrics = NotchLayoutMetrics.compute(for: NotchScreenMetrics(
+            minX: 0, minY: 0, width: 1512, height: 982,
+            safeAreaTop: 32,
+            auxiliaryTopLeftMaxX: 656,
+            auxiliaryTopRightMinX: 856
+        ))
+
+        // Peek reads as the notch stretching: wider than closed, far narrower than open,
+        // and just tall enough for one row under the hardware lip.
+        XCTAssertEqual(metrics.peekWidth, metrics.closedWidth + 144)
+        XCTAssertEqual(metrics.peekHeight, metrics.closedHeight + 26)
+        XCTAssertLessThan(metrics.peekWidth, metrics.openWidth)
+        XCTAssertLessThan(metrics.peekHeight, metrics.openHeight)
+        // The panel frame must already be large enough to contain the peek.
+        XCTAssertLessThan(metrics.peekWidth, metrics.panelFrame.width)
+        XCTAssertLessThan(metrics.peekHeight, metrics.panelFrame.height)
+    }
+
     func testNarrowDisplayClampsOpenWidthAndKeepsTopAnchored() {
         let metrics = NotchLayoutMetrics.compute(for: NotchScreenMetrics(
             minX: 100,
