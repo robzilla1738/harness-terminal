@@ -36,37 +36,8 @@ final class DynamicInstanceBuffer {
         self.slotPending = Array(repeating: nil, count: ringSize)
     }
 
-    /// Copy `instances` into the ring `slot`'s buffer (growing it if needed) and return the
-    /// buffer ready to bind. Returns `nil` for an empty array so callers skip the pass entirely
-    /// — `makeBuffer(length:)` is undefined for length 0, and binding a zero-length buffer is
-    /// pointless, so no buffer is created or bound (matching the renderer's prior behavior).
-    func upload<T>(_ instances: [T], slot: Int) -> MTLBuffer? {
-        guard !instances.isEmpty else { return nil }
-        let needed = instances.count * MemoryLayout<T>.stride
-
-        if buffers[slot] == nil || capacities[slot] < needed {
-            // Grow with doubling headroom so a frame that adds a cell or two doesn't force a
-            // reallocation every time. `.storageModeShared` matches the CPU-upload behavior the
-            // renderer relied on with the old per-frame `makeBuffer(bytes:)`.
-            let newCapacity = max(needed, capacities[slot] * 2)
-            guard let grown = device.makeBuffer(length: newCapacity, options: .storageModeShared) else {
-                return nil
-            }
-            grown.label = "\(label)[\(slot)]"
-            buffers[slot] = grown
-            capacities[slot] = newCapacity
-        }
-
-        guard let target = buffers[slot] else { return nil }
-        instances.withUnsafeBytes { raw in
-            // `raw.baseAddress` is non-nil because the array is non-empty.
-            _ = memcpy(target.contents(), raw.baseAddress!, needed)
-        }
-        return target
-    }
-
-    /// Like `upload`, but copies only the bytes that changed. `instances` is the *whole* current
-    /// array (so the buffer can be re-seeded on a grow); `dirty` is the half-open instance span the
+    /// Copy only the bytes that changed into the ring `slot`'s buffer. `instances` is the *whole*
+    /// current array (so the buffer can be re-seeded on a grow); `dirty` is the half-open instance span the
     /// caller changed this frame. The span is unioned into every slot's pending range, then this
     /// `slot`'s accumulated pending span (everything changed since this slot was last written) is
     /// copied and cleared. Returns the buffer to bind and the number of bytes actually written
@@ -79,8 +50,10 @@ final class DynamicInstanceBuffer {
     func uploadIncremental<T>(_ instances: [T], dirty: Range<Int>, slot: Int) -> (buffer: MTLBuffer, bytesWritten: Int)? {
         let count = instances.count
         guard count > 0 else {
-            // Nothing to draw this frame; drop this slot's stale pending so it can't resurrect a
-            // span past the (now larger) array next time.
+            // An empty stream binds no buffer and draws nothing, so there is nothing to upload.
+            // Clear this slot's pending span: it indexes an array that no longer exists, and a
+            // later non-empty frame re-dirties its own content (any row gaining instances is in
+            // that frame's damage), so dropping it here loses no required write.
             slotPending[slot] = nil
             return nil
         }
