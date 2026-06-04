@@ -443,6 +443,58 @@ public struct FrameBuilder {
                              cursor: cursor, images: images, promptGutter: promptGutter)
     }
 
+    /// Scroll-delta rebuild: the viewport window moved by `shift` rows over otherwise-unchanged
+    /// content (a pure scrollback scroll — no output, no overlays), so every surviving row of the
+    /// previous frame is still byte-identical at its new position. Copies the surviving band from
+    /// `previous` (fixing each cell's baked `row` index) and re-resolves only the newly-exposed
+    /// rows from the snapshot — the resolver/color work that dominates `build` is skipped for the
+    /// whole kept band.
+    ///
+    /// `shift` is in viewport rows: positive = the window moved up into history (scrolled back;
+    /// previous row r now displays at r + shift, new content enters at the top), negative = the
+    /// window moved down toward live (new content enters at the bottom). Returns nil when the
+    /// shift isn't applicable (no-op shift, |shift| covers the viewport, geometry mismatch, or
+    /// either side draws images — placements are window-relative and not worth shifting) so the
+    /// caller falls back to a full build. The result is byte-identical to
+    /// `build(snapshot, region: nil)` — pinned by the differential tests; the caller owns the
+    /// "content didn't change" predicate (no output since `previous`, same builder config).
+    public func buildShifted(
+        _ snapshot: TerminalGridSnapshot,
+        reusing previous: TerminalFrame,
+        shift: Int
+    ) -> TerminalFrame? {
+        let cols = snapshot.cols
+        let rows = snapshot.rows
+        guard shift != 0, abs(shift) < rows,
+              previous.columns == cols, previous.rows == rows,
+              previous.cells.count == cols * rows,
+              previous.images.isEmpty, snapshot.images.isEmpty
+        else { return nil }
+        var cells = [RenderCell]()
+        cells.reserveCapacity(cols * rows)
+        for row in 0 ..< rows {
+            let sourceRow = row - shift // where this viewport row lived in the previous frame
+            if sourceRow >= 0, sourceRow < rows {
+                let base = cells.count
+                cells.append(contentsOf: previous.cells[(sourceRow * cols) ..< ((sourceRow + 1) * cols)])
+                for i in base ..< cells.count { cells[i].row = row } // fix the baked row index
+            } else {
+                appendRow(row, snapshot: snapshot, region: nil, searchHighlights: [], into: &cells)
+            }
+        }
+        // Cursor and prompt gutter come fresh from the snapshot (both are cheap): the cursor is
+        // hidden in scrolled history views anyway, and the gutter marks are window-relative so
+        // they shift with the snapshot, not the previous frame.
+        let cursor = CursorRender(
+            row: snapshot.cursor.row, column: snapshot.cursor.col, visible: snapshot.cursor.visible,
+            color: renderColor(cursorColor), textColor: renderColor(cursorTextColor),
+            style: renderCursorStyle(userStyle: cursorStyle, programShape: snapshot.cursor.shape)
+        )
+        let promptGutter = promptGutterEnabled ? resolvePromptGutter(snapshot.marks) : [:]
+        return TerminalFrame(columns: cols, rows: rows, cells: cells,
+                             cursor: cursor, images: [], promptGutter: promptGutter)
+    }
+
     /// Build the `RenderCell`s for one viewport row (appending in column order). A row's cells
     /// depend only on its snapshot cells plus selection/search shading — the cursor overlay is
     /// applied later by the renderer — so this is the unit of incremental reuse in `build`.

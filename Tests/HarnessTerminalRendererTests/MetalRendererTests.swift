@@ -170,6 +170,186 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertEqual(renderer.stats.presentScheduleNanos, 0)
     }
 
+    /// Scroll-delta rotation: rendering frame B (= frame A's window scrolled back one row) with
+    /// `scrollShift` must reuse every kept row from the cache (stats) and produce pixels identical
+    /// to a from-scratch render of B — pinning both the rotation bookkeeping and the baked-Y
+    /// rewrite on every instance type.
+    func testScrollShiftRotationMatchesFullRenderReadback() throws {
+        let (device, renderer) = try makeRenderer()
+        let cols = 12, rows = 4
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 10 {
+            term.feed("\u{1b}[3\(i % 8)mr\(i)\u{1b}[0m \u{1b}[4mu\(i)\u{1b}[24m \u{1b}[41mB\u{1b}[0m\r\n")
+        }
+        let builder = FrameBuilder(theme: theme)
+        let frameA = builder.build(term.readGrid(scrollbackOffset: 1)!)
+        let frameB = builder.build(term.readGrid(scrollbackOffset: 2)!) // = A shifted down 1 row
+        let (w, h) = renderer.surfacePixelSize(columns: cols, rows: rows)
+        guard let target = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        let clear = RenderColor(theme.background)
+        // Seed the row cache with frame A (full damage caches every row).
+        renderer.render(frameA, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+        // Shifted render of B: rotate the cache, encode only the exposed top row.
+        renderer.render(frameB, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integer: 0)), scrollShift: 1)
+        XCTAssertEqual(renderer.stats.encodedRows, 1)
+        XCTAssertEqual(renderer.stats.reusedRows, rows - 1)
+        let rotated = readPixels(target, width: w, height: h)
+
+        let reference = try makeRenderer(device: device)
+        guard let refTarget = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        reference.render(frameB, to: refTarget, clearColor: clear)
+        let expected = readPixels(refTarget, width: w, height: h)
+        var mismatches = 0
+        for y in 0 ..< h {
+            for x in 0 ..< w where rotated(x, y) != expected(x, y) {
+                mismatches += 1
+            }
+        }
+        XCTAssertEqual(mismatches, 0, "rotated render must be pixel-identical to a full render")
+    }
+
+    /// Rotation across a shift matrix — positive, negative, and multi-row. Pins the baked-Y
+    /// rewrite sign (dy = shift·cellH in BOTH directions), the fall-off end (top rows drop for
+    /// negative shifts, bottom for positive), and the exposed band, all at the pixel level —
+    /// the count-only stats assertions are sign-symmetric and cannot catch a flipped dy.
+    func testScrollShiftRotationMatrixMatchesFullRender() throws {
+        let (device, renderer) = try makeRenderer()
+        let cols = 12, rows = 4
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 16 {
+            term.feed("\u{1b}[3\(i % 8)mm\(i)\u{1b}[0m \u{1b}[4mu\(i)\u{1b}[24m \u{1b}[4\(i % 8)m#\u{1b}[0m\r\n")
+        }
+        let builder = FrameBuilder(theme: theme)
+        let clear = RenderColor(theme.background)
+        let (w, h) = renderer.surfacePixelSize(columns: cols, rows: rows)
+        let baseOffset = 5
+        for shift in [1, 3, -1, -2] {
+            let seed = builder.build(term.readGrid(scrollbackOffset: baseOffset)!)
+            let target = builder.build(term.readGrid(scrollbackOffset: baseOffset + shift)!)
+            guard let texture = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+            renderer.render(seed, to: texture, clearColor: clear,
+                            damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+            let exposed = shift > 0
+                ? IndexSet(integersIn: 0 ..< shift)
+                : IndexSet(integersIn: (rows + shift) ..< rows)
+            renderer.render(target, to: texture, clearColor: clear,
+                            damage: TerminalDamage(rows: exposed), scrollShift: shift)
+            XCTAssertEqual(renderer.stats.encodedRows, abs(shift), "shift \(shift)")
+            XCTAssertEqual(renderer.stats.reusedRows, rows - abs(shift), "shift \(shift)")
+            let rotated = readPixels(texture, width: w, height: h)
+
+            let reference = try makeRenderer(device: device)
+            guard let refTexture = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+            reference.render(target, to: refTexture, clearColor: clear)
+            let expected = readPixels(refTexture, width: w, height: h)
+            var mismatches = 0
+            for y in 0 ..< h {
+                for x in 0 ..< w where rotated(x, y) != expected(x, y) {
+                    mismatches += 1
+                }
+            }
+            XCTAssertEqual(mismatches, 0, "shift \(shift) must be pixel-identical to a full render")
+        }
+    }
+
+    /// A deliberately WRONG exposed band with the correct scrollShift must still render perfectly:
+    /// rotation nils the truly-exposed slots, and the nil-slot fallback re-encodes them from the
+    /// (always-correct) frame regardless of what the damage band claims. This documents that the
+    /// nil slots — not the caller's band — are the correctness guarantor.
+    func testScrollShiftSurvivesWrongDamageBand() throws {
+        let (device, renderer) = try makeRenderer()
+        let cols = 12, rows = 4
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 10 { term.feed("wrongband \(i)\r\n") }
+        let builder = FrameBuilder(theme: theme)
+        let clear = RenderColor(theme.background)
+        let (w, h) = renderer.surfacePixelSize(columns: cols, rows: rows)
+        guard let texture = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        let seed = builder.build(term.readGrid(scrollbackOffset: 1)!)
+        let target = builder.build(term.readGrid(scrollbackOffset: 2)!)
+        renderer.render(seed, to: texture, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+        // Exposed row is 0 (shift +1); claim row 2 instead.
+        renderer.render(target, to: texture, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integer: 2)), scrollShift: 1)
+        let rotated = readPixels(texture, width: w, height: h)
+        let reference = try makeRenderer(device: device)
+        guard let refTexture = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        reference.render(target, to: refTexture, clearColor: clear)
+        let expected = readPixels(refTexture, width: w, height: h)
+        var mismatches = 0
+        for y in 0 ..< h {
+            for x in 0 ..< w where rotated(x, y) != expected(x, y) {
+                mismatches += 1
+            }
+        }
+        XCTAssertEqual(mismatches, 0)
+    }
+
+    /// Drop-recovery contract: when a present fails, the view calls `invalidateRowReuseCache()`
+    /// because its frame bookkeeping advanced while the glass (and possibly the cache) did not —
+    /// the next "nothing changed" frame must re-encode from frame content rather than reuse rows
+    /// that disagree with the screen. Pinned here deterministically since real drops are
+    /// drawable-starvation races.
+    func testInvalidateRowReuseCacheForcesFullReencode() throws {
+        let (device, renderer) = try makeRenderer()
+        let cols = 12, rows = 4
+        let frameA = frame("alpha", cols: cols, rows: rows)
+        let (w, h) = renderer.surfacePixelSize(columns: cols, rows: rows)
+        guard let texture = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        let clear = RenderColor(theme.background)
+        renderer.render(frameA, to: texture, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+        // Baseline: a quiet frame reuses every cached row.
+        renderer.render(frameA, to: texture, clearColor: clear, damage: TerminalDamage())
+        XCTAssertEqual(renderer.stats.encodedRows, 0)
+        XCTAssertEqual(renderer.stats.reusedRows, rows)
+        // After a drop the view invalidates; the same quiet frame must now re-encode everything.
+        renderer.invalidateRowReuseCache()
+        renderer.render(frameA, to: texture, clearColor: clear, damage: TerminalDamage())
+        XCTAssertEqual(renderer.stats.encodedRows, rows)
+        XCTAssertEqual(renderer.stats.reusedRows, 0)
+    }
+
+    /// Live→scrolled with a visible block cursor: the cursor's row carries an inverted glyph in
+    /// the cache, and after the shift it must re-encode at its SHIFTED slot (the cached cursor key
+    /// rotates with the content) — otherwise the stale inversion rides along one row down.
+    func testScrollShiftReencodesShiftedCursorRow() throws {
+        let (device, renderer) = try makeRenderer()
+        let cols = 12, rows = 4
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 10 { term.feed("cursor\(i)\r\n") }
+        term.feed("\u{1b}[2;5H") // park the cursor mid-screen so its row survives the shift
+        let builder = FrameBuilder(theme: theme)
+        let live = builder.build(term.readGrid()!) // visible block cursor on viewport row 1
+        XCTAssertTrue(live.cursor.visible)
+        XCTAssertEqual(live.cursor.row, 1)
+        let scrolled = builder.build(term.readGrid(scrollbackOffset: 1)!) // cursor hidden
+        XCTAssertFalse(scrolled.cursor.visible)
+        let (w, h) = renderer.surfacePixelSize(columns: cols, rows: rows)
+        guard let target = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        let clear = RenderColor(theme.background)
+        renderer.render(live, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+        renderer.render(scrolled, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integer: 0)), scrollShift: 1)
+        let rotated = readPixels(target, width: w, height: h)
+
+        let reference = try makeRenderer(device: device)
+        guard let refTarget = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        reference.render(scrolled, to: refTarget, clearColor: clear)
+        let expected = readPixels(refTarget, width: w, height: h)
+        var mismatches = 0
+        for y in 0 ..< h {
+            for x in 0 ..< w where rotated(x, y) != expected(x, y) {
+                mismatches += 1
+            }
+        }
+        XCTAssertEqual(mismatches, 0, "shifted cursor row must re-encode without the stale inversion")
+    }
+
     func testRenderStatsDistinguishNonEmptyAndDefaultCanvasFrames() throws {
         let (device, renderer) = try makeRenderer()
         let nonEmpty = frame("\u{1b}[?25l\u{1b}[48;2;255;0;0mA", cols: 1, rows: 1)

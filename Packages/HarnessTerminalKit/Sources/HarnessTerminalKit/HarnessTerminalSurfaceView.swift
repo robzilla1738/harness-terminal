@@ -43,6 +43,11 @@ private struct SurfaceFrameBuildResult: Sendable {
     var generation: UInt64
     var frame: TerminalFrame
     var damage: TerminalDamage?
+    /// Non-zero for a pure scrollback scroll: the frame is the previous one shifted by this many
+    /// viewport rows (`FrameBuilder.buildShifted`), and the renderer should rotate its row cache
+    /// by the same amount instead of re-encoding the kept rows. `damage` then lists exactly the
+    /// newly-exposed rows.
+    var scrollShift: Int = 0
     var frameBuildNanos: UInt64
     var clearColor: RenderColor
 }
@@ -90,6 +95,14 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
     /// (and resets the emulator/grid) can never diff new damage against a frame built for the old
     /// grid — which would show torn/stale rows. Belt-and-suspenders alongside `resetPlainFrame()`.
     var lastPlainFrameGeneration: UInt64 = 0
+    /// Scroll-delta reuse source: the last overlay-free, image-free viewport frame (live at
+    /// offset 0 or a scrolled history view), the scroll offset it was built at, and its
+    /// generation. A pure scroll between two such frames rebuilds via
+    /// `FrameBuilder.buildShifted` — re-resolving only the newly-exposed rows — instead of a
+    /// full rebuild. Touched only on the serial queue (same discipline as `lastPlainFrame`).
+    var lastViewportFrame: TerminalFrame?
+    var lastViewportOffset = 0
+    var lastViewportGeneration: UInt64 = 0
 
     /// Latest-wins coalescing for async frame builds. Every `renderNowOffMain()` claims a token; a
     /// build whose token is no longer the latest (a newer build is already queued behind it on this
@@ -133,7 +146,10 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
     }
 
     func resetPlainFrame() {
-        sync { _ in lastPlainFrame = nil }
+        sync { _ in
+            lastPlainFrame = nil
+            lastViewportFrame = nil
+        }
     }
 }
 
@@ -596,6 +612,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     var testingHasRenderer: Bool { renderer != nil }
     var testingLastPresentScheduleNanos: UInt64 { renderer?.stats.presentScheduleNanos ?? 0 }
     func testingRepaintLastFrame() -> Bool { repaintLastFrame() }
+    // Scroll-reuse seams: drive a synchronous build+present and a scrollback scroll headlessly.
+    func testingForceRender() { scheduler.forceRender() }
+    func testingScrollBy(lines: Int) { scrollBy(lines: lines) }
 
     /// The full appearance the host computes from settings + theme:
     /// - `canvasBackground/Foreground/cursor` come from `ThemeManager.resolvedCanvas`, so
@@ -1388,6 +1407,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             let frameBuildStart = DispatchTime.now().uptimeNanoseconds
             var frame: TerminalFrame
             var renderDamage: TerminalDamage?
+            var scrollShift = 0
             if let cm = copyModeState {
                 let offset = cm.scrollbackOffset(historyCount: emulator.historyCount)
                 let grid = emulator.readGrid(scrollbackOffset: offset)
@@ -1410,6 +1430,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                                          selectionBackground: config.selectionBackground,
                                          canvasForeground: fg, canvasBackground: bg)
                 state.lastPlainFrame = nil
+                state.lastViewportFrame = nil // copy-mode frames bake overlays — not a shift source
             } else {
                 let grid = requestedScrollOffset > 0
                     ? emulator.readGrid(scrollbackOffset: requestedScrollOffset)
@@ -1418,8 +1439,29 @@ public final class HarnessTerminalSurfaceView: NSView {
                 let findHits = findIsActive
                     ? Self.viewportFindHighlights(findMatchesSnapshot, scrollOffset: requestedScrollOffset, historyCount: emulator.historyCount, rows: viewRows)
                     : []
-                let plain = requestedScrollOffset == 0 && selectionRegion == nil && preedit.isEmpty && findHits.isEmpty
-                if plain {
+                let overlayFree = selectionRegion == nil && preedit.isEmpty && findHits.isEmpty
+                let plain = requestedScrollOffset == 0 && overlayFree
+                // Scroll-delta fast path: a pure scrollback scroll (the offset changed, nothing
+                // else did — no output since the last overlay-free frame, no overlays now) is the
+                // previous frame shifted by the offset delta. `buildShifted` re-resolves only the
+                // newly-exposed rows; `scrollShift` + the exposed-row damage let the renderer
+                // rotate its row cache the same way. This covers k→k′ scrolls AND the 0→k / k→0
+                // transitions (landing at 0 yields a byte-identical plain frame, so the plain
+                // cache below stays coherent). `damage.rows.isEmpty` is the no-output guard —
+                // cursor moves list their rows there, so they conservatively take the full path.
+                let scrollDelta = requestedScrollOffset - state.lastViewportOffset
+                if overlayFree, scrollDelta != 0,
+                   damage.rows.isEmpty, !damage.full,
+                   state.lastViewportGeneration == generation,
+                   let previous = state.lastViewportFrame,
+                   let shifted = builder.buildShifted(grid, reusing: previous, shift: scrollDelta) {
+                    frame = shifted
+                    scrollShift = scrollDelta
+                    let exposed = scrollDelta > 0
+                        ? IndexSet(integersIn: 0 ..< min(scrollDelta, viewRows))
+                        : IndexSet(integersIn: max(0, viewRows + scrollDelta) ..< viewRows)
+                    renderDamage = TerminalDamage(rows: exposed)
+                } else if plain {
                     // Only reuse a cached frame built for THIS generation — a stale-generation frame
                     // describes the old grid and would tear when diffed against fresh damage.
                     let reuse = state.lastPlainFrameGeneration == generation ? state.lastPlainFrame : nil
@@ -1448,11 +1490,22 @@ public final class HarnessTerminalSurfaceView: NSView {
                 frame.cursor.hollow = !isFocused // unfocused → hollow outline / dimmed cursor
                 state.lastPlainFrame = plain ? frame : nil
                 state.lastPlainFrameGeneration = generation
+                // Refresh the scroll-reuse source: any overlay-free, image-free viewport frame
+                // qualifies (live or scrolled — both are byte-faithful windows over unchanged
+                // content). Overlay frames bake highlight colors into cells, so they poison it.
+                if overlayFree, frame.images.isEmpty {
+                    state.lastViewportFrame = frame
+                    state.lastViewportOffset = requestedScrollOffset
+                    state.lastViewportGeneration = generation
+                } else {
+                    state.lastViewportFrame = nil
+                }
             }
             return SurfaceFrameBuildResult(
                 generation: generation,
                 frame: frame,
                 damage: renderDamage,
+                scrollShift: scrollShift,
                 frameBuildNanos: DispatchTime.now().uptimeNanoseconds &- frameBuildStart,
                 clearColor: builder.renderColor(bg, alpha: opacity)
             )
@@ -1481,7 +1534,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// scheduler (and wake the link) to retry on the next tick rather than leaving a frame unshown.
     private func presentBuiltFrame(_ result: SurfaceFrameBuildResult) {
         guard renderGeneration == result.generation, window != nil, let renderer else { return }
-        if presentFrame(result, damage: result.damage) {
+        if presentFrame(result, damage: result.damage, scrollShift: result.scrollShift) {
             // Remember the presented frame so a live resize can re-stretch it without rebuilding
             // (and without touching the emulator queue). See `repaintLastFrame`.
             lastPresentedResult = result
@@ -1489,6 +1542,13 @@ public final class HarnessTerminalSurfaceView: NSView {
         } else {
             // A genuine drop: nothing reached the glass this turn (repaintLastFrame failures
             // don't count — their callers fall back to another present in the same turn).
+            // The worker has already diffed this frame's damage away (lastPlainFrame /
+            // lastViewportFrame advanced at build time), so the NEXT build can legitimately say
+            // "nothing changed" — but the renderer's row cache never received this frame's rows
+            // (nil drawable drops before encode) or holds rows the screen never showed (encode
+            // failed after mutating them). Either way the cache and the next frame's damage
+            // disagree about what's on the glass, so drop the cache: the retry re-encodes fully.
+            renderer.invalidateRowReuseCache()
             FrameSignposter.shared.recordFrameDrop()
             scheduleRender() // transient encode/present failure — retry next tick
         }
@@ -1510,7 +1570,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// (total / drawable wait / semaphore wait / schedule). A `false` return is a skipped present
     /// (nil drawable or encode failure) — callers decide whether to retry or fall back; only
     /// `presentBuiltFrame` counts a genuine drop (`recordFrameDrop`).
-    private func presentFrame(_ result: SurfaceFrameBuildResult, damage: TerminalDamage?) -> Bool {
+    private func presentFrame(
+        _ result: SurfaceFrameBuildResult, damage: TerminalDamage?, scrollShift: Int = 0
+    ) -> Bool {
         guard let renderer else { return false }
         let sp = FrameSignposter.shared
         let presentStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
@@ -1528,6 +1590,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 gamma: glyphGamma,
                 ligatures: ligaturesEnabled,
                 damage: damage,
+                scrollShift: scrollShift,
                 frameBuildNanos: result.frameBuildNanos,
                 synchronizedWithTransaction: metalLayer.presentsWithTransaction
             )

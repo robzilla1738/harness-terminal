@@ -24,6 +24,53 @@ final class FrameBuilderTests: XCTestCase {
         XCTAssertEqual(f.cells.count, 30)
     }
 
+    /// Scroll-delta reuse must be byte-identical to a full rebuild at every offset: walk a
+    /// deterministic pseudo-random offset sequence over content with colors, wide chars,
+    /// decorations, and wrapped lines, shifting from the previous frame at each step.
+    func testBuildShiftedMatchesFullBuildAcrossScrollWalk() {
+        let cols = 24, rows = 6
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 80 {
+            term.feed("\u{1b}[3\(i % 8)mL\(i) 漢字 \u{1b}[4mu\(i)\u{1b}[24m \(String(repeating: "w", count: 30))\r\n")
+        }
+        let sharedBuilder = builder // one deterministic config for the whole walk
+        var offset = 0
+        var previous = sharedBuilder.build(term.readGrid()!)
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        var shiftedSteps = 0
+        for step in 0 ..< 60 {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            let newOffset = Int(seed % 9) // small offsets → many |delta| < rows shift steps
+            let delta = newOffset - offset
+            guard let snap = newOffset > 0
+                ? term.readGrid(scrollbackOffset: newOffset) : term.readGrid()
+            else { return XCTFail("snapshot failed at step \(step)") }
+            let full = sharedBuilder.build(snap)
+            if delta != 0, let shifted = sharedBuilder.buildShifted(snap, reusing: previous, shift: delta) {
+                XCTAssertEqual(shifted, full, "offset \(offset)→\(newOffset) (step \(step))")
+                previous = shifted
+                shiftedSteps += 1
+            } else {
+                previous = full
+            }
+            offset = newOffset
+        }
+        XCTAssertGreaterThan(shiftedSteps, 10, "the walk should exercise the shift path")
+    }
+
+    func testBuildShiftedRejectsInapplicableShifts() {
+        let term = HarnessGridTerminal(cols: 10, rows: 3)!
+        for i in 0 ..< 12 { term.feed("line \(i)\r\n") }
+        let b = builder
+        let live = b.build(term.readGrid()!)
+        let snap = term.readGrid(scrollbackOffset: 1)!
+        XCTAssertNil(b.buildShifted(snap, reusing: live, shift: 0), "zero shift is a no-op")
+        XCTAssertNil(b.buildShifted(snap, reusing: live, shift: 3), "|shift| ≥ rows leaves nothing to reuse")
+        let small = HarnessGridTerminal(cols: 8, rows: 3)!
+        small.feed("x")
+        XCTAssertNil(b.buildShifted(small.readGrid()!, reusing: live, shift: 1), "geometry mismatch")
+    }
+
     func testBackgroundFilledForEveryCell() {
         // Even an empty cell carries the resolved default background.
         let f = frame("", cols: 4, rows: 1)

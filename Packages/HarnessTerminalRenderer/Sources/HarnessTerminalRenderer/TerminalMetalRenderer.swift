@@ -346,11 +346,12 @@ public final class TerminalMetalRenderer {
         gamma: Float = 1,
         ligatures: Bool = false,
         damage: TerminalDamage? = nil,
+        scrollShift: Int = 0,
         frameBuildNanos: UInt64 = 0
     ) -> Bool {
         guard let commandBuffer = encode(
             frame, target: target, clearColor: clearColor, origin: origin,
-            gamma: gamma, ligatures: ligatures, damage: damage,
+            gamma: gamma, ligatures: ligatures, damage: damage, scrollShift: scrollShift,
             frameBuildNanos: frameBuildNanos
         ) else { return false }
         commandBuffer.commit()
@@ -382,12 +383,13 @@ public final class TerminalMetalRenderer {
         gamma: Float = 1,
         ligatures: Bool = false,
         damage: TerminalDamage? = nil,
+        scrollShift: Int = 0,
         frameBuildNanos: UInt64 = 0,
         synchronizedWithTransaction: Bool = false
     ) -> Bool {
         guard let commandBuffer = encode(
             frame, target: drawable.texture, clearColor: clearColor, origin: origin,
-            gamma: gamma, ligatures: ligatures, damage: damage,
+            gamma: gamma, ligatures: ligatures, damage: damage, scrollShift: scrollShift,
             frameBuildNanos: frameBuildNanos
         ) else { return false }
         if synchronizedWithTransaction {
@@ -405,6 +407,8 @@ public final class TerminalMetalRenderer {
 
     /// Build the instance buffers and encode the background, glyph, and decoration passes
     /// into a fresh command buffer. Caller decides whether to wait (offscreen) or present.
+    /// `scrollShift` (viewport rows; see `buildFrameInstances`) rotates the row-instance cache
+    /// for a pure scrollback scroll so kept rows skip re-encoding.
     func encode(
         _ frame: TerminalFrame,
         target: MTLTexture,
@@ -413,6 +417,7 @@ public final class TerminalMetalRenderer {
         gamma: Float,
         ligatures: Bool,
         damage: TerminalDamage? = nil,
+        scrollShift: Int = 0,
         frameBuildNanos: UInt64 = 0
     ) -> MTLCommandBuffer? {
         let encodeStart = DispatchTime.now().uptimeNanoseconds
@@ -440,6 +445,7 @@ public final class TerminalMetalRenderer {
             cellSize: SIMD2(cellW, cellH),
             ligatures: ligatures,
             damage: damage,
+            scrollShift: scrollShift,
             thickness: thickness,
             underlineY: underlineY,
             strikeY: strikeY,
@@ -721,12 +727,18 @@ public final class TerminalMetalRenderer {
         )
     }
 
+    /// `scrollShift` (viewport rows, same convention as `FrameBuilder.buildShifted`): non-zero
+    /// signals that this frame is the previous frame's content shifted by that many rows — a pure
+    /// scrollback scroll. The cached row instances rotate to their new slots (rewriting the baked
+    /// absolute Y) so kept rows skip re-encoding entirely (glyph shaping + atlas lookups); only
+    /// the newly-exposed rows — which the caller puts in `damage.rows` — are encoded fresh.
     private func buildFrameInstances(
         _ frame: TerminalFrame,
         origin: (x: Int, y: Int),
         cellSize: SIMD2<Float>,
         ligatures: Bool,
         damage: TerminalDamage?,
+        scrollShift: Int = 0,
         thickness: Float,
         underlineY: Float,
         strikeY: Float,
@@ -764,6 +776,14 @@ public final class TerminalMetalRenderer {
             && rowInstanceCache.ligatures == ligatures
             && rowInstanceCache.atlasResets == atlas.stats.resets
             && rowInstanceCache.rowInstances.count == frame.rows
+
+        // Scroll-delta rotation: rotate kept rows to their new slots before the dirty-row pass so
+        // they hit the reuse branch below. Exposed slots become nil (and arrive in damage.rows),
+        // so they encode fresh either way. Gated on an otherwise-valid cache; a mismatch falls
+        // through to the full reset exactly as a non-shifted frame would.
+        if scrollShift != 0, cacheMatches, !damage.full {
+            rotateRowInstanceCache(by: scrollShift, cellHeight: cellSize.y)
+        }
 
         var dirtyRows = clampedRows(damage.rows, rowCount: frame.rows)
         if damage.full || !cacheMatches {
@@ -995,6 +1015,55 @@ public final class TerminalMetalRenderer {
     private func resetRowInstanceCache() {
         rowInstanceCache = RowInstanceCache()
         uploadedInstanceCache = nil
+    }
+
+    /// Drop the row-reuse + stable-upload caches so the next frame re-encodes everything. The
+    /// live view calls this when a present FAILS: the caller's frame bookkeeping has already
+    /// advanced (its next build may report empty damage), but the cache either never saw the
+    /// dropped frame's rows (nil drawable — the drop happens before `encode`) or holds rows the
+    /// screen never showed (`encode` mutated it, then the command buffer failed). Both leave the
+    /// cache disagreeing with the next frame's damage about what's on the glass; resetting makes
+    /// the retry re-encode from the (always-correct) frame content.
+    public func invalidateRowReuseCache() {
+        resetRowInstanceCache()
+    }
+
+    /// Move every cached row's instances to their post-scroll slot and rewrite the baked absolute
+    /// Y (instance origins are device-pixel positions frozen at encode time; decoration `params`
+    /// stay cell-relative, so only `origin.y` moves). Rows shifted out of the viewport drop;
+    /// exposed slots become nil so the caller encodes them fresh.
+    /// The cached cursor key SHIFTS with the content — its row indexes the band it was encoded
+    /// into, so after rotation the standard `previousCursor != cursorKey` pass still dirties the
+    /// right slot (e.g. live→scrolled hides a block cursor: the old cursor row carries an
+    /// inverted glyph and must re-encode at its shifted position, not its old index).
+    /// The stable-upload cache holds pre-shift Y too; the exposed-row encodes force a real upload
+    /// this frame (`encodedRows > 0` fails `stableFrame`), but it must also be dropped so a later
+    /// stable frame can't revive the stale buffers through a still-matching key.
+    private func rotateRowInstanceCache(by shift: Int, cellHeight: Float) {
+        uploadedInstanceCache = nil
+        let rows = rowInstanceCache.rowInstances.count
+        guard abs(shift) < rows else {
+            rowInstanceCache.rowInstances = Array(repeating: nil, count: rows)
+            rowInstanceCache.previousCursor = nil
+            return
+        }
+        var rotated: [EncodedRowInstances?] = Array(repeating: nil, count: rows)
+        let dy = Float(shift) * cellHeight
+        for sourceRow in 0 ..< rows {
+            let destRow = sourceRow + shift
+            guard destRow >= 0, destRow < rows,
+                  var instances = rowInstanceCache.rowInstances[sourceRow] else { continue }
+            for i in instances.backgrounds.indices { instances.backgrounds[i].origin.y += dy }
+            for i in instances.glyphs.indices { instances.glyphs[i].origin.y += dy }
+            for i in instances.decorations.indices { instances.decorations[i].origin.y += dy }
+            rotated[destRow] = instances
+        }
+        rowInstanceCache.rowInstances = rotated
+        if var previous = rowInstanceCache.previousCursor {
+            previous.row += shift
+            rowInstanceCache.previousCursor =
+                (previous.row >= 0 && previous.row < rows) ? previous : nil
+        }
     }
 
     private func clampedRows(_ rows: IndexSet, rowCount: Int) -> IndexSet {

@@ -657,6 +657,39 @@ final class PerformanceBenchmarks: XCTestCase {
         }
     }
 
+    // MARK: - Scrollback-view frame build: full rebuild vs scroll-delta shift
+
+    /// Per-scroll-tick frame-build cost while viewing history: the pre-existing path rebuilds the
+    /// whole frame (re-resolving every cell) per tick; `buildShifted` re-resolves only the rows
+    /// the scroll exposed. 200×60, line-by-line scroll — the trackpad steady state.
+    func testScrollTickShiftVsFullRebuild() throws {
+        try skipUnlessEnabled()
+        let cols = 200, rows = 60
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        term.feed(syntheticStream(targetBytes: 512 * 1024))
+        let theme = HarnessThemeCatalog.theme(named: "Dracula")!
+        let builder = FrameBuilder(theme: theme)
+        let ticks = 200
+
+        let fullNanos = timedNanos {
+            for offset in 1 ... ticks {
+                _ = builder.build(term.readGrid(scrollbackOffset: offset)!)
+            }
+        }
+        var previous = builder.build(term.readGrid()!)
+        let shiftNanos = timedNanos {
+            for offset in 1 ... ticks {
+                let snap = term.readGrid(scrollbackOffset: offset)!
+                previous = builder.buildShifted(snap, reusing: previous, shift: 1) ?? builder.build(snap)
+            }
+        }
+        printBenchmark("scroll_tick_full_rebuild", nanos: fullNanos, fields: [("ticks", "\(ticks)")])
+        printBenchmark("scroll_tick_shift_reuse", nanos: shiftNanos, fields: [
+            ("ticks", "\(ticks)"),
+            ("speedup", String(format: "%.1fx", Double(fullNanos) / Double(max(1, shiftNanos)))),
+        ])
+    }
+
     // MARK: - Scrollback append + replay (steady state, at the cap)
 
     func testScrollbackSteadyStateAtCap() throws {
