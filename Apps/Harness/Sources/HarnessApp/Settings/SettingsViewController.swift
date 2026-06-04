@@ -1921,7 +1921,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // "Keep sessions running" toggle. Mirror the snapshot truth into that toggle so the
         // two controls stay consistent while the window is open.
         let keep = mode.persistsSessionsByDefault
-        SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep))
+        if SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep)) != nil {
+            // Record the live apply so the launch-time reconcile sees this mode as settled —
+            // otherwise the next launch would treat the switch as a cross-launch mode change and
+            // re-impose the default over any keep-on-quit override made after switching.
+            AppDelegate.recordModePersistenceApplied(mode)
+        }
         keepSessionsToggle.state = keep ? .on : .off
     }
 

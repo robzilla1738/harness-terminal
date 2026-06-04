@@ -81,6 +81,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private static let modePersistenceLastAppliedKey = "HarnessModePersistenceLastAppliedMode"
+
+    /// Record that `mode`'s keep-on-quit default has been applied to the daemon, so the next
+    /// launch's reconcile treats the mode as settled. Called after the launch-time apply below and
+    /// from Settings when a preset switch applies the default live — without the latter, that
+    /// switch would look like a cross-launch mode change and re-clobber any keep-on-quit override
+    /// the user made after switching.
+    static func recordModePersistenceApplied(_ mode: ExperienceMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: modePersistenceLastAppliedKey)
+    }
+
     /// Align the daemon's keep-on-quit default with the chosen experience whenever the mode
     /// *changes* across launches. Switching presets (Plain ⇄ Persistent/Full/Agent) re-applies that
     /// preset's default; a stable mode is left untouched so an explicit in-Settings keep-on-quit
@@ -88,15 +99,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// was a permanent one-shot, so a later mode switch silently failed to re-sync persistence.)
     /// A fresh Plain install becomes ephemeral; an upgraded Full install keeps sessions.
     private static func reconcileSessionPersistenceWithMode() {
-        let key = "HarnessModePersistenceLastAppliedMode"
+        let defaults = UserDefaults.standard
         let mode = SessionCoordinator.shared.settings.experienceMode
-        guard UserDefaults.standard.string(forKey: key) != mode.rawValue else { return }
+        // Upgrade seed: installs that ran the old one-shot (V1) reconcile already have a settled —
+        // possibly user-overridden — keep-on-quit value in the daemon. Treat the current mode as
+        // already applied instead of re-imposing its default, which would clobber an explicit
+        // Settings override (e.g. a Plain user who pinned keep-on-quit on would lose sessions on
+        // the next quit).
+        if defaults.string(forKey: modePersistenceLastAppliedKey) == nil,
+           defaults.bool(forKey: "HarnessModePersistenceReconciledV1") {
+            recordModePersistenceApplied(mode)
+            return
+        }
+        guard defaults.string(forKey: modePersistenceLastAppliedKey) != mode.rawValue else { return }
         let keep = mode.persistsSessionsByDefault
         // Record the applied mode ONLY after the daemon accepts the default. A launch while the
         // daemon is still spawning would otherwise burn the key without ever applying the mode's
         // keep-on-quit default — leaving a fresh Plain install wrongly persistent forever.
         guard SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep)) != nil else { return }
-        UserDefaults.standard.set(mode.rawValue, forKey: key)
+        recordModePersistenceApplied(mode)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
