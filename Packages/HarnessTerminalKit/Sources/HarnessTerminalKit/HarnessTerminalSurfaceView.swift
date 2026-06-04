@@ -367,6 +367,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// drawable still updates every frame for a smooth visual; the grid + PTY commit once the
     /// size settles.
     private var resizeCommitWork: DispatchWorkItem?
+    /// Grid origin captured at `viewWillStartLiveResize`, held for the whole drag. Balanced
+    /// padding re-centers the grid on *every* layout, so a pixel-by-pixel drag shifts the text
+    /// ±1px per frame — a visible shimmer. Freezing the origin anchors the content for the
+    /// duration (Ghostty's behavior: leftover sub-cell space accumulates at the right/bottom)
+    /// and `viewDidEndLiveResize` re-centers exactly once for the settled size.
+    private var liveResizeFrozenOrigin: (x: Int, y: Int)?
     /// Safety valve for DEC 2026 synchronized output: a program that enters a synchronized
     /// frame but never ends it must not freeze the display, so we force-present after this.
     private var syncTimeout: DispatchWorkItem?
@@ -577,6 +583,19 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     var testingRenderSynchronized: Bool { scheduler.synchronized }
     var testingRenderPending: Bool { scheduler.needsRender }
+
+    // Live-resize seams (glitchless-resize behavior is asserted headlessly: no window, no Metal).
+    var testingPresentsWithTransaction: Bool { metalLayer.presentsWithTransaction }
+    var testingLiveResizeFrozenOrigin: (x: Int, y: Int)? { liveResizeFrozenOrigin }
+    var testingGridSize: (cols: Int, rows: Int) { (columns, rows) }
+    var testingHasPendingResizeCommit: Bool { resizeCommitWork != nil }
+    func testingScheduleResizeCommit(cols: Int, rows: Int) { scheduleResizeCommit(cols: cols, rows: rows) }
+    func testingMarkGridSized() { hasSizedGrid = true }
+    // Window-hosted seams (the routing test drives real presents through a real Metal renderer).
+    var testingOriginOffset: (x: Int, y: Int) { (originOffsetX, originOffsetY) }
+    var testingHasRenderer: Bool { renderer != nil }
+    var testingLastPresentScheduleNanos: UInt64 { renderer?.stats.presentScheduleNanos ?? 0 }
+    func testingRepaintLastFrame() -> Bool { repaintLastFrame() }
 
     /// The full appearance the host computes from settings + theme:
     /// - `canvasBackground/Foreground/cursor` come from `ThemeManager.resolvedCanvas`, so
@@ -979,6 +998,18 @@ public final class HarnessTerminalSurfaceView: NSView {
             blinkTimer = nil
             stopDisplayLink()
             invalidateRenderGeneration()
+            // A view can leave the window MID-DRAG (tab close / pane remount during a live
+            // resize) and AppKit does not guarantee `viewDidEndLiveResize` then. This instance
+            // is cached and re-hosted (`TerminalPaneRegistry`), so unwind the live-resize state
+            // here too — a latched `presentsWithTransaction` would route every later present
+            // through the synchronous (main-blocking) path outside any resize, and a stale
+            // frozen origin would mis-anchor the next layout. The pending commit is cancelled,
+            // not flushed: re-attach runs `layout()`, which re-schedules a commit if the size
+            // really differs.
+            metalLayer.presentsWithTransaction = false
+            liveResizeFrozenOrigin = nil
+            resizeCommitWork?.cancel()
+            resizeCommitWork = nil
         }
     }
 
@@ -1003,8 +1034,55 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         buildRenderer()
+        // Backing scale changed (e.g. the drag crossed monitors): a frozen drag origin is in
+        // old-scale device pixels — drop it, recompute at the new scale, and re-freeze so the
+        // rest of the drag stays anchored.
+        let wasFrozen = liveResizeFrozenOrigin != nil
+        liveResizeFrozenOrigin = nil
         updateGridSize()
+        if wasFrozen, hasSizedGrid { liveResizeFrozenOrigin = (originOffsetX, originOffsetY) }
         scheduleRender()
+    }
+
+    /// Glitchless live resize (Hume's technique; Ghostty parity). While the user drags the window
+    /// edge, the layer presents *with* the Core Animation transaction: every present becomes
+    /// commit → `waitUntilScheduled()` → `drawable.present()` (see the renderer's
+    /// `synchronizedWithTransaction`), so the terminal frame and the window's new frame land in
+    /// the SAME transaction — content stays latched to the edge instead of lagging it by 1–2
+    /// vsyncs (the judder the async present produces). The mode lives exactly as long as the
+    /// drag: outside it, the async present path keeps its latency profile.
+    /// `allowsNextDrawableTimeout` deliberately stays on (see `configureLayer`): a nil drawable
+    /// mid-drag skips one transaction's present and self-heals on the next layout — preferable
+    /// to an unbounded main-thread wait if the GPU wedges.
+    public override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        metalLayer.presentsWithTransaction = true
+        // Anchor the grid for the whole drag; re-centered once in `viewDidEndLiveResize`.
+        // Before the first real layout there's no meaningful origin to freeze — leave nil so
+        // `updateGridSize` computes normally.
+        liveResizeFrozenOrigin = hasSizedGrid ? (originOffsetX, originOffsetY) : nil
+    }
+
+    public override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        metalLayer.presentsWithTransaction = false
+        // Flush the debounced grid+PTY commit now: the size is settled the moment the drag ends,
+        // so the shell shouldn't wait out the coalescing delay (which exists for *animated*
+        // resizes — sidebar slides, tiling — that never enter live resize). `perform` runs the
+        // captured commit synchronously; `cancel` keeps the queued asyncAfter copy from running
+        // it a second time (and `commitGridSize` is idempotent via its cols/rows guard anyway).
+        if let work = resizeCommitWork {
+            resizeCommitWork = nil
+            work.perform()
+            work.cancel()
+        }
+        // Unfreeze and re-center the balanced padding once for the settled size, then repaint so
+        // the grid doesn't stay parked at the drag-start origin. When the flush above committed a
+        // new size, the generation just changed and `repaintLastFrame` declines — the authoritative
+        // off-main reflow presents the re-centered frame instead.
+        liveResizeFrozenOrigin = nil
+        updateGridSize()
+        if !repaintLastFrame() { scheduleRender() }
     }
 
     public override func layout() {
@@ -1044,22 +1122,21 @@ public final class HarnessTerminalSurfaceView: NSView {
 
         // Inset the grid by the window padding (in device pixels); the same offset is the
         // renderer's draw origin so the padding region shows the canvas color.
-        originOffsetX = Int((paddingPointsX * scale).rounded())
-        originOffsetY = Int((paddingPointsY * scale).rounded())
-        let usableWidth = max(1, pixelWidth - 2 * originOffsetX)
-        let usableHeight = max(1, pixelHeight - 2 * originOffsetY)
-
-        let newCols = max(1, usableWidth / renderer.cellPixelWidth)
-        let newRows = max(1, usableHeight / renderer.cellPixelHeight)
-        if paddingBalanced {
-            // Center the grid: split the sub-cell remainder onto both sides instead of letting
-            // `.topLeft` gravity park it all at the bottom-right. The renderer draws from this
-            // origin and the leftover on every side reads as canvas; the odd pixel (integer / 2)
-            // stays bottom-right and is invisible. Updated even when the cell count is unchanged
-            // so a sub-cell resize re-centers on the next paint.
-            originOffsetX += (usableWidth - newCols * renderer.cellPixelWidth) / 2
-            originOffsetY += (usableHeight - newRows * renderer.cellPixelHeight) / 2
-        }
+        let geometry = Self.computeGridGeometry(
+            pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+            basePadX: Int((paddingPointsX * scale).rounded()),
+            basePadY: Int((paddingPointsY * scale).rounded()),
+            cellWidth: renderer.cellPixelWidth, cellHeight: renderer.cellPixelHeight,
+            balanced: paddingBalanced,
+            // The frozen origin is the live-resize signal (set in viewWillStartLiveResize,
+            // cleared in viewDidEndLiveResize / detach) — NOT NSView.inLiveResize, which only
+            // AppKit's drag loop sets, so the lifecycle stays directly drivable in tests.
+            frozenOrigin: liveResizeFrozenOrigin
+        )
+        originOffsetX = geometry.originX
+        originOffsetY = geometry.originY
+        let newCols = geometry.cols
+        let newRows = geometry.rows
         guard newCols != columns || newRows != rows else { return }
         if !hasSizedGrid {
             // First real layout: size immediately so the terminal opens correct (no flash).
@@ -1084,6 +1161,44 @@ public final class HarnessTerminalSurfaceView: NSView {
                 updateResizePreview(cols: newCols, rows: newRows)
             }
         }
+    }
+
+    /// Pure grid geometry: cols/rows from the usable (padding-inset) area plus the draw origin.
+    /// Normal path: the origin is the padding inset, balanced-centered when enabled — the sub-cell
+    /// remainder splits onto both sides instead of `.topLeft` gravity parking it all bottom-right;
+    /// the odd pixel (integer / 2) stays bottom-right and is invisible. Recomputed even when the
+    /// cell count is unchanged so a sub-cell resize re-centers on the next paint.
+    /// Live drag (`frozenOrigin` non-nil): hold the drag-start origin — re-centering every
+    /// sub-cell layout shifts the text ±1px per pixel of drag (visible shimmer). Clamped so a
+    /// shrink can't push the grid past the drawable's right/bottom edge: the origin slides only
+    /// enough to keep the last column/row visible — once per cell boundary, not every pixel.
+    /// `viewDidEndLiveResize` re-centers once for the settled size. Static + pure so the headless
+    /// tests cover centering/freeze/clamp without a Metal renderer.
+    nonisolated static func computeGridGeometry(
+        pixelWidth: Int, pixelHeight: Int,
+        basePadX: Int, basePadY: Int,
+        cellWidth: Int, cellHeight: Int,
+        balanced: Bool,
+        frozenOrigin: (x: Int, y: Int)?
+    ) -> (cols: Int, rows: Int, originX: Int, originY: Int) {
+        let usableWidth = max(1, pixelWidth - 2 * basePadX)
+        let usableHeight = max(1, pixelHeight - 2 * basePadY)
+        let cols = max(1, usableWidth / cellWidth)
+        let rows = max(1, usableHeight / cellHeight)
+        if let frozen = frozenOrigin {
+            return (
+                cols, rows,
+                min(frozen.x, max(0, pixelWidth - cols * cellWidth)),
+                min(frozen.y, max(0, pixelHeight - rows * cellHeight))
+            )
+        }
+        var originX = basePadX
+        var originY = basePadY
+        if balanced {
+            originX += (usableWidth - cols * cellWidth) / 2
+            originY += (usableHeight - rows * cellHeight) / 2
+        }
+        return (cols, rows, originX, originY)
     }
 
     private func scheduleResizeCommit(cols: Int, rows: Int) {
@@ -1221,7 +1336,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             gamma: glyphGamma,
             ligatures: ligaturesEnabled,
             damage: plain ? damage : nil,
-            frameBuildNanos: frameBuildNanos
+            frameBuildNanos: frameBuildNanos,
+            synchronizedWithTransaction: metalLayer.presentsWithTransaction
         )
         if didPresent { onRenderStats?(renderer.stats) }
         else { scheduleRender() } // transient encode/present failure — retry next tick
@@ -1365,14 +1481,45 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// scheduler (and wake the link) to retry on the next tick rather than leaving a frame unshown.
     private func presentBuiltFrame(_ result: SurfaceFrameBuildResult) {
         guard renderGeneration == result.generation, window != nil, let renderer else { return }
-        // The `present` interval brackets nextDrawable() + the renderer's inFlightSemaphore.wait():
-        // the drawable / GPU back-pressure (vsync) stall on the main thread — the term the latency
-        // work targets (0b showed parse+build is ~16µs, so any felt lag lives here, not upstream).
-        // When signposts are enabled we also time it and log a rolling p50/p95 (see recordPresent).
+        if presentFrame(result, damage: result.damage) {
+            // Remember the presented frame so a live resize can re-stretch it without rebuilding
+            // (and without touching the emulator queue). See `repaintLastFrame`.
+            lastPresentedResult = result
+            onRenderStats?(renderer.stats)
+        } else {
+            // A genuine drop: nothing reached the glass this turn (repaintLastFrame failures
+            // don't count — their callers fall back to another present in the same turn).
+            FrameSignposter.shared.recordFrameDrop()
+            scheduleRender() // transient encode/present failure — retry next tick
+        }
+        StartupMetrics.shared.mark(.firstDrawablePresented)
+    }
+
+    /// Acquire a drawable and present `result`'s frame at the current origin — the one place the
+    /// main thread meets the GPU (drawable wait + in-flight semaphore + encode). While the layer is
+    /// in `presentsWithTransaction` mode (live resize) the present is routed through the renderer's
+    /// transaction-synchronized path, keyed off the layer property itself so present modes can
+    /// never mix while the mode is on — DELIBERATE for output/tick presents mid-drag too: an async
+    /// `commandBuffer.present` against a transaction-mode layer presents at an indeterminate later
+    /// commit (the glitch class this change eliminates), and the uniform sync cost is the bounded
+    /// schedule wait (sub-ms, measured as `presentScheduleNanos`), paid only while dragging.
+    /// The `present` signpost interval brackets nextDrawable() + the renderer's
+    /// inFlightSemaphore.wait(): the drawable / GPU back-pressure (vsync) stall on the main thread
+    /// — the term the latency work targets (0b showed parse+build is ~16µs, so any felt lag lives
+    /// here, not upstream). When signposts are enabled we also record a rolling p50/p95 breakdown
+    /// (total / drawable wait / semaphore wait / schedule). A `false` return is a skipped present
+    /// (nil drawable or encode failure) — callers decide whether to retry or fall back; only
+    /// `presentBuiltFrame` counts a genuine drop (`recordFrameDrop`).
+    private func presentFrame(_ result: SurfaceFrameBuildResult, damage: TerminalDamage?) -> Bool {
+        guard let renderer else { return false }
         let sp = FrameSignposter.shared
         let presentStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
+        var drawableWaitNanos: UInt64 = 0
         let didPresent = sp.interval("present") { () -> Bool in
-            guard let drawable = metalLayer.nextDrawable() else { return false }
+            let drawableStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
+            guard let drawable = sp.interval("drawableWait", { metalLayer.nextDrawable() })
+            else { return false }
+            if sp.enabled { drawableWaitNanos = DispatchTime.now().uptimeNanoseconds &- drawableStart }
             return renderer.present(
                 result.frame,
                 to: drawable,
@@ -1380,20 +1527,20 @@ public final class HarnessTerminalSurfaceView: NSView {
                 origin: (originOffsetX, originOffsetY),
                 gamma: glyphGamma,
                 ligatures: ligaturesEnabled,
-                damage: result.damage,
-                frameBuildNanos: result.frameBuildNanos
+                damage: damage,
+                frameBuildNanos: result.frameBuildNanos,
+                synchronizedWithTransaction: metalLayer.presentsWithTransaction
             )
         }
-        if sp.enabled { sp.recordPresent(nanos: DispatchTime.now().uptimeNanoseconds &- presentStart) }
-        if didPresent {
-            // Remember the presented frame so a live resize can re-stretch it without rebuilding
-            // (and without touching the emulator queue). See `repaintLastFrame`.
-            lastPresentedResult = result
-            onRenderStats?(renderer.stats)
-        } else {
-            scheduleRender() // transient encode/present failure — retry next tick
+        if sp.enabled, didPresent {
+            sp.recordPresent(
+                nanos: DispatchTime.now().uptimeNanoseconds &- presentStart,
+                drawableWait: drawableWaitNanos,
+                semaphoreWait: renderer.stats.semaphoreWaitNanos,
+                schedule: renderer.stats.presentScheduleNanos
+            )
         }
-        StartupMetrics.shared.mark(.firstDrawablePresented)
+        return didPresent
     }
 
     /// Re-present the last built frame at the *current* drawable size with no emulator-queue access
@@ -1410,17 +1557,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard let result = lastPresentedResult,
               result.generation == renderGeneration,
               window != nil, let renderer else { return false }
-        guard let drawable = metalLayer.nextDrawable() else { return false }
-        let didPresent = renderer.present(
-            result.frame,
-            to: drawable,
-            clearColor: result.clearColor,
-            origin: (originOffsetX, originOffsetY),
-            gamma: glyphGamma,
-            ligatures: ligaturesEnabled,
-            damage: nil,
-            frameBuildNanos: result.frameBuildNanos
-        )
+        let didPresent = presentFrame(result, damage: nil)
         if didPresent { onRenderStats?(renderer.stats) }
         return didPresent
     }
@@ -2760,7 +2897,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             frame, to: drawable,
             clearColor: frameBuilder.renderColor(canvasBackground, alpha: canvasOpacity),
             origin: (originOffsetX, originOffsetY), gamma: glyphGamma, ligatures: ligaturesEnabled,
-            frameBuildNanos: frameBuildNanos
+            frameBuildNanos: frameBuildNanos,
+            synchronizedWithTransaction: metalLayer.presentsWithTransaction
         )
         if didPresent { onRenderStats?(renderer.stats) }
         return true

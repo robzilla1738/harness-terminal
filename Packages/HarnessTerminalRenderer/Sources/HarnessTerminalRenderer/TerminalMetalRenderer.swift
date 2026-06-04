@@ -18,6 +18,13 @@ public struct TerminalRenderStats: Equatable, Sendable {
     public var instanceUploadBytes: Int
     public var frameBuildNanos: UInt64
     public var encodeNanos: UInt64
+    /// Time spent blocked on the in-flight semaphore inside `encode` — the GPU back-pressure
+    /// (vsync) stall on the calling thread. Included in `encodeNanos`; split out so profiling can
+    /// tell "GPU behind" from "encode is slow".
+    public var semaphoreWaitNanos: UInt64
+    /// Transaction-synchronized presents only: time from `commit()` to `waitUntilScheduled()`
+    /// returning (the bounded main-thread wait of the glitchless-resize path). 0 for async presents.
+    public var presentScheduleNanos: UInt64
 
     public init(
         cells: Int = 0,
@@ -32,7 +39,9 @@ public struct TerminalRenderStats: Equatable, Sendable {
         reusedRows: Int = 0,
         instanceUploadBytes: Int = 0,
         frameBuildNanos: UInt64 = 0,
-        encodeNanos: UInt64 = 0
+        encodeNanos: UInt64 = 0,
+        semaphoreWaitNanos: UInt64 = 0,
+        presentScheduleNanos: UInt64 = 0
     ) {
         self.cells = cells
         self.bgInstances = bgInstances
@@ -47,6 +56,8 @@ public struct TerminalRenderStats: Equatable, Sendable {
         self.instanceUploadBytes = instanceUploadBytes
         self.frameBuildNanos = frameBuildNanos
         self.encodeNanos = encodeNanos
+        self.semaphoreWaitNanos = semaphoreWaitNanos
+        self.presentScheduleNanos = presentScheduleNanos
     }
 }
 
@@ -352,6 +363,16 @@ public final class TerminalMetalRenderer {
     /// `gamma` remaps glyph coverage only: 1 = native, < 1 = heavier/crisper, > 1 = softer.
     /// `ligatures` enables CoreText run shaping (programming-font ligatures).
     /// `clearColor` carries the same default-background contract as `render(_:to:clearColor:…)`.
+    ///
+    /// `synchronizedWithTransaction` must mirror the layer's `presentsWithTransaction` (the live
+    /// view sets it during a live window resize): the drawable then has to join the *current*
+    /// Core Animation transaction — the one carrying the window's new frame — so the present is
+    /// commit → `waitUntilScheduled()` → `drawable.present()` instead of the async
+    /// `commandBuffer.present(drawable)`. That latches the terminal content to the window edge
+    /// with zero lag (Hume's glitchless-resize technique; Ghostty does the same). The wait is
+    /// bounded by GPU *scheduling*, not completion — typically well under a millisecond — and is
+    /// paid only while the layer is in transaction mode; the async path is byte-identical to
+    /// before, preserving present-on-echo latency.
     @discardableResult
     public func present(
         _ frame: TerminalFrame,
@@ -361,15 +382,24 @@ public final class TerminalMetalRenderer {
         gamma: Float = 1,
         ligatures: Bool = false,
         damage: TerminalDamage? = nil,
-        frameBuildNanos: UInt64 = 0
+        frameBuildNanos: UInt64 = 0,
+        synchronizedWithTransaction: Bool = false
     ) -> Bool {
         guard let commandBuffer = encode(
             frame, target: drawable.texture, clearColor: clearColor, origin: origin,
             gamma: gamma, ligatures: ligatures, damage: damage,
             frameBuildNanos: frameBuildNanos
         ) else { return false }
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
+        if synchronizedWithTransaction {
+            let scheduleStart = DispatchTime.now().uptimeNanoseconds
+            commandBuffer.commit()
+            commandBuffer.waitUntilScheduled()
+            drawable.present()
+            stats.presentScheduleNanos = DispatchTime.now().uptimeNanoseconds &- scheduleStart
+        } else {
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+        }
         return true
     }
 
@@ -493,8 +523,11 @@ public final class TerminalMetalRenderer {
 
         // Reserve an in-flight slot before touching the instance-buffer ring, then advance to
         // the next slot so this frame writes a buffer no longer read by the GPU. The semaphore
-        // blocks here if `maxFramesInFlight` frames are already queued.
+        // blocks here if `maxFramesInFlight` frames are already queued — timed into the stats so
+        // profiling can attribute a slow present to GPU back-pressure rather than encode cost.
+        let semaphoreStart = DispatchTime.now().uptimeNanoseconds
         inFlightSemaphore.wait()
+        frameStats.semaphoreWaitNanos = DispatchTime.now().uptimeNanoseconds &- semaphoreStart
         frameSlot = (frameSlot + 1) % Self.maxFramesInFlight
 
         guard let commandBuffer = commandQueue.makeCommandBuffer(),

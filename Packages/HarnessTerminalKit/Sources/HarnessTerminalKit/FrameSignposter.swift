@@ -26,9 +26,19 @@ final class FrameSignposter: @unchecked Sendable {
     private let signposter: OSSignposter
     private let logger: Logger
     #endif
-    /// Recent `present` interval durations (ns), main-thread only (`recordPresent` is called from
-    /// `presentBuiltFrame`). Flushed to the log as p50/p95/max every `presentLogEvery` frames.
+    /// Recent `present` interval durations (ns) with their breakdown components, main-thread only
+    /// (`recordPresent` is called from the surface's `presentFrame`). Flushed to the log as
+    /// p50/p95/max every `presentLogEvery` frames. The breakdown attributes a slow present:
+    /// `drawableWait` = `nextDrawable()` (pool exhaustion / vsync pacing), `semaphoreWait` = the
+    /// renderer's in-flight gate (GPU behind), `schedule` = `waitUntilScheduled()` (the bounded
+    /// transaction-synchronized wait of the glitchless-resize path; 0 for async presents).
     private var presentSamples: [UInt64] = []
+    private var drawableWaitSamples: [UInt64] = []
+    private var semaphoreWaitSamples: [UInt64] = []
+    private var scheduleSamples: [UInt64] = []
+    /// Presents skipped since the last flush (nil drawable / encode failure) — work was pending
+    /// but nothing reached the glass that turn; the scheduler retried on a later tick.
+    private var droppedFrames = 0
     private let presentLogEvery = 120
 
     init() {
@@ -39,22 +49,55 @@ final class FrameSignposter: @unchecked Sendable {
         #endif
     }
 
-    /// Record a `present` duration (ns) and, every `presentLogEvery` frames, log p50/p95/max to the
-    /// unified log — so the drawable/vsync stall is readable with
-    /// `log stream --predicate 'subsystem == "com.robert.harness"'` (no Instruments needed).
+    /// Record a `present` duration (ns) plus its breakdown and, every `presentLogEvery` frames,
+    /// log p50/p95/max per component to the unified log — so the drawable/vsync stall is readable
+    /// with `log stream --predicate 'subsystem == "com.robert.harness"'` (no Instruments needed).
     /// Main-thread only; a no-op when disabled (so the hot path stays a single branch).
-    func recordPresent(nanos: UInt64) {
+    func recordPresent(nanos: UInt64, drawableWait: UInt64 = 0, semaphoreWait: UInt64 = 0, schedule: UInt64 = 0) {
         guard enabled else { return }
         presentSamples.append(nanos)
+        drawableWaitSamples.append(drawableWait)
+        semaphoreWaitSamples.append(semaphoreWait)
+        scheduleSamples.append(schedule)
         guard presentSamples.count >= presentLogEvery else { return }
-        let sorted = presentSamples.sorted()
-        let p50 = sorted[sorted.count / 2] / 1000
-        let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))] / 1000
-        let mx = (sorted.last ?? 0) / 1000
+        let frames = presentSamples.count
+        let total = Self.percentilesMicros(presentSamples)
+        let drawable = Self.percentilesMicros(drawableWaitSamples)
+        let semaphore = Self.percentilesMicros(semaphoreWaitSamples)
+        let sched = Self.percentilesMicros(scheduleSamples)
+        let dropped = droppedFrames
         presentSamples.removeAll(keepingCapacity: true)
+        drawableWaitSamples.removeAll(keepingCapacity: true)
+        semaphoreWaitSamples.removeAll(keepingCapacity: true)
+        scheduleSamples.removeAll(keepingCapacity: true)
+        droppedFrames = 0
         #if canImport(os)
-        logger.log("present µs p50=\(p50) p95=\(p95) max=\(mx) over \(sorted.count) frames")
+        logger.log("""
+        present µs p50=\(total.p50) p95=\(total.p95) max=\(total.max) | \
+        drawableWait p50=\(drawable.p50) p95=\(drawable.p95) | \
+        semaphoreWait p50=\(semaphore.p50) p95=\(semaphore.p95) | \
+        schedule p50=\(sched.p50) p95=\(sched.p95) | \
+        dropped=\(dropped) over \(frames) frames
+        """)
         #endif
+    }
+
+    /// Count a skipped present (nil drawable / encode failure); included in the periodic
+    /// `recordPresent` flush line. Main-thread only; no-op when disabled.
+    func recordFrameDrop() {
+        guard enabled else { return }
+        droppedFrames += 1
+    }
+
+    // Internal (not private) so the unit tests pin the percentile math directly.
+    static func percentilesMicros(_ samples: [UInt64]) -> (p50: UInt64, p95: UInt64, max: UInt64) {
+        guard !samples.isEmpty else { return (0, 0, 0) }
+        let sorted = samples.sorted()
+        return (
+            sorted[sorted.count / 2] / 1000,
+            sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))] / 1000,
+            (sorted.last ?? 0) / 1000
+        )
     }
 
     #if canImport(os)

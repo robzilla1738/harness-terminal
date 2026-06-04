@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import Metal
+import QuartzCore
 import UniformTypeIdentifiers
 import XCTest
 @testable import HarnessTerminalRenderer
@@ -134,6 +135,39 @@ final class MetalRendererTests: XCTestCase {
         let size = renderer.surfacePixelSize(columns: 80, rows: 24)
         XCTAssertEqual(size.width, renderer.cellPixelWidth * 80)
         XCTAssertEqual(size.height, renderer.cellPixelHeight * 24)
+    }
+
+    /// Glitchless live resize: a transaction-synchronized present (commit → waitUntilScheduled →
+    /// drawable.present) must succeed against a layer in `presentsWithTransaction` mode and record
+    /// the bounded schedule wait in the stats; the async path must leave that stat at zero (it's
+    /// per-frame, self-clearing via `encode`'s fresh stats).
+    func testPresentSynchronizedWithTransactionPresentsAndRecordsSchedule() throws {
+        let (device, renderer) = try makeRenderer()
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = TerminalMetalRenderer.pixelFormat
+        layer.framebufferOnly = true
+        let (w, h) = renderer.surfacePixelSize(columns: 20, rows: 4)
+        layer.drawableSize = CGSize(width: w, height: h)
+        layer.presentsWithTransaction = true
+        guard let drawable = layer.nextDrawable() else { throw XCTSkip("no drawable") }
+        let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        XCTAssertTrue(renderer.present(
+            frame("sync present", cols: 20, rows: 4),
+            to: drawable,
+            clearColor: clear,
+            synchronizedWithTransaction: true
+        ))
+        XCTAssertGreaterThan(renderer.stats.presentScheduleNanos, 0)
+
+        layer.presentsWithTransaction = false
+        guard let second = layer.nextDrawable() else { throw XCTSkip("no second drawable") }
+        XCTAssertTrue(renderer.present(
+            frame("async present", cols: 20, rows: 4),
+            to: second,
+            clearColor: clear
+        ))
+        XCTAssertEqual(renderer.stats.presentScheduleNanos, 0)
     }
 
     func testRenderStatsDistinguishNonEmptyAndDefaultCanvasFrames() throws {
