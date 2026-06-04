@@ -93,25 +93,25 @@ final class KeybindingsStoreTests: XCTestCase {
         }
     }
 
-    func testStoredShippedPrefixDefaultsMigrateToSessionNavigation() throws {
+    func testStoredPrefixDefaultsKeepTabWorkspaceBindingsAndMergeSessionKeys() throws {
         try withTemporaryHarnessHome { _ in
-            var stored = KeyTableSet.defaults
-            stored.setBinding(table: .prefix, binding: Binding(spec: KeySpec(key: "n"), command: .nextWindow, note: "Next tab"))
-            stored.setBinding(table: .prefix, binding: Binding(spec: KeySpec(key: "p"), command: .previousWindow, note: "Previous tab"))
+            var prefix = KeyTable(id: .prefix, bindings: [
+                Binding(spec: KeySpec(key: "n"), command: .nextWindow, note: "Next tab"),
+                Binding(spec: KeySpec(key: "p"), command: .previousWindow, note: "Previous tab"),
+            ])
             for index in 0 ... 9 {
-                stored.setBinding(
-                    table: .prefix,
-                    binding: Binding(spec: KeySpec(key: String(index)), command: .selectWorkspace(index: index), note: "Workspace \(index)")
-                )
+                prefix.set(Binding(spec: KeySpec(key: String(index)), command: .selectWorkspace(index: index), note: "Workspace \(index)"))
             }
-            try KeybindingsStore.save(stored)
+            try KeybindingsStore.save(KeyTableSet(tables: [prefix]))
 
             let loaded = KeybindingsStore.load()
-            let prefix = try XCTUnwrap(loaded.table(.prefix))
-            XCTAssertEqual(prefix.lookup(KeySpec(key: "n"))?.command, .nextSession)
-            XCTAssertEqual(prefix.lookup(KeySpec(key: "p"))?.command, .previousSession)
+            let loadedPrefix = try XCTUnwrap(loaded.table(.prefix))
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: "n"))?.command, .nextWindow)
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: "p"))?.command, .previousWindow)
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: "("))?.command, .previousSession)
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: ")"))?.command, .nextSession)
             for index in 0 ... 9 {
-                XCTAssertEqual(prefix.lookup(KeySpec(key: String(index)))?.command, .selectSession(index: index))
+                XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: String(index)))?.command, .selectWorkspace(index: index))
             }
         }
     }
