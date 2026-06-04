@@ -15,6 +15,10 @@ blink, copy-on-select, and the default shell.
 **What's not imported:** the font **size** is Harness-owned (default 16) — a terminal's size
 preference doesn't carry over, only the face does.
 
+Dual light/dark theme declarations import as Harness system appearance defaults: the light theme
+becomes the macOS-light choice, the dark theme becomes the macOS-dark choice, and Harness switches
+into `macos-system` appearance mode for new defaults.
+
 **Sources tried:** the importer checks its supported compatibility paths in order and
 merges matches, with later files overriding earlier files.
 

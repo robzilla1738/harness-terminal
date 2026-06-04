@@ -59,6 +59,12 @@ New installs start in Plain. Moving over from another setup? See [docs/MIGRATION
 - Set Harness as the default terminal for SSH/Telnet/man-page links and `.command` / `.tool` files from Settings > Terminal
 - Automatic, signed background updates (Sparkle + EdDSA)
 
+## Appearance defaults
+
+Harness appearance is owned by Harness. The **Appearance** setting can stay on the selected Harness theme or follow macOS light and dark mode with Harness's `macos-system` appearance mode. This is separate from OpenCode's own TUI `system` theme in `tui.json`, which only controls OpenCode's interface inside the terminal.
+
+Program ANSI output is preserved by default. Harness themes color the canvas, chrome, cursor, selection, and OSC color answers, but they do not rewrite a program's SGR palette unless **Settings > Appearance > Apply theme colors to terminal output** is enabled.
+
 ## harness-cli
 
 Harness launches its daemon automatically; the CLI talks to it.

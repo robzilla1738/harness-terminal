@@ -428,7 +428,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `resizeOverlay`, `resizeOverlayPosition` | Live resize HUD: when shown (`after-first`/`always`/`never`) + placement; rendered by `ResizeHUDView` |
 | `windowPaddingBalance` | Center the grid by distributing the sub-cell remainder onto both sides (default on) |
 | `minimumContrast` | WCAG fg/bg contrast floor (1 = off … 21); imported from `minimum-contrast`, enforced by `CellColorResolver` |
-| `lightThemeName`, `darkThemeName` | Both set ⇒ the active theme follows the macOS appearance (KVO on `NSApp.effectiveAppearance` in `SessionCoordinator`); the window then follows the system appearance |
+| `appearanceMode`, `systemLightThemeName`, `systemDarkThemeName` | `macos-system` ⇒ the active theme follows macOS appearance; the app observes `NSApp.effectiveAppearance` and refreshes both terminal canvas and chrome from the effective light/dark theme |
 | `pasteProtection` | Confirm pastes containing newlines / control chars when bracketed paste is off (default on) |
 | `commandFinishedThresholdSeconds` | Minimum runtime (OSC 133 timing) for the `commandFinished` notification to fire in an unfocused pane (default 10s) |
 | `notificationEvents` | Sparse per-event banner gating keyed by `NotificationEvent` (`agentWaiting`, `agentFinished`, `bell`, `commandFinished`); an absent key uses the event's default. Picks *which* events notify; `systemNotificationsEnabled` / `notificationSoundEnabled` pick *how*. Read via `isEventEnabled(_:)`. The old `commandFinishedNotifications` bool migrates into `notificationEvents["commandFinished"]` |

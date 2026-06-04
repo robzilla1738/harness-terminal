@@ -4,7 +4,8 @@ import Foundation
 public struct ImportedTerminalConfig: Sendable, Equatable {
     // v4: selection/bold/cursor-text/minimum-contrast/palette are now honored
     // (previously imported then discarded), so bump to force a one-time re-import.
-    private static let signatureVersion = "v4"
+    // v6: light/dark theme pairs are now imported into system appearance settings.
+    private static let signatureVersion = "v6"
 
     public var fontFamily: String?
     public var fontSize: Float?
