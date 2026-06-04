@@ -509,6 +509,54 @@ final class MetalRendererTests: XCTestCase {
         )
     }
 
+    /// Ring-slot coherence for the incremental (per-row) GPU upload. Back-to-back incremental
+    /// frames write *alternating* ring-buffer slots, so a slot the GPU last touched two frames ago
+    /// must still receive every row that changed in between — not just the current frame's row.
+    /// Change a different row on each of three consecutive incremental frames, then assert the
+    /// readback is pixel-identical to a from-scratch render. A single-frame test can't catch the
+    /// failure this guards: an under-upload would leave one ring slot showing a stale row only on
+    /// the frames that land on it (an every-other-frame flicker).
+    func testIncrementalUploadStaysCoherentAcrossRingSlots() throws {
+        let (device, renderer) = try makeRenderer()
+        let cols = 4, rows = 4
+        let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let size = renderer.surfacePixelSize(columns: cols, rows: rows)
+        guard let target = makeTarget(device, width: size.width, height: size.height) else {
+            throw XCTSkip("no texture")
+        }
+
+        // Distinct content per row so a stale row is visible; cursor hidden (`?25l`) so its quad
+        // doesn't confound the comparison. Each frame changes exactly one row from the prior one.
+        func text(_ a: String, _ b: String, _ c: String, _ d: String) -> String {
+            "\u{1b}[?25l\(a)\r\n\(b)\r\n\(c)\r\n\(d)"
+        }
+        let f0 = frame(text("AAAA", "BBBB", "CCCC", "DDDD"), cols: cols, rows: rows)
+        let f1 = frame(text("AAAA", "XXXX", "CCCC", "DDDD"), cols: cols, rows: rows) // row 1
+        let f2 = frame(text("AAAA", "XXXX", "YYYY", "DDDD"), cols: cols, rows: rows) // row 2
+        let f3 = frame(text("ZZZZ", "XXXX", "YYYY", "DDDD"), cols: cols, rows: rows) // row 0
+
+        renderer.render(f0, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+        renderer.render(f1, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integer: 1), full: false))
+        renderer.render(f2, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integer: 2), full: false))
+        renderer.render(f3, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integer: 0), full: false))
+
+        let reference = try makeRenderer(device: device)
+        guard let refTarget = makeTarget(device, width: size.width, height: size.height) else {
+            throw XCTSkip("no texture")
+        }
+        reference.render(f3, to: refTarget, clearColor: clear)
+
+        XCTAssertEqual(
+            readPixelBytes(target, width: size.width, height: size.height),
+            readPixelBytes(refTarget, width: size.width, height: size.height),
+            "incremental frames across alternating ring slots must match a from-scratch render"
+        )
+    }
+
     func testRendererDamageRebuildsBlockCursorGlyphRowWhenBlinking() throws {
         let (device, renderer) = try makeRenderer()
         var visible = frame("A", cols: 1, rows: 1)

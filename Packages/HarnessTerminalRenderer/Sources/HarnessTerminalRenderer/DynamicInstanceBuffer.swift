@@ -20,12 +20,20 @@ final class DynamicInstanceBuffer {
     private var buffers: [MTLBuffer?]
     /// Byte capacity of each slot's current buffer (0 until first allocation).
     private var capacities: [Int]
+    /// Per ring slot: the half-open instance-index span that still needs to be (re)written to that
+    /// slot's buffer to make it match the current frame's array, or nil when the slot is already
+    /// current. A content change in one frame is unioned into *every* slot's pending span, because
+    /// each slot is written on its own frame (the GPU may still be reading slots written up to
+    /// `ringSize` frames ago). When a slot is written, only its own pending span is copied and then
+    /// cleared — so a one-row keystroke uploads ~one row's bytes, not the whole frame.
+    private var slotPending: [Range<Int>?]
 
     init(device: MTLDevice, ringSize: Int, label: String) {
         self.device = device
         self.label = label
         self.buffers = Array(repeating: nil, count: ringSize)
         self.capacities = Array(repeating: 0, count: ringSize)
+        self.slotPending = Array(repeating: nil, count: ringSize)
     }
 
     /// Copy `instances` into the ring `slot`'s buffer (growing it if needed) and return the
@@ -55,5 +63,79 @@ final class DynamicInstanceBuffer {
             _ = memcpy(target.contents(), raw.baseAddress!, needed)
         }
         return target
+    }
+
+    /// Like `upload`, but copies only the bytes that changed. `instances` is the *whole* current
+    /// array (so the buffer can be re-seeded on a grow); `dirty` is the half-open instance span the
+    /// caller changed this frame. The span is unioned into every slot's pending range, then this
+    /// `slot`'s accumulated pending span (everything changed since this slot was last written) is
+    /// copied and cleared. Returns the buffer to bind and the number of bytes actually written
+    /// (0 when nothing was pending for this slot — the buffer already holds the right data).
+    ///
+    /// Correctness under the in-flight ring: each slot is written on a distinct frame, so a change
+    /// must reach all of them; unioning into every slot guarantees a slot the GPU finished N frames
+    /// ago still gets every span that changed meanwhile, leaving it byte-identical to the current
+    /// array. A capacity grow allocates a fresh buffer for this slot, so it is re-seeded in full.
+    func uploadIncremental<T>(_ instances: [T], dirty: Range<Int>, slot: Int) -> (buffer: MTLBuffer, bytesWritten: Int)? {
+        let count = instances.count
+        guard count > 0 else {
+            // Nothing to draw this frame; drop this slot's stale pending so it can't resurrect a
+            // span past the (now larger) array next time.
+            slotPending[slot] = nil
+            return nil
+        }
+        let stride = MemoryLayout<T>.stride
+        let needed = count * stride
+
+        var grew = false
+        if buffers[slot] == nil || capacities[slot] < needed {
+            let newCapacity = max(needed, capacities[slot] * 2)
+            guard let grown = device.makeBuffer(length: newCapacity, options: .storageModeShared) else {
+                return nil
+            }
+            grown.label = "\(label)[\(slot)]"
+            buffers[slot] = grown
+            capacities[slot] = newCapacity
+            grew = true
+        }
+
+        // A content change must reach every ring slot, since each is uploaded on its own frame.
+        let lo = max(0, min(dirty.lowerBound, count))
+        let hi = max(lo, min(dirty.upperBound, count))
+        if lo < hi {
+            let span = lo ..< hi
+            for i in slotPending.indices {
+                slotPending[i] = Self.union(slotPending[i], span)
+            }
+        }
+
+        // A freshly grown buffer holds no prior bytes, so re-seed it fully; otherwise write exactly
+        // what this slot is missing, clamped to the current array bounds.
+        let effective: Range<Int>
+        if grew {
+            effective = 0 ..< count
+        } else if let pending = slotPending[slot] {
+            let plo = max(0, min(pending.lowerBound, count))
+            let phi = max(plo, min(pending.upperBound, count))
+            effective = plo ..< phi
+        } else {
+            effective = 0 ..< 0
+        }
+
+        guard let target = buffers[slot] else { return nil }
+        if !effective.isEmpty {
+            instances.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else { return }
+                let offset = effective.lowerBound * stride
+                _ = memcpy(target.contents().advanced(by: offset), base.advanced(by: offset), effective.count * stride)
+            }
+        }
+        slotPending[slot] = nil
+        return (target, effective.count * stride)
+    }
+
+    private static func union(_ existing: Range<Int>?, _ added: Range<Int>) -> Range<Int> {
+        guard let existing else { return added }
+        return min(existing.lowerBound, added.lowerBound) ..< max(existing.upperBound, added.upperBound)
     }
 }
