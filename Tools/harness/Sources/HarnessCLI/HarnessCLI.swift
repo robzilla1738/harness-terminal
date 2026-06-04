@@ -27,6 +27,9 @@ struct HarnessCLI {
                 exit(try handleRemote(args))
             case "daemon":
                 runDaemonForeground() // execs HarnessDaemon; never returns
+            case "version", "--version", "-v":
+                printVersion(args) // best-effort daemon query; works with the daemon down
+                return
             default:
                 break
             }
@@ -846,6 +849,7 @@ struct HarnessCLI {
         guard case let .daemonStats(stats) = response else { throw DaemonClientError.unexpectedResponse }
         try emit(stats, args) {
             print("pid: \(stats.pid)")
+            print("version: \(stats.version ?? "?") (\(stats.build.map(String.init) ?? "pre-handshake"))")
             print(String(format: "uptime: %.0fs", stats.uptimeSeconds))
             print("surfaces: \(stats.surfaceCount)")
             print("scrollback: \(stats.totalScrollbackBytes) bytes")
@@ -1281,13 +1285,7 @@ struct HarnessCLI {
     }
 
     static func copyExecutable(source: URL, destination: URL) throws {
-        if source.standardizedFileURL.path != destination.standardizedFileURL.path {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: source, to: destination)
-        }
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
+        try BinaryRefresher.copyExecutable(from: source, to: destination)
     }
 
     /// Locate the daemon executable: next to the running CLI (the app bundle, or `.build/<config>/`
@@ -1359,7 +1357,13 @@ struct HarnessCLI {
         if let response = try? client.request(.ping, timeout: 0.3), case .pong = response {
             daemonReachable = true
         }
-        let report = DoctorRunner.run(daemonReachable: daemonReachable, cliPath: resolvedCLIPath())
+        var stats: DaemonStats?
+        if daemonReachable,
+           let response = try? client.request(.daemonStats, timeout: 0.3),
+           case let .daemonStats(s) = response {
+            stats = s
+        }
+        let report = DoctorRunner.run(daemonReachable: daemonReachable, cliPath: resolvedCLIPath(), daemonStats: stats)
         if args.contains("--json") {
             print(try JSONOutputFormatter.encode(report, pretty: args.contains("--pretty")))
         } else {
@@ -1383,6 +1387,48 @@ struct HarnessCLI {
         Bundle.main.executablePath ?? CommandLine.arguments.first ?? "harness-cli"
     }
 
+    /// `version [--json]` — print this CLI's version/build and, best-effort, the running daemon's
+    /// (from the `daemonStats` handshake). A build mismatch is the stale-daemon signature (#60).
+    static func printVersion(_ args: [String]) {
+        struct VersionReport: Encodable {
+            var cliVersion: String
+            var cliBuild: Int
+            var daemonVersion: String?
+            var daemonBuild: Int?
+            var daemonRunning: Bool
+        }
+        var report = VersionReport(
+            cliVersion: HarnessVersion.short,
+            cliBuild: HarnessVersion.build,
+            daemonVersion: nil,
+            daemonBuild: nil,
+            daemonRunning: false
+        )
+        if let client = try? makeClient(args),
+           let response = try? client.request(.daemonStats, timeout: 0.3),
+           case let .daemonStats(stats) = response {
+            report.daemonRunning = true
+            report.daemonVersion = stats.version
+            report.daemonBuild = stats.build
+        }
+        if args.contains("--json") {
+            if let encoded = try? JSONOutputFormatter.encode(report, pretty: args.contains("--pretty")) {
+                print(encoded)
+            }
+            return
+        }
+        print("harness-cli \(report.cliVersion) (\(report.cliBuild))")
+        if !report.daemonRunning {
+            print("daemon: not running")
+        } else if let build = report.daemonBuild {
+            var line = "daemon: \(report.daemonVersion ?? "?") (\(build))"
+            if build != HarnessVersion.build { line += "  [mismatch — restart Harness.app, or run: harness-cli install]" }
+            print(line)
+        } else {
+            print("daemon: running, pre-handshake build (no version reported)")
+        }
+    }
+
     static func printUsage() {
         print("""
         harness-cli — control Harness terminal sessions
@@ -1391,6 +1437,7 @@ struct HarnessCLI {
 
         Commands:
           doctor [--json]                             (diagnose daemon, socket, paths, integrations)
+          version [--json]                            (print CLI and daemon versions; flags build mismatch)
           color-check                                  (print ANSI/256/truecolor diagnostic swatches)
           theme-preview [--theme <name>] [--all]       (print deterministic themed sample output)
           completions <zsh|fish|bash>                 (print a shell completion script to stdout)

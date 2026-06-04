@@ -6,6 +6,30 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Fixed
+- **App updates now actually update the daemon and CLI.** (#60) The launchd-supervised
+  `HarnessDaemon` and the on-PATH `harness-cli` live under
+  `~/Library/Application Support/Harness/bin/` (placed there by onboarding or
+  `harness-cli install`), but app updates only replaced the copies inside Harness.app — so
+  daemon-side fixes (like the 1.2.0 `TERM_PROGRAM` identity fix, #39) never reached updated
+  installs. The app now refreshes the installed copies from the bundle on launch
+  (remove-then-copy, so the kernel's per-vnode code-signature cache can't kill the new daemon),
+  points the LaunchAgent at the canonical installed copy, and detects a stale running daemon
+  through a real version handshake — `daemon-stats` now reports the daemon's version/build —
+  instead of a file-timestamp heuristic that any daemon restart defeated. The first launch
+  after updating restarts the daemon once to pick up the new build (sessions and scrollback
+  replay; running pane processes restart).
+- **Daemon/CLI version constants no longer drift.** `TERM_PROGRAM_VERSION` and the XTVERSION
+  reply said 1.2.0 on 1.3.x builds because the shared version constant missed the release
+  bump; packaging and the release workflow now fail when it disagrees with Info.plist.
+
+### Added
+- **`harness-cli version`** prints the CLI's version/build and the running daemon's, and flags
+  a mismatch. `harness-cli doctor` gained a "Daemon version" check that warns when the running
+  daemon's build differs from the CLI's.
+
 ## [1.3.1] - 2026-06-04
 
 The fluidity release: resize-drag and scrolling re-measured on 120Hz hardware and fixed at the

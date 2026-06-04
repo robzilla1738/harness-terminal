@@ -14,6 +14,21 @@ cp "$BUILD_DIR/HarnessDaemon" "$APP/Contents/MacOS/HarnessDaemon"
 cp "$BUILD_DIR/harness-cli" "$APP/Contents/MacOS/harness-cli"
 cp "$ROOT/Apps/Harness/Sources/HarnessApp/Resources/Info.plist" "$APP/Contents/Info.plist"
 
+# Guard: HarnessVersion.swift is the daemon/CLI's view of the version (the app reads
+# Bundle.main, but the launchd daemon can't). It is bumped by hand alongside Info.plist;
+# v1.3.0/v1.3.1 missed it, shipping daemons that reported 1.2.0 — and the daemon↔app build
+# handshake depends on it. Fail the package step if the two disagree.
+PLIST_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+PLIST_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+VERSION_SWIFT="$ROOT/Packages/HarnessCore/Sources/HarnessCore/HarnessVersion.swift"
+CODE_SHORT="$(sed -n 's/.*static let short = "\([^"]*\)".*/\1/p' "$VERSION_SWIFT")"
+CODE_BUILD="$(sed -n 's/.*static let build = \([0-9]*\).*/\1/p' "$VERSION_SWIFT")"
+if [[ "$PLIST_SHORT" != "$CODE_SHORT" || "$PLIST_BUILD" != "$CODE_BUILD" ]]; then
+  echo "error: HarnessVersion.swift ($CODE_SHORT/$CODE_BUILD) does not match Info.plist ($PLIST_SHORT/$PLIST_BUILD)." >&2
+  echo "       Bump HarnessVersion.short/build to match Info.plist before packaging." >&2
+  exit 1
+fi
+
 # SwiftPM resource bundles (for example HarnessTheme's bundled themes.json) are
 # emitted next to the built products. The app is assembled by this script rather
 # than by Xcode, so copy those bundles into Contents/Resources explicitly.

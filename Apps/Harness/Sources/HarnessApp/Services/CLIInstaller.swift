@@ -4,17 +4,11 @@ import HarnessCore
 
 @MainActor
 enum CLIInstaller {
-    static var binDirectory: URL {
-        HarnessPaths.applicationSupport.appendingPathComponent("bin", isDirectory: true)
-    }
+    static var binDirectory: URL { BinaryRefresher.binDirectory }
 
-    static var installedCLIPath: URL {
-        binDirectory.appendingPathComponent("harness-cli")
-    }
+    static var installedCLIPath: URL { BinaryRefresher.installedCLIPath }
 
-    static var installedDaemonPath: URL {
-        binDirectory.appendingPathComponent("HarnessDaemon")
-    }
+    static var installedDaemonPath: URL { BinaryRefresher.installedDaemonPath }
 
     @discardableResult
     static func install() -> Bool {
@@ -56,13 +50,7 @@ enum CLIInstaller {
     }
 
     private static func copyExecutable(source: URL, destination: URL) throws {
-        if source.standardizedFileURL.path != destination.standardizedFileURL.path {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: source, to: destination)
-        }
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
+        try BinaryRefresher.copyExecutable(from: source, to: destination)
     }
 
     static func daemonSourceURL() -> URL? {

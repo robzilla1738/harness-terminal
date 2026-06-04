@@ -336,7 +336,9 @@ public final class DaemonServer: @unchecked Sendable {
                 totalScrollbackBytes: telemetry.scrollbackBytes,
                 clientCount: clients.count,
                 subscriberCount: totalSubs,
-                snapshotRevision: registry.revision
+                snapshotRevision: registry.revision,
+                version: HarnessVersion.short,
+                build: HarnessVersion.build
             )
             return .daemonStats(stats)
         default:

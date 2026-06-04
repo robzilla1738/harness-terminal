@@ -43,8 +43,15 @@ final class DaemonLauncher: @unchecked Sendable {
     /// Synchronous variant for non-main callers/tests. Never call from the main thread.
     @discardableResult
     func ensureRunningBlocking() -> Bool {
+        // Refresh the installed bin/ copies before any staleness check so the restart below
+        // brings up the *updated* daemon. Release-only: a DEBUG build must never clobber the
+        // user's installed release binaries (the bin/ copies and the LaunchAgent label are
+        // global — not isolated by HARNESS_HOME).
+        #if !DEBUG
+        refreshInstalledBinaries()
+        #endif
         if let stats = daemonStats(timeout: 0.4) {
-            if bundledDaemonIsNewer(than: stats) {
+            if daemonIsStale(stats) {
                 restartStaleDaemon()
                 if pollUntilFreshDaemon(replacingPID: stats.pid, timeoutSeconds: 3) { return true }
             } else {
@@ -86,6 +93,16 @@ final class DaemonLauncher: @unchecked Sendable {
         return stats
     }
 
+    /// A running daemon is stale when its build handshake disagrees with this app's build
+    /// (nil = a daemon too old to report one), or — for the dev loop, where the build constant
+    /// doesn't change between rebuilds — when the bundled binary is newer than the daemon's
+    /// start. The handshake is authoritative: it survives daemon restarts, which reset the
+    /// start time the mtime heuristic compares against and made it permanently read "fresh".
+    private func daemonIsStale(_ stats: DaemonStats) -> Bool {
+        if stats.isStale(comparedTo: HarnessVersion.build) { return true }
+        return bundledDaemonIsNewer(than: stats)
+    }
+
     private func bundledDaemonIsNewer(than stats: DaemonStats) -> Bool {
         guard let executable = daemonExecutableURL(),
               let attributes = try? FileManager.default.attributesOfItem(atPath: executable.path),
@@ -102,7 +119,7 @@ final class DaemonLauncher: @unchecked Sendable {
     /// re-running `ensureAllSnapshotSurfaces` each time and widening the window where a pane reconnect
     /// could subscribe to a momentarily-missing surface and freeze.
     private func restartStaleDaemon() {
-        guard let executable = daemonExecutableURL(),
+        guard let executable = launchAgentDaemonTarget(),
               let report = try? LaunchAgentInstaller.install(daemonPath: executable)
         else {
             // No installable LaunchAgent (e.g. daemon binary not found) — best-effort kick.
@@ -130,7 +147,7 @@ final class DaemonLauncher: @unchecked Sendable {
         while Date() < deadline {
             if let stats = daemonStats(timeout: 0.3),
                oldPID.map({ stats.pid != $0 }) ?? true,
-               !bundledDaemonIsNewer(than: stats) {
+               !daemonIsStale(stats) {
                 return true
             }
             usleep(100_000)
@@ -146,7 +163,7 @@ final class DaemonLauncher: @unchecked Sendable {
     }
 
     private func installLaunchAgentIfPossible() -> Bool {
-        guard let executable = daemonExecutableURL() else { return false }
+        guard let executable = launchAgentDaemonTarget() else { return false }
         do {
             _ = try LaunchAgentInstaller.install(daemonPath: executable)
             return true
@@ -177,6 +194,43 @@ final class DaemonLauncher: @unchecked Sendable {
         } catch {
             fputs("Harness: failed to spawn HarnessDaemon at \(executable.path): \(error)\n", harnessStderr)
         }
+    }
+
+    /// Refresh the installed `bin/` daemon + CLI from this app bundle so an app update actually
+    /// advances the launchd-supervised daemon and the on-PATH CLI (issue #60 — Sparkle replaces
+    /// the bundle copies, never these). Only refreshes copies an installer already created, and
+    /// only when bytes differ, so the common up-to-date case is just a content compare and the
+    /// refresh→restart happens at most once per update.
+    private func refreshInstalledBinaries() {
+        _ = try? BinaryRefresher.refreshIfChanged(
+            source: bundledBinaryURL(named: "HarnessDaemon"),
+            destination: BinaryRefresher.installedDaemonPath
+        )
+        _ = try? BinaryRefresher.refreshIfChanged(
+            source: bundledBinaryURL(named: "harness-cli"),
+            destination: BinaryRefresher.installedCLIPath
+        )
+    }
+
+    /// A binary shipped next to the app executable (`Contents/MacOS/`), where the release
+    /// packager puts both the daemon and the CLI.
+    private func bundledBinaryURL(named name: String) -> URL? {
+        guard let dir = Bundle.main.executableURL?.deletingLastPathComponent() else { return nil }
+        let url = dir.appendingPathComponent(name)
+        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+    }
+
+    /// The daemon the LaunchAgent should supervise: the installed AppSupport copy when present
+    /// (canonical — what onboarding/`harness-cli install` write, survives the app moving, and
+    /// just refreshed above in release), else wherever the bundle/dev daemon lives. DEBUG keeps
+    /// the bundle/dev path so the Xcode loop restarts into the freshly built daemon, not a
+    /// previously installed release copy.
+    private func launchAgentDaemonTarget() -> URL? {
+        #if !DEBUG
+        let installed = BinaryRefresher.installedDaemonPath
+        if FileManager.default.isExecutableFile(atPath: installed.path) { return installed }
+        #endif
+        return daemonExecutableURL()
     }
 
     /// Locate the daemon binary across every layout we ship in:

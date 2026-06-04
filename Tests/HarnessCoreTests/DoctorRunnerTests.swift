@@ -61,6 +61,52 @@ final class DoctorRunnerTests: XCTestCase {
         XCTAssertEqual(report.exitCode, 1)
     }
 
+    private func stats(version: String?, build: Int?) -> DaemonStats {
+        DaemonStats(pid: 1, uptimeSeconds: 0, surfaceCount: 0, totalScrollbackBytes: 0,
+                    clientCount: 0, subscriberCount: 0, snapshotRevision: 0,
+                    version: version, build: build)
+    }
+
+    func testMatchingDaemonBuildPasses() throws {
+        let home = try makeHome()
+        let report = DoctorRunner.run(home: home, daemonReachable: true, cliPath: "x",
+                                      daemonStats: stats(version: HarnessVersion.short,
+                                                         build: HarnessVersion.build),
+                                      installedAgentHooks: [])
+        XCTAssertEqual(check(report, "Daemon version")?.status, .pass)
+        XCTAssertEqual(report.exitCode, 0)
+    }
+
+    func testMismatchedDaemonBuildWarnsButExitsZero() throws {
+        let home = try makeHome()
+        let report = DoctorRunner.run(home: home, daemonReachable: true, cliPath: "x",
+                                      daemonStats: stats(version: "0.0.1",
+                                                         build: HarnessVersion.build + 1),
+                                      installedAgentHooks: [])
+        let row = check(report, "Daemon version")
+        XCTAssertEqual(row?.status, .warn, "a stale daemon is recoverable — warn, don't fail")
+        XCTAssertTrue(row?.detail.contains("harness-cli install") == true,
+                      "the warning should tell the user how to heal")
+        XCTAssertEqual(report.exitCode, 0)
+    }
+
+    func testPreHandshakeDaemonWarns() throws {
+        let home = try makeHome()
+        let report = DoctorRunner.run(home: home, daemonReachable: true, cliPath: "x",
+                                      daemonStats: stats(version: nil, build: nil),
+                                      installedAgentHooks: [])
+        XCTAssertEqual(check(report, "Daemon version")?.status, .warn,
+                       "a daemon too old to report a build is stale by definition")
+    }
+
+    func testNoVersionRowWhenDaemonUnreachable() throws {
+        let home = try makeHome()
+        let report = DoctorRunner.run(home: home, daemonReachable: false, cliPath: "x",
+                                      installedAgentHooks: [])
+        XCTAssertNil(check(report, "Daemon version"),
+                     "no daemon to compare against — don't assert a version verdict")
+    }
+
     func testInstalledAgentHooksAreReported() throws {
         let home = try makeHome()
         let report = DoctorRunner.run(home: home, daemonReachable: false, cliPath: "x",

@@ -8,10 +8,12 @@ import Foundation
 /// `TERM_PROGRAM_VERSION`, the XTVERSION reply) reads these constants instead.
 ///
 /// Bump these alongside `Info.plist` (`CFBundleShortVersionString` / `CFBundleVersion`)
-/// in the release runbook.
+/// in the release runbook. `Scripts/package-app.sh` and the release workflow fail the
+/// build when the two disagree (v1.3.0/v1.3.1 shipped daemons that reported 1.2.0).
 public enum HarnessVersion {
     /// Marketing version, matches `CFBundleShortVersionString`.
-    public static let short = "1.2.0"
-    /// Build number, matches `CFBundleVersion`. Used as the secondary-DA firmware field.
-    public static let build = 111
+    public static let short = "1.3.1"
+    /// Build number, matches `CFBundleVersion`. Used as the secondary-DA firmware field
+    /// and as the daemon↔app/CLI staleness handshake in `daemonStats`.
+    public static let build = 113
 }

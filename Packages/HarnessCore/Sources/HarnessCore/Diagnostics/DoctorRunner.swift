@@ -49,6 +49,7 @@ public enum DoctorRunner {
         home: URL = HarnessPaths.applicationSupport,
         daemonReachable: Bool,
         cliPath: String,
+        daemonStats: DaemonStats? = nil,
         installedAgentHooks: [AgentKind] = AgentHookInstaller.installableAgents.filter {
             AgentHookInstaller.isInstalled(agent: $0)
         }
@@ -59,6 +60,21 @@ public enum DoctorRunner {
         checks.append(daemonReachable
             ? .init("Daemon", .pass, "reachable (ping → pong)")
             : .init("Daemon", .warn, "not reachable — open Harness.app, or check launchctl print gui/$(id -u)/\(HarnessPaths.launchAgentLabel)"))
+
+        // 1b. Version handshake: a running daemon whose build differs from this CLI's is the
+        //     stale-daemon signature (an app update refreshed the bundle but not the
+        //     launchd-supervised copy — issue #60). nil build = a daemon too old to report one.
+        if daemonReachable {
+            if let build = daemonStats?.build, build == HarnessVersion.build {
+                checks.append(.init("Daemon version", .pass,
+                    "daemon \(daemonStats?.version ?? "?") (\(build)) matches CLI \(HarnessVersion.short) (\(HarnessVersion.build))"))
+            } else {
+                let daemonDesc = daemonStats?.build.map { "\(daemonStats?.version ?? "?") (\($0))" }
+                    ?? "pre-handshake (no version reported)"
+                checks.append(.init("Daemon version", .warn,
+                    "daemon \(daemonDesc) != CLI \(HarnessVersion.short) (\(HarnessVersion.build)) — restart Harness.app, or run: harness-cli install"))
+            }
+        }
 
         // 2. Control socket: path must fit sun_path, and when present be owner-only (0o600).
         let socketURL = home.appendingPathComponent("harness.sock")

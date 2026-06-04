@@ -63,6 +63,18 @@ jobs:
             exit 1
           fi
 
+          # HarnessVersion.swift is what the daemon/CLI report (TERM_PROGRAM_VERSION, the
+          # daemon↔app build handshake). It must move in lockstep with Info.plist — v1.3.0
+          # and v1.3.1 shipped with it stale at 1.2.0.
+          VERSION_SWIFT="Packages/HarnessCore/Sources/HarnessCore/HarnessVersion.swift"
+          CODE_SHORT="$(sed -n 's/.*static let short = "\([^"]*\)".*/\1/p' "$VERSION_SWIFT")"
+          CODE_BUILD="$(sed -n 's/.*static let build = \([0-9]*\).*/\1/p' "$VERSION_SWIFT")"
+          if [[ "$VERSION" != "$CODE_SHORT" || "$BUILD" != "$CODE_BUILD" ]]; then
+            echo "HarnessVersion.swift ($CODE_SHORT/$CODE_BUILD) does not match Info.plist ($VERSION/$BUILD)." >&2
+            echo "Bump HarnessVersion.short/build before running this workflow." >&2
+            exit 1
+          fi
+
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "APP_BUILD=$BUILD" >> "$GITHUB_ENV"
