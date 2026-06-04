@@ -3951,3 +3951,11 @@ extension HarnessTerminalSurfaceView: @preconcurrency NSTextInputClient {
     /// `keyDown` before reaching the IME, so swallow these silently (no system beep).
     public override func doCommand(by selector: Selector) {}
 }
+
+#if DEBUG
+extension HarnessTerminalSurfaceView {
+    public func testingResolveCellColors(_ cell: TerminalGridCell) -> ResolvedCellColors {
+        frameBuildConfiguration.resolver.resolve(cell)
+    }
+}
+#endif

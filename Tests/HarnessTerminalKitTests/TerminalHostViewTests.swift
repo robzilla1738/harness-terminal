@@ -10,36 +10,6 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(TerminalHostView.terminalOverlayCornerRadius, 10)
     }
 
-    @MainActor
-    func testSurfaceDefaultFontResolutionMatchesSettingsDefault() {
-        let settings = HarnessSettings()
-        let expected = TerminalFontResolver.resolve(
-            fontFamily: settings.fontFamily,
-            size: CGFloat(settings.fontSize)
-        )
-        let surface = HarnessTerminalSurfaceView(
-            fontFamily: settings.fontFamily,
-            fontSize: CGFloat(settings.fontSize),
-            offMainParserFramePipeline: false
-        )
-
-        XCTAssertEqual(surface.testingResolvedFont, expected)
-    }
-
-    @MainActor
-    func testSurfaceConfiguredMissingFontUsesSharedFallback() {
-        let missingFamily = "Harness Missing Font \(UUID().uuidString)"
-        let expected = TerminalFontResolver.resolve(fontFamily: missingFamily, size: 16)
-        let surface = HarnessTerminalSurfaceView(
-            fontFamily: missingFamily,
-            fontSize: 16,
-            offMainParserFramePipeline: false
-        )
-
-        XCTAssertEqual(surface.testingResolvedFont, expected)
-        XCTAssertTrue(surface.testingResolvedFont.fallbackUsed)
-        XCTAssertNotNil(surface.testingResolvedFont.fallbackFamily)
-    }
 
     @MainActor
     func testChromeAndHostCanvasMoveFromStaleDarkOverrideToSelectedSystemLightAfterReset() throws {

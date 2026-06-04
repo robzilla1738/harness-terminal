@@ -480,6 +480,18 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         notificationEvents[event.rawValue] = enabled
     }
 
+    public mutating func clearThemeColorOverrides() {
+        customBackgroundHex = nil
+        customForegroundHex = nil
+        customCursorHex = nil
+        selectionBackgroundHex = nil
+        selectionForegroundHex = nil
+        boldColorHex = nil
+        cursorTextHex = nil
+        dividerHex = nil
+        statusLineHex = nil
+    }
+
     /// Reset visual fields to either the user's imported terminal config or the source terminal's
     /// stock baseline. Preserves shell, cwd, sidebar/titlebar chrome, prefix key, and
     /// agent color overrides so selecting "Default" changes appearance, not behavior.
