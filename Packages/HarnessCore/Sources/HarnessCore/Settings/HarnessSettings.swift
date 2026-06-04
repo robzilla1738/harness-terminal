@@ -185,17 +185,26 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var showPromptGutter: Bool
     /// Show the bottom status line (workspace · git · clock). When false the band is
     /// hidden and the terminal split extends to the window bottom. Read by
-    /// `StatusLineView.refresh` (alongside the `status` option and `showsHarnessControls`).
+    /// `StatusLineView.refresh` (alongside the `status` option and `effectiveStatusLineEnabled`).
     public var showStatusLine: Bool
     /// The user-facing experience (Plain / Persistent / Full / Agent). Drives which chrome
     /// is shown, the default session-persistence policy, and onboarding copy — all on top of
     /// the same daemon session core. See `ExperienceMode`.
     public var experienceMode: ExperienceMode
-    /// Explicit override for Harness controls visibility (prefix key + status line). `nil` derives
-    /// from `experienceMode`. Lets a Persistent/Agent user opt into the prefix and status line
-    /// without switching to Full Terminal, or a Full Terminal user turn the controls off without
-    /// changing modes.
+    /// Explicit override for Harness controls visibility (prefix key + status line) as a single
+    /// umbrella. `nil` derives from `experienceMode`. Lets a Persistent/Agent user opt into both
+    /// the prefix and status line without switching to Full Terminal, or a Full Terminal user turn
+    /// them both off without changing modes. The finer-grained `prefixKeyEnabled` /
+    /// `statusLineEnabled` below take precedence over this when set.
     public var harnessControlsEnabled: Bool?
+    /// Per-component override for the command prefix, independent of the status line. `nil` falls
+    /// back to `harnessControlsEnabled`, then the mode's `showsPrefixByDefault`. Lets any preset be
+    /// tuned one piece at a time (e.g. Full Terminal with the status line but no prefix).
+    public var prefixKeyEnabled: Bool?
+    /// Per-component override for the bottom status line, independent of the prefix. `nil` falls
+    /// back to `harnessControlsEnabled`, then the mode's `showsStatusLineByDefault`. Lets a Plain
+    /// terminal show a status line without arming the prefix, and vice versa.
+    public var statusLineEnabled: Bool?
     /// When the live resize dimensions overlay ("120 × 32") is shown while resizing the window.
     public var resizeOverlay: ResizeOverlayMode
     /// Where the resize overlay is positioned within the surface.
@@ -221,18 +230,31 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// behavior, Ghostty `bold-is-bright`). Off keeps the theme's exact colors for bold text.
     public var boldIsBright: Bool
 
-    /// Whether Harness controls (prefix-key handling, prefix indicator, and status line)
-    /// should be active. The explicit override wins; otherwise the mode decides. The single
-    /// gate consulted by `PrefixKeymap`, `StatusLineView`, and onboarding so they never drift.
+    /// Whether the *umbrella* Harness controls are on (prefix or status line). Kept for onboarding
+    /// copy and tests; the prefix and status line each resolve independently via the effective
+    /// accessors below, so a preset can show one without the other.
     public var showsHarnessControls: Bool {
-        harnessControlsEnabled ?? experienceMode.showsHarnessControlsByDefault
+        effectivePrefixKeyEnabled || effectiveStatusLineEnabled
+    }
+
+    /// Whether the command prefix should be armed. Precedence: the per-component override wins,
+    /// then the legacy umbrella `harnessControlsEnabled`, then the mode default. Consulted by
+    /// `PrefixKeymap` (via `effectivePrefixKey`).
+    public var effectivePrefixKeyEnabled: Bool {
+        prefixKeyEnabled ?? harnessControlsEnabled ?? experienceMode.showsPrefixByDefault
+    }
+
+    /// Whether the bottom status line should show. Same precedence as the prefix, but resolved
+    /// separately. Consulted by `StatusLineView` (alongside the explicit `showStatusLine` toggle).
+    public var effectiveStatusLineEnabled: Bool {
+        statusLineEnabled ?? harnessControlsEnabled ?? experienceMode.showsStatusLineByDefault
     }
 
     /// The prefix shortcut string to actually arm, or `nil` to disable the prefix entirely.
-    /// `nil` when Harness controls are hidden or when the user blanked the prefix in
+    /// `nil` when the prefix is disabled (by mode/override) or when the user blanked the prefix in
     /// Settings — fixes the old bug where an empty `prefixKey` silently fell back to Ctrl-A.
     public var effectivePrefixKey: String? {
-        guard showsHarnessControls else { return nil }
+        guard effectivePrefixKeyEnabled else { return nil }
         let trimmed = prefixKey.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -292,6 +314,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // current user loses the prefix/status they already have.
         experienceMode: ExperienceMode = .plain,
         harnessControlsEnabled: Bool? = nil,
+        prefixKeyEnabled: Bool? = nil,
+        statusLineEnabled: Bool? = nil,
         resizeOverlay: ResizeOverlayMode = .afterFirst,
         resizeOverlayPosition: ResizeOverlayPosition = .center,
         windowPaddingBalance: Bool = true,
@@ -351,6 +375,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.showStatusLine = showStatusLine
         self.experienceMode = experienceMode
         self.harnessControlsEnabled = harnessControlsEnabled
+        self.prefixKeyEnabled = prefixKeyEnabled
+        self.statusLineEnabled = statusLineEnabled
         self.resizeOverlay = resizeOverlay
         self.resizeOverlayPosition = resizeOverlayPosition
         self.windowPaddingBalance = windowPaddingBalance
@@ -496,6 +522,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         harnessControlsEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .harnessControlsEnabled)
             ?? legacyContainer.decodeIfPresent(Bool.self, forKey: .tmuxControlsEnabled)
+        // Per-component overrides — absent in older files, so they decode to nil and fall back to
+        // the legacy umbrella `harnessControlsEnabled` (then the mode) via the effective accessors.
+        // No data migration needed: an existing file with `harnessControlsEnabled` keeps behaving
+        // exactly as before until the user touches a finer toggle.
+        prefixKeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .prefixKeyEnabled)
+        statusLineEnabled = try container.decodeIfPresent(Bool.self, forKey: .statusLineEnabled)
         resizeOverlay = try container.decodeIfPresent(ResizeOverlayMode.self, forKey: .resizeOverlay) ?? fallback.resizeOverlay
         resizeOverlayPosition = try container.decodeIfPresent(ResizeOverlayPosition.self, forKey: .resizeOverlayPosition) ?? fallback.resizeOverlayPosition
         windowPaddingBalance = try container.decodeIfPresent(Bool.self, forKey: .windowPaddingBalance) ?? fallback.windowPaddingBalance

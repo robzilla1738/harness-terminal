@@ -71,6 +71,34 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertFalse(ids.contains(throwaway), "unpinned session must be reaped")
     }
 
+    func testCloseEphemeralSessionsKeepsPinnedTabClosesSibling() throws {
+        let client = DaemonClient()
+        guard case let .snapshot(initial) = try client.request(.getSnapshot),
+              let ws = initial.activeWorkspace else { return XCTFail("no workspace") }
+
+        // A session with two tabs; pin one tab, leave the other ephemeral.
+        guard case let .sessionID(mixed) = try client.request(.newSession(workspaceID: ws.id, cwd: nil, name: "mixed"))
+        else { return XCTFail("expected session ID") }
+        _ = try client.request(.newTab(workspaceID: ws.id, cwd: nil))
+
+        guard case let .snapshot(mid) = try client.request(.getSnapshot) else { return XCTFail("no snapshot") }
+        let tabs = mid.workspaces.flatMap(\.sessions).first { $0.id == mixed }?.tabs ?? []
+        guard tabs.count >= 2 else { return XCTFail("expected two tabs in the session") }
+        let keepTab = tabs[0].id
+        let dropTab = tabs[1].id
+
+        _ = try client.request(.setKeepSessionsOnQuit(false))
+        _ = try client.request(.setTabPersistent(tabID: keepTab, persistent: true))
+        _ = try client.request(.closeEphemeralSessions)
+
+        guard case let .snapshot(end) = try client.request(.getSnapshot) else { return XCTFail("no snapshot") }
+        let survivingSession = end.workspaces.flatMap(\.sessions).first { $0.id == mixed }
+        XCTAssertNotNil(survivingSession, "a session with a pinned tab survives as its container")
+        let survivingTabIDs = survivingSession?.tabs.map(\.id) ?? []
+        XCTAssertTrue(survivingTabIDs.contains(keepTab), "pinned tab survives a clean quit")
+        XCTAssertFalse(survivingTabIDs.contains(dropTab), "unpinned sibling tab is reaped")
+    }
+
     func testPingMutationAndSnapshotRoundTrip() throws {
         let client = DaemonClient()
         guard case .pong = try client.request(.ping) else { return XCTFail("expected pong") }

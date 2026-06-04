@@ -73,4 +73,59 @@ final class ExperienceModeTests: XCTestCase {
         settings.resetToImportedConfig(imported: nil)
         XCTAssertEqual(settings.experienceMode, .full)
     }
+
+    // MARK: - Per-component (decoupled) chrome overrides
+
+    func testPerComponentDefaultsByMode() {
+        // Prefix + status line default on only for Full; the notch only for Agent.
+        XCTAssertTrue(ExperienceMode.full.showsPrefixByDefault)
+        XCTAssertTrue(ExperienceMode.full.showsStatusLineByDefault)
+        XCTAssertFalse(ExperienceMode.plain.showsPrefixByDefault)
+        XCTAssertFalse(ExperienceMode.plain.showsStatusLineByDefault)
+        XCTAssertTrue(ExperienceMode.agent.notchEnabledByDefault)
+        XCTAssertFalse(ExperienceMode.full.notchEnabledByDefault)
+    }
+
+    func testGranularOverridesDecouplePrefixFromStatusLine() {
+        // A Plain terminal can show a status line without arming the prefix…
+        let s = HarnessSettings(experienceMode: .plain, statusLineEnabled: true)
+        XCTAssertTrue(s.effectiveStatusLineEnabled)
+        XCTAssertFalse(s.effectivePrefixKeyEnabled)
+        XCTAssertNil(s.effectivePrefixKey)
+        // …and a Full Terminal can drop the prefix while keeping the status line.
+        let f = HarnessSettings(experienceMode: .full, prefixKeyEnabled: false)
+        XCTAssertFalse(f.effectivePrefixKeyEnabled)
+        XCTAssertTrue(f.effectiveStatusLineEnabled)
+    }
+
+    func testGranularOverrideFallsBackToUmbrellaThenMode() {
+        // nil granular → legacy umbrella → mode default. The umbrella lifts both components.
+        let umbrella = HarnessSettings(experienceMode: .agent, harnessControlsEnabled: true)
+        XCTAssertTrue(umbrella.effectivePrefixKeyEnabled)
+        XCTAssertTrue(umbrella.effectiveStatusLineEnabled)
+        // A finer override beats the umbrella for just that component.
+        let mixed = HarnessSettings(experienceMode: .agent, harnessControlsEnabled: true, prefixKeyEnabled: false)
+        XCTAssertFalse(mixed.effectivePrefixKeyEnabled)
+        XCTAssertTrue(mixed.effectiveStatusLineEnabled)
+    }
+
+    func testGranularOverridesSurviveRoundTrip() throws {
+        let settings = HarnessSettings(experienceMode: .plain, prefixKeyEnabled: true, statusLineEnabled: false)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(decoded.prefixKeyEnabled, true)
+        XCTAssertEqual(decoded.statusLineEnabled, false)
+        XCTAssertTrue(decoded.effectivePrefixKeyEnabled)
+        XCTAssertFalse(decoded.effectiveStatusLineEnabled)
+    }
+
+    func testLegacyFileWithoutGranularOverridesPreservesBehavior() throws {
+        // Older files have no prefixKeyEnabled/statusLineEnabled → nil, so behavior is preserved
+        // through the umbrella fallback (umbrella off ⇒ both components off, even for Full).
+        let legacy = #"{"experienceMode":"tmux","harnessControlsEnabled":false}"#
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: Data(legacy.utf8))
+        XCTAssertNil(decoded.prefixKeyEnabled)
+        XCTAssertNil(decoded.statusLineEnabled)
+        XCTAssertFalse(decoded.effectivePrefixKeyEnabled)
+        XCTAssertFalse(decoded.effectiveStatusLineEnabled)
+    }
 }

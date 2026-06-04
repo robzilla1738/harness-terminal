@@ -273,12 +273,47 @@ public struct SessionEditor: Sendable {
         return false
     }
 
-    /// Session IDs that should be torn down on a clean GUI quit: a session is removed iff it is
-    /// neither globally kept (`keepSessionsOnQuit`) nor individually pinned (`persistent`).
-    /// A daemon/GUI crash never calls this — survival across a crash is always a feature.
+    /// Pin/unpin an individual tab so it survives a clean quit even when neither the global
+    /// `keepSessionsOnQuit` nor its session's `persistent` flag is set — the finest-grained
+    /// persistence control. Mirrors `setSessionPersistent`.
+    @discardableResult
+    public mutating func setTabPersistent(_ tabID: TabID, _ persistent: Bool) -> Bool {
+        guard let match = tabIndex(tabID: tabID) else { return false }
+        guard snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].persistent != persistent
+        else { return true }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].persistent = persistent
+        bumpRevision()
+        return true
+    }
+
+    // Persistence precedence on a clean GUI quit (a daemon/GUI crash never reaps — survival
+    // across a crash is always a feature):
+    //   A tab survives iff `keepSessionsOnQuit || session.persistent || tab.persistent`.
+    //   A session is closed iff *none* of its tabs survive.
+    // `ephemeralSessionIDs()` returns whole sessions to close; `ephemeralTabIDs()` returns the
+    // unpinned tabs to close individually inside sessions that survive only because another tab
+    // in them is pinned. The two sets are disjoint by construction.
+
+    /// Sessions to tear down entirely: not globally kept, not session-pinned, and with no
+    /// individually-pinned tab to keep them alive.
     public func ephemeralSessionIDs() -> [SessionID] {
         guard !snapshot.keepSessionsOnQuit else { return [] }
-        return snapshot.workspaces.flatMap(\.sessions).filter { !$0.persistent }.map(\.id)
+        return snapshot.workspaces.flatMap(\.sessions)
+            .filter { !$0.persistent && !$0.tabs.contains(where: { $0.persistent }) }
+            .map(\.id)
+    }
+
+    /// Unpinned tabs to close individually: they live in a session that itself survives only
+    /// because a *sibling* tab is pinned (a session-pinned session keeps all its tabs, so it is
+    /// skipped here; a session with no pinned tab is closed wholesale via `ephemeralSessionIDs`).
+    public func ephemeralTabIDs() -> [TabID] {
+        guard !snapshot.keepSessionsOnQuit else { return [] }
+        var result: [TabID] = []
+        for session in snapshot.workspaces.flatMap(\.sessions) {
+            guard !session.persistent, session.tabs.contains(where: { $0.persistent }) else { continue }
+            result.append(contentsOf: session.tabs.filter { !$0.persistent }.map(\.id))
+        }
+        return result
     }
 
     public mutating func closeTab(_ tabID: TabID) -> Bool {

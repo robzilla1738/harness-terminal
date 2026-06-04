@@ -26,6 +26,11 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
     public var bell: Bool
     /// Non-nil once the pane's process exits while `remain-on-exit` keeps the dead pane.
     public var exitStatus: Int?
+    /// Pin this individual tab to survive a clean GUI quit even when neither the global
+    /// `keepSessionsOnQuit` nor its session's `persistent` flag is set. The finest-grained
+    /// persistence control: a tab survives iff `keepSessionsOnQuit || session.persistent ||
+    /// tab.persistent`. Defaults to unpinned; older snapshots decode to `false`.
+    public var persistent: Bool
 
     /// The tmux activity/silence/bell portion of `#{window_flags}`.
     public var alertFlags: String {
@@ -49,7 +54,8 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         activity: Bool = false,
         silence: Bool = false,
         bell: Bool = false,
-        exitStatus: Int? = nil
+        exitStatus: Int? = nil,
+        persistent: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -71,6 +77,7 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         self.silence = silence
         self.bell = bell
         self.exitStatus = exitStatus
+        self.persistent = persistent
     }
 
     public var displaySubtitle: String {
@@ -105,5 +112,7 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         silence = try container.decodeIfPresent(Bool.self, forKey: .silence) ?? false
         bell = try container.decodeIfPresent(Bool.self, forKey: .bell) ?? false
         exitStatus = try container.decodeIfPresent(Int.self, forKey: .exitStatus)
+        // Per-tab persistence pin — absent in older layout.json; default to unpinned.
+        persistent = try container.decodeIfPresent(Bool.self, forKey: .persistent) ?? false
     }
 }

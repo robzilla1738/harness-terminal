@@ -30,7 +30,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let sidebarVisibleToggle = HarnessToggle(title: "Show sidebar")
     private let restoreWindowSizeToggle = HarnessToggle(title: "Remember window size")
     private let experienceSegment = HarnessSegmented(frame: .zero)
-    private let harnessControlsSegment = HarnessSegmented(frame: .zero)
+    // Per-component overrides for the chrome the experience preset would otherwise bundle. Each is
+    // tri-state (Auto / On / Off): Auto follows the selected preset; On/Off pin the component
+    // independently, so e.g. a Plain terminal can show a status line without arming the prefix.
+    private let prefixControlSegment = HarnessSegmented(frame: .zero)
+    private let statusLineControlSegment = HarnessSegmented(frame: .zero)
     private let textRenderingSegment = HarnessSegmented(frame: .zero)
     private let offMainPipelineToggle = HarnessToggle(title: "Off-main render pipeline")
     private let experienceSummaryLabel = NSTextField(wrappingLabelWithString: "")
@@ -374,12 +378,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         restoreWindowSizeToggle.target = self
         restoreWindowSizeToggle.action = #selector(restoreWindowSizeChanged)
 
-        // Optional Harness controls (prefix key + status line) without switching experience
-        // mode: Auto follows the mode, On/Off force them on/off via `harnessControlsEnabled`.
-        harnessControlsSegment.setSegments(["Auto", "On", "Off"])
-        harnessControlsSegment.selectItem(withTitle: harnessControlsTitle(settings.harnessControlsEnabled))
-        harnessControlsSegment.target = self
-        harnessControlsSegment.action = #selector(harnessControlsChanged)
+        // Optional Harness controls without switching experience mode, now decoupled into two
+        // independent tri-states. Auto follows the preset; On/Off pin each via `prefixKeyEnabled` /
+        // `statusLineEnabled`. The legacy umbrella `harnessControlsEnabled` is preserved on disk and
+        // acts as the fallback when a component is Auto, so existing settings keep their behavior.
+        prefixControlSegment.setSegments(["Auto", "On", "Off"])
+        prefixControlSegment.selectItem(withTitle: harnessControlsTitle(settings.prefixKeyEnabled))
+        prefixControlSegment.target = self
+        prefixControlSegment.action = #selector(prefixControlChanged)
+
+        statusLineControlSegment.setSegments(["Auto", "On", "Off"])
+        statusLineControlSegment.selectItem(withTitle: harnessControlsTitle(settings.statusLineEnabled))
+        statusLineControlSegment.target = self
+        statusLineControlSegment.action = #selector(statusLineControlChanged)
 
         offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
         offMainPipelineToggle.target = self
@@ -892,8 +903,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         experienceSegment.widthAnchor.constraint(equalTo: experienceContent.widthAnchor).isActive = true
         let experienceGroup = settingsGroup("Experience", [
             experienceContent,
-            settingsRow("Harness controls", harnessControlsSegment,
-                        hint: "Prefix key + status line. Auto follows the mode above."),
+            settingsRow("Command prefix", prefixControlSegment,
+                        hint: "Arm the prefix key. Auto follows the mode above."),
+            settingsRow("Status line", statusLineControlSegment,
+                        hint: "Show the bottom status band. Auto follows the mode above."),
         ])
 
         let stack = NSStackView(views: [
@@ -1726,13 +1739,18 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
-    private var selectedHarnessControls: Bool? {
-        switch harnessControlsSegment.titleOfSelectedItem {
+    /// Tri-state segment title → `Bool?` override (Auto = nil). Shared by the prefix and status
+    /// line segments since both map Auto/On/Off the same way.
+    private func tristateOverride(from segment: HarnessSegmented) -> Bool? {
+        switch segment.titleOfSelectedItem {
         case "On": return true
         case "Off": return false
         default: return nil
         }
     }
+
+    private var selectedPrefixEnabled: Bool? { tristateOverride(from: prefixControlSegment) }
+    private var selectedStatusLineEnabled: Bool? { tristateOverride(from: statusLineControlSegment) }
 
     private func updateFontReadout() {
         let s = SessionCoordinator.shared.settings
@@ -1907,12 +1925,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         keepSessionsToggle.state = keep ? .on : .off
     }
 
-    /// The optional Harness-controls override re-gates the prefix key + status line without
-    /// changing the experience mode. Mirrors the chrome-refresh path of `experienceModeChanged`.
-    @objc private func harnessControlsChanged() {
-        SessionCoordinator.shared.settings.harnessControlsEnabled = selectedHarnessControls
+    /// The per-component prefix override re-gates the prefix key independently of the status line
+    /// (and of the experience mode). Mirrors the chrome-refresh path of `experienceModeChanged`.
+    @objc private func prefixControlChanged() {
+        SessionCoordinator.shared.settings.prefixKeyEnabled = selectedPrefixEnabled
         flushAndApply()
         PrefixKeymap.shared.rebuildFromSettings()
+    }
+
+    /// The per-component status-line override re-gates the bottom status band independently of the
+    /// prefix. `flushAndApply` posts the chrome-changed notification `StatusLineView` reacts to.
+    @objc private func statusLineControlChanged() {
+        SessionCoordinator.shared.settings.statusLineEnabled = selectedStatusLineEnabled
+        flushAndApply()
     }
 
     /// "Remember window size" applies to the live main window immediately, not just on the
@@ -2074,7 +2099,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         showStatusLineToggle.state = settings.showStatusLine ? .on : .off
         sidebarVisibleToggle.state = settings.sidebarVisible ? .on : .off
         restoreWindowSizeToggle.state = settings.restoreWindowSize ? .on : .off
-        harnessControlsSegment.selectItem(withTitle: harnessControlsTitle(settings.harnessControlsEnabled))
+        prefixControlSegment.selectItem(withTitle: harnessControlsTitle(settings.prefixKeyEnabled))
+        statusLineControlSegment.selectItem(withTitle: harnessControlsTitle(settings.statusLineEnabled))
         systemNotificationsToggle.state = settings.systemNotificationsEnabled ? .on : .off
         notificationSoundToggle.state = settings.notificationSoundEnabled ? .on : .off
         notchModeSegment.selectItem(withTitle: notchModeTitle(settings.notchVisibilityMode))
@@ -2168,7 +2194,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.commandFinishedNotifications = commandFinishedToggle.state == .on
         coordinator.settings.commandFinishedThresholdSeconds = max(1, Int(commandFinishedThresholdField.stringValue) ?? 10)
         coordinator.settings.experienceMode = selectedExperienceMode
-        coordinator.settings.harnessControlsEnabled = selectedHarnessControls
+        coordinator.settings.prefixKeyEnabled = selectedPrefixEnabled
+        coordinator.settings.statusLineEnabled = selectedStatusLineEnabled
         try? coordinator.settings.save()
 
         // Theme switching (and its color seeding) is handled by themeDidChange, so

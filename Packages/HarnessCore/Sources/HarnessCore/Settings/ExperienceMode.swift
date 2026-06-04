@@ -51,7 +51,23 @@ public enum ExperienceMode: String, Codable, Sendable, CaseIterable {
     /// Whether Harness controls — prefix-key handling, the prefix indicator, and the
     /// bottom status line — are shown by default.
     /// Only the full experience shows them by default; the others can opt in.
+    ///
+    /// This is the *umbrella* default; the prefix and status line each also have their own
+    /// per-component default below so a preset can be tuned one piece at a time (e.g. Plain
+    /// with a status line, or Full without the prefix). See `HarnessSettings`'
+    /// `effectivePrefixKeyEnabled` / `effectiveStatusLineEnabled`.
     public var showsHarnessControlsByDefault: Bool { self == .full }
+
+    /// Whether the command prefix is armed by default. Decoupled from the status line so a
+    /// preset can show one without the other.
+    public var showsPrefixByDefault: Bool { self == .full }
+
+    /// Whether the bottom status line is shown by default. Decoupled from the prefix.
+    public var showsStatusLineByDefault: Bool { self == .full }
+
+    /// Whether the top-center Agent Notch HUD is enabled by default (the `.automatic`
+    /// notch policy resolves through this). Only the Agent Workspace foregrounds it.
+    public var notchEnabledByDefault: Bool { self == .agent }
 
     /// Whether sessions created in this mode persist across a *clean* GUI quit by default.
     /// Only `plain` is ephemeral. (A daemon or GUI crash never tears sessions down in any

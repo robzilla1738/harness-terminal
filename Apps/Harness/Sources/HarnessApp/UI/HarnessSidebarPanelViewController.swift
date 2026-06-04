@@ -783,17 +783,21 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
         menu.addItem(.separator())
 
-        // Pin a session to survive a clean quit even in Plain mode (and the reverse). When
-        // keep-on-quit is globally on this is moot — everything survives — so only offer it
-        // when the global switch is off, otherwise the checkmark would lie.
-        if !SessionCoordinator.shared.snapshot.keepSessionsOnQuit {
-            let pin = NSMenuItem(title: "Keep running after quit", action: #selector(toggleSessionPersistent(_:)), keyEquivalent: "")
-            pin.target = self
-            pin.representedObject = session.id
-            pin.state = session.persistent ? .on : .off
-            menu.addItem(pin)
-            menu.addItem(.separator())
-        }
+        // Pin a session to survive a clean quit even in Plain mode (and the reverse). Always
+        // offered for discoverability; the checkmark reflects the stored per-session intent. When
+        // keep-on-quit is globally on, that intent is currently superseded (everything survives),
+        // so the title says as much rather than hiding the control.
+        let globallyKept = SessionCoordinator.shared.snapshot.keepSessionsOnQuit
+        let pin = NSMenuItem(
+            title: globallyKept ? "Keep running after quit (all sessions kept)" : "Keep running after quit",
+            action: #selector(toggleSessionPersistent(_:)),
+            keyEquivalent: ""
+        )
+        pin.target = self
+        pin.representedObject = session.id
+        pin.state = session.persistent ? .on : .off
+        menu.addItem(pin)
+        menu.addItem(.separator())
 
         let close = NSMenuItem(title: "Close session", action: #selector(closeSessionFromMenu(_:)), keyEquivalent: "")
         close.target = self

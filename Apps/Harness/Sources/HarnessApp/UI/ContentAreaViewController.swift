@@ -205,6 +205,17 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         SessionCoordinator.shared.splitTab(workspaceID: workspaceID, tabID: tabID, direction: direction)
     }
 
+    func tabBarDidRequestTogglePersistent(tabID: TabID) {
+        // Flip the tab's persistence pin via the daemon (mirrors the session pin in the sidebar).
+        // Read the current value from the snapshot so the menu item toggles rather than forces a
+        // state; the resulting commit refreshes the pill's checkmark on the next reload.
+        let coordinator = SessionCoordinator.shared
+        let current = coordinator.snapshot.workspaces
+            .flatMap(\.sessions).flatMap(\.tabs)
+            .first(where: { $0.id == tabID })?.persistent ?? false
+        coordinator.requestDaemon(.setTabPersistent(tabID: tabID, persistent: !current))
+    }
+
     private func reloadAll(force: Bool) {
         reloadTabBar()
         reloadIfNeeded(force: force)

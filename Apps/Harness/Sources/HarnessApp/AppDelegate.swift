@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // lands), then refresh the window chrome to match.
             SessionCoordinator.shared.applyAutoThemeForCurrentAppearance()
             self.mainWindowController?.applyChrome()
-            Self.reconcileSessionPersistenceWithModeOnce()
+            Self.reconcileSessionPersistenceWithMode()
             OnboardingController.presentIfNeeded()
             self.externalOpenReady = true
             if synced {
@@ -81,19 +81,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// One-shot: align the daemon's keep-on-quit default with the chosen experience the first
-    /// time we launch with modes. A fresh Plain install becomes ephemeral; an upgraded install
-    /// (already keep-on-quit + migrated to Full Terminal) is a no-op. Keyed so it never overrides a
-    /// later explicit choice the user makes in Settings.
-    private static func reconcileSessionPersistenceWithModeOnce() {
-        let key = "HarnessModePersistenceReconciledV1"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        let keep = SessionCoordinator.shared.settings.experienceMode.persistsSessionsByDefault
-        // Mark reconciled ONLY after the daemon accepts the default. A launch while the daemon is
-        // still spawning would otherwise burn the one-shot flag without ever applying the mode's
+    /// Align the daemon's keep-on-quit default with the chosen experience whenever the mode
+    /// *changes* across launches. Switching presets (Plain ⇄ Persistent/Full/Agent) re-applies that
+    /// preset's default; a stable mode is left untouched so an explicit in-Settings keep-on-quit
+    /// override — or a per-session / per-tab pin — is never clobbered on relaunch. (The old V1 flag
+    /// was a permanent one-shot, so a later mode switch silently failed to re-sync persistence.)
+    /// A fresh Plain install becomes ephemeral; an upgraded Full install keeps sessions.
+    private static func reconcileSessionPersistenceWithMode() {
+        let key = "HarnessModePersistenceLastAppliedMode"
+        let mode = SessionCoordinator.shared.settings.experienceMode
+        guard UserDefaults.standard.string(forKey: key) != mode.rawValue else { return }
+        let keep = mode.persistsSessionsByDefault
+        // Record the applied mode ONLY after the daemon accepts the default. A launch while the
+        // daemon is still spawning would otherwise burn the key without ever applying the mode's
         // keep-on-quit default — leaving a fresh Plain install wrongly persistent forever.
         guard SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep)) != nil else { return }
-        UserDefaults.standard.set(true, forKey: key)
+        UserDefaults.standard.set(mode.rawValue, forKey: key)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

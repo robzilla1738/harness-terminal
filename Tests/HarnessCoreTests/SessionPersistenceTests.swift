@@ -59,4 +59,87 @@ final class SessionPersistenceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(SessionGroup.self, from: JSONEncoder().encode(group))
         XCTAssertTrue(decoded.persistent)
     }
+
+    // MARK: - Per-tab persistence (precedence: tab → session → global)
+
+    func testSetTabPersistentTogglesAndReports() throws {
+        var editor = SessionEditor()
+        let wsID = try XCTUnwrap(editor.snapshot.activeWorkspace).id
+        let sessionID = try XCTUnwrap(editor.addSession(to: wsID, name: "s"))
+        let tab1 = try XCTUnwrap(editor.snapshot.activeWorkspace?.sessions.first { $0.id == sessionID }).tabs[0].id
+        XCTAssertTrue(editor.setTabPersistent(tab1, true))
+        XCTAssertTrue(try tabPersistent(editor, tab1))
+        XCTAssertTrue(editor.setTabPersistent(tab1, false))
+        XCTAssertFalse(try tabPersistent(editor, tab1))
+        XCTAssertFalse(editor.setTabPersistent(UUID(), true), "unknown tab reports failure")
+    }
+
+    func testPinnedTabKeepsSessionAndClosesUnpinnedSiblings() throws {
+        var editor = SessionEditor()
+        editor.setKeepSessionsOnQuit(false)
+        let wsID = try XCTUnwrap(editor.snapshot.activeWorkspace).id
+        let sessionID = try XCTUnwrap(editor.addSession(to: wsID, name: "s"))
+        let tab1 = try XCTUnwrap(editor.snapshot.activeWorkspace?.sessions.first { $0.id == sessionID }).tabs[0].id
+        let tab2 = try XCTUnwrap(editor.addTab(to: wsID))
+        XCTAssertTrue(editor.setTabPersistent(tab1, true))
+        // The session survives as a container for its pinned tab…
+        XCTAssertFalse(editor.ephemeralSessionIDs().contains(sessionID))
+        // …its unpinned sibling is torn down individually, the pinned one is not.
+        XCTAssertTrue(editor.ephemeralTabIDs().contains(tab2))
+        XCTAssertFalse(editor.ephemeralTabIDs().contains(tab1))
+    }
+
+    func testSessionPinKeepsAllTabs() throws {
+        var editor = SessionEditor()
+        editor.setKeepSessionsOnQuit(false)
+        let wsID = try XCTUnwrap(editor.snapshot.activeWorkspace).id
+        let sessionID = try XCTUnwrap(editor.addSession(to: wsID, name: "s"))
+        _ = try XCTUnwrap(editor.addTab(to: wsID))
+        editor.setSessionPersistent(sessionID, true)
+        // A session pin keeps every tab — none are individually ephemeral.
+        XCTAssertFalse(editor.ephemeralSessionIDs().contains(sessionID))
+        let tabs = try XCTUnwrap(editor.snapshot.activeWorkspace?.sessions.first { $0.id == sessionID }).tabs
+        for tab in tabs {
+            XCTAssertFalse(editor.ephemeralTabIDs().contains(tab.id))
+        }
+    }
+
+    func testUnpinnedSessionWithNoPinnedTabIsClosedWholesale() throws {
+        var editor = SessionEditor()
+        editor.setKeepSessionsOnQuit(false)
+        let wsID = try XCTUnwrap(editor.snapshot.activeWorkspace).id
+        let sessionID = try XCTUnwrap(editor.addSession(to: wsID, name: "s"))
+        let tab2 = try XCTUnwrap(editor.addTab(to: wsID))
+        // No pins anywhere: the whole session is ephemeral, with no per-tab teardown for it.
+        XCTAssertTrue(editor.ephemeralSessionIDs().contains(sessionID))
+        XCTAssertFalse(editor.ephemeralTabIDs().contains(tab2))
+    }
+
+    func testKeepOnQuitMakesEverythingSurviveRegardlessOfTabPin() throws {
+        var editor = SessionEditor()
+        editor.setKeepSessionsOnQuit(true)
+        let wsID = try XCTUnwrap(editor.snapshot.activeWorkspace).id
+        let sessionID = try XCTUnwrap(editor.addSession(to: wsID, name: "s"))
+        let tab2 = try XCTUnwrap(editor.addTab(to: wsID))
+        editor.setTabPersistent(tab2, true)
+        XCTAssertTrue(editor.ephemeralSessionIDs().isEmpty)
+        XCTAssertTrue(editor.ephemeralTabIDs().isEmpty)
+    }
+
+    func testLegacyTabDecodesAsUnpinned() throws {
+        // A Tab written before `persistent` existed must decode to false, not fail. Strip the key
+        // from an encoded Tab (rather than hand-writing a PaneNode tree) to simulate the old file.
+        let tab = Tab(title: "t")
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(tab)) as? [String: Any])
+        object.removeValue(forKey: "persistent")
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(Tab.self, from: data)
+        XCTAssertFalse(decoded.persistent)
+    }
+
+    private func tabPersistent(_ editor: SessionEditor, _ tabID: TabID) throws -> Bool {
+        try XCTUnwrap(editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+            .first { $0.id == tabID }).persistent
+    }
 }

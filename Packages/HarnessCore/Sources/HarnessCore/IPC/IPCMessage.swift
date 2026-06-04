@@ -28,6 +28,9 @@ public enum IPCRequest: Codable, Sendable {
     /// Pin/unpin a session so it survives a clean quit even with `keepSessionsOnQuit` off
     /// (Plain mode "promote to persistent"). `true` = persistent, `false` = ephemeral.
     case setSessionPersistent(sessionID: UUID, persistent: Bool)
+    /// Pin/unpin an individual tab so it survives a clean quit even when neither
+    /// `keepSessionsOnQuit` nor its session's pin is set. `true` = persistent, `false` = ephemeral.
+    case setTabPersistent(tabID: UUID, persistent: Bool)
     /// Tear down sessions that are neither globally kept nor individually pinned. The GUI calls
     /// this on a *clean* quit so Plain-mode sessions behave like a normal terminal; pinned and
     /// keep-on-quit sessions are left running.

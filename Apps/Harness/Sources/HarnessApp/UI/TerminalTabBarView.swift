@@ -10,6 +10,7 @@ protocol TerminalTabBarDelegate: AnyObject {
     func tabBarDidRequestCloseOthers(tabID: TabID)
     func tabBarDidRequestRename(tabID: TabID)
     func tabBarDidRequestSplit(tabID: TabID, direction: SplitDirection)
+    func tabBarDidRequestTogglePersistent(tabID: TabID)
 }
 
 extension TerminalTabBarDelegate {
@@ -18,6 +19,7 @@ extension TerminalTabBarDelegate {
     func tabBarDidRequestCloseOthers(tabID: TabID) {}
     func tabBarDidRequestRename(tabID: TabID) {}
     func tabBarDidRequestSplit(tabID: TabID, direction: SplitDirection) {}
+    func tabBarDidRequestTogglePersistent(tabID: TabID) {}
 }
 
 enum TabContextCommand {
@@ -26,6 +28,7 @@ enum TabContextCommand {
     case rename
     case splitHorizontal
     case splitVertical
+    case togglePersistent
 }
 
 /// Frame-laid tab strip. Pills compress toward a minimum width and, once they no
@@ -296,6 +299,7 @@ final class TerminalTabBarView: NSView {
         case .rename: delegate?.tabBarDidRequestRename(tabID: tabID)
         case .splitHorizontal: delegate?.tabBarDidRequestSplit(tabID: tabID, direction: .horizontal)
         case .splitVertical: delegate?.tabBarDidRequestSplit(tabID: tabID, direction: .vertical)
+        case .togglePersistent: delegate?.tabBarDidRequestTogglePersistent(tabID: tabID)
         }
     }
 
@@ -371,6 +375,8 @@ private final class TabPillView: NSView {
     private var isActive = false
     private var isHovered = false
     private var status: TabStatus = .idle
+    /// Whether this tab is pinned to survive a clean quit — drives the context-menu checkmark.
+    private var isPersistent = false
 
     // Drag detection.
     private var mouseDownLocation: NSPoint?
@@ -389,6 +395,7 @@ private final class TabPillView: NSView {
         super.init(frame: .zero)
         self.isActive = isActive
         self.status = tab.status
+        self.isPersistent = tab.persistent
 
         wantsLayer = true
         // Card radius (not control) so the active pill reads identically to the
@@ -600,6 +607,12 @@ private final class TabPillView: NSView {
         menu.addItem(.separator())
         menu.addItem(menuItem("Rename…", #selector(ctxRename)))
         menu.addItem(.separator())
+        // Per-tab persistence pin: survives a clean quit even when its session and the global
+        // keep-on-quit are off. The checkmark reflects the current pinned state.
+        let pin = menuItem("Keep Tab Running After Quit", #selector(ctxTogglePersistent))
+        pin.state = isPersistent ? .on : .off
+        menu.addItem(pin)
+        menu.addItem(.separator())
         menu.addItem(menuItem("Split Right", #selector(ctxSplitHorizontal)))
         menu.addItem(menuItem("Split Down", #selector(ctxSplitVertical)))
         return menu
@@ -616,6 +629,7 @@ private final class TabPillView: NSView {
     @objc private func ctxRename() { onContextCommand?(.rename) }
     @objc private func ctxSplitHorizontal() { onContextCommand?(.splitHorizontal) }
     @objc private func ctxSplitVertical() { onContextCommand?(.splitVertical) }
+    @objc private func ctxTogglePersistent() { onContextCommand?(.togglePersistent) }
 
     @objc private func closeClicked() {
         onClose?(tabID)
@@ -623,6 +637,7 @@ private final class TabPillView: NSView {
 
     func update(tab: Tab, isActive: Bool) {
         status = tab.status
+        isPersistent = tab.persistent
         titleLabel.stringValue = tabDisplayTitle(tab)
         setAgentIcon(for: tab)
         setWorkingDotVisible(Self.isAgentWorking(tab))

@@ -366,12 +366,21 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             commit()
             return .ok
+        case let .setTabPersistent(tabID, persistent):
+            guard editor.setTabPersistent(tabID, persistent) else {
+                return .error("Tab not found")
+            }
+            commit()
+            return .ok
         case .closeEphemeralSessions:
             // Close each ephemeral session inline (NOT via re-entrant handle(.closeSession),
             // which would deadlock on the non-recursive `lock` we already hold). Same helpers
             // the .closeSession case uses, so PTYs are killed and the layout stays consistent.
             let ids = editor.ephemeralSessionIDs()
-            guard !ids.isEmpty else { return .ok }
+            // Unpinned tabs kept alive only by a pinned sibling: close them individually so a
+            // pinned tab keeps just itself (and its session container) across a clean quit.
+            let tabIDs = editor.ephemeralTabIDs()
+            guard !ids.isEmpty || !tabIDs.isEmpty else { return .ok }
             for sessionID in ids {
                 let closedSurfaces = editor.snapshot.workspaces
                     .flatMap(\.sessions)
@@ -379,6 +388,16 @@ public final class SurfaceRegistry: @unchecked Sendable {
                     .tabs
                     .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
                 guard editor.closeSession(sessionID) else { continue }
+                closeSurfaces(closedSurfaces)
+            }
+            for tabID in tabIDs {
+                // Gather the tab's surfaces before removing it from the layout (mirrors the
+                // session loop above), then kill those PTYs.
+                let closedSurfaces = editor.snapshot.workspaces
+                    .flatMap(\.sessions).flatMap(\.tabs)
+                    .first(where: { $0.id == tabID })?
+                    .rootPane.allSurfaceIDs().map(\.uuidString) ?? []
+                guard editor.closeTab(tabID) else { continue }
                 closeSurfaces(closedSurfaces)
             }
             ensureAllSnapshotSurfaces()

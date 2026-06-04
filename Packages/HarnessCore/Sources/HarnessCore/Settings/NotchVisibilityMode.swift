@@ -12,7 +12,7 @@ public enum NotchVisibilityMode: String, Codable, Sendable, CaseIterable {
     public func isEnabled(for experienceMode: ExperienceMode) -> Bool {
         switch self {
         case .automatic:
-            return experienceMode == .agent
+            return experienceMode.notchEnabledByDefault
         case .on:
             return true
         case .off:
