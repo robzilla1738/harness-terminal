@@ -203,11 +203,6 @@ enum SVGPathParser {
 enum AgentIconRenderer {
     private static var cache: [String: NSImage] = [:]
 
-    /// Whether a brand mark exists for this agent (else callers fall back to text).
-    static func hasIcon(for kind: AgentKind) -> Bool {
-        AgentIconArt.icons[kind.rawValue] != nil
-    }
-
     /// A brand-colored (non-template) icon, baked to `color`. For contexts that can't
     /// tint a template at draw time (e.g. `NSMenuItem.image`, which would otherwise
     /// recolor it to the menu's label color). Cached per kind+size+color.
@@ -216,13 +211,7 @@ enum AgentIconRenderer {
         // Key on the actual sRGB components, not `color.hashValue` — a hash collision
         // would hand back an icon baked in the wrong color. A semantic/system color that
         // can't resolve to sRGB falls back to its hash (rare; never crashes).
-        let colorKey: String
-        if let rgb = color.usingColorSpace(.sRGB) {
-            colorKey = String(format: "%.3f,%.3f,%.3f,%.3f",
-                              rgb.redComponent, rgb.greenComponent, rgb.blueComponent, rgb.alphaComponent)
-        } else {
-            colorKey = String(color.hashValue)
-        }
+        let colorKey = cacheKey(for: color)
         let key = "\(kind.rawValue)@\(Int(size.rounded()))#\(colorKey)"
         if let cached = cache[key] { return cached }
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
@@ -234,6 +223,34 @@ enum AgentIconRenderer {
         image.isTemplate = false
         cache[key] = image
         return image
+    }
+
+    static func coloredOrMonogramImage(for kind: AgentKind, size: CGFloat, color: NSColor) -> NSImage {
+        coloredImage(for: kind, size: size, color: color)
+            ?? coloredMonogram(kind.chip, size: size, color: color)
+    }
+
+    private static func coloredMonogram(_ text: String, size: CGFloat, color: NSColor) -> NSImage {
+        let key = "coloredMono:\(text)@\(Int(size.rounded()))#\(cacheKey(for: color))"
+        if let cached = cache[key] { return cached }
+        let template = monogramTemplate(text, size: size)
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            template.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        image.isTemplate = false
+        cache[key] = image
+        return image
+    }
+
+    private static func cacheKey(for color: NSColor) -> String {
+        if let rgb = color.usingColorSpace(.sRGB) {
+            return String(format: "%.3f,%.3f,%.3f,%.3f",
+                          rgb.redComponent, rgb.greenComponent, rgb.blueComponent, rgb.alphaComponent)
+        }
+        return String(color.hashValue)
     }
 
     /// A tintable template for an agent that has no vector brand mark (e.g. Aider): its
@@ -253,6 +270,10 @@ enum AgentIconRenderer {
         image.isTemplate = true
         cache[key] = image
         return image
+    }
+
+    static func templateOrMonogramImage(for kind: AgentKind, size: CGFloat) -> NSImage {
+        templateImage(for: kind, size: size) ?? monogramTemplate(kind.chip, size: size)
     }
 
     /// A template image (alpha = silhouette) for the agent, or nil if none exists.

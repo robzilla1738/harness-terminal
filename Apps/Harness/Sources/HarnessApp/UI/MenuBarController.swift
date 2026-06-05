@@ -95,7 +95,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         item.target = self
         item.representedObject = MenuRef(row.workspaceID, row.sessionID)
         let tint = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: row.kind)) ?? .secondaryLabelColor
-        item.image = AgentIconRenderer.coloredImage(for: row.kind, size: 15, color: tint)
+        item.image = AgentIconRenderer.coloredOrMonogramImage(for: row.kind, size: 15, color: tint)
 
         let title = NSMutableAttributedString(string: row.kind.displayName, attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
@@ -135,7 +135,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let tab = session.activeTab ?? session.tabs.first,
            let kind = tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title) {
             let tint = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: kind)) ?? .secondaryLabelColor
-            item.image = AgentIconRenderer.coloredImage(for: kind, size: 13, color: tint)
+            item.image = AgentIconRenderer.coloredOrMonogramImage(for: kind, size: 13, color: tint)
         }
         return item
     }

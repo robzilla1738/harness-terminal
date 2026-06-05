@@ -42,6 +42,57 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(HarnessSettings.makeDefaults(imported: nil).cursorStyle, "bar")
     }
 
+    // MARK: - Per-event notification gating
+
+    func testNotificationEventDefaultsMatchPriorBehavior() {
+        let settings = HarnessSettings()
+        XCTAssertTrue(settings.isEventEnabled(.agentWaiting))
+        XCTAssertTrue(settings.isEventEnabled(.agentFinished))
+        XCTAssertTrue(settings.isEventEnabled(.bell))
+        // Command-finished stays opt-in, as the standalone toggle was.
+        XCTAssertFalse(settings.isEventEnabled(.commandFinished))
+    }
+
+    func testSetEventEnabledRoundTripsThroughCoding() throws {
+        var settings = HarnessSettings()
+        settings.setEventEnabled(.bell, false)
+        settings.setEventEnabled(.commandFinished, true)
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: data)
+
+        XCTAssertFalse(decoded.isEventEnabled(.bell))
+        XCTAssertTrue(decoded.isEventEnabled(.commandFinished))
+        // Untouched events still resolve to their defaults.
+        XCTAssertTrue(decoded.isEventEnabled(.agentWaiting))
+    }
+
+    func testLegacyCommandFinishedNotificationsMigratesIntoEventMap() throws {
+        let legacy = Data("""
+        { "fontSize": 14, "commandFinishedNotifications": true }
+        """.utf8)
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+        XCTAssertTrue(migrated.isEventEnabled(.commandFinished))
+        // Other events keep their defaults through the migration.
+        XCTAssertTrue(migrated.isEventEnabled(.agentWaiting))
+    }
+
+    func testExplicitEventMapWinsOverLegacyCommandFinishedFlag() throws {
+        // A user who has already moved to the new map shouldn't have a stale legacy flag override it.
+        let blob = Data("""
+        { "fontSize": 14, "commandFinishedNotifications": true, "notificationEvents": { "commandFinished": false } }
+        """.utf8)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: blob)
+        XCTAssertFalse(decoded.isEventEnabled(.commandFinished))
+    }
+
+    func testSettingsWithNoNotificationKeysDecodeToDefaults() throws {
+        let blob = Data(#"{ "fontSize": 14 }"#.utf8)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: blob)
+        XCTAssertTrue(decoded.isEventEnabled(.agentFinished))
+        XCTAssertFalse(decoded.isEventEnabled(.commandFinished))
+    }
+
     func testVividColorsLoadMigrationPreservesExplicitChoice() throws {
         try withTemporaryHarnessHome { root in
             try HarnessPaths.ensureDirectories()
