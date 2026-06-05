@@ -272,11 +272,16 @@ final class TerminalScreen {
         imageByteTotal = 0
     }
 
-    /// DECSCUSR `CSI Ps SP q`: 0/1 blink block, 2 steady block, 3 blink underline, 4 steady
-    /// underline, 5 blink bar, 6 steady bar. Out-of-range resets to the user default.
+    /// DECSCUSR `CSI Ps SP q`: 1 blink block, 2 steady block, 3 blink underline, 4 steady
+    /// underline, 5 blink bar, 6 steady bar. 0 (and a missing/out-of-range Ps) resets to the
+    /// user default — the Ghostty/kitty/xterm de-facto reading, and what TUIs emit on exit
+    /// (`CSI 0 SP q` / bare `CSI SP q`) expecting the configured style back, NOT a hard
+    /// blinking block (the strict-DEC reading, which left a permanent block over a bar/
+    /// underline user style — and replays from persisted scrollback re-applied it forever).
     func setCursorStyle(_ ps: Int) {
         switch ps {
-        case 0, 1: cursorShape = .block; cursorBlinking = true
+        case 0: cursorShape = .default; cursorBlinking = nil
+        case 1: cursorShape = .block; cursorBlinking = true
         case 2: cursorShape = .block; cursorBlinking = false
         case 3: cursorShape = .underline; cursorBlinking = true
         case 4: cursorShape = .underline; cursorBlinking = false

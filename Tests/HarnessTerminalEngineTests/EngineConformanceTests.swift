@@ -226,11 +226,45 @@ final class EngineConformanceTests: XCTestCase {
         term.feed("\u{1b}[2 q") // steady block
         XCTAssertEqual(term.readGrid()!.cursor.shape, .block)
         XCTAssertEqual(term.readGrid()!.cursor.blinking, false)
-        term.feed("\u{1b}[0 q") // 0 = blinking block (DEC default cursor), not a reset
+        term.feed("\u{1b}[0 q") // 0 = reset to the user default (Ghostty/kitty/xterm de-facto)
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .default)
+        XCTAssertNil(term.readGrid()!.cursor.blinking)
+        term.feed("\u{1b}[1 q") // 1 = blinking block (explicit, unlike 0)
         XCTAssertEqual(term.readGrid()!.cursor.shape, .block)
         XCTAssertEqual(term.readGrid()!.cursor.blinking, true)
         // The honor-user-setting state is the initial one (before any program sets a shape).
         XCTAssertEqual(HarnessGridTerminal(cols: 4, rows: 1)!.readGrid()!.cursor.shape, .default)
+    }
+
+    /// The TUI exit-reset path: a program sets an explicit shape, then resets with `CSI 0 SP q`
+    /// (or the parameter-less `CSI SP q`, which parses as 0). Both must return `.default` so the
+    /// renderer resolves the user's configured style — a leaked hard block here was permanent,
+    /// because attach replays the raw scrollback tail (reset sequence included) at every launch.
+    func testDECSCUSRResetReturnsToDefault() {
+        let term = HarnessGridTerminal(cols: 10, rows: 2)!
+        term.feed("\u{1b}[2 q") // steady block (vim normal mode, etc.)
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .block)
+        term.feed("\u{1b}[0 q")
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .default)
+        XCTAssertNil(term.readGrid()!.cursor.blinking)
+        term.feed("\u{1b}[5 q") // blinking bar
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .bar)
+        term.feed("\u{1b}[ q") // bare reset: missing Ps defaults to 0
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .default)
+        XCTAssertNil(term.readGrid()!.cursor.blinking)
+    }
+
+    /// Replay shape: attach does RIS then re-feeds the persisted byte tail. A tail that ends in
+    /// the standard exit-reset must leave the cursor on the user default, not a stale program shape.
+    func testDECSCUSRReplayedTailEndsOnDefault() {
+        let tail = "\u{1b}[2 q" + "some output" + "\u{1b}[0 q"
+        let term = HarnessGridTerminal(cols: 20, rows: 2)!
+        term.feed(tail)
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .default)
+        term.feed("\u{1b}c") // RIS (what attach sends before the replay)
+        term.feed(tail)      // replayed scrollback bytes
+        XCTAssertEqual(term.readGrid()!.cursor.shape, .default)
+        XCTAssertNil(term.readGrid()!.cursor.blinking)
     }
 
     func testOSC8HyperlinkStampsCellsAndSurvivesSGRReset() {

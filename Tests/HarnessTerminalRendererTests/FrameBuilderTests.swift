@@ -136,6 +136,16 @@ final class FrameBuilderTests: XCTestCase {
         XCTAssertEqual(f.cursor.style, .bar)
     }
 
+    func testCursorResetAfterProgramShapeReturnsToUserStyle() {
+        // The TUI exit path: program shape (steady block) then `CSI 0 SP q` reset — the build
+        // must resolve back to the user's configured style, not keep the program's block.
+        let term = HarnessGridTerminal(cols: 4, rows: 1)!
+        term.feed("\u{1b}[2 q")
+        XCTAssertEqual(FrameBuilder(theme: theme, cursorStyle: .bar).build(term.readGrid()!).cursor.style, .block)
+        term.feed("\u{1b}[0 q")
+        XCTAssertEqual(FrameBuilder(theme: theme, cursorStyle: .bar).build(term.readGrid()!).cursor.style, .bar)
+    }
+
     func testRenderColorNormalizesChannels() {
         XCTAssertEqual(RenderColor(RGBColor(red: 255, green: 0, blue: 0)),
                        RenderColor(red: 1, green: 0, blue: 0, alpha: 1))
