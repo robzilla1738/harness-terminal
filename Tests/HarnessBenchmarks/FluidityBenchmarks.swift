@@ -113,6 +113,97 @@ final class FluidityBenchmarks: XCTestCase {
         print("{\"benchmark\":\"fluidity_resize_upload\",\"meanBytes\":\(meanUpload)}")
     }
 
+    /// Boundary-crossing drag pacing: every tick steps a FULL cell column, so each one carries a
+    /// real re-wrap (the 1px loop above crosses a boundary only every ~cellWidth ticks). Measures
+    /// the two halves the async preview splits a boundary into: the layout tick's main-thread
+    /// wall (must look like a sub-cell tick — the cached frame re-presented, zero rows), and the
+    /// preview present that lands after the queue drains (the one cache-populating rebuild, with
+    /// its `buildInstancesNanos`/`uploadNanos` split attributing the cost per value boundary).
+    func testLiveResizeBoundaryCrossingPacing() throws {
+        try skipUnlessEnabled()
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        var lastStats: TerminalRenderStats?
+        var lastPresentTick: UInt64 = 0 // captured IN the sink — the polling loop below has ~2ms
+        view.onRenderStats = {          // granularity, which would otherwise swamp the land figure
+            lastStats = $0
+            lastPresentTick = DispatchTime.now().uptimeNanoseconds
+        }
+
+        for i in 0 ..< 300 { view.receive("boundary line \(i) abcdefghijklmnopqrstuvwxyz\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard lastStats != nil else { throw XCTSkip("no present happened (drawable unavailable)") }
+        let cellPx = view.testingCellPixelSize.width
+        guard cellPx > 0 else { throw XCTSkip("no cell metrics") }
+        let scale = window.backingScaleFactor
+        let stepPoints = ceil(CGFloat(cellPx) / max(1, scale)) // one full cell column per tick
+
+        view.viewWillStartLiveResize()
+        defer { view.viewDidEndLiveResize() }
+
+        var layoutNanos: [UInt64] = []          // main wall of the boundary tick itself
+        var layoutEncodedRows: [Int] = []       // 0 = cached re-present (the async-preview win)
+        var previewBuildNanos: [UInt64] = []    // FrameBuilder full build (boundary 2)
+        var previewInstanceNanos: [UInt64] = [] // CPU instance build (boundary 3)
+        var previewUploadNanos: [UInt64] = []   // GPU upload (boundary 4)
+        var previewUploadBytes: [Int] = []
+        var previewLandNanos: [UInt64] = []     // tick start → re-wrapped frame on glass
+        var commitFramesExcluded = 0
+        for _ in 0 ..< 16 {
+            var frame = window.frame
+            frame.size.width += stepPoints
+            window.setFrame(frame, display: false)
+            view.needsLayout = true
+            let cellsBefore = lastStats?.cells ?? 0
+            let generationBefore = view.testingRenderGeneration
+            lastStats = nil
+            let start = DispatchTime.now().uptimeNanoseconds
+            view.layoutSubtreeIfNeeded()
+            layoutNanos.append(DispatchTime.now().uptimeNanoseconds &- start)
+            if let s = lastStats { layoutEncodedRows.append(s.encodedRows) }
+            // Drain the async preview: emulator-queue build, then the main hop that presents it.
+            view.testingWaitForEmulatorIdle()
+            let deadline = Date().addingTimeInterval(1)
+            while (lastStats?.cells ?? cellsBefore) == cellsBefore, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.002))
+            }
+            guard let s = lastStats, s.cells != cellsBefore else { continue } // dropped (no drawable)
+            // Exclude commit frames: if the drain outlived the 60ms debounce, the landed frame is
+            // the AUTHORITATIVE reflow (generation bumped), not the preview — its O(history) cost
+            // must not pollute the preview percentiles.
+            let target = view.testingPreviewTarget
+            guard view.testingRenderGeneration == generationBefore,
+                  s.cells == target.cols * target.rows else {
+                commitFramesExcluded += 1
+                continue
+            }
+            previewLandNanos.append(lastPresentTick &- start)
+            previewBuildNanos.append(s.frameBuildNanos)
+            previewInstanceNanos.append(s.buildInstancesNanos)
+            previewUploadNanos.append(s.uploadNanos)
+            previewUploadBytes.append(s.instanceUploadBytes)
+        }
+
+        let encodedSummary = layoutEncodedRows.isEmpty
+            ? "[]" : "[\(layoutEncodedRows.map(String.init).joined(separator: ","))]"
+        percentileLine("fluidity_resize_boundary_main", samples: layoutNanos,
+                       fields: [("encodedRowsPerTick", encodedSummary)])
+        percentileLine("fluidity_resize_boundary_land", samples: previewLandNanos)
+        percentileLine("fluidity_resize_boundary_framebuild", samples: previewBuildNanos)
+        percentileLine("fluidity_resize_boundary_instancebuild", samples: previewInstanceNanos)
+        percentileLine("fluidity_resize_boundary_upload", samples: previewUploadNanos)
+        let meanBytes = previewUploadBytes.isEmpty
+            ? 0 : previewUploadBytes.reduce(0, +) / previewUploadBytes.count
+        print("{\"benchmark\":\"fluidity_resize_boundary_upload_bytes\",\"meanBytes\":\(meanBytes),\"ticks\":\(previewUploadBytes.count),\"commitFramesExcluded\":\(commitFramesExcluded)}")
+    }
+
     func testScrollTickFramePacing() throws {
         try skipUnlessEnabled()
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }

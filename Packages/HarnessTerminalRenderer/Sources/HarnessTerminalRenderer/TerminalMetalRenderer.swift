@@ -18,6 +18,13 @@ public struct TerminalRenderStats: Equatable, Sendable {
     public var instanceUploadBytes: Int
     public var frameBuildNanos: UInt64
     public var encodeNanos: UInt64
+    /// CPU instance build inside `encode` (`buildFrameInstances`): row encode + flatten. Included
+    /// in `encodeNanos`; split out so a slow encode can be attributed to instance building vs the
+    /// GPU upload vs the in-flight semaphore (the remaining `encodeNanos` residue is pass setup).
+    public var buildInstancesNanos: UInt64
+    /// GPU instance upload inside `encode` (`bindableInstanceBuffers`): the ring-slot memcpy or
+    /// stable-cache bind. Included in `encodeNanos`; see `buildInstancesNanos`.
+    public var uploadNanos: UInt64
     /// Time spent blocked on the in-flight semaphore inside `encode` — the GPU back-pressure
     /// (vsync) stall on the calling thread. Included in `encodeNanos`; split out so profiling can
     /// tell "GPU behind" from "encode is slow".
@@ -46,6 +53,8 @@ public struct TerminalRenderStats: Equatable, Sendable {
         instanceUploadBytes: Int = 0,
         frameBuildNanos: UInt64 = 0,
         encodeNanos: UInt64 = 0,
+        buildInstancesNanos: UInt64 = 0,
+        uploadNanos: UInt64 = 0,
         semaphoreWaitNanos: UInt64 = 0,
         presentScheduleNanos: UInt64 = 0,
         rowCacheCoherent: Bool = false
@@ -63,6 +72,8 @@ public struct TerminalRenderStats: Equatable, Sendable {
         self.instanceUploadBytes = instanceUploadBytes
         self.frameBuildNanos = frameBuildNanos
         self.encodeNanos = encodeNanos
+        self.buildInstancesNanos = buildInstancesNanos
+        self.uploadNanos = uploadNanos
         self.semaphoreWaitNanos = semaphoreWaitNanos
         self.presentScheduleNanos = presentScheduleNanos
         self.rowCacheCoherent = rowCacheCoherent
@@ -472,6 +483,7 @@ public final class TerminalMetalRenderer {
         let strikeY = (Float(ascentPixels) * 0.65).rounded()
         let overlineY = thickness
 
+        let buildInstancesStart = DispatchTime.now().uptimeNanoseconds
         let encoded = buildFrameInstances(
             frame,
             origin: origin,
@@ -484,6 +496,7 @@ public final class TerminalMetalRenderer {
             strikeY: strikeY,
             overlineY: overlineY
         )
+        frameStats.buildInstancesNanos = DispatchTime.now().uptimeNanoseconds &- buildInstancesStart
         var backgrounds = encoded.backgrounds
         let glyphs = encoded.glyphs
         let decorations = encoded.decorations
@@ -610,6 +623,7 @@ public final class TerminalMetalRenderer {
 
         var vp = viewport
         var scrollPx = scrollFractionPx
+        let uploadStart = DispatchTime.now().uptimeNanoseconds
         let instanceBuffers = bindableInstanceBuffers(
             backgrounds: backgrounds,
             glyphs: glyphs,
@@ -624,6 +638,7 @@ public final class TerminalMetalRenderer {
             decoDirty: encoded.decoDirty,
             slot: frameSlot
         )
+        frameStats.uploadNanos = DispatchTime.now().uptimeNanoseconds &- uploadStart
         frameStats.instanceUploadBytes = instanceBuffers.uploadBytes
 
         // Background pass. Empty instance arrays bind nothing, so a directly-constructed empty

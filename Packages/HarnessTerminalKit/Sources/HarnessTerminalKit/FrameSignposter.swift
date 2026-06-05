@@ -30,7 +30,10 @@ final class FrameSignposter: @unchecked Sendable {
     #endif
     /// Recent `present` interval durations (ns) with their breakdown components, main-thread only
     /// (`recordPresent` is called from the surface's `presentFrame`). Flushed to the log as
-    /// p50/p95/max every `presentLogEvery` frames. The breakdown attributes a slow present:
+    /// p50/p95/max every `presentLogEvery` frames. NOTE: the singleton blends samples from ALL
+    /// presenting surfaces (splits/tabs) into one bucket — the percentiles are only attributable
+    /// to a specific pipeline with a single visible surface (benchmarks read per-view
+    /// `TerminalRenderStats` directly and are unaffected). The breakdown attributes a slow present:
     /// `drawableWait` = `nextDrawable()` (pool exhaustion / vsync pacing), `semaphoreWait` = the
     /// renderer's in-flight gate (GPU behind), `schedule` = `waitUntilScheduled()` (the bounded
     /// transaction-synchronized wait of the glitchless-resize path; 0 for async presents).
@@ -38,6 +41,11 @@ final class FrameSignposter: @unchecked Sendable {
     private var drawableWaitSamples: [UInt64] = []
     private var semaphoreWaitSamples: [UInt64] = []
     private var scheduleSamples: [UInt64] = []
+    /// Per-boundary encode split (from `TerminalRenderStats`): `instanceBuild` = CPU row encode +
+    /// flatten (`buildFrameInstances`), `upload` = the GPU ring-slot memcpy / stable bind
+    /// (`bindableInstanceBuffers`). Attributes a slow encode to the value boundary that paid it.
+    private var instanceBuildSamples: [UInt64] = []
+    private var uploadSamples: [UInt64] = []
     /// Presents skipped since the last flush (nil drawable / encode failure) — work was pending
     /// but nothing reached the glass that turn; the scheduler retried on a later tick.
     private var droppedFrames = 0
@@ -61,23 +69,32 @@ final class FrameSignposter: @unchecked Sendable {
     /// log p50/p95/max per component to the unified log — so the drawable/vsync stall is readable
     /// with `log stream --predicate 'subsystem == "com.robert.harness"'` (no Instruments needed).
     /// Main-thread only; a no-op when disabled (so the hot path stays a single branch).
-    func recordPresent(nanos: UInt64, drawableWait: UInt64 = 0, semaphoreWait: UInt64 = 0, schedule: UInt64 = 0) {
+    func recordPresent(
+        nanos: UInt64, drawableWait: UInt64 = 0, semaphoreWait: UInt64 = 0, schedule: UInt64 = 0,
+        instanceBuild: UInt64 = 0, upload: UInt64 = 0
+    ) {
         guard enabled else { return }
         presentSamples.append(nanos)
         drawableWaitSamples.append(drawableWait)
         semaphoreWaitSamples.append(semaphoreWait)
         scheduleSamples.append(schedule)
+        instanceBuildSamples.append(instanceBuild)
+        uploadSamples.append(upload)
         guard presentSamples.count >= presentLogEvery else { return }
         let frames = presentSamples.count
         let total = Self.percentilesMicros(presentSamples)
         let drawable = Self.percentilesMicros(drawableWaitSamples)
         let semaphore = Self.percentilesMicros(semaphoreWaitSamples)
         let sched = Self.percentilesMicros(scheduleSamples)
+        let build = Self.percentilesMicros(instanceBuildSamples)
+        let up = Self.percentilesMicros(uploadSamples)
         let dropped = droppedFrames
         presentSamples.removeAll(keepingCapacity: true)
         drawableWaitSamples.removeAll(keepingCapacity: true)
         semaphoreWaitSamples.removeAll(keepingCapacity: true)
         scheduleSamples.removeAll(keepingCapacity: true)
+        instanceBuildSamples.removeAll(keepingCapacity: true)
+        uploadSamples.removeAll(keepingCapacity: true)
         droppedFrames = 0
         #if canImport(os)
         logger.log("""
@@ -85,6 +102,8 @@ final class FrameSignposter: @unchecked Sendable {
         drawableWait p50=\(drawable.p50) p95=\(drawable.p95) | \
         semaphoreWait p50=\(semaphore.p50) p95=\(semaphore.p95) | \
         schedule p50=\(sched.p50) p95=\(sched.p95) | \
+        instanceBuild p50=\(build.p50) p95=\(build.p95) | \
+        upload p50=\(up.p50) p95=\(up.p95) | \
         dropped=\(dropped) over \(frames) frames
         """)
         #endif

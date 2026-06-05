@@ -55,6 +55,73 @@ final class LiveResizeTests: XCTestCase {
         XCTAssertEqual(resizes.count, 1)
     }
 
+    func testDebouncedCommitDefersWhileDragHolds() {
+        // A stationary >60ms hold mid-drag lets the debounce elapse. The commit must re-arm, not
+        // fire: a mid-drag commit bumps the generation (dropping the in-flight preview) but its
+        // authoritative re-present defers while the layer is in transaction mode — with the mouse
+        // still, the screen would freeze on a stale-generation frame until the next pointer move.
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        var resizes = 0
+        view.onResize = { _, _ in resizes += 1 }
+        view.testingMarkGridSized()
+        view.viewWillStartLiveResize()
+        view.testingScheduleResizeCommit(cols: 100, rows: 30)
+
+        let held = expectation(description: "debounce elapsed mid-hold")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { held.fulfill() }
+        wait(for: [held], timeout: 2)
+        XCTAssertEqual(view.testingGridSize.cols, 80, "no commit may land mid-drag")
+        XCTAssertEqual(resizes, 0, "no mid-drag SIGWINCH")
+        XCTAssertTrue(view.testingHasPendingResizeCommit, "the commit re-armed for the next window")
+
+        view.viewDidEndLiveResize() // flush: transaction mode is off, the commit lands once
+        XCTAssertEqual(view.testingGridSize.cols, 100)
+        XCTAssertEqual(resizes, 1, "exactly one SIGWINCH, at release")
+    }
+
+    func testDragEndInvalidatesInFlightPreview() throws {
+        // A drag that returns to its ORIGINAL size commits nothing (no generation bump, and the
+        // back-to-original tick never updates previewCols), so drag-end must invalidate the
+        // in-flight preview explicitly: token advanced + target cleared, making a late landing
+        // for the intermediate width drop instead of stashing a wrong-width frame.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        for i in 0 ..< 40 { view.receive("end test line \(i) abcdefghij\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard view.testingRepaintCacheCoherent else { throw XCTSkip("no present happened (drawable unavailable)") }
+
+        view.viewWillStartLiveResize()
+        var frame = window.frame
+        frame.size.width += 40 // boundary crossing: claims a preview token, sets the target
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        let midDragTarget = view.testingPreviewTarget
+        guard midDragTarget.cols > 0 else { throw XCTSkip("no boundary crossing at this cell size") }
+        frame.size.width -= 40 // back to EXACTLY the original size before release
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        view.viewDidEndLiveResize()
+        // (The drag-end flush may commit the stale armed size and immediately start a NEW preview
+        // toward the settled size — that successor is legitimate; only the MID-DRAG build must die.)
+
+        // A landing carrying the mid-drag target must now be dropped: the end-of-drag token claim
+        // made every token from during the drag stale, independent of whether the flush bumped the
+        // generation (a drag ending at its original size commits nothing).
+        XCTAssertFalse(
+            view.testingPresentResizePreview(cols: midDragTarget.cols, rows: midDragTarget.rows, token: 1),
+            "a stale mid-drag preview landing after release must be dropped"
+        )
+    }
+
     func testDebouncedCommitStillFiresWithoutLiveResize() {
         // Animated (non-drag) resizes — sidebar slides, tiling — never enter live resize and
         // must keep coalescing to a single commit after the delay.
@@ -337,10 +404,21 @@ final class LiveResizeTests: XCTestCase {
         XCTAssertEqual(second.instanceUploadBytes, 0, "steady-state drag ticks bind the uploaded cache zero-copy")
     }
 
-    func testRepaintAfterPreviewPaysExactlyOneCachePopulatingRebuild() throws {
-        // The coherence gate: a preview reflow replaces `lastPresentedResult` WITHOUT presenting,
-        // so the next repaint must rebuild through the cache-populating path (all rows encoded) —
-        // and the tick after that must be free again. Asserted via the coherence seam + stats.
+    /// Drain one async resize-preview round: the build on the emulator queue (queue order — the
+    /// preview was dispatched before this sync), then the main hop that lands it
+    /// (`presentResizePreview` → stash + repaint).
+    private func drainPreviewHop(_ view: HarnessTerminalSurfaceView) {
+        view.testingWaitForEmulatorIdle()
+        let hop = expectation(description: "preview main hop drained")
+        DispatchQueue.main.async { hop.fulfill() }
+        wait(for: [hop], timeout: 2)
+    }
+
+    func testBoundaryTickPaysExactlyOneCachePopulatingRebuildThenFree() throws {
+        // The boundary-crossing contract: the layout tick that crosses a cell boundary re-presents
+        // the cached frame for free (the re-wrap builds async on the emulator queue — main never
+        // blocks); the preview then lands on the next hop and pays the ONE cache-populating full
+        // rebuild per geometry change; the tick after that is free again.
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
@@ -354,30 +432,228 @@ final class LiveResizeTests: XCTestCase {
         view.testingWaitForEmulatorIdle()
         view.testingForceRender()
         guard view.testingRepaintCacheCoherent else { throw XCTSkip("no present happened (drawable unavailable)") }
+        guard let before = view.testingLastRenderStats else { throw XCTSkip("no stats") }
 
         view.viewWillStartLiveResize()
         defer { view.viewDidEndLiveResize() }
-        // Grow far enough to cross a cell-column boundary → updateGridSize runs the re-wrap
-        // preview, which replaces the cached frame without presenting it.
-        guard let renderer = view.testingLastRenderStats else { throw XCTSkip("no stats") }
-        _ = renderer
+        // Grow far enough to cross a cell-column boundary → updateGridSize schedules the async
+        // re-wrap preview; the SAME layout pass re-presents the cached (old-wrap) frame for free.
         var frame = window.frame
         frame.size.width += 40 // ≥ one cell column at any reasonable font size
         window.setFrame(frame, display: false)
         view.needsLayout = true
         view.layoutSubtreeIfNeeded()
-        guard let rebuild = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
-        let rows = view.testingGridSize.rows
-        XCTAssertEqual(rebuild.encodedRows, rows, "first repaint after a preview rebuilds every row")
+        guard let boundaryTick = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        XCTAssertEqual(boundaryTick.encodedRows, 0,
+                       "the boundary tick itself re-presents the cached frame — main pays no rebuild")
+        XCTAssertEqual(boundaryTick.cells, before.cells, "still the old-wrap frame on this tick")
+
+        // The async preview lands: stash (coherence break) + immediate repaint through the
+        // cache-populating full path — the one rebuild this geometry change pays. Setup proved
+        // presents work in this environment, so a missing land is a FAILURE, not a skip — a
+        // presentResizePreview that never runs must turn this test red.
+        drainPreviewHop(view)
+        guard let rebuild = view.testingLastRenderStats else { return XCTFail("no stats after drain") }
+        XCTAssertNotEqual(rebuild.cells, before.cells,
+                          "the async preview must land after the drain (re-wrapped cell count)")
+        XCTAssertEqual(rebuild.cells, view.testingPreviewTarget.cols * view.testingPreviewTarget.rows,
+                       "the landed frame is the drag target's re-wrap")
+        XCTAssertEqual(rebuild.encodedRows, view.testingPreviewTarget.rows,
+                       "the preview present rebuilds every row of the re-wrapped grid")
         XCTAssertTrue(view.testingRepaintCacheCoherent, "the rebuild repopulated the cache")
 
-        // Next sub-cell tick: free again.
+        // Next sub-cell tick: free again. Neutralize the armed 60ms commit first — under CI load
+        // the drain can outlast the debounce, and a fired commit bumps the generation and forces
+        // a full rebuild, which would fail this assertion for timing reasons, not correctness.
+        view.testingCancelPendingResizeCommit()
         frame.size.width += 1
         window.setFrame(frame, display: false)
         view.needsLayout = true
         view.layoutSubtreeIfNeeded()
-        guard let reuse = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        guard let reuse = view.testingLastRenderStats else { return XCTFail("present dropped") }
         XCTAssertEqual(reuse.encodedRows, 0, "the tick after the rebuild reuses every row")
+    }
+
+    func testPresentResizePreviewGuardsDropStaleLandings() throws {
+        // The main-hop guards (stale token / stale drag target) only fire under racy production
+        // interleavings (a hop queued before a newer boundary tick claims the token), so drive
+        // them directly: each guard must independently drop the landing.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        for i in 0 ..< 40 { view.receive("guard test line \(i) abcdefghij\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard view.testingRepaintCacheCoherent else { throw XCTSkip("no present happened (drawable unavailable)") }
+
+        view.viewWillStartLiveResize()
+        defer { view.viewDidEndLiveResize() }
+        var frame = window.frame
+        frame.size.width += 40 // one boundary crossing establishes a current target + token
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        drainPreviewHop(view)
+        let target = view.testingPreviewTarget
+        guard target.cols > 0 else { throw XCTSkip("no boundary crossing at this cell size") }
+        guard let landed = view.testingLastRenderStats,
+              landed.cells == target.cols * target.rows else {
+            throw XCTSkip("preview present dropped (drawable unavailable)")
+        }
+
+        // Stale TOKEN: a hop carrying an old token (a newer claim superseded it) must drop, even
+        // though the target still matches.
+        XCTAssertFalse(view.testingPresentResizePreview(cols: target.cols, rows: target.rows, token: 0),
+                       "a superseded token must be dropped")
+
+        // Stale TARGET: a hop whose (cols, rows) no longer match the current drag target must
+        // drop, even with the freshest token.
+        let freshToken = view.testingClaimPreviewToken()
+        XCTAssertFalse(view.testingPresentResizePreview(cols: target.cols + 5, rows: target.rows, token: freshToken),
+                       "a superseded drag target must be dropped")
+
+        // Happy path: the current target with the latest token lands.
+        let currentToken = view.testingClaimPreviewToken()
+        XCTAssertTrue(view.testingPresentResizePreview(cols: target.cols, rows: target.rows, token: currentToken),
+                      "the current target with the latest token must land")
+    }
+
+    func testBoundaryTickDoesNotBlockMainOnBusyParser() throws {
+        // The async-preview point: with a parse in flight on the emulator queue, the boundary
+        // tick's layout must not park main behind it (the old synchronous preview either blocked
+        // or skipped). The layout re-presents the cached frame immediately; the re-wrap lands
+        // once the queue drains.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        for i in 0 ..< 50 { view.receive("busy parser line \(i) abcdefghij\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard view.testingRepaintCacheCoherent else { throw XCTSkip("no present happened (drawable unavailable)") }
+        guard let before = view.testingLastRenderStats else { throw XCTSkip("no stats") }
+
+        view.viewWillStartLiveResize()
+        defer { view.viewDidEndLiveResize() }
+        // Queue a big parse, then cross a boundary while it's in flight. The preview build queues
+        // BEHIND the parse on the serial queue; layout itself must not wait for either.
+        let bulk = (0 ..< 2000).map { "flood \($0) abcdefghijklmnopqrstuvwxyz\r\n" }.joined()
+        view.receive(bulk)
+        var frame = window.frame
+        frame.size.width += 40
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        guard let boundaryTick = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        XCTAssertEqual(boundaryTick.encodedRows, 0,
+                       "boundary tick under load re-presents the cached frame without touching the queue")
+        XCTAssertEqual(boundaryTick.cells, before.cells)
+
+        // Once the parse + preview drain, the re-wrapped preview presents (the old code SKIPPED
+        // the preview entirely when the parser was busy — re-wrap under load is the upgrade).
+        // Setup proved presents work here, so a missing land is a failure, not a skip.
+        drainPreviewHop(view)
+        guard let rebuild = view.testingLastRenderStats else { return XCTFail("no stats after drain") }
+        XCTAssertNotEqual(rebuild.cells, before.cells, "the preview must land once the queue drains")
+        XCTAssertTrue(view.testingRepaintCacheCoherent, "preview landed and repopulated the cache")
+    }
+
+    func testStalePreviewBuildIsDroppedNotStashed() throws {
+        // A slow preview landing after the drag moved to a DIFFERENT cell target must be dropped
+        // outright (stashing it would re-present mis-wrapped content at the wrong grid size on
+        // every later sub-cell repaint). Superseded here by a second boundary crossing whose
+        // newer token + previewCols invalidate the first build.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        for i in 0 ..< 50 { view.receive("stale test line \(i) abcdefghij\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard view.testingRepaintCacheCoherent else { throw XCTSkip("no present happened (drawable unavailable)") }
+
+        view.viewWillStartLiveResize()
+        defer { view.viewDidEndLiveResize() }
+        // Two boundary crossings back-to-back WITHOUT draining between them: build #1 (intermediate
+        // width) and build #2 (final width) both queue; #1 is dropped by the ON-QUEUE token skip
+        // (it never reaches a main hop in this construction — the hop-side guards are pinned
+        // separately by testPresentResizePreviewGuardsDropStaleLandings), leaving exactly the
+        // final width's wrap on screen.
+        var frame = window.frame
+        frame.size.width += 40
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        frame.size.width += 40
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+
+        drainPreviewHop(view)
+        drainPreviewHop(view) // second round for the second build's hop
+        guard let landed = view.testingLastRenderStats else { throw XCTSkip("present dropped") }
+        let cols = view.testingGridSize.cols // commit is debounced — grid cols are pre-drag
+        _ = cols
+        // The presented frame must be the FINAL target's re-wrap: cells = previewCols × previewRows
+        // of the last crossing, never the intermediate width's.
+        XCTAssertEqual(landed.cells, view.testingPreviewTarget.cols * view.testingPreviewTarget.rows,
+                       "only the latest boundary target's preview may land")
+    }
+
+    func testEncodeStatsSplitIsPopulatedAndBounded() throws {
+        // The per-boundary instrumentation pin: buildInstancesNanos (CPU instance build) and
+        // uploadNanos (GPU buffer upload) must be populated by a real encode and sum to no more
+        // than encodeNanos (they are disjoint sub-spans of it) — so the split can never silently
+        // regress to zero or double-count.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        for i in 0 ..< 30 { view.receive("stats split line \(i)\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard let stats = view.testingLastRenderStats, stats.encodeNanos > 0 else {
+            throw XCTSkip("no present happened (drawable unavailable)")
+        }
+        XCTAssertGreaterThan(stats.buildInstancesNanos, 0, "a real encode times the instance build")
+        // Include the semaphore wait in the bound: the three sub-spans are DISJOINT intervals of
+        // encodeNanos (build < semWait < upload in encode), so a future edit that lets the build
+        // timer swallow the semaphore-wait region breaks this sum instead of passing silently.
+        XCTAssertLessThanOrEqual(
+            stats.buildInstancesNanos + stats.uploadNanos + stats.semaphoreWaitNanos,
+            stats.encodeNanos,
+            "build, upload, and semaphore-wait are disjoint sub-intervals of encodeNanos"
+        )
+
+        // The reuse path (the dominant drag tick: coherent empty-damage repaint) must keep the
+        // split populated too — a regression zeroing the timers only on reuse would otherwise hide.
+        guard view.testingRepaintCacheCoherent, view.testingRepaintLastFrame(),
+              let reuse = view.testingLastRenderStats else {
+            throw XCTSkip("no coherent repaint available")
+        }
+        XCTAssertEqual(reuse.encodedRows, 0, "precondition: this is the reuse path")
+        XCTAssertGreaterThan(reuse.buildInstancesNanos, 0, "the reuse path still times the instance walk")
+        XCTAssertLessThanOrEqual(
+            reuse.buildInstancesNanos + reuse.uploadNanos + reuse.semaphoreWaitNanos,
+            reuse.encodeNanos
+        )
     }
 
     func testOutputPresentsDeferDuringDragAndFlushAfter() throws {
