@@ -458,8 +458,13 @@ final class LiveResizeTests: XCTestCase {
                           "the async preview must land after the drain (re-wrapped cell count)")
         XCTAssertEqual(rebuild.cells, view.testingPreviewTarget.cols * view.testingPreviewTarget.rows,
                        "the landed frame is the drag target's re-wrap")
-        XCTAssertEqual(rebuild.encodedRows, view.testingPreviewTarget.rows,
-                       "the preview present rebuilds every row of the re-wrapped grid")
+        // Content-keyed salvage: these short lines don't re-wrap at the wider grid, so every
+        // row's rendered content is unchanged and the cache survives the column change — the
+        // "rebuild" encodes ZERO rows (the Stage-3 win; a real re-wrap encodes its changed
+        // suffix, pinned by MetalRendererTests.testColumnChangeReencodesOnlyChangedRows).
+        XCTAssertEqual(rebuild.encodedRows, 0,
+                       "unchanged content salvages every row across the column change")
+        XCTAssertEqual(rebuild.reusedRows, view.testingPreviewTarget.rows)
         XCTAssertTrue(view.testingRepaintCacheCoherent, "the rebuild repopulated the cache")
 
         // Next sub-cell tick: free again. Neutralize the armed 60ms commit first — under CI load

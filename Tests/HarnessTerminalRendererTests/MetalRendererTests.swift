@@ -557,6 +557,199 @@ final class MetalRendererTests: XCTestCase {
         )
     }
 
+    // MARK: - Content-keyed row salvage across a column-count change
+
+    /// Render `first` (priming the row cache), then `second` with full damage — the boundary-tick
+    /// shape — and assert the salvage outcome plus pixel-identity against a from-scratch render.
+    private func assertSalvage(
+        first: TerminalFrame, second: TerminalFrame,
+        expectedEncodedRows: Int, _ message: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let (device, renderer) = try makeRenderer()
+        let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let size1 = renderer.surfacePixelSize(columns: first.columns, rows: first.rows)
+        let size2 = renderer.surfacePixelSize(columns: second.columns, rows: second.rows)
+        guard let target1 = makeTarget(device, width: size1.width, height: size1.height),
+              let target2 = makeTarget(device, width: size2.width, height: size2.height),
+              let refTarget = makeTarget(device, width: size2.width, height: size2.height)
+        else { throw XCTSkip("no texture") }
+
+        renderer.render(first, to: target1, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< first.rows), full: true))
+        XCTAssertEqual(renderer.stats.encodedRows, first.rows, "prime encodes everything", file: file, line: line)
+
+        renderer.render(second, to: target2, clearColor: clear, damage: TerminalDamage(full: true))
+        XCTAssertEqual(renderer.stats.encodedRows, expectedEncodedRows, message, file: file, line: line)
+        XCTAssertEqual(renderer.stats.reusedRows, second.rows - expectedEncodedRows, file: file, line: line)
+        XCTAssertTrue(renderer.stats.rowCacheCoherent, "salvage must leave the cache coherent", file: file, line: line)
+
+        // The hard line: a salvaged render must be byte-identical to a from-scratch render.
+        let reference = try makeRenderer(device: device)
+        reference.render(second, to: refTarget, clearColor: clear)
+        XCTAssertEqual(
+            readPixelBytes(target2, width: size2.width, height: size2.height),
+            readPixelBytes(refTarget, width: size2.width, height: size2.height),
+            "salvaged readback must equal a from-scratch render",
+            file: file, line: line
+        )
+    }
+
+    func testColumnChangeSalvagesUnchangedRows() throws {
+        // The width-drag boundary tick: same content re-wrapped to more columns (here: no actual
+        // re-wrap, just trailing blank canvas — the dominant case for short lines). Every row's
+        // significant content is unchanged, so NO row re-encodes despite full damage + new cols.
+        let text = "\u{1b}[?25lAAAA\r\nBBBB\r\nCCCC\r\nDDDD"
+        try assertSalvage(
+            first: frame(text, cols: 8, rows: 4),
+            second: frame(text, cols: 10, rows: 4),
+            expectedEncodedRows: 0,
+            "a column-count change with unchanged content re-binds every cached row"
+        )
+    }
+
+    func testColumnChangeReencodesOnlyChangedRows() throws {
+        // A real re-wrap changes a suffix; the unchanged top band salvages, the changed row
+        // re-encodes. (Content differs only on row 2.)
+        try assertSalvage(
+            first: frame("\u{1b}[?25lAAAA\r\nBBBB\r\nCCCC\r\nDDDD", cols: 8, rows: 4),
+            second: frame("\u{1b}[?25lAAAA\r\nBBBB\r\nCXCC\r\nDDDD", cols: 10, rows: 4),
+            expectedEncodedRows: 1,
+            "only the changed row re-encodes across the column change"
+        )
+    }
+
+    func testSalvageFallsBackBelowHitRateFloor() throws {
+        // A near-total change (every row differs) must take the plain full-reset path — the
+        // salvage bookkeeping isn't worth it below a 50% hit rate.
+        try assertSalvage(
+            first: frame("\u{1b}[?25lAAAA\r\nBBBB\r\nCCCC\r\nDDDD", cols: 8, rows: 4),
+            second: frame("\u{1b}[?25lEEEE\r\nFFFF\r\nGGGG\r\nHHHH", cols: 10, rows: 4),
+            expectedEncodedRows: 4,
+            "a near-total change re-encodes everything (hit-rate floor)"
+        )
+    }
+
+    func testSalvageExcludesGlyphInvertingCursorRow() throws {
+        // A visible block cursor bakes the cursor-text color into its row's glyph instances, so
+        // that row is never salvaged — it re-encodes under the new cursor key.
+        var first = frame("AAAA\r\nBBBB\r\nCCCC\r\nDDDD", cols: 8, rows: 4)
+        first.cursor.visible = true
+        first.cursor.style = .block
+        var second = frame("AAAA\r\nBBBB\r\nCCCC\r\nDDDD", cols: 10, rows: 4)
+        second.cursor.visible = true
+        second.cursor.style = .block
+        try assertSalvage(
+            first: first, second: second,
+            expectedEncodedRows: 1,
+            "the glyph-inverting cursor row re-encodes; the rest salvage"
+        )
+    }
+
+    func testSalvageRequiresStableOrigin() throws {
+        // The frozen-origin clamp can slide the origin on a boundary crossing — instances bake
+        // absolute X/Y, so an origin change must fail the geometry gate (full re-encode,
+        // degraded-but-correct).
+        let (device, renderer) = try makeRenderer()
+        let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let text = "\u{1b}[?25lAAAA\r\nBBBB\r\nCCCC\r\nDDDD"
+        let first = frame(text, cols: 8, rows: 4)
+        let second = frame(text, cols: 10, rows: 4)
+        let size1 = renderer.surfacePixelSize(columns: 8, rows: 4)
+        let size2 = renderer.surfacePixelSize(columns: 10, rows: 4)
+        guard let target1 = makeTarget(device, width: size1.width, height: size1.height),
+              let target2 = makeTarget(device, width: size2.width + 8, height: size2.height)
+        else { throw XCTSkip("no texture") }
+        renderer.render(first, to: target1, clearColor: clear, origin: (0, 0),
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< 4), full: true))
+        renderer.render(second, to: target2, clearColor: clear, origin: (4, 0),
+                        damage: TerminalDamage(full: true))
+        XCTAssertEqual(renderer.stats.encodedRows, 4, "an origin slide forfeits salvage entirely")
+    }
+
+    func testContentKeyCoversEveryRenderedField() {
+        // Pin the hash's field coverage: a missed field is a SILENT wrong-pixel cache. For each
+        // rendered field, toggling it on one cell must change the row's content key.
+        let fg = RenderColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let bg = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let other = RenderColor(red: 0.5, green: 0.25, blue: 0.75, alpha: 1)
+        func makeCell() -> RenderCell {
+            RenderCell(row: 0, column: 0, codepoint: 0x41, foreground: fg, background: bg,
+                       underlineColor: fg, bold: false, italic: false, underline: .none,
+                       strikethrough: false, overline: false, width: .normal, drawBackground: true)
+        }
+        func key(_ mutate: (inout RenderCell) -> Void) -> UInt64 {
+            var cell = makeCell()
+            mutate(&cell)
+            let f = TerminalFrame(columns: 1, rows: 1, cells: [cell],
+                                  cursor: CursorRender(row: 0, column: 0, visible: false,
+                                                       color: fg, textColor: bg))
+            return TerminalMetalRenderer.rowContentKey(f, row: 0)
+        }
+        let base = key { _ in }
+        let mutations: [(String, (inout RenderCell) -> Void)] = [
+            ("codepoint", { $0.codepoint = 0x42 }),
+            ("combining0", { $0.combining0 = 0x0301 }),
+            ("combining1", { $0.combining0 = 0x0301; $0.combining1 = 0x0302 }),
+            ("foreground", { $0.foreground = other }),
+            ("background", { $0.background = other }),
+            ("underlineColor", { $0.underlineColor = other }),
+            ("bold", { $0.bold = true }),
+            ("italic", { $0.italic = true }),
+            ("underline:single", { $0.underline = .single }),
+            ("underline:curly", { $0.underline = .curly }),
+            ("strikethrough", { $0.strikethrough = true }),
+            ("overline", { $0.overline = true }),
+            ("width", { $0.width = .wide }),
+            ("drawBackground", { $0.drawBackground = false }),
+        ]
+        var seen: [UInt64: String] = [base: "base"]
+        for (name, mutate) in mutations {
+            let k = key(mutate)
+            XCTAssertNotEqual(k, base, "mutating \(name) must change the content key")
+            if let collision = seen[k] {
+                XCTFail("content key collision between \(name) and \(collision)")
+            }
+            seen[k] = name
+        }
+    }
+
+    func testContentKeyIgnoresTrailingInsignificantCells() {
+        // The significant-prefix trim: trailing cells that emit nothing (blank canvas) hash
+        // identically regardless of count, so widening into blank space salvages. Safe under
+        // ligatures too — `emitLigatedGlyphs`' run scan breaks on any non-glyph cell, so
+        // trailing blanks can never start, extend, or restyle a run (the cache's `ligatures`
+        // geometry gate still separates the two shaping modes' cached instances).
+        let fg = RenderColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let bg = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        func cells(_ columns: Int, glyphs: Int) -> [RenderCell] {
+            (0 ..< columns).map { col in
+                RenderCell(row: 0, column: col, codepoint: col < glyphs ? 0x41 : 0x20,
+                           foreground: fg, background: bg, underlineColor: fg,
+                           bold: false, italic: false, underline: .none,
+                           strikethrough: false, overline: false, width: .normal,
+                           drawBackground: false)
+            }
+        }
+        let cursor = CursorRender(row: 0, column: 0, visible: false, color: fg, textColor: bg)
+        let narrow = TerminalFrame(columns: 6, rows: 1, cells: cells(6, glyphs: 4), cursor: cursor)
+        let wide = TerminalFrame(columns: 9, rows: 1, cells: cells(9, glyphs: 4), cursor: cursor)
+        XCTAssertEqual(
+            TerminalMetalRenderer.rowContentKey(narrow, row: 0),
+            TerminalMetalRenderer.rowContentKey(wide, row: 0),
+            "trailing blank canvas must not affect the key"
+        )
+        // A trailing cell that DOES emit (explicit background) must defeat the trim.
+        var emitting = cells(9, glyphs: 4)
+        emitting[8].drawBackground = true
+        let wideEmitting = TerminalFrame(columns: 9, rows: 1, cells: emitting, cursor: cursor)
+        XCTAssertNotEqual(
+            TerminalMetalRenderer.rowContentKey(narrow, row: 0),
+            TerminalMetalRenderer.rowContentKey(wideEmitting, row: 0),
+            "a significant trailing cell must change the key"
+        )
+    }
+
     func testRendererDamageRebuildsBlockCursorGlyphRowWhenBlinking() throws {
         let (device, renderer) = try makeRenderer()
         var visible = frame("A", cols: 1, rows: 1)
