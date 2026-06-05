@@ -1480,10 +1480,23 @@ extension SessionCoordinator: TerminalHostDelegate {
     }
 
     func terminalHostDidChangeFocus(_ focused: Bool, surfaceID: SurfaceID) {
-        if focused {
-            setActiveSurface(surfaceID)
-            clearNotification(for: surfaceID)
-        }
+        guard focused else { return }
+        setActiveSurface(surfaceID)
+        // Focus-in now fires on every click-into / ⌘-Tab-back (not only tab switches), so
+        // gate the clear on the local `.waiting` state: `clearNotification` does a main-thread
+        // `requestDaemon` + full `syncFromDaemon`, and there's nothing to clear on a pane with
+        // no badge. The snapshot lookup is cheap and keeps the hot path off the daemon.
+        guard tabIsWaiting(forSurface: surfaceID) else { return }
+        clearNotification(for: surfaceID)
+    }
+
+    /// Whether the tab owning `surfaceID` currently shows a `.waiting` notification, read from
+    /// the local snapshot (no daemon round-trip).
+    private func tabIsWaiting(forSurface surfaceID: SurfaceID) -> Bool {
+        snapshot.workspaces
+            .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
+            .first { $0.rootPane.allSurfaceIDs().contains(surfaceID) }?
+            .status == .waiting
     }
 
     func terminalHostDidRingBell(surfaceID: SurfaceID) {

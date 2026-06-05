@@ -627,6 +627,14 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     func testingInputModes() -> TerminalModes { inputModes() }
 
+    /// Test seam: drive the window-key half of `effectivelyFocused` (the real value comes from
+    /// `NSWindow` key-state notifications, which are awkward to trigger headlessly). Mirrors the
+    /// `didBecomeKey`/`didResignKey` observers — set the flag, then re-evaluate focus state.
+    func testingSetWindowIsKey(_ isKey: Bool) {
+        windowIsKey = isKey
+        focusStateChanged()
+    }
+
     func testingResizeGrid(cols: Int, rows: Int) {
         commitGridSize(cols: cols, rows: rows)
         emulatorState.sync { _ in } // commit now reflows off-main; flush so tests observe it synchronously
