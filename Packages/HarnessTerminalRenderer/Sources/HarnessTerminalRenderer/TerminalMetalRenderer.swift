@@ -100,6 +100,13 @@ private struct EncodedRowInstances {
     var decorations: [DecoInstance] = []
     var bgSpans = 0
     var bgCells = 0
+    /// `TerminalMetalRenderer.rowContentKey` of the row content these instances were encoded
+    /// from (0 = not computed — e.g. rows from before the field existed in a decoded cache).
+    /// Lets a geometry-compatible cache survive a column-count change: a row whose content key
+    /// matches re-binds its cached instances instead of re-encoding (the instance X/Y bake
+    /// per-cell `column`/`row` × cell pixels, NOT `frame.columns`, so a same-index row with
+    /// identical significant content is byte-identical across widths).
+    var contentKey: UInt64 = 0
 }
 
 private struct EncodedFrameInstances {
@@ -144,6 +151,11 @@ private struct RowInstanceCache {
     var originY = 0
     var ligatures = false
     var atlasResets = 0
+    /// Cell metrics the cached instances were baked with — the content-keyed salvage across a
+    /// column change must never reuse instances positioned for a different font geometry (a
+    /// font change normally rebuilds the renderer, but this gate makes salvage self-contained).
+    var cellPixelWidth = 0
+    var cellPixelHeight = 0
     var rowInstances: [EncodedRowInstances?] = []
     var previousCursor: CursorCacheKey?
 }
@@ -882,6 +894,15 @@ public final class TerminalMetalRenderer {
 
         var dirtyRows = clampedRows(damage.rows, rowCount: frame.rows)
         if damage.full || !cacheMatches {
+            // Content-keyed salvage: before discarding the cache, keep rows whose rendered
+            // content provably didn't change (geometry-compatible cache + matching row content
+            // key). The width-drag boundary tick is the payoff: a column-count change fails
+            // `cacheMatches` and arrives as full damage, but a reflow typically rewraps only a
+            // suffix — the unchanged top band re-binds instead of re-encoding. nil = not
+            // compatible or under the hit-rate floor → the plain full reset, exactly as before.
+            let salvaged = salvageRowInstances(
+                frame, origin: origin, ligatures: ligatures, cursorKey: cursorKey
+            )
             rowInstanceCache = RowInstanceCache(
                 columns: frame.columns,
                 rows: frame.rows,
@@ -889,10 +910,18 @@ public final class TerminalMetalRenderer {
                 originY: origin.y,
                 ligatures: ligatures,
                 atlasResets: atlas.stats.resets,
-                rowInstances: Array(repeating: nil, count: frame.rows),
+                cellPixelWidth: cellPixelWidth,
+                cellPixelHeight: cellPixelHeight,
+                rowInstances: salvaged ?? Array(repeating: nil, count: frame.rows),
                 previousCursor: nil
             )
-            dirtyRows = IndexSet(integersIn: 0 ..< frame.rows)
+            if let salvaged {
+                dirtyRows = IndexSet(
+                    (0 ..< frame.rows).filter { salvaged[$0] == nil }
+                )
+            } else {
+                dirtyRows = IndexSet(integersIn: 0 ..< frame.rows)
+            }
         }
 
         if rowInstanceCache.previousCursor != cursorKey {
@@ -922,7 +951,7 @@ public final class TerminalMetalRenderer {
             let previous = rowInstanceCache.rowInstances[row]
             let rowInstances: EncodedRowInstances
             if dirtyRows.contains(row) || previous == nil {
-                rowInstances = encodeRowInstances(
+                var fresh = encodeRowInstances(
                     row,
                     frame: frame,
                     origin: origin,
@@ -934,6 +963,13 @@ public final class TerminalMetalRenderer {
                     strikeY: strikeY,
                     overlineY: overlineY
                 )
+                // Stamp the content key so a later column-count change can salvage this row.
+                // Skipped for a glyph-inverting cursor row: its instances bake the cursor-text
+                // color, so they are NOT a pure function of the row content alone.
+                fresh.contentKey = (cursorKey.invertsGlyph && cursorKey.row == row)
+                    ? 0
+                    : Self.rowContentKey(frame, row: row)
+                rowInstances = fresh
                 rowInstanceCache.rowInstances[row] = rowInstances
                 encoded.encodedRows += 1
                 let bgN = rowInstances.backgrounds.count
@@ -1026,6 +1062,113 @@ public final class TerminalMetalRenderer {
             append(rowInstances, into: &encoded)
         }
         return encoded
+    }
+
+    @inline(__always)
+    private static func mixContentKey(_ h: inout UInt64, _ v: UInt64) {
+        h = (h ^ v) &* 0x0000_0100_0000_01B3 // FNV-64 prime, word-at-a-time mix
+    }
+
+    /// Content key for one viewport row: a 64-bit hash over EVERY `RenderCell` field that can
+    /// affect the row's emitted instances. Two rows with equal keys (and equal geometry: origin,
+    /// cell pixel metrics, ligatures, atlas epoch, row index) encode to byte-identical
+    /// instances, so a cached row can be reused across a `frame.columns` change — instance X/Y
+    /// bake per-cell `column`/`row` × cell pixels, never the total column count.
+    ///
+    /// Trailing cells that emit nothing (no glyph or combining mark, no background quad, no
+    /// block element, no decoration) are excluded — the *significant prefix* — so a width change
+    /// that only adds/removes trailing blank canvas hashes identically. Safe under ligatures
+    /// too: `emitLigatedGlyphs`' run scan breaks on any non-glyph cell, so trailing
+    /// insignificant cells can never start, extend, or restyle a run (and a `spacerTail` is
+    /// transparent to runs — its wide BASE is the significant cell). A row that actually
+    /// re-wraps gains/loses significant cells and hashes differently, as it must.
+    ///
+    /// MUST cover every field `encodeRowInstances`/`emit*Glyphs`/`appendDecorations` read from a
+    /// cell — a missed field is a silent wrong-pixel cache. Pinned per-field by
+    /// `MetalRendererTests.testContentKeyCoversEveryRenderedField`.
+    static func rowContentKey(_ frame: TerminalFrame, row: Int) -> UInt64 {
+        let start = row * frame.columns
+        var end = start + frame.columns
+        while end > start {
+            let c = frame.cells[end - 1]
+            let significant = c.drawBackground || c.hasGlyph || c.combining0 != 0
+                || c.underline != .none || c.strikethrough || c.overline
+                || Self.isBlockElement(c.codepoint)
+            if significant { break }
+            end -= 1
+        }
+        var h: UInt64 = 0xCBF2_9CE4_8422_2325 // FNV-64 offset basis
+        for i in start ..< end {
+            let c = frame.cells[i]
+            mixContentKey(&h, UInt64(c.codepoint) | (UInt64(c.combining0) << 32))
+            mixContentKey(&h, UInt64(c.combining1))
+            mixContentKey(&h, UInt64(c.foreground.red.bitPattern) | (UInt64(c.foreground.green.bitPattern) << 32))
+            mixContentKey(&h, UInt64(c.foreground.blue.bitPattern) | (UInt64(c.foreground.alpha.bitPattern) << 32))
+            mixContentKey(&h, UInt64(c.background.red.bitPattern) | (UInt64(c.background.green.bitPattern) << 32))
+            mixContentKey(&h, UInt64(c.background.blue.bitPattern) | (UInt64(c.background.alpha.bitPattern) << 32))
+            mixContentKey(&h, UInt64(c.underlineColor.red.bitPattern) | (UInt64(c.underlineColor.green.bitPattern) << 32))
+            mixContentKey(&h, UInt64(c.underlineColor.blue.bitPattern) | (UInt64(c.underlineColor.alpha.bitPattern) << 32))
+            let underlineBits: UInt64
+            switch c.underline {
+            case .none: underlineBits = 0
+            case .single: underlineBits = 1
+            case .double: underlineBits = 2
+            case .curly: underlineBits = 3
+            case .dotted: underlineBits = 4
+            case .dashed: underlineBits = 5
+            }
+            let widthBits: UInt64
+            switch c.width {
+            case .normal: widthBits = 0
+            case .wide: widthBits = 1
+            case .spacerTail: widthBits = 2
+            }
+            mixContentKey(&h, underlineBits
+                | (widthBits << 3)
+                | (c.bold ? 1 << 6 : 0)
+                | (c.italic ? 1 << 7 : 0)
+                | (c.strikethrough ? 1 << 8 : 0)
+                | (c.overline ? 1 << 9 : 0)
+                | (c.drawBackground ? 1 << 10 : 0))
+        }
+        mixContentKey(&h, UInt64(end - start)) // significant length, so prefixes can't alias
+        return h
+    }
+
+    /// Content-keyed salvage across a geometry change the row cache would otherwise discard
+    /// wholesale (a column-count change, or full damage with a compatible cache): keep cached
+    /// rows whose content key matches the new frame's same-index row. Returns nil when the old
+    /// cache isn't geometry-compatible (everything except `columns` must match — origin, rows,
+    /// ligatures, atlas epoch, cell metrics) or when fewer than half the rows match (a near-total
+    /// change isn't worth the bookkeeping — fall back to the plain full reset).
+    private func salvageRowInstances(
+        _ frame: TerminalFrame, origin: (x: Int, y: Int), ligatures: Bool, cursorKey: CursorCacheKey
+    ) -> [EncodedRowInstances?]? {
+        let cache = rowInstanceCache
+        guard cache.rows == frame.rows,
+              cache.originX == origin.x, cache.originY == origin.y,
+              cache.ligatures == ligatures,
+              cache.atlasResets == atlas.stats.resets,
+              cache.cellPixelWidth == cellPixelWidth,
+              cache.cellPixelHeight == cellPixelHeight,
+              cache.rowInstances.count == frame.rows
+        else { return nil }
+        var salvaged: [EncodedRowInstances?] = Array(repeating: nil, count: frame.rows)
+        var hits = 0
+        for row in 0 ..< frame.rows {
+            // Cursor-affected rows never salvage: cached instances baked the OLD cursor's glyph
+            // inversion; the new cursor row must re-encode under the new key. (Mirrors the
+            // cursor-row dirtying on the incremental path.)
+            if let previous = cache.previousCursor, previous.invertsGlyph, previous.row == row { continue }
+            if cursorKey.invertsGlyph, cursorKey.row == row { continue }
+            guard let cached = cache.rowInstances[row], cached.contentKey != 0,
+                  cached.contentKey == Self.rowContentKey(frame, row: row)
+            else { continue }
+            salvaged[row] = cached
+            hits += 1
+        }
+        guard hits * 2 >= frame.rows else { return nil }
+        return salvaged
     }
 
     private func encodeRowInstances(
