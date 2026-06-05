@@ -137,6 +137,9 @@ public enum AgentDetector {
         return changes
     }
 
+    /// Walks descendants of `pid` looking for a process whose resolved binary,
+    /// argv[0], or wrapper-launched executable matches any agent in `table`.
+    /// Returns the deepest match so a real child agent wins over its shell.
     public static func detect(pid: Int32, table: AgentTable) -> AgentSnapshot? {
         var best: AgentSnapshot?
         for descendant in descendantPIDs(of: pid) {
@@ -197,6 +200,10 @@ public enum AgentDetector {
         #endif
     }
 
+    /// Full argv for `pid`, preserving argv[0] as invoked. Darwin exposes this
+    /// via KERN_PROCARGS2 after `exec_path`; Linux uses `/proc/<pid>/cmdline`.
+    /// The parser is argc-bounded on Darwin so environment bytes after argv are
+    /// never interpreted as command arguments.
     private static func processArguments(_ pid: Int32) -> [String]? {
         #if canImport(Darwin)
         var size = 0
@@ -256,6 +263,12 @@ public struct AgentTableEntry: Codable, Sendable {
         matchesAny(Self.matchableProcessNames(resolvedExecutable: resolvedExecutable, arguments: arguments))
     }
 
+    /// Builds every basename that can identify a process as an agent: resolved
+    /// executable, argv[0], and the launcher target when argv0/resolved is a
+    /// known wrapper. Non-wrapper commands do not scan arbitrary arguments, so
+    /// `vim hermes-notes.txt` cannot become a false Hermes match. `env` gets
+    /// one nested-wrapper pass (`env FOO=1 python3 hermes --tui`) to cover the
+    /// common env→runtime shape without turning this into an unbounded parser.
     private static func matchableProcessNames(resolvedExecutable: String, arguments: [String]) -> Set<String> {
         var names: Set<String> = []
         insertProcessName(resolvedExecutable, into: &names)
@@ -285,11 +298,16 @@ public struct AgentTableEntry: Codable, Sendable {
         return names
     }
 
+    /// Returns where wrapper-target scanning should begin. When argv[0] is the
+    /// wrapper, scan after it; when only the resolved executable is the wrapper,
+    /// argv[0] may be the launcher target name and must remain searchable.
     private static func launchArgumentSearchStart(arguments: [String], wrapperName: String) -> Int? {
         guard let argv0 = arguments.first else { return nil }
         return processName(argv0) == wrapperName ? 1 : 0
     }
 
+    /// Finds the first argv element that represents the wrapper's launched
+    /// executable, skipping known wrapper flags and their operands.
     private static func firstLaunchArgumentIndex(in arguments: [String], startIndex: Int, wrapperName: String) -> Int? {
         var index = startIndex
         while index < arguments.count {
@@ -336,6 +354,10 @@ public struct AgentTableEntry: Codable, Sendable {
         case stopScanning
     }
 
+    /// Classifies wrapper flags by how they affect executable discovery. `-c`
+    /// and eval-style flags stop the scan because their next value is code, not
+    /// an executable argv token; any spawned child is detected by the descendant
+    /// process walk instead.
     private static func optionBehavior(_ option: String, wrapperName: String) -> WrapperOptionBehavior {
         if option.contains("=") { return .keepScanning }
         switch wrapperName {
