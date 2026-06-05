@@ -54,6 +54,7 @@ final class SettingsViewControllerFollowSystemThemeTests: XCTestCase {
         let flushAndApply = try sourceBlock(named: "flushAndApply", in: settingsSource)
         XCTAssertTrue(flushAndApply.contains("previousAppearanceMode != nextAppearanceMode"))
         XCTAssertTrue(flushAndApply.contains("coordinator.settings.clearThemeColorOverrides()"))
+        XCTAssertTrue(flushAndApply.contains("paletteHexValues = HarnessSettings.normalizedPalette(coordinator.settings.paletteHex)"))
         XCTAssertFalse(flushAndApply.contains("coordinator.settings.systemLightThemeName = selectedAppearanceMode"))
         XCTAssertFalse(flushAndApply.contains("coordinator.settings.systemDarkThemeName = selectedAppearanceMode"))
     }
@@ -133,7 +134,7 @@ final class SettingsViewControllerFollowSystemThemeTests: XCTestCase {
         XCTAssertEqual(settings.cursorStyle, "underline")
         XCTAssertFalse(settings.cursorBlink)
         XCTAssertFalse(settings.copyOnSelect)
-        XCTAssertEqual(settings.paletteHex[0], "#000000")
+        XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
         XCTAssertEqual(settings.agentColorOverrides, ["codex": "#123456"])
         XCTAssertFalse(settings.systemNotificationsEnabled)
         XCTAssertFalse(settings.notificationSoundEnabled)

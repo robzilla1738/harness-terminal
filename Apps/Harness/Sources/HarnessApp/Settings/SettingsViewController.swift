@@ -2403,6 +2403,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.appearanceMode = nextAppearanceMode
         if previousAppearanceMode != nextAppearanceMode {
             coordinator.settings.clearThemeColorOverrides()
+            paletteHexValues = HarnessSettings.normalizedPalette(coordinator.settings.paletteHex)
+            for (index, well) in paletteWells.enumerated() {
+                well.color = paletteHexValues[index].flatMap(NSColor.fromHex)
+                    ?? NSColor.fromHex(Self.defaultAnsiPalette[index]) ?? .gray
+            }
             for binding in colorBindings {
                 binding.field.stringValue = ""
                 refreshColorBinding(binding)
