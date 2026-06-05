@@ -1175,4 +1175,85 @@ final class PerformanceBenchmarks: XCTestCase {
             runLookups(atlas)
         }
     }
+
+    // MARK: - Width reflow (the live-resize per-boundary cost)
+
+    /// A deep-scrollback emulator: 10k history lines of prose with wrapped logical lines (every
+    /// 8th line is ~3 rows long at 150 cols) so the join→trim→re-wrap path does real work.
+    /// `cjk` interleaves wide glyphs into every line to exercise the wide-char stepping path.
+    private func deepScrollbackEmulator(cjk: Bool) -> TerminalEmulator {
+        let term = TerminalEmulator(cols: 150, rows: 48)
+        term.maxScrollbackLines = 10_000
+        let ascii = "the quick brown fox jumps over the lazy dog 0123456789"
+        let wide = "漢字テスト混在行で再折返しの幅広グリフ経路を踏む"
+        var stream = ""
+        stream.reserveCapacity(2_500_000)
+        for i in 0 ..< 10_500 { // overfill past the cap so history sits at exactly 10k lines
+            let stem = cjk ? "\(ascii) \(wide)" : ascii
+            let line = (i % 8 == 0) ? "L\(i) \(stem) \(stem) \(stem) \(stem)" : "L\(i) \(stem)"
+            stream += line + "\r\n"
+        }
+        term.feed(stream)
+        return term
+    }
+
+    /// The cost a live drag pays at EVERY cell-boundary crossing: a full history-wide width
+    /// reflow. Alternates 150↔137 so each measured iteration is a genuine width change (the
+    /// height-only fast path never triggers) and the content re-wraps both directions.
+    func testWidthReflowDeepScrollbackProse() throws {
+        try skipUnlessEnabled()
+        let term = deepScrollbackEmulator(cjk: false)
+        let iterations = 10
+        var flip = false
+        let nanos = timedNanos {
+            for _ in 0 ..< iterations {
+                term.resize(cols: flip ? 150 : 137, rows: 48)
+                flip.toggle()
+            }
+        }
+        printBenchmark("width_reflow_10k_prose", nanos: nanos / UInt64(iterations),
+                       fields: [("lines", "10000"), ("iterations", "\(iterations)")])
+        measure {
+            term.resize(cols: 141, rows: 48)
+            term.resize(cols: 150, rows: 48)
+        }
+    }
+
+    /// Same shape with wide (CJK) glyphs in every logical line — the per-cell stepping path.
+    func testWidthReflowDeepScrollbackCJK() throws {
+        try skipUnlessEnabled()
+        let term = deepScrollbackEmulator(cjk: true)
+        let iterations = 10
+        var flip = false
+        let nanos = timedNanos {
+            for _ in 0 ..< iterations {
+                term.resize(cols: flip ? 150 : 137, rows: 48)
+                flip.toggle()
+            }
+        }
+        printBenchmark("width_reflow_10k_cjk", nanos: nanos / UInt64(iterations),
+                       fields: [("lines", "10000"), ("iterations", "\(iterations)")])
+        measure {
+            term.resize(cols: 141, rows: 48)
+            term.resize(cols: 150, rows: 48)
+        }
+    }
+
+    /// The drag-preview cost at a boundary tick: O(visible) viewport re-wrap on the same deep
+    /// buffer. Stays cheap regardless of history depth; benched so a regression that quietly
+    /// re-couples it to history shows up as a step change.
+    func testPreviewViewportReflowDeepScrollback() throws {
+        try skipUnlessEnabled()
+        let term = deepScrollbackEmulator(cjk: false)
+        let iterations = 50
+        var flip = false
+        let nanos = timedNanos {
+            for _ in 0 ..< iterations {
+                _ = term.previewViewportReflow(cols: flip ? 150 : 137, rows: 48)
+                flip.toggle()
+            }
+        }
+        printBenchmark("preview_reflow_10k_prose", nanos: nanos / UInt64(iterations),
+                       fields: [("lines", "10000"), ("iterations", "\(iterations)")])
+    }
 }

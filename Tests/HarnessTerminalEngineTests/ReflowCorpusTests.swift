@@ -196,6 +196,88 @@ final class ReflowCorpusTests: XCTestCase {
         }
     }
 
+    /// The streaming rewrap reuses per-line scratch buffers (`keepingCapacity`) across lines and
+    /// calls — a stale-cell bleed between reflows would show up as path-dependent layout. Pin
+    /// stability: once a width has been visited (its trailing trim applied), every later visit
+    /// to the same width must serialize identically, across many alternating reflows.
+    func testRepeatedAlternatingReflowsAreStable() {
+        for c in corpus {
+            let term = TerminalEmulator(cols: c.cols, rows: c.rows)
+            term.maxScrollbackLines = 10_000
+            term.feed(c.feed)
+            let original = logicalContent(term)
+            var serializedAt: [Int: String] = [:]
+            for step in 0 ..< 12 {
+                let target = (step % 2 == 0) ? 9 : 23
+                term.resize(cols: target, rows: c.rows)
+                XCTAssertEqual(logicalContent(term), original, "\(c.name): content drifted at step \(step)")
+                if let previous = serializedAt[target] {
+                    XCTAssertEqual(serialize(term), previous,
+                                   "\(c.name): layout not stable revisiting width \(target) at step \(step)")
+                } else {
+                    serializedAt[target] = serialize(term)
+                }
+            }
+        }
+    }
+
+    /// Wide heads at every margin alignment: prefix-pad a wide-glyph run with 0–3 ascii cells and
+    /// reflow across a fine width sweep, so a head lands exactly at the flush-before-straddle
+    /// boundary in every alignment (the seam between the narrow bulk-copy path and the wide
+    /// stepping path). Content and wide integrity must hold throughout.
+    func testWideHeadAtEveryMarginAlignment() {
+        for pad in 0 ... 3 {
+            let term = TerminalEmulator(cols: 30, rows: 4)
+            term.maxScrollbackLines = 10_000
+            term.feed(String(repeating: "x", count: pad) + "漢字測試寬字邊界折返檢查\r\n")
+            let original = logicalContent(term)
+            for target in 4 ... 14 {
+                term.resize(cols: target, rows: 4)
+                XCTAssertEqual(logicalContent(term), original, "pad \(pad) width \(target): content drifted")
+                for i in 0 ..< term.bufferLineCount {
+                    let cells = term.bufferLine(i)
+                    for (col, cell) in cells.enumerated() {
+                        switch cell.width {
+                        case .wide:
+                            XCTAssertLessThan(col + 1, cells.count, "pad \(pad)@\(target): wide head in last column, row \(i)")
+                            if col + 1 < cells.count {
+                                XCTAssertEqual(cells[col + 1].width, .spacerTail, "pad \(pad)@\(target): head without tail, row \(i)")
+                            }
+                        case .spacerTail:
+                            XCTAssertTrue(col > 0 && cells[col - 1].width == .wide, "pad \(pad)@\(target): orphaned tail, row \(i)")
+                        case .normal:
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pure-narrow logical lines spanning several source rows with UNEVEN effective lengths (an
+    /// EL-erased soft-wrapped row keeps its blanks; its row is shorter than a full row after the
+    /// trim floor) — the chunked slice copies must stitch row fragments byte-exactly. Oracle: a
+    /// fresh emulator fed identically and reflowed straight to the final width.
+    func testNarrowChunkedCopySpansRowBoundaries() {
+        let feed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#\r\n"
+            + "short\r\n"
+            + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123\u{1b}[1;7H\u{1b}[0K" // interior erased gap on a wrapped row
+        for path in [[7, 13, 24], [24, 7], [13, 5, 31]] { // multi-step paths land on the same final width
+            let stepped = TerminalEmulator(cols: 12, rows: 5)
+            stepped.maxScrollbackLines = 10_000
+            stepped.feed(feed)
+            for w in path { stepped.resize(cols: w, rows: 5) }
+
+            let direct = TerminalEmulator(cols: 12, rows: 5)
+            direct.maxScrollbackLines = 10_000
+            direct.feed(feed)
+            direct.resize(cols: path.last!, rows: 5)
+
+            XCTAssertEqual(logicalContent(stepped), logicalContent(direct),
+                           "stepped \(path) diverged from direct reflow content")
+        }
+    }
+
     /// Reflow relocates cells but must never alter their attributes: the multiset of non-blank cells
     /// is invariant under a width change.
     func testAttributesPreserved() {
