@@ -1442,8 +1442,18 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// The rebuilt frame presents inside an explicit `CATransaction` (`flushTransaction`) so a
     /// completion landing while the mouse is held *still* (no layout pass to ride) still flushes —
     /// see `presentWithinExplicitTransaction`. Called only while `presentsWithTransaction` (a real
-    /// drag) and `liveResizeReflowEnabled`; `updateGridSize` gates both.
+    /// drag) and `liveResizeReflowEnabled`; `updateGridSize` gates both. Requires the off-main
+    /// pipeline — on the main-confined escape hatch it falls back to the debounced commit below.
     private func requestLiveResizeCommit(cols: Int, rows newRows: Int) {
+        // Only on the off-main pipeline: this commit reflows the emulator ON the serial queue, but
+        // with the flag off the emulator is main-confined (`receive` feeds it synchronously on
+        // main) and the queue hop would mutate it concurrently with a main-thread parse — the same
+        // guard `updateResizePreview` and `commitGridSize` already apply. Fall back to the
+        // debounced drag-end commit, whose `commitGridSize` resizes via `emulatorSync` on main.
+        guard offMainParserFramePipelineEnabled else {
+            scheduleResizeCommit(cols: cols, rows: newRows)
+            return
+        }
         guard cols != columns || newRows != rows else { return }
         columns = cols
         rows = newRows

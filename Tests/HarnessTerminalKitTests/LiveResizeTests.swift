@@ -760,6 +760,30 @@ final class LiveResizeTests: XCTestCase {
         view.viewDidEndLiveResize()
     }
 
+    func testLiveCommitFallsBackToDebounceOnMainConfinedPipeline() {
+        // The real-time commit reflows the emulator ON the serial queue; with the off-main parser
+        // pipeline disabled the emulator is main-confined (`receive` feeds it synchronously on
+        // main), so the live path must fall back to the debounced drag-end commit — the same
+        // confinement guard `updateResizePreview` and `commitGridSize` apply — instead of
+        // mutating the emulator across two threads mid-drag.
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: false)
+        XCTAssertTrue(view.testingLiveResizeReflowEnabled, "real-time reflow stays on by default")
+        var resizes = 0
+        view.onResize = { _, _ in resizes += 1 }
+        view.testingMarkGridSized()
+        view.viewWillStartLiveResize()
+
+        view.testingRequestLiveResizeCommit(cols: 100, rows: 30)
+        XCTAssertEqual(view.testingGridSize.cols, 80, "no live commit on the main-confined pipeline")
+        XCTAssertEqual(resizes, 0, "no mid-drag SIGWINCH on the fallback path")
+        XCTAssertTrue(view.testingHasPendingResizeCommit, "fell back to the debounced commit")
+
+        view.viewDidEndLiveResize() // flush: the commit lands once, at release
+        XCTAssertEqual(view.testingGridSize.cols, 100)
+        XCTAssertEqual(view.testingGridSize.rows, 30)
+        XCTAssertEqual(resizes, 1, "exactly one SIGWINCH, at release")
+    }
+
     func testLivePTYVoteCoalescesToDistinctCellCounts() {
         // The PTY vote must fire once per DISTINCT cell count and never re-send an unchanged size
         // (the daemon re-ioctls on every identical vote, so a within-column drag must be silent).
