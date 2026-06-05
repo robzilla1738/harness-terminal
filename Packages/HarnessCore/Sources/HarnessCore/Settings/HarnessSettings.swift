@@ -78,6 +78,8 @@ private enum LegacyHarnessSettingsCodingKeys: String, CodingKey {
     /// Removed in favor of the per-event `notificationEvents` map; still read here to migrate
     /// an existing on/off choice into `notificationEvents[.commandFinished]`.
     case commandFinishedNotifications
+    case lightThemeName
+    case darkThemeName
 }
 
 public struct HarnessSettings: Codable, Sendable, Equatable {
@@ -488,6 +490,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         selectionForegroundHex = nil
         boldColorHex = nil
         cursorTextHex = nil
+        paletteHex = Array(repeating: nil, count: 16)
         dividerHex = nil
         statusLineHex = nil
     }
@@ -554,9 +557,24 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             try container.decodeIfPresent(Float.self, forKey: .windowPaddingX) ?? fallback.windowPaddingX)
         windowPaddingY = HarnessSettings.clampedPadding(
             try container.decodeIfPresent(Float.self, forKey: .windowPaddingY) ?? fallback.windowPaddingY)
-        appearanceMode = try container.decodeIfPresent(HarnessAppearanceMode.self, forKey: .appearanceMode) ?? HarnessSettings().appearanceMode
-        systemLightThemeName = try container.decodeIfPresent(String.self, forKey: .systemLightThemeName) ?? HarnessSettings().systemLightThemeName
-        systemDarkThemeName = try container.decodeIfPresent(String.self, forKey: .systemDarkThemeName) ?? HarnessSettings().systemDarkThemeName
+        let decodedAppearanceMode = try container.decodeIfPresent(HarnessAppearanceMode.self, forKey: .appearanceMode)
+        let legacyLightThemeName = try legacyContainer.decodeIfPresent(String.self, forKey: .lightThemeName)
+        let legacyDarkThemeName = try legacyContainer.decodeIfPresent(String.self, forKey: .darkThemeName)
+        let defaultSettings = HarnessSettings()
+        if decodedAppearanceMode == nil,
+           let legacyLightThemeName,
+           let legacyDarkThemeName,
+           !legacyLightThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !legacyDarkThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            appearanceMode = .macOSSystem
+            systemLightThemeName = legacyLightThemeName
+            systemDarkThemeName = legacyDarkThemeName
+        } else {
+            appearanceMode = decodedAppearanceMode ?? defaultSettings.appearanceMode
+            systemLightThemeName = try container.decodeIfPresent(String.self, forKey: .systemLightThemeName) ?? defaultSettings.systemLightThemeName
+            systemDarkThemeName = try container.decodeIfPresent(String.self, forKey: .systemDarkThemeName) ?? defaultSettings.systemDarkThemeName
+        }
         customBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customBackgroundHex) ?? fallback.customBackgroundHex
         customForegroundHex = try container.decodeIfPresent(String.self, forKey: .customForegroundHex) ?? fallback.customForegroundHex
         customCursorHex = try container.decodeIfPresent(String.self, forKey: .customCursorHex) ?? fallback.customCursorHex
@@ -650,7 +668,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
                 return HarnessSettings.makeDefaults(imported: imported)
             }
             let hasStoredColorChoice = settingsDataContainsColorChoice(data)
-            let hasStoredAppearanceMode = settingsDataContainsAppearanceMode(data)
             // Track whether any migration below actually changed something, so a no-op launch never
             // rewrites settings.json (a needless write — and a corruption window — on every start).
             var didMutate = false
@@ -662,7 +679,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             // via Settings / `source-config` / prefix `r` (the consented path). Either way we record
             // the new signature so we don't re-evaluate this every launch.
             if let imported, settings.importedConfigSignature != imported.signature {
-                if !settings.hasPriorImport && (hasStoredAppearanceMode || settings.hasUserVisualCustomizations && settings.hasNonPaletteVisualCustomizations) {
+                if settings.hasUserVisualCustomizations {
                     settings.importedConfigSignature = imported.signature
                 } else {
                     settings.applyImportedDefaults(imported)
@@ -721,29 +738,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             || paletteHex.contains { $0 != nil }
     }
 
-    private var hasPriorImport: Bool {
-        importedConfigSignature?.isEmpty == false
-    }
-
-    private var hasNonPaletteVisualCustomizations: Bool {
-        customBackgroundHex != nil || customForegroundHex != nil || customCursorHex != nil
-            || selectionBackgroundHex != nil || selectionForegroundHex != nil
-            || boldColorHex != nil || cursorTextHex != nil
-    }
-
     private static func settingsDataContainsColorChoice(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return false
         }
         return object[CodingKeys.vividColors.stringValue] != nil
             || object[CodingKeys.colorRendering.stringValue] != nil
-    }
-
-    private static func settingsDataContainsAppearanceMode(_ data: Data) -> Bool {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        return object[CodingKeys.appearanceMode.stringValue] != nil
     }
 
     /// Opacity bounds. The user can pick any value from fully transparent to

@@ -77,6 +77,26 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(migrated.systemDarkThemeName, "Harness Default")
     }
 
+    func testLegacyAutoLightDarkSettingsMigrateToMacOSSystemAndRoundTrip() throws {
+        let legacy = Data("""
+        {
+          "fontSize": 14,
+          "lightThemeName": "GitHub Light",
+          "darkThemeName": "Dracula"
+        }
+        """.utf8)
+
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+        let decodedAgain = try JSONDecoder().decode(HarnessSettings.self, from: try JSONEncoder().encode(migrated))
+
+        XCTAssertEqual(migrated.appearanceMode, .macOSSystem)
+        XCTAssertEqual(migrated.systemLightThemeName, "GitHub Light")
+        XCTAssertEqual(migrated.systemDarkThemeName, "Dracula")
+        XCTAssertEqual(decodedAgain.appearanceMode, .macOSSystem)
+        XCTAssertEqual(decodedAgain.systemLightThemeName, "GitHub Light")
+        XCTAssertEqual(decodedAgain.systemDarkThemeName, "Dracula")
+    }
+
     func testAppearanceModeLoadMigrationPreservesMacOSSystemChoice() throws {
         try withTemporaryHarnessHome { root in
             try HarnessPaths.ensureDirectories()
@@ -394,6 +414,91 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
     }
 
+    func testLoadMigrationAppliesNewImportWhenUserHasNoVisualCustomizations() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            try Data("""
+            {
+              "importedConfigSignature": "old"
+            }
+            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+
+            let settings = HarnessSettings.load(imported: splitThemeImport)
+
+            XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+            XCTAssertEqual(settings.systemLightThemeName, "Tango Adapted")
+            XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
+            XCTAssertEqual(settings.importedConfigSignature, splitThemeImport.signature)
+        }
+    }
+
+    func testLoadMigrationRecordsNewImportSignatureWithoutReimportingCustomPalette() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            try Data("""
+            {
+              "paletteHex": ["#ABCDEF", null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+              "importedConfigSignature": "old"
+            }
+            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+
+            let settings = HarnessSettings.load(imported: splitThemeImport)
+
+            XCTAssertEqual(settings.appearanceMode, .theme)
+            XCTAssertEqual(settings.systemLightThemeName, "Zenwritten Light")
+            XCTAssertEqual(settings.systemDarkThemeName, "Harness Default")
+            XCTAssertEqual(settings.paletteHex[0], "#ABCDEF")
+            XCTAssertEqual(settings.importedConfigSignature, splitThemeImport.signature)
+        }
+    }
+
+    func testLoadMigrationPreservesHandEditedVisualsAcrossImportSignatureBump() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            try Data("""
+            {
+              "appearanceMode": "macos-system",
+              "systemLightThemeName": "3024 Day",
+              "systemDarkThemeName": "Seoulbones Dark",
+              "customBackgroundHex": "#123456",
+              "importedConfigSignature": "v5|old-import"
+            }
+            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+
+            let settings = HarnessSettings.load(imported: splitThemeImport)
+
+            XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+            XCTAssertEqual(settings.systemLightThemeName, "3024 Day")
+            XCTAssertEqual(settings.systemDarkThemeName, "Seoulbones Dark")
+            XCTAssertEqual(settings.customBackgroundHex, "#123456")
+            XCTAssertEqual(settings.importedConfigSignature, splitThemeImport.signature)
+        }
+    }
+
+    func testLoadMigrationRecordsSignatureWithoutClearingPreviouslyImportedPalette() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            try Data("""
+            {
+              "appearanceMode": "macos-system",
+              "systemLightThemeName": "3024 Day",
+              "systemDarkThemeName": "Seoulbones Dark",
+              "paletteHex": ["#1D1F21", "#CC6666", "#B5BD68", "#F0C674", "#81A2BE", "#B294BB", "#8ABEB7", "#C5C8C6", "#666666", "#D54E53", "#B9CA4A", "#E7C547", "#7AA6DA", "#C397D8", "#70C0B1", "#EAEAEA"],
+              "importedConfigSignature": "v5|old-import"
+            }
+            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+
+            let settings = HarnessSettings.load(imported: splitThemeImport)
+
+            XCTAssertEqual(settings.appearanceMode, .macOSSystem)
+            XCTAssertEqual(settings.systemLightThemeName, "3024 Day")
+            XCTAssertEqual(settings.systemDarkThemeName, "Seoulbones Dark")
+            XCTAssertEqual(settings.paletteHex[0], "#1D1F21")
+            XCTAssertEqual(settings.paletteHex[15], "#EAEAEA")
+            XCTAssertEqual(settings.importedConfigSignature, splitThemeImport.signature)
+        }
+    }
+
     func testResetToImportedSplitThemeClearsStalePaletteWhenImportHasNoExplicitPalette() {
         var settings = HarnessSettings()
         settings.paletteHex[0] = "#ABCDEF"
@@ -410,23 +515,12 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
     }
 
-    func testLoadMigrationClearsPaletteOnlyStaleImportWhenNewImportHasNoPalette() throws {
-        try withTemporaryHarnessHome { root in
-            try HarnessPaths.ensureDirectories()
-            try Data("""
-            {
-              "paletteHex": ["#ABCDEF", null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
-              "importedConfigSignature": "old"
-            }
-            """.utf8).write(to: root.appendingPathComponent("settings.json"))
+    func testClearThemeColorOverridesClearsPaletteOverrides() {
+        var settings = HarnessSettings(paletteHex: ["#ABCDEF"] + Array(repeating: nil, count: 15))
 
-            let settings = HarnessSettings.load(imported: splitThemeImport)
+        settings.clearThemeColorOverrides()
 
-            XCTAssertEqual(settings.appearanceMode, .macOSSystem)
-            XCTAssertEqual(settings.systemLightThemeName, "Tango Adapted")
-            XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
-            XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
-        }
+        XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
     }
 
     func testLoadMigrationRefreshesPreviouslyImportedSystemThemesAndClearsStalePalette() throws {
@@ -437,7 +531,6 @@ final class HarnessSettingsTests: XCTestCase {
               "appearanceMode": "macos-system",
               "systemLightThemeName": "3024 Day",
               "systemDarkThemeName": "Seoulbones Dark",
-              "paletteHex": ["#1D1F21", "#CC6666", "#B5BD68", "#F0C674", "#81A2BE", "#B294BB", "#8ABEB7", "#C5C8C6", "#666666", "#D54E53", "#B9CA4A", "#E7C547", "#7AA6DA", "#C397D8", "#70C0B1", "#EAEAEA"],
               "importedConfigSignature": "v5|old-import"
             }
             """.utf8).write(to: root.appendingPathComponent("settings.json"))
@@ -448,7 +541,7 @@ final class HarnessSettingsTests: XCTestCase {
             XCTAssertEqual(settings.systemLightThemeName, "Tango Adapted")
             XCTAssertEqual(settings.systemDarkThemeName, "TokyoNight Storm")
             XCTAssertTrue(settings.paletteHex.allSatisfy { $0 == nil })
-            XCTAssertTrue(settings.importedConfigSignature?.hasPrefix("v6|") == true)
+            XCTAssertEqual(settings.importedConfigSignature, splitThemeImport.signature)
         }
     }
 
