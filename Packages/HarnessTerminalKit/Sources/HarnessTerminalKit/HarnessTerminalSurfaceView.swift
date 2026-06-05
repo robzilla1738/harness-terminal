@@ -147,6 +147,42 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
         return token == latestPreviewToken
     }
 
+    /// The latest grid size a resize commit requested, applied-and-cleared by the NEXT output/commit
+    /// build to run on the queue (`applyPendingResize` at the top of `renderNowOffMain`'s build).
+    /// Decoupling "which size to materialize" from "which build wins the latest-wins token" is what
+    /// lets mid-drag output presents coexist with live-resize commits: an output build that
+    /// supersedes an in-flight commit build (newer token → the commit skips before its resize)
+    /// still carries the resize forward, so the emulator can never strand at the old size after
+    /// the PTY vote went out. Touched ONLY on `queue` (the setters below dispatch there; the
+    /// queue's FIFO orders a `setPendingResize` ahead of any build dispatched after it).
+    private var pendingResize: (cols: Int, rows: Int)?
+
+    /// Enqueue a resize target from main. The preview pipeline must never call the apply side —
+    /// previews are non-mutating reads at an explicit target size.
+    func setPendingResize(_ size: (cols: Int, rows: Int)) {
+        queue.async { [self] in pendingResize = size }
+    }
+
+    /// Drop an unapplied target (detach/re-host: a stale size must not apply to a re-hosted view).
+    func clearPendingResize() {
+        queue.async { [self] in pendingResize = nil }
+    }
+
+    /// On-queue: materialize any pending resize and clear it. Idempotent across builds; returns
+    /// whether the grid dimensions actually changed so the caller can drop its reuse caches.
+    func applyPendingResize() -> Bool {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard let size = pendingResize else { return false }
+        pendingResize = nil
+        emulator.resize(cols: size.cols, rows: size.rows)
+        return true
+    }
+
+    /// Test seam: the staged-but-unapplied resize target (read on the queue).
+    func pendingResizeForTesting() -> (cols: Int, rows: Int)? {
+        sync { _ in pendingResize }
+    }
+
     init(columns: Int, rows: Int) {
         self.emulator = TerminalEmulator(cols: columns, rows: rows)
         self.queue = DispatchQueue(label: "com.robert.harness.terminal-surface.emulator", qos: .userInteractive)
@@ -650,7 +686,10 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     func testingResizeGrid(cols: Int, rows: Int) {
         commitGridSize(cols: cols, rows: rows)
-        emulatorState.sync { _ in } // commit now reflows off-main; flush so tests observe it synchronously
+        // The commit stages the reflow for the next output/commit build to materialize; headless
+        // there is no renderer, so no build ever runs — apply the staged target directly (the
+        // exact step the first build performs) so tests observe the resize synchronously.
+        emulatorState.sync { _ in _ = emulatorState.applyPendingResize() }
     }
 
     var testingRenderSynchronized: Bool { scheduler.synchronized }
@@ -667,6 +706,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     var testingLiveResizeReflowEnabled: Bool { liveResizeReflowEnabled }
     var testingLastSentPTYSize: (cols: Int, rows: Int)? { lastSentPTYSize }
     func testingMarkGridSized() { hasSizedGrid = true }
+    // pendingResize seams: the staged-but-unapplied reflow target, a direct driver for the
+    // scheduler's async off-main entry (what a PTY output burst triggers mid-drag), and a queue
+    // gate for staging deterministic build interleavings (e.g. an output build superseding a
+    // commit build's frame token while both sit queued).
+    var testingPendingResize: (cols: Int, rows: Int)? { emulatorState.pendingResizeForTesting() }
+    func testingRenderNowOffMainAsync() { renderNowOffMain() }
+    func testingBlockEmulatorQueue(until gate: DispatchSemaphore) {
+        emulatorState.async { _ in gate.wait() }
+    }
     // Window-hosted seams (the routing test drives real presents through a real Metal renderer).
     var testingOriginOffset: (x: Int, y: Int) { (originOffsetX, originOffsetY) }
     var testingHasRenderer: Bool { renderer != nil }
@@ -1150,6 +1198,10 @@ public final class HarnessTerminalSurfaceView: NSView {
             // into the re-hosted view.
             _ = emulatorState.claimPreviewToken()
             previewCols = 0; previewRows = 0
+            // And any staged-but-unapplied resize target: re-attach runs `layout()`, which
+            // commits the real size if it differs — a stale mid-drag target applying to the
+            // re-hosted view would resize the grid behind that layout's back.
+            emulatorState.clearPendingResize()
         }
     }
 
@@ -1406,17 +1458,15 @@ public final class HarnessTerminalSurfaceView: NSView {
         onGridSizeWillChange?(cols, newRows, true) // settled size for the HUD
         previewCols = 0; previewRows = 0           // force the next drag to rebuild a fresh preview
         if offMainParserFramePipelineEnabled {
-            // Off-main pipeline: reflow on the emulator's serial queue (serialized with the output
-            // feed), present the rebuilt frame on completion. Main never blocks on the O(history)
-            // width reflow; the live preview / repaintLastFrame covers the interim.
-            let generation = renderGeneration
-            emulatorState.async { emulator in
-                emulator.resize(cols: cols, rows: newRows)
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.renderGeneration == generation else { return } // superseded by a newer resize
-                    self.renderNowOffMain()
-                }
-            }
+            // Off-main pipeline: stage the settled size and let the next build materialize it on
+            // the emulator's serial queue (serialized with the output feed) — `setPendingResize`
+            // enqueues ahead of the build below, and last-writer-wins overwrites any stale live
+            // target still unapplied from the drag. Main never blocks on the O(history) width
+            // reflow; the live preview / repaintLastFrame covers the interim. A superseding newer
+            // resize drops this build's present via the generation guard, and its own build
+            // applies the newest staged size.
+            emulatorState.setPendingResize((cols, newRows))
+            renderNowOffMain()
         } else {
             // Main-confined pipeline: the emulator lives on the main thread (no serial queue to
             // offload to), so resize + present synchronously — the pre-existing discipline. Going
@@ -1467,8 +1517,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         // `repaintLastFrame` decline (generation mismatch) and fall to the SYNCHRONOUS `forceRender`,
         // whose `state.sync` would block main behind the in-flight O(history) reflow on the emulator
         // queue — the exact stall the off-main pipeline exists to avoid. Instead the builder-reuse
-        // cache is cleared ON the queue right after `emulator.resize` (see the `resizeEmulatorTo`
-        // branch in `renderNowOffMain`'s build), and the renderer's row cache auto-invalidates on the
+        // cache is cleared ON the queue right after the resize applies (see `applyPendingResize` at
+        // the top of `renderNowOffMain`'s build), and the renderer's row cache auto-invalidates on the
         // dimension change. So between this commit and the authoritative frame landing, layout keeps
         // stretching the cached frame (the same near-free sub-cell repaint), and FIFO queue + main
         // ordering guarantees the latest target's reflow is the one that presents last.
@@ -1480,8 +1530,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         // Clear the preview target so the next `updateResizePreview` (same boundary tick) rebuilds a
         // fresh re-wrap for this width and a stale in-flight preview can't match `previewCols`.
         previewCols = 0; previewRows = 0
-        // Reflow the real grid off-main and present the result within an explicit CA transaction.
-        renderNowOffMain(resizeEmulatorTo: (cols, newRows), flushTransaction: true)
+        // Stage the reflow target on the queue (whichever build runs next materializes it — see
+        // `pendingResize`) and present the result within an explicit CA transaction.
+        emulatorState.setPendingResize((cols, newRows))
+        renderNowOffMain(flushTransaction: true)
     }
 
     /// Run `body` (which presents a transaction-synchronized frame) inside an explicit Core
@@ -1527,10 +1579,19 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func renderNow(forced: Bool = false) {
-        // Single present source during a live drag: while the layer presents with the CA
-        // transaction, an ad-hoc output/tick present would pay the synchronized
-        // commit→waitUntilScheduled stall on main AND replace `lastPresentedResult` with a fresh
-        // frame the renderer cache hasn't seen — forcing the next layout repaint back onto the
+        // Off-main pipeline first: its entry owns the drag semantics (output presents flow live
+        // under real-time reflow, within explicit CA transactions; the reflow-off escape hatch
+        // defers there). Ordering matters — the main-confined hold below must not swallow the
+        // scheduler's off-main ticks, or mid-drag output would gate on BOTH pipelines.
+        if offMainParserFramePipelineEnabled {
+            renderNowOffMain()
+            return
+        }
+        // Main-confined escape hatch: single present source during a live drag. This legacy
+        // pipeline has no live commits (requestLiveResizeCommit falls back to the debounce) and
+        // a build here runs ON main — an ad-hoc output/tick present would pay the synchronized
+        // commit→waitUntilScheduled stall AND replace `lastPresentedResult` with a fresh frame
+        // the renderer cache hasn't seen, forcing the next layout repaint back onto the
         // full-rebuild path (defeating the empty-damage reuse that makes drag ticks near-free).
         // Defer instead: re-mark dirty so the work is never lost (`presentNow`/`tick` cleared the
         // flag before calling here); `layout()`'s repaint carries the visual per drag step, and
@@ -1538,10 +1599,6 @@ public final class HarnessTerminalSurfaceView: NSView {
         // the synchronous path (first paint / no-cached-frame fallback inside layout) open.
         if !forced, metalLayer.presentsWithTransaction {
             scheduler.markDirty()
-            return
-        }
-        if offMainParserFramePipelineEnabled {
-            renderNowOffMain()
             return
         }
         guard let renderer else { return }
@@ -1628,14 +1685,19 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func renderNowOffMain(
         synchronous: Bool = false,
-        resizeEmulatorTo: (cols: Int, rows: Int)? = nil,
         flushTransaction: Bool = false
     ) {
-        // Mirror of `renderNow`'s live-drag hold for the scheduler's async entry; the synchronous
-        // (layout/forceRender) entry must keep presenting — it IS the drag's single present source.
-        // A live-resize commit (`flushTransaction`) is also a present source: it owns its flush via
-        // an explicit CATransaction (`presentWithinExplicitTransaction`), so it must not bail here.
-        if !synchronous, !flushTransaction, metalLayer.presentsWithTransaction {
+        // Live-drag hold for the scheduler's async entry — ESCAPE HATCH ONLY. With real-time
+        // reflow off, the drag's contract is defer-to-release: the grid stays at its pre-drag
+        // size while the re-wrap PREVIEW (a different cell count) owns the glass, so an output
+        // build presenting the old-size grid mid-drag would visibly fight the preview's frame.
+        // With real-time reflow ON (the default), boundary commits keep the real grid current,
+        // so output builds present the same size the drag shows — they flow live (each present
+        // flushes its own explicit CATransaction below), which is what keeps streaming output,
+        // SIGWINCH redraws, and keystroke echo moving DURING the drag instead of one boundary
+        // behind. The synchronous (layout/forceRender) entry always presents — it is a drag
+        // present source; a live-resize commit (`flushTransaction`) likewise.
+        if !synchronous, !flushTransaction, metalLayer.presentsWithTransaction, !liveResizeReflowEnabled {
             scheduler.markDirty()
             return
         }
@@ -1663,15 +1725,16 @@ public final class HarnessTerminalSurfaceView: NSView {
         // over the captured value snapshot + the emulator; the only mutation is `state`'s plain-frame
         // cache, which is always touched on the serial queue (sync runs there; async dispatches there).
         let build: @Sendable (TerminalEmulator) -> SurfaceFrameBuildResult = { emulator in
-            // Live-resize commit: reflow the real grid on the queue right before the build so the
-            // resize serializes with any in-flight output feed. A superseded build (its token is no
-            // longer latest) returns before this runs, so a fast drag reflows only to the latest
-            // target — the intermediate column counts are never materialized. Clearing the
+            // Materialize any staged resize on the queue right before the build so it serializes
+            // with the in-flight output feed. EVERY output/commit build applies the shared target
+            // (`pendingResize`): a superseded commit build (its token is no longer latest) returns
+            // before this runs, and whichever build superseded it applies the staged size instead —
+            // a fast drag reflows only to the latest target (intermediate column counts are never
+            // materialized) and the emulator can never strand at a pre-vote size. Clearing the
             // builder-reuse caches here (on the queue, not via a main-thread generation bump) keeps
             // this build from diffing the new grid against an old-width cached frame; the renderer's
             // row cache auto-invalidates on the dimension change.
-            if let size = resizeEmulatorTo {
-                emulator.resize(cols: size.cols, rows: size.rows)
+            if state.applyPendingResize() {
                 state.lastPlainFrame = nil
                 state.lastViewportFrame = nil
             }
@@ -1830,9 +1893,13 @@ public final class HarnessTerminalSurfaceView: NSView {
                 let result = FrameSignposter.shared.interval("frameBuild") { build(emulator) }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    // A live-resize commit flushes its own present (the mouse may be held still, so
-                    // there's no layout pass to carry the transaction-mode present to the glass).
-                    if flush {
+                    // Any present landing while the layer is in transaction mode flushes its own
+                    // explicit CATransaction: a live-resize commit by contract, and an un-gated
+                    // mid-drag output build because the mouse may be held still (no layout pass
+                    // to carry a transaction-mode present to the glass). Checked at LANDING time —
+                    // a build that outlives the drag presents normally (the wrap is a harmless
+                    // no-op shape either way, see `presentWithinExplicitTransaction`).
+                    if flush || self.metalLayer.presentsWithTransaction {
                         self.presentWithinExplicitTransaction { self.presentBuiltFrame(result) }
                     } else {
                         self.presentBuiltFrame(result)
