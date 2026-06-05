@@ -291,8 +291,7 @@ would be useful, use `choose-window` instead.
 
 Harness owns the terminal canvas and chrome. Choose **Settings > Appearance > Appearance** to keep
 the selected Harness theme or to follow macOS light and dark mode with Harness's `macos-system`
-appearance mode. That is separate from OpenCode's TUI `system` theme in `tui.json`; OpenCode's
-setting only affects OpenCode inside the terminal.
+appearance mode.
 
 Program ANSI output stays untouched unless **Apply theme colors to terminal output** is enabled in
 Harness settings. With the default off, full-screen apps and command output keep their own SGR

@@ -61,7 +61,7 @@ New installs start in Plain. Moving over from another setup? See [docs/MIGRATION
 
 ## Appearance defaults
 
-Harness appearance is owned by Harness. The **Appearance** setting can stay on the selected Harness theme or follow macOS light and dark mode with Harness's `macos-system` appearance mode. This is separate from OpenCode's own TUI `system` theme in `tui.json`, which only controls OpenCode's interface inside the terminal.
+Harness appearance is owned by Harness. The **Appearance** setting can stay on the selected Harness theme or follow macOS light and dark mode with Harness's `macos-system` appearance mode.
 
 Program ANSI output is preserved by default. Harness themes color the canvas, chrome, cursor, selection, and OSC color answers, but they do not rewrite a program's SGR palette unless **Settings > Appearance > Apply theme colors to terminal output** is enabled.
 
