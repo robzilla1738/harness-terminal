@@ -109,10 +109,11 @@ private struct EncodedRowInstances {
     var contentKey: UInt64 = 0
 }
 
+/// Per-frame metadata for one `buildFrameInstances` pass. The instance data itself lives in the
+/// renderer's PERSISTENT flat arrays (`flatBg`/`flatGlyph`/`flatDeco` + `rowSeg`), mutated in
+/// place per dirty row — a clean row's bytes are never touched or copied, so a steady-state
+/// frame costs O(damage), not O(grid) (the Ghostty `Contents` model).
 private struct EncodedFrameInstances {
-    var backgrounds: [BgInstance] = []
-    var glyphs: [GlyphInstance] = []
-    var decorations: [DecoInstance] = []
     var bgSpans = 0
     var bgCells = 0
     var encodedRows = 0
@@ -121,13 +122,25 @@ private struct EncodedFrameInstances {
     /// cache-bypassing builds (nil damage, images, shape guards) and the mid-encode atlas-reset
     /// fallback. Feeds `TerminalRenderStats.rowCacheCoherent`.
     var cachePopulated = false
-    /// Half-open instance-index span that changed this frame in each stream, used to upload only
-    /// the changed bytes to the GPU. `nil` means "the whole array changed" (cache-bypass, scroll,
-    /// full damage) — the safe default that reproduces the old whole-array upload. An empty range
-    /// means nothing in that stream changed (e.g. a row whose glyphs were untouched).
-    var bgDirty: Range<Int>?
-    var glyphDirty: Range<Int>?
-    var decoDirty: Range<Int>?
+    /// Ordered half-open instance-index spans that changed this frame in each stream, used to
+    /// upload only the changed bytes to the GPU. `nil` means "the whole array changed"
+    /// (cache-bypass, scroll — every kept row's baked Y rewrites, full rebuild) — the safe
+    /// default that reproduces the whole-array upload. An empty list means nothing in that
+    /// stream changed. A count-changing row's spans extend to the stream end (its tail bytes
+    /// genuinely moved); count-preserving scattered damage stays as separate row-sized spans.
+    var bgDirty: [Range<Int>]?
+    var glyphDirty: [Range<Int>]?
+    var decoDirty: [Range<Int>]?
+}
+
+/// One row's half-open ranges within the renderer's persistent flat instance arrays — the
+/// single source of truth for both the in-place splice and the upload dirty spans. Invariant:
+/// segments are contiguous, ascending, and exactly cover each flat array's grid region
+/// (extras appended by `encode` live past the last segment).
+private struct RowSegment {
+    var bg: Range<Int>
+    var glyph: Range<Int>
+    var deco: Range<Int>
 }
 
 private struct CursorCacheKey: Equatable {
@@ -273,6 +286,26 @@ public final class TerminalMetalRenderer {
     /// CPU-side row cache for encoded Metal instances. The drawable is still fully redrawn
     /// every frame; this cache only avoids regenerating clean rows from `RenderCell`s.
     private var rowInstanceCache = RowInstanceCache()
+    /// Persistent flat instance storage — the upload source. The grid region [0, gridCount) is
+    /// `concat(rowInstanceCache.rowInstances)` laid out per `rowSeg`; `encode` appends the
+    /// per-frame cursor/gutter extras after it (truncated at the next build). On a steady-state
+    /// frame only the dirty rows' segments are rewritten in place (equal-count) or spliced
+    /// (count change shifts the tail once) — clean rows' bytes are never copied.
+    private var flatBg: [BgInstance] = []
+    private var flatGlyph: [GlyphInstance] = []
+    private var flatDeco: [DecoInstance] = []
+    private var rowSeg: [RowSegment] = []
+    /// Count of extras `encode` appended to `flatBg` for the LAST frame (cursor + prompt
+    /// gutter), removed before the next build mutates the grid region.
+    private var flatBgExtras = 0
+    /// True iff the flats' grid region is exactly `concat(rowInstanceCache.rowInstances)` per
+    /// `rowSeg` — the precondition for the in-place splice path. False after any reset/bypass;
+    /// re-established by a full rebuild over the cache.
+    private var flatsCoherent = false
+    /// Running per-frame stat totals for the flats' grid region (mirrors what summing every
+    /// row's `bgSpans`/`bgCells` would yield), adjusted on splice instead of recomputed.
+    private var flatBgSpans = 0
+    private var flatBgCells = 0
     /// Immutable instance buffers for an unchanged frame. When damage is empty and the overlay
     /// key still matches, the renderer can bind these without another CPU memcpy.
     private var uploadedInstanceCache: UploadedInstanceBuffers?
@@ -509,13 +542,11 @@ public final class TerminalMetalRenderer {
             overlineY: overlineY
         )
         frameStats.buildInstancesNanos = DispatchTime.now().uptimeNanoseconds &- buildInstancesStart
-        var backgrounds = encoded.backgrounds
-        let glyphs = encoded.glyphs
-        let decorations = encoded.decorations
-        // The cursor + prompt-gutter quads are appended after the grid backgrounds below. They
-        // change almost every frame (cursor blink/move), so the bg dirty span must always cover
+        // The cursor + prompt-gutter quads are appended after the grid region of the persistent
+        // flat bg array below (the build already truncated the previous frame's extras). They
+        // change almost every frame (cursor blink/move), so the bg dirty spans must always cover
         // this trailing segment; `bgGridCount` marks where it starts.
-        let bgGridCount = backgrounds.count
+        let bgGridCount = flatBg.count
 
         // OSC 133 prompt gutter: a thin vertical stripe in the left margin marking shell-prompt
         // rows (green/red/neutral, resolved in the FrameBuilder). Appended after the cell
@@ -526,7 +557,7 @@ public final class TerminalMetalRenderer {
             let gutterW = max(2, (cellW * 0.14).rounded())
             let gx = max(0, ox - gutterW)
             for (row, color) in frame.promptGutter where row >= 0 && row < frame.rows {
-                backgrounds.append(BgInstance(
+                flatBg.append(BgInstance(
                     origin: SIMD2(gx, oy + Float(row) * cellH),
                     size: SIMD2(gutterW, cellH),
                     color: vector(color)
@@ -554,7 +585,7 @@ public final class TerminalMetalRenderer {
                     (SIMD2(cellX + cellW - t, cellY), SIMD2(t, cellH)),     // right
                 ]
                 for (cursorOrigin, cursorSize) in edges {
-                    backgrounds.append(BgInstance(origin: cursorOrigin, size: cursorSize, color: color))
+                    flatBg.append(BgInstance(origin: cursorOrigin, size: cursorSize, color: color))
                 }
             } else {
                 let cursorOrigin: SIMD2<Float>
@@ -572,24 +603,24 @@ public final class TerminalMetalRenderer {
                     cursorOrigin = SIMD2(cellX, cellY + cellH - h)
                     cursorSize = SIMD2(cellW, h)
                 }
-                backgrounds.append(BgInstance(origin: cursorOrigin, size: cursorSize, color: color))
+                flatBg.append(BgInstance(origin: cursorOrigin, size: cursorSize, color: color))
             }
         }
-        // Fold the trailing cursor/gutter segment into the bg dirty span. When the grid span is
-        // nil (whole-array upload) leave it nil; otherwise extend it to the end of the array so the
-        // freshly appended extras are uploaded too. An empty grid span (no grid bg row changed —
-        // e.g. only the cursor moved) becomes an extras-only upload, not the whole stream.
+        // Record the extras so the next build truncates them before touching the grid region,
+        // and fold their span into the bg dirty list. When the grid list is nil (whole-array
+        // upload) leave it nil; an empty grid list (no grid bg row changed — e.g. only the
+        // cursor moved) becomes an extras-only upload, not the whole stream.
+        flatBgExtras = flatBg.count - bgGridCount
         var bgDirty = encoded.bgDirty
-        if backgrounds.count > bgGridCount, let grid = bgDirty {
-            let lower = grid.isEmpty ? bgGridCount : grid.lowerBound
-            bgDirty = lower ..< backgrounds.count
+        if flatBgExtras > 0, bgDirty != nil {
+            bgDirty?.append(bgGridCount ..< flatBg.count)
         }
 
-        frameStats.bgInstances = backgrounds.count
+        frameStats.bgInstances = flatBg.count
         frameStats.bgSpans = encoded.bgSpans
         frameStats.bgCells = encoded.bgCells
-        frameStats.glyphInstances = glyphs.count
-        frameStats.decoInstances = decorations.count
+        frameStats.glyphInstances = flatGlyph.count
+        frameStats.decoInstances = flatDeco.count
         frameStats.encodedRows = encoded.encodedRows
         frameStats.reusedRows = encoded.reusedRows
         frameStats.rowCacheCoherent = encoded.cachePopulated
@@ -637,9 +668,9 @@ public final class TerminalMetalRenderer {
         var scrollPx = scrollFractionPx
         let uploadStart = DispatchTime.now().uptimeNanoseconds
         let instanceBuffers = bindableInstanceBuffers(
-            backgrounds: backgrounds,
-            glyphs: glyphs,
-            decorations: decorations,
+            backgrounds: flatBg,
+            glyphs: flatGlyph,
+            decorations: flatDeco,
             frame: frame,
             origin: origin,
             ligatures: ligatures,
@@ -713,9 +744,9 @@ public final class TerminalMetalRenderer {
         ligatures: Bool,
         damage: TerminalDamage?,
         encoded: EncodedFrameInstances,
-        bgDirty: Range<Int>?,
-        glyphDirty: Range<Int>?,
-        decoDirty: Range<Int>?,
+        bgDirty: [Range<Int>]?,
+        glyphDirty: [Range<Int>]?,
+        decoDirty: [Range<Int>]?,
         slot: Int
     ) -> UploadedInstanceBuffers {
         let key = instanceUploadCacheKey(frame: frame, origin: origin, ligatures: ligatures)
@@ -750,18 +781,12 @@ public final class TerminalMetalRenderer {
         }
 
         // Incremental upload: copy only the spans that changed since this ring slot was last
-        // written. A nil span means "whole array" (scroll, full damage, images, cache-bypass) and
+        // written. nil means "whole array" (scroll, full damage, images, cache-bypass) and
         // reproduces the old whole-array upload exactly.
         uploadedInstanceCache = nil
-        let bg = bgInstanceBuffer.uploadIncremental(
-            backgrounds, dirty: bgDirty ?? 0 ..< backgrounds.count, slot: slot
-        )
-        let glyph = glyphInstanceBuffer.uploadIncremental(
-            glyphs, dirty: glyphDirty ?? 0 ..< glyphs.count, slot: slot
-        )
-        let deco = decoInstanceBuffer.uploadIncremental(
-            decorations, dirty: decoDirty ?? 0 ..< decorations.count, slot: slot
-        )
+        let bg = bgInstanceBuffer.uploadIncremental(backgrounds, dirty: bgDirty, slot: slot)
+        let glyph = glyphInstanceBuffer.uploadIncremental(glyphs, dirty: glyphDirty, slot: slot)
+        let deco = decoInstanceBuffer.uploadIncremental(decorations, dirty: decoDirty, slot: slot)
         return UploadedInstanceBuffers(
             key: key,
             backgrounds: bg?.buffer,
@@ -851,11 +876,19 @@ public final class TerminalMetalRenderer {
         strikeY: Float,
         overlineY: Float
     ) -> EncodedFrameInstances {
+        // Drop the previous frame's cursor/gutter extras before touching the grid region —
+        // every later mutation assumes the flats end at the last row segment.
+        if flatBgExtras > 0 {
+            flatBg.removeLast(flatBgExtras)
+            flatBgExtras = 0
+        }
+
         guard frame.columns > 0,
               frame.rows > 0,
               frame.cells.count == frame.columns * frame.rows
         else {
             resetRowInstanceCache()
+            clearFlats() // an invalid frame draws nothing — stale flats must not upload
             return EncodedFrameInstances()
         }
 
@@ -935,75 +968,138 @@ public final class TerminalMetalRenderer {
 
         let atlasResetsBefore = atlas.stats.resets
         var encoded = EncodedFrameInstances()
-        encoded.backgrounds.reserveCapacity(frame.cells.count + 1)
-        encoded.glyphs.reserveCapacity(frame.cells.count)
-        encoded.decorations.reserveCapacity(frame.cells.count / 8)
 
-        // Track the changed instance span per stream so the GPU upload can copy only the rows that
-        // moved. `bgOff/glOff/deOff` are each stream's running start offset; `*Lo/*Hi` bound the
-        // re-encoded rows; `*Shift` is the first offset whose count changed (everything after it
-        // shifted, so it must be re-uploaded too). A reused row contributes nothing.
-        var bgOff = 0, glOff = 0, deOff = 0
-        var bgLo = Int.max, bgHi = 0, bgShift = Int.max
-        var glLo = Int.max, glHi = 0, glShift = Int.max
-        var deLo = Int.max, deHi = 0, deShift = Int.max
-        for row in 0 ..< frame.rows {
-            let previous = rowInstanceCache.rowInstances[row]
-            let rowInstances: EncodedRowInstances
-            if dirtyRows.contains(row) || previous == nil {
+        // In-place splice (the steady-state path): the flats already hold every cached row at
+        // `rowSeg` offsets, so only the dirty rows' segments are rewritten — clean rows' bytes
+        // are never touched or copied. Requires a coherent layout (`flatsCoherent` — any reset,
+        // bypass, or geometry change forces the full rebuild below, which re-establishes it),
+        // an unchanged grid shape, and no scroll (a rotate rewrites every row's baked Y). Above
+        // half the rows dirty, one linear rebuild is cheaper than per-row tail shifts.
+        let spliceEligible = cacheMatches && !damage.full && scrollShift == 0 && flatsCoherent
+            && rowSeg.count == frame.rows && dirtyRows.count * 2 <= frame.rows
+        if spliceEligible {
+            var bgSpansDirty: [Range<Int>] = []
+            var glSpansDirty: [Range<Int>] = []
+            var deSpansDirty: [Range<Int>] = []
+            var bgShifted = Int.max, glShifted = Int.max, deShifted = Int.max
+            for row in dirtyRows.sorted() {
                 var fresh = encodeRowInstances(
-                    row,
-                    frame: frame,
-                    origin: origin,
-                    cellSize: cellSize,
-                    ligatures: ligatures,
-                    cursorKey: cursorKey,
-                    thickness: thickness,
-                    underlineY: underlineY,
-                    strikeY: strikeY,
-                    overlineY: overlineY
+                    row, frame: frame, origin: origin, cellSize: cellSize, ligatures: ligatures,
+                    cursorKey: cursorKey, thickness: thickness, underlineY: underlineY,
+                    strikeY: strikeY, overlineY: overlineY
                 )
-                // Stamp the content key so a later column-count change can salvage this row.
-                // Skipped for a glyph-inverting cursor row: its instances bake the cursor-text
-                // color, so they are NOT a pure function of the row content alone.
                 fresh.contentKey = (cursorKey.invertsGlyph && cursorKey.row == row)
                     ? 0
                     : Self.rowContentKey(frame, row: row)
-                rowInstances = fresh
-                rowInstanceCache.rowInstances[row] = rowInstances
+                let old = rowSeg[row]
+                let oldStats = rowInstanceCache.rowInstances[row]
+                flatBgSpans += fresh.bgSpans - (oldStats?.bgSpans ?? 0)
+                flatBgCells += fresh.bgCells - (oldStats?.bgCells ?? 0)
+                // Splice each stream: equal counts overwrite in place (no tail shift); a count
+                // change shifts the tail once and rebases every later segment by the delta.
+                let bgDelta = fresh.backgrounds.count - old.bg.count
+                let glDelta = fresh.glyphs.count - old.glyph.count
+                let deDelta = fresh.decorations.count - old.deco.count
+                flatBg.replaceSubrange(old.bg, with: fresh.backgrounds)
+                flatGlyph.replaceSubrange(old.glyph, with: fresh.glyphs)
+                flatDeco.replaceSubrange(old.deco, with: fresh.decorations)
+                rowSeg[row] = RowSegment(
+                    bg: old.bg.lowerBound ..< old.bg.lowerBound + fresh.backgrounds.count,
+                    glyph: old.glyph.lowerBound ..< old.glyph.lowerBound + fresh.glyphs.count,
+                    deco: old.deco.lowerBound ..< old.deco.lowerBound + fresh.decorations.count
+                )
+                if bgDelta != 0 || glDelta != 0 || deDelta != 0 {
+                    for j in (row + 1) ..< frame.rows {
+                        let s = rowSeg[j]
+                        rowSeg[j] = RowSegment(
+                            bg: (s.bg.lowerBound + bgDelta) ..< (s.bg.upperBound + bgDelta),
+                            glyph: (s.glyph.lowerBound + glDelta) ..< (s.glyph.upperBound + glDelta),
+                            deco: (s.deco.lowerBound + deDelta) ..< (s.deco.upperBound + deDelta)
+                        )
+                    }
+                }
+                bgSpansDirty.append(rowSeg[row].bg)
+                glSpansDirty.append(rowSeg[row].glyph)
+                deSpansDirty.append(rowSeg[row].deco)
+                if bgDelta != 0 { bgShifted = min(bgShifted, rowSeg[row].bg.lowerBound) }
+                if glDelta != 0 { glShifted = min(glShifted, rowSeg[row].glyph.lowerBound) }
+                if deDelta != 0 { deShifted = min(deShifted, rowSeg[row].deco.lowerBound) }
+                rowInstanceCache.rowInstances[row] = fresh
                 encoded.encodedRows += 1
-                let bgN = rowInstances.backgrounds.count
-                let glN = rowInstances.glyphs.count
-                let deN = rowInstances.decorations.count
-                bgLo = min(bgLo, bgOff); bgHi = max(bgHi, bgOff + bgN)
-                glLo = min(glLo, glOff); glHi = max(glHi, glOff + glN)
-                deLo = min(deLo, deOff); deHi = max(deHi, deOff + deN)
-                if (previous?.backgrounds.count ?? -1) != bgN { bgShift = min(bgShift, bgOff) }
-                if (previous?.glyphs.count ?? -1) != glN { glShift = min(glShift, glOff) }
-                if (previous?.decorations.count ?? -1) != deN { deShift = min(deShift, deOff) }
-            } else {
-                rowInstances = previous!
-                encoded.reusedRows += 1
             }
-            append(rowInstances, into: &encoded)
-            bgOff += rowInstances.backgrounds.count
-            glOff += rowInstances.glyphs.count
-            deOff += rowInstances.decorations.count
+            encoded.reusedRows = frame.rows - encoded.encodedRows
+            // A count change moved every later byte in that stream — those bytes must upload
+            // too, so the moved suffix joins the dirty list (count-preserving scattered damage
+            // keeps its separate row-sized spans; this is the win over the single-union range).
+            if bgShifted != Int.max { bgSpansDirty.append(bgShifted ..< flatBg.count) }
+            if glShifted != Int.max { glSpansDirty.append(glShifted ..< flatGlyph.count) }
+            if deShifted != Int.max { deSpansDirty.append(deShifted ..< flatDeco.count) }
+            encoded.bgDirty = DynamicInstanceBuffer.merge([], adding: bgSpansDirty.filter { !$0.isEmpty })
+            encoded.glyphDirty = DynamicInstanceBuffer.merge([], adding: glSpansDirty.filter { !$0.isEmpty })
+            encoded.decoDirty = DynamicInstanceBuffer.merge([], adding: deSpansDirty.filter { !$0.isEmpty })
+        } else {
+            // Full rebuild: clear the flats and lay every row back down (cached rows are still
+            // REUSED — only their flat-array copy is redone, not their encode). This is the
+            // boundary-crossing / scroll / post-reset shape; it re-establishes `flatsCoherent`.
+            clearFlats()
+            var bgLo = Int.max, bgHi = 0, bgShift = Int.max
+            var glLo = Int.max, glHi = 0, glShift = Int.max
+            var deLo = Int.max, deHi = 0, deShift = Int.max
+            flatBg.reserveCapacity(frame.cells.count + 1)
+            flatGlyph.reserveCapacity(frame.cells.count)
+            flatDeco.reserveCapacity(frame.cells.count / 8)
+            rowSeg.reserveCapacity(frame.rows)
+            for row in 0 ..< frame.rows {
+                let previous = rowInstanceCache.rowInstances[row]
+                let rowInstances: EncodedRowInstances
+                if dirtyRows.contains(row) || previous == nil {
+                    var fresh = encodeRowInstances(
+                        row, frame: frame, origin: origin, cellSize: cellSize, ligatures: ligatures,
+                        cursorKey: cursorKey, thickness: thickness, underlineY: underlineY,
+                        strikeY: strikeY, overlineY: overlineY
+                    )
+                    // Stamp the content key so a later column-count change can salvage this row.
+                    // Skipped for a glyph-inverting cursor row: its instances bake the cursor-text
+                    // color, so they are NOT a pure function of the row content alone.
+                    fresh.contentKey = (cursorKey.invertsGlyph && cursorKey.row == row)
+                        ? 0
+                        : Self.rowContentKey(frame, row: row)
+                    rowInstances = fresh
+                    rowInstanceCache.rowInstances[row] = rowInstances
+                    encoded.encodedRows += 1
+                    let bgN = rowInstances.backgrounds.count
+                    let glN = rowInstances.glyphs.count
+                    let deN = rowInstances.decorations.count
+                    bgLo = min(bgLo, flatBg.count); bgHi = max(bgHi, flatBg.count + bgN)
+                    glLo = min(glLo, flatGlyph.count); glHi = max(glHi, flatGlyph.count + glN)
+                    deLo = min(deLo, flatDeco.count); deHi = max(deHi, flatDeco.count + deN)
+                    if (previous?.backgrounds.count ?? -1) != bgN { bgShift = min(bgShift, flatBg.count) }
+                    if (previous?.glyphs.count ?? -1) != glN { glShift = min(glShift, flatGlyph.count) }
+                    if (previous?.decorations.count ?? -1) != deN { deShift = min(deShift, flatDeco.count) }
+                } else {
+                    rowInstances = previous!
+                    encoded.reusedRows += 1
+                }
+                appendRowToFlats(rowInstances)
+            }
+            flatsCoherent = true
+            // A row whose instance count changed shifts every later row's bytes, so extend that
+            // stream's dirty span to the end. A pure scroll rotates every kept row's baked Y, so
+            // its bytes all changed without being in `dirtyRows` — leave the spans nil (whole
+            // upload; the rewritten Ys genuinely all moved).
+            if scrollShift == 0 {
+                if bgShift != Int.max { bgHi = flatBg.count }
+                if glShift != Int.max { glHi = flatGlyph.count }
+                if deShift != Int.max { deHi = flatDeco.count }
+                encoded.bgDirty = bgHi > bgLo ? [bgLo ..< bgHi] : []
+                encoded.glyphDirty = glHi > glLo ? [glLo ..< glHi] : []
+                encoded.decoDirty = deHi > deLo ? [deLo ..< deHi] : []
+            }
         }
+        encoded.bgSpans = flatBgSpans
+        encoded.bgCells = flatBgCells
         rowInstanceCache.previousCursor = cursorKey
         encoded.cachePopulated = true // every row now lives in the cache (encoded or reused)
-
-        // A row whose instance count changed shifts every later row's bytes, so extend that
-        // stream's dirty span to the end. A pure scroll rotates every kept row's baked Y, so its
-        // bytes all changed without being in `dirtyRows` — leave the spans nil (whole upload).
-        if scrollShift == 0 {
-            if bgShift != Int.max { bgHi = bgOff }
-            if glShift != Int.max { glHi = glOff }
-            if deShift != Int.max { deHi = deOff }
-            encoded.bgDirty = bgHi > bgLo ? bgLo ..< bgHi : 0 ..< 0
-            encoded.glyphDirty = glHi > glLo ? glLo ..< glHi : 0 ..< 0
-            encoded.decoDirty = deHi > deLo ? deLo ..< deHi : 0 ..< 0
-        }
 
         if atlas.stats.resets != atlasResetsBefore {
             let reusedRows = encoded.reusedRows
@@ -1035,9 +1131,10 @@ public final class TerminalMetalRenderer {
         overlineY: Float
     ) -> EncodedFrameInstances {
         var encoded = EncodedFrameInstances()
-        encoded.backgrounds.reserveCapacity(frame.cells.count + 1)
-        encoded.glyphs.reserveCapacity(frame.cells.count)
-        encoded.decorations.reserveCapacity(frame.cells.count / 8)
+        clearFlats()
+        flatBg.reserveCapacity(frame.cells.count + 1)
+        flatGlyph.reserveCapacity(frame.cells.count)
+        flatDeco.reserveCapacity(frame.cells.count / 8)
         for row in 0 ..< frame.rows {
             let rowInstances = encodeRowInstances(
                 row,
@@ -1059,9 +1156,45 @@ public final class TerminalMetalRenderer {
                 overlineY: overlineY
             )
             encoded.encodedRows += 1
-            append(rowInstances, into: &encoded)
+            appendRowToFlats(rowInstances)
         }
+        encoded.bgSpans = flatBgSpans
+        encoded.bgCells = flatBgCells
+        // The bypass leaves the row cache empty (`resetRowInstanceCache` ran before this), so
+        // the flats hold THIS frame but cannot be spliced against next frame: stay incoherent.
+        flatsCoherent = false
         return encoded
+    }
+
+    /// Append one row's instances to the persistent flats, recording its segment and stat
+    /// contributions. The full-rebuild and bypass paths lay frames down exclusively through
+    /// this, so `rowSeg` always exactly tiles the grid region.
+    private func appendRowToFlats(_ row: EncodedRowInstances) {
+        let seg = RowSegment(
+            bg: flatBg.count ..< flatBg.count + row.backgrounds.count,
+            glyph: flatGlyph.count ..< flatGlyph.count + row.glyphs.count,
+            deco: flatDeco.count ..< flatDeco.count + row.decorations.count
+        )
+        flatBg.append(contentsOf: row.backgrounds)
+        flatGlyph.append(contentsOf: row.glyphs)
+        flatDeco.append(contentsOf: row.decorations)
+        rowSeg.append(seg)
+        flatBgSpans += row.bgSpans
+        flatBgCells += row.bgCells
+    }
+
+    /// Empty the persistent flats (capacity kept — steady state never re-allocates) and reset
+    /// the segment table and stat totals. Callers re-establish `flatsCoherent` themselves after
+    /// laying a frame back down over the cache.
+    private func clearFlats() {
+        flatBg.removeAll(keepingCapacity: true)
+        flatGlyph.removeAll(keepingCapacity: true)
+        flatDeco.removeAll(keepingCapacity: true)
+        rowSeg.removeAll(keepingCapacity: true)
+        flatBgExtras = 0
+        flatBgSpans = 0
+        flatBgCells = 0
+        flatsCoherent = false
     }
 
     @inline(__always)
@@ -1277,17 +1410,13 @@ public final class TerminalMetalRenderer {
         return encoded
     }
 
-    private func append(_ row: EncodedRowInstances, into encoded: inout EncodedFrameInstances) {
-        encoded.backgrounds.append(contentsOf: row.backgrounds)
-        encoded.glyphs.append(contentsOf: row.glyphs)
-        encoded.decorations.append(contentsOf: row.decorations)
-        encoded.bgSpans += row.bgSpans
-        encoded.bgCells += row.bgCells
-    }
-
     private func resetRowInstanceCache() {
         rowInstanceCache = RowInstanceCache()
         uploadedInstanceCache = nil
+        // Mark the flats stale relative to the (now empty) cache, but do NOT clear them: the
+        // mid-encode atlas-reset branch resets the cache while the flats still hold the frame
+        // `encode` is about to draw and upload. The next build's full-rebuild path clears them.
+        flatsCoherent = false
     }
 
     /// Drop the row-reuse + stable-upload caches so the next frame re-encodes everything. The
