@@ -1634,7 +1634,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                     // rotation or fraction-only repaint (nil would reset it and force the next
                     // tick to re-encode everything). Overlay frames keep nil — their baked
                     // highlight cells must not poison the cache.
-                    if overlayFree, frame.images.isEmpty {
+                    if overlayFree {
                         renderDamage = TerminalDamage(full: true)
                     }
                 }
@@ -1706,7 +1706,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             // (and without touching the emulator queue). See `repaintLastFrame`.
             lastPresentedResult = result
             // The renderer reports whether the encode left its row cache holding exactly this
-            // frame's rows — false for the cache-bypassing paths (nil damage, images) AND for a
+            // frame's rows — false for the cache-bypassing paths (nil damage) AND for a
             // mid-encode atlas reset that wiped the cache (which a damage-only heuristic here
             // could not distinguish from a normal full encode).
             lastPresentedResultIsRendererCoherent = renderer.stats.rowCacheCoherent
@@ -1836,17 +1836,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// doesn't (preview reflow replaced the frame, a drop wiped the cache), a `full` damage pays
     /// one rebuild *through the cache-populating path* so the very next tick is free again —
     /// unlike `damage: nil`, which rebuilds AND leaves the cache empty, making every sub-cell drag
-    /// tick a full re-encode (the pre-#57 resize-lag source). Image frames keep `nil` (the
-    /// renderer's cache path requires `images.isEmpty`).
+    /// tick a full re-encode (the pre-#57 resize-lag source). Image frames take the same two
+    /// paths — image quads draw outside the cell instance buffers, so they never gate reuse.
     @discardableResult
     private func repaintLastFrame() -> Bool {
         guard let result = lastPresentedResult,
               result.generation == renderGeneration,
               window != nil, let renderer else { return false }
         let damage: TerminalDamage?
-        if !result.frame.images.isEmpty {
-            damage = nil
-        } else if lastPresentedResultIsRendererCoherent {
+        if lastPresentedResultIsRendererCoherent {
             damage = TerminalDamage(rows: [], full: false)
         } else {
             damage = TerminalDamage(full: true)

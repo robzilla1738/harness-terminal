@@ -34,7 +34,7 @@ public struct TerminalRenderStats: Equatable, Sendable {
     public var presentScheduleNanos: UInt64
     /// True iff this encode left the row-instance cache holding exactly the encoded frame's rows —
     /// the surface's repaint-coherence signal. False for the cache-bypassing paths (nil damage,
-    /// image frames) AND for a mid-encode atlas reset that wiped the cache after reuse: those
+    /// shape guards) AND for a mid-encode atlas reset that wiped the cache after reuse: those
     /// present correct pixels but leave the cache empty, so an empty-damage repaint must not
     /// assume reuse. Only the renderer can tell these apart from a normal full encode.
     public var rowCacheCoherent: Bool
@@ -119,7 +119,7 @@ private struct EncodedFrameInstances {
     var encodedRows = 0
     var reusedRows = 0
     /// Whether the row-instance cache holds exactly this frame's rows on exit — false for the
-    /// cache-bypassing builds (nil damage, images, shape guards) and the mid-encode atlas-reset
+    /// cache-bypassing builds (nil damage, shape guards) and the mid-encode atlas-reset
     /// fallback. Feeds `TerminalRenderStats.rowCacheCoherent`.
     var cachePopulated = false
     /// Ordered half-open instance-index spans that changed this frame in each stream, used to
@@ -757,12 +757,15 @@ public final class TerminalMetalRenderer {
         let frameShapeIsValid = frame.columns > 0
             && frame.rows > 0
             && frame.cells.count == frame.columns * frame.rows
+        // Images do NOT gate the stable cache: image quads draw per frame from `frame.images`
+        // (textures keyed by their never-reused ids in ImageTextureCache), entirely outside the
+        // cell instance buffers — a moved/changed image renders at its new placement while the
+        // unchanged cell buffers re-bind zero-copy.
         let stableFrame = damage != nil
             && damage?.full == false
             && encoded.encodedRows == 0
             && encoded.reusedRows == frame.rows
             && frameShapeIsValid
-            && frame.images.isEmpty
 
         // INVARIANT (load-bearing for the ring): the immutable path below bypasses
         // `uploadIncremental`, so the ring slots' pending lists do NOT learn about this frame.
@@ -907,7 +910,10 @@ public final class TerminalMetalRenderer {
             return EncodedFrameInstances()
         }
 
-        guard let damage, frame.images.isEmpty else {
+        // Inline images do not bypass the row cache: they draw as separate textured quads AFTER
+        // the cell passes (`drawImages`), so image presence is irrelevant to the cell encode —
+        // an image-bearing pane keeps incremental row reuse while typing/resizing.
+        guard let damage else {
             resetRowInstanceCache()
             return buildFrameInstancesWithoutCache(
                 frame, origin: origin, cellSize: cellSize, ligatures: ligatures,

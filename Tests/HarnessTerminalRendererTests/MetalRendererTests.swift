@@ -849,8 +849,9 @@ final class MetalRendererTests: XCTestCase {
     }
 
     func testImagesBypassThenValidFrameRecovers() throws {
-        // The images bypass resets the cache and leaves the flats incoherent; the next no-image
-        // damage frame must take the full rebuild and render byte-identically to from-scratch.
+        // A nil-damage bypass frame (here carrying an image, as overlay frames do) resets the
+        // cache and leaves the flats incoherent; the next damage frame must take the full
+        // rebuild and render byte-identically to from-scratch.
         let (device, renderer) = try makeRenderer()
         let cols = 8, rows = 4
         let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
@@ -880,6 +881,83 @@ final class MetalRendererTests: XCTestCase {
             readPixelBytes(target, width: size.width, height: size.height),
             readPixelBytes(refTarget, width: size.width, height: size.height),
             "the no-image frame after the bypass must rebuild and match from-scratch"
+        )
+    }
+
+    func testImageFrameKeepsRowReuseWhileTyping() throws {
+        // Inline images draw as separate textured quads after the cell passes, so an
+        // image-bearing pane must keep incremental row reuse: a one-row change re-encodes one
+        // row, not the whole grid (the old code bypassed the cache whenever images were present).
+        let (device, renderer) = try makeRenderer()
+        let cols = 8, rows = 4
+        let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let size = renderer.surfacePixelSize(columns: cols, rows: rows)
+        guard let target = makeTarget(device, width: size.width, height: size.height),
+              let refTarget = makeTarget(device, width: size.width, height: size.height)
+        else { throw XCTSkip("no texture") }
+        func withImage(_ f: TerminalFrame) -> TerminalFrame {
+            var v = f
+            v.images = [FrameImage(
+                id: 1, column: 5, row: 2, columns: 2, rows: 1, z: 0,
+                image: DecodedImage(rgba: [0, 255, 0, 255], pixelWidth: 1, pixelHeight: 1)
+            )]
+            return v
+        }
+        let first = withImage(frame("\u{1b}[?25lAAAA\r\nBBBB\r\nCCCC\r\nDDDD", cols: cols, rows: rows))
+        renderer.render(first, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+        XCTAssertTrue(renderer.stats.rowCacheCoherent, "an image frame populates the cache now")
+        XCTAssertGreaterThan(renderer.stats.imageInstances, 0)
+
+        let typed = withImage(frame("\u{1b}[?25lAXAA\r\nBBBB\r\nCCCC\r\nDDDD", cols: cols, rows: rows))
+        renderer.render(typed, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integer: 0), full: false))
+        XCTAssertEqual(renderer.stats.encodedRows, 1, "typing with an image on screen reuses clean rows")
+        XCTAssertEqual(renderer.stats.reusedRows, rows - 1)
+        XCTAssertGreaterThan(renderer.stats.imageInstances, 0, "the image still draws")
+
+        let reference = try makeRenderer(device: device)
+        reference.render(typed, to: refTarget, clearColor: clear)
+        XCTAssertEqual(
+            readPixelBytes(target, width: size.width, height: size.height),
+            readPixelBytes(refTarget, width: size.width, height: size.height)
+        )
+    }
+
+    func testMovedImageRendersAtNewPlacementOverStableCells() throws {
+        // A moved image must render at its new placement even when the CELL buffers re-bind from
+        // the stable immutable cache with zero upload — image quads are placed per frame from
+        // `frame.images`, never from the cached instance buffers.
+        let (device, renderer) = try makeRenderer()
+        let cols = 8, rows = 4
+        let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let size = renderer.surfacePixelSize(columns: cols, rows: rows)
+        guard let target = makeTarget(device, width: size.width, height: size.height),
+              let refTarget = makeTarget(device, width: size.width, height: size.height)
+        else { throw XCTSkip("no texture") }
+        func at(_ column: Int) -> TerminalFrame {
+            var v = frame("\u{1b}[?25lAAAA\r\nBBBB\r\nCCCC\r\nDDDD", cols: cols, rows: rows)
+            v.images = [FrameImage(
+                id: 7, column: column, row: 1, columns: 1, rows: 1, z: 0,
+                image: DecodedImage(rgba: [255, 0, 255, 255], pixelWidth: 1, pixelHeight: 1)
+            )]
+            return v
+        }
+        renderer.render(at(1), to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< rows), full: true))
+        // Settle to the stable immutable cache (two empty-damage frames prime then hit it).
+        renderer.render(at(1), to: target, clearColor: clear, damage: TerminalDamage(rows: [], full: false))
+        renderer.render(at(1), to: target, clearColor: clear, damage: TerminalDamage(rows: [], full: false))
+        XCTAssertEqual(renderer.stats.instanceUploadBytes, 0, "cells settled to the stable cache")
+
+        renderer.render(at(5), to: target, clearColor: clear, damage: TerminalDamage(rows: [], full: false))
+        XCTAssertEqual(renderer.stats.instanceUploadBytes, 0, "the move costs zero cell bytes")
+        let reference = try makeRenderer(device: device)
+        reference.render(at(5), to: refTarget, clearColor: clear)
+        XCTAssertEqual(
+            readPixelBytes(target, width: size.width, height: size.height),
+            readPixelBytes(refTarget, width: size.width, height: size.height),
+            "the image must draw at its NEW placement over the zero-copy cell bind"
         )
     }
 
