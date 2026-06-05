@@ -171,7 +171,8 @@ public final class TerminalHostView: NSView {
             vivid: settings?.vividColors ?? false,
             colorRendering: settings?.colorRendering,
             colorGamut: settings?.colorGamut ?? .auto,
-            offMainParserFramePipeline: settings?.offMainParserFramePipeline ?? true
+            offMainParserFramePipeline: settings?.offMainParserFramePipeline ?? true,
+            liveResizeReflow: settings?.liveResizeReflow ?? true
         )
         self.nativeView = nativeView
         super.init(frame: .zero)
@@ -362,7 +363,8 @@ public final class TerminalHostView: NSView {
             minimumContrast: HarnessSettings.clampedContrast(settings.minimumContrast),
             boldIsBright: settings.boldIsBright,
             promptGutter: settings.showPromptGutter,
-            offMainParserFramePipeline: settings.offMainParserFramePipeline
+            offMainParserFramePipeline: settings.offMainParserFramePipeline,
+            liveResizeReflow: settings.liveResizeReflow
         )
         // Resize overlay: legible on any theme via the canvas FG fill + BG text (same trick as the
         // pane-border label), positioned per settings.
@@ -840,6 +842,11 @@ private final class SurfaceIO: @unchecked Sendable {
     /// its placeholder size is corrected without waiting for the next layout pass. Guarded by `lock`.
     private var lastRows: UInt16 = 0
     private var lastCols: UInt16 = 0
+    /// Monotonic tag for coalescing live-resize votes: a real-time window drag fires one
+    /// `resize(...)` per cell boundary, and the daemon re-`ioctl`s on every identical size, so a
+    /// fast drag must not storm the IPC socket. Each call bumps this; a queued send drops itself if
+    /// a newer call superseded it. Guarded by `lock`.
+    private var resizeVoteEpoch: UInt64 = 0
 
     init(surfaceID: String, endpoint: Endpoint = .localControlSocket) {
         self.surfaceID = surfaceID
@@ -882,16 +889,33 @@ private final class SurfaceIO: @unchecked Sendable {
     }
 
     func resize(rows: UInt16, cols: UInt16) {
-        lock.lock(); lastRows = rows; lastCols = cols; lock.unlock()
-        // Prefer the persistent subscription (mirrors `send`): the daemon keys size votes by fd,
-        // so a vote on the subscription holds until detach — a one-shot vote evaporates with its
+        lock.lock()
+        lastRows = rows
+        lastCols = cols
+        resizeVoteEpoch &+= 1
+        let epoch = resizeVoteEpoch
+        lock.unlock()
+        // Coalesce a live drag's per-cell-boundary votes: each call bumps the epoch, and the queued
+        // send fires only if its epoch is still newest when it runs, reading the freshest size under
+        // the lock. A burst on the IPC socket collapses to the final size — the daemon does not
+        // dedupe identical `TIOCSWINSZ` calls, so the client must — while every DISTINCT settled
+        // size still lands (the per-fd vote is sticky, so the last value wins).
+        // Prefer the persistent subscription (mirrors `send`): the daemon keys size votes by fd, so
+        // a vote on the subscription holds until detach — a one-shot vote evaporates with its
         // socket. Before the subscription exists, fall back to the per-call client (apply-then-drop
         // is correct for a not-yet-attached client).
         queue.async { [weak self, client, surfaceID] in
-            if let sub = self?.currentSubscription {
-                sub.resize(surfaceID, rows: rows, cols: cols)
+            guard let self else { return }
+            self.lock.lock()
+            let isLatest = epoch == self.resizeVoteEpoch
+            let r = self.lastRows
+            let c = self.lastCols
+            self.lock.unlock()
+            guard isLatest else { return } // a newer vote superseded this one — drop the duplicate
+            if let sub = self.currentSubscription {
+                sub.resize(surfaceID, rows: r, cols: c)
             } else {
-                _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols))
+                _ = try? client.request(.resizeSurface(surfaceID: surfaceID, rows: r, cols: c))
             }
         }
     }

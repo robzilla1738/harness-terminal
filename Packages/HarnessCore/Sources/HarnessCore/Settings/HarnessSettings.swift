@@ -179,6 +179,12 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// `queue.sync`), stale builds are dropped by a render-generation tag, and the row-reuse cache
     /// is queue-owned. An explicitly stored `false` is honored (opt-out).
     public var offMainParserFramePipeline: Bool
+    /// Real-time (Ghostty-style) live resize: while dragging the window edge, reflow the grid and
+    /// signal the running program (`SIGWINCH`) at every cell boundary, so interactive programs
+    /// (vim/htop/tmux) redraw continuously instead of waiting for the drag to end. **Default on.**
+    /// An explicitly stored `false` reverts to the legacy defer-to-release behavior (the authoritative
+    /// reflow + `SIGWINCH` fire once, when the drag ends).
+    public var liveResizeReflow: Bool
     /// Draw the OSC 133 prompt gutter — a per-row stripe in the left margin marking shell
     /// prompts (green = success, red = failure). Off by default; the marks still power
     /// jump-to-prompt either way, so this only controls the stripe's visibility.
@@ -307,6 +313,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         applyThemeToTerminalOutput: Bool = false,
         ligatures: Bool = true,
         offMainParserFramePipeline: Bool = true,
+        liveResizeReflow: Bool = true,
         showPromptGutter: Bool = false,
         showStatusLine: Bool = true,
         // Fresh installs default to the simplest experience — a fast native terminal.
@@ -371,6 +378,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.applyThemeToTerminalOutput = applyThemeToTerminalOutput
         self.ligatures = ligatures
         self.offMainParserFramePipeline = offMainParserFramePipeline
+        self.liveResizeReflow = liveResizeReflow
         self.showPromptGutter = showPromptGutter
         self.showStatusLine = showStatusLine
         self.experienceMode = experienceMode
@@ -512,6 +520,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // Default on when the key is absent (existing installs get the fast path); an explicitly
         // stored `false` is honored as an opt-out.
         offMainParserFramePipeline = try container.decodeIfPresent(Bool.self, forKey: .offMainParserFramePipeline) ?? true
+        // Default on when the key is absent (existing installs get real-time resize); an explicitly
+        // stored `false` is honored as an opt-out to the legacy defer-to-release behavior.
+        liveResizeReflow = try container.decodeIfPresent(Bool.self, forKey: .liveResizeReflow) ?? true
         showPromptGutter = try container.decodeIfPresent(Bool.self, forKey: .showPromptGutter) ?? fallback.showPromptGutter
         showStatusLine = try container.decodeIfPresent(Bool.self, forKey: .showStatusLine) ?? fallback.showStatusLine
         // Behavior-preserving migration: a settings file that predates modes was written by a

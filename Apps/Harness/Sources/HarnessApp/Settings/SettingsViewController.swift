@@ -37,6 +37,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let statusLineControlSegment = HarnessSegmented(frame: .zero)
     private let textRenderingSegment = HarnessSegmented(frame: .zero)
     private let offMainPipelineToggle = HarnessToggle(title: "Off-main render pipeline")
+    private let liveResizeReflowToggle = HarnessToggle(title: "Real-time resize")
     private let experienceSummaryLabel = NSTextField(wrappingLabelWithString: "")
     private let cursorStyleSegment = HarnessSegmented(frame: .zero)
     private let cursorBlinkToggle = HarnessToggle(title: "Blinking cursor")
@@ -395,6 +396,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
         offMainPipelineToggle.target = self
         offMainPipelineToggle.action = #selector(appearanceTextDidCommit)
+
+        liveResizeReflowToggle.state = settings.liveResizeReflow ? .on : .off
+        liveResizeReflowToggle.target = self
+        liveResizeReflowToggle.action = #selector(appearanceTextDidCommit)
 
         // Resize overlay (T1)
         resizeOverlaySegment.setSegments(["After first", "Always", "Never"])
@@ -1238,6 +1243,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let performanceGroup = settingsGroup("Performance", [
             settingsToggleRow("Off-main render pipeline", offMainPipelineToggle,
                               hint: "Parse + build frames off the main thread. On is recommended."),
+            settingsToggleRow("Real-time resize", liveResizeReflowToggle,
+                              hint: "Reflow and redraw the running program live while dragging the "
+                                  + "window edge, instead of on release. On is recommended."),
         ])
 
         let intro = settingsCaption("Power-user options shared with the harness-cli set-option command surface. Changes apply globally and persist immediately.")
@@ -2086,6 +2094,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         themeTerminalOutputToggle.state = settings.applyThemeToTerminalOutput ? .on : .off
         ligaturesToggle.state = settings.ligatures ? .on : .off
         offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
+        liveResizeReflowToggle.state = settings.liveResizeReflow ? .on : .off
         resizeOverlaySegment.selectItem(withTitle: resizeOverlayTitle(settings.resizeOverlay))
         paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
         minContrastSlider.doubleValue = settings.minimumContrast
@@ -2191,6 +2200,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.ligatures = ligaturesToggle.state == .on
         coordinator.settings.showPromptGutter = promptGutterToggle.state == .on
         coordinator.settings.offMainParserFramePipeline = offMainPipelineToggle.state == .on
+        coordinator.settings.liveResizeReflow = liveResizeReflowToggle.state == .on
         coordinator.settings.resizeOverlay = resizeOverlayValue(resizeOverlaySegment.titleOfSelectedItem)
         coordinator.settings.windowPaddingBalance = paddingBalanceToggle.state == .on
         coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)

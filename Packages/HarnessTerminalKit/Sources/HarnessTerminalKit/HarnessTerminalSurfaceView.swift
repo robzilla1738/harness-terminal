@@ -292,6 +292,17 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// cached preview at the new drawable size). Reset on commit so the next drag starts fresh.
     private var previewCols = 0
     private var previewRows = 0
+    /// Real-time live resize (Ghostty parity). When true, a window-edge drag commits the
+    /// authoritative grid reflow + PTY `SIGWINCH` at every cell boundary so interactive programs
+    /// (vim/htop/tmux) redraw continuously, instead of deferring the reflow to drag-end. The
+    /// non-mutating re-wrap preview still rides under it for instant feedback. Set from
+    /// `configureAppearance(liveResizeReflow:)`; the escape-hatch setting defaults it on. When
+    /// false the surface keeps the legacy defer-to-release behavior.
+    private var liveResizeReflowEnabled = true
+    /// The (cols, rows) last handed to the PTY via `onResize`, so a mid-drag commit only fires a
+    /// `SIGWINCH` when the cell count actually changed from the last one sent (a within-column drag
+    /// frame sends nothing). Reset at drag end so the next drag starts fresh.
+    private var lastSentPTYSize: (cols: Int, rows: Int)?
     private var fontFamily: String
     private var fontSize: CGFloat
     /// The canvas (default) background — used as the Metal clear color and (at
@@ -462,7 +473,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         vivid: Bool = false,
         colorRendering: TerminalColorRenderingMode? = nil,
         colorGamut: TerminalColorGamut = .auto,
-        offMainParserFramePipeline: Bool = true
+        offMainParserFramePipeline: Bool = true,
+        liveResizeReflow: Bool = true
     ) {
         let theme = HarnessThemeCatalog.theme(named: themeName)
             ?? HarnessThemeCatalog.theme(named: ThemeManager.defaultThemeName)!
@@ -499,6 +511,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         self.colorRendering = resolvedColorRendering
         self.colorGamut = resolvedGamut
         self.offMainParserFramePipelineEnabled = offMainParserFramePipeline
+        self.liveResizeReflowEnabled = liveResizeReflow
         self.emulatorState = SurfaceEmulatorState(columns: columns, rows: rows)
         super.init(frame: .zero)
         registerForDraggedTypes(Self.droppedPathPasteboardTypes)
@@ -637,6 +650,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     var testingGridSize: (cols: Int, rows: Int) { (columns, rows) }
     var testingHasPendingResizeCommit: Bool { resizeCommitWork != nil }
     func testingScheduleResizeCommit(cols: Int, rows: Int) { scheduleResizeCommit(cols: cols, rows: rows) }
+    func testingRequestLiveResizeCommit(cols: Int, rows: Int) { requestLiveResizeCommit(cols: cols, rows: rows) }
+    func testingSetLiveResizeReflow(_ enabled: Bool) { liveResizeReflowEnabled = enabled }
+    var testingLiveResizeReflowEnabled: Bool { liveResizeReflowEnabled }
+    var testingLastSentPTYSize: (cols: Int, rows: Int)? { lastSentPTYSize }
     func testingMarkGridSized() { hasSizedGrid = true }
     // Window-hosted seams (the routing test drives real presents through a real Metal renderer).
     var testingOriginOffset: (x: Int, y: Int) { (originOffsetX, originOffsetY) }
@@ -727,8 +744,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         minimumContrast: Double = 1,
         boldIsBright: Bool = true,
         promptGutter: Bool = false,
-        offMainParserFramePipeline: Bool = true
+        offMainParserFramePipeline: Bool = true,
+        liveResizeReflow: Bool = true
     ) {
+        liveResizeReflowEnabled = liveResizeReflow
         emulatorSync { $0.maxScrollbackLines = scrollbackLines }
         if offMainParserFramePipelineEnabled && !offMainParserFramePipeline {
             // Drain any queued parser/frame work before direct main-thread emulator access resumes.
@@ -1183,30 +1202,32 @@ public final class HarnessTerminalSurfaceView: NSView {
         super.viewDidEndLiveResize()
         metalLayer.presentsWithTransaction = false
         metalLayer.maximumDrawableCount = 2 // restore the low-latency echo pool (see configureLayer)
-        // Flush the debounced grid+PTY commit now: the size is settled the moment the drag ends,
-        // so the shell shouldn't wait out the coalescing delay (which exists for *animated*
-        // resizes — sidebar slides, tiling — that never enter live resize). `perform` runs the
-        // captured commit synchronously; `cancel` keeps the queued asyncAfter copy from running
-        // it a second time (and `commitGridSize` is idempotent via its cols/rows guard anyway).
+        // Invalidate any in-flight preview build UNCONDITIONALLY. A live commit's generation bump
+        // usually covers this, but a drag that returns to its ORIGINAL size commits nothing (no
+        // bump, previewCols still holds the last intermediate target) — a slow build for that
+        // intermediate width landing after release would pass every guard and stash a wrong-width
+        // frame. Advancing the preview token + clearing the target makes both the on-queue skip and
+        // the hop guards drop it.
+        _ = emulatorState.claimPreviewToken()
+        previewCols = 0; previewRows = 0
+        // Unfreeze and recompute geometry/origin for the SETTLED size. With live reflow on this is
+        // almost always a pure re-center — the last cell-boundary commit already reflowed + sent
+        // the final size; with live reflow off it schedules the drag's one-and-only debounced
+        // commit. Either mode, a release landing exactly on a not-yet-processed boundary schedules
+        // a fresh commit here, flushed immediately just below.
+        liveResizeFrozenOrigin = nil
+        updateGridSize()
+        // Flush any pending grid+PTY commit NOW: the size is settled the moment the drag ends and
+        // transaction mode is off, so it lands immediately instead of waiting out the coalescing
+        // delay (which exists only for *animated* resizes — sidebar slides, tiling). `perform` runs
+        // it synchronously; `cancel` stops the queued asyncAfter copy from re-running it (and
+        // `commitGridSize` is idempotent via its cols/rows guard anyway). Ordered AFTER
+        // `updateGridSize` so a commit it just scheduled for a boundary-landing release is caught.
         if let work = resizeCommitWork {
             resizeCommitWork = nil
             work.perform()
             work.cancel()
         }
-        // Invalidate any in-flight preview build UNCONDITIONALLY. The commit's generation bump
-        // usually covers this, but a drag that returns to its ORIGINAL size commits nothing (the
-        // cols guard early-returns, no bump, previewCols still holds the last intermediate
-        // target) — a slow build for that intermediate width landing after release would pass
-        // every guard and stash a wrong-width frame. Advancing the preview token + clearing the
-        // target makes both the on-queue skip and the hop guards drop it.
-        _ = emulatorState.claimPreviewToken()
-        previewCols = 0; previewRows = 0
-        // Unfreeze and re-center the balanced padding once for the settled size, then repaint so
-        // the grid doesn't stay parked at the drag-start origin. When the flush above committed a
-        // new size, the generation just changed and `repaintLastFrame` declines — the authoritative
-        // off-main reflow presents the re-centered frame instead.
-        liveResizeFrozenOrigin = nil
-        updateGridSize()
         if !repaintLastFrame() { scheduleRender() }
     }
 
@@ -1271,11 +1292,20 @@ public final class HarnessTerminalSurfaceView: NSView {
             // Live HUD tick: the integer cols/rows only change at cell boundaries (the drawable
             // resizes smoothly every frame), so this fires exactly when the displayed size ticks.
             onGridSizeWillChange?(newCols, newRows, false)
-            // Coalesce: the drawable already resized above (smooth); defer the authoritative
-            // history-wide reflow + PTY SIGWINCH until the size settles so a sidebar slide / window
-            // drag can't storm the shell. Each layout reschedules, so the commit fires once after
-            // the last frame.
-            scheduleResizeCommit(cols: newCols, rows: newRows)
+            if liveResizeReflowEnabled, metalLayer.presentsWithTransaction {
+                // Real-time live resize (Ghostty parity): commit the authoritative reflow + PTY
+                // SIGWINCH at THIS cell boundary so the running program redraws during the drag,
+                // not on release. The reflow runs off-main and coalesces latest-wins, so a fast
+                // drag stays cheap. The preview below still rides under it for instant feedback.
+                requestLiveResizeCommit(cols: newCols, rows: newRows)
+            } else {
+                // Legacy / animated path (escape-hatch off, or sidebar slide / tiling which never
+                // enter live resize): the drawable already resized above (smooth); defer the
+                // authoritative history-wide reflow + PTY SIGWINCH until the size settles so the
+                // animation can't storm the shell. Each layout reschedules, so the commit fires
+                // once after the last frame.
+                scheduleResizeCommit(cols: newCols, rows: newRows)
+            }
             // Live re-wrap: show the *content re-wrapped* to the new width during the drag instead of
             // the old grid revealed/clipped — `previewViewportReflow` is O(visible) and non-mutating,
             // so it's affordable every cell-boundary tick. Rebuild only when the cell count changes.
@@ -1359,6 +1389,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         columns = cols
         rows = newRows
         invalidateRenderGeneration()              // bump generation; drop stale preview / plain-frame cache
+        lastSentPTYSize = (cols, newRows)          // keep the live-resize vote coalescer in sync
         onResize?(cols, newRows)                  // one PTY SIGWINCH (fire-and-forget)
         onGridSizeWillChange?(cols, newRows, true) // settled size for the HUD
         previewCols = 0; previewRows = 0           // force the next drag to rebuild a fresh preview
@@ -1381,6 +1412,70 @@ public final class HarnessTerminalSurfaceView: NSView {
             emulatorSync { $0.resize(cols: cols, rows: newRows) }
             scheduler.forceRender()
         }
+    }
+
+    /// Real-time authoritative commit fired at EVERY cell boundary during a live drag (Ghostty
+    /// parity) — the counterpart to `commitGridSize`'s debounced drag-end path. It mutates the real
+    /// grid (`emulator.resize`) and sends the PTY `SIGWINCH` (`onResize`) live, so interactive
+    /// programs — vim/htop/btop/tmux/less, and any alternate-screen TUI the non-mutating preview
+    /// cannot serve — reflow and redraw continuously instead of snapping at release.
+    ///
+    /// Two costs are tamed so a fast drag stays smooth:
+    /// - The O(history) width reflow runs OFF-MAIN on the emulator serial queue and is coalesced
+    ///   latest-wins via `renderNowOffMain`'s frame token: a drag crossing N columns runs ~1–3
+    ///   reflows, not N (superseded targets skip their resize+build entirely).
+    /// - The cross-process PTY vote (`onResize` → daemon ioctl → child `SIGWINCH`) fires only when
+    ///   the cell count changed from `lastSentPTYSize`, so a within-column drag frame sends nothing.
+    ///
+    /// The rebuilt frame presents inside an explicit `CATransaction` (`flushTransaction`) so a
+    /// completion landing while the mouse is held *still* (no layout pass to ride) still flushes —
+    /// see `presentWithinExplicitTransaction`. Called only while `presentsWithTransaction` (a real
+    /// drag) and `liveResizeReflowEnabled`; `updateGridSize` gates both.
+    private func requestLiveResizeCommit(cols: Int, rows newRows: Int) {
+        guard cols != columns || newRows != rows else { return }
+        columns = cols
+        rows = newRows
+        // A text selection can't survive a width reflow (the wrapped rows move under its anchors),
+        // so clear it like Terminal.app/iTerm rather than render a stale region. Copy mode and find
+        // recompute their viewport-relative state per build, so they self-heal across the reflow.
+        // `clearSelection` no-ops when nothing is selected (and avoids the `currentSelectionRegion`
+        // getter, which can `emulatorSync` for a word selection — a main-thread stall mid-drag).
+        clearSelection()
+        // DELIBERATELY no `renderGeneration` bump here. A bump would make `layout()`'s
+        // `repaintLastFrame` decline (generation mismatch) and fall to the SYNCHRONOUS `forceRender`,
+        // whose `state.sync` would block main behind the in-flight O(history) reflow on the emulator
+        // queue — the exact stall the off-main pipeline exists to avoid. Instead the builder-reuse
+        // cache is cleared ON the queue right after `emulator.resize` (see the `resizeEmulatorTo`
+        // branch in `renderNowOffMain`'s build), and the renderer's row cache auto-invalidates on the
+        // dimension change. So between this commit and the authoritative frame landing, layout keeps
+        // stretching the cached frame (the same near-free sub-cell repaint), and FIFO queue + main
+        // ordering guarantees the latest target's reflow is the one that presents last.
+        // PTY SIGWINCH, coalesced caller-side to distinct cell counts (the daemon does not dedupe).
+        if lastSentPTYSize?.cols != cols || lastSentPTYSize?.rows != newRows {
+            lastSentPTYSize = (cols, newRows)
+            onResize?(cols, newRows)
+        }
+        // Clear the preview target so the next `updateResizePreview` (same boundary tick) rebuilds a
+        // fresh re-wrap for this width and a stale in-flight preview can't match `previewCols`.
+        previewCols = 0; previewRows = 0
+        // Reflow the real grid off-main and present the result within an explicit CA transaction.
+        renderNowOffMain(resizeEmulatorTo: (cols, newRows), flushTransaction: true)
+    }
+
+    /// Run `body` (which presents a transaction-synchronized frame) inside an explicit Core
+    /// Animation transaction. With `presentsWithTransaction = true` a `drawable.present()` reaches
+    /// the glass only when the enclosing transaction commits; during a live drag the only
+    /// transactions are AppKit's per-frame `layout()` passes, so an off-main reflow completing while
+    /// the pointer is held still would otherwise never flush (a frozen screen until the next pointer
+    /// move). Wrapping the present in our own begin/commit flushes it immediately — the same
+    /// mechanism `layout()` relies on (`CATransaction` at the resize site), driven from a completion
+    /// handler. A no-op shape outside transaction mode (an explicit transaction around a normal
+    /// async present is harmless), so the end-of-drag settle can share the path.
+    private func presentWithinExplicitTransaction(_ body: () -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        body()
+        CATransaction.commit()
     }
 
     /// Mark the surface dirty and ensure the display link is running to present it. Every code path
@@ -1509,10 +1604,16 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
-    private func renderNowOffMain(synchronous: Bool = false) {
+    private func renderNowOffMain(
+        synchronous: Bool = false,
+        resizeEmulatorTo: (cols: Int, rows: Int)? = nil,
+        flushTransaction: Bool = false
+    ) {
         // Mirror of `renderNow`'s live-drag hold for the scheduler's async entry; the synchronous
         // (layout/forceRender) entry must keep presenting — it IS the drag's single present source.
-        if !synchronous, metalLayer.presentsWithTransaction {
+        // A live-resize commit (`flushTransaction`) is also a present source: it owns its flush via
+        // an explicit CATransaction (`presentWithinExplicitTransaction`), so it must not bail here.
+        if !synchronous, !flushTransaction, metalLayer.presentsWithTransaction {
             scheduler.markDirty()
             return
         }
@@ -1540,6 +1641,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         // over the captured value snapshot + the emulator; the only mutation is `state`'s plain-frame
         // cache, which is always touched on the serial queue (sync runs there; async dispatches there).
         let build: @Sendable (TerminalEmulator) -> SurfaceFrameBuildResult = { emulator in
+            // Live-resize commit: reflow the real grid on the queue right before the build so the
+            // resize serializes with any in-flight output feed. A superseded build (its token is no
+            // longer latest) returns before this runs, so a fast drag reflows only to the latest
+            // target — the intermediate column counts are never materialized. Clearing the
+            // builder-reuse caches here (on the queue, not via a main-thread generation bump) keeps
+            // this build from diffing the new grid against an old-width cached frame; the renderer's
+            // row cache auto-invalidates on the dimension change.
+            if let size = resizeEmulatorTo {
+                emulator.resize(cols: size.cols, rows: size.rows)
+                state.lastPlainFrame = nil
+                state.lastViewportFrame = nil
+            }
             let builder = config.makeBuilder()
             let frameBuildStart = DispatchTime.now().uptimeNanoseconds
             var frame: TerminalFrame
@@ -1685,13 +1798,24 @@ public final class HarnessTerminalSurfaceView: NSView {
             presentBuiltFrame(result)
         } else {
             let token = state.claimFrameToken()
+            let flush = flushTransaction
             state.async { emulator in
                 // Latest-wins coalescing: if a newer build is already queued behind this one, skip —
                 // it will consume the damage this one would have (no rows lost), so a burst of marks
-                // collapses to a single build instead of N stale frames.
+                // collapses to a single build instead of N stale frames. For a live-resize commit
+                // the skip also drops this target's `emulator.resize`, bounding O(history) reflows.
                 guard state.isLatestFrameToken(token) else { return }
                 let result = FrameSignposter.shared.interval("frameBuild") { build(emulator) }
-                DispatchQueue.main.async { [weak self] in self?.presentBuiltFrame(result) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    // A live-resize commit flushes its own present (the mouse may be held still, so
+                    // there's no layout pass to carry the transaction-mode present to the glass).
+                    if flush {
+                        self.presentWithinExplicitTransaction { self.presentBuiltFrame(result) }
+                    } else {
+                        self.presentBuiltFrame(result)
+                    }
+                }
             }
         }
     }

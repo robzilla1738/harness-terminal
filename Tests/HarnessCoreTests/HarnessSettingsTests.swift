@@ -183,6 +183,31 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertFalse(decoded.offMainParserFramePipeline)
     }
 
+    func testLiveResizeReflowDefaultsOnAndRoundTrips() throws {
+        // Real-time (Ghostty-style) resize is the production default.
+        XCTAssertTrue(HarnessSettings().liveResizeReflow)
+
+        // A legacy settings.json with no key gets real-time resize on upgrade.
+        let legacy = Data("""
+        { "fontSize": 14, "customBackgroundHex": "#000000" }
+        """.utf8)
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+        XCTAssertTrue(migrated.liveResizeReflow, "absent key defaults to on")
+
+        // An explicitly stored `false` is honored as an opt-out to defer-to-release.
+        let optedOut = Data("""
+        { "fontSize": 14, "liveResizeReflow": false }
+        """.utf8)
+        let decodedOptOut = try JSONDecoder().decode(HarnessSettings.self, from: optedOut)
+        XCTAssertFalse(decodedOptOut.liveResizeReflow, "explicit false is preserved")
+
+        var settings = HarnessSettings()
+        settings.liveResizeReflow = false
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: encoded)
+        XCTAssertFalse(decoded.liveResizeReflow)
+    }
+
     func testRestoreWindowSizeDefaultsOffAndRoundTrips() throws {
         // New option: opt-in window frame persistence. Default off so existing users
         // keep the centered default-size launch.

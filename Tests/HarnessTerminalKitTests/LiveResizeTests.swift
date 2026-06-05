@@ -56,11 +56,14 @@ final class LiveResizeTests: XCTestCase {
     }
 
     func testDebouncedCommitDefersWhileDragHolds() {
-        // A stationary >60ms hold mid-drag lets the debounce elapse. The commit must re-arm, not
-        // fire: a mid-drag commit bumps the generation (dropping the in-flight preview) but its
-        // authoritative re-present defers while the layer is in transaction mode — with the mouse
-        // still, the screen would freeze on a stale-generation frame until the next pointer move.
+        // ESCAPE-HATCH path (real-time reflow off): a stationary >60ms hold mid-drag lets the
+        // debounce elapse. The commit must re-arm, not fire: a mid-drag commit bumps the generation
+        // (dropping the in-flight preview) but its authoritative re-present defers while the layer
+        // is in transaction mode — with the mouse still, the screen would freeze on a
+        // stale-generation frame until the next pointer move. (With real-time reflow on, the live
+        // path commits here instead — see testCommitFiresLiveAtBoundaryWithReflowOn.)
         let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        view.testingSetLiveResizeReflow(false)
         var resizes = 0
         view.onResize = { _, _ in resizes += 1 }
         view.testingMarkGridSized()
@@ -356,6 +359,12 @@ final class LiveResizeTests: XCTestCase {
 
     private func makeHostedView(in window: NSWindow) throws -> HarnessTerminalSurfaceView {
         let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        // These hosted cases pin the non-mutating re-wrap PREVIEW and the output-defer/cache-reuse
+        // contracts of a drag. With real-time reflow on, a boundary crossing also commits the
+        // authoritative grid (bumping the generation) and would race those assertions — so they run
+        // the escape-hatch (defer-to-release) path, which still drives the same preview machinery.
+        // The real-time commit path has its own dedicated coverage below.
+        view.testingSetLiveResizeReflow(false)
         window.contentView = view
         guard view.testingHasRenderer else { throw XCTSkip("renderer unavailable") }
         view.layoutSubtreeIfNeeded()
@@ -727,5 +736,125 @@ final class LiveResizeTests: XCTestCase {
         wait(for: [settle], timeout: 2)
         XCTAssertGreaterThan(presents, 0, "output outside a drag presents through the async path")
         XCTAssertFalse(view.testingRenderPending, "nothing re-marked dirty (the hold is inert)")
+    }
+
+    // MARK: - Real-time live reflow (Ghostty parity)
+
+    func testCommitFiresLiveAtBoundaryWithReflowOn() {
+        // The headline behavior: with real-time reflow on (the default), a cell-boundary commit
+        // during a drag updates the grid dimensions and fires the PTY SIGWINCH IMMEDIATELY — no
+        // debounce, no re-arm — so the running program reflows live instead of at release.
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        XCTAssertTrue(view.testingLiveResizeReflowEnabled, "real-time reflow is on by default")
+        var resizes: [(Int, Int)] = []
+        view.onResize = { resizes.append(($0, $1)) }
+        view.testingMarkGridSized()
+        view.viewWillStartLiveResize()
+
+        view.testingRequestLiveResizeCommit(cols: 100, rows: 30)
+        XCTAssertEqual(view.testingGridSize.cols, 100, "the grid commits live, not at release")
+        XCTAssertEqual(view.testingGridSize.rows, 30)
+        XCTAssertEqual(resizes.count, 1, "exactly one SIGWINCH, fired mid-drag")
+        XCTAssertEqual(resizes.first?.0, 100)
+        XCTAssertFalse(view.testingHasPendingResizeCommit, "the live path arms no debounced commit")
+        view.viewDidEndLiveResize()
+    }
+
+    func testLivePTYVoteCoalescesToDistinctCellCounts() {
+        // The PTY vote must fire once per DISTINCT cell count and never re-send an unchanged size
+        // (the daemon re-ioctls on every identical vote, so a within-column drag must be silent).
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        var resizes: [(Int, Int)] = []
+        view.onResize = { resizes.append(($0, $1)) }
+        view.testingMarkGridSized()
+        view.viewWillStartLiveResize()
+
+        view.testingRequestLiveResizeCommit(cols: 100, rows: 30)
+        view.testingRequestLiveResizeCommit(cols: 99, rows: 30)
+        view.testingRequestLiveResizeCommit(cols: 98, rows: 30)
+        XCTAssertEqual(resizes.map(\.0), [100, 99, 98], "each distinct cell count votes once")
+        XCTAssertEqual(view.testingLastSentPTYSize?.cols, 98)
+        // A repeat of the current size sends nothing (the cols/rows guard short-circuits it).
+        view.testingRequestLiveResizeCommit(cols: 98, rows: 30)
+        XCTAssertEqual(resizes.count, 3, "an unchanged cell count fires no redundant SIGWINCH")
+        view.viewDidEndLiveResize()
+    }
+
+    func testLiveReflowCommitsGridAndPresentsMidDrag() throws {
+        // End-to-end with a real renderer: a boundary crossing during a drag commits the
+        // authoritative grid + SIGWINCH and presents the reflowed frame through the
+        // transaction-synchronized path — all WITHOUT a viewDidEndLiveResize.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true) // real-time reflow on
+        window.contentView = view
+        guard view.testingHasRenderer else { throw XCTSkip("renderer unavailable") }
+        view.layoutSubtreeIfNeeded()
+        for i in 0 ..< 50 { view.receive("reflow line \(i) abcdefghij\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        let startCols = view.testingGridSize.cols
+        var resizes: [(Int, Int)] = []
+        view.onResize = { resizes.append(($0, $1)) }
+
+        view.viewWillStartLiveResize()
+        defer { view.viewDidEndLiveResize() }
+        var frame = window.frame
+        frame.size.width += 40 // cross at least one cell column
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        XCTAssertNotEqual(view.testingGridSize.cols, startCols, "the grid reflows live during the drag")
+        XCTAssertFalse(resizes.isEmpty, "a PTY SIGWINCH fired mid-drag, not at release")
+        XCTAssertEqual(resizes.last?.0, view.testingGridSize.cols, "the vote matches the live grid width")
+
+        // Drain the off-main authoritative reflow + its explicit-transaction present hop.
+        view.testingWaitForEmulatorIdle()
+        let hop = expectation(description: "live reflow present hop")
+        DispatchQueue.main.async { hop.fulfill() }
+        wait(for: [hop], timeout: 2)
+        if let stats = view.testingLastRenderStats {
+            XCTAssertGreaterThan(stats.presentScheduleNanos, 0,
+                                 "the mid-drag present takes the transaction-synchronized path")
+        }
+    }
+
+    func testLiveReflowDisabledDefersCommitToRelease() throws {
+        // The escape hatch (real-time reflow off) must preserve the legacy contract end-to-end:
+        // the grid stays put and no SIGWINCH fires until the drag ends. `makeHostedView` already
+        // disables real-time reflow for the preview/legacy suite.
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        XCTAssertFalse(view.testingLiveResizeReflowEnabled)
+        for i in 0 ..< 30 { view.receive("defer line \(i)\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        let startCols = view.testingGridSize.cols
+        var resizes = 0
+        view.onResize = { _, _ in resizes += 1 }
+
+        view.viewWillStartLiveResize()
+        var frame = window.frame
+        frame.size.width += 40
+        window.setFrame(frame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(view.testingGridSize.cols, startCols, "escape hatch: the grid stays put mid-drag")
+        XCTAssertEqual(resizes, 0, "escape hatch: no SIGWINCH mid-drag")
+
+        view.viewDidEndLiveResize()
+        XCTAssertNotEqual(view.testingGridSize.cols, startCols, "the settled size commits at release")
+        XCTAssertGreaterThan(resizes, 0, "the SIGWINCH fires at release")
     }
 }
