@@ -6,6 +6,19 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Added
+- **Real-time live resize (Ghostty parity).** Dragging the window edge now reflows the grid and
+  signals the running program (`SIGWINCH`) at every cell boundary, so interactive programs
+  (vim/htop/btop/tmux/less) and alternate-screen TUIs redraw *during* the drag instead of snapping
+  at release. The authoritative reflow runs off-main with latest-wins coalescing (a fast drag runs
+  ~1–3 reflows, not one per column), presents inside an explicit `CATransaction` so it flushes even
+  when the pointer is held still, and the PTY vote coalesces per-fd and to distinct cell counts so
+  the daemon isn't stormed. Default on, with a **Real-time resize** setting (`liveResizeReflow`)
+  that reverts to the previous defer-to-release behavior. The non-mutating re-wrap preview is
+  retained as instant feedback under the live reflow.
+
 ## [1.4.1] - 2026-06-04
 
 The resize-parity release: the live render path stops crossing full-frame value boundaries.

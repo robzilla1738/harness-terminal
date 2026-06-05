@@ -94,14 +94,27 @@ users moving in keep their colors/font — kept by product decision.
   256-entry LUT (bit-identical to the `Float(i)/255` divide it replaces).
 - **Resize:** `HarnessTerminalSurfaceView.updateGridSize` *rounds* the drawable (no edge seam
   under `.topLeft`) and `layout()` renders synchronously inside a `CATransaction` (no stretch
-  flicker). The drawable resizes every frame, but the **grid reflow + PTY `SIGWINCH` are
-  coalesced** (`scheduleResizeCommit`, ~60ms debounce, kept in lockstep via `commitGridSize`):
-  a sidebar slide / window drag calls `layout()` per frame, and firing the reflow + SIGWINCH
-  each time storms the shell — fish/zsh redraw their prompt faster than they coalesce, leaving
-  overlapping garbage in the pane. The first sizing commits immediately (no open-flash).
-  `TerminalScreen.resize` *reflows* the primary screen — rejoin soft-wrapped rows via a per-row
-  wrap flag, re-wrap to the new width (wide chars never split), map the cursor; the alternate
-  screen just clamps (TUIs redraw on SIGWINCH). The PTY env sets `COLORTERM=truecolor`.
+  flicker). The drawable resizes every frame; the authoritative **grid reflow + PTY `SIGWINCH`**
+  fire per path:
+  - **Real-time (default, Ghostty parity, `liveResizeReflow` on):** during a window-edge drag
+    (`presentsWithTransaction`), `requestLiveResizeCommit` commits the reflow + SIGWINCH at every
+    cell boundary so interactive programs redraw live. The O(history) reflow runs off-main and
+    coalesces latest-wins (the `renderNowOffMain` frame token), the reflowed frame flushes inside
+    an explicit `CATransaction` (no layout pass needed when the pointer holds still), and the PTY
+    vote coalesces per-fd (`TerminalHostView.resize` epoch) + to distinct cell counts
+    (`lastSentPTYSize`). No main-thread generation bump — the builder caches are cleared on the
+    queue after the resize, so `repaintLastFrame` keeps stretching the cached frame between
+    boundaries with no synchronous rebuild.
+  - **Animated / escape-hatch (`liveResizeReflow` off, or sidebar slide / tiling):** the reflow +
+    SIGWINCH are **coalesced** (`scheduleResizeCommit`, ~60ms debounce, kept in lockstep via
+    `commitGridSize`) and the non-mutating `previewViewportReflow` shows a live re-wrap; firing
+    the reflow + SIGWINCH every frame of an *animation* storms the shell. `viewDidEndLiveResize`
+    flushes the settled commit at release.
+
+  The first sizing commits immediately (no open-flash). `TerminalScreen.resize` *reflows* the
+  primary screen — rejoin soft-wrapped rows via a per-row wrap flag, re-wrap to the new width
+  (wide chars never split), map the cursor; the alternate screen just clamps (TUIs redraw on
+  SIGWINCH). The PTY env sets `COLORTERM=truecolor`.
 - **Decorations** (underline/strike/overline) are pixel-snapped for crisp 1–2px lines.
 - **Glyph baseline** is pixel-snapped at rasterization: `GlyphRasterizer.render` draws each glyph
   with its pen origin (baseline + left edge) on integer device pixels, so every glyph shares the
