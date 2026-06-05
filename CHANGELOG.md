@@ -6,6 +6,15 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Added
+- **Tab persistence indicator.** A tab pinned to stay running after a clean quit
+  ("Keep Tab Running After Quit") now shows a small accent pin at the leading edge of
+  its tab pill — a tmux-style window flag — so kept-alive tabs are identifiable at a
+  glance instead of only through the right-click checkmark. The pin also appears beside
+  the tab in the overflow menu.
+
 ## [1.4.1] - 2026-06-04
 
 The resize-parity release: the live render path stops crossing full-frame value boundaries.

@@ -311,8 +311,12 @@ final class TerminalTabBarView: NSView {
             item.representedObject = tab.id.uuidString
             // A waiting tab gets the bell glyph (same vocabulary as the tab pill) — a
             // checkmark would read as "this item is selected", not "needs attention".
+            // Otherwise a kept-alive tab shows the persistence pin so the flag is visible
+            // even when the tab has spilled into the overflow menu.
             if tab.status == .waiting {
                 item.image = NSImage(systemSymbolName: "bell.fill", accessibilityDescription: "Waiting")
+            } else if tab.persistent {
+                item.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Kept running after quit")
             }
             menu.addItem(item)
         }
@@ -363,6 +367,10 @@ private final class TabPillView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let agentIcon = NSImageView()
+    /// "Kept alive" flag: a small pin shown at the leading edge when this tab is pinned to
+    /// survive a clean quit (`tab.persistent`). The visible counterpart of the context-menu
+    /// "Keep Tab Running After Quit" checkmark — a tmux-style window flag for persistence.
+    private let persistentIcon = NSImageView()
     /// Ghostty-style "AI is working" indicator: a tiny dot before the title that discretely
     /// shuttles between two spots while the tab's agent is producing output. Hidden otherwise.
     private let workingDot = NSView()
@@ -371,6 +379,7 @@ private final class TabPillView: NSView {
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let hasShortcut: Bool
     private var agentIconWidth: NSLayoutConstraint!
+    private var persistentIconWidth: NSLayoutConstraint!
     private var trackingArea: NSTrackingArea?
     private var isActive = false
     private var isHovered = false
@@ -431,6 +440,13 @@ private final class TabPillView: NSView {
         agentIcon.imageScaling = .scaleProportionallyUpOrDown
         agentIcon.isHidden = true
 
+        persistentIcon.translatesAutoresizingMaskIntoConstraints = false
+        persistentIcon.imageScaling = .scaleProportionallyUpOrDown
+        persistentIcon.isHidden = true
+        persistentIcon.toolTip = "Kept running after quit"
+        persistentIcon.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Kept running after quit")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold))
+
         shortcutLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
         shortcutLabel.alignment = .right
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -444,6 +460,7 @@ private final class TabPillView: NSView {
         workingDot.translatesAutoresizingMaskIntoConstraints = false
         workingDot.isHidden = true
 
+        addSubview(persistentIcon)
         addSubview(agentIcon)
         addSubview(titleLabel)
         addSubview(shortcutLabel)
@@ -455,13 +472,20 @@ private final class TabPillView: NSView {
         // edge inset matches the close button's trailing inset so the title stays
         // optically centered even when both are visible.
         agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
+        persistentIconWidth = persistentIcon.widthAnchor.constraint(equalToConstant: 0)
         let titleLeading = titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: agentIcon.trailingAnchor, constant: 4)
         let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.xs)
         let closeWidth = closeButton.widthAnchor.constraint(equalToConstant: 14)
         let closeHeight = closeButton.heightAnchor.constraint(equalToConstant: 14)
         [titleLeading, closeTrailing, closeWidth, closeHeight].forEach { $0.priority = .defaultHigh }
         NSLayoutConstraint.activate([
-            agentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.sm),
+            // Leading run: [persistence pin?][agent icon?] — each collapses to zero width when
+            // absent, so a plain tab keeps the agent icon flush at the same inset as before.
+            persistentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.sm),
+            persistentIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            persistentIcon.heightAnchor.constraint(equalToConstant: 12),
+            persistentIconWidth,
+            agentIcon.leadingAnchor.constraint(equalTo: persistentIcon.trailingAnchor),
             agentIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             agentIcon.heightAnchor.constraint(equalToConstant: 14),
             agentIconWidth,
@@ -485,6 +509,7 @@ private final class TabPillView: NSView {
         ])
 
         setAgentIcon(for: tab)
+        setPersistentIndicator(tab.persistent)
         setWorkingDotVisible(Self.isAgentWorking(tab))
         applyChrome(isActive: isActive)
 
@@ -640,8 +665,15 @@ private final class TabPillView: NSView {
         isPersistent = tab.persistent
         titleLabel.stringValue = tabDisplayTitle(tab)
         setAgentIcon(for: tab)
+        setPersistentIndicator(tab.persistent)
         setWorkingDotVisible(Self.isAgentWorking(tab))
         applyChrome(isActive: isActive)
+    }
+
+    /// Show/hide the leading "kept alive" pin (the visible form of `tab.persistent`).
+    private func setPersistentIndicator(_ visible: Bool) {
+        persistentIcon.isHidden = !visible
+        persistentIconWidth.constant = visible ? 12 : 0
     }
 
     /// Show/hide the working dot and run its shuttle: a gentle glide between two spots —
@@ -716,6 +748,9 @@ private final class TabPillView: NSView {
 
         closeButton.contentTintColor = c.textTertiary
         closeButton.layer?.backgroundColor = NSColor.clear.cgColor
+        // Persistence pin reads as an intentional "kept alive" marker, so it carries the
+        // brand accent rather than the neutral title color — visible on active and idle tabs alike.
+        persistentIcon.contentTintColor = c.accent
         // Working dot follows the title color so it reads as part of the label, not a badge.
         workingDot.layer?.backgroundColor = titleLabel.textColor?.cgColor
         // ⌘N hint: a touch brighter on the active tab, quiet otherwise.
