@@ -38,7 +38,13 @@ over the unchanged row-instance cache, with a display-only peek row appended to 
 and a grid-box scissor; consumers stay line-based on the integer `scrollOffset`), reflow on
 resize (drag repaints reuse the renderer row cache under the frozen origin — empty damage when
 `lastPresentedResultIsRendererCoherent`, `encodedRows == 0` per sub-cell tick — and output/tick
-presents defer to the layout repaint while `presentsWithTransaction` is on), optional WCAG
+presents defer to the layout repaint while `presentsWithTransaction` is on; cell-boundary
+crossings build their re-wrap preview ASYNC on the emulator queue — latest-wins preview token,
+landed via `presentResizePreview` with generation/token/target stale-drop guards — so a boundary
+tick costs main no more than a sub-cell tick, and the renderer salvages content-identical rows
+across the column change via per-row `contentKey`s; instance data lives in persistent flat
+arrays + a per-row segment table mutated in place per dirty row — the Ghostty `Contents` model —
+with span-list incremental GPU uploads), optional WCAG
 `minimum-contrast`, a bundled Nerd Font symbol fallback (Powerline/icon glyphs always render),
 procedurally-rendered block elements + box-drawing (seamless, font-independent), and IME / dead
 keys (`NSTextInputClient`).

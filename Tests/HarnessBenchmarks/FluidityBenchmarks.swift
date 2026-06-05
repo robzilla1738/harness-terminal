@@ -60,19 +60,18 @@ final class FluidityBenchmarks: XCTestCase {
         view.viewWillStartLiveResize()
         defer { view.viewDidEndLiveResize() }
 
-        // Synthetic drag: 1px-wide steps so most ticks stay inside one cell column (the pure
-        // sub-cell repaint case) and a few cross a boundary (the preview-reflow case). The grid
-        // commit is debounced to drag-end, so the boundary signal is the *preview* changing the
-        // built frame's cell count, not `testingGridSize`.
+        // Synthetic drag: 1px-wide steps, the dominant tick shape during a real drag. Every
+        // layout tick re-presents the cached frame (cell-count crossings build their re-wrap
+        // ASYNC on the emulator queue and land on a later hop, so the layout tick itself never
+        // carries a new cell count — `testLiveResizeBoundaryCrossingPacing` below measures the
+        // crossing cost end-to-end). `encodedRowsPerTick` is the reuse-health signal: 0 means
+        // the cached re-present, a full-row count means a landed re-wrap or fallback repaint.
         var tickNanos: [UInt64] = []
-        var subCellTicks: [UInt64] = []
-        var boundaryTicks: [UInt64] = []
-        var subCellEncodedRows: [Int] = []
+        var tickEncodedRows: [Int] = []
         var scheduleNanos: [UInt64] = []
         var encodeNanos: [UInt64] = []
         var semaphoreNanos: [UInt64] = []
         var uploadBytes: [Int] = []
-        var cellsBefore = lastStats?.cells ?? 0
         for _ in 0 ..< 60 {
             var frame = window.frame
             frame.size.width += 1
@@ -83,29 +82,20 @@ final class FluidityBenchmarks: XCTestCase {
             view.layoutSubtreeIfNeeded()
             let elapsed = DispatchTime.now().uptimeNanoseconds &- start
             tickNanos.append(elapsed)
-            let cellsAfter = lastStats?.cells ?? cellsBefore
-            if cellsAfter == cellsBefore {
-                subCellTicks.append(elapsed)
-                if let stats = lastStats { subCellEncodedRows.append(stats.encodedRows) }
-            } else {
-                boundaryTicks.append(elapsed)
-            }
             if let stats = lastStats {
+                tickEncodedRows.append(stats.encodedRows)
                 scheduleNanos.append(stats.presentScheduleNanos)
                 encodeNanos.append(stats.encodeNanos)
                 semaphoreNanos.append(stats.semaphoreWaitNanos)
                 uploadBytes.append(stats.instanceUploadBytes)
             }
-            cellsBefore = cellsAfter
         }
 
-        let encodedSummary = subCellEncodedRows.isEmpty
+        let encodedSummary = tickEncodedRows.isEmpty
             ? "[]"
-            : "[\(subCellEncodedRows.map(String.init).joined(separator: ","))]"
-        percentileLine("fluidity_resize_tick", samples: tickNanos)
-        percentileLine("fluidity_resize_tick_subcell", samples: subCellTicks,
+            : "[\(tickEncodedRows.map(String.init).joined(separator: ","))]"
+        percentileLine("fluidity_resize_tick", samples: tickNanos,
                        fields: [("encodedRowsPerTick", encodedSummary)])
-        percentileLine("fluidity_resize_tick_boundary", samples: boundaryTicks)
         percentileLine("fluidity_resize_schedule_wait", samples: scheduleNanos)
         percentileLine("fluidity_resize_encode", samples: encodeNanos)
         percentileLine("fluidity_resize_semaphore_wait", samples: semaphoreNanos)

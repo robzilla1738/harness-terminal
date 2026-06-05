@@ -101,7 +101,8 @@ private struct EncodedRowInstances {
     var bgSpans = 0
     var bgCells = 0
     /// `TerminalMetalRenderer.rowContentKey` of the row content these instances were encoded
-    /// from (0 = not computed — e.g. rows from before the field existed in a decoded cache).
+    /// from (0 = not salvageable: a glyph-inverting cursor row, whose instances bake the
+    /// cursor-text color and so are not a pure function of the row content).
     /// Lets a geometry-compatible cache survive a column-count change: a row whose content key
     /// matches re-binds its cached instances instead of re-encoding (the instance X/Y bake
     /// per-cell `column`/`row` × cell pixels, NOT `frame.columns`, so a same-index row with
