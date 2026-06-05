@@ -1067,8 +1067,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.imageScaling = .scaleProportionallyUpOrDown
         // Brand mark when one exists, else a tinted monogram (e.g. Aider) — never a blank slot.
-        icon.image = AgentIconRenderer.templateImage(for: kind, size: 18)
-            ?? AgentIconRenderer.monogramTemplate(kind.chip, size: 18)
+        icon.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: 18)
         icon.contentTintColor = NSColor.fromHex(colorHex) ?? c.textSecondary
         icon.widthAnchor.constraint(equalToConstant: 20).isActive = true
         icon.heightAnchor.constraint(equalToConstant: 20).isActive = true

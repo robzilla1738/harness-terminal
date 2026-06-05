@@ -9,6 +9,11 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
+- **Tab persistence indicator.** A tab pinned to stay running after a clean quit
+  ("Keep Tab Running After Quit") now shows a small accent pin at the leading edge of
+  its tab pill — a tmux-style window flag — so kept-alive tabs are identifiable at a
+  glance instead of only through the right-click checkmark. The pin also appears beside
+  the tab in the overflow menu.
 - **Granular notification settings.** Settings → Agents now splits notifications into
   *Notify me about* (per-event toggles for **Agent needs input**, **Agent finished**,
   **Terminal bell**, and **Command finished**) and *Delivery* (macOS banner + sound),

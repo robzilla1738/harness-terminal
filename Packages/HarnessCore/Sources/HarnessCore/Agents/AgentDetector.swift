@@ -137,20 +137,15 @@ public enum AgentDetector {
         return changes
     }
 
-    /// Walks descendants of `pid` looking for a process whose argv[0] matches
-    /// any agent in `table`. Returns the deepest match (so a wrapper script
-    /// like `bash -c "claude --foo"` resolves to `claude`).
+    /// Walks descendants of `pid` looking for a process whose resolved binary,
+    /// argv[0], or wrapper-launched executable matches any agent in `table`.
+    /// Returns the deepest match so a real child agent wins over its shell.
     public static func detect(pid: Int32, table: AgentTable) -> AgentSnapshot? {
         var best: AgentSnapshot?
         for descendant in descendantPIDs(of: pid) {
             guard let path = pidPath(descendant) else { continue }
-            // Match the resolved binary basename AND the name the process was invoked
-            // as (argv[0]). Native installers symlink the launcher to a version-numbered
-            // binary — e.g. ~/.local/bin/claude -> .../versions/2.1.152 — so proc_pidpath
-            // resolves the "claude" name away and only argv[0] still carries it.
-            var names: Set<String> = [(path as NSString).lastPathComponent.lowercased()]
-            if let invoked = argv0Name(descendant) { names.insert(invoked) }
-            for entry in table.entries where entry.matchesAny(names) {
+            let arguments = processArguments(descendant) ?? []
+            for entry in table.entries where entry.matchesProcess(resolvedExecutable: path, arguments: arguments) {
                 best = AgentSnapshot(
                     kind: entry.kind,
                     executable: path,
@@ -205,10 +200,11 @@ public enum AgentDetector {
         #endif
     }
 
-    /// Lowercased basename of `pid`'s argv[0] (how it was invoked). Darwin: KERN_PROCARGS2. Linux:
-    /// the first NUL-separated token of /proc/<pid>/cmdline. Catches launchers that exec a
-    /// renamed/versioned binary.
-    private static func argv0Name(_ pid: Int32) -> String? {
+    /// Full argv for `pid`, preserving argv[0] as invoked. Darwin exposes this
+    /// via KERN_PROCARGS2 after `exec_path`; Linux uses `/proc/<pid>/cmdline`.
+    /// The parser is argc-bounded on Darwin so environment bytes after argv are
+    /// never interpreted as command arguments.
+    private static func processArguments(_ pid: Int32) -> [String]? {
         #if canImport(Darwin)
         var size = 0
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
@@ -218,22 +214,29 @@ public enum AgentDetector {
             sysctl(&mib, 3, ptr.baseAddress, &size, nil, 0)
         }) == 0 else { return nil }
 
-        // Layout: int argc, exec_path\0, padding NULs, then argv[0]\0 argv[1]\0 ...
+        let argc: Int32 = buffer.withUnsafeBytes { rawPtr in
+            rawPtr.loadUnaligned(as: Int32.self)
+        }
         var cursor = MemoryLayout<Int32>.size
         while cursor < size, buffer[cursor] != 0 { cursor += 1 } // skip exec_path
         while cursor < size, buffer[cursor] == 0 { cursor += 1 } // skip NUL padding
-        let start = cursor
-        while cursor < size, buffer[cursor] != 0 { cursor += 1 } // read argv[0]
-        guard cursor > start else { return nil }
-        let argv0 = String(decoding: buffer[start..<cursor], as: UTF8.self)
-        return (argv0 as NSString).lastPathComponent.lowercased()
+        var args: [String] = []
+        var read: Int32 = 0
+        while read < argc, cursor < size {
+            let start = cursor
+            while cursor < size, buffer[cursor] != 0 { cursor += 1 }
+            if cursor > start {
+                args.append(String(decoding: buffer[start..<cursor], as: UTF8.self))
+            }
+            cursor += 1
+            read += 1
+        }
+        return args.isEmpty ? nil : args
         #else
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: "/proc/\(pid)/cmdline")),
               !data.isEmpty else { return nil }
-        let first = data.prefix { $0 != 0 } // argv[0] up to the first NUL
-        guard !first.isEmpty else { return nil }
-        let argv0 = String(decoding: first, as: UTF8.self)
-        return (argv0 as NSString).lastPathComponent.lowercased()
+        let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+        return args.isEmpty ? nil : args
         #endif
     }
 }
@@ -254,6 +257,147 @@ public struct AgentTableEntry: Codable, Sendable {
     /// True if any of `names` (e.g. resolved binary basename + argv[0] name) matches.
     public func matchesAny(_ names: Set<String>) -> Bool {
         executables.contains { names.contains($0) }
+    }
+
+    public func matchesProcess(resolvedExecutable: String, arguments: [String]) -> Bool {
+        matchesAny(Self.matchableProcessNames(resolvedExecutable: resolvedExecutable, arguments: arguments))
+    }
+
+    /// Builds every basename that can identify a process as an agent: resolved
+    /// executable, argv[0], and the launcher target when argv0/resolved is a
+    /// known wrapper. Non-wrapper commands do not scan arbitrary arguments, so
+    /// `vim hermes-notes.txt` cannot become a false Hermes match. `env` gets
+    /// one nested-wrapper pass (`env FOO=1 python3 hermes --tui`) to cover the
+    /// common env→runtime shape without turning this into an unbounded parser.
+    private static func matchableProcessNames(resolvedExecutable: String, arguments: [String]) -> Set<String> {
+        var names: Set<String> = []
+        insertProcessName(resolvedExecutable, into: &names)
+        let invokedName: String?
+        if let invoked = arguments.first {
+            insertProcessName(invoked, into: &names)
+            invokedName = processName(invoked)
+        } else {
+            invokedName = nil
+        }
+
+        let resolvedName = processName(resolvedExecutable)
+        if let wrapperName = [invokedName, resolvedName].compactMap({ $0 }).first(where: isWrapperExecutable),
+           let launchSearchStart = launchArgumentSearchStart(arguments: arguments, wrapperName: wrapperName),
+           let launchIndex = firstLaunchArgumentIndex(in: arguments, startIndex: launchSearchStart, wrapperName: wrapperName)
+        {
+            insertProcessName(arguments[launchIndex], into: &names)
+            if wrapperName == "env",
+               let nestedName = processName(arguments[launchIndex]),
+               isWrapperExecutable(nestedName),
+               let nestedIndex = firstLaunchArgumentIndex(in: arguments, startIndex: launchIndex + 1, wrapperName: nestedName)
+            {
+                insertProcessName(arguments[nestedIndex], into: &names)
+            }
+        }
+
+        return names
+    }
+
+    /// Returns where wrapper-target scanning should begin. When argv[0] is the
+    /// wrapper, scan after it; when only the resolved executable is the wrapper,
+    /// argv[0] may be the launcher target name and must remain searchable.
+    private static func launchArgumentSearchStart(arguments: [String], wrapperName: String) -> Int? {
+        guard let argv0 = arguments.first else { return nil }
+        return processName(argv0) == wrapperName ? 1 : 0
+    }
+
+    /// Finds the first argv element that represents the wrapper's launched
+    /// executable, skipping known wrapper flags and their operands.
+    private static func firstLaunchArgumentIndex(in arguments: [String], startIndex: Int, wrapperName: String) -> Int? {
+        var index = startIndex
+        while index < arguments.count {
+            let argument = arguments[index]
+            if shouldSkipLauncherSubcommand(argument, at: index, startIndex: startIndex, wrapperName: wrapperName) {
+                index += 1
+                continue
+            }
+            if wrapperName == "env", isEnvironmentAssignment(argument) {
+                index += 1
+                continue
+            }
+            if argument == "--" {
+                let next = index + 1
+                return next < arguments.count ? next : nil
+            }
+            if argument.hasPrefix("-") {
+                switch optionBehavior(argument, wrapperName: wrapperName) {
+                case .keepScanning:
+                    index += 1
+                case .skipValue:
+                    index += 2
+                case .matchValue:
+                    let next = index + 1
+                    return next < arguments.count ? next : nil
+                case .stopScanning:
+                    return nil
+                }
+                continue
+            }
+            return index
+        }
+        return nil
+    }
+
+    private static func shouldSkipLauncherSubcommand(_ argument: String, at index: Int, startIndex: Int, wrapperName: String) -> Bool {
+        index == startIndex && ["bun", "deno"].contains(wrapperName) && argument == "run"
+    }
+
+    private enum WrapperOptionBehavior {
+        case keepScanning
+        case skipValue
+        case matchValue
+        case stopScanning
+    }
+
+    /// Classifies wrapper flags by how they affect executable discovery. `-c`
+    /// and eval-style flags stop the scan because their next value is code, not
+    /// an executable argv token; any spawned child is detected by the descendant
+    /// process walk instead.
+    private static func optionBehavior(_ option: String, wrapperName: String) -> WrapperOptionBehavior {
+        if option.contains("=") { return .keepScanning }
+        switch wrapperName {
+        case "env":
+            return ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"].contains(option) ? .skipValue : .keepScanning
+        case "node", "bun", "deno":
+            if ["-e", "--eval"].contains(option) { return .stopScanning }
+            return ["-r", "--require", "--loader", "--import"].contains(option) ? .skipValue : .keepScanning
+        case "bash", "sh", "zsh", "fish":
+            if option == "-c" { return .stopScanning }
+            return option == "-o" ? .skipValue : .keepScanning
+        default:
+            guard isPythonExecutable(wrapperName) else { return .keepScanning }
+            if option == "-m" { return .matchValue }
+            if option == "-c" { return .stopScanning }
+            return ["-W", "-X"].contains(option) ? .skipValue : .keepScanning
+        }
+    }
+
+    private static func isEnvironmentAssignment(_ argument: String) -> Bool {
+        guard let equals = argument.firstIndex(of: "=") else { return false }
+        return equals != argument.startIndex
+    }
+
+    private static func isWrapperExecutable(_ name: String) -> Bool {
+        isPythonExecutable(name) || ["node", "deno", "bun", "bash", "sh", "zsh", "fish", "env", "tsx"].contains(name)
+    }
+
+    private static func isPythonExecutable(_ name: String) -> Bool {
+        name == "python" || name == "python3" || name.hasPrefix("python3.")
+    }
+
+    private static func insertProcessName(_ raw: String, into names: inout Set<String>) {
+        guard let name = processName(raw) else { return }
+        names.insert(name)
+    }
+
+    private static func processName(_ raw: String) -> String? {
+        let name = (raw as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return name.isEmpty || name == "." || name == "/" ? nil : name
     }
 }
 

@@ -67,6 +67,106 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertTrue(entry.matchesAny(["opencode"]))
     }
 
+    func testHermesPythonScriptTUILaunchMatchesScriptArgument() throws {
+        let entry = try XCTUnwrap(AgentTable.default.entries.first { $0.kind == .hermes })
+        XCTAssertTrue(entry.matchesProcess(
+            resolvedExecutable: "/Users/me/.hermes/hermes-agent/venv/bin/python3",
+            arguments: [
+                "/Users/me/.hermes/hermes-agent/venv/bin/python3",
+                "/Users/me/.local/bin/hermes",
+                "--tui",
+            ]
+        ))
+        XCTAssertFalse(entry.matchesProcess(
+            resolvedExecutable: "/Users/me/.hermes/hermes-agent/venv/bin/python3",
+            arguments: [
+                "/Users/me/.hermes/hermes-agent/venv/bin/python3",
+                "/Users/me/project/not-hermes.py",
+                "--provider",
+                "hermes",
+            ]
+        ))
+        XCTAssertFalse(entry.matchesProcess(
+            resolvedExecutable: "/usr/bin/python3",
+            arguments: [
+                "/usr/bin/python3",
+                "/Users/me/project/tool.py",
+                "/tmp/hermes",
+            ]
+        ))
+        XCTAssertFalse(entry.matchesProcess(
+            resolvedExecutable: "/usr/bin/vim",
+            arguments: [
+                "vim",
+                "/tmp/hermes",
+            ]
+        ))
+    }
+
+    func testWrapperLaunchMatchingSkipsInterpreterOptions() {
+        let entry = AgentTableEntry(kind: .hermes, executables: ["hermes"])
+        XCTAssertTrue(entry.matchesProcess(
+            resolvedExecutable: "/usr/bin/env",
+            arguments: [
+                "/usr/bin/env",
+                "HERMES_TUI=1",
+                "python3",
+                "/Users/me/.local/bin/hermes",
+                "--tui",
+            ]
+        ))
+        XCTAssertFalse(entry.matchesProcess(
+            resolvedExecutable: "/usr/bin/python3",
+            arguments: [
+                "/usr/bin/python3",
+                "-c",
+                "print('hello')",
+                "/tmp/hermes",
+            ]
+        ))
+        XCTAssertTrue(entry.matchesProcess(
+            resolvedExecutable: "/usr/bin/python3",
+            arguments: [
+                "/usr/bin/python3",
+                "-m",
+                "hermes",
+                "--tui",
+            ]
+        ))
+        XCTAssertFalse(entry.matchesProcess(
+            resolvedExecutable: "/usr/bin/python3",
+            arguments: [
+                "/usr/bin/python3",
+                "-m",
+                "pytest",
+                "/tmp/hermes",
+            ]
+        ))
+    }
+
+    func testJavaScriptWrappersCanLaunchHermesTUI() {
+        let entry = AgentTableEntry(kind: .hermes, executables: ["hermes"])
+        XCTAssertTrue(entry.matchesProcess(
+            resolvedExecutable: "/usr/local/bin/deno",
+            arguments: [
+                "/usr/local/bin/deno",
+                "run",
+                "--allow-read",
+                "/Users/me/.local/bin/hermes",
+                "--tui",
+            ]
+        ))
+        XCTAssertTrue(entry.matchesProcess(
+            resolvedExecutable: "/opt/homebrew/bin/bun",
+            arguments: [
+                "/opt/homebrew/bin/bun",
+                "run",
+                "/Users/me/.local/bin/hermes",
+                "--tui",
+            ]
+        ))
+    }
+
     /// Title-based fallback for when the daemon proc-tree scan can't see the
     /// agent (the case the user reported: Claude Code shown as raw text in
     /// the sidebar instead of a chip).
@@ -91,6 +191,8 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertEqual(AgentTitleInference.kind(from: "Gemini-CLI"), .gemini)
         XCTAssertEqual(AgentTitleInference.kind(from: "goose run"), .goose)
         XCTAssertEqual(AgentTitleInference.kind(from: "Hermes"), .hermes)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Hermes Agent"), .hermes)
+        XCTAssertEqual(AgentTitleInference.kind(from: "Hermes TUI"), .hermes)
         XCTAssertEqual(AgentTitleInference.kind(from: "Grok"), .grok)
         XCTAssertEqual(AgentTitleInference.kind(from: "✱ Grok"), .grok)
         XCTAssertEqual(AgentTitleInference.kind(from: "Grok Build"), .grok)
