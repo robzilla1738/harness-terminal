@@ -6,6 +6,18 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Added
+- **Granular notification settings.** Settings → Agents now splits notifications into
+  *Notify me about* (per-event toggles for **Agent needs input**, **Agent finished**,
+  **Terminal bell**, and **Command finished**) and *Delivery* (macOS banner + sound),
+  so you can pick exactly which events ping you instead of one all-or-nothing switch.
+  Defaults preserve prior behavior, and an existing "command finished" choice migrates
+  automatically. Backed by a new `NotificationEvent` type and a sparse
+  `notificationEvents` map in settings; only desktop banners are gated — the in-app
+  bell/waiting indicators are unaffected.
+
 ## [1.4.1] - 2026-06-04
 
 The resize-parity release: the live render path stops crossing full-frame value boundaries.

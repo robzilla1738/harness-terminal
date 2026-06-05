@@ -64,11 +64,20 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let windowBorderWell = HarnessSwatchWell(frame: .zero)
     private let windowBorderOpacitySlider = HarnessSlider(frame: .zero)
     private let windowBorderOpacityLabel = NSTextField(labelWithString: "")
-    private let systemNotificationsToggle = HarnessToggle(title: "macOS banner when an agent stops or needs input")
-    private let notificationSoundToggle = HarnessToggle(title: "Play a chime with notifications")
+    private let systemNotificationsToggle = HarnessToggle(title: "Show a macOS banner")
+    private let notificationSoundToggle = HarnessToggle(title: "Play a sound")
     private let notchModeSegment = HarnessSegmented(frame: .zero)
     private let notchOpenOnHoverToggle = HarnessToggle(title: "Open when I hover near the macOS notch")
-    private let commandFinishedToggle = HarnessToggle(title: "Notify when a long command finishes in a background window")
+    /// One toggle per `NotificationEvent` ("which events notify me"). Built from the enum so a
+    /// new case automatically gets a wired row. Lazy so its (main-actor) `HarnessToggle`
+    /// construction runs at first access inside a method, not in a stored-property initializer.
+    private lazy var eventToggles: [NotificationEvent: HarnessToggle] = {
+        var toggles: [NotificationEvent: HarnessToggle] = [:]
+        for event in NotificationEvent.allCases {
+            toggles[event] = HarnessToggle(title: event.title)
+        }
+        return toggles
+    }()
     private let commandFinishedThresholdField = HarnessTextField()
     private let notchSummaryLabel = NSTextField(wrappingLabelWithString: "")
     // QoL additions: resize overlay (T1), balanced padding (T2), minimum contrast (T5),
@@ -420,10 +429,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
         boldIsBrightToggle.target = self
         boldIsBrightToggle.action = #selector(appearanceTextDidCommit)
-        // Command-finished notifications (E)
-        commandFinishedToggle.state = settings.commandFinishedNotifications ? .on : .off
-        commandFinishedToggle.target = self
-        commandFinishedToggle.action = #selector(appearanceTextDidCommit)
+        // Per-event notification toggles ("which events notify me").
+        for (event, toggle) in eventToggles {
+            toggle.state = settings.isEventEnabled(event) ? .on : .off
+            toggle.target = self
+            toggle.action = #selector(appearanceTextDidCommit)
+        }
         commandFinishedThresholdField.stringValue = String(settings.commandFinishedThresholdSeconds)
         commandFinishedThresholdField.target = self
         commandFinishedThresholdField.action = #selector(appearanceTextDidCommit)
@@ -591,7 +602,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status", "soft", "native", "crisp", "rendering", "gamma"],
         2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session", "harness", "controls", "experience"],
         3: ["keys", "prefix", "binding", "keybinding", "shortcut"],
-        4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "detection"],
+        4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "notify", "banner", "bell", "sound", "detection"],
         5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"],
     ]
 
@@ -984,11 +995,23 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         notifStatusBlock.spacing = 10
         refreshNotificationStatus()
         commandFinishedThresholdField.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        let notificationsGroup = settingsGroup("Notifications", [
-            settingsToggleRow("Agent notifications", systemNotificationsToggle),
-            settingsToggleRow("Command finished", commandFinishedToggle),
-            settingsRow("Threshold (seconds)", commandFinishedThresholdField,
-                        hint: "Only commands that ran at least this long trigger the notification."),
+        // "Which events notify me" — one row per NotificationEvent, in enum order. The
+        // command-finished row carries its runtime threshold as a sub-row. State/target are
+        // already wired in `configureControls` (the authoritative seed, so a flush can never
+        // clobber settings with unseeded toggles); here we only lay out the rows.
+        var eventRows: [NSView] = []
+        for event in NotificationEvent.allCases {
+            guard let toggle = eventToggles[event] else { continue }
+            eventRows.append(settingsToggleRow(event.title, toggle, hint: event.detail))
+            if event == .commandFinished {
+                eventRows.append(settingsRow("Threshold (seconds)", commandFinishedThresholdField,
+                                             hint: "Only commands that ran at least this long trigger the notification."))
+            }
+        }
+        let notifyGroup = settingsGroup("Notify me about", eventRows)
+        // "How notifications are delivered" — the two global channel toggles + permission status.
+        let deliveryGroup = settingsGroup("Delivery", [
+            settingsToggleRow("macOS banner", systemNotificationsToggle),
             settingsToggleRow("Sound", notificationSoundToggle),
             notifStatusBlock,
         ])
@@ -1020,7 +1043,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         let stack = NSStackView(views: [
             header,
-            notificationsGroup,
+            notifyGroup,
+            deliveryGroup,
             notchGroup,
             settingsGroup("Detection & hooks", [detectionBox]),
             settingsGroup("Set up via your IDE", [promptBox]),
@@ -2092,7 +2116,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         updateMinContrastLabel()
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
         boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
-        commandFinishedToggle.state = settings.commandFinishedNotifications ? .on : .off
+        for (event, toggle) in eventToggles {
+            toggle.state = settings.isEventEnabled(event) ? .on : .off
+        }
         commandFinishedThresholdField.stringValue = String(settings.commandFinishedThresholdSeconds)
         let autoThemeOn = settings.lightThemeName != nil && settings.darkThemeName != nil
         autoThemeToggle.state = autoThemeOn ? .on : .off
@@ -2196,7 +2222,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)
         coordinator.settings.pasteProtection = pasteProtectionToggle.state == .on
         coordinator.settings.boldIsBright = boldIsBrightToggle.state == .on
-        coordinator.settings.commandFinishedNotifications = commandFinishedToggle.state == .on
+        for (event, toggle) in eventToggles {
+            coordinator.settings.setEventEnabled(event, toggle.state == .on)
+        }
         coordinator.settings.commandFinishedThresholdSeconds = max(1, Int(commandFinishedThresholdField.stringValue) ?? 10)
         coordinator.settings.experienceMode = selectedExperienceMode
         coordinator.settings.prefixKeyEnabled = selectedPrefixEnabled

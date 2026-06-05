@@ -272,6 +272,11 @@ final class SessionCoordinator: NSObject {
                     else { continue }
                     let key = "\(surfaceID.uuidString)|\(text)"
                     guard !pushedNotificationKeys.contains(key) else { continue }
+                    // Gate on the per-event preference *before* marking the key pushed, so toggling
+                    // "Agent needs input" off then back on during the same waiting episode still
+                    // fires once — a disabled event must not consume the dedup key. (Same reason as
+                    // the watched-pane deferral below: don't mark pushed when we aren't delivering.)
+                    guard settings.isEventEnabled(.agentWaiting) else { continue }
                     // Always surface the waiting ring; but don't fire a banner for the pane you're
                     // actively watching — its output + the ring already show it. Defer (don't mark
                     // pushed) so it still fires once you look away, matching the activity path.
@@ -279,7 +284,7 @@ final class SessionCoordinator: NSObject {
                     pushedNotificationKeys.insert(key)
                     let agentLabel = effectiveAgentKind(for: tab)?.displayName ?? "Harness"
                     let title = "\(agentLabel) · \(tab.title.isEmpty ? "Terminal" : tab.title)"
-                    deliverAgentAlert(title: title, body: text)
+                    deliverAgentAlert(event: .agentWaiting, title: title, body: text)
                 }
             }
         }
@@ -327,13 +332,17 @@ final class SessionCoordinator: NSObject {
                     if tab.status == .waiting { continue }
                     // Don't nag for the pane you're already watching.
                     if NSApp.isActive, surfaceID == activeSurfaceID { continue }
+                    // Gate on the per-event preference *before* the cooldown, so a disabled
+                    // "Agent finished" doesn't arm the 30s window and suppress a later
+                    // (re-enabled) stop. `lastAgentActivity` above still tracks the edge.
+                    guard settings.isEventEnabled(.agentFinished) else { continue }
                     // Cooldown so a flapping stream can't spam.
                     if let last = lastStopNotifyAt[key], Date().timeIntervalSince(last) < 30 { continue }
                     lastStopNotifyAt[key] = Date()
 
                     let folder = HarnessDesign.pathDisplayName(tab.cwd)
                     let title = "\(agent.kind.displayName) · \(folder)"
-                    deliverAgentAlert(title: title, body: "Finished — waiting for you")
+                    deliverAgentAlert(event: .agentFinished, title: title, body: "Finished — waiting for you")
                 }
             }
         }
@@ -341,11 +350,13 @@ final class SessionCoordinator: NSObject {
         lastStopNotifyAt = lastStopNotifyAt.filter { live.contains($0.key) }
     }
 
-    /// Single delivery point for agent alerts, honoring the two Settings toggles:
+    /// Single delivery point for agent alerts. First gates on the per-event "which events
+    /// notify me" choice (`isEventEnabled`); then honors the two delivery toggles:
     /// `systemNotificationsEnabled` (push banner) and `notificationSoundEnabled` (chime).
     /// Banner-on carries the sound; banner-off-but-chime-on still plays an in-app chime,
-    /// so an agent stopping is audible even when banners are suppressed.
-    private func deliverAgentAlert(title: String, body: String) {
+    /// so an enabled event is audible even when banners are suppressed.
+    private func deliverAgentAlert(event: NotificationEvent, title: String, body: String) {
+        guard settings.isEventEnabled(event) else { return }
         let wantBanner = settings.systemNotificationsEnabled
         let wantChime = settings.notificationSoundEnabled
         guard wantBanner || wantChime else { return }
@@ -1336,7 +1347,7 @@ final class SessionCoordinator: NSObject {
         return nil
     }
 
-    func handleNotification(for surfaceID: SurfaceID, title: String, body: String) {
+    func handleNotification(for surfaceID: SurfaceID, event: NotificationEvent, title: String, body: String) {
         let key = "\(surfaceID.uuidString)|\(body)"
         // Already pinged for this exact surface+message and it's still pending: just re-assert the
         // ring and return. A program spamming the bell (body is the constant "Bell") would
@@ -1353,7 +1364,7 @@ final class SessionCoordinator: NSObject {
         ))
         pushedNotificationKeys.insert(key)
         if NSApp.isActive == false {
-            deliverAgentAlert(title: title, body: body)
+            deliverAgentAlert(event: event, title: title, body: body)
         }
         syncFromDaemon()
     }
@@ -1487,17 +1498,17 @@ extension SessionCoordinator: TerminalHostDelegate {
     }
 
     func terminalHostDidRingBell(surfaceID: SurfaceID) {
-        handleNotification(for: surfaceID, title: "Terminal", body: "Bell")
+        handleNotification(for: surfaceID, event: .bell, title: "Terminal", body: "Bell")
     }
 
     func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID) {
-        guard settings.commandFinishedNotifications,
+        guard settings.isEventEnabled(.commandFinished),
               duration >= Double(max(0, settings.commandFinishedThresholdSeconds)) else { return }
         // Only notify when this pane isn't the one being actively watched.
         if NSApp.isActive, surfaceID == activeSurfaceID { return }
         let code = exitCode ?? 0
         let status = code == 0 ? "succeeded" : "failed (exit \(code))"
-        deliverAgentAlert(title: "Command \(status)", body: "Ran for \(Self.formatDuration(duration)).")
+        deliverAgentAlert(event: .commandFinished, title: "Command \(status)", body: "Ran for \(Self.formatDuration(duration)).")
     }
 
     private static func formatDuration(_ seconds: TimeInterval) -> String {
@@ -1510,7 +1521,7 @@ extension SessionCoordinator: TerminalHostDelegate {
     }
 
     func terminalHostDidRequestDesktopNotification(title: String, body: String, surfaceID: SurfaceID) {
-        handleNotification(for: surfaceID, title: title, body: body)
+        handleNotification(for: surfaceID, event: .agentWaiting, title: title, body: body)
     }
 
     func terminalHostDidClose(surfaceID: SurfaceID) {

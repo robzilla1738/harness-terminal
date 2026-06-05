@@ -57,6 +57,9 @@ public enum ResizeOverlayPosition: String, Codable, Sendable, CaseIterable {
 
 private enum LegacyHarnessSettingsCodingKeys: String, CodingKey {
     case tmuxControlsEnabled
+    /// Removed in favor of the per-event `notificationEvents` map; still read here to migrate
+    /// an existing on/off choice into `notificationEvents[.commandFinished]`.
+    case commandFinishedNotifications
 }
 
 public struct HarnessSettings: Codable, Sendable, Equatable {
@@ -116,10 +119,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var windowBorderHex: String?
     /// Opacity of the window-edge hairline, 0–1. 0 hides it entirely.
     public var windowBorderOpacity: Float
-    /// Fire a macOS system notification when an agent transitions to `waiting`
-    /// (e.g. Codex needs approval, Claude completed a task). When false, the
-    /// in-window bell badge still updates but the OS notification banner is
-    /// suppressed.
+    /// Delivery channel: show a macOS banner for an enabled notification event (which events
+    /// notify is decided per-event by `notificationEvents` / `isEventEnabled(_:)`). When false,
+    /// the in-window bell badge still updates but the OS banner is suppressed; an enabled event
+    /// can still chime if `notificationSoundEnabled` is on.
     public var systemNotificationsEnabled: Bool
     /// Play a sound ("chime") with agent notifications. When `systemNotificationsEnabled`
     /// is on, the banner carries the sound; when banners are off but this is on, Harness
@@ -222,10 +225,15 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Confirm before pasting text containing newlines / control characters when the program has
     /// not enabled bracketed paste — guards against blind multi-line command execution.
     public var pasteProtection: Bool
-    /// Post a desktop notification when a command that ran longer than
-    /// `commandFinishedThresholdSeconds` finishes in an unfocused pane (uses OSC 133 timing).
-    public var commandFinishedNotifications: Bool
+    /// Minimum runtime (seconds) for the `commandFinished` notification — only commands that
+    /// ran at least this long fire it (uses OSC 133 timing).
     public var commandFinishedThresholdSeconds: Int
+    /// Per-event desktop-banner gating, keyed by `NotificationEvent.rawValue`. A sparse map:
+    /// an absent key falls back to the event's `defaultEnabled`, so older `settings.json` files
+    /// decode to today's behavior. The two global channel toggles (`systemNotificationsEnabled`
+    /// = show banner, `notificationSoundEnabled` = play chime) still decide *how* an enabled
+    /// event is delivered; this map decides *which* events notify. Read via `isEventEnabled(_:)`.
+    public var notificationEvents: [String: Bool]
     /// Map bold + palette colors 0–7 to their bright variants 8–15 (classic terminal
     /// behavior, Ghostty `bold-is-bright`). Off keeps the theme's exact colors for bold text.
     public var boldIsBright: Bool
@@ -323,8 +331,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         lightThemeName: String? = nil,
         darkThemeName: String? = nil,
         pasteProtection: Bool = true,
-        commandFinishedNotifications: Bool = false,
         commandFinishedThresholdSeconds: Int = 10,
+        notificationEvents: [String: Bool] = [:],
         boldIsBright: Bool = true
     ) {
         self.fontSize = fontSize
@@ -384,8 +392,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.lightThemeName = lightThemeName
         self.darkThemeName = darkThemeName
         self.pasteProtection = pasteProtection
-        self.commandFinishedNotifications = commandFinishedNotifications
         self.commandFinishedThresholdSeconds = max(0, commandFinishedThresholdSeconds)
+        self.notificationEvents = notificationEvents
         self.boldIsBright = boldIsBright
     }
 
@@ -416,6 +424,18 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
 
     public func agentColorHex(for kind: AgentKind) -> String {
         agentColorOverrides[kind.rawValue] ?? "#\(kind.dotHex.uppercased())"
+    }
+
+    /// Whether `event` is allowed to fire a notification. Falls back to the event's
+    /// `defaultEnabled` when the user hasn't made an explicit choice, so the sparse
+    /// `notificationEvents` map stays small and old configs behave as before.
+    public func isEventEnabled(_ event: NotificationEvent) -> Bool {
+        notificationEvents[event.rawValue] ?? event.defaultEnabled
+    }
+
+    /// Record an explicit per-event notification choice.
+    public mutating func setEventEnabled(_ event: NotificationEvent, _ enabled: Bool) {
+        notificationEvents[event.rawValue] = enabled
     }
 
     /// Reset visual fields to either the user's imported terminal config or the source terminal's
@@ -536,10 +556,16 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         lightThemeName = try container.decodeIfPresent(String.self, forKey: .lightThemeName)
         darkThemeName = try container.decodeIfPresent(String.self, forKey: .darkThemeName)
         pasteProtection = try container.decodeIfPresent(Bool.self, forKey: .pasteProtection) ?? fallback.pasteProtection
-        commandFinishedNotifications =
-            try container.decodeIfPresent(Bool.self, forKey: .commandFinishedNotifications) ?? fallback.commandFinishedNotifications
         commandFinishedThresholdSeconds =
             try container.decodeIfPresent(Int.self, forKey: .commandFinishedThresholdSeconds) ?? fallback.commandFinishedThresholdSeconds
+        var decodedEvents = try container.decodeIfPresent([String: Bool].self, forKey: .notificationEvents) ?? [:]
+        // One-time migration: fold the legacy standalone `commandFinishedNotifications` bool into the
+        // per-event map, unless the map already carries an explicit choice for it.
+        if decodedEvents[NotificationEvent.commandFinished.rawValue] == nil,
+           let legacyCommandFinished = try legacyContainer.decodeIfPresent(Bool.self, forKey: .commandFinishedNotifications) {
+            decodedEvents[NotificationEvent.commandFinished.rawValue] = legacyCommandFinished
+        }
+        notificationEvents = decodedEvents
         boldIsBright = try container.decodeIfPresent(Bool.self, forKey: .boldIsBright) ?? fallback.boldIsBright
     }
 
