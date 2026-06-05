@@ -545,7 +545,11 @@ public final class TerminalMetalRenderer {
         // The cursor + prompt-gutter quads are appended after the grid region of the persistent
         // flat bg array below (the build already truncated the previous frame's extras). They
         // change almost every frame (cursor blink/move), so the bg dirty spans must always cover
-        // this trailing segment; `bgGridCount` marks where it starts.
+        // this trailing segment; `bgGridCount` marks where it starts. Gated on a valid frame
+        // shape so an invalid (transient) frame truly draws nothing — the build just cleared the
+        // flats, and a stray cursor quad over the cleared canvas would outlive the guard's intent.
+        let frameShapeIsValid = frame.columns > 0 && frame.rows > 0
+            && frame.cells.count == frame.columns * frame.rows
         let bgGridCount = flatBg.count
 
         // OSC 133 prompt gutter: a thin vertical stripe in the left margin marking shell-prompt
@@ -553,7 +557,7 @@ public final class TerminalMetalRenderer {
         // backgrounds so it paints over them; it sits in the window padding (flush to the grid's
         // left edge, falling back to column 0's bearing when there's no padding), where no glyph
         // draws — so it never collides with text. No-op without shell-integration marks.
-        if !frame.promptGutter.isEmpty {
+        if frameShapeIsValid, !frame.promptGutter.isEmpty {
             let gutterW = max(2, (cellW * 0.14).rounded())
             let gx = max(0, ox - gutterW)
             for (row, color) in frame.promptGutter where row >= 0 && row < frame.rows {
@@ -569,7 +573,7 @@ public final class TerminalMetalRenderer {
         // underline is a thin bottom edge. When unfocused (`hollow`), the cursor becomes a 1px box
         // outline regardless of style — the standard macOS/Ghostty "inactive window" cursor — so
         // the glyph shows through. Full alpha (the bg pipeline doesn't blend). Respects the origin.
-        if frame.cursor.visible {
+        if frameShapeIsValid, frame.cursor.visible {
             let cellX = ox + Float(frame.cursor.column * cellPixelWidth)
             let cellY = oy + Float(frame.cursor.row * cellPixelHeight)
             let cellW = Float(cellPixelWidth)
@@ -760,6 +764,17 @@ public final class TerminalMetalRenderer {
             && frameShapeIsValid
             && frame.images.isEmpty
 
+        // INVARIANT (load-bearing for the ring): the immutable path below bypasses
+        // `uploadIncremental`, so the ring slots' pending lists do NOT learn about this frame.
+        // That is correct ONLY because a stable frame (encodedRows == 0) can mutate nothing but
+        // flatBg's extras tail [bgGridCount, flatBg.count) — grid mutation requires
+        // encodedRows > 0, which fails `stableFrame` — and every ring-upload frame
+        // unconditionally re-covers the full current extras tail (the bgDirty append at the
+        // cursor/gutter site). flatGlyph/flatDeco have no per-frame extras and are never
+        // mutated on a stable frame. Any future path that mutates a flat array while
+        // encodedRows == 0 OUTSIDE that always-re-covered tail must route through
+        // `uploadIncremental` (or bump encodedRows) or it silently corrupts whichever ring
+        // slot was skipped during the stable run.
         if stableFrame, let cached = uploadedInstanceCache, cached.key == key {
             return UploadedInstanceBuffers(
                 key: key,
