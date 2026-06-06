@@ -79,6 +79,16 @@ final class CodepointRunFastPathTests: XCTestCase {
         assertAllPathsAgree("e\u{0301}a\u{0301}o\u{0301} cafe\u{0301}", cols: 12, rows: 4)
     }
 
+    func testThaiSaraAmDecompositionAgreesAcrossPaths() {
+        // SARA AM (#66) is split on input into NIKHAHIT (combining) + SARA AA (spacing). Both the
+        // bulk and scalar paths must apply the split identically — including when it lands mid-run,
+        // at a wrap boundary, and after both marked and unmarked bases.
+        assertAllPathsAgree("น้ำ ต่ำ ซ้ำ ค่ำ ย้ำ ทำ รำ", cols: 24, rows: 6)
+        assertAllPathsAgree("ก่ำน้ำใจ", cols: 12, rows: 4)
+        // Force SARA AM to fall at the right margin so the split's wrap behavior matches too.
+        assertAllPathsAgree("abcน้ำ", cols: 4, rows: 4)
+    }
+
     func testEmojiAndSupplementaryPlane() {
         assertAllPathsAgree("hi 🙂 ok 😀😀 𝛀 𐍈 end", cols: 18, rows: 5)
     }

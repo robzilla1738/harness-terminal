@@ -28,6 +28,27 @@ public enum TerminalBufferSearch {
         // unmatchable. Each unit is then NFC-normalized + lowercased.
         var needleUnits: [String] = []
         for scalar in query.unicodeScalars {
+            // Mirror the engine's SARA AM split (`TerminalScreen.saraAm`): the hay cells store
+            // U+0E33 decomposed as NIKHAHIT (folds onto the base unit) + SARA AA (its own unit), so
+            // the needle must segment the same way or `น้ำ`-class words become unmatchable. But the
+            // engine only splits when the NIKHAHIT actually attaches; an orphan SARA AM or one after
+            // a full two-mark base is stored as a faithful U+0E33 cell. Match that here: the previous
+            // unit can take the NIKHAHIT only if it holds at most a base + one mark (≤ 2 scalars,
+            // the engine's two-combining-slot cap). Otherwise keep U+0E33 so a faithful cell — and
+            // only a faithful cell — matches.
+            if scalar.value == TerminalScreen.saraAm {
+                let prevHasRoom = (needleUnits.last?.unicodeScalars.count ?? 0) >= 1
+                    && (needleUnits.last?.unicodeScalars.count ?? 0) <= 2
+                if prevHasRoom, let nikhahit = Unicode.Scalar(TerminalScreen.nikhahit),
+                   let saraAa = Unicode.Scalar(TerminalScreen.saraAa) {
+                    needleUnits[needleUnits.count - 1].unicodeScalars.append(nikhahit)
+                    needleUnits.append(String(saraAa))
+                } else {
+                    // No attachable base (leading) or the base is already full → faithful U+0E33.
+                    needleUnits.append(String(scalar))
+                }
+                continue
+            }
             if CharacterWidth.width(of: scalar.value) == 0, !needleUnits.isEmpty {
                 needleUnits[needleUnits.count - 1].unicodeScalars.append(scalar)
             } else {

@@ -1561,6 +1561,32 @@ final class MetalRendererTests: XCTestCase {
                     label: "block cursor fill over skipped cell", tolerance: 24)
     }
 
+    /// #66 review nit: in the ligated path, a combining-mark cluster cell under an inverting block
+    /// cursor must emit with the cursor TEXT color (parity with the single-glyph path), and keep its
+    /// own foreground when the cursor is elsewhere. The cluster here is `น้ำ`'s base cell (น + tone +
+    /// SARA AM's NIKHAHIT), which takes the `combining0 != 0` branch.
+    func testClusterCellUnderCursorUsesCursorTextColor() throws {
+        let (_, renderer) = try makeRenderer()
+        let f = frame("น้ำ", cols: 6, rows: 1)
+        XCTAssertNotEqual(f.cells[0].combining0, 0, "cell 0 is a marked cluster (takes the cluster branch)")
+        let cursorText = RenderColor(red: 1, green: 0, blue: 0, alpha: 1) // distinct from any fg
+        let fgVec = SIMD4<Float>(f.cells[0].foreground.red, f.cells[0].foreground.green,
+                                 f.cells[0].foreground.blue, f.cells[0].foreground.alpha)
+        let cursorVec = SIMD4<Float>(1, 0, 0, 1)
+
+        // Cursor ON the cluster cell → first emitted glyph (the cluster bitmap) gets the cursor color.
+        let onCluster = renderer.emittedGlyphColorsForTesting(
+            row: 0, frame: f, cursorCell: (row: 0, column: 0), cursorTextColor: cursorText)
+        XCTAssertEqual(onCluster.first, cursorVec,
+                       "marked cluster under the cursor must use the cursor text color")
+
+        // Cursor on a DIFFERENT cell → the cluster keeps its own foreground.
+        let offCluster = renderer.emittedGlyphColorsForTesting(
+            row: 0, frame: f, cursorCell: (row: 0, column: 1), cursorTextColor: cursorText)
+        XCTAssertEqual(offCluster.first, fgVec,
+                       "marked cluster keeps its foreground when the cursor is elsewhere")
+    }
+
     func testRepeatedRendersReuseInstanceBuffersWithoutCorruption() throws {
         let (device, renderer) = try makeRenderer()
         // Background + glyph + decoration all present so every reused ring buffer is exercised:

@@ -1588,6 +1588,19 @@ public final class TerminalMetalRenderer {
         }
     }
 
+    /// Test seam: emit a single row's glyphs (ligated path) for `frame` with the given inverting
+    /// cursor cell and cursor text color, returning each instance's color. Lets a unit test assert
+    /// per-glyph color (e.g. that a combining-mark cluster under the cursor gets the cursor color)
+    /// without standing up a full render pass. Not part of the public API.
+    func emittedGlyphColorsForTesting(
+        row: Int, frame: TerminalFrame, cursorCell: (row: Int, column: Int)?, cursorTextColor: RenderColor
+    ) -> [SIMD4<Float>] {
+        var glyphs: [GlyphInstance] = []
+        emitLigatedGlyphs(row: row, frame: frame, ox: 0, oy: 0, cursorCell: cursorCell,
+                          cursorTextColor: cursorTextColor, into: &glyphs)
+        return glyphs.map { $0.color }
+    }
+
     /// Fast path: one atlas glyph per cell (no shaping). Each glyph sits on its own cell;
     /// the cursor cell flips to the cursor-text color.
     private func emitPerCellGlyphs(
@@ -1660,9 +1673,14 @@ public final class TerminalMetalRenderer {
             // A cell carrying combining marks (Thai vowel/tone, etc.) is composed by CoreText as a
             // single cluster bitmap with contextual mark positioning — never shaped into a ligature
             // run (the run path discards CoreText's per-glyph positions, which marks depend on).
+            // Use the cursor text color when an inverting cursor sits on the cluster, for parity with
+            // the single-glyph path (the leading cursor check above already covers the common case;
+            // this keeps the branch self-consistent regardless of ordering). (#66 review nit)
             if cell.combining0 != 0 {
+                let isCursor = cursorCell.map { $0.row == row && $0.column == col } ?? false
+                let color = isCursor ? vector(cursorTextColor) : vector(cell.foreground)
                 emitClusterGlyph(cell, row: row, col: col, ox: ox, oy: oy,
-                                 color: vector(cell.foreground), into: &glyphs)
+                                 color: color, into: &glyphs)
                 col += 1
                 continue
             }

@@ -57,17 +57,77 @@ final class ThaiCombiningMarkTests: XCTestCase {
         XCTAssertEqual(reconstructed, "รีวิว")
     }
 
-    /// SARA AM (◌ำ, 0x0E33) is a SPACING vowel (width 1) even though it sits visually above/right of
-    /// the base — it must take its own cell and NOT be absorbed as a combining mark.
-    func testSaraAmStaysSpacing() {
+    /// SARA AM (◌ำ, 0x0E33) is decomposed on input (issue #66) into its canonical-compatibility
+    /// pair: the NIKHAHIT (0x0E4D, an above-base combining mark) folds onto the current base, and
+    /// the SARA AA (0x0E32, a width-1 spacing vowel) takes the next cell. The syllable still spans
+    /// two columns (one base cell + one spacing cell), but the above-base piece now rides the base's
+    /// cluster bitmap so a marked base no longer orphans a lone SARA AM cell into a dotted circle.
+    func testSaraAmDecomposesOntoMarkedBase() {
         let t = term()
-        t.feed("ก่ำ") // ก(0E01) + ◌่(0E48, combining) + ◌ำ(0E33, spacing)
-        let g = t.readGrid()
+        t.feed("ก่ำ") // ก(0E01) + ◌่(0E48, tone) + ◌ำ(0E33) → ก + ◌่ + ◌ํ, then า
 
+        let g = t.readGrid()
         XCTAssertEqual(cell(g, 0, 0).codepoint, 0x0E01) // ก
         XCTAssertEqual(cell(g, 0, 0).combining0, 0x0E48) // tone stacks on ก
-        XCTAssertEqual(cell(g, 0, 1).codepoint, 0x0E33, "SARA AM takes its own cell")
+        XCTAssertEqual(cell(g, 0, 0).combining1, 0x0E4D) // SARA AM's NIKHAHIT folds on as the 2nd mark
+        XCTAssertEqual(cell(g, 0, 1).codepoint, 0x0E32, "SARA AM's SARA AA takes its own spacing cell")
+        XCTAssertEqual(cell(g, 0, 1).combining0, 0, "the spacing vowel carries no mark of its own")
+        XCTAssertEqual(g.cursor.col, 2, "two columns: marked base + spacing vowel")
+    }
+
+    /// SARA AM after an UNMARKED base: the NIKHAHIT folds onto the base (now its first mark) and the
+    /// SARA AA takes the next cell. `ทำ` and `รำ` already rendered fine pre-fix (base + SARA AM
+    /// shared one CoreText run); the decomposition keeps them a two-column base+vowel pair and folds
+    /// search/copy onto the same scalars as the marked case.
+    func testSaraAmDecomposesOntoUnmarkedBase() {
+        let t = term()
+        t.feed("ทำ") // ท(0E17) + ◌ำ(0E33) → ท + ◌ํ, then า
+        let g = t.readGrid()
+        XCTAssertEqual(cell(g, 0, 0).codepoint, 0x0E17) // ท
+        XCTAssertEqual(cell(g, 0, 0).combining0, 0x0E4D, "NIKHAHIT folds onto the unmarked base")
+        XCTAssertEqual(cell(g, 0, 0).combining1, 0, "only one mark on the base")
+        XCTAssertEqual(cell(g, 0, 1).codepoint, 0x0E32, "SARA AA in its own cell")
         XCTAssertEqual(g.cursor.col, 2)
+    }
+
+    /// SARA AM with NO attachable base (orphan at column 0) keeps the FAITHFUL original U+0E33 cell
+    /// rather than silently dropping its NIKHAHIT and emitting a bare SARA AA. The split only fires
+    /// when the NIKHAHIT actually folds onto a base, so this degenerate input round-trips losslessly.
+    func testOrphanSaraAmKeepsOriginalScalar() {
+        let t = term()
+        t.feed("ำ") // SARA AM at column 0, no preceding base
+        let g = t.readGrid()
+        XCTAssertEqual(cell(g, 0, 0).codepoint, 0x0E33, "orphan SARA AM stays its own faithful cell")
+        XCTAssertEqual(cell(g, 0, 0).combining0, 0)
+        XCTAssertEqual(g.cursor.col, 1)
+    }
+
+    /// SARA AM after a base whose two inline mark slots are ALREADY full (a 2-mark cluster) cannot
+    /// fold its NIKHAHIT, so it keeps the faithful original U+0E33 cell instead of dropping the mark.
+    func testSaraAmAfterFullClusterKeepsOriginalScalar() {
+        let t = term()
+        t.feed("ที่ำ") // ท + ◌ี + ◌่ (both slots full), then SARA AM
+        let g = t.readGrid()
+        XCTAssertEqual(cell(g, 0, 0).codepoint, 0x0E17)
+        XCTAssertEqual(cell(g, 0, 0).combining0, 0x0E35)
+        XCTAssertEqual(cell(g, 0, 0).combining1, 0x0E48, "base already carries two marks")
+        XCTAssertEqual(cell(g, 0, 1).codepoint, 0x0E33, "SARA AM stays faithful (NIKHAHIT couldn't attach)")
+        XCTAssertEqual(g.cursor.col, 2)
+    }
+
+    /// `น้ำ` (the headline #66 word: base + tone + SARA AM) lays out as exactly two columns —
+    /// `น + ้ + ํ` (base + tone + NIKHAHIT) then `า` (SARA AA) — and the cursor advances by two.
+    func testNamWaterLaysOutAsTwoColumns() {
+        let t = term()
+        t.feed("น้ำ") // น(0E19) + ◌้(0E49, tone) + ◌ำ(0E33)
+        let g = t.readGrid()
+        XCTAssertEqual(cell(g, 0, 0).codepoint, 0x0E19) // น
+        XCTAssertEqual(cell(g, 0, 0).combining0, 0x0E49) // tone ◌้
+        XCTAssertEqual(cell(g, 0, 0).combining1, 0x0E4D) // SARA AM's NIKHAHIT (fits the 2-mark cap)
+        XCTAssertEqual(cell(g, 0, 1).codepoint, 0x0E32) // SARA AA
+        XCTAssertEqual(cell(g, 0, 1).combining0, 0)
+        XCTAssertEqual(cell(g, 0, 2).codepoint, 0, "no third column — SARA AM never explodes to a mark cell")
+        XCTAssertEqual(g.cursor.col, 2, "น้ำ occupies exactly two columns")
     }
 
     // MARK: - Edge cases
@@ -188,6 +248,64 @@ final class ThaiCombiningMarkTests: XCTestCase {
         let hits = TerminalBufferSearch.matches(query: "ทำ", lineCount: 1, line: { _ in cells })
         XCTAssertEqual(hits.count, 1)
         XCTAssertEqual(hits.first?.columns, 0 ..< 2, "ทำ spans its two cells (consonant + SARA AM)")
+    }
+
+    /// #66: SARA AM after a MARKED base still matches. The engine stores `น้ำ` decomposed (base +
+    /// tone + NIKHAHIT, then SARA AA), and `TerminalBufferSearch` applies the SAME SARA AM split to
+    /// the query — so a precomposed `น้ำ` needle (U+0E33 and all) matches the decomposed cells.
+    /// SARA AM has only a COMPATIBILITY decomposition, so NFC alone would NOT reconcile the two; the
+    /// query-side split is what keeps this matching.
+    func testSearchMatchesSaraAmAfterMarkedBase() {
+        for word in ["น้ำ", "ต่ำ", "ซ้ำ", "ค่ำ", "ย้ำ"] {
+            let t = term(); t.feed(word + "ใจ")
+            let cells = (0 ..< t.cols).map { cell(t.readGrid(), 0, $0) }
+            let hits = TerminalBufferSearch.matches(query: word, lineCount: 1, line: { _ in cells })
+            XCTAssertEqual(hits.count, 1, "expected one match for \(word)")
+            XCTAssertEqual(hits.first?.columns, 0 ..< 2, "\(word) spans two columns")
+        }
+    }
+
+    /// The query splitter mirrors the engine's SARA AM FALLBACK: a leading `ำ` query keeps U+0E33,
+    /// so it matches a faithful orphan SARA AM cell and does NOT false-match a plain SARA AA cell.
+    func testSearchLeadingSaraAmMatchesFaithfulCellOnly() {
+        // A faithful orphan SARA AM cell (engine keeps U+0E33 when it can't attach) IS matched.
+        let orphan = [TerminalGridCell(codepoint: 0x0E33)]
+        let hit = TerminalBufferSearch.matches(query: "ำ", lineCount: 1, line: { _ in orphan })
+        XCTAssertEqual(hit.count, 1, "leading ำ query matches a faithful U+0E33 cell")
+
+        // A plain SARA AA cell (U+0E32) must NOT be matched by a ำ (U+0E33) query.
+        let saraAa = [TerminalGridCell(codepoint: 0x0E32)]
+        let miss = TerminalBufferSearch.matches(query: "ำ", lineCount: 1, line: { _ in saraAa })
+        XCTAssertEqual(miss.count, 0, "ำ must not false-match a bare SARA AA")
+    }
+
+    /// A SARA AM query after a unit that already carries two marks keeps U+0E33, matching the
+    /// engine's faithful fallback cell for `ที่ำ`-style input.
+    func testSearchSaraAmAfterFullClusterMatchesFaithfulCell() {
+        let t = term(); t.feed("ที่ำ")
+        let cells = (0 ..< t.cols).map { cell(t.readGrid(), 0, $0) }
+        let hits = TerminalBufferSearch.matches(query: "ที่ำ", lineCount: 1, line: { _ in cells })
+        XCTAssertEqual(hits.count, 1, "ที่ำ matches its two faithful cells")
+        XCTAssertEqual(hits.first?.columns, 0 ..< 2)
+    }
+
+    /// Copy / capture-pane fidelity is PINNED to the deliberate decomposition (issue #66, approach
+    /// A). Capturing `น้ำ` yields `น ้ ํ า` (U+0E19 U+0E49 U+0E4D U+0E32), NOT the original
+    /// `น ้ ำ` (…U+0E33). This is the accepted tradeoff: SARA AM's only decomposition is a
+    /// COMPATIBILITY one, so the round-trip is not byte-identical, but it is visually faithful and
+    /// re-composable via NFKC. If a future change drops the input split, this test must change too.
+    func testCaptureReflectsSaraAmDecomposition() {
+        let t = term(); t.feed("น้ำ")
+        let captured = t.captureLines(joinWrapped: false).first ?? ""
+        let scalars = captured.unicodeScalars.map { $0.value }
+        XCTAssertEqual(scalars, [0x0E19, 0x0E49, 0x0E4D, 0x0E32],
+                       "capture pins the decomposed SARA AM sequence (compatibility-only, by design)")
+        // The decomposition is exactly the compatibility decomposition of the original word, so
+        // NFKC of the captured text equals NFKC of the original — the loss is canonical-only and the
+        // text is still semantically the same word (search reconciles it via the same query split).
+        XCTAssertEqual(captured.precomposedStringWithCompatibilityMapping,
+                       "น้ำ".precomposedStringWithCompatibilityMapping,
+                       "NFKC recovers the original precomposed word — only canonical fidelity is lost")
     }
 
     // MARK: - Non-combining width-0 scalars

@@ -1072,8 +1072,37 @@ final class TerminalScreen {
 
     // MARK: - Printing
 
+    /// Thai SARA AM (U+0E33) and its canonical-compatibility pair. SARA AM is a *spacing* mark
+    /// (width 1, its own cell), but visually it is a NIKHAHIT (U+0E4D, an above-base zero-width
+    /// mark) stacked on the base plus a SARA AA (U+0E32, a width-1 trailing vowel). When SARA AM
+    /// follows a base that already carries a mark, that base is composed as a standalone CoreText
+    /// cluster bitmap, so the following SARA AM cell shapes ALONE — CoreText, seeing a spacing mark
+    /// with no base in its run, inserts a U+25CC dotted circle (`น้ำ` rendered as `น้` + ◌ำ; #66).
+    ///
+    /// We split SARA AM on input into its pieces: fold the NIKHAHIT onto the current base as a
+    /// combining mark (it joins the base's cluster bitmap, positioned correctly), and print the
+    /// SARA AA as the width-1 cell (a plain spacing vowel that shapes fine standalone). The common
+    /// `tone + SARA AM` case (`น้ำ` → น + ้ + ํ, then า) fits the existing two-mark cap.
+    ///
+    /// TRADEOFF: this alters cell content — copy / capture-pane / search of `น้ำ` now sees
+    /// `น ้ ํ า` (U+0E19 U+0E49 U+0E4D U+0E32) instead of `น ้ ำ` (…U+0E33). SARA AM has only a
+    /// COMPATIBILITY decomposition, so NFC does NOT recompose it. To keep find-in-scrollback
+    /// working, `TerminalBufferSearch.matches` applies the SAME split to the search query.
+    static let saraAm: UInt32 = 0x0E33
+    static let nikhahit: UInt32 = 0x0E4D // SARA AM's combining (above-base) component
+    static let saraAa: UInt32 = 0x0E32 // SARA AM's spacing (trailing-vowel) component
+
     /// Write one printable scalar at the cursor, honoring width and autowrap.
     func print(_ scalar: UInt32) {
+        // Decompose Thai SARA AM (see `saraAm`): fold its NIKHAHIT onto the current base, then print
+        // its SARA AA as the spacing cell. Both pieces route through the normal combining / width-1
+        // paths, so wrap, advance, and dirty-marking stay identical. Only split when the NIKHAHIT
+        // actually attached — with no base (orphan at col 0) or the base's two mark slots full, keep
+        // the faithful original SARA AM cell rather than silently dropping the above-base component.
+        if scalar == Self.saraAm, attachCombining(Self.nikhahit) {
+            print(Self.saraAa)
+            return
+        }
         let w = CharacterWidth.width(of: scalar)
 
         // Zero-width (combining marks etc.): stack onto the preceding base cell's grapheme
@@ -1183,8 +1212,14 @@ final class TerminalScreen {
         var lastMarkedRow = -1
         var i = 0
         while i < n {
-            let scalar = codepoints[i]
+            var scalar = codepoints[i]
             i += 1
+            // Thai SARA AM: fold its NIKHAHIT onto the current base, then print its SARA AA as the
+            // width-1 cell — identical to `print`'s SARA AM split (see `saraAm`). Only split when the
+            // NIKHAHIT attached; otherwise keep the faithful original SARA AM cell.
+            if scalar == Self.saraAm, attachCombining(Self.nikhahit) {
+                scalar = Self.saraAa
+            }
             let w = CharacterWidth.width(of: scalar)
             // Zero-width (combining marks etc.): stack onto the preceding base cell — identical to
             // `print`'s `w == 0` path. attachCombining does a read-modify-write on `cells`; this is
@@ -1258,14 +1293,18 @@ final class TerminalScreen {
     /// Stack a zero-width combining scalar onto the base glyph it belongs to, instead of dropping
     /// it. Called from `print`/`printCodepointRun` for every `width == 0` scalar; never advances the
     /// cursor. Finds the base cell and folds the mark in via `TerminalGridCell.appendCombining`.
-    private func attachCombining(_ scalar: UInt32) {
+    /// Returns whether the mark was actually stored — `false` when there is no attachable base
+    /// (leading mark, blank padding) or both inline slots are full. Callers that DROP unattached
+    /// marks can ignore the result; the SARA AM split uses it to fall back to the faithful original.
+    @discardableResult
+    private func attachCombining(_ scalar: UInt32) -> Bool {
         // Only fold TRUE grapheme-extending marks (Thai vowels/tones, accents, variation selectors)
         // onto the base. Width-0 FORMAT scalars (ZWSP, BOM, word joiner, bidi LRM/RLM/overrides) are
         // not grapheme extenders: folding them would make the cell's `cluster` span two extended
         // grapheme clusters — which crashes `Character(cluster)` on the copy-mode read path and is
         // semantically wrong — so drop them, exactly as the pre-cluster code did for all width-0.
-        guard let s = Unicode.Scalar(scalar), s.properties.isGraphemeExtend else { return }
-        guard cursorRow >= 0, cursorRow < rows else { return }
+        guard let s = Unicode.Scalar(scalar), s.properties.isGraphemeExtend else { return false }
+        guard cursorRow >= 0, cursorRow < rows else { return false }
         let rowBase = cursorRow * cols
         var baseCol: Int
         if pendingWrap {
@@ -1277,7 +1316,7 @@ final class TerminalScreen {
         } else {
             // Leading mark with no base on this row (col 0, fresh or explicitly-repositioned row):
             // drop it, matching prior behavior. (A dotted-circle U+25CC base is a later option.)
-            return
+            return false
         }
         // Wide base: the cell at baseCol is the reserved `.spacerTail`; step back to its `.wide`
         // head and decorate that, never the spacer.
@@ -1285,9 +1324,10 @@ final class TerminalScreen {
         // Base is blank padding (codepoint 0): drop rather than make padding non-blank, which would
         // break trailing-trim and the wide-deferral gap. A real space is 0x20 (!= 0) and DOES take a
         // mark.
-        guard cells[rowBase + baseCol].codepoint != 0 else { return }
-        cells[rowBase + baseCol].appendCombining(scalar)
+        guard cells[rowBase + baseCol].codepoint != 0 else { return false }
+        let stored = cells[rowBase + baseCol].appendCombining(scalar)
         markRowDirty(cursorRow)
+        return stored
     }
 
     /// Advance the cursor after writing a glyph, arming a deferred wrap when it reaches
