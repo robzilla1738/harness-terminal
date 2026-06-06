@@ -547,7 +547,9 @@ final class SurfaceRegistryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dest) }
         let canonicalDest = dest.resolvingSymlinksInPath().path
         usleep(400_000) // let the shell come up
-        _ = registry.handle(.sendData(surfaceID: sid, data: Data("cd \(canonicalDest)\n".utf8)))
+        // Single-quote the path: on Linux, corelibs-foundation's itemReplacementDirectory is named
+        // "(A Document Being Saved By …)" — spaces and parens are a bash syntax error unquoted.
+        _ = registry.handle(.sendData(surfaceID: sid, data: Data("cd '\(canonicalDest)'\n".utf8)))
 
         var updated = false
         for _ in 0 ..< 50 {
