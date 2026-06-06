@@ -98,6 +98,19 @@ let platformTestTargets: [Target] = [
         dependencies: ["HarnessOnboarding"],
         path: "Tests/HarnessOnboardingTests"
     ),
+    // Drift canary: the onboarding-preview port of GridCompositor must keep composing the
+    // shared subset (layout, borders, junctions, status line) identically to the live one.
+    // Imports both packages so a single fixture is composed through each and compared.
+    .testTarget(
+        name: "GridCompositorParityTests",
+        dependencies: [
+            "HarnessTerminalKit",
+            "HarnessOnboarding",
+            "HarnessCore",
+            "HarnessTerminalEngine",
+        ],
+        path: "Tests/GridCompositorParityTests"
+    ),
     .testTarget(
         name: "HarnessAppTests",
         dependencies: ["HarnessApp"],
