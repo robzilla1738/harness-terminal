@@ -519,4 +519,77 @@ final class SurfaceRegistryTests: XCTestCase {
             .first { $0.rootPane.allSurfaceIDs().contains(uuid) }?
             .status
     }
+
+    // MARK: - Off-lock metadata refresh (item 3)
+
+    /// After moving the cwd probe off the registry lock, `refreshSurfaceMetadata` must still
+    /// update a tab's cwd to the live shell's working directory. Live-gated: it needs the
+    /// spawned shell to actually `cd` and `proc_pidinfo` to read its cwd.
+    func testRefreshSurfaceMetadataUpdatesTabCwd() throws {
+        try skipUnlessLiveDaemonTests()
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(initial) = registry.handle(.listSurfaces), let target = initial.first else {
+            return XCTFail("expected a default surface")
+        }
+        let sid = target.surfaceID
+
+        func tabCwd() -> String? {
+            registry.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+                .first { $0.rootPane.allSurfaceIDs().map(\.uuidString).contains(sid) }?
+                .cwd
+        }
+
+        // Drive the live shell into a known directory, then refresh and observe the new cwd.
+        let dest = try FileManager.default.url(
+            for: .itemReplacementDirectory, in: .userDomainMask,
+            appropriateFor: FileManager.default.temporaryDirectory, create: true
+        )
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let canonicalDest = dest.resolvingSymlinksInPath().path
+        usleep(400_000) // let the shell come up
+        _ = registry.handle(.sendData(surfaceID: sid, data: Data("cd \(canonicalDest)\n".utf8)))
+
+        var updated = false
+        for _ in 0 ..< 50 {
+            registry.refreshSurfaceMetadata()
+            if tabCwd().map({ ($0 as NSString).resolvingSymlinksInPath }) == canonicalDest { updated = true; break }
+            usleep(100_000)
+        }
+        XCTAssertTrue(updated, "off-lock refresh must still propagate the live shell's cwd to the tab")
+    }
+
+    // MARK: - Orphan-scrollback sweep safety (item 5)
+
+    /// On startup the sweep must keep a `.scroll` file whose surface is referenced by the layout
+    /// (even one whose PTY failed to spawn) and delete a `.scroll` whose UUID isn't in the layout.
+    func testScrollbackSweepKeepsReferencedDeletesOrphan() throws {
+        // Seed a layout that references one surface, plus an unrelated orphan UUID.
+        let referencedSurface = UUID()
+        let leaf = PaneLeaf(surfaceID: referencedSurface)
+        let tab = Tab(rootPane: .leaf(leaf))
+        let snapshot = SessionSnapshot(workspaces: [Workspace(sessions: [SessionGroup(tabs: [tab])])])
+        try SessionStore().saveImmediately(snapshot)
+
+        // Write a scroll file for the referenced surface AND a genuine orphan.
+        let referencedFile = HarnessPaths.scrollbackFileURL(forSurfaceID: referencedSurface.uuidString)
+        let orphanFile = HarnessPaths.scrollbackFileURL(forSurfaceID: UUID().uuidString)
+        try Data("history".utf8).write(to: referencedFile)
+        try Data("orphan".utf8).write(to: orphanFile)
+
+        // Constructing the registry runs `cleanupOrphanScrollbackFiles` in init.
+        let registry = SurfaceRegistry()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: referencedFile.path),
+            "a layout-referenced surface's scrollback must survive the startup sweep"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: orphanFile.path),
+            "a scrollback file for a UUID absent from the layout is a genuine orphan and must be deleted"
+        )
+
+        // The live set must include the layout-referenced surface via the snapshot half of the
+        // union — the property that protects a failed-to-spawn surface (in layout, not in sessions).
+        XCTAssertTrue(registry.scrollbackLiveSurfaceKeys().contains(referencedSurface.uuidString))
+    }
 }

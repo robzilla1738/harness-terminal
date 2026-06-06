@@ -878,22 +878,46 @@ public final class SurfaceRegistry: @unchecked Sendable {
     }
 
     public func refreshSurfaceMetadata() {
+        // `currentWorkingDirectory()` runs `ProcessScan.livePIDs()` (a `proc_listpids` of EVERY
+        // system PID) per surface — measured 6.2ms@10 panes / 11.7ms@20 — and was previously
+        // computed while holding `lock`, blocking ALL IPC (keystroke `sendData`, snapshots) for
+        // that whole window every ~1.5s. Mirror the `surfaceTelemetry` pattern: snapshot strong
+        // refs under the lock, compute each cwd OFF the lock, then re-acquire to commit — and
+        // re-validate identity + the current cwd under the lock before each write.
+        lock.lock()
+        let snap = Array(sessions)  // [(key, RealPty)] — strong refs keep PTYs alive off-lock
+        lock.unlock()
+
+        // Off-lock: walk every surface's process tree without contending with IPC. Keep the
+        // exact `session` instance alongside its probed cwd so the re-acquire below can confirm
+        // the surface wasn't closed/replaced before committing (PID reuse safety).
+        let probed: [(key: String, session: RealPty, uuid: UUID, cwd: String)] = snap.compactMap { key, session in
+            guard let uuid = UUID(uuidString: key), let cwd = session.currentWorkingDirectory() else {
+                return nil
+            }
+            return (key, session, uuid, cwd)
+        }
+        guard !probed.isEmpty else { return }
+
         lock.lock()
         defer { lock.unlock() }
         var changed = false
-        for (surfaceKey, session) in sessions {
-            guard let uuid = UUID(uuidString: surfaceKey),
-                  let cwd = session.currentWorkingDirectory(),
-                  let match = editor.tab(for: uuid)
+        for entry in probed {
+            // The surface could have been closed/replaced while we were off-lock — only commit if
+            // the exact instance we probed is still registered under this key.
+            guard sessions[entry.key] === entry.session,
+                  let match = editor.tab(for: entry.uuid)
             else { continue }
+            // Re-read the tab's stored cwd under the lock; the proc-scan result (`entry.cwd`) was
+            // computed off-lock so we never re-run that O(all-PIDs) walk while holding the lock.
             let current = editor.snapshot.workspaces
                 .first(where: { $0.id == match.workspaceID })?
                 .sessions
                 .flatMap { $0.tabs }
                 .first(where: { $0.id == match.tabID })?
                 .cwd
-            guard current != cwd else { continue }
-            editor.updateTabCwd(surfaceID: uuid, path: cwd)
+            guard current != entry.cwd else { continue }
+            editor.updateTabCwd(surfaceID: entry.uuid, path: entry.cwd)
             changed = true
         }
         if changed { commit() }
@@ -1390,18 +1414,36 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// On startup, delete persisted scrollback files for surfaces no longer in the layout. A clean
     /// shutdown removes a surface's file via `closeSurfaces`, but a crash can leave files behind for
     /// surfaces that were closed in-flight; sweep them so the directory doesn't grow without bound.
-    /// Runs in `init` after `ensureAllSnapshotSurfaces`, so `sessions` holds exactly the live set.
+    /// Runs in `init` after `ensureAllSnapshotSurfaces`.
+    ///
+    /// Liveness is the union of live PTYs AND snapshot-referenced surfaces — NOT just `sessions`.
+    /// `createOrEnsureSurface` returns nil when the `RealPty` fails to spawn (forkpty EAGAIN/ENOMEM),
+    /// leaving the surface in `layout.json` but out of `sessions`; keying the sweep on `sessions`
+    /// alone would then permanently delete the history of a surface that respawns fine next boot.
     private func cleanupOrphanScrollbackFiles() {
         let dir = HarnessPaths.scrollbackDirectory
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil) else { return }
-        let live = Set(sessions.keys)
+        let live = scrollbackLiveSurfaceKeys()
         for file in files where file.pathExtension == "scroll" {
             let surfaceID = file.deletingPathExtension().lastPathComponent
+            // Delete only genuine crash orphans — files neither backing a live PTY nor referenced
+            // anywhere in the layout.
             if !live.contains(surfaceID) {
                 try? FileManager.default.removeItem(at: file)
             }
         }
+    }
+
+    /// Surface keys whose persisted scrollback must be preserved on startup: the union of live
+    /// PTYs (`sessions`) AND every surface referenced by the snapshot. The snapshot half is what
+    /// keeps a failed-to-spawn surface's history (in `layout.json` but absent from `sessions`)
+    /// from being swept. `internal` purely so the orphan-sweep safety can be unit-tested.
+    func scrollbackLiveSurfaceKeys() -> Set<String> {
+        let referenced = Set(editor.snapshot.workspaces
+            .flatMap { $0.sessions }.flatMap { $0.tabs }
+            .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) })
+        return Set(sessions.keys).union(referenced)
     }
 
     private func removeSurfaceIfCurrent(surfaceID: String, session: RealPty?, exitStatus: Int32? = nil) {

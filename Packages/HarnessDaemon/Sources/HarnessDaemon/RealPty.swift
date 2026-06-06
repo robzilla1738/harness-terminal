@@ -94,6 +94,14 @@ public final class RealPty: @unchecked Sendable {
     /// semantics — while the daemon keeps serving everyone else. Serial ⇒ keystrokes stay ordered;
     /// no userspace buffering ⇒ no dropped input.
     private let writeQueue = DispatchQueue(label: "com.robert.harness.realpty.write")
+    /// Delayed-SIGKILL escalation timers (`scheduleKillEscalation`) run here, off every
+    /// hot path. A child that ignores SIGTERM+SIGHUP would otherwise leave the `watchForExit`
+    /// `waitpid(pid, …, 0)` blocked forever, leaking that thread for the daemon's lifetime.
+    private let killQueue = DispatchQueue(label: "com.robert.harness.realpty.kill")
+    /// Grace period after SIGTERM before escalating to SIGKILL. Long enough for a well-behaved
+    /// shell to drain and exit on its own (so we don't `SIGKILL` it mid-teardown), short enough
+    /// that a TERM-ignoring child is reaped promptly.
+    private let killGrace: DispatchTimeInterval = .milliseconds(2500)
 
     public var onOutput: ((Data) -> Void)?
     /// Fired once when the child for the current generation dies. Carries the decoded exit
@@ -143,6 +151,11 @@ public final class RealPty: @unchecked Sendable {
     /// pane keeps the exact shell it started with (not whatever `$SHELL` happens to be now).
     private let shell: String
     var launchedShellForTesting: String { shell }
+    /// The live child PID (lock-guarded read), exposed only so the SIGKILL-escalation tests can
+    /// assert a TERM-ignoring child is actually reaped within the grace window.
+    var childPIDForTesting: pid_t {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }; return childPID
+    }
 
     /// `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` exported to the child — the terminal-identity the
     /// daemon advertises so capability-detecting tools (Claude Code) recognize Harness and enable
@@ -302,7 +315,10 @@ public final class RealPty: @unchecked Sendable {
         }
         // Advance the generation so the old child's exit-watcher and read-source
         // recognise they've been superseded and bail (instead of running close()/
-        // onExit against the shell we're about to spawn).
+        // onExit against the shell we're about to spawn). `dyingGeneration` is the
+        // pre-bump value the SIGTERM'd child was tagged with — used by the SIGKILL
+        // escalation so a TERM-ignoring old shell can't leak its blocked waitpid thread.
+        let dyingGeneration = generation
         generation &+= 1
         readSource = nil
         master = -1
@@ -313,7 +329,10 @@ public final class RealPty: @unchecked Sendable {
         // Probe the old child's cwd while it may still be alive — after SIGTERM the PID
         // disappears and proc_pidinfo fails, which would lose the directory the user was in.
         let inheritedCwd = oldPID > 0 ? Self.cwd(for: oldPID) : nil
-        if oldPID > 0 { kill(oldPID, SIGTERM) }
+        if oldPID > 0 {
+            kill(oldPID, SIGTERM)
+            scheduleKillEscalation(pid: oldPID, dyingGeneration: dyingGeneration)
+        }
         if let oldSource {
             oldSource.cancel()
         } else if oldFD >= 0 {
@@ -495,7 +514,37 @@ public final class RealPty: @unchecked Sendable {
     }
 
     public func currentWorkingDirectory() -> String? {
-        Self.cwd(for: deepestReadableDescendant(of: childPID) ?? childPID)
+        // `childPID` is `lifecycleLock`-guarded (class doc); snapshot it under the lock,
+        // then run the proc scan OUTSIDE the lock (it walks every system PID).
+        lifecycleLock.lock()
+        let pid = childPID
+        lifecycleLock.unlock()
+        guard pid > 0 else { return nil }
+        return Self.cwd(for: deepestReadableDescendant(of: pid) ?? pid)
+    }
+
+    /// After SIGTERM, a child that traps/ignores TERM+HUP never exits, so the `watchForExit`
+    /// `waitpid(pid, …, 0)` blocks forever and that thread leaks for the daemon's lifetime
+    /// (and accumulates across repeated close/respawn). Escalate to SIGKILL after a grace.
+    ///
+    /// `dyingGeneration` is the generation the SIGTERM'd child was tagged with — i.e. the value
+    /// captured *before* close()/respawn() bumped `generation`. We only deliver SIGKILL when that
+    /// child is still the not-yet-reaped one: if `watchForExit` already recorded a reap for that
+    /// generation, the PID may have been recycled, so we must not signal it. `watchForExit` stays
+    /// the SOLE reaper — we never `waitpid` here; SIGKILL just unblocks its pending `waitpid(…,0)`,
+    /// which then returns and reaps the zombie.
+    private func scheduleKillEscalation(pid: pid_t, dyingGeneration: UInt64) {
+        guard pid > 0 else { return }
+        killQueue.asyncAfter(deadline: .now() + killGrace) { [weak self] in
+            guard let self else { return }
+            self.lifecycleLock.lock()
+            let alreadyReaped = self.reapedExit?.generation == dyingGeneration
+            self.lifecycleLock.unlock()
+            // Already reaped ⇒ the watcher's waitpid returned and the PID may be recycled — don't
+            // signal it. Still unreaped but the process is gone (kill(pid,0)!=0) ⇒ nothing to do.
+            guard !alreadyReaped, kill(pid, 0) == 0 else { return }
+            kill(pid, SIGKILL)
+        }
     }
 
     public func close() {
@@ -505,6 +554,7 @@ public final class RealPty: @unchecked Sendable {
             return
         }
         isClosed = true
+        let dyingGeneration = generation
         generation &+= 1
         let pid = childPID
         let source = readSource
@@ -515,7 +565,10 @@ public final class RealPty: @unchecked Sendable {
         lifecycleLock.unlock()
 
         AgentDetector.unregisterRootPID(forSurfaceKey: id)
-        if pid > 0 { kill(pid, SIGTERM) }
+        if pid > 0 {
+            kill(pid, SIGTERM)
+            scheduleKillEscalation(pid: pid, dyingGeneration: dyingGeneration)
+        }
         if let source {
             source.cancel()
         } else if fd >= 0 {
