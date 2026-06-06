@@ -753,6 +753,46 @@ final class PerformanceBenchmarks: XCTestCase {
         ])
     }
 
+    /// Per-tick frame-build cost while DRAGGING a selection over static content: the pre-overlay
+    /// path rebuilt the whole frame per drag event (selection baked into cells, reuse disabled);
+    /// the cell-overlay pass reuses the clean cached frame and re-shades only the selected rows.
+    /// 200×60, head walking down one row per tick — the drag steady state.
+    func testSelectionDragBuildCost() throws {
+        try skipUnlessEnabled()
+        let cols = 200, rows = 60
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        term.feed(syntheticStream(targetBytes: 256 * 1024))
+        _ = term.consumeDamage()
+        let builder = FrameBuilder(
+            theme: theme, selectionBackground: RGBColor(red: 60, green: 80, blue: 200)
+        )
+        let snap = term.readGrid()!
+        let ticks = 200
+
+        let bakedNanos = timedNanos {
+            for i in 0 ..< ticks {
+                let head = (i % (rows - 1)) + 1
+                _ = builder.build(snap, region: .linear(TerminalSelection((0, 4), (head, 12))))
+            }
+        }
+
+        let clean = builder.build(snap)
+        let overlayNanos = timedNanos {
+            for i in 0 ..< ticks {
+                let head = (i % (rows - 1)) + 1
+                let region = SelectionRegion.linear(TerminalSelection((0, 4), (head, 12)))
+                var frame = clean
+                builder.applyHighlights(into: &frame, from: snap, region: region,
+                                        searchHighlights: [], rows: IndexSet(0 ... head))
+            }
+        }
+        printBenchmark("selection_drag_baked_rebuild", nanos: bakedNanos, fields: [("ticks", "\(ticks)")])
+        printBenchmark("selection_drag_overlay_pass", nanos: overlayNanos, fields: [
+            ("ticks", "\(ticks)"),
+            ("speedup", String(format: "%.1fx", Double(bakedNanos) / Double(max(1, overlayNanos)))),
+        ])
+    }
+
     // MARK: - Scrollback append + replay (steady state, at the cap)
 
     func testScrollbackSteadyStateAtCap() throws {

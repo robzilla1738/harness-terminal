@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1440, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <link rel="stylesheet" href="harness-brand.css" />
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      @font-face {
+        font-family: HarnessUI;
+        src:
+          local("SF Pro Text"),
+          local(".SFNS-Regular"),
+          local("Helvetica Neue");
+      }
+
+      @font-face {
+        font-family: HarnessMono;
+        src:
+          local("SF Mono"),
+          local("Menlo");
+      }
+
+      html,
+      body {
+        width: 1440px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--harness-bg);
+        color: var(--harness-fg);
+        font-family: HarnessUI;
+        letter-spacing: 0;
+      }
+
+      #root {
+        position: relative;
+        width: 1440px;
+        height: 1080px;
+        overflow: hidden;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          #000;
+        background-size: 120px 120px;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        padding: 78px 92px 72px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+
+      .topbar,
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: rgba(255, 255, 255, 0.58);
+        font: 600 22px/1 HarnessMono;
+        text-transform: uppercase;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        color: var(--harness-fg);
+        font: 600 24px/1 HarnessUI;
+        text-transform: none;
+      }
+
+      .mark {
+        position: relative;
+        width: 42px;
+        height: 42px;
+      }
+
+      .mark::before,
+      .mark::after {
+        content: "";
+        position: absolute;
+        width: 25px;
+        height: 25px;
+        border: 2px solid var(--harness-fg);
+        border-radius: 7px;
+        background: #000;
+      }
+
+      .mark::before {
+        left: 2px;
+        top: 2px;
+      }
+
+      .mark::after {
+        right: 2px;
+        bottom: 2px;
+      }
+
+      .release {
+        display: flex;
+        align-items: baseline;
+        gap: 22px;
+      }
+
+      .release strong {
+        color: var(--harness-fg);
+        font: 650 40px/1 HarnessUI;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1fr 460px;
+        align-items: center;
+        gap: 64px;
+      }
+
+      .headline {
+        max-width: 780px;
+        font: 680 92px/0.98 HarnessUI;
+        letter-spacing: 0;
+      }
+
+      .subhead {
+        margin-top: 34px;
+        max-width: 720px;
+        color: var(--harness-text-secondary);
+        font: 400 32px/1.28 HarnessUI;
+      }
+
+      .terminal {
+        border: 1px solid var(--harness-border-strong);
+        border-radius: var(--harness-radius-card);
+        background: rgba(255, 255, 255, 0.035);
+        box-shadow: 0 22px 80px rgba(0, 0, 0, 0.45);
+        overflow: hidden;
+      }
+
+      .terminal-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--harness-border);
+        color: rgba(255, 255, 255, 0.58);
+        font: 600 16px/1 HarnessMono;
+      }
+
+      .terminal-body {
+        padding: 24px 24px 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        font: 500 22px/1.25 HarnessMono;
+      }
+
+      .line {
+        color: var(--harness-text-secondary);
+        white-space: nowrap;
+      }
+
+      .line strong {
+        color: var(--harness-fg);
+      }
+
+      .ok {
+        color: var(--harness-success);
+      }
+
+      .wait {
+        color: var(--harness-waiting);
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 28px;
+      }
+
+      .card {
+        min-height: 226px;
+        padding: 30px;
+        border: 1px solid var(--harness-border-strong);
+        border-radius: var(--harness-radius-card);
+        background: rgba(255, 255, 255, 0.045);
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+
+      .card-label {
+        color: rgba(255, 255, 255, 0.58);
+        font: 700 18px/1 HarnessMono;
+        text-transform: uppercase;
+      }
+
+      .card h2 {
+        color: var(--harness-fg);
+        font: 650 38px/1.05 HarnessUI;
+        letter-spacing: 0;
+      }
+
+      .card p {
+        color: var(--harness-text-secondary);
+        font: 400 23px/1.28 HarnessUI;
+      }
+
+      .metric {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+
+      .metric-number {
+        color: var(--harness-success);
+        font: 700 104px/0.92 HarnessUI;
+      }
+
+      .metric-copy {
+        max-width: 390px;
+        color: var(--harness-text-secondary);
+        font: 500 33px/1.12 HarnessUI;
+      }
+
+      .fixes {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 24px;
+      }
+
+      .fix {
+        min-height: 150px;
+        border-left: 2px solid var(--harness-border-strong);
+        padding: 8px 22px;
+      }
+
+      .fix h3 {
+        color: var(--harness-fg);
+        font: 650 27px/1.05 HarnessUI;
+      }
+
+      .fix p {
+        margin-top: 13px;
+        color: var(--harness-text-secondary);
+        font: 400 20px/1.25 HarnessUI;
+      }
+
+      .final {
+        align-items: center;
+        text-align: center;
+        justify-content: center;
+        gap: 34px;
+      }
+
+      .final .mark {
+        width: 68px;
+        height: 68px;
+      }
+
+      .final .mark::before,
+      .final .mark::after {
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+      }
+
+      .final h1 {
+        font: 700 112px/0.95 HarnessUI;
+      }
+
+      .final p {
+        max-width: 760px;
+        color: var(--harness-text-secondary);
+        font: 400 34px/1.25 HarnessUI;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="14"
+      data-width="1440"
+      data-height="1080"
+    >
+      <section class="scene scene-intro">
+        <div class="topbar">
+          <div class="brand"><span class="mark"></span><span>Harness</span></div>
+          <div class="release"><span>release</span><strong>1.1.0</strong></div>
+        </div>
+        <div class="hero">
+          <div>
+            <h1 class="headline">Remote terminals. Persistent history. Faster core.</h1>
+            <p class="subhead">A native terminal for AI agents and dev sessions, now built for remote and headless work.</p>
+          </div>
+          <div class="terminal">
+            <div class="terminal-title"><span>harness-cli</span><span>2026-06-02</span></div>
+            <div class="terminal-body">
+              <div class="line">$ harness-cli remote add <strong>prod</strong></div>
+              <div class="line wait">ssh trust tunnel established</div>
+              <div class="line">$ harness-cli --host prod ping</div>
+              <div class="line ok">pong</div>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>macOS app</span>
+          <span>Linux daemon + CLI</span>
+        </div>
+      </section>
+
+      <section class="scene scene-features">
+        <div class="topbar">
+          <div class="brand"><span class="mark"></span><span>Harness 1.1.0</span></div>
+          <div>major changes</div>
+        </div>
+        <div class="cards">
+          <article class="card">
+            <div class="card-label">remote</div>
+            <h2>Headless daemon over SSH</h2>
+            <p>Register a host once, then run every client command with <strong>--host</strong>.</p>
+          </article>
+          <article class="card">
+            <div class="card-label">history</div>
+            <h2>Persistent scrollback</h2>
+            <p>Pane history survives daemon restarts and crashes, per surface.</p>
+          </article>
+          <article class="card">
+            <div class="card-label">settings</div>
+            <h2>Native settings overhaul</h2>
+            <p>Themed sections, deeper customization, and a theme-true live pane.</p>
+          </article>
+          <article class="card">
+            <div class="card-label">agents</div>
+            <h2>Agent hooks in one click</h2>
+            <p>Install hooks from Settings and get setup prompts per agent.</p>
+          </article>
+        </div>
+        <div class="footer">
+          <span>remote add · remote list · remote remove</span>
+          <span>ping · new-session · send-keys · capture-pane · doctor</span>
+        </div>
+      </section>
+
+      <section class="scene scene-performance">
+        <div class="topbar">
+          <div class="brand"><span class="mark"></span><span>Terminal core</span></div>
+          <div>performance + fixes</div>
+        </div>
+        <div class="hero">
+          <div class="metric">
+            <div class="metric-number">1.66x</div>
+            <div class="metric-copy">faster VT parse hot path on unicode and throughput workloads.</div>
+          </div>
+          <div class="terminal">
+            <div class="terminal-title"><span>daemon launch</span><span class="ok">launchd supervised</span></div>
+            <div class="terminal-body">
+              <div class="line ok">runs = 1</div>
+              <div class="line ok">no retry loop</div>
+              <div class="line ok">clean macOS VM verified</div>
+            </div>
+          </div>
+        </div>
+        <div class="fixes">
+          <div class="fix">
+            <h3>IME composition</h3>
+            <p>Dead keys and multi-stroke input commit correctly.</p>
+          </div>
+          <div class="fix">
+            <h3>Window memory</h3>
+            <p>Position and size are remembered across launches.</p>
+          </div>
+          <div class="fix">
+            <h3>Xcode parity</h3>
+            <p>The CHarnessSys shim is exposed to SwiftPM and generated Xcode builds.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="scene final scene-final">
+        <span class="mark"></span>
+        <h1>Harness 1.1.0</h1>
+        <p>Remote and headless by default. Persistent where it matters. Cleaner for the long sessions.</p>
+      </section>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      gsap.set([".scene-features", ".scene-performance", ".scene-final"], { opacity: 0 });
+
+      tl.from(".scene-intro .topbar", { opacity: 0, y: -22, duration: 0.55, ease: "power3.out" }, 0);
+      tl.from(".scene-intro .headline", { opacity: 0, y: 42, duration: 0.65, ease: "power3.out" }, 0.25);
+      tl.from(".scene-intro .subhead", { opacity: 0, y: 26, duration: 0.55, ease: "power3.out" }, 0.45);
+      tl.from(".scene-intro .terminal", { opacity: 0, x: 38, duration: 0.65, ease: "power3.out" }, 0.55);
+      tl.from(".scene-intro .terminal-body .line", { opacity: 0, y: 12, duration: 0.34, stagger: 0.16, ease: "power2.out" }, 0.95);
+      tl.from(".scene-intro .footer", { opacity: 0, y: 18, duration: 0.45, ease: "power2.out" }, 1.65);
+      tl.to(".scene-intro", { opacity: 0, y: -28, duration: 0.5, ease: "power2.in" }, 3.45);
+
+      tl.to(".scene-features", { opacity: 1, duration: 0.05 }, 3.95);
+      tl.from(".scene-features .topbar", { opacity: 0, y: -18, duration: 0.45, ease: "power3.out" }, 4.05);
+      tl.from(".scene-features .card", { opacity: 0, y: 34, duration: 0.52, stagger: 0.12, ease: "power3.out" }, 4.25);
+      tl.from(".scene-features .footer", { opacity: 0, y: 18, duration: 0.4, ease: "power2.out" }, 5.25);
+      tl.to(".scene-features", { opacity: 0, y: -28, duration: 0.5, ease: "power2.in" }, 7.55);
+
+      tl.to(".scene-performance", { opacity: 1, duration: 0.05 }, 8.05);
+      tl.from(".scene-performance .topbar", { opacity: 0, y: -18, duration: 0.45, ease: "power3.out" }, 8.12);
+      tl.from(".metric-number", { opacity: 0, y: 36, duration: 0.55, ease: "power3.out" }, 8.35);
+      tl.from(".metric-copy", { opacity: 0, y: 24, duration: 0.5, ease: "power3.out" }, 8.55);
+      tl.from(".scene-performance .terminal", { opacity: 0, x: 34, duration: 0.55, ease: "power3.out" }, 8.65);
+      tl.from(".fix", { opacity: 0, y: 24, duration: 0.42, stagger: 0.1, ease: "power2.out" }, 9.25);
+      tl.to(".scene-performance", { opacity: 0, y: -24, duration: 0.45, ease: "power2.in" }, 11.5);
+
+      tl.to(".scene-final", { opacity: 1, duration: 0.05 }, 11.95);
+      tl.from(".scene-final .mark", { opacity: 0, scale: 0.82, duration: 0.45, ease: "power3.out" }, 12.05);
+      tl.from(".scene-final h1", { opacity: 0, y: 34, duration: 0.55, ease: "power3.out" }, 12.25);
+      tl.from(".scene-final p", { opacity: 0, y: 24, duration: 0.48, ease: "power3.out" }, 12.55);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

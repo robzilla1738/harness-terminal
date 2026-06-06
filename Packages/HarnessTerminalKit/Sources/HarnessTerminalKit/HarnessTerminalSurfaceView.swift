@@ -107,6 +107,11 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
     var lastViewportFrame: TerminalFrame?
     var lastViewportOffset = 0
     var lastViewportGeneration: UInt64 = 0
+    /// Per-row fingerprints of the last build's cell-overlay pass (selection / find / IME
+    /// preedit shading) — see `overlayRowKeys`. The next build re-encodes exactly the rows
+    /// whose fingerprint changed, so a selection drag costs the rows it crossed, not the grid.
+    /// Touched only on the serial queue (same discipline as `lastPlainFrame`).
+    var lastOverlayKeys: [Int: UInt64] = [:]
 
     /// Latest-wins coalescing for async frame builds. Every `renderNowOffMain()` claims a token; a
     /// build whose token is no longer the latest (a newer build is already queued behind it on this
@@ -208,6 +213,7 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
         sync { _ in
             lastPlainFrame = nil
             lastViewportFrame = nil
+            lastOverlayKeys = [:]
         }
     }
 }
@@ -760,6 +766,26 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
     // Scroll-reuse seams: drive a synchronous build+present and a scrollback scroll headlessly.
     func testingForceRender() { scheduler.forceRender() }
+    /// Programmatic selection for the cell-overlay tests (a mouse drag's end state).
+    func testingSetSelection(
+        anchor: (row: Int, column: Int)?, head: (row: Int, column: Int)?, rectangular: Bool = false
+    ) {
+        selectionAnchor = anchor
+        selectionHead = head
+        selectionRectangular = rectangular
+        selectionGranularity = .character
+        scheduleRender()
+    }
+    func testingSetSelectionColors(
+        background: HarnessTheme.RGBColor?, foreground: HarnessTheme.RGBColor?
+    ) {
+        selectionBackground = background
+        frameBuildConfiguration.selectionBackground = background
+        frameBuildConfiguration.selectionForeground = foreground
+    }
+    func testingMakeFrameBuilder() -> FrameBuilder { frameBuildConfiguration.makeBuilder() }
+    var testingLastPresentedFrame: TerminalFrame? { lastPresentedResult?.frame }
+    var testingLastPresentedDamage: TerminalDamage? { lastPresentedResult?.damage }
     // Smooth-scroll seams: continuous (sub-line) scrolling and the resulting offset/fraction split.
     func testingScrollByContinuous(lines: CGFloat) { scrollByContinuous(lines: lines) }
     var testingScrollPosition: (offset: Int, fraction: CGFloat) { (scrollOffset, scrollFraction) }
@@ -1751,6 +1777,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             if state.applyPendingResize() {
                 state.lastPlainFrame = nil
                 state.lastViewportFrame = nil
+                state.lastOverlayKeys = [:]
             }
             let builder = config.makeBuilder()
             let frameBuildStart = DispatchTime.now().uptimeNanoseconds
@@ -1805,7 +1832,13 @@ public final class HarnessTerminalSurfaceView: NSView {
                     ? Self.viewportFindHighlights(findMatchesSnapshot, scrollOffset: requestedScrollOffset, historyCount: emulator.historyCount, rows: viewRows)
                     : []
                 let overlayFree = selectionRegion == nil && preedit.isEmpty && findHits.isEmpty
-                let plain = requestedScrollOffset == 0 && overlayFree
+                // The LIVE view (offset 0) always builds CLEAN: selection/find/preedit are
+                // re-shaded onto a copy after the reuse caches are updated (the cell-overlay
+                // pass below), so they ride damage-driven incremental builds instead of forcing
+                // a full rebuild every frame for their whole duration. Scrolled views keep the
+                // baked full-rebuild path (overlay coordinates while scrolled are rarer and not
+                // worth the extra path).
+                let plain = requestedScrollOffset == 0
                 // Scroll-delta fast path: a pure scrollback scroll (the offset changed, nothing
                 // else did — no output since the last overlay-free frame, no overlays now) is the
                 // previous frame shifted by the offset delta. `buildShifted` re-resolves only the
@@ -1867,9 +1900,6 @@ public final class HarnessTerminalSurfaceView: NSView {
                         renderDamage = TerminalDamage(full: true)
                     }
                 }
-                if !preedit.isEmpty, requestedScrollOffset == 0 {
-                    Self.applyPreedit(into: &frame, text: preedit, builder: builder, canvasForeground: fg)
-                }
                 switch grid.cursor.shape {
                 case .block: frame.cursor.style = .block
                 case .bar: frame.cursor.style = .bar
@@ -1881,17 +1911,50 @@ public final class HarnessTerminalSurfaceView: NSView {
                     frame.cursor.visible = false
                 }
                 frame.cursor.hollow = !isFocused // unfocused → hollow outline / dimmed cursor
+                // Caches hold the CLEAN frame: on the live path the overlay pass below shades a
+                // copy, so reuse stays warm through a selection drag / find session / composition.
                 state.lastPlainFrame = plain ? frame : nil
                 state.lastPlainFrameGeneration = generation
-                // Refresh the scroll-reuse source: any overlay-free, image-free viewport frame
-                // qualifies (live or scrolled — both are byte-faithful windows over unchanged
-                // content). Overlay frames bake highlight colors into cells, so they poison it.
-                if overlayFree, frame.images.isEmpty {
+                // Refresh the scroll-reuse source: any clean, image-free viewport frame qualifies
+                // (the live view always builds clean now; a scrolled view only when overlay-free —
+                // scrolled overlay frames bake highlight colors into cells, so they poison it).
+                if plain || overlayFree, frame.images.isEmpty {
                     state.lastViewportFrame = frame
                     state.lastViewportOffset = requestedScrollOffset
                     state.lastViewportGeneration = generation
                 } else {
                     state.lastViewportFrame = nil
+                }
+                // Cell-overlay pass (live view only): re-shade the selection / find rows of a
+                // copy and lay the IME preedit over it, leaving the cached clean frame above
+                // untouched. The render damage gains exactly the rows whose overlay fingerprint
+                // changed since the last build, so a selection drag re-encodes the rows it
+                // crossed — a static highlight (or an idle find bar) adds nothing per frame.
+                if plain {
+                    let keys = Self.overlayRowKeys(
+                        selection: selectionRegion, findHits: findHits, preedit: preedit,
+                        preeditCursor: (frame.cursor.row, frame.cursor.column),
+                        rows: grid.rows, cols: grid.cols
+                    )
+                    if !keys.isEmpty {
+                        builder.applyHighlights(into: &frame, from: grid, region: selectionRegion,
+                                                searchHighlights: findHits, rows: IndexSet(keys.keys))
+                        if !preedit.isEmpty {
+                            Self.applyPreedit(into: &frame, text: preedit, builder: builder,
+                                              canvasForeground: fg)
+                        }
+                    }
+                    if var damage = renderDamage, !damage.full {
+                        for (row, key) in keys where state.lastOverlayKeys[row] != key {
+                            damage.rows.insert(row)
+                        }
+                        for row in state.lastOverlayKeys.keys where keys[row] == nil {
+                            damage.rows.insert(row)
+                        }
+                        if !keys.isEmpty || !state.lastOverlayKeys.isEmpty { damage.cursorOnly = false }
+                        renderDamage = damage
+                    }
+                    state.lastOverlayKeys = keys
                 }
             }
             return SurfaceFrameBuildResult(
@@ -3100,6 +3163,64 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// committed text, instead of dropping vowels / exploding tone marks.
     private func overlayPreedit(into frame: inout TerminalFrame) {
         Self.applyPreedit(into: &frame, text: markedText, builder: frameBuilder, canvasForeground: canvasForeground)
+    }
+
+    /// Per-row fingerprint of the cell-overlay pass (selection + find shading + IME preedit):
+    /// what the pass paints on each row, hashed from the overlay GEOMETRY (no cell walks). Two
+    /// builds whose fingerprints agree for a row shaded it identically, so the rows whose
+    /// fingerprint changed — plus rows that left the overlay — are exactly the extra render
+    /// damage the pass needs. A selection drag therefore re-encodes the rows it crossed, not
+    /// the grid. Keys exist only for rows the overlay touches now.
+    nonisolated static func overlayRowKeys(
+        selection: SelectionRegion?,
+        findHits: [TerminalSelection],
+        preedit: String,
+        preeditCursor: (row: Int, column: Int),
+        rows: Int, cols: Int
+    ) -> [Int: UInt64] {
+        var keys: [Int: UInt64] = [:]
+        func fold(_ row: Int, _ value: UInt64) {
+            guard row >= 0, row < rows else { return }
+            let h = keys[row] ?? 0xCBF2_9CE4_8422_2325 // FNV-64 offset basis
+            keys[row] = (h ^ value) &* 0x0000_0100_0000_01B3
+        }
+        // Column extents pack into one word; the tag keeps a selection span from ever colliding
+        // with an identical find span (they shade with different colors).
+        func pack(_ a: Int, _ b: Int, _ tag: UInt64) -> UInt64 {
+            (UInt64(UInt32(bitPattern: Int32(a))) << 34)
+                ^ (UInt64(UInt32(bitPattern: Int32(b))) << 3) ^ tag
+        }
+        switch selection {
+        case let .linear(s):
+            if s.endRow >= 0, s.startRow < rows {
+                for row in max(0, s.startRow) ... min(rows - 1, s.endRow) {
+                    let a = row == s.startRow ? s.startColumn : 0
+                    let b = row == s.endRow ? s.endColumn : cols - 1
+                    fold(row, pack(a, b, 1))
+                }
+            }
+        case let .block(b):
+            if b.endRow >= 0, b.startRow < rows {
+                for row in max(0, b.startRow) ... min(rows - 1, b.endRow) {
+                    fold(row, pack(b.startColumn, b.endColumn, 2))
+                }
+            }
+        case nil:
+            break
+        }
+        for hit in findHits where hit.endRow >= 0 && hit.startRow < rows {
+            for row in max(0, hit.startRow) ... min(rows - 1, hit.endRow) {
+                let a = row == hit.startRow ? hit.startColumn : 0
+                let b = row == hit.endRow ? hit.endColumn : cols - 1
+                fold(row, pack(a, b, 3))
+            }
+        }
+        if !preedit.isEmpty {
+            var h: UInt64 = 0xCBF2_9CE4_8422_2325
+            for byte in preedit.utf8 { h = (h ^ UInt64(byte)) &* 0x0000_0100_0000_01B3 }
+            fold(preeditCursor.row, h ^ pack(preeditCursor.column, 0, 4))
+        }
+        return keys
     }
 
     nonisolated private static func applyPreedit(

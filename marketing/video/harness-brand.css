@@ -1,0 +1,22 @@
+/**
+ * Harness marketing tokens for HyperFrames compositions.
+ * Sourced from ThemeManager default canvas + HarnessChromePalette (see ../../design-system.md).
+ * Import in index.html: <link rel="stylesheet" href="harness-brand.css" />
+ */
+:root {
+  --harness-bg: #000000;
+  --harness-fg: #ffffff;
+  --harness-accent: #ffffff;
+  --harness-surface-elevated: rgba(255, 255, 255, 0.07);
+  --harness-border: rgba(255, 255, 255, 0.07);
+  --harness-border-strong: rgba(255, 255, 255, 0.12);
+  --harness-text-secondary: rgba(255, 255, 255, 0.66);
+  --harness-text-tertiary: rgba(255, 255, 255, 0.4);
+  --harness-waiting: #82b0f5;
+  --harness-danger: #ee7d8c;
+  --harness-success: #96d48c;
+  --harness-radius-card: 7px;
+  --harness-radius-control: 6px;
+  --harness-font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --harness-font-mono: "JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, SFMono-Regular, Menlo, monospace;
+}

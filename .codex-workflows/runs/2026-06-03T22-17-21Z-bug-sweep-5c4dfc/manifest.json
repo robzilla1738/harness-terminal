@@ -1,0 +1,204 @@
+{
+  "definition": {
+    "name": "bug-sweep",
+    "version": "1",
+    "description": "Codebase-wide adversarial bug sweep with independent finding, verification, repro planning, and synthesis.",
+    "maxConcurrency": 16,
+    "maxAgents": 64,
+    "phases": [
+      {
+        "id": "find",
+        "title": "Find",
+        "agents": [
+          {
+            "id": "runtime-correctness",
+            "title": "runtime-correctness",
+            "prompt": "Audit runtime correctness bugs: state transitions, async races, lifecycle gaps, stale caches, and edge cases. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "data-contracts",
+            "title": "data-contracts",
+            "prompt": "Audit schemas, parsing, serialization, migrations, and compatibility contracts for bugs. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "cli-mcp-surfaces",
+            "title": "cli-mcp-surfaces",
+            "prompt": "Audit CLI and MCP public interfaces for broken flags, invalid defaults, missing validation, and workflow control bugs. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "ui-tui",
+            "title": "ui-tui",
+            "prompt": "Audit terminal UI behavior for broken navigation, unreadable states, overflow, stale status, and control mismatches. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "adapter-streaming",
+            "title": "adapter-streaming",
+            "prompt": "Audit Codex SDK and exec adapter streaming behavior, token/tool accounting, cancellation, and error handling. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "persistence-resume",
+            "title": "persistence-resume",
+            "prompt": "Audit run persistence, checkpoint/resume, restart-agent, event logs, and artifact durability. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          }
+        ]
+      },
+      {
+        "id": "verify",
+        "title": "Verify",
+        "agents": [
+          {
+            "id": "claim-01",
+            "title": "claim-01",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 64000,
+            "expectedTools": 34,
+            "durationMs": 430
+          },
+          {
+            "id": "claim-02",
+            "title": "claim-02",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 65200,
+            "expectedTools": 35,
+            "durationMs": 450
+          },
+          {
+            "id": "claim-03",
+            "title": "claim-03",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 66400,
+            "expectedTools": 36,
+            "durationMs": 470
+          },
+          {
+            "id": "claim-04",
+            "title": "claim-04",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 67600,
+            "expectedTools": 37,
+            "durationMs": 490
+          },
+          {
+            "id": "claim-05",
+            "title": "claim-05",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 68800,
+            "expectedTools": 38,
+            "durationMs": 510
+          },
+          {
+            "id": "claim-06",
+            "title": "claim-06",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 70000,
+            "expectedTools": 39,
+            "durationMs": 530
+          },
+          {
+            "id": "claim-07",
+            "title": "claim-07",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 71200,
+            "expectedTools": 40,
+            "durationMs": 550
+          },
+          {
+            "id": "claim-08",
+            "title": "claim-08",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 72400,
+            "expectedTools": 41,
+            "durationMs": 570
+          },
+          {
+            "id": "claim-09",
+            "title": "claim-09",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 73600,
+            "expectedTools": 42,
+            "durationMs": 590
+          },
+          {
+            "id": "claim-10",
+            "title": "claim-10",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 74800,
+            "expectedTools": 43,
+            "durationMs": 610
+          },
+          {
+            "id": "claim-11",
+            "title": "claim-11",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 76000,
+            "expectedTools": 44,
+            "durationMs": 630
+          },
+          {
+            "id": "claim-12",
+            "title": "claim-12",
+            "prompt": "Adversarially verify one candidate bug from the find phase. Try to disprove it first. Return confirmed, false-positive, or needs-human-review as strict JSON findings only.",
+            "sandbox": "read-only",
+            "expectedTokens": 77200,
+            "expectedTools": 45,
+            "durationMs": 650
+          }
+        ]
+      },
+      {
+        "id": "probe",
+        "title": "Probe",
+        "agents": [
+          {
+            "id": "minimal-repros",
+            "title": "minimal-repros",
+            "prompt": "For confirmed or plausible bugs, design minimal repro commands/tests. Mark anything unproven as needs-human-review. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          },
+          {
+            "id": "regression-tests",
+            "title": "regression-tests",
+            "prompt": "Map confirmed bugs to exact regression test files, test names, and acceptance criteria. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          }
+        ]
+      },
+      {
+        "id": "synthesize",
+        "title": "Synthesize",
+        "agents": [
+          {
+            "id": "bug-report",
+            "title": "bug-report",
+            "prompt": "Synthesize confirmed bugs, false positives, and needs-human-review items into a prioritized bug report. Return strict JSON findings only.",
+            "sandbox": "read-only"
+          }
+        ]
+      }
+    ]
+  },
+  "args": {},
+  "launch": {
+    "adapter": "sdk",
+    "defaultModel": "5.4-mini",
+    "reasoningEffort": "high",
+    "promptSuffix": "Read-only Harness repository bug hunt. Do not edit, format, write files, install packages, commit, stash, push, delete, or mutate local app state. Treat AGENTS.md/claude.md architecture invariants as binding: daemon owns layout.json, app is IPC client, preserve surfaceID and terminal views on metadata-only updates, terminal/chrome colors flow from ThemeManager.resolvedCanvas, do not layer-back root contentView. Current branch is ghostty-minimal-chrome; untracked marketing/ and x-replies-to-unreplied.txt exist and should be ignored unless directly relevant. Look for real bugs in the checked-out code, not style nits. Prefer findings with exact file and line evidence, concrete failure scenario, and likely regression test. If uncertain, mark needs-human-review."
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "skills": {
+    "animejs": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "1880b1980cf66aaacdbbcaf17284ed0844b15b9104568165be4568918074d5f5"
+    },
+    "contribute-catalog": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "911ae13321ae8b7f37b8723e0f48db1d8ff967beb6522822e8c6806dd3dce31c"
+    },
+    "css-animations": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "44c8a279548753b8aa41d4afbf0f33d4235fa1407beda6395afb3959a745a07d"
+    },
+    "gsap": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "bb14343a55447c56b960559c30c2cd6f3ba7c2c54baf4eba8ed7c5da5f6d066d"
+    },
+    "hyperframes": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "c844dbbbb3c1162dbd0126cf2301f3e3bdeb21353e7f07a265a6e5ad439ddc8f"
+    },
+    "hyperframes-cli": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "6272f5136a7ab54f274c13c767ef9942281c7fdd0ab9ca3067c2ccfb4be279e7"
+    },
+    "hyperframes-media": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "d5c40907c9f52c39dc4a926a3c17fbc68c239a33f0821ee6f43ee7006b1d20ca"
+    },
+    "hyperframes-registry": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "141fcd863a1a02117706712508e8b0df407c3d0ff36e5863123fa4ce2defd14d"
+    },
+    "lottie": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "385ed944795f1e6b5efa883b069611497be4a7fa78ceed7bfe51cb58e4b0d890"
+    },
+    "remotion-to-hyperframes": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "7bfa13c3a5baa27db840d1107b43db45c65a10f4c5c1e9fcafc861a462e6ca7e"
+    },
+    "tailwind": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "81c15c45ad0fad512fc7b34985c24b567762c9c6bb976827c5991ec9dec88ca5"
+    },
+    "three": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "39f1522a327799dab8aafbfd64fc548f0fdb6ec03cb235e236afc9298345a715"
+    },
+    "typegpu": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "f7f39c882b817188d97a91c519cee6bba31088ce57c3750a7139eb04ff64a4de"
+    },
+    "waapi": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "91d57ea8e36f47ddef497ccd27ffa55b774bb53d988d4f8b6f67860a767930f6"
+    },
+    "website-to-hyperframes": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "computedHash": "0b1ee10eedd5df4cec928b7d41c9416534bf739fdcf22e69858f9ccb0accba2a"
+    }
+  }
+}

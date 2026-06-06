@@ -515,6 +515,33 @@ public struct FrameBuilder {
                              cursor: cursor, images: [], promptGutter: promptGutter)
     }
 
+    /// Re-shade `rows` of an already-built **plain** frame with selection/search highlights —
+    /// the cell-overlay pass. The touched rows are byte-identical to what
+    /// `build(snapshot, region:searchHighlights:)` would have produced for them, because they
+    /// run the exact same `appendRow`; untouched rows keep their plain cells. Lets a caller
+    /// keep the clean frame cached for damage-driven reuse and pay O(highlighted rows) per
+    /// frame for the shading instead of an O(grid) rebuild that also poisons the reuse caches.
+    /// `frame` must be a plain build of `snapshot` (same geometry, no baked shading).
+    public func applyHighlights(
+        into frame: inout TerminalFrame,
+        from snapshot: TerminalGridSnapshot,
+        region: SelectionRegion?,
+        searchHighlights: [TerminalSelection],
+        rows: IndexSet
+    ) {
+        guard region != nil || !searchHighlights.isEmpty else { return }
+        let cols = snapshot.cols
+        guard frame.columns == cols, frame.cells.count >= cols * min(frame.rows, snapshot.rows) else { return }
+        var rowCells = [RenderCell]()
+        rowCells.reserveCapacity(cols)
+        for row in rows where row >= 0 && row < min(frame.rows, snapshot.rows) {
+            rowCells.removeAll(keepingCapacity: true)
+            appendRow(row, snapshot: snapshot, region: region, searchHighlights: searchHighlights,
+                      into: &rowCells)
+            frame.cells.replaceSubrange((row * cols) ..< ((row + 1) * cols), with: rowCells)
+        }
+    }
+
     /// Build the `RenderCell`s for one viewport row (appending in column order). A row's cells
     /// depend only on its snapshot cells plus selection/search shading — the cursor overlay is
     /// applied later by the renderer — so this is the unit of incremental reuse in `build`.

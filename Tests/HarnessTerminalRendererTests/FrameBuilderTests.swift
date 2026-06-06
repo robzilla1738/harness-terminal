@@ -102,6 +102,50 @@ final class FrameBuilderTests: XCTestCase {
         XCTAssertGreaterThan(hintSteps, 15, "the walk should exercise the hint path")
     }
 
+    /// The cell-overlay pass must be byte-identical to baking: a plain build re-shaded by
+    /// `applyHighlights` equals `build(region:searchHighlights:)` for linear/block selections,
+    /// find hits, and the selection-beats-search precedence — across colored, wide-char,
+    /// decorated, and inverse content. Passing extra (unshaded) rows must be harmless: they
+    /// re-resolve to their plain cells.
+    func testApplyHighlightsMatchesBakedBuild() {
+        let cols = 24, rows = 8
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 7 {
+            term.feed("\u{1b}[3\(i % 8);4\((i + 1) % 8)mrow \(i) 漢字 \u{1b}[4mu\(i)\u{1b}[24m \u{1b}[7minv\u{1b}[27m\r\n")
+        }
+        term.feed("tail row")
+        let snap = term.readGrid()!
+        let b = FrameBuilder(
+            theme: theme,
+            selectionBackground: RGBColor(red: 60, green: 80, blue: 200),
+            searchBackground: RGBColor(red: 200, green: 180, blue: 40)
+        )
+        let cases: [(SelectionRegion?, [TerminalSelection], String)] = [
+            (.linear(TerminalSelection((1, 3), (4, 10))), [], "linear"),
+            (.block(BlockSelection((2, 2), (5, 9))), [], "block"),
+            (nil, [TerminalSelection((0, 0), (0, 5)), TerminalSelection((3, 4), (3, 9))], "find"),
+            (.linear(TerminalSelection((2, 0), (3, 23))), [TerminalSelection((2, 5), (2, 8))], "precedence"),
+            (.linear(TerminalSelection((0, 0), (7, 23))), [], "whole grid"),
+        ]
+        for (region, hits, name) in cases {
+            let baked = b.build(snap, region: region, searchHighlights: hits)
+            var shaded = b.build(snap)
+            b.applyHighlights(into: &shaded, from: snap, region: region, searchHighlights: hits,
+                              rows: IndexSet(integersIn: 0 ..< rows)) // extra rows must be harmless
+            XCTAssertEqual(shaded, baked, name)
+        }
+    }
+
+    func testApplyHighlightsWithoutShadingIsANoOp() {
+        let snap = HarnessGridTerminal(cols: 10, rows: 3)!.readGrid()!
+        let b = builder
+        let clean = b.build(snap)
+        var copy = clean
+        b.applyHighlights(into: &copy, from: snap, region: nil, searchHighlights: [],
+                          rows: IndexSet(integersIn: 0 ..< 3))
+        XCTAssertEqual(copy, clean)
+    }
+
     func testBuildShiftedRejectsInapplicableShifts() {
         let term = HarnessGridTerminal(cols: 10, rows: 3)!
         for i in 0 ..< 12 { term.feed("line \(i)\r\n") }
