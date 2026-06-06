@@ -507,4 +507,56 @@ final class EngineConformanceTests: XCTestCase {
         // Row 0 (outside region) must stay untouched/blank.
         XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, 0)
     }
+
+    func testInvalidDECSTBMIsNoOpAndPreservesRegionAndCursor() {
+        // After a valid region (rows 2..3), an invalid DECSTBM must be a complete no-op in
+        // xterm/Ghostty: it must NOT reset the region to full screen or home the cursor.
+        // `ESC[1;1r` (top==bottom) and `ESC[5;3r` (top>bottom) are both degenerate.
+        for bad in ["\u{1b}[1;1r", "\u{1b}[5;3r"] {
+            let term = HarnessGridTerminal(cols: 10, rows: 4)!
+            term.feed("\u{1b}[2;3r")        // valid region rows 2..3 -> homes cursor
+            term.feed("\u{1b}[3;4HX")       // place cursor + a sentinel inside the region
+            term.feed(bad)                  // degenerate DECSTBM — must be ignored
+            // Force a scroll inside the region; row 0 must stay blank if containment held.
+            term.feed("\u{1b}[2;1HA\r\nB\r\nC")
+            let grid = term.readGrid()!
+            XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, 0,
+                           "region clobbered by invalid DECSTBM \(bad)")
+        }
+    }
+
+    func testBareDECSTBMResetsToFullScreenAndHomes() {
+        // `ESC[r` (params absent) is the legitimate reset: full-screen region + home. The
+        // invalid-DECSTBM no-op fix must NOT regress this path.
+        let term = HarnessGridTerminal(cols: 10, rows: 4)!
+        term.feed("\u{1b}[2;3r")        // shrink region first
+        term.feed("\u{1b}[3;5H")        // move cursor away from home
+        term.feed("\u{1b}[r")           // reset region -> full screen + home
+        var grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 0)
+        XCTAssertEqual(grid.cursor.col, 0)
+        // Region is now the full screen: place a sentinel on row 0, then scroll the whole
+        // screen. The sentinel must move off row 0 (it is no longer pinned outside a region).
+        term.feed("\u{1b}[1;1HZ")       // sentinel on row 0
+        term.feed("\u{1b}[4;1H\n")      // line feed at bottom -> full-screen scroll up
+        grid = term.readGrid()!
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, 0,
+                       "row 0 should have scrolled when the region is full-screen")
+    }
+
+    func testDECRCWithoutPriorSaveRestoresDefaultPen() {
+        // `ESC[31m ESC[2;6H ESC8 X` with no prior DECSC: xterm/Ghostty home the cursor AND
+        // reset the SGR pen, so X prints at (0,0) with the DEFAULT (no) foreground, not red.
+        let grid = read("\u{1b}[31m\u{1b}[2;6H\u{1b}8X", cols: 80, rows: 24)
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, codepoint("X"))
+        // Fully qualify: a bare `.none` would resolve to Optional.none, not TerminalGridColor.none.
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.foreground, TerminalGridColor.none)
+    }
+
+    func testDECRCWithoutPriorSaveClearsBoldPen() {
+        // Same no-save path, bold instead of color: the restored default pen must clear bold.
+        let grid = read("\u{1b}[1m\u{1b}[2;6H\u{1b}8Y", cols: 80, rows: 24)
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, codepoint("Y"))
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.bold, false)
+    }
 }
