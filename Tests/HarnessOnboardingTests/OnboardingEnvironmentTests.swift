@@ -6,9 +6,11 @@ import XCTest
 /// command list. These pin the seam's default-and-injected contract.
 @MainActor
 final class OnboardingEnvironmentTests: XCTestCase {
-    override func tearDown() {
-        OnboardingEnvironment.fishCompletionScript = { nil }
-        super.tearDown()
+    // tearDown() overrides a nonisolated XCTest method, so the class-level @MainActor doesn't
+    // apply to it — hop explicitly before touching the MainActor-isolated seam.
+    override func tearDown() async throws {
+        await MainActor.run { OnboardingEnvironment.fishCompletionScript = { nil } }
+        try await super.tearDown()
     }
 
     func testFishCompletionScriptDefaultsToNilSoTheStepSkipsInIsolation() {
