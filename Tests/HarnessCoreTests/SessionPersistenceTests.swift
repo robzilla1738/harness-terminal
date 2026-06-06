@@ -162,7 +162,7 @@ final class SessionPersistenceTests: XCTestCase {
         var editor = SessionEditor()
         editor.setKeepSessionsOnQuit(true)
         let wsID = try XCTUnwrap(editor.snapshot.activeWorkspace).id
-        let sessionID = try XCTUnwrap(editor.addSession(to: wsID, name: "s"))
+        _ = try XCTUnwrap(editor.addSession(to: wsID, name: "s"))
         let tab2 = try XCTUnwrap(editor.addTab(to: wsID))
         editor.setTabPersistent(tab2, true)
         XCTAssertTrue(editor.ephemeralSessionIDs().isEmpty)
