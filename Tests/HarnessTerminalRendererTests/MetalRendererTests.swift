@@ -452,6 +452,47 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertNotEqual(nonEmptyStats.glyphInstances, blankStats.glyphInstances)
     }
 
+    /// Cursor blink is overlay-cheap BY DESIGN and must stay that way: the cursor quad lives in
+    /// the per-frame extras (not the row cache), and a block cursor's glyph inversion re-encodes
+    /// exactly its own row via the `previousCursor` key diff. A blink toggle (visible flips, no
+    /// cell damage) must therefore re-encode at most one row — never the grid — and the readback
+    /// must equal a fresh full render. Locks the invariant the cell-overlay work relies on.
+    func testCursorBlinkReencodesAtMostTheCursorRow() throws {
+        let (device, renderer) = try makeRenderer()
+        let shown = frame("AAAA\r\nBB", cols: 4, rows: 3) // visible block cursor on row 1
+        XCTAssertTrue(shown.cursor.visible)
+        var hidden = shown
+        hidden.cursor.visible = false // the blink off-beat: only the cursor changed
+        let size = renderer.surfacePixelSize(columns: 4, rows: 3)
+        guard let target = makeTarget(device, width: size.width, height: size.height),
+              let fullTarget = makeTarget(device, width: size.width, height: size.height)
+        else { throw XCTSkip("no texture") }
+        let clear = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+        renderer.render(shown, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: IndexSet(integersIn: 0 ..< 3), full: true))
+        XCTAssertEqual(renderer.stats.encodedRows, 3)
+
+        renderer.render(hidden, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: [], full: false))
+        XCTAssertLessThanOrEqual(renderer.stats.encodedRows, 1,
+                                 "the blink off-beat re-encodes at most the cursor row")
+        XCTAssertGreaterThanOrEqual(renderer.stats.reusedRows, 2)
+
+        renderer.render(shown, to: target, clearColor: clear,
+                        damage: TerminalDamage(rows: [], full: false))
+        XCTAssertLessThanOrEqual(renderer.stats.encodedRows, 1,
+                                 "the blink on-beat re-encodes at most the cursor row")
+
+        let reference = try makeRenderer(device: device)
+        reference.render(shown, to: fullTarget, clearColor: clear)
+        XCTAssertEqual(
+            readPixelBytes(target, width: size.width, height: size.height),
+            readPixelBytes(fullTarget, width: size.width, height: size.height),
+            "blink round-trip must be pixel-identical to a fresh full render"
+        )
+    }
+
     func testRendererDamageReusesCleanRowsWithoutChangingReadback() throws {
         let (device, renderer) = try makeRenderer()
         let initial = frame("\u{1b}[?25lAAAA\r\nBBBB\r\nCCCC", cols: 4, rows: 3)

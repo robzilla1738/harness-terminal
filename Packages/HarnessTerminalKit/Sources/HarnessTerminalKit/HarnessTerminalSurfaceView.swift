@@ -2285,6 +2285,10 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     // MARK: - Cursor blink
 
+    // Blink is overlay-cheap: the cursor quad lives in the renderer's per-frame extras and a
+    // block cursor's glyph inversion re-encodes exactly its own row (`previousCursor` key diff),
+    // so each toggle costs ≤1 encoded row + one present — never a grid rebuild. Pinned by
+    // `testCursorBlinkReencodesAtMostTheCursorRow`.
     private func restartBlinkTimer() {
         blinkTimer?.invalidate()
         blinkTimer = nil
