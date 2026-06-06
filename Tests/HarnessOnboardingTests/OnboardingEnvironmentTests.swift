@@ -6,13 +6,9 @@ import XCTest
 /// command list. These pin the seam's default-and-injected contract.
 @MainActor
 final class OnboardingEnvironmentTests: XCTestCase {
-    // tearDown() overrides a nonisolated XCTest method, so the class-level @MainActor doesn't
-    // apply to it — hop explicitly before touching the MainActor-isolated seam.
-    override func tearDown() async throws {
-        await MainActor.run { OnboardingEnvironment.fishCompletionScript = { nil } }
-        try await super.tearDown()
-    }
-
+    // No tearDown override: under strict concurrency a tearDown override is nonisolated (it
+    // overrides a nonisolated XCTest method), so it can't touch the MainActor seam — each test
+    // restores the seam inline instead.
     func testFishCompletionScriptDefaultsToNilSoTheStepSkipsInIsolation() {
         // Unset by default (preview/test) → the Shell step skips writing fish completion rather than
         // embedding a drift-prone literal.
@@ -21,6 +17,7 @@ final class OnboardingEnvironmentTests: XCTestCase {
     }
 
     func testFishCompletionScriptUsesTheInjectedGenerator() {
+        defer { OnboardingEnvironment.fishCompletionScript = { nil } }
         OnboardingEnvironment.fishCompletionScript = { "complete -c harness-cli ..." }
         XCTAssertEqual(OnboardingEnvironment.fishCompletionScript(), "complete -c harness-cli ...")
     }
