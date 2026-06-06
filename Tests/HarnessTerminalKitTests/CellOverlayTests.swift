@@ -196,6 +196,44 @@ final class CellOverlayTests: XCTestCase {
         XCTAssertEqual(clearDamage.rows, IndexSet(integer: cursorRow))
     }
 
+    /// Composing over a selected region must NOT inherit the selection shading: the preedit sits
+    /// on the canvas background (no background quad, preserving window translucency) so it reads
+    /// as "being typed", not "selected". applyPreedit runs after applyHighlights and used to keep
+    /// whatever background the overlay pass had painted under it.
+    func testPreeditOverSelectionUsesCanvasBackground() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        let selectionBG = RGBColor(red: 60, green: 80, blue: 200)
+        view.testingSetSelectionColors(background: selectionBG, foreground: nil)
+        for i in 0 ..< 10 { view.receive("line \(i)\r\n") }
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard let before = view.testingLastPresentedFrame else {
+            throw XCTSkip("no present happened (drawable unavailable)")
+        }
+        let row = before.cursor.row
+        let col = before.cursor.column
+
+        // Shade the cursor row, then compose on top of the shaded cells.
+        view.testingSetSelection(anchor: (row, 0), head: (row, 20))
+        view.testingForceRender()
+        view.setMarkedText("かん", selectedRange: NSRange(), replacementRange: NSRange())
+        view.testingForceRender()
+
+        let frame = try XCTUnwrap(view.testingLastPresentedFrame)
+        let cell = try XCTUnwrap(frame.cell(row: row, column: col))
+        XCTAssertEqual(cell.codepoint, UnicodeScalar("か").value)
+        XCTAssertFalse(cell.drawBackground,
+                       "preedit resets to the canvas background (no quad), not the selection's")
+        XCTAssertNotEqual(cell.background, RenderColor(selectionBG))
+    }
+
     func testOutputDuringActiveSelectionKeepsShadingAndDamage() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
         let window = NSWindow(

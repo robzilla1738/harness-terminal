@@ -1968,7 +1968,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                                                 searchHighlights: findHits, rows: IndexSet(keys.keys))
                         if !preedit.isEmpty {
                             Self.applyPreedit(into: &frame, text: preedit, builder: builder,
-                                              canvasForeground: fg)
+                                              canvasForeground: fg, canvasBackground: bg)
                         }
                     }
                     if var damage = renderDamage, !damage.full {
@@ -3193,7 +3193,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// cell — never given their own column — so composing Thai through the IME renders the same as
     /// committed text, instead of dropping vowels / exploding tone marks.
     private func overlayPreedit(into frame: inout TerminalFrame) {
-        Self.applyPreedit(into: &frame, text: markedText, builder: frameBuilder, canvasForeground: canvasForeground)
+        Self.applyPreedit(into: &frame, text: markedText, builder: frameBuilder,
+                          canvasForeground: canvasForeground, canvasBackground: canvasBackground)
     }
 
     /// Per-row fingerprint of the cell-overlay pass (selection + find shading + IME preedit):
@@ -3258,12 +3259,14 @@ public final class HarnessTerminalSurfaceView: NSView {
         into frame: inout TerminalFrame,
         text: String,
         builder: FrameBuilder,
-        canvasForeground: RGBColor
+        canvasForeground: RGBColor,
+        canvasBackground: RGBColor
     ) {
         let row = frame.cursor.row
         guard row >= 0, row < frame.rows else { return }
         var col = frame.cursor.column
         let fg = builder.renderColor(canvasForeground)
+        let bg = builder.renderColor(canvasBackground)
         var lastBaseIdx: Int? = nil
         for scalar in text.unicodeScalars {
             // Zero-width scalar: fold a TRUE combining mark onto the preceding preedit base cell
@@ -3286,11 +3289,19 @@ public final class HarnessTerminalSurfaceView: NSView {
             frame.cells[idx].foreground = fg
             frame.cells[idx].underline = .single
             frame.cells[idx].width = (width == 2) ? .wide : .normal
+            // Preedit sits on the *canvas* background: reset the background to it and clear
+            // `drawBackground` (canvas cells draw no quad, so window translucency is preserved).
+            // Without this the cell kept whatever the overlay pass painted — composing over a
+            // selection or find hit rendered the preedit indistinguishable from highlighted text.
+            frame.cells[idx].background = bg
+            frame.cells[idx].drawBackground = false
             // Mark the trailing cell of a wide composing glyph as its spacer.
             if width == 2, idx + 1 < frame.cells.count {
                 frame.cells[idx + 1].codepoint = 0
                 frame.cells[idx + 1].width = .spacerTail
                 frame.cells[idx + 1].underline = .single
+                frame.cells[idx + 1].background = bg
+                frame.cells[idx + 1].drawBackground = false
             }
             lastBaseIdx = idx
             col += width

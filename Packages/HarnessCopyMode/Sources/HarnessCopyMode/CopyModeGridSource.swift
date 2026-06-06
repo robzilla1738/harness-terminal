@@ -58,10 +58,12 @@ struct CopyModeLine {
         return result
     }
 
-    /// The characters whose start column falls in `[from, to)`, as a string.
+    /// The characters whose column span intersects `[from, to)`, as a string. Span intersection
+    /// (not just the start column) keeps a wide (CJK) glyph in the copied text when the selection
+    /// covers only its trailing cell — matching the cells the highlight visually covers.
     func substring(fromColumn from: Int, toColumn to: Int) -> String {
         var out = ""
-        for (i, start) in columnOf.enumerated() where start >= from && start < to {
+        for (i, start) in columnOf.enumerated() where start + widthOf[i] > from && start < to {
             out.append(chars[i])
         }
         return out

@@ -339,10 +339,15 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
             guard editor.closeSession(sessionID) else { return .error("Session not found") }
             closeSurfaces(closedSurfaces)
+            // Drop the session's per-session env so entries don't accumulate in environment.json.
+            environmentStore.clearSession(sessionID.uuidString)
             ensureAllSnapshotSurfaces()
             commit()
             return .ok
         case let .closeWorkspace(id):
+            let workspaceSessionIDs = editor.snapshot.workspaces
+                .first(where: { $0.id == id })?
+                .sessions.map(\.id) ?? []
             let closedSurfaces = editor.snapshot.workspaces
                 .first(where: { $0.id == id })?
                 .sessions
@@ -350,6 +355,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
             guard editor.closeWorkspace(id) else { return .error("Cannot close workspace") }
             closeSurfaces(closedSurfaces)
+            for sessionID in workspaceSessionIDs { environmentStore.clearSession(sessionID.uuidString) }
             commit()
             return .ok
         case let .setTheme(name):
@@ -389,6 +395,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                     .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
                 guard editor.closeSession(sessionID) else { continue }
                 closeSurfaces(closedSurfaces)
+                environmentStore.clearSession(sessionID.uuidString)
             }
             for tabID in tabIDs {
                 // Gather the tab's surfaces before removing it from the layout (mirrors the
@@ -896,12 +903,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
         // Off-lock: walk every surface's process tree without contending with IPC. Keep the
         // exact `session` instance alongside its probed cwd so the re-acquire below can confirm
-        // the surface wasn't closed/replaced before committing (PID reuse safety).
-        let probed: [(key: String, session: RealPty, uuid: UUID, cwd: String)] = snap.compactMap { key, session in
-            guard let uuid = UUID(uuidString: key), let cwd = session.currentWorkingDirectory() else {
+        // the surface wasn't closed/replaced before committing (PID reuse safety). Capture the PID
+        // the cwd was computed for so a respawn during the probe (same RealPty, new child) can't
+        // commit the OLD child's cwd for the NEW one.
+        let probed: [(key: String, session: RealPty, uuid: UUID, pid: pid_t, cwd: String)] = snap.compactMap { key, session in
+            guard let uuid = UUID(uuidString: key), let result = session.probeWorkingDirectory() else {
                 return nil
             }
-            return (key, session, uuid, cwd)
+            return (key, session, uuid, result.pid, result.cwd)
         }
         guard !probed.isEmpty else { return }
 
@@ -910,8 +919,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
         var changed = false
         for entry in probed {
             // The surface could have been closed/replaced while we were off-lock — only commit if
-            // the exact instance we probed is still registered under this key.
+            // the exact instance we probed is still registered under this key, AND its child PID is
+            // still the one we probed. A respawn swaps childPID on the same RealPty instance, so the
+            // `===` check alone would commit a stale cwd; skip and let the next ~1.5s cycle re-probe.
             guard sessions[entry.key] === entry.session,
+                  entry.session.currentChildPID == entry.pid,
                   let match = editor.tab(for: entry.uuid)
             else { continue }
             // Re-read the tab's stored cwd under the lock; the proc-scan result (`entry.cwd`) was

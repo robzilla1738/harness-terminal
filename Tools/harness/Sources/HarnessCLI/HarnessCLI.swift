@@ -769,9 +769,23 @@ struct HarnessCLI {
             var sshArgs: [String] = []
             var i = 0
             while i < args.count {
-                if args[i] == "--ssh-arg", i + 1 < args.count { sshArgs.append(args[i + 1]); i += 2 } else { i += 1 }
+                if args[i] == "--ssh-arg" {
+                    // A trailing valueless `--ssh-arg` would silently drop the arg the user meant to
+                    // pass through; fail loudly (exit 64) like the other dangling-flag guards (#92).
+                    guard i + 1 < args.count else {
+                        fputs("harness-cli remote add: --ssh-arg requires a value "
+                            + "(e.g. --ssh-arg -p --ssh-arg 2222).\n", harnessStderr)
+                        return 64
+                    }
+                    sshArgs.append(args[i + 1]); i += 2
+                } else { i += 1 }
             }
-            store.upsert(RemoteHost(name: name, sshTarget: ssh, remoteSocketPath: socketPath, sshArgs: sshArgs))
+            let result = store.upsert(RemoteHost(name: name, sshTarget: ssh, remoteSocketPath: socketPath, sshArgs: sshArgs))
+            guard result.saved else {
+                fputs("harness-cli remote add: failed to write \(HarnessPaths.remoteHostsURL.path) "
+                    + "(check disk space and permissions).\n", harnessStderr)
+                return 1
+            }
             print("Added remote '\(name)' -> \(ssh) (\(socketPath))")
             return 0
         case "remove":
@@ -779,8 +793,13 @@ struct HarnessCLI {
                 fputs("Usage: harness-cli remote remove --name <name>\n", harnessStderr)
                 return 64
             }
-            store.remove(name: name)
+            let result = store.remove(name: name)
             SSHTunnelManager.shared.stop(host: name)
+            guard result.saved else {
+                fputs("harness-cli remote remove: failed to write \(HarnessPaths.remoteHostsURL.path) "
+                    + "(check disk space and permissions).\n", harnessStderr)
+                return 1
+            }
             print("Removed remote '\(name)'")
             return 0
         default:
@@ -930,14 +949,28 @@ struct HarnessCLI {
         _ = try checkedRequest(client, .detachClient(clientID: id))
     }
 
-    static func handleBindKey(_ args: [String]) throws {
-        // Usage: harness-cli bind-key [-T <table>] <spec> <command source>
-        let table = flagValue(args, flag: "-T") ?? "prefix"
-        // Drop the subcommand (`bind-key`/`bind`) at index 0; keep every other token so
-        // the command source can itself contain flags (e.g. `new-window -h`).
+    /// Split `bind-key`/`unbind-key` args into the resolved table name and the remaining positional
+    /// tokens (key spec + optional command source). Pure so it's unit-testable.
+    ///
+    /// The table comes from `-T <table>` and defaults to `prefix`. The strip of `-T`'s value must be
+    /// gated on `-T` actually being present: otherwise `bind-key prefix <cmd>` (binding a key *named*
+    /// `prefix`) had its literal `prefix` positional removed as if it were the default table value.
+    static func parseKeyTableArgs(_ args: [String]) -> (table: String, positional: [String]) {
+        let explicitTable = flagValue(args, flag: "-T")
+        let table = explicitTable ?? "prefix"
+        // Drop the subcommand at index 0; keep every other token so the command source can itself
+        // contain flags (e.g. `new-window -h`).
         var positional = Array(args.dropFirst())
         positional.removeAll { $0 == "-T" }
-        if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
+        // Only strip the table token when it came from an explicit `-T <table>`; never when it's the
+        // implicit default, or a literal key spec equal to "prefix" would be eaten.
+        if explicitTable != nil, let i = positional.firstIndex(of: table) { positional.remove(at: i) }
+        return (table, positional)
+    }
+
+    static func handleBindKey(_ args: [String]) throws {
+        // Usage: harness-cli bind-key [-T <table>] <spec> <command source>
+        let (table, positional) = parseKeyTableArgs(args)
         guard positional.count >= 2 else {
             fputs("Usage: harness-cli bind-key [-T <table>] <spec> <command...>\n", harnessStderr)
             exit(1)
@@ -956,11 +989,7 @@ struct HarnessCLI {
     }
 
     static func handleUnbindKey(_ args: [String]) throws {
-        let table = flagValue(args, flag: "-T") ?? "prefix"
-        // Drop the subcommand (`unbind-key`/`unbind`) at index 0.
-        var positional = Array(args.dropFirst())
-        positional.removeAll { $0 == "-T" }
-        if let i = positional.firstIndex(of: table) { positional.remove(at: i) }
+        let (table, positional) = parseKeyTableArgs(args)
         guard let spec = positional.first, let parsedSpec = KeySpec.parse(spec) else {
             fputs("Usage: harness-cli unbind-key [-T <table>] <spec>\n", harnessStderr)
             exit(1)

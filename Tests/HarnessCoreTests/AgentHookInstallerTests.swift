@@ -58,7 +58,15 @@ final class AgentHookInstallerTests: XCTestCase {
         let result = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
         let command = try claudeNotificationCommand(at: result.path)
         XCTAssertTrue(command.contains("--from-hook"), "Notification body must come from stdin")
+        // The PATH prefix must point at the platform's real install location — a hardcoded
+        // macOS path in Linux-installed hooks made every notification silently vanish
+        // (`harness-cli` was never on the hook's PATH).
+        #if os(Linux)
+        XCTAssertTrue(command.hasPrefix(
+            "PATH=\"${XDG_DATA_HOME:-$HOME/.local/share}/harness/bin:$PATH\" harness-cli notify"))
+        #else
         XCTAssertTrue(command.hasPrefix("PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli notify"))
+        #endif
         XCTAssertFalse(command.contains("HARNESS_NOTIFY_MESSAGE"), "the dangling env var must be gone")
     }
 

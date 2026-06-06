@@ -579,6 +579,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         for page in pages.values { reskinControls(in: page) }
         // Re-tint links (their accent color is baked into the attributed title).
         for link in linkButtons { styleAsLink(link) }
+        // Auto light/dark lands here as a chrome change too: the color wells/placeholder hex
+        // read from the *theme*, so without a refresh they keep showing the old appearance's
+        // palette until the window reopens.
+        refreshColorPlaceholders()
     }
 
     private var lastChromeSignature: String?
@@ -2382,12 +2386,15 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             coordinator.settings.setEventEnabled(event, toggle.state == .on)
         }
         coordinator.settings.commandFinishedThresholdSeconds = max(1, Int(commandFinishedThresholdField.stringValue) ?? 10)
-        // Reflect the clamp back into the field so typing "0" doesn't leave the UI showing 0 while
-        // the setting is silently 1 (and a non-numeric entry resets to the persisted value).
-        let clampedThreshold = String(coordinator.settings.commandFinishedThresholdSeconds)
-        if commandFinishedThresholdField.stringValue != clampedThreshold {
-            commandFinishedThresholdField.stringValue = clampedThreshold
-        }
+        // Reflect every clamped numeric field back into the UI so typing an out-of-range value
+        // (fontSize "2", threshold "0", …) doesn't leave the field showing one number while the
+        // setting — and the live terminals — silently use the clamped one. Non-numeric entries
+        // reset to the persisted value the same way.
+        reflectClamped(commandFinishedThresholdField, String(coordinator.settings.commandFinishedThresholdSeconds))
+        reflectClamped(fontSizeField, String(format: "%.0f", coordinator.settings.fontSize))
+        reflectClamped(paddingXField, String(format: "%.0f", coordinator.settings.windowPaddingX))
+        reflectClamped(paddingYField, String(format: "%.0f", coordinator.settings.windowPaddingY))
+        reflectClamped(scrollbackField, String(coordinator.settings.scrollbackLines))
         coordinator.settings.experienceMode = selectedExperienceMode
         coordinator.settings.prefixKeyEnabled = selectedPrefixEnabled
         coordinator.settings.statusLineEnabled = selectedStatusLineEnabled
@@ -2398,6 +2405,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.applySettingsToHosts()
         NotchPanelController.shared.refreshVisibility()
         updateFontReadout()
+    }
+
+    /// Rewrite a numeric field only when its committed text differs from the clamped setting —
+    /// the UI must never show a value the terminals aren't actually using.
+    private func reflectClamped(_ field: NSTextField, _ clamped: String) {
+        if field.stringValue != clamped { field.stringValue = clamped }
     }
 
     /// Safety net for the apply-only/persist-on-commit split (#89): continuous sliders apply live on

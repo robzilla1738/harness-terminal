@@ -560,6 +560,60 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertTrue(updated, "off-lock refresh must still propagate the live shell's cwd to the tab")
     }
 
+    /// Closing a session must drop its per-session environment so entries don't accumulate in
+    /// environment.json forever. Regression for the close paths never calling `clearSession`.
+    func testCloseSessionClearsPerSessionEnvironment() throws {
+        let registry = SurfaceRegistry()
+        let wsID = try XCTUnwrap(registry.snapshot.activeWorkspaceID)
+        guard case let .sessionID(sessionID) = registry.handle(
+            .newSession(workspaceID: wsID, cwd: "/tmp", name: "env-test", shell: nil)
+        ) else { return XCTFail("expected a new session") }
+
+        // Seed a per-session variable.
+        guard case .ok = registry.handle(.setEnvironment(sessionID: sessionID, key: "API_KEY", value: "secret")) else {
+            return XCTFail("expected set-environment to succeed")
+        }
+        XCTAssertEqual(registry.environmentStore.resolved(sessionID: sessionID.uuidString)["API_KEY"], "secret")
+
+        // Closing the session must clear its map.
+        guard case .ok = registry.handle(.closeSession(sessionID: sessionID)) else {
+            return XCTFail("expected close-session to succeed")
+        }
+        XCTAssertNil(
+            registry.environmentStore.resolved(sessionID: sessionID.uuidString)["API_KEY"],
+            "a closed session's per-session env must not survive in environment.json"
+        )
+        XCTAssertTrue(
+            registry.environmentStore.entries(sessionID: sessionID.uuidString)
+                .allSatisfy { $0.scope != "session" },
+            "no per-session entries should remain after the session is closed"
+        )
+    }
+
+    /// Closing a workspace must clear the per-session environment of every session it held.
+    func testCloseWorkspaceClearsPerSessionEnvironment() throws {
+        let registry = SurfaceRegistry()
+        guard case let .workspaceID(wsID) = registry.handle(.newWorkspace(name: "Env WS")) else {
+            return XCTFail("expected a new workspace")
+        }
+        guard case let .sessionID(sessionID) = registry.handle(
+            .newSession(workspaceID: wsID, cwd: "/tmp", name: "ws-env", shell: nil)
+        ) else { return XCTFail("expected a new session") }
+
+        guard case .ok = registry.handle(.setEnvironment(sessionID: sessionID, key: "WS_VAR", value: "v")) else {
+            return XCTFail("expected set-environment to succeed")
+        }
+        XCTAssertEqual(registry.environmentStore.resolved(sessionID: sessionID.uuidString)["WS_VAR"], "v")
+
+        guard case .ok = registry.handle(.closeWorkspace(id: wsID)) else {
+            return XCTFail("expected close-workspace to succeed")
+        }
+        XCTAssertNil(
+            registry.environmentStore.resolved(sessionID: sessionID.uuidString)["WS_VAR"],
+            "closing a workspace must clear every member session's per-session env"
+        )
+    }
+
     // MARK: - Orphan-scrollback sweep safety (item 5)
 
     /// On startup the sweep must keep a `.scroll` file whose surface is referenced by the layout

@@ -465,7 +465,16 @@ public enum AgentHookInstaller {
 
     /// Substring present in every Harness hook command — the `isInstalled` marker.
     private static let hookMarker = "harness-cli notify"
+    /// Shell-expandable PATH prefix so hooks find `harness-cli` even under an agent's minimal
+    /// PATH. Platform-specific: macOS installs under `~/Library/Application Support/Harness/bin`;
+    /// Linux follows the XDG base-dir spec (mirrors `HarnessPaths.applicationSupport`), expanded
+    /// at hook *runtime* so a changed `XDG_DATA_HOME` keeps working without reinstalling hooks.
+    #if os(Linux)
+    private static let notifyPrefix =
+        "PATH=\"${XDG_DATA_HOME:-$HOME/.local/share}/harness/bin:$PATH\" harness-cli notify"
+    #else
     private static let notifyPrefix = "PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli notify"
+    #endif
 
     private static func notifyCommand(title: String, body: String) -> String {
         "\(notifyPrefix) --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --body \"\(body)\""

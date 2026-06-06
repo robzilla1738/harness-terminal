@@ -133,6 +133,14 @@ public enum CopyModeReducer {
         let rows = max(1, grid.viewportRows)
         s.cursor.line = min(max(0, s.cursor.line), total - 1)
         s.cursor.column = min(max(0, s.cursor.column), maxColumn(grid))
+        // Scrollback eviction can shrink the buffer between reduce calls; an anchor left past
+        // the new end would make selectedText read out-of-range (blank) lines and silently copy
+        // nothing. Clamp it exactly like the cursor.
+        if var anchor = s.anchor {
+            anchor.line = min(max(0, anchor.line), total - 1)
+            anchor.column = min(max(0, anchor.column), maxColumn(grid))
+            s.anchor = anchor
+        }
         let maxTop = max(0, total - rows)
         if s.cursor.line < s.viewTop { s.viewTop = s.cursor.line }
         else if s.cursor.line >= s.viewTop + rows { s.viewTop = s.cursor.line - rows + 1 }
@@ -186,19 +194,27 @@ public enum CopyModeReducer {
     // MARK: - Selection text extraction
 
     private static func selectedText(_ s: CopyModeState, grid: CopyModeGridSource) -> String {
-        guard let anchor = s.anchor, s.mode != .none else { return "" }
+        guard var anchor = s.anchor, s.mode != .none else { return "" }
+        // Copy actions read the selection *before* reveal() runs, so a stale anchor/cursor from
+        // a scrollback eviction must be clamped here too — never index past the live buffer.
+        let total = max(1, grid.totalLines)
+        var cursor = s.cursor
+        anchor.line = min(max(0, anchor.line), total - 1)
+        anchor.column = min(max(0, anchor.column), maxColumn(grid))
+        cursor.line = min(max(0, cursor.line), total - 1)
+        cursor.column = min(max(0, cursor.column), maxColumn(grid))
         switch s.mode {
         case .char:
-            return linearText(from: Swift.min(anchor, s.cursor), to: Swift.max(anchor, s.cursor), grid: grid)
+            return linearText(from: Swift.min(anchor, cursor), to: Swift.max(anchor, cursor), grid: grid)
         case .line:
-            let r0 = Swift.min(anchor.line, s.cursor.line)
-            let r1 = Swift.max(anchor.line, s.cursor.line)
+            let r0 = Swift.min(anchor.line, cursor.line)
+            let r1 = Swift.max(anchor.line, cursor.line)
             return (r0...r1).map { trimTrailing(grid.renderedLine($0).text) }.joined(separator: "\n")
         case .block:
-            let r0 = Swift.min(anchor.line, s.cursor.line)
-            let r1 = Swift.max(anchor.line, s.cursor.line)
-            let c0 = Swift.min(anchor.column, s.cursor.column)
-            let c1 = Swift.max(anchor.column, s.cursor.column)
+            let r0 = Swift.min(anchor.line, cursor.line)
+            let r1 = Swift.max(anchor.line, cursor.line)
+            let c0 = Swift.min(anchor.column, cursor.column)
+            let c1 = Swift.max(anchor.column, cursor.column)
             return (r0...r1).map { grid.renderedLine($0).substring(fromColumn: c0, toColumn: c1 + 1) }
                 .joined(separator: "\n")
         case .none:
@@ -234,7 +250,15 @@ public enum CopyModeReducer {
 
     private static func stepSearch(_ state: CopyModeState, forward: Bool, grid: CopyModeGridSource) -> CopyModeState {
         var s = state
-        guard !s.search.matches.isEmpty else { return s }
+        guard !s.search.query.isEmpty else { return s }
+        // Scrollback eviction shifts virtual line numbers under the stored matches, so n/N on a
+        // cached list would jump to (or highlight) the wrong rows. Recompute from the live grid —
+        // the same scan the initial search commit already does, at a human keypress cadence.
+        s.search.matches = computeMatches(s.search.query, grid: grid)
+        guard !s.search.matches.isEmpty else {
+            s.search.currentIndex = nil
+            return s
+        }
         let idx = matchIndex(after: s.cursor, forward: forward, matches: s.search.matches) ?? (forward ? 0 : s.search.matches.count - 1)
         s.search.currentIndex = idx
         let m = s.search.matches[idx]

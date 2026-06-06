@@ -222,4 +222,38 @@ final class HarnessCLITests: XCTestCase {
         // Absent entirely → not dangling (it's just absent).
         XCTAssertFalse(HarnessCLI.flagIsDangling(["--tab", "t"], flag: "--pane"))
     }
+
+    // MARK: - parseKeyTableArgs (bind-key / unbind-key)
+
+    func testParseKeyTableArgsDefaultsToPrefixWithoutEatingPositionals() {
+        // No -T: table defaults to "prefix" and EVERY positional is preserved. Regression: a key
+        // spec literally named "prefix" must survive — the implicit default must not strip it.
+        let (table, positional) = HarnessCLI.parseKeyTableArgs(["bind-key", "prefix", "new-window"])
+        XCTAssertEqual(table, "prefix")
+        XCTAssertEqual(positional, ["prefix", "new-window"],
+                       "the literal 'prefix' key spec must not be removed when -T is absent")
+    }
+
+    func testParseKeyTableArgsStripsExplicitTableValue() {
+        // With -T <table>, both the flag and its value are removed from the positionals.
+        let (table, positional) = HarnessCLI.parseKeyTableArgs(["bind-key", "-T", "root", "C-b", "detach-client"])
+        XCTAssertEqual(table, "root")
+        XCTAssertEqual(positional, ["C-b", "detach-client"])
+    }
+
+    func testParseKeyTableArgsExplicitPrefixTableStripsOnlyTheTableToken() {
+        // -T prefix AND a key spec also named "prefix": only the table value (first occurrence) is
+        // stripped; the key spec "prefix" remains.
+        let (table, positional) = HarnessCLI.parseKeyTableArgs(["bind-key", "-T", "prefix", "prefix", "new-window"])
+        XCTAssertEqual(table, "prefix")
+        XCTAssertEqual(positional, ["prefix", "new-window"])
+    }
+
+    func testParseKeyTableArgsUnbindKeepsLiteralPrefixSpec() {
+        // unbind-key path: removing a key named "prefix" must keep it as the spec, not treat it as
+        // the default table.
+        let (table, positional) = HarnessCLI.parseKeyTableArgs(["unbind-key", "prefix"])
+        XCTAssertEqual(table, "prefix")
+        XCTAssertEqual(positional, ["prefix"])
+    }
 }

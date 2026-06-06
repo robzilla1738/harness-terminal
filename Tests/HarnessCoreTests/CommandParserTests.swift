@@ -173,6 +173,30 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("last-pane"), .selectPane(target: .last))
     }
 
+    func testPaneTargetSpecialFormsParse() throws {
+        XCTAssertEqual(try CommandParser.parse("select-pane -t :.+"), .selectPane(target: .next))
+        XCTAssertEqual(try CommandParser.parse("select-pane -t :.-"), .selectPane(target: .previous))
+        XCTAssertEqual(try CommandParser.parse("swap-pane -t !"), .swapPane(target: .last))
+    }
+
+    /// An unrecognized -t used to silently route to `.next`, moving the WRONG pane with no
+    /// feedback — it must throw like every other invalid argument.
+    func testPaneTargetInvalidValueThrows() {
+        XCTAssertThrowsError(try CommandParser.parse("select-pane -t bogus"))
+        XCTAssertThrowsError(try CommandParser.parse("swap-pane -t api:1.0")) { error in
+            guard let parseError = error as? CommandParseError,
+                  case .invalidArgument = parseError else {
+                return XCTFail("expected invalidArgument, got \(error)")
+            }
+        }
+    }
+
+    /// A dangling -t (flag present, value missing) is a typo, not a request for the default.
+    func testPaneTargetDanglingFlagThrows() {
+        XCTAssertThrowsError(try CommandParser.parse("select-pane -t"))
+        XCTAssertThrowsError(try CommandParser.parse("swap-pane -t"))
+    }
+
     // MARK: - Robustness (audit Tier 1.5)
 
     func testUnterminatedQuoteThrows() {

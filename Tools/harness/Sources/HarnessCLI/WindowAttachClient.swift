@@ -438,8 +438,8 @@ private final class WindowSession: @unchecked Sendable {
     private func mainStatusLine(ctx: FormatContext) -> [StyledSegment] {
         let leftSegs = FormatString.evaluateStyled(statusOptions["status-left"] ?? "", context: ctx)
         let rightSegs = FormatString.evaluateStyled(statusOptions["status-right"] ?? "", context: ctx)
-        let leftWidth = leftSegs.reduce(0) { $0 + $1.text.unicodeScalars.count }
-        let rightWidth = rightSegs.reduce(0) { $0 + $1.text.unicodeScalars.count }
+        let leftWidth = StatusLineWidth.displayWidth(of: leftSegs)
+        let rightWidth = StatusLineWidth.displayWidth(of: rightSegs)
         if leftWidth + rightWidth >= cols { return clipSegments(leftSegs, to: cols) }
         var out = leftSegs
         out.append(StyledSegment(text: String(repeating: " ", count: cols - leftWidth - rightWidth)))
@@ -453,22 +453,9 @@ private final class WindowSession: @unchecked Sendable {
         clipSegments(FormatString.evaluateStyled(format, context: ctx), to: cols)
     }
 
-    /// Truncate styled segments to a total scalar `width`, cutting the last that overflows.
+    /// Truncate styled segments to a total *display* `width`, cutting the last that overflows.
     private func clipSegments(_ segs: [StyledSegment], to width: Int) -> [StyledSegment] {
-        var out: [StyledSegment] = []
-        var used = 0
-        for seg in segs {
-            let count = seg.text.unicodeScalars.count
-            if used + count <= width { out.append(seg); used += count; continue }
-            let remain = width - used
-            if remain > 0 {
-                var s = seg
-                s.text = String(String.UnicodeScalarView(seg.text.unicodeScalars.prefix(remain)))
-                out.append(s)
-            }
-            break
-        }
-        return out
+        StatusLineWidth.clipSegments(segs, to: width)
     }
 
     private func currentTarget() -> CommandTarget {
@@ -538,9 +525,7 @@ private final class WindowSession: @unchecked Sendable {
     }
 
     private func clip(_ string: String, to width: Int) -> String {
-        let scalars = Array(string.unicodeScalars)
-        guard scalars.count > width else { return string }
-        return String(String.UnicodeScalarView(scalars.prefix(max(0, width))))
+        StatusLineWidth.clip(string, to: width)
     }
 
     /// Show a transient message on the status row for ~2s, then revert.

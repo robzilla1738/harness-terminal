@@ -101,10 +101,16 @@ public final class HookRegistry: @unchecked Sendable {
     }
 
     private func save() {
+        // Snapshot under the lock — encoding `hooks` while another thread mutates it (bind/unbind
+        // release the lock before save()) is a torn read of the array (mirrors OptionStore /
+        // EnvironmentStore; the registry is `@unchecked Sendable` and saves can overlap mutations).
+        lock.lock()
+        let snapshot = hooks
+        lock.unlock()
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(hooks) else { return }
+        guard let data = try? encoder.encode(snapshot) else { return }
         HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon")
     }
 

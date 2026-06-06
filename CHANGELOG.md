@@ -6,6 +6,81 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+The post-release audit of 1.7.0: a second exhaustive multi-agent pass (56 hunt dimensions across
+the release diff and the whole app, refute-by-default verification, every fix below pinned by a
+regression test that fails on the pre-fix code where feasible).
+
+### Fixed
+- **RIS left the saved cursor alive, so `DECSC → RIS → DECRC` restored pre-reset state.** A full
+  reset (`ESC c`) now clears the DECSC save like xterm; DECRC after RIS restores home + the
+  default pen instead of leaking the old position and colors into freshly-reset programs.
+- **A torn read in the hook registry could crash the daemon.** `bind-hook`/`unbind-hook` saves
+  encoded the live hook array outside the lock; concurrent mutations made `JSONEncoder` trap
+  (reproduced: index-out-of-range within 15 runs). Saves now snapshot under the lock, matching
+  the option/environment stores.
+- **Copying a selection after scrollback eviction silently produced blank text.** The selection
+  anchor (unlike the cursor) was never clamped when history shrank under copy mode; stale anchors
+  now clamp on every motion and at extraction, so `y` copies real content instead of whitespace.
+- **Block/char selections dropped a wide (CJK) glyph when only its trailing cell was covered.**
+  Extraction now includes any character whose span intersects the selected columns — the text you
+  copy matches the cells the highlight covers.
+- **`n`/`N` in copy-mode search jumped to stale rows after scrollback eviction.** Matches are
+  re-derived from the live buffer on every search step instead of trusting line numbers cached at
+  search time.
+- **A wedged binary froze onboarding forever.** The install step's `version --json` probe had no
+  timeout; a corrupted/stuck binary blocked the main actor with Continue/Skip locked until
+  force-quit. The probe is now fully bounded (3s + SIGTERM/SIGKILL escalation) and surfaces as
+  "no version info" so the install continues on the fallback path.
+- **Settings fields could show a value the terminals weren't using.** Committing an out-of-range
+  fontSize / window padding / scrollback now reflects the clamped value back into the field (the
+  command-finished threshold already did); color swatches and placeholder hex now refresh when
+  auto light/dark flips the theme while Settings is open.
+- **`bind -n` (root-table) bindings ignored caps lock.** An uppercase letter typed without Shift
+  now falls back to the lowercase binding, mirroring the prefix table — while Shift+letter stays
+  distinct so a typed `C` is never swallowed when only `bind -n c` exists.
+- **IME composition over a selection was indistinguishable from the selection.** Preedit text
+  inherited the selection / find-highlight background; it now resets its cells to the canvas
+  background (translucency intact) so composition always reads as "being typed".
+- **`select-pane`/`swap-pane -t` silently misrouted bad targets to the next pane.** Unrecognized
+  or dangling `-t` values now fail loudly with the accepted forms (`:.+`, `:.-`, `!`), like every
+  other validated flag.
+- **Status-line layout counted scalars, not columns.** `status-left`/`status-right` padding and
+  `display-message`/`status-format` clipping in `attach-window` overflowed one column per wide
+  (CJK) glyph; all measurement and truncation is now display-width-aware.
+- **`harness-cli remote add` could report success without persisting.** Write failures in
+  `remote-hosts.json` are now surfaced (exit 1, naming the file); concurrent CLI invocations are
+  serialized with a cross-process file lock so the second writer no longer silently discards the
+  first's hosts.
+- **SSH tunnel failures all read as timeouts.** When `ssh` exits before the tunnel is ready the
+  error now reports its exit status ("check the host, credentials, and remote socket path")
+  instead of the generic not-ready-in-time message.
+- **A dangling `--ssh-arg` was silently dropped**; it now errors with exit 64 like the other
+  validated flags, and `bind-key`/`unbind-key` no longer eat a key spec literally named `prefix`
+  when `-T` wasn't passed.
+- **Killed panes leaked their terminal views.** The pane registry now prunes hosts that left the
+  daemon snapshot on every structural sync, so split+kill cycles no longer accumulate dead
+  Metal-backed views for the life of the app.
+- **Hooks installed on Linux pointed at the macOS binary path.** `install-hooks` now emits the
+  XDG path (`${XDG_DATA_HOME:-$HOME/.local/share}/harness/bin`) on Linux, so agent notifications
+  actually reach the daemon there.
+- **Closing a session never cleaned its scoped environment.** `set-environment -t <session>`
+  entries now clear on session/workspace close instead of accumulating in `environment.json`
+  forever.
+- **A respawn racing the metadata scan could briefly publish the dead shell's cwd.** The off-lock
+  cwd probe now records which child PID it measured and skips the commit when a respawn swapped
+  the child mid-probe.
+
+### Added
+- **`.harnesstheme` files now open in Harness.** Double-click (or Open With) imports the theme —
+  validate → "Install / Install and Apply" — installing into `Application Support/Harness/themes`
+  and optionally applying its colors and appearance immediately. The format was already shipped;
+  the app-side wiring was the missing piece.
+- Regression tests pinning the daemon-reconnect backoff policy, the OSC 9;4 stale-progress
+  timeout, corrupt `layout.json` recovery, reap-generation eviction order, and the onboarding
+  probe failure modes (~45 new tests).
+
 ## [1.7.0] - 2026-06-06
 
 The production-hardening release: a full adversarial audit (multi-dimension bug hunt →

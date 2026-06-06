@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private struct QueuedExternalOpen {
         let url: URL
         let asWindow: Bool
+        let kind: ExternalOpenKind
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -162,9 +163,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !urls.isEmpty else { return }
         NSApp.activate(ignoringOtherApps: true)
         if externalOpenReady {
-            DefaultTerminalOpener.open(urls, asWindow: asWindow)
+            // Theme files import/apply (touching settings + a setTheme IPC); everything else opens
+            // a terminal exactly as before. Both paths need a hydrated daemon, so when not ready
+            // each URL is queued with its kind and handled on the drain.
+            performExternalOpen(urls.map { QueuedExternalOpen(url: $0, asWindow: asWindow, kind: ExternalOpenKind(for: $0)) })
         } else {
-            queuedExternalOpens.append(contentsOf: urls.map { QueuedExternalOpen(url: $0, asWindow: asWindow) })
+            queuedExternalOpens.append(contentsOf: urls.map {
+                QueuedExternalOpen(url: $0, asWindow: asWindow, kind: ExternalOpenKind(for: $0))
+            })
+        }
+    }
+
+    /// Route each opened URL by kind: `.harnesstheme` files go through the theme importer, all
+    /// others through the terminal opener. Terminal opens batch (one `DefaultTerminalOpener.open`
+    /// preserves the existing folder/asWindow semantics); theme opens are handled individually.
+    private func performExternalOpen(_ opens: [QueuedExternalOpen]) {
+        let terminalOpens = opens.filter { $0.kind == .terminal }
+        for open in opens where open.kind == .theme {
+            ThemeImportController.handle(open.url)
+        }
+        for open in terminalOpens {
+            DefaultTerminalOpener.open([open.url], asWindow: open.asWindow)
         }
     }
 
@@ -172,9 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard externalOpenReady, !queuedExternalOpens.isEmpty else { return }
         let opens = queuedExternalOpens
         queuedExternalOpens.removeAll()
-        for open in opens {
-            DefaultTerminalOpener.open([open.url], asWindow: open.asWindow)
-        }
+        performExternalOpen(opens)
     }
 
     /// Bounded retry to drain opens that were queued at launch when the daemon wasn't yet hydrated.

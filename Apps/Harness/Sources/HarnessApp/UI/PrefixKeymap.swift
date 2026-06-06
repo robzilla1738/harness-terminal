@@ -69,10 +69,17 @@ final class PrefixKeymap {
         // Root table (`bind -n`): no-prefix global bindings, consulted on every key. Empty by
         // default so normal typing passes straight through; only an explicitly-bound key is
         // swallowed and run.
-        if let spec = makeSpec(from: event),
-           let binding = KeybindingsService.shared.lookup(table: .root, spec: spec) {
-            executeBinding(binding)
-            return nil
+        if let spec = makeSpec(from: event) {
+            if let binding = KeybindingsService.shared.lookup(table: .root, spec: spec) {
+                executeBinding(binding)
+                return nil
+            }
+            if let fallback = Self.capsLockRootFallback(
+                spec: spec, shiftPressed: event.modifierFlags.contains(.shift)),
+                let binding = KeybindingsService.shared.lookup(table: .root, spec: fallback) {
+                executeBinding(binding)
+                return nil
+            }
         }
         return event
     }
@@ -122,6 +129,15 @@ final class PrefixKeymap {
         pendingTable = nil
         armGeneration += 1 // invalidate any pending auto-disarm
         hideIndicator()
+    }
+
+    /// The caps-lock fallback candidate for a missed root-table lookup: the lowercased spec when
+    /// the typed key is an uppercase letter *without* Shift (i.e. caps lock), else nil. Mirrors
+    /// the prefix table's forgiveness, but narrower on purpose — Shift+letter stays distinct so a
+    /// typed `C` headed for the shell is never swallowed when only `bind -n c` exists.
+    static func capsLockRootFallback(spec: KeySpec, shiftPressed: Bool) -> KeySpec? {
+        guard spec.key.count == 1, spec.key != spec.key.lowercased(), !shiftPressed else { return nil }
+        return KeySpec(key: spec.key.lowercased(), modifiers: spec.modifiers)
     }
 
     /// Map an NSEvent into a `KeySpec` so the prefix table can resolve it.

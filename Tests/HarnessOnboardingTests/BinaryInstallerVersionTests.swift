@@ -162,4 +162,60 @@ final class BinaryInstallerVersionTests: XCTestCase {
         // Missing file is also nil.
         XCTAssertNil(BinaryInstaller.buildNumberProbe(dir.appendingPathComponent("does-not-exist")))
     }
+
+    /// Exit 0 with empty stdout (no JSON at all) yields nil, not a crash or a bogus build.
+    @MainActor
+    func testBuildNumberProbeReturnsNilForEmptyOutput() throws {
+        let dir = try makeDir()
+        let fake = dir.appendingPathComponent("harness-cli")
+        try write("#!/bin/sh\nexit 0\n", to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        XCTAssertNil(BinaryInstaller.buildNumberProbe(fake))
+    }
+
+    /// Malformed / truncated JSON yields nil — never a parse crash mid-install.
+    @MainActor
+    func testBuildNumberProbeReturnsNilForMalformedJSON() throws {
+        let dir = try makeDir()
+        let fake = dir.appendingPathComponent("harness-cli")
+        try write(#"""
+        #!/bin/sh
+        echo '{"cliVersion":"1.6.0","cliBuild":'
+        """#, to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        XCTAssertNil(BinaryInstaller.buildNumberProbe(fake))
+        // Valid JSON missing the cliBuild field is also nil.
+        try write(#"""
+        #!/bin/sh
+        echo '{"cliVersion":"1.6.0"}'
+        """#, to: fake)
+        XCTAssertNil(BinaryInstaller.buildNumberProbe(fake))
+    }
+
+    /// A file that exists but is not executable yields nil (the pre-run guard).
+    @MainActor
+    func testBuildNumberProbeReturnsNilForNonExecutableFile() throws {
+        let dir = try makeDir()
+        let fake = dir.appendingPathComponent("harness-cli")
+        try write("not a binary", to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fake.path)
+        XCTAssertNil(BinaryInstaller.buildNumberProbe(fake))
+    }
+
+    /// The wizard-freeze regression (v1.7 audit): a wedged binary must surface as "no version
+    /// info" within `probeTimeout` (+ escalation slack) instead of hanging the main actor —
+    /// the unbounded `waitUntilExit` locked onboarding's Continue/Skip forever.
+    @MainActor
+    func testBuildNumberProbeTimesOutOnHungBinary() throws {
+        let dir = try makeDir()
+        let fake = dir.appendingPathComponent("harness-cli")
+        try write("#!/bin/sh\nsleep 600\n", to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+
+        let start = Date()
+        XCTAssertNil(BinaryInstaller.buildNumberProbe(fake))
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, BinaryInstaller.probeTimeout + 3,
+                          "the probe must give up within the bounded window, not block forever")
+    }
 }

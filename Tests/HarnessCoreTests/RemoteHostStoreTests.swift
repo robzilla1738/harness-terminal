@@ -39,6 +39,29 @@ final class RemoteHostStoreTests: XCTestCase {
         XCTAssertEqual(store.load().count, 1)
     }
 
+    func testUpsertReportsSavedTrueOnSuccess() {
+        let store = RemoteHostStore()
+        let result = store.upsert(RemoteHost(name: "devbox", sshTarget: "rob@devbox", remoteSocketPath: "/tmp/x.sock"))
+        XCTAssertTrue(result.saved, "a successful write must report saved == true")
+        XCTAssertEqual(result.hosts.count, 1)
+    }
+
+    func testUpsertReportsSavedFalseWhenWriteFails() throws {
+        // Make the on-disk write fail by stripping write permission from the sessions directory that
+        // holds remote-hosts.json: the atomic write can't create its temp file, so saveLocked()
+        // returns false. The mutating API must surface that (saved == false) instead of silently
+        // swallowing it — the silent-write-failure class the audit flagged for `harness-cli remote
+        // add`. (The flock degrades to unlocked when its sidecar can't be created, which is fine.)
+        let sessions = HarnessPaths.sessionsDirectory
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: sessions.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sessions.path) }
+
+        let store = RemoteHostStore()
+        let result = store.upsert(RemoteHost(name: "devbox", sshTarget: "rob@devbox", remoteSocketPath: "/tmp/x.sock"))
+        XCTAssertFalse(result.saved, "a failed write must report saved == false")
+    }
+
     func testSSHTunnelAllowsSafeUserArgs() throws {
         let host = RemoteHost(
             name: "build",

@@ -202,6 +202,67 @@ final class CopyModeReducerTests: XCTestCase {
         XCTAssertEqual(matches, [CopyModeMatch(line: 0, startColumn: 2, endColumn: 4)])
     }
 
+    // MARK: Scrollback eviction (v1.7 audit regressions)
+
+    /// Scrollback eviction shrinks the buffer between reduce calls; copying with a selection
+    /// anchored above the new head must clamp into the live buffer instead of silently
+    /// extracting blank out-of-range lines.
+    func testCopyAfterEvictionClampsStaleAnchorAndCursor() {
+        let big = FakeGrid((0..<10).map { "line\($0)" }, columns: 6, viewportRows: 3)
+        var s = CopyModeReducer.initialState(grid: big, cursorLine: 8, cursorColumn: 0)
+        s = reduce(s, .beginSelection, big) // anchor (8,0)
+        s = reduce(s, .cursorDown, big)     // cursor (9,0)
+        // The buffer shrank to 4 lines under the live selection (history head evicted).
+        let small = FakeGrid(["l0", "l1", "l2", "l3"], columns: 6, viewportRows: 3)
+        let effect = CopyModeReducer.reduce(s, .copySelectionAndCancel, grid: small).effect
+        // Both ends clamp to the last live line → its first cell, never whitespace garbage.
+        XCTAssertEqual(effect, .copyAndCancel("l"))
+    }
+
+    /// Any motion routed through reveal() must clamp a stale anchor the same way as the cursor.
+    func testEvictionClampsAnchorOnNextMotion() {
+        let big = FakeGrid((0..<10).map { "line\($0)" }, columns: 6, viewportRows: 3)
+        var s = CopyModeReducer.initialState(grid: big, cursorLine: 9, cursorColumn: 2)
+        s = reduce(s, .beginSelection, big) // anchor (9,2)
+        let small = FakeGrid(["a", "b"], columns: 6, viewportRows: 3)
+        s = reduce(s, .cursorLeft, small)
+        XCTAssertEqual(s.anchor?.line, 1) // clamped to the live tail
+    }
+
+    /// Block/char extraction includes a wide glyph whose span merely intersects the column
+    /// range — selecting only its trailing cell still copies the glyph the highlight covers.
+    func testSubstringIncludesWideCharOnPartialOverlap() {
+        var cells = Array(repeating: TerminalGridCell.blank, count: 4)
+        cells[0] = TerminalGridCell(codepoint: 0x4E16, width: .wide) // 世 at cols 0-1
+        cells[1] = TerminalGridCell(width: .spacerTail)
+        cells[2] = TerminalGridCell(codepoint: UInt32(("a" as Unicode.Scalar).value))
+        cells[3] = TerminalGridCell(codepoint: UInt32(("b" as Unicode.Scalar).value))
+        struct WideGrid: CopyModeGridSource {
+            let cells: [TerminalGridCell]
+            var totalLines: Int { 1 }
+            var viewportRows: Int { 1 }
+            var columns: Int { 4 }
+            func line(_ index: Int) -> [TerminalGridCell] { cells }
+        }
+        let rl = WideGrid(cells: cells).renderedLine(0)
+        XCTAssertEqual(rl.substring(fromColumn: 1, toColumn: 4), "世ab") // trailing cell covered
+        XCTAssertEqual(rl.substring(fromColumn: 2, toColumn: 4), "ab")  // glyph fully outside
+    }
+
+    /// n/N re-derive matches from the live grid: eviction shifts virtual line numbers, so a
+    /// cached match list would jump to (and highlight) the wrong rows.
+    func testSearchAgainRecomputesAfterEviction() {
+        let grid = FakeGrid(["foo", "bar", "foo"], columns: 3)
+        var s = CopyModeReducer.initialState(grid: grid, cursorLine: 0, cursorColumn: 0)
+        s = CopyModeReducer.applySearch(s, query: "foo", reverse: false, grid: grid)
+        XCTAssertEqual(s.search.matches.count, 2)
+        // The first "foo" line evicted; matches must re-derive from the live grid.
+        let evicted = FakeGrid(["bar", "foo"], columns: 3)
+        s = reduce(s, .searchAgain, evicted)
+        XCTAssertEqual(s.search.matches, [CopyModeMatch(line: 1, startColumn: 0, endColumn: 3)])
+        XCTAssertEqual(s.cursor, GridPosition(line: 1, column: 0))
+    }
+
     // MARK: Render projection
 
     func testViewportProjection() {

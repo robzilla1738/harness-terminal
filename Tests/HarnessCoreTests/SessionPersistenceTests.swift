@@ -2,6 +2,49 @@ import XCTest
 @testable import HarnessCore
 
 final class SessionPersistenceTests: XCTestCase {
+    private var root: URL?
+    private var previousHome: String?
+
+    override func setUpWithError() throws {
+        // Isolate HARNESS_HOME so the disk-backed `SessionStore.load()` test never touches real
+        // session state; the in-memory `SessionEditor` tests are unaffected by the override.
+        previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("harness-session-store-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        root = dir
+        setenv("HARNESS_HOME", dir.path, 1)
+    }
+
+    override func tearDownWithError() throws {
+        if let previousHome { setenv("HARNESS_HOME", previousHome, 1) } else { unsetenv("HARNESS_HOME") }
+        if let root { try? FileManager.default.removeItem(at: root) }
+    }
+
+    /// A corrupt layout.json must be preserved as `.corrupt` for recovery (mirrors every other
+    /// store) and `load()` must return a fresh empty snapshot rather than crashing or silently
+    /// discarding the file (which the next save would overwrite).
+    func testCorruptLayoutIsBackedUpAndLoadReturnsFreshSnapshot() throws {
+        try HarnessPaths.ensureDirectories()
+        let url = HarnessPaths.snapshotURL
+        let backup = url.appendingPathExtension("corrupt")
+        try Data("{ this is not valid json".utf8).write(to: url)
+
+        let snapshot = SessionStore().load()
+
+        // Fresh snapshot: a single default workspace, no carried-over corruption.
+        let fresh = SessionSnapshot()
+        XCTAssertEqual(snapshot.workspaces.count, fresh.workspaces.count,
+                       "corrupt layout.json → a fresh default snapshot")
+        // The bad file is moved aside, not left in place to be clobbered by the next save.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path),
+                      "corrupt layout.json must be preserved as .corrupt")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
+                       "the unreadable layout.json must be moved aside")
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "{ this is not valid json",
+                       "the preserved backup must be byte-for-byte the original corrupt content")
+    }
+
     func testNewSessionsDefaultUnpinned() throws {
         var editor = SessionEditor()
         let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)

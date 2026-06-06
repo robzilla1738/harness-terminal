@@ -585,4 +585,40 @@ final class EngineConformanceTests: XCTestCase {
         XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, codepoint("Y"))
         XCTAssertEqual(grid.cell(row: 0, col: 0)?.bold, false)
     }
+
+    func testRISClearsSavedCursor() {
+        // `ESC[31m ESC[5;5H ESC7 ESCc ESC8 X`: DECSC saves (4,4)+red, then RIS (ESCc) must
+        // drop that save. The following DECRC therefore restores defaults — X prints at (0,0)
+        // with the DEFAULT (no) foreground, not back at (4,4) in red.
+        let grid = read("\u{1b}[31m\u{1b}[5;5H\u{1b}7\u{1b}c\u{1b}8X", cols: 80, rows: 24)
+        XCTAssertEqual(grid.cursor.row, 0)
+        XCTAssertEqual(grid.cursor.col, 1)   // home + one cell advanced by the printed X
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, codepoint("X"))
+        // Fully qualify: a bare `.none` would resolve to Optional.none, not TerminalGridColor.none.
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.foreground, TerminalGridColor.none)
+    }
+
+    func testDECSTBMInvalidRegionOnTwoRowGrid() {
+        // `ESC[2;1r` on a 2-row grid is an explicit inverted request (pre-clamp top=1,bottom=0),
+        // NOT the full-screen identity. It must be a complete no-op: region + cursor unchanged.
+        // `ESC[r` on the same grid must still home, mirroring the 1-row conformance tests.
+        let term = HarnessGridTerminal(cols: 10, rows: 2)!
+        term.feed("\u{1b}[2;5H")        // move cursor to row 1, col 4 (1-based 2;5)
+        term.feed("\u{1b}[2;1r")        // inverted region -> must be ignored
+        var grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 1, "inverted DECSTBM must not home")
+        XCTAssertEqual(grid.cursor.col, 4, "inverted DECSTBM must not home")
+        // Region untouched: place a sentinel on row 0, scroll the full screen; row 0 must move.
+        term.feed("\u{1b}[1;1HZ")       // sentinel on row 0
+        term.feed("\u{1b}[2;1H\n")      // line feed at bottom -> full-screen scroll up
+        grid = term.readGrid()!
+        XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, 0,
+                       "region clobbered: row 0 should have scrolled (full-screen region)")
+        // Bare `ESC[r` on the 2-row grid still homes.
+        term.feed("\u{1b}[2;5H")        // park cursor away from home
+        term.feed("\u{1b}[r")           // bare DECSTBM -> full-screen reset must home
+        grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 0)
+        XCTAssertEqual(grid.cursor.col, 0, "ESC[r must home the cursor on a 2-row grid")
+    }
 }

@@ -56,6 +56,10 @@ Any component may be omitted (`api:`, `:2`, `:2.1`, `%<uuid>`). Indices honor
 `base-index` / `pane-base-index`. `select-pane` keeps its directional/relative
 form; `select-window -t session:N` is supported.
 
+`select-pane` / `swap-pane` accept exactly `-t :.+` (next), `-t :.-` (previous), and
+`-t !` (last). Any other `-t` value — or a dangling `-t` — is a parse error naming the
+accepted forms; it is never silently routed to the next pane.
+
 ## Sessions / workspaces
 
 | Command | Effect |

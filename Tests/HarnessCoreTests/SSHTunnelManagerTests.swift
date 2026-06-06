@@ -224,17 +224,26 @@ final class SSHTunnelManagerTests: XCTestCase {
 
     // MARK: - Failure modes
 
-    func testSSHExitingImmediatelyBailsEarlyWithNotReady() {
+    func testSSHExitingImmediatelyBailsEarlyWithExitedError() {
         let manager = SSHTunnelManager(
             makeTunnelProcess: immediateExitProcessFactory(),
             reachabilityProbe: { _ in false })
 
-        // Generous timeout: the early-bail on process death must throw long before it elapses.
+        // Generous timeout: the early-bail on process death must throw long before it elapses, and
+        // it must throw .exitedEarly (carrying the ssh exit status) — NOT .notReady, which would
+        // hide a bad-host/bad-credentials cause behind a generic timeout message.
         let start = Date()
         XCTAssertThrowsError(try manager.endpoint(for: host(), waitTimeout: 30)) { error in
-            guard case SSHTunnelError.notReady = error else {
-                return XCTFail("expected .notReady, got \(error)")
+            guard case let SSHTunnelError.exitedEarly(host, status) = error else {
+                return XCTFail("expected .exitedEarly, got \(error)")
             }
+            XCTAssertEqual(host, "devbox")
+            XCTAssertEqual(status, 0, "the immediate-exit child returns 0; the status must be carried through")
+            // The rendered message must read as an early exit, not a timeout.
+            let text = "\(error)"
+            XCTAssertTrue(text.contains("ssh exited with status"), "message should report the ssh exit, got: \(text)")
+            XCTAssertTrue(text.contains("credentials"), "message should point at host/credentials, got: \(text)")
+            XCTAssertFalse(text.contains("did not become ready in time"), "must not reuse the timeout wording")
         }
         XCTAssertLessThan(Date().timeIntervalSince(start), 5,
                           "a dead ssh process should short-circuit, not wait out the full timeout")

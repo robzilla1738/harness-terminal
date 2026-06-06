@@ -186,6 +186,35 @@ final class RealPtyLifecycleTests: XCTestCase {
         XCTAssertTrue(gone, "respawn's SIGKILL escalation must reap the TERM-ignoring old shell")
     }
 
+    /// `refreshSurfaceMetadata` probes cwd off-lock and only commits when the surface's CURRENT
+    /// child PID still matches the one it probed. This pins the seam that fix relies on: a respawn
+    /// swaps `childPID`, so a PID captured by `probeWorkingDirectory()` before the respawn no longer
+    /// equals `currentChildPID` after it — and the registry would (correctly) skip committing the
+    /// OLD child's cwd for the NEW child.
+    func testProbedPIDGoesStaleAcrossRespawn() throws {
+        let pty = try makePty()
+        defer { pty.close() }
+        Thread.sleep(forTimeInterval: 0.3) // let the first shell come up
+
+        let probe = try XCTUnwrap(pty.probeWorkingDirectory(), "live shell must report a cwd + PID")
+        XCTAssertGreaterThan(probe.pid, 0)
+        XCTAssertEqual(probe.pid, pty.currentChildPID, "the probed PID is the live child before respawn")
+
+        pty.respawn(clearHistory: true) // swaps childPID to the freshly spawned shell
+
+        // Wait for the new child to be installed (respawn is async w.r.t. the spawn completing).
+        let deadline = Date().addingTimeInterval(5.0)
+        var newPID = pty.currentChildPID
+        while (newPID <= 0 || newPID == probe.pid), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+            newPID = pty.currentChildPID
+        }
+        XCTAssertGreaterThan(newPID, 0, "respawn must install a new child")
+        XCTAssertNotEqual(newPID, probe.pid,
+                          "the pre-respawn probe PID must no longer match the live child — the registry's "
+                          + "`currentChildPID == entry.pid` guard then skips committing a stale cwd")
+    }
+
     /// Hammer write/resize concurrently with a respawn; the generation-guarded
     /// lifecycle must neither crash nor double-free.
     func testRespawnUnderConcurrentIODoesNotCrash() throws {

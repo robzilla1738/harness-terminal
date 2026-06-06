@@ -219,10 +219,19 @@ enum BinaryInstaller {
         }
     }
 
+    /// How long `buildNumberProbe` waits for `version --json` before declaring the binary
+    /// unresponsive. The probe runs (synchronously) on the main actor inside `performInstall`,
+    /// so this bound is what keeps a wedged binary from freezing the wizard with Continue/Skip
+    /// locked forever — the failure surfaces as "no version info" and install proceeds on the
+    /// no-build fallback path.
+    static let probeTimeout: TimeInterval = 3
+
     /// Read a binary's build number by running `<binary> version --json` and parsing `cliBuild`.
     /// Overridable so tests can stage fake source/installed builds without real executables.
     /// Returns nil when the binary is absent or doesn't answer (e.g. HarnessDaemon has no version
-    /// flag — the daemon's overwrite decision reuses the CLI build instead).
+    /// flag — the daemon's overwrite decision reuses the CLI build instead). Every wait below is
+    /// bounded: the old unbounded `readToEnd` + `waitUntilExit` hung the main thread for good if
+    /// a corrupted/stuck binary never exited.
     static var buildNumberProbe: (URL) -> Int? = { url in
         guard FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
         let process = Process()
@@ -231,11 +240,30 @@ enum BinaryInstaller {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
-        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
-        process.waitUntilExit()
+        if exited.wait(timeout: .now() + BinaryInstaller.probeTimeout) == .timedOut {
+            // Wedged binary: terminate, escalate once, report "no version info".
+            process.terminate()
+            if exited.wait(timeout: .now() + 1) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 1)
+            }
+            return nil
+        }
+        // Read only after exit so a child that never closes stdout can't block us — the version
+        // JSON is tiny (far below the pipe buffer), so nothing was lost while waiting. The read
+        // itself stays bounded too: a grandchild inheriting the write end would hold EOF open.
+        let box = ProbeOutputBox()
+        let readDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.store((try? pipe.fileHandleForReading.readToEnd()) ?? Data())
+            readDone.signal()
+        }
+        guard readDone.wait(timeout: .now() + 1) != .timedOut else { return nil }
         guard process.terminationStatus == 0,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let object = try? JSONSerialization.jsonObject(with: box.take()) as? [String: Any],
               let build = object["cliBuild"] as? Int else { return nil }
         return build
     }
@@ -337,4 +365,13 @@ enum BinaryInstaller {
         let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
         return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
+}
+
+/// Lock-boxed pipe output so `buildNumberProbe`'s bounded read can hand bytes across queues
+/// without a captured-var data race.
+private final class ProbeOutputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func store(_ d: Data) { lock.lock(); data = d; lock.unlock() }
+    func take() -> Data { lock.lock(); defer { lock.unlock() }; return data }
 }

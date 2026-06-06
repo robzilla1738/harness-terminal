@@ -3,6 +3,7 @@ import Foundation
 import HarnessCore
 import HarnessTerminalEngine
 import HarnessTerminalKit
+import HarnessTheme
 import UserNotifications
 
 @MainActor
@@ -102,9 +103,7 @@ final class SessionCoordinator: NSObject {
     }
 
     @objc private func notificationPosted(_ note: Notification) {
-        guard let notification = note.userInfo?["notification"] as? AgentNotification else { return }
-        if let surfaceID = notification.surfaceID {
-        }
+        guard note.userInfo?["notification"] is AgentNotification else { return }
         NotificationCenter.default.post(name: NotificationBus.shared.tabStatusChanged, object: nil)
     }
 
@@ -176,6 +175,17 @@ final class SessionCoordinator: NSObject {
         lastRevision = remote.revision
         if structureChanged {
             structureRevision += 1
+            // Drop hosts for surfaces the daemon no longer knows: killPane / remote closes remount
+            // the pane UI but never told the registry, so dead TerminalHostViews (and their Metal
+            // surfaces) accumulated for the life of the app. Hosts are only ever registered while
+            // building panes from a snapshot, so anything outside the latest snapshot is gone for
+            // good — explicit close paths still removeHost() eagerly for the common case.
+            let live = Set(remote.workspaces.flatMap { ws in
+                ws.sessions.flatMap { session in
+                    session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
+                }
+            })
+            terminalHosts.prune(keeping: live)
         }
         pushNewRemoteNotifications(from: remote)
         pushAgentActivityNotifications(from: remote)
@@ -459,6 +469,52 @@ final class SessionCoordinator: NSObject {
             try? settings.save()
         }
         requestDaemon(.setTheme(name: name))
+        syncFromDaemon()
+    }
+
+    /// Apply an imported `.harnesstheme` document. Custom themes aren't in the static catalog,
+    /// so the colors are seeded straight from the document (not resolved by name like `setTheme`).
+    /// Any appearance knobs the document carries (opacity/blur/font/padding/terminal-output sync)
+    /// are applied too; absent keys leave the current setting untouched. `themeName` is set on the
+    /// daemon so the canvas + chrome adopt the imported name.
+    func applyImportedTheme(_ document: ThemeDocument) {
+        let colors = document.colors
+        settings.customBackgroundHex = colors.background.hexString
+        settings.customForegroundHex = colors.foreground.hexString
+        settings.customCursorHex = colors.cursor?.hexString
+        settings.cursorTextHex = colors.cursorText?.hexString
+        settings.selectionBackgroundHex = colors.selectionBackground?.hexString
+        settings.selectionForegroundHex = colors.selectionForeground?.hexString
+        settings.boldColorHex = colors.bold?.hexString
+        settings.paletteHex = HarnessSettings.normalizedPalette(colors.palette.map { $0.hexString })
+        // Chrome accents re-derive from the imported colors unless re-set by the user.
+        settings.dividerHex = nil
+        settings.statusLineHex = nil
+        if let appearance = document.appearance {
+            if let opacity = appearance.backgroundOpacity {
+                settings.backgroundOpacity = HarnessSettings.clampedOpacity(Float(opacity))
+            }
+            if let blur = appearance.backgroundBlur {
+                settings.backgroundBlur = HarnessSettings.clampedBlur(blur)
+            }
+            if let family = appearance.fontFamily, !family.isEmpty {
+                settings.fontFamily = family
+            }
+            if let size = appearance.fontSize {
+                settings.fontSize = HarnessSettings.clampedFontSize(Float(size))
+            }
+            if let px = appearance.windowPaddingX {
+                settings.windowPaddingX = HarnessSettings.clampedPadding(Float(px))
+            }
+            if let py = appearance.windowPaddingY {
+                settings.windowPaddingY = HarnessSettings.clampedPadding(Float(py))
+            }
+            if let applyToOutput = appearance.applyToTerminalOutput {
+                settings.applyThemeToTerminalOutput = applyToOutput
+            }
+        }
+        try? settings.save()
+        requestDaemon(.setTheme(name: document.name))
         syncFromDaemon()
     }
 

@@ -564,13 +564,27 @@ public final class RealPty: @unchecked Sendable {
     }
 
     public func currentWorkingDirectory() -> String? {
+        probeWorkingDirectory()?.cwd
+    }
+
+    /// The live child PID (`lifecycleLock`-guarded read). Returns -1 once closed/reaped.
+    /// Callers that probed cwd off-lock re-read this at commit time to confirm a respawn
+    /// didn't swap the child out from under them (committing the OLD child's cwd for the NEW one).
+    public var currentChildPID: pid_t {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }; return childPID
+    }
+
+    /// Like `currentWorkingDirectory()`, but also returns the PID the cwd was computed for so the
+    /// caller can detect a respawn between the (off-lock) probe and its commit. The PID is the
+    /// child generation snapshotted at probe time; `currentChildPID` may differ later.
+    public func probeWorkingDirectory() -> (pid: pid_t, cwd: String)? {
         // `childPID` is `lifecycleLock`-guarded (class doc); snapshot it under the lock,
         // then run the proc scan OUTSIDE the lock (it walks every system PID).
         lifecycleLock.lock()
         let pid = childPID
         lifecycleLock.unlock()
-        guard pid > 0 else { return nil }
-        return Self.cwd(for: deepestReadableDescendant(of: pid) ?? pid)
+        guard pid > 0, let cwd = Self.cwd(for: deepestReadableDescendant(of: pid) ?? pid) else { return nil }
+        return (pid, cwd)
     }
 
     /// After SIGTERM, a child that traps/ignores TERM+HUP never exits, so the `watchForExit`

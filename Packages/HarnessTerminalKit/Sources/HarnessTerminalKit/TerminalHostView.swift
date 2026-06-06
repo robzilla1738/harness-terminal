@@ -730,7 +730,7 @@ public final class TerminalHostView: NSView {
     /// back to the manual "click to re-grab" affordance. No-op once intentionally detached.
     private func scheduleDaemonReconnect() {
         guard !intentionallyDetached, outputSubscription == nil else { return }
-        guard reconnectAttempts < 60 else {
+        guard !DaemonReconnectPolicy.isExhausted(attempts: reconnectAttempts) else {
             hideReconnectingOverlay() // the chip gives way to the full re-grab affordance
             showDetachedOverlay() // ~50s of retries elapsed; let the user re-grab manually
             return
@@ -741,7 +741,7 @@ public final class TerminalHostView: NSView {
         showReconnectingOverlay()
         let attempt = reconnectAttempts
         reconnectAttempts += 1
-        let delay = min(0.1 * Double(attempt + 1), 1.0)
+        let delay = DaemonReconnectPolicy.delay(forAttempt: attempt)
         // Capture main-actor state so the whole probe + (re)attach handshake — ping, ensureSurface,
         // replayScrollback, and subscribe — runs OFF main. A still-restarting daemon answers slowly
         // (or its socket blocks), so doing these synchronous round trips on main froze the UI for the
@@ -1117,4 +1117,19 @@ private final class InputGate: @unchecked Sendable {
             }
         }
     }
+}
+
+/// Pure backoff policy for `TerminalHostView.scheduleDaemonReconnect`, extracted so the recovery
+/// window's shape — bounded retries, ramping delay, hand-off to the manual re-grab overlay — is
+/// pinned by unit tests (the live wiring needs a real daemon and is covered by the gated suites).
+enum DaemonReconnectPolicy {
+    static let maxAttempts = 60
+
+    /// Ramp 0.1s → 1.0s: a fast daemon restart reattaches almost immediately, a slow one isn't
+    /// hammered; the full window is ~55s before the manual re-grab affordance takes over.
+    static func delay(forAttempt attempt: Int) -> TimeInterval {
+        min(0.1 * Double(attempt + 1), 1.0)
+    }
+
+    static func isExhausted(attempts: Int) -> Bool { attempts >= maxAttempts }
 }

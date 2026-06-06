@@ -440,8 +440,16 @@ public enum CommandParser {
             case ":.+": return .next
             case ":.-": return .previous
             case "!": return .last
-            default: return .next
+            default:
+                // Silently routing an unrecognized -t to .next moved the wrong pane with no
+                // feedback; fail loudly instead (same policy as the v1.7 CLI flag validation).
+                throw CommandParseError.invalidArgument(
+                    "unsupported pane target '\(target)' — use -t :.+, -t :.-, -t ! or -L/-R/-U/-D/-l")
             }
+        }
+        // A dangling -t (flag present, value missing) is a typo, not a request for the default.
+        if tokens.contains("-t") {
+            throw CommandParseError.missingArgument("-t requires a pane target (:.+, :.-, or !)")
         }
         return defaultValue
     }
@@ -465,6 +473,7 @@ public enum CommandParseError: Error, CustomStringConvertible, Equatable {
     case unknownCommand(String)
     case missingFlag(String)
     case missingArgument(String)
+    case invalidArgument(String)
     case unterminatedString
 
     public var description: String {
@@ -474,6 +483,7 @@ public enum CommandParseError: Error, CustomStringConvertible, Equatable {
         case let .unknownCommand(name): return "unknown command: \(name)"
         case let .missingFlag(message): return message
         case let .missingArgument(message): return message
+        case let .invalidArgument(message): return message
         case .unterminatedString: return "unterminated quoted string"
         }
     }

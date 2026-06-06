@@ -50,4 +50,43 @@ final class RealPtyReapRecordTests: XCTestCase {
         // The very oldest must have been pruned.
         XCTAssertFalse(pty.wasGenerationReapedForTesting(1))
     }
+
+    /// The set is held at EXACTLY the 32-generation cap and eviction always drops the LOWEST, so the
+    /// surviving window is the newest 32 contiguous generations. (`wasGenerationReapedForTesting` is
+    /// the same pure answer the SIGKILL escalation consults via `reapedGenerations.contains`.)
+    func testReapRecordHoldsExactCapAndEvictsLowest() {
+        let pty = RealPty(forTesting: ())
+        let cap = 32
+        let recorded = 100
+        for gen in 1 ... recorded { pty.recordReapedGenerationForTesting(UInt64(gen)) }
+
+        // Held at exactly the cap once enough generations are recorded.
+        XCTAssertEqual(pty.reapedGenerationCountForTesting, cap, "set is pinned at the 32-generation cap")
+
+        // The surviving window is the newest `cap` generations, contiguous; everything older is gone.
+        let lowestKept = recorded - cap + 1 // 69
+        XCTAssertTrue(pty.wasGenerationReapedForTesting(UInt64(lowestKept)), "lowest survivor is retained")
+        XCTAssertFalse(pty.wasGenerationReapedForTesting(UInt64(lowestKept - 1)), "the next-lower generation is evicted")
+        for gen in lowestKept ... recorded {
+            XCTAssertTrue(pty.wasGenerationReapedForTesting(UInt64(gen)), "every newest-\(cap) generation survives")
+        }
+    }
+
+    /// An EVICTED reap-generation must read back exactly like one that was NEVER recorded: not
+    /// reaped. That is the SIGKILL-relevant fact — the escalation only suppresses a kill when the
+    /// generation is still in the set, so an evicted (old) generation falls through to deliver
+    /// SIGKILL just as an unknown generation does. Pins that eviction can't masquerade as a record.
+    func testEvictedGenerationReadsAsNeverRecorded() {
+        let pty = RealPty(forTesting: ())
+        // Record gen 1, then push it out by recording well past the cap of newer generations.
+        pty.recordReapedGenerationForTesting(1)
+        XCTAssertTrue(pty.wasGenerationReapedForTesting(1))
+        for gen in 2 ... 40 { pty.recordReapedGenerationForTesting(UInt64(gen)) } // 39 newer ⇒ gen 1 evicted
+
+        let evictedAnswer = pty.wasGenerationReapedForTesting(1)
+        let neverRecordedAnswer = pty.wasGenerationReapedForTesting(9999)
+        XCTAssertFalse(evictedAnswer, "an evicted generation reports not-reaped")
+        XCTAssertEqual(evictedAnswer, neverRecordedAnswer,
+                       "an evicted generation is indistinguishable from one never recorded")
+    }
 }

@@ -1899,6 +1899,7 @@ final class TerminalScreen {
     /// RIS — full reset: clear, home cursor, default pen and modes, and drop scrollback.
     func fullReset() {
         pen = Pen()
+        savedCursor = nil          // xterm RIS drops the DECSC save; DECRC after RIS restores defaults
         currentHyperlink = 0
         cursorShape = .default
         cursorBlinking = nil

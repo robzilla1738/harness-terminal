@@ -4,12 +4,19 @@ public enum SSHTunnelError: Error, CustomStringConvertible {
     case launchFailed(String)
     case invalidConfiguration(String)
     case notReady(host: String)
+    /// The `ssh` process exited before the tunnel became reachable — almost always a bad host,
+    /// bad credentials, or a refused forward, NOT a slow remote. Carries the exit status so the
+    /// message can point at the real cause instead of looking like a generic timeout.
+    case exitedEarly(host: String, status: Int32)
 
     public var description: String {
         switch self {
         case let .launchFailed(message): return "Failed to start SSH tunnel: \(message)"
         case let .invalidConfiguration(message): return "Invalid SSH tunnel configuration: \(message)"
         case let .notReady(host): return "SSH tunnel to '\(host)' did not become ready in time"
+        case let .exitedEarly(host, status):
+            return "ssh exited with status \(status) before the tunnel to '\(host)' became ready "
+                + "— check the host, credentials, and remote socket path"
         }
     }
 }
@@ -80,10 +87,17 @@ public final class SSHTunnelManager: @unchecked Sendable {
         while Date() < deadline {
             if reachabilityProbe(endpoint) { return endpoint }
             // Bail early if ssh exited (bad host/auth/forward) rather than waiting the full timeout.
+            // Capture its exit status under the same lock so the thrown error names the real cause
+            // instead of masquerading as a timeout.
             lock.lock()
-            let running = tunnels[host.name]?.process.isRunning ?? false
+            let process = tunnels[host.name]?.process
+            let running = process?.isRunning ?? false
+            let status = (process != nil && !running) ? process?.terminationStatus : nil
             lock.unlock()
-            if !running { break }
+            if !running {
+                stop(host: host.name)
+                throw SSHTunnelError.exitedEarly(host: host.name, status: status ?? -1)
+            }
             Thread.sleep(forTimeInterval: 0.15)
         }
         stop(host: host.name)

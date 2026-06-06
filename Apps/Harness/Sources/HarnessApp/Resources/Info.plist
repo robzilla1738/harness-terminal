@@ -79,6 +79,44 @@
                 <string>public.unix-executable</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Harness theme</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleTypeIconFile</key>
+            <string>Harness</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.robert.harness.theme</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>harnesstheme</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.robert.harness.theme</string>
+            <key>UTTypeDescription</key>
+            <string>Harness theme</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>harnesstheme</string>
+                </array>
+            </dict>
+        </dict>
     </array>
     <key>NSServices</key>
     <array>
