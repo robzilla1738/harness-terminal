@@ -58,6 +58,50 @@ final class FrameBuilderTests: XCTestCase {
         XCTAssertGreaterThan(shiftedSteps, 10, "the walk should exercise the shift path")
     }
 
+    /// Output-scroll reuse must be byte-identical to a full rebuild: drive real output through
+    /// the engine (streamed lines, mid-screen overwrites, multi-line bursts), consume the damage
+    /// hint each step, and rebuild via `buildShifted(freshRows:)` exactly as the surface view's
+    /// off-main plain path does. The engine's `scroll`/`scrolledRows` contract and the builder's
+    /// shift-copy must agree at every step.
+    func testBuildShiftedWithFreshRowsMatchesFullBuildOnOutputScroll() {
+        let cols = 24, rows = 6
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        for i in 0 ..< 10 {
+            term.feed("\u{1b}[3\(i % 8)mfill \(i) 漢字 \u{1b}[4mu\(i)\u{1b}[0m\r\n")
+        }
+        let b = builder
+        _ = term.consumeDamage()
+        var previous = b.build(term.readGrid()!)
+        var hintSteps = 0
+        for step in 0 ..< 40 {
+            switch step % 5 {
+            case 0: // plain streamed line (one scroll)
+                term.feed("\u{1b}[3\(step % 8)mnew \(step) wide 漢\u{1b}[0m\r\n")
+            case 1: // burst (two scrolls in one consume window)
+                term.feed("burst-a \(step)\r\nburst-b \(step)\r\n")
+            case 2: // scroll, then overwrite a moved top row (fresh row inside the kept band)
+                term.feed("scrolled \(step)\r\n\u{1b}[2;3Hovr\u{1b}[\(rows);1H")
+            case 3: // decorated content with a trailing partial line (no scroll on the write)
+                term.feed("\u{1b}[7minverse \(step)\u{1b}[27m\r\n")
+            default: // wide chars crossing the wrap (wrap + scroll interplay)
+                term.feed(String(repeating: "漢", count: cols / 2 + 2) + "\r\n")
+            }
+            let damage = term.consumeDamage()
+            guard let snap = term.readGrid() else { return XCTFail("snapshot failed") }
+            let full = b.build(snap)
+            if damage.scroll != 0, !damage.full, !damage.scrolledRows.isEmpty,
+               let shifted = b.buildShifted(snap, reusing: previous, shift: damage.scroll,
+                                            freshRows: damage.rows.subtracting(damage.scrolledRows)) {
+                XCTAssertEqual(shifted, full, "step \(step) (scroll \(damage.scroll))")
+                previous = shifted
+                hintSteps += 1
+            } else {
+                previous = full
+            }
+        }
+        XCTAssertGreaterThan(hintSteps, 15, "the walk should exercise the hint path")
+    }
+
     func testBuildShiftedRejectsInapplicableShifts() {
         let term = HarnessGridTerminal(cols: 10, rows: 3)!
         for i in 0 ..< 12 { term.feed("line \(i)\r\n") }

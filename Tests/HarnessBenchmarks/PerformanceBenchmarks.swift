@@ -690,6 +690,69 @@ final class PerformanceBenchmarks: XCTestCase {
         ])
     }
 
+    /// Per-tick frame-build cost while OUTPUT scrolls the live view (`cat`/build streaming): the
+    /// pre-hint path re-resolves the whole viewport per tick (the engine marked every region row
+    /// dirty); the `TerminalDamage.scroll` hint shift-copies the moved band and re-resolves only
+    /// the fresh rows. 200×60, two lines per tick — the streaming steady state. This is the
+    /// measurement gate for the output-scroll damage hint.
+    func testOutputScrollHintBuildCost() throws {
+        try skipUnlessEnabled()
+        let cols = 200, rows = 60
+        let theme = HarnessThemeCatalog.theme(named: "Dracula")!
+        let builder = FrameBuilder(theme: theme)
+        let ticks = 200
+
+        // `syntheticStream` ends near a clear+home, leaving the cursor high on the screen; the
+        // settle lines walk it back to the bottom row so every timed tick actually scrolls.
+        let settle = (0 ..< rows).map { "settle \($0)\r\n" }.joined()
+
+        // Baseline: hint ignored — exactly the pre-hint consumer (damage.rows = whole viewport).
+        let fullTerm = HarnessGridTerminal(cols: cols, rows: rows)!
+        fullTerm.feed(syntheticStream(targetBytes: 256 * 1024))
+        fullTerm.feed(settle)
+        _ = fullTerm.consumeDamage()
+        var fullPrev = builder.build(fullTerm.readGrid()!)
+        let fullNanos = timedNanos {
+            for i in 0 ..< ticks {
+                fullTerm.feed("stream line \(i) with some trailing content\r\nand a second one \(i)\r\n")
+                let damage = fullTerm.consumeDamage()
+                fullPrev = builder.build(fullTerm.readGrid()!, region: nil,
+                                         reusing: fullPrev, damage: damage)
+            }
+        }
+
+        // Hint path: shift-copy the moved band, re-resolve only the fresh rows (the surface
+        // view's off-main plain-path logic).
+        let hintTerm = HarnessGridTerminal(cols: cols, rows: rows)!
+        hintTerm.feed(syntheticStream(targetBytes: 256 * 1024))
+        hintTerm.feed(settle)
+        _ = hintTerm.consumeDamage()
+        var hintPrev = builder.build(hintTerm.readGrid()!)
+        var hintTicks = 0
+        let hintNanos = timedNanos {
+            for i in 0 ..< ticks {
+                hintTerm.feed("stream line \(i) with some trailing content\r\nand a second one \(i)\r\n")
+                let damage = hintTerm.consumeDamage()
+                let snap = hintTerm.readGrid()!
+                if damage.scroll != 0, !damage.full, !damage.scrolledRows.isEmpty,
+                   let shifted = builder.buildShifted(
+                       snap, reusing: hintPrev, shift: damage.scroll,
+                       freshRows: damage.rows.subtracting(damage.scrolledRows)) {
+                    hintPrev = shifted
+                    hintTicks += 1
+                } else {
+                    hintPrev = builder.build(snap, region: nil, reusing: hintPrev, damage: damage)
+                }
+            }
+        }
+        XCTAssertEqual(hintTicks, ticks, "every streaming tick should ride the hint")
+        printBenchmark("output_scroll_full_resolve", nanos: fullNanos, fields: [("ticks", "\(ticks)")])
+        printBenchmark("output_scroll_hint_reuse", nanos: hintNanos, fields: [
+            ("ticks", "\(ticks)"),
+            ("speedup", String(format: "%.1fx", Double(fullNanos) / Double(max(1, hintNanos)))),
+        ])
+    }
+
     // MARK: - Scrollback append + replay (steady state, at the cap)
 
     func testScrollbackSteadyStateAtCap() throws {

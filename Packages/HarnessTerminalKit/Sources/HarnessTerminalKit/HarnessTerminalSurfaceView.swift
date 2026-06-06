@@ -1818,10 +1818,27 @@ public final class HarnessTerminalSurfaceView: NSView {
                     // Only reuse a cached frame built for THIS generation — a stale-generation frame
                     // describes the old grid and would tear when diffed against fresh damage.
                     let reuse = state.lastPlainFrameGeneration == generation ? state.lastPlainFrame : nil
-                    frame = builder.build(grid, region: nil,
-                                          imageProvider: { emulator.image(for: $0) },
-                                          reusing: reuse, damage: damage)
-                    renderDamage = damage
+                    let fresh = damage.rows.subtracting(damage.scrolledRows)
+                    // Output-scroll fast path: the engine reported a whole-viewport scroll
+                    // (`damage.scroll`), so the moved band shift-copies from the previous frame
+                    // and only the fresh rows (writes, blank band, cursor rows) re-resolve.
+                    // `scrollShift` lets the renderer rotate its row-instance cache the same way
+                    // it does for scrollback scrolls; the fresh band is its re-encode set. Any
+                    // bail (no reusable frame, images, geometry) falls back to the plain build,
+                    // whose `damage.rows` still covers the whole moved band.
+                    if damage.scroll != 0, !damage.full, !damage.scrolledRows.isEmpty,
+                       let prev = reuse,
+                       let shifted = builder.buildShifted(grid, reusing: prev,
+                                                          shift: damage.scroll, freshRows: fresh) {
+                        frame = shifted
+                        scrollShift = damage.scroll
+                        renderDamage = TerminalDamage(rows: fresh)
+                    } else {
+                        frame = builder.build(grid, region: nil,
+                                              imageProvider: { emulator.image(for: $0) },
+                                              reusing: reuse, damage: damage)
+                        renderDamage = damage
+                    }
                 } else {
                     frame = builder.build(grid, region: selectionRegion,
                                           searchHighlights: findHits,

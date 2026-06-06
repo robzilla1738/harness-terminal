@@ -95,6 +95,14 @@ final class TerminalScreen {
     /// The cursor row reported dirty at the last `consumeDamage()`. Unioned with the current
     /// `cursorRow` on the next consume so a moved cursor redraws both its old and new rows.
     private var lastPresentedCursorRow = 0
+    /// Accumulated whole-viewport content displacement since the last consume (negative = up),
+    /// the source of `TerminalDamage.scroll`. Only whole-viewport scrolls accumulate; anything
+    /// the hint can't describe poisons it for the rest of the window (see `poisonScrollHint`).
+    private var pendingScroll = 0
+    /// The hint died for this consume window (sub-region scroll, or the shift covered the whole
+    /// grid). Marks stay correct — they are always current-coordinate — only the reuse hint is
+    /// withheld.
+    private var scrollHintPoisoned = false
 
     /// Mark one viewport row's content dirty (out-of-range rows are ignored).
     private func markRowDirty(_ row: Int) {
@@ -118,6 +126,45 @@ final class TerminalScreen {
     /// Flag the whole screen for a full rebuild (clear, resize/reflow, reset, screen switch).
     func markFullyDirty() { fullDamage = true }
 
+    /// A whole-viewport scroll moved the content by `delta` rows: marks made *before* it describe
+    /// content that now lives `delta` rows away, so move them with it (rows shifted off the
+    /// viewport drop — that content is gone/in history). Keeps `contentDamage` in current
+    /// coordinates at all times, which is what every consumer (hint-aware or not) expects.
+    private func shiftContentDamage(by delta: Int) {
+        guard !contentDamage.isEmpty else { return }
+        var shifted = IndexSet()
+        for r in contentDamage {
+            let nr = r + delta
+            if nr >= 0, nr < rows { shifted.insert(nr) }
+        }
+        contentDamage = shifted
+    }
+
+    /// Drop the scroll hint for this consume window. If a shift was already pending, rows the
+    /// hint would have covered must redraw the ordinary way, so the whole viewport goes dirty —
+    /// exactly the pre-hint behavior (over-reporting is safe; the hint is purely an optimization).
+    private func poisonScrollHint() {
+        if pendingScroll != 0 { markRowsDirty(0 ..< rows) }
+        pendingScroll = 0
+        scrollHintPoisoned = true
+    }
+
+    /// Record a whole-viewport scroll for the damage hint (or poison it when the hint can't
+    /// describe this window's events). `by` is the content displacement in rows (negative = up);
+    /// `blankBand` is the freed band (current coordinates), which is genuinely new content.
+    private func recordScroll(by: Int, blankBand: Range<Int>, wholeViewport: Bool) {
+        if wholeViewport, !scrollHintPoisoned {
+            shiftContentDamage(by: by)
+            pendingScroll += by
+            // A net shift covering the grid leaves no reusable band — degrade to plain dirty.
+            if abs(pendingScroll) >= rows { poisonScrollHint() }
+            markRowsDirty(blankBand)
+        } else {
+            poisonScrollHint()
+            markRowsDirty(scrollTop ... scrollBottom)
+        }
+    }
+
     /// Return the rows that changed since the last call and reset the accumulator. A moved
     /// cursor contributes its old and new rows; `cursorOnly` is set when that move is the only
     /// change. `full` requests a whole-screen rebuild.
@@ -131,14 +178,31 @@ final class TerminalScreen {
             }
             dirtyRows.insert(cursorRow)
         }
+        // Scroll hint: with a clean whole-viewport shift pending, every row either carries fresh
+        // content (already in `dirtyRows` — writes, blank band, cursor rows) or merely moved by
+        // `pendingScroll`. Report the moved remainder as shift-reusable, and widen `rows` to the
+        // whole viewport so hint-unaware consumers redraw the moved band exactly as they did
+        // before the hint existed.
+        var scroll = 0
+        var scrolledRows = IndexSet()
+        if !fullDamage, !scrollHintPoisoned, pendingScroll != 0 {
+            scroll = pendingScroll
+            scrolledRows = IndexSet(integersIn: 0 ..< rows)
+            scrolledRows.subtract(dirtyRows)
+            dirtyRows = IndexSet(integersIn: 0 ..< rows)
+        }
         let damage = TerminalDamage(
             rows: dirtyRows,
             full: fullDamage,
-            cursorOnly: !fullDamage && contentEmpty && cursorMoved
+            cursorOnly: !fullDamage && contentEmpty && cursorMoved,
+            scroll: scroll,
+            scrolledRows: scrolledRows
         )
         contentDamage = IndexSet()
         fullDamage = false
         lastPresentedCursorRow = cursorRow
+        pendingScroll = 0
+        scrollHintPoisoned = false
         return damage
     }
 
@@ -1433,7 +1497,9 @@ final class TerminalScreen {
             rowWrapped[r] = false
             rowMarks[r] = nil
         }
-        markRowsDirty(scrollTop ... scrollBottom)
+        recordScroll(by: -count,
+                     blankBand: (scrollTop + survivors) ..< (scrollBottom + 1),
+                     wholeViewport: scrollTop == 0 && scrollBottom == rows - 1)
         // Only region/alternate scrolls move anchors; a history-growing scroll leaves them
         // invariant (the image scrolls into scrollback instead of being dropped).
         if !growsHistory { shiftPlacements(by: -count) }
@@ -1470,7 +1536,9 @@ final class TerminalScreen {
             rowWrapped[r] = false
             rowMarks[r] = nil
         }
-        markRowsDirty(scrollTop ... scrollBottom)
+        recordScroll(by: count,
+                     blankBand: scrollTop ..< (scrollTop + count),
+                     wholeViewport: scrollTop == 0 && scrollBottom == rows - 1)
         shiftPlacements(by: count)
     }
 

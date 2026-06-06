@@ -1,3 +1,4 @@
+import Foundation
 import HarnessCore
 import HarnessTerminalEngine
 import HarnessTheme
@@ -459,12 +460,13 @@ public struct FrameBuilder {
                              cursor: cursor, images: images, promptGutter: promptGutter)
     }
 
-    /// Scroll-delta rebuild: the viewport window moved by `shift` rows over otherwise-unchanged
-    /// content (a pure scrollback scroll — no output, no overlays), so every surviving row of the
-    /// previous frame is still byte-identical at its new position. Copies the surviving band from
-    /// `previous` (fixing each cell's baked `row` index) and re-resolves only the newly-exposed
-    /// rows from the snapshot — the resolver/color work that dominates `build` is skipped for the
-    /// whole kept band.
+    /// Scroll-delta rebuild: the viewport's content moved by `shift` rows (a pure scrollback
+    /// scroll, or an output scroll reported via `TerminalDamage.scroll`), so every surviving row
+    /// of the previous frame is still byte-identical at its new position. Copies the surviving
+    /// band from `previous` (fixing each cell's baked `row` index) and re-resolves only the
+    /// newly-exposed rows — plus any `freshRows` (rows the engine marked as genuinely new content:
+    /// writes, the scroll's blank band, cursor rows) — from the snapshot. The resolver/color work
+    /// that dominates `build` is skipped for the whole kept band.
     ///
     /// `shift` is in viewport rows: positive = the window moved up into history (scrolled back;
     /// previous row r now displays at r + shift, new content enters at the top), negative = the
@@ -473,11 +475,13 @@ public struct FrameBuilder {
     /// either side draws images — placements are window-relative and not worth shifting) so the
     /// caller falls back to a full build. The result is byte-identical to
     /// `build(snapshot, region: nil)` — pinned by the differential tests; the caller owns the
-    /// "content didn't change" predicate (no output since `previous`, same builder config).
+    /// "unlisted content didn't change" predicate (`previous` reflects the pre-shift grid, same
+    /// builder config).
     public func buildShifted(
         _ snapshot: TerminalGridSnapshot,
         reusing previous: TerminalFrame,
-        shift: Int
+        shift: Int,
+        freshRows: IndexSet = []
     ) -> TerminalFrame? {
         let cols = snapshot.cols
         let rows = snapshot.rows
@@ -490,7 +494,7 @@ public struct FrameBuilder {
         cells.reserveCapacity(cols * rows)
         for row in 0 ..< rows {
             let sourceRow = row - shift // where this viewport row lived in the previous frame
-            if sourceRow >= 0, sourceRow < rows {
+            if sourceRow >= 0, sourceRow < rows, !freshRows.contains(row) {
                 let base = cells.count
                 cells.append(contentsOf: previous.cells[(sourceRow * cols) ..< ((sourceRow + 1) * cols)])
                 for i in base ..< cells.count { cells[i].row = row } // fix the baked row index
