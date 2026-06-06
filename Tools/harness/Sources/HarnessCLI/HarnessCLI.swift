@@ -306,7 +306,14 @@ struct HarnessCLI {
             fputs("Usage: harness-cli new-split --tab <uuid> --direction horizontal|vertical\n", harnessStderr)
             exit(1)
         }
-        let paneID = UUID(uuidString: flagValue(args, flag: "--pane") ?? "")
+        let paneID: UUID?
+        switch optionalUUIDFlag(args, flag: "--pane") {
+        case .absent: paneID = nil
+        case .valid(let id): paneID = id
+        case .invalid(let raw):
+            fputs("new-split: --pane must be a pane UUID (got '\(raw)')\n", harnessStderr)
+            exit(1)
+        }
         let response = try checkedRequest(client, .newSplit(tabID: tabID, paneID: paneID, direction: direction))
         if case let .paneID(id) = response { print(id.uuidString) }
     }
@@ -702,9 +709,10 @@ struct HarnessCLI {
             return 64
         }
         var configuration = AttachClient.Configuration()
-        if let raw = flagValue(args, flag: "--detach-keys"),
-           let parsed = parseDetachSequence(raw) {
-            configuration.detachSequence = parsed
+        switch resolveDetachSequence(args) {
+        case .parsed(let seq): configuration.detachSequence = seq
+        case .absent: break  // flag absent — keep the default
+        case .invalid(let message): fputs(message, harnessStderr); return 64
         }
         let endpoint = try resolveEndpoint(args)
         return try AttachClient.run(surfaceID: surface, configuration: configuration, endpoint: endpoint)
@@ -822,13 +830,36 @@ struct HarnessCLI {
             selector = .active
         }
         var configuration = WindowAttachClient.Configuration()
-        if let raw = flagValue(args, flag: "--detach-keys"),
-           let parsed = parseDetachSequence(raw) {
-            configuration.detachSequence = parsed
+        switch resolveDetachSequence(args) {
+        case .parsed(let seq): configuration.detachSequence = seq
+        case .absent: break  // flag absent — keep the default
+        case .invalid(let message): fputs(message, harnessStderr); return 64
         }
         return try WindowAttachClient.run(tab: selector, configuration: configuration)
     }
     #endif
+
+    /// Outcome of resolving the optional `--detach-keys` flag for the attach commands.
+    ///   - `.absent` — flag not supplied; the caller keeps its built-in default.
+    ///   - `.parsed(bytes)` — flag supplied and parsed.
+    ///   - `.invalid(message)` — flag supplied but unparseable; the value would otherwise be
+    ///     silently dropped, leaving the user attached with no way to detach. The message is a
+    ///     ready-to-`fputs` line naming the bad value and the accepted formats.
+    enum DetachKeys: Equatable {
+        case absent
+        case parsed([UInt8])
+        case invalid(String)
+    }
+
+    static func resolveDetachSequence(_ args: [String]) -> DetachKeys {
+        guard let raw = flagValue(args, flag: "--detach-keys") else { return .absent }
+        guard let parsed = parseDetachSequence(raw) else {
+            return .invalid(
+                "harness-cli: invalid --detach-keys '\(raw)'. "
+                + "Use 'C-a d', '0x01 0x64', or comma-separated decimal bytes.\n")
+        }
+        return .parsed(parsed)
+    }
 
     /// Parse `C-a d`, `0x01 0x64`, or comma-separated decimal bytes into a raw
     /// byte sequence. Single-character tokens become their literal ASCII byte.
@@ -1031,7 +1062,14 @@ struct HarnessCLI {
             fputs("Usage: harness-cli select-layout --tab <uuid> --layout <name> [--main <paneUUID>]\n", harnessStderr)
             exit(1)
         }
-        let mainPaneID = flagValue(args, flag: "--main").flatMap { UUID(uuidString: $0) }
+        let mainPaneID: UUID?
+        switch optionalUUIDFlag(args, flag: "--main") {
+        case .absent: mainPaneID = nil
+        case .valid(let id): mainPaneID = id
+        case .invalid(let raw):
+            fputs("select-layout: --main must be a pane UUID (got '\(raw)')\n", harnessStderr)
+            exit(1)
+        }
         _ = try checkedRequest(client, .applyLayout(tabID: tabID, layout: layout, mainPaneID: mainPaneID))
     }
 
@@ -1220,22 +1258,31 @@ struct HarnessCLI {
 
     static func handleBindHook(_ args: [String], client: DaemonClient) throws {
         // Drop the subcommand (`bind-hook`) at index 0: `<event> <command...> [--if <format>]`.
-        let rest = Array(args.dropFirst())
-        guard rest.count >= 2 else {
+        guard let parsed = parseBindHook(Array(args.dropFirst())) else {
             fputs("Usage: harness-cli bind-hook <event> <command...> [--if <format>]\n", harnessStderr)
             exit(1)
         }
+        let response = try checkedRequest(
+            client, .bindHook(event: parsed.event, source: parsed.source, condition: parsed.condition))
+        if case let .hookID(id) = response { print(id.uuidString) }
+    }
+
+    /// Parse `<event> <command...> [--if <format>]` (the args after the `bind-hook` subcommand).
+    /// Returns nil for any malformed shape so the caller can print usage once:
+    ///   - fewer than two tokens (no command);
+    ///   - `--if` at index 0 (no event) or index 1 (empty command) — the latter also closes the
+    ///     `rest[1..<ifIndex]` crash where `ifIndex < 1` slices an inverted range and traps.
+    static func parseBindHook(_ rest: [String]) -> (event: String, source: String, condition: String?)? {
+        guard rest.count >= 2 else { return nil }
         let event = rest[0]
         let ifIndex = rest.firstIndex(of: "--if")
-        let condition = (ifIndex.flatMap { rest.count > $0 + 1 ? rest[$0 + 1] : nil })
-        let source: String
         if let ifIndex {
-            source = rest[1..<ifIndex].joined(separator: " ")
-        } else {
-            source = rest.dropFirst().joined(separator: " ")
+            // Need an event (index 0) and at least one command token before `--if` (index >= 2),
+            // plus a format token after it.
+            guard ifIndex > 1, rest.count > ifIndex + 1 else { return nil }
+            return (event, rest[1..<ifIndex].joined(separator: " "), rest[ifIndex + 1])
         }
-        let response = try checkedRequest(client, .bindHook(event: event, source: source, condition: condition))
-        if case let .hookID(id) = response { print(id.uuidString) }
+        return (event, rest.dropFirst().joined(separator: " "), nil)
     }
 
     static func handleUnbindHook(_ args: [String], client: DaemonClient) throws {
@@ -1367,6 +1414,20 @@ struct HarnessCLI {
     static func flagValue(_ args: [String], flag: String) -> String? {
         guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
         return args[index + 1]
+    }
+
+    /// Outcome of resolving an optional UUID-valued flag without collapsing "absent" and "invalid"
+    /// into the same nil — the silent-fallback class fixed elsewhere (list-panes/kill-pane, #68).
+    enum OptionalUUID: Equatable {
+        case absent              // flag not supplied; caller keeps its default (e.g. active pane)
+        case valid(UUID)         // flag supplied and a well-formed UUID
+        case invalid(String)     // flag supplied but not a UUID; caller should error loudly
+    }
+
+    static func optionalUUIDFlag(_ args: [String], flag: String) -> OptionalUUID {
+        guard let raw = flagValue(args, flag: flag) else { return .absent }
+        guard let id = UUID(uuidString: raw) else { return .invalid(raw) }
+        return .valid(id)
     }
 
     static func checkedRequest(_ client: DaemonClient, _ request: IPCRequest, timeout: TimeInterval = 2) throws -> IPCResponse {
