@@ -503,7 +503,7 @@ public final class GlyphRasterizer {
         guard width > 0, height > 0 else { return coverage }
         let clampedStrength = min(255, max(0, strength))
         let lightestSupportedBoost = 12
-        let strongestSupportedBoost = 30
+        let strongestSupportedBoost = 20
         let amount = lightestSupportedBoost + ((strongestSupportedBoost - lightestSupportedBoost) * clampedStrength + 127) / 255
         var out = coverage
         for y in 0 ..< height {
