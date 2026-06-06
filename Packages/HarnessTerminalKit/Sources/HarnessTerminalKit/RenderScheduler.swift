@@ -44,6 +44,14 @@ final class RenderScheduler {
     /// Whether the display-cadence loop is live (the view is in a window). `tick` is inert when
     /// stopped, so a detached view never presents.
     private(set) var isRunning = false
+    /// The hosting window is occluded (fully covered / minimized): nothing presented can be seen,
+    /// and acquiring drawables for an invisible window wastes CPU and can stall the shared pool
+    /// (Apple guidance: don't `nextDrawable()` for occluded windows). `tick`/`presentNow` hold
+    /// while set; dirty marks keep accumulating so visibility returning presents promptly. The
+    /// view owns the state (it observes `NSWindow.didChangeOcclusionStateNotification`) and wakes
+    /// the loop itself on un-occlusion. `forceRender` stays ungated (resize/first-paint forces
+    /// while occluded are rare and harmless).
+    private(set) var isOccluded = false
 
     init(render: @escaping () -> Void, renderSynchronously: (() -> Void)? = nil) {
         self.render = render
@@ -52,19 +60,27 @@ final class RenderScheduler {
 
     /// There is a frame to present and nothing is holding it — the view uses this to keep its
     /// display link running only while needed (and pause it when idle, so a quiet terminal doesn't
-    /// wake the CPU every display tick).
-    var hasPendingWork: Bool { isRunning && needsRender && !synchronized }
+    /// wake the CPU every display tick). An occluded window holds too: its link pauses even with
+    /// output flooding in, so a covered pane running a build costs no presents at all.
+    var hasPendingWork: Bool { isRunning && needsRender && !synchronized && !isOccluded }
+
+    /// Window visibility changed (see `isOccluded`). Un-occlusion does not present by itself —
+    /// the caller re-arms via its normal scheduling so any marks accumulated while covered land
+    /// on the next tick.
+    func setOccluded(_ occluded: Bool) { isOccluded = occluded }
 
     /// Begin display-cadence scheduling (called when the view enters a window).
     func start() { isRunning = true }
 
     /// Stop scheduling and drop any pending work / hold (called when the view leaves its window).
-    /// A later `tick` is a no-op until `start()` runs again.
+    /// A later `tick` is a no-op until `start()` runs again. Occlusion resets too — it described
+    /// the departed window; re-hosting seeds it from the new window's state.
     func stop() {
         isRunning = false
         needsRender = false
         synchronized = false
         presentedThisInterval = false
+        isOccluded = false
     }
 
     /// Request a present at the next display tick. Cheap and idempotent — many marks before a tick
@@ -79,7 +95,7 @@ final class RenderScheduler {
     /// per-chunk present). Returns whether it actually rendered.
     @discardableResult
     func presentNow() -> Bool {
-        guard isRunning, needsRender, !synchronized, !presentedThisInterval else { return false }
+        guard isRunning, needsRender, !synchronized, !isOccluded, !presentedThisInterval else { return false }
         needsRender = false
         presentedThisInterval = true
         render()

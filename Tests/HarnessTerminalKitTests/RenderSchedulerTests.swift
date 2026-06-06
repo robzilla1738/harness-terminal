@@ -213,4 +213,44 @@ final class RenderSchedulerTests: XCTestCase {
         sched.tick()
         XCTAssertFalse(sched.hasPendingWork, "presented → idle")
     }
+
+    // MARK: - Occlusion (covered / minimized windows present nothing)
+
+    func testOccludedSuppressesTickAndPresentNow() {
+        let (sched, renders) = makeScheduler()
+        sched.setOccluded(true)
+        sched.markDirty() // output keeps flowing into the covered pane
+        XCTAssertFalse(sched.hasPendingWork, "occluded → the display link can pause")
+        XCTAssertFalse(sched.tick(), "no present for an invisible window")
+        XCTAssertFalse(sched.presentNow(), "echo flush holds too")
+        XCTAssertEqual(renders(), 0)
+    }
+
+    func testDirtyMarksAccumulateWhileOccludedAndPresentOnUnocclusion() {
+        let (sched, renders) = makeScheduler()
+        sched.setOccluded(true)
+        for _ in 0 ..< 50 { sched.markDirty() } // a build streaming into a covered window
+        XCTAssertEqual(renders(), 0)
+        sched.setOccluded(false)
+        XCTAssertTrue(sched.hasPendingWork, "accumulated marks surface once visible")
+        XCTAssertTrue(sched.tick(), "the first visible tick presents the fresh frame")
+        XCTAssertEqual(renders(), 1, "the covered burst coalesces to one present")
+    }
+
+    func testForceRenderIgnoresOcclusion() {
+        // Resize/first-paint forces are rare while covered and must stay deterministic.
+        let (sched, renders) = makeScheduler()
+        sched.setOccluded(true)
+        sched.forceRender()
+        XCTAssertEqual(renders(), 1)
+    }
+
+    func testStopResetsOcclusion() {
+        // Occlusion described the departed window; a re-hosted view seeds it afresh.
+        let (sched, _) = makeScheduler()
+        sched.setOccluded(true)
+        sched.stop()
+        sched.start()
+        XCTAssertFalse(sched.isOccluded)
+    }
 }

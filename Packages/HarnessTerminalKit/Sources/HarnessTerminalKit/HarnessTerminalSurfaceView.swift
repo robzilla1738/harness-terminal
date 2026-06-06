@@ -786,6 +786,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     func testingMakeFrameBuilder() -> FrameBuilder { frameBuildConfiguration.makeBuilder() }
     var testingLastPresentedFrame: TerminalFrame? { lastPresentedResult?.frame }
     var testingLastPresentedDamage: TerminalDamage? { lastPresentedResult?.damage }
+    func testingSetWindowOccluded(_ occluded: Bool) { setWindowOccluded(occluded) }
+    var testingIsOccluded: Bool { scheduler.isOccluded }
     // Smooth-scroll seams: continuous (sub-line) scrolling and the resulting offset/fraction split.
     func testingScrollByContinuous(lines: CGFloat) { scrollByContinuous(lines: lines) }
     var testingScrollPosition: (offset: Int, fraction: CGFloat) { (scrollOffset, scrollFraction) }
@@ -1195,6 +1197,21 @@ public final class HarnessTerminalSurfaceView: NSView {
                     self.focusStateChanged()
                 }
             })
+            // Track occlusion (covered / minimized / other Space): an invisible pane must not
+            // acquire drawables or present — Apple guidance, and it keeps a backgrounded build
+            // or `tail -f` from waking the GPU at full cadence. Notification-driven only, NOT
+            // seeded from the current state: a window that has never been ordered on screen
+            // reads as non-visible (every headless test window, and briefly during launch), and
+            // gating those would be wrong — the first real occlusion change corrects any
+            // attach-while-covered case.
+            windowKeyObservers.append(nc.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window else { return }
+                    self.setWindowOccluded(!window.occlusionState.contains(.visible))
+                }
+            })
             window.makeFirstResponder(self)
             focusStateChanged()
         } else {
@@ -1260,6 +1277,16 @@ public final class HarnessTerminalSurfaceView: NSView {
         renderLink?.invalidate()
         renderLink = nil
         scheduler.stop()
+    }
+
+    /// Window visibility changed (occlusion observer / attach seed). While occluded the scheduler
+    /// holds every present — dirty marks and parsing continue, so the pane stays current and
+    /// costs no GPU work. On becoming visible, re-arm: any output that arrived while covered
+    /// accumulated engine damage, so the next tick builds and presents one up-to-date frame.
+    private func setWindowOccluded(_ occluded: Bool) {
+        guard occluded != scheduler.isOccluded else { return }
+        scheduler.setOccluded(occluded)
+        if !occluded { scheduleRender() }
     }
 
     public override func viewDidChangeBackingProperties() {
