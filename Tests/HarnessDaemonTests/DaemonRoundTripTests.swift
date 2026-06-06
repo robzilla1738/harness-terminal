@@ -135,6 +135,108 @@ final class DaemonRoundTripTests: XCTestCase {
         wait(for: [streamed], timeout: 8)
     }
 
+    /// Item 1 regression — the attach replay→subscribe gap. Pre-fix, attach did
+    /// `replayScrollback` THEN `subscribeSurfaceOutput` on a separate socket; bytes appended
+    /// between the replay snapshot and the handler registration were persisted but never delivered
+    /// (the daemon does no backfill). This drove the worst case: a tight marker burst lands in that
+    /// window, so a re-replay sees them but the live attach stream is missing them.
+    ///
+    /// `attachReplayingSurfaceOutput` closes it (subscribe-first → buffer → replay → dedup-flush).
+    /// The test bursts N distinct markers, attaches gap-free WHILE more markers keep flowing, and
+    /// asserts every marker is present in union(replay, live) — i.e. the gap-free attach loses none
+    /// of what a fresh full re-replay would show (0 missing). Pre-fix this fails with a gap.
+    func testGapFreeAttachLosesNoOutputAcrossReplaySubscribeBoundary() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let sid = target.surfaceID
+
+        // Quiet the shell so only our marker output reaches the stream. `stty -echo` stops the PTY
+        // echoing input; per-marker complete commands keep the marker tokens off the line editor's
+        // syntax-highlighted echo (an interactive shell colorizes a long command as it's "typed",
+        // which would split a marker token across SGR escapes and defeat substring matching).
+        _ = try client.request(.sendData(surfaceID: sid, data: Data("PS1=''; stty -echo\n".utf8)))
+        usleep(300_000)
+
+        let total = 40
+        @Sendable func marker(_ i: Int) -> String { "GAPMARK_\(i)_END" }
+
+        // The gap-free attach folds replay AND live frames into one accumulator, in order.
+        let combined = OutputAccumulator()
+        let burstDone = AtomicBox<Bool>()
+
+        // Stream markers continuously ACROSS the attach handshake. The writer uses its OWN
+        // `DaemonClient` so its `sendData` requests don't serialize behind the attach's replay/
+        // subscribe round trips on a shared client queue — output must keep flowing during the
+        // replay→subscribe window for the no-loss guarantee to mean anything. Each marker is a
+        // complete `printf` command so its output token lands clean in scrollback.
+        let writerClient = DaemonClient()
+        let writer = DispatchQueue(label: "gap-writer")
+        writer.async {
+            for i in 0 ..< total {
+                _ = try? writerClient.request(.sendData(surfaceID: sid, data: Data("printf '\(marker(i))\\n'\n".utf8)))
+                usleep(25_000)
+            }
+            burstDone.set(true)
+        }
+
+        // Attach mid-stream, AFTER a few markers have accumulated (non-empty replay) but with the
+        // bulk still to come (the gap/live window).
+        usleep(200_000)
+        let subscription = try client.attachReplayingSurfaceOutput(
+            surfaceID: sid,
+            label: "gap-test",
+            onReplay: { text in _ = combined.appendAndContains(text, marker: "") },
+            onData: { data, _ in _ = combined.appendAndContains(String(decoding: data, as: UTF8.self), marker: "") }
+        )
+        defer { subscription.cancel() }
+
+        // Wait for the burst to finish and the stream to settle.
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            if burstDone.value == true, combined.contains(marker(total - 1)) { break }
+            usleep(50_000)
+        }
+        usleep(400_000) // let any trailing frames flush before the authoritative re-replay
+
+        // Ground truth: a full re-replay AFTER everything settled is exactly what the surface holds.
+        // The gap-free attach must contain every marker ground truth does — anything in the re-replay
+        // but missing from the attach stream is output the replay→subscribe boundary dropped.
+        // (Comparing against the re-replay, not the absolute 0..<total set, isolates the attach gap
+        // from any shell-level loss, which would be absent from BOTH.)
+        guard case let .text(fullReplay)? = try? client.request(.replayScrollback(surfaceID: sid, fromSequence: nil), timeout: 5) else {
+            return XCTFail("expected a full re-replay")
+        }
+        let stream = combined.snapshot
+        let groundTruth = (0 ..< total).filter { fullReplay.contains(marker($0)) }
+        let missing = groundTruth.filter { !stream.contains(marker($0)) }
+        XCTAssertFalse(groundTruth.isEmpty, "the surface must actually hold markers to test against")
+        XCTAssertEqual(missing, [], "gap-free attach must lose no output the surface holds; missing: \(missing)")
+    }
+
+    /// Item 1 — the sequenced replay reports a usable end boundary that advances as output is
+    /// appended. The boundary is what the gap-free attach dedupes its buffered live frames against;
+    /// a non-advancing or zero boundary would either re-show overlap or (with the old `.text`-only
+    /// replay) force the lossy fallback. Proves the new request is wired end to end.
+    func testReplayScrollbackSequencedReportsAdvancingEndSequence() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let sid = target.surfaceID
+
+        guard case let .replayResult(_, first)? = try? client.request(.replayScrollbackSequenced(surfaceID: sid, fromSequence: nil)) else {
+            return XCTFail("expected a replayResult")
+        }
+        _ = try client.request(.sendData(surfaceID: sid, data: Data("printf 'SEQPROBE\\n'\n".utf8)))
+        usleep(400_000)
+        guard case let .replayResult(_, second)? = try? client.request(.replayScrollbackSequenced(surfaceID: sid, fromSequence: nil)) else {
+            return XCTFail("expected a second replayResult")
+        }
+        XCTAssertGreaterThan(second, first, "the replay end sequence must advance as output is appended")
+    }
+
     /// Change B: subscribing to a surface that does not exist must NOT hang forever. The daemon
     /// rejects it with `.error("Surface not found")` and leaves the fd open, so the read loop has
     /// to treat that `.error` as fatal and fire `onEnd` — otherwise a GUI reconnect (or CLI attach)

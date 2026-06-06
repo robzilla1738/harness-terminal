@@ -598,6 +598,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case let .replayScrollback(surfaceID, fromSequence):
             guard let session = sessions[surfaceID] else { return .text("") }
             return .text(session.replay(fromSequence: fromSequence))
+        case let .replayScrollbackSequenced(surfaceID, fromSequence):
+            // A missing surface still answers (empty replay at sequence 0) so the gap-free attach
+            // path gets a usable boundary instead of mistaking it for an old-daemon `.error`.
+            guard let session = sessions[surfaceID] else { return .replayResult(text: "", endSequence: 0) }
+            let result = session.replayWithEndSequence(fromSequence: fromSequence)
+            return .replayResult(text: result.text, endSequence: result.endSequence)
         case let .resizeSurface(surfaceID, rows, cols):
             sessions[surfaceID]?.resize(rows: rows, cols: cols)
             return .ok

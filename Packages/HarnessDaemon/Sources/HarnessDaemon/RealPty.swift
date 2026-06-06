@@ -682,6 +682,22 @@ public final class RealPty: @unchecked Sendable {
         return String(decoding: combined, as: UTF8.self)
     }
 
+    /// Replay text PLUS the sequence one past the last replayed byte (`nextSequence` at the
+    /// snapshot instant). A client that subscribed BEFORE calling this can use `endSequence` to
+    /// dedupe its buffered live frames — any frame whose sequence is `< endSequence` is already
+    /// inside this replay, closing the replay→subscribe gap without double-delivering the overlap.
+    /// Captured under the same lock as the snapshot so the boundary is exact (a chunk is appended
+    /// atomically, so `endSequence` always lands on a chunk boundary).
+    public func replayWithEndSequence(fromSequence: UInt64?) -> (text: String, endSequence: UInt64) {
+        scrollbackLock.lock()
+        let live = scrollback[scrollbackHead...] // skip the evicted dead prefix
+        let segments = live.map { ScrollbackReplaySegment(sequence: $0.sequence, data: $0.data) }
+        let endSequence = nextSequence
+        scrollbackLock.unlock()
+        let combined = Self.replayData(from: segments, fromSequence: fromSequence)
+        return (String(decoding: combined, as: UTF8.self), endSequence)
+    }
+
     static func replayData(from segments: [ScrollbackReplaySegment], fromSequence: UInt64?) -> Data {
         guard let fromSequence else {
             return segments.reduce(into: Data()) { output, segment in output.append(segment.data) }

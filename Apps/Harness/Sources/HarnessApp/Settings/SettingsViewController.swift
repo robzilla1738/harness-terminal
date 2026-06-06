@@ -512,6 +512,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func showPage(_ index: Int) {
         for button in sidebarButtons { button.isSelected = (button.tag == index) }
         for subview in pageContainer.subviews { subview.removeFromSuperview() }
+        // Rebuild the Advanced page each time it's shown so it re-checks daemon reachability (and
+        // re-fetches live option values): a daemon that was down when Settings opened may be back,
+        // and vice-versa. The other pages are static enough to stay cached.
+        if index == 5 { pages[5] = buildAdvancedPage() }
         guard let page = pages[index] else { return }
         page.translatesAutoresizingMaskIntoConstraints = false
         pageContainer.addSubview(page)
@@ -1215,9 +1219,17 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private var advValues: [String: String] = [:]
     private enum AdvKind { case toggle, segment, field }
     private var advOptKeys: [ObjectIdentifier: (key: String, kind: AdvKind)] = [:]
+    /// Whether the last `loadAdvancedValues` reached the daemon. False = the overlaid values are
+    /// builtin defaults, NOT the live daemon state — so the page warns and disables its controls
+    /// (a change couldn't be applied) instead of silently presenting defaults as if real.
+    private var advDaemonReachable = true
+    /// The daemon-backed controls (set-option surface), disabled when the daemon is unreachable.
+    /// Excludes the performance toggles, which write local settings and stay usable offline.
+    private var advDaemonControls: [NSControl] = []
 
     private func buildAdvancedPage() -> NSView {
         let header = pageHeader(title: "Advanced", trailing: nil)
+        advDaemonControls.removeAll() // repopulated by the adv* factories below
         loadAdvancedValues()
 
         let statusGroup = settingsGroup("Status bar", [
@@ -1272,9 +1284,18 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         ])
 
         let intro = settingsCaption("Power-user options shared with the harness-cli set-option command surface. Changes apply globally and persist immediately.")
-        let stack = NSStackView(views: [
-            header,
-            intro,
+        // When the daemon is unreachable these groups show builtin defaults, NOT the live state, and
+        // a change can't be applied — so disable the daemon-backed controls and warn inline at the
+        // top. The performance toggles (local settings) stay usable. Re-checked each time the page is
+        // shown (see `showPage`). The set-option surface depends on the daemon, so it's gated here.
+        if !advDaemonReachable {
+            for control in advDaemonControls { control.isEnabled = false }
+        }
+        var views: [NSView] = [header, intro]
+        if !advDaemonReachable {
+            views.append(advUnreachableBanner())
+        }
+        views.append(contentsOf: [
             performanceGroup,
             statusGroup,
             inputGroup,
@@ -1284,6 +1305,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             lifecycleGroup,
             borderGroup,
         ])
+        let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .width
         stack.spacing = 18
@@ -1291,11 +1313,42 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return scrollWrap(stack)
     }
 
+    /// Inline warning shown atop the Advanced page when the daemon is unreachable: the controls
+    /// below show builtin defaults, not live state, and edits can't be applied. Uses the chrome's
+    /// danger color so it reads as a real warning, consistent with the rest of Settings.
+    private func advUnreachableBanner() -> NSView {
+        let banner = NSView()
+        banner.wantsLayer = true
+        banner.layer?.cornerRadius = 6
+        banner.layer?.backgroundColor = HarnessChrome.current.danger.withAlphaComponent(0.12).cgColor
+        banner.layer?.borderWidth = 1
+        banner.layer?.borderColor = HarnessChrome.current.danger.withAlphaComponent(0.35).cgColor
+        let label = NSTextField(wrappingLabelWithString:
+            "Daemon unreachable — showing defaults; changes can't be applied.")
+        label.font = .systemFont(ofSize: 11.5, weight: .medium)
+        label.textColor = HarnessChrome.current.danger
+        label.translatesAutoresizingMaskIntoConstraints = false
+        banner.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -12),
+            label.topAnchor.constraint(equalTo: banner.topAnchor, constant: 9),
+            label.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -9),
+        ])
+        return banner
+    }
+
     private func loadAdvancedValues() {
         advValues.removeAll()
         for (key, value) in OptionStore.builtinDefaults { advValues[key] = value.stringValue }
+        // `requestDaemon` returns nil when the daemon is unreachable. Distinguish that from a real
+        // empty-options reply: only overlay (and mark reachable) on an actual `.options` response,
+        // so an unreachable daemon renders builtin defaults that the page flags as not-live.
         if case let .options(entries)? = SessionCoordinator.shared.requestDaemon(.showOptions(scope: nil)) {
             for entry in entries where entry.scope == "global" { advValues[entry.key] = entry.value }
+            advDaemonReachable = true
+        } else {
+            advDaemonReachable = false
         }
     }
 
@@ -1306,6 +1359,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         toggle.target = self
         toggle.action = #selector(advChanged(_:))
         advOptKeys[ObjectIdentifier(toggle)] = (key, .toggle)
+        advDaemonControls.append(toggle)
         return toggle
     }
 
@@ -1316,6 +1370,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         segment.target = self
         segment.action = #selector(advChanged(_:))
         advOptKeys[ObjectIdentifier(segment)] = (key, .segment)
+        advDaemonControls.append(segment)
         return segment
     }
 
@@ -1327,6 +1382,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         field.target = self
         field.action = #selector(advChanged(_:))
         advOptKeys[ObjectIdentifier(field)] = (key, .field)
+        advDaemonControls.append(field)
         return field
     }
 

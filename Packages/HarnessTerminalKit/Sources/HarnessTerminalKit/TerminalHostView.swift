@@ -112,6 +112,13 @@ public final class TerminalHostView: NSView {
     /// transient "not yet subscribed" state. Drives menu-item enablement.
     public var isDetachedFromDaemon: Bool { detachedOverlay != nil }
 
+    /// A small, non-interactive "Reconnecting…" status chip shown in the corner while the output
+    /// stream is dropped and the backoff is retrying (daemon restart/crash). Distinct from
+    /// `detachedOverlay` (the full-pane click-to-re-grab affordance that only appears after the
+    /// backoff is exhausted): this is a quiet liveness cue during the ~55s recovery window so the
+    /// pane isn't silently frozen. Hidden the moment the resubscribe succeeds. nil while attached.
+    private var reconnectingOverlay: DetachedPaneOverlay?
+
     /// Show a `pane-border-format` label at the top (or bottom) edge, or hide it (nil/empty).
     public func setPaneBorderLabel(_ text: String?, atTop: Bool) {
         let trimmed = text?.trimmingCharacters(in: .whitespaces)
@@ -554,6 +561,7 @@ public final class TerminalHostView: NSView {
         outputSubscription?.cancel()
         outputSubscription = nil
         io.attach(subscription: nil) // fall back to the per-call client while detached
+        hideReconnectingOverlay() // a deliberate release supersedes any in-flight reconnect cue
         showDetachedOverlay()
     }
 
@@ -563,6 +571,7 @@ public final class TerminalHostView: NSView {
         guard outputSubscription == nil else { return }
         intentionallyDetached = false
         reconnectAttempts = 0
+        hideReconnectingOverlay()
         hideDetachedOverlay()
         startDaemonOutput(resetBeforeReplay: true)
     }
@@ -587,6 +596,29 @@ public final class TerminalHostView: NSView {
     private func hideDetachedOverlay() {
         detachedOverlay?.removeFromSuperview()
         detachedOverlay = nil
+    }
+
+    /// Drop a small, unobtrusive "Reconnecting…" chip in the top-right while the backoff retries.
+    /// Non-interactive (passes clicks/scroll through to the frozen pane) and does not steal focus —
+    /// it's a liveness cue, not the re-grab affordance. Idempotent; no-op if the full detached
+    /// overlay is already up (the backoff was exhausted, so the chip would be redundant).
+    private func showReconnectingOverlay() {
+        guard reconnectingOverlay == nil, detachedOverlay == nil else { return }
+        let overlay = DetachedPaneOverlay(frame: bounds, style: .reconnectingChip)
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(overlay, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: topAnchor),
+            overlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        reconnectingOverlay = overlay
+    }
+
+    private func hideReconnectingOverlay() {
+        reconnectingOverlay?.removeFromSuperview()
+        reconnectingOverlay = nil
     }
 
     /// Scroll the viewport to the previous/next OSC 133 shell prompt (no-op without shell
@@ -622,27 +654,31 @@ public final class TerminalHostView: NSView {
     }
 
     private func startDaemonOutput(resetBeforeReplay: Bool = false) {
-        // Reconnect/reattach: reset the emulator (RIS) first so the replayed scrollback replaces
-        // stale pre-restart content instead of stacking on it (which shows a doubled prompt). On the
-        // first connect the emulator is empty, so RIS would be a no-op — keep it off that path.
-        if resetBeforeReplay {
-            nativeView.receive("\u{1b}c")
-        }
-        do {
-            if case let .text(text) = try daemonClient.request(.replayScrollback(
-                surfaceID: surfaceID.uuidString,
-                fromSequence: nil
-            )), !text.isEmpty {
-                nativeView.receive(text)
+        // Gap-free attach: subscribe FIRST (live frames buffer), THEN replay, then flush the
+        // buffered live frames deduped against the replay boundary — so a byte appended between the
+        // replay snapshot and the handler registration is delivered exactly once instead of dropped.
+        // `onReplay` resets stale content (when reconnecting) and feeds the replayed history; both
+        // run on main, and live frames only reach main AFTER this (via `makeOutputDataHandler`'s
+        // `main.async`), so FIFO keeps history before live output.
+        let reset = resetBeforeReplay
+        let onData = makeOutputDataHandler()
+        let onReplay: @Sendable (String) -> Void = { [weak self] text in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    // Reconnect/reattach: RIS first so the replay replaces stale pre-restart content
+                    // instead of stacking on it. First connect: emulator empty, so RIS is a no-op.
+                    if reset { self.nativeView.receive("\u{1b}c") }
+                    if !text.isEmpty { self.nativeView.receive(text) }
+                }
             }
-        } catch {
-            fputs("Harness: replayScrollback failed for \(surfaceID.uuidString): \(error)\n", harnessStderr)
         }
         do {
-            outputSubscription = try daemonClient.subscribeSurfaceOutput(
+            outputSubscription = try daemonClient.attachReplayingSurfaceOutput(
                 surfaceID: surfaceID.uuidString,
                 label: "Harness.app",
-                onData: makeOutputDataHandler(),
+                onReplay: onReplay,
+                onData: onData,
                 onEnd: makeOutputEndHandler()
             )
             // Ride this persistent full-duplex connection for input (fire-and-forget), replacing
@@ -695,9 +731,14 @@ public final class TerminalHostView: NSView {
     private func scheduleDaemonReconnect() {
         guard !intentionallyDetached, outputSubscription == nil else { return }
         guard reconnectAttempts < 60 else {
+            hideReconnectingOverlay() // the chip gives way to the full re-grab affordance
             showDetachedOverlay() // ~50s of retries elapsed; let the user re-grab manually
             return
         }
+        // Surface a quiet "Reconnecting…" cue at the start of the backoff so a dropped stream isn't
+        // silently frozen for the whole recovery window. Hidden on a successful re-attach (or when
+        // the backoff is exhausted and the full re-grab overlay takes over). Idempotent.
+        showReconnectingOverlay()
         let attempt = reconnectAttempts
         reconnectAttempts += 1
         let delay = min(0.1 * Double(attempt + 1), 1.0)
@@ -739,6 +780,7 @@ public final class TerminalHostView: NSView {
                         // the last grid size, correcting a surface respawned at the placeholder size.
                         self.io.attach(subscription: subscription)
                         self.reconnectAttempts = 0
+                        self.hideReconnectingOverlay()
                         self.hideDetachedOverlay()
                     } else {
                         self.scheduleDaemonReconnect() // daemon not back / subscribe failed — retry
@@ -755,16 +797,13 @@ public final class TerminalHostView: NSView {
             guard case .ok? = try? client.request(.ensureSurface(
                 surfaceID: sid, cwd: cwd, shell: shell, rows: 24, cols: 80, scrollbackBytes: scrollbackBytes
             )) else { onAttached(nil); return }
-            var replayText = ""
-            if case let .text(text)? = try? client.request(.replayScrollback(surfaceID: sid, fromSequence: nil)) {
-                replayText = text
-            }
-            // Reset + replay on main BEFORE the live stream starts: this main hop is queued before the
-            // subscribe below, and `onData` only ever hops to main AFTER the subscribe — so FIFO
-            // guarantees the replayed history lands before any live byte.
-            onReplay(replayText)
-            let subscription = try? client.subscribeSurfaceOutput(
-                surfaceID: sid, label: "Harness.app", onData: onData, onEnd: onEnd
+            // Gap-free resubscribe: the helper subscribes first (buffering live frames), replays,
+            // then flushes the buffered frames deduped against the replay boundary — closing the
+            // window where a byte appended between the replay and the subscribe was dropped. The
+            // helper invokes `onReplay` (reset + replayed history on main) before the live stream,
+            // and the buffered/live frames reach main via `onData` AFTER it, so FIFO keeps order.
+            let subscription = try? client.attachReplayingSurfaceOutput(
+                surfaceID: sid, label: "Harness.app", onReplay: onReplay, onData: onData, onEnd: onEnd
             )
             onAttached(subscription)
         }
@@ -797,13 +836,20 @@ private final class TerminalFrameOverlayView: NSView {
 /// than reaching the stale surface underneath.
 @MainActor
 private final class DetachedPaneOverlay: NSView {
-    var onReattach: (() -> Void)?
-    private let label = NSTextField(labelWithString: "Pane released — click to re-grab")
+    /// `detached` = the full-pane dim + centered "click to re-grab" affordance (captures clicks).
+    /// `reconnectingChip` = a small, corner-pinned, non-interactive "Reconnecting…" liveness cue
+    /// shown during the backoff window (passes events through, shares the same chrome palette).
+    enum Style { case detached, reconnectingChip }
 
-    override init(frame frameRect: NSRect) {
+    var onReattach: (() -> Void)?
+    private let style: Style
+    private let label: NSTextField
+
+    init(frame frameRect: NSRect, style: Style = .detached) {
+        self.style = style
+        self.label = NSTextField(labelWithString: style == .detached ? "Pane released — click to re-grab" : "Reconnecting…")
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
         label.textColor = .white
@@ -811,21 +857,51 @@ private final class DetachedPaneOverlay: NSView {
         label.maximumNumberOfLines = 2
         label.lineBreakMode = .byWordWrapping
         label.isSelectable = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -24),
-        ])
+
+        switch style {
+        case .detached:
+            // Dim the whole pane and center the affordance.
+            layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+            addSubview(label)
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: centerXAnchor),
+                label.centerYAnchor.constraint(equalTo: centerYAnchor),
+                label.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -24),
+            ])
+        case .reconnectingChip:
+            // A small rounded chip pinned top-right; the overlay itself stays transparent so the
+            // pane underneath shows through. Reuses the detached overlay's dark/white palette.
+            let chip = NSView()
+            chip.translatesAutoresizingMaskIntoConstraints = false
+            chip.wantsLayer = true
+            chip.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
+            chip.layer?.cornerRadius = 6
+            chip.addSubview(label)
+            addSubview(chip)
+            NSLayoutConstraint.activate([
+                chip.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+                chip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+                label.leadingAnchor.constraint(equalTo: chip.leadingAnchor, constant: 10),
+                label.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -10),
+                label.topAnchor.constraint(equalTo: chip.topAnchor, constant: 4),
+                label.bottomAnchor.constraint(equalTo: chip.bottomAnchor, constant: -4),
+            ])
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// A click anywhere re-grabs the surface.
+    /// The reconnecting chip is a passive cue — let every event fall through to the pane underneath
+    /// so the user can still scroll/select the frozen content. The detached overlay captures.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        style == .reconnectingChip ? nil : super.hitTest(point)
+    }
+
+    /// A click anywhere re-grabs the surface (detached style only; the chip never hit-tests).
     override func mouseDown(with event: NSEvent) { onReattach?() }
     /// Re-grab even when the window isn't key (the first click also focuses).
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    /// Swallow scroll so the frozen pane underneath doesn't react to wheel events.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { style == .detached }
+    /// Swallow scroll so the frozen pane underneath doesn't react to wheel events (detached only).
     override func scrollWheel(with event: NSEvent) {}
 }
 
@@ -886,11 +962,16 @@ private final class SurfaceIO: @unchecked Sendable {
         // path); the write itself is now one frame on the persistent fd with no socket setup or
         // reply wait. Before the subscription exists (first keystrokes), fall back to the client.
         queue.async { [weak self, client, surfaceID] in
-            if let sub = self?.currentSubscription {
-                sub.sendInput(data, surfaceID: surfaceID)
-            } else {
-                _ = try? client.request(.sendData(surfaceID: surfaceID, data: data))
+            // Prefer the persistent subscription fd. If it can't deliver — torn down, or the daemon
+            // evicted this slow subscriber past its write-backlog cap while staying reachable —
+            // `sendInput` returns false; fall back to a one-shot `.sendData` RPC on THIS queue
+            // (mirrors the pre-subscription path, preserving keystroke order). Without this the
+            // keystroke is silently dropped in the window between socket death and the main-thread
+            // `attach(nil)`. No main hop.
+            if let sub = self?.currentSubscription, sub.sendInput(data, surfaceID: surfaceID) {
+                return
             }
+            _ = try? client.request(.sendData(surfaceID: surfaceID, data: data))
         }
     }
 

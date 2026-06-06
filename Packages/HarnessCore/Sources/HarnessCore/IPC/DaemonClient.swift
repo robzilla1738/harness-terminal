@@ -38,6 +38,58 @@ public final class DaemonClient: @unchecked Sendable {
         return subscription
     }
 
+    /// Gap-free attach: subscribe FIRST (buffering live output), then replay scrollback, deliver the
+    /// replayed history via `onReplay`, flush the buffered live frames DEDUPED against the replay's
+    /// end sequence, and stream the rest via `onData`. This closes the replay→subscribe window where
+    /// bytes appended between the replay snapshot and handler registration were persisted but never
+    /// delivered (the daemon does no backfill).
+    ///
+    /// Ordering is preserved end to end: live frames buffer inside the subscription until
+    /// `flushBuffered` runs, so `onReplay` (history) is always delivered before any live byte, and
+    /// the flush + live frames share one ordered sink. The caller's `onReplay`/`onData` decide the
+    /// delivery thread (e.g. the GUI hops to main); this method only guarantees the *call* order.
+    ///
+    /// Compatibility: uses `replayScrollbackSequenced` to learn the dedup boundary. An old daemon
+    /// rejects that request (`.error`), so we fall back to plain `replayScrollback` and flush with a
+    /// boundary of 0 — i.e. deliver every buffered frame, no dedup. That can re-show a small overlap
+    /// but never drops output; it matches "today's behavior" the moment a usable sequence is absent.
+    /// `fromSequence` is passed through to the replay (nil = full history).
+    @discardableResult
+    public func attachReplayingSurfaceOutput(
+        surfaceID: String,
+        label: String? = nil,
+        fromSequence: UInt64? = nil,
+        replayTimeout: TimeInterval = 5,
+        onReplay: @escaping @Sendable (String) -> Void,
+        onData: @escaping @Sendable (Data, UInt64) -> Void,
+        onEnd: (@Sendable () -> Void)? = nil
+    ) throws -> DaemonSubscription {
+        // 1. Subscribe first, buffering live frames (do NOT deliver yet).
+        let fd = try connectSocket()
+        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSurfaceOutput(surfaceID: surfaceID, label: label)))
+        do { try writeAll(payload, to: fd) } catch { close(fd); throw error }
+        let subscription = DaemonSubscription(fd: fd)
+        subscription.start(onData: onData, onEnd: onEnd, buffered: true)
+
+        // 2. Replay AFTER the subscription is live, so every byte the replay omits is already in the
+        //    buffer. Prefer the sequenced replay (gives the dedup boundary); on an old daemon that
+        //    rejects it, fall back to the plain replay with boundary 0 (no dedup, replay-then-stream).
+        var replayText = ""
+        var endSequence: UInt64 = 0
+        if case let .replayResult(text, end)? = try? request(.replayScrollbackSequenced(surfaceID: surfaceID, fromSequence: fromSequence), timeout: replayTimeout) {
+            replayText = text
+            endSequence = end
+        } else if case let .text(text)? = try? request(.replayScrollback(surfaceID: surfaceID, fromSequence: fromSequence), timeout: replayTimeout) {
+            replayText = text // legacy daemon: no usable boundary → deliver all buffered frames
+        }
+
+        // 3. Deliver the replayed history, THEN release the buffered live frames (deduped). The
+        //    caller's sink keeps both in one order, so history always lands before live output.
+        onReplay(replayText)
+        subscription.flushBuffered(droppingSequencesBelow: endSequence, onData: onData)
+        return subscription
+    }
+
     /// Long-lived snapshot subscription: invokes `onRevision` each time the daemon
     /// pushes a `snapshotChanged(revision:)` frame (i.e. the layout committed). Replaces
     /// the compositor's structure poll.
@@ -157,6 +209,16 @@ public final class DaemonSubscription: @unchecked Sendable {
     private var cancelled = false
     private var finished = false
 
+    /// Gap-free attach buffering. While `buffering` is true the output read loop stashes live
+    /// `(data, sequence)` frames here instead of delivering them, so a subscription can be
+    /// established BEFORE the scrollback replay is taken without the live frames racing ahead of
+    /// the replayed history. `flushBuffered(droppingSequencesBelow:)` drains them in order — minus
+    /// any whose sequence is already inside the replay — and switches to direct delivery. Guarded
+    /// by `bufferLock` (distinct from `lock`/`writeLock`, which guard teardown/writes).
+    private let bufferLock = NSLock()
+    private var buffering = false
+    private var pendingFrames: [(Data, UInt64)] = []
+
     init(fd: Int32) {
         self.fd = fd
     }
@@ -179,12 +241,19 @@ public final class DaemonSubscription: @unchecked Sendable {
     /// which opened a fresh socket and blocked for the `.ok`. Safe from any thread — the read loop
     /// runs on its own queue and only reads; the `cancelled`/`finished` guard (same as
     /// `detachSurface`) prevents writing to a torn-down fd.
-    public func sendInput(_ data: Data, surfaceID: String) {
+    /// Returns `false` if the input could NOT be delivered — the subscription is torn down
+    /// (`cancelled`/`finished`) or the socket hard-errored before all bytes flushed (e.g. the daemon
+    /// evicted this slow subscriber past its write-backlog cap while staying reachable). The caller
+    /// then falls back to a one-shot `.sendData` RPC so the keystroke isn't silently dropped in the
+    /// window between socket death and the main-thread re-attach. Returns `true` once the full frame
+    /// is on the wire (fire-and-forget — no `.ok` ack is awaited).
+    @discardableResult
+    public func sendInput(_ data: Data, surfaceID: String) -> Bool {
         lock.lock(); let dead = cancelled || finished; lock.unlock()
         guard !dead,
               let payload = try? IPCCodec.encodeInputFrame(surfaceID: surfaceID, payload: data)
-        else { return }
-        writeFrame(payload)
+        else { return false }
+        return writeFrame(payload)
     }
 
     /// Record this client's PTY size vote for `surfaceID` over the persistent connection. The
@@ -210,8 +279,11 @@ public final class DaemonSubscription: @unchecked Sendable {
 
     /// Write one complete framed message to `fd`, retrying partial/interrupted writes. Holds
     /// `writeLock` for the whole frame so two writers can't interleave bytes. A hard error (peer
-    /// gone) just stops — the read loop independently observes EOF and tears down.
-    private func writeFrame(_ payload: Data) {
+    /// gone) just stops — the read loop independently observes EOF and tears down. Returns `true`
+    /// iff every byte of the frame flushed; `false` on a torn-down subscription or a hard write
+    /// error (so `sendInput` can fall back). `detachSurface`/`resize` ignore the result.
+    @discardableResult
+    private func writeFrame(_ payload: Data) -> Bool {
         let bytes = [UInt8](payload)
         writeLock.lock()
         defer { writeLock.unlock() }
@@ -221,14 +293,15 @@ public final class DaemonSubscription: @unchecked Sendable {
         // sendInput/detachSurface entry points) closes the window where `cancel()` + the read-loop
         // close raced an in-flight write into a stale descriptor.
         lock.lock(); let dead = cancelled || finished; lock.unlock()
-        guard !dead else { return }
+        guard !dead else { return false }
         var off = 0
         while off < bytes.count {
             let n = bytes.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: off), bytes.count - off) }
             if n > 0 { off += n }
             else if n < 0, errno == EINTR || errno == EAGAIN { continue }
-            else { break }
+            else { return false } // hard error (EPIPE / peer gone) before the frame fully flushed
         }
+        return true
     }
 
     public func cancel() {
@@ -244,14 +317,68 @@ public final class DaemonSubscription: @unchecked Sendable {
     }
 
     /// Output-stream convenience: forwards `.data` frames to `onData`.
+    ///
+    /// When `buffered` is true the loop starts in buffering mode (see `beginBuffering`): live frames
+    /// are stashed until `flushBuffered(droppingSequencesBelow:)` releases them. The caller uses this
+    /// to subscribe BEFORE the replay snapshot and then dedupe — closing the replay→subscribe gap.
     func start(
         onData: @escaping @Sendable (Data, UInt64) -> Void,
-        onEnd: (@Sendable () -> Void)?
+        onEnd: (@Sendable () -> Void)?,
+        buffered: Bool = false
     ) {
+        if buffered { beginBuffering() }
         start(
-            onResponse: { if case let .data(data, sequence) = $0 { onData(data, sequence) } },
+            onResponse: { [weak self] in
+                guard case let .data(data, sequence) = $0 else { return }
+                // While buffering, stash in order under `bufferLock`; the flush drains these and
+                // flips to direct delivery atomically, so no frame is lost or reordered at the seam.
+                if let self {
+                    self.bufferLock.lock()
+                    if self.buffering {
+                        self.pendingFrames.append((data, sequence))
+                        self.bufferLock.unlock()
+                        return
+                    }
+                    self.bufferLock.unlock()
+                }
+                onData(data, sequence)
+            },
             onEnd: onEnd
         )
+    }
+
+    /// Arm buffering before the read loop starts (called from `start(…, buffered: true)`).
+    private func beginBuffering() {
+        bufferLock.lock(); buffering = true; bufferLock.unlock()
+    }
+
+    /// Test-only: how many live frames are currently held in the buffer (before a flush). Lets a
+    /// deterministic test wait for the read loop to stash all frames without timing guesswork.
+    func bufferedFrameCountForTesting() -> Int {
+        bufferLock.lock(); defer { bufferLock.unlock() }; return pendingFrames.count
+    }
+
+    /// Release buffered live frames in arrival order, dropping any whose sequence is already inside
+    /// the replay (`sequence < endSequence`), then switch to direct delivery — all under `bufferLock`
+    /// so a frame arriving mid-flush either lands in `pendingFrames` (drained here, in order) or is
+    /// delivered directly after the flag flips, never both and never out of order. `onData` is the
+    /// SAME closure the read loop forwards to, so flushed and live frames share one ordered sink.
+    /// Returns the number of frames dropped as duplicates (for tests / diagnostics).
+    @discardableResult
+    func flushBuffered(
+        droppingSequencesBelow endSequence: UInt64,
+        onData: @Sendable (Data, UInt64) -> Void
+    ) -> Int {
+        bufferLock.lock()
+        defer { bufferLock.unlock() }
+        var dropped = 0
+        for (data, sequence) in pendingFrames {
+            if sequence < endSequence { dropped += 1; continue }
+            onData(data, sequence)
+        }
+        pendingFrames.removeAll(keepingCapacity: false)
+        buffering = false
+        return dropped
     }
 
     /// Generic read loop: decodes every pushed reply and forwards its response. Used by

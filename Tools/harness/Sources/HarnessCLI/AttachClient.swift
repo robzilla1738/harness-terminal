@@ -46,20 +46,21 @@ public enum AttachClient {
         }
         let client = DaemonClient(endpoint: endpoint)
 
-        // Replay scrollback so the user sees what's already on screen before
-        // live output begins. We write it to the local TTY before raw-mode
-        // flips on so the terminal still cooks newlines for the historical
-        // dump — then we enable raw mode and switch to live streaming.
-        if case let .text(text) = (try? client.request(.replayScrollback(surfaceID: surfaceID, fromSequence: nil), timeout: 5)) ?? .error("replay"),
-           !text.isEmpty,
-           let data = text.data(using: .utf8) {
-            writeAll(data, to: STDOUT_FILENO)
+        let session = LiveSession(client: client, surfaceID: surfaceID, configuration: configuration)
+        // Gap-free attach: subscribe FIRST (buffering live output), then replay scrollback to the
+        // local TTY (still cooked — raw mode is off here), then flush the buffered live frames
+        // deduped against the replay boundary. This closes the window where output appended between
+        // the old replay snapshot and the separate subscribe was persisted but never streamed.
+        do {
+            try session.connect()
+        } catch {
+            fputs("\nharness-cli attach: \(error)\n", harnessStderr)
+            return 1
         }
 
         let original = enterRawMode()
         defer { restoreTerminalMode(original) }
 
-        let session = LiveSession(client: client, surfaceID: surfaceID, configuration: configuration)
         do {
             try session.run()
         } catch {
@@ -67,19 +68,6 @@ public enum AttachClient {
             return 1
         }
         return 0
-    }
-
-    private static func writeAll(_ data: Data, to fd: Int32) {
-        data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            var written = 0
-            while written < raw.count {
-                let n = write(fd, base.advanced(by: written), raw.count - written)
-                if n > 0 { written += n; continue }
-                if n < 0, errno == EINTR { continue }
-                return
-            }
-        }
     }
 }
 
@@ -110,20 +98,29 @@ private final class LiveSession: @unchecked Sendable {
         self.configuration = configuration
     }
 
-    func run() throws {
+    /// Subscribe + replay, gap-free. Run BEFORE raw mode so the replayed history is written to the
+    /// cooked TTY (matching the prior behavior). The output subscription is on its own socket; as
+    /// data arrives it's copied straight to stdout — no interpretation; the daemon emits raw bytes.
+    func connect() throws {
         try installWakePipe()
         installSignalHandlers()
-        // Output subscription on its own socket. As data arrives we copy it
-        // straight to stdout — no interpretation; the daemon already emits
-        // raw terminal bytes.
-        let sub = try client.subscribeSurfaceOutput(surfaceID: surfaceID, label: configuration.label, onData: { [weak self] data, _ in
-            self?.writeOut(data)
-        }, onEnd: { [weak self] in
-            // Daemon closed the stream — surface exited or daemon died. Wake
-            // the stdin loop so attach exits without leaving the TTY in raw mode.
-            self?.requestDetach()
-        })
-        subscription = sub
+        subscription = try client.attachReplayingSurfaceOutput(
+            surfaceID: surfaceID,
+            label: configuration.label,
+            onReplay: { [weak self] text in
+                if !text.isEmpty, let data = text.data(using: .utf8) { self?.writeOut(data) }
+            },
+            onData: { [weak self] data, _ in self?.writeOut(data) },
+            onEnd: { [weak self] in
+                // Daemon closed the stream — surface exited or daemon died. Wake
+                // the stdin loop so attach exits without leaving the TTY in raw mode.
+                self?.requestDetach()
+            }
+        )
+    }
+
+    func run() throws {
+        guard let sub = subscription else { return }
 
         // Establish this client's size vote on the subscription fd, where it holds
         // until detach. (A one-shot `.resizeSurface` request loses its vote the

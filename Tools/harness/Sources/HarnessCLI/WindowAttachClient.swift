@@ -274,18 +274,20 @@ private final class WindowSession: @unchecked Sendable {
                 // OSC 52 from a pane → set the client's own clipboard (gated on set-clipboard)
                 // and mirror into the daemon buffer so other clients see it.
                 term.onSetClipboard = { [weak self] text in self?.handleProgramClipboard(text, surface: sid) }
-                // Seed with scrollback, subscribe, then vote this pane's PTY size on the
-                // subscription fd — a one-shot resize request loses its vote when its socket
-                // closes, so it can't hold the smallest-size contract while we stay attached.
-                if case let .text(text)? = try? client.request(.replayScrollback(surfaceID: sid, fromSequence: nil), timeout: 5),
-                   !text.isEmpty {
-                    term.feed(text)
-                }
-                if let sub = try? client.subscribeSurfaceOutput(surfaceID: sid, label: configuration.label, onData: { [weak self] data, _ in
-                    self?.ingest(surface: sid, data: data)
-                }, onEnd: { [weak self] in
-                    self?.scheduleStructureCheck()
-                }) {
+                // Gap-free seed: subscribe FIRST (buffering live output), replay scrollback, then
+                // flush the buffered frames deduped against the replay boundary — closing the window
+                // where output appended between the old replay snapshot and the separate subscribe
+                // was dropped. Replay and live frames both feed the pane via `ingest` (the serial
+                // render queue), so the replayed history lands before any live byte. Then vote this
+                // pane's PTY size on the subscription fd (a one-shot resize loses its vote on close).
+                if let sub = try? client.attachReplayingSurfaceOutput(
+                    surfaceID: sid, label: configuration.label,
+                    onReplay: { [weak self] text in
+                        if !text.isEmpty, let data = text.data(using: .utf8) { self?.ingest(surface: sid, data: data) }
+                    },
+                    onData: { [weak self] data, _ in self?.ingest(surface: sid, data: data) },
+                    onEnd: { [weak self] in self?.scheduleStructureCheck() }
+                ) {
                     subscriptions[sid] = sub
                     sub.resize(sid, rows: UInt16(rect.rows), cols: UInt16(rect.cols))
                 }

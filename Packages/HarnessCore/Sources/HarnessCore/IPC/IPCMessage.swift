@@ -85,6 +85,12 @@ public enum IPCRequest: Codable, Sendable {
     case subscribeSurfaceOutput(surfaceID: String, label: String?)
     case cancelSubscription(surfaceID: String)
     case replayScrollback(surfaceID: String, fromSequence: UInt64?)
+    /// Like `replayScrollback`, but the reply also carries the sequence one past the last
+    /// replayed byte (`replayResult`). A client that subscribed FIRST uses that boundary to
+    /// dedupe its buffered live frames and close the replay→subscribe gap. An old daemon doesn't
+    /// know this case and replies `.error("unrecognized request")`, so the caller degrades to the
+    /// plain `replayScrollback` (replay-then-stream) path — no dedup, but never a double-deliver.
+    case replayScrollbackSequenced(surfaceID: String, fromSequence: UInt64?)
     case resizeSurface(surfaceID: String, rows: UInt16, cols: UInt16)
     case detachSurface(surfaceID: String)
     /// Identify this connection to the daemon so it shows up in `list-clients`
@@ -159,6 +165,9 @@ public enum IPCResponse: Codable, Sendable {
     case snapshot(SessionSnapshot)
     case text(String)
     case data(Data, sequence: UInt64)
+    /// Reply to `replayScrollbackSequenced`: the replay text plus the sequence one past its last
+    /// byte. Only ever sent in answer to that request, so an old client never receives it.
+    case replayResult(text: String, endSequence: UInt64)
     /// Pushed on a `subscribeSnapshot` channel when the layout commits at `revision`.
     case snapshotChanged(revision: Int)
     case agentInfo(AgentSnapshot?)
