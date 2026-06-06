@@ -1430,12 +1430,10 @@ final class TerminalScreen {
     func setScrollRegion(top: Int, bottom: Int) {
         let t = clamp(top, 0, rows - 1)
         let b = clamp(bottom, 0, rows - 1)
-        guard t < b else {
-            scrollTop = 0
-            scrollBottom = rows - 1
-            moveCursor(row: 0, col: 0)
-            return
-        }
+        // Invalid DECSTBM (top >= bottom) is a complete no-op in xterm/Ghostty — it must
+        // not reset the region or home the cursor. (`ESC[r` maps absent params to the full
+        // screen, which is valid and still homes via the t<b path below.)
+        guard t < b else { return }
         scrollTop = t
         scrollBottom = b
         moveCursor(row: 0, col: 0)
@@ -1835,10 +1833,9 @@ final class TerminalScreen {
     }
 
     func restoreCursor() {
-        guard let s = savedCursor else {
-            moveCursor(row: 0, col: 0)
-            return
-        }
+        // With no prior DECSC, xterm/Ghostty restore to defaults: home cursor AND reset the
+        // SGR pen. Restoring from a fresh default SavedCursor covers both that and the saved case.
+        let s = savedCursor ?? SavedCursor(row: 0, col: 0, pen: Pen(), pendingWrap: false)
         cursorRow = clamp(s.row, 0, rows - 1)
         cursorCol = clamp(s.col, 0, cols - 1)
         pen = s.pen

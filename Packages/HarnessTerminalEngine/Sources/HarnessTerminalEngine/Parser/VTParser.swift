@@ -552,8 +552,10 @@ final class VTParser {
     private func pushDigit(_ byte: UInt8) {
         let digit = Int(byte - 0x30)
         let value = (currentNumber ?? 0) * 10 + digit
-        if value > 65_535 { csiOverflow = true; return }
-        currentNumber = value
+        // Clamp rather than poison: xterm caps an over-large param at 65535 and still
+        // dispatches the sequence. Further digits keep it pinned (accumulation stays
+        // bounded, DoS guard preserved); handler-side grid clamps do the rest.
+        currentNumber = min(value, 65_535)
     }
 
     /// Append a value to the flattened store, dropping (and flagging overflow) past the cap.

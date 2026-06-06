@@ -39,7 +39,28 @@ public final class SSHTunnelManager: @unchecked Sendable {
     /// Whether the process-exit cleanup hook has been installed (guarded by `lock`).
     private var exitCleanupRegistered = false
 
-    public init() {}
+    /// Builds the (not-yet-started) `ssh -N -L …` child for a host. Injectable purely so tests can
+    /// drive the lifecycle/failure paths with a controllable child instead of a real `ssh`; the
+    /// production default below is the only value any shipping caller ever uses.
+    private let makeTunnelProcess: (RemoteHost, URL) throws -> Process
+    /// Probes whether the forwarded local socket reaches a live remote daemon (a `ping`→`pong`).
+    /// Injectable for the same test-only reason; the production default is the real daemon probe.
+    private let reachabilityProbe: (Endpoint) -> Bool
+
+    public convenience init() {
+        self.init(makeTunnelProcess: nil, reachabilityProbe: nil)
+    }
+
+    /// Test seam: `makeTunnelProcess`/`reachabilityProbe` default to the production builders when
+    /// nil, so this is behaviourally identical to `init()` for every shipping caller. Tests inject
+    /// closures to characterize the lifecycle and failure modes without spawning real `ssh`.
+    init(
+        makeTunnelProcess: ((RemoteHost, URL) throws -> Process)?,
+        reachabilityProbe: ((Endpoint) -> Bool)?
+    ) {
+        self.makeTunnelProcess = makeTunnelProcess ?? SSHTunnelManager.defaultTunnelProcess
+        self.reachabilityProbe = reachabilityProbe ?? SSHTunnelManager.defaultReachabilityProbe
+    }
 
     /// Ensure a tunnel to `host` is running, then return the local endpoint that reaches the remote
     /// daemon. Reuses a live tunnel; (re)spawns one if absent or dead. Blocks until the remote
@@ -50,14 +71,14 @@ public final class SSHTunnelManager: @unchecked Sendable {
 
         // Reuse a tunnel that's actually forwarding; otherwise tear down any dead/stale one and
         // (re)spawn. `stop` is a no-op when there's no existing tunnel.
-        if isConnected(host.name), isReachable(endpoint) { return endpoint }
+        if isConnected(host.name), reachabilityProbe(endpoint) { return endpoint }
         stop(host: host.name)
         try spawnTunnel(host: host, localSocket: localSocket)
 
         // Wait for the remote daemon to answer through the freshly forwarded socket.
         let deadline = Date().addingTimeInterval(waitTimeout)
         while Date() < deadline {
-            if isReachable(endpoint) { return endpoint }
+            if reachabilityProbe(endpoint) { return endpoint }
             // Bail early if ssh exited (bad host/auth/forward) rather than waiting the full timeout.
             lock.lock()
             let running = tunnels[host.name]?.process.isRunning ?? false
@@ -104,12 +125,7 @@ public final class SSHTunnelManager: @unchecked Sendable {
         // Clear any stale forwarded socket so ssh can bind it (StreamLocalBindUnlink also covers this).
         try? FileManager.default.removeItem(at: localSocket)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = try Self.sshArguments(for: host, localSocket: localSocket)
-        // Silence ssh's own chatter; failures surface as the process exiting + the readiness timeout.
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let process = try makeTunnelProcess(host, localSocket)
 
         do {
             try process.run()
@@ -221,7 +237,21 @@ public final class SSHTunnelManager: @unchecked Sendable {
         }
     }
 
-    private func isReachable(_ endpoint: Endpoint) -> Bool {
+    // MARK: - Production defaults for the injectable seams
+
+    /// The shipping `ssh -N -L …` child: `/usr/bin/env ssh …` with stdout/stderr silenced.
+    private static func defaultTunnelProcess(_ host: RemoteHost, _ localSocket: URL) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = try sshArguments(for: host, localSocket: localSocket)
+        // Silence ssh's own chatter; failures surface as the process exiting + the readiness timeout.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        return process
+    }
+
+    /// The shipping reachability probe: ask the forwarded socket for a `pong`.
+    private static func defaultReachabilityProbe(_ endpoint: Endpoint) -> Bool {
         guard case .pong = try? DaemonClient(endpoint: endpoint).request(.ping, timeout: 0.5) else {
             return false
         }

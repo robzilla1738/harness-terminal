@@ -98,6 +98,38 @@ final class ParserRobustnessTests: XCTestCase {
         XCTAssertEqual(grid.cell(row: 2, col: 0)?.codepoint, UInt32(UnicodeScalar("A").value))
     }
 
+    func testCSIParamOverflowClampsAndStillDispatches() {
+        // `CSI 99999 H` — a single param past the 65535 digit cap. xterm clamps the param and
+        // still executes (CUP), so the cursor must land on the last row (clamped by the grid),
+        // not be left at home by a dropped sequence.
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        term.feed("\u{1b}[99999H")
+        let grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 3) // last row of a 4-row grid
+        XCTAssertEqual(grid.cursor.col, 0)
+    }
+
+    func testCSIParamOverflowDoesNotPoisonSiblingParams() {
+        // `CSI 1;99999 H` — one over-large param must not poison the whole CSI. The in-range
+        // row (1 -> row 0) still applies; the clamped column lands on the last column.
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        term.feed("\u{1b}[1;99999H")
+        let grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 0)
+        XCTAssertEqual(grid.cursor.col, 19) // last col of a 20-col grid
+    }
+
+    func testCSIHomeRegressionStillWorks() {
+        // `CSI 0 H` (and the bare `CSI H`) must still home — guards against the clamp change
+        // breaking the default-param path.
+        let term = HarnessGridTerminal(cols: 20, rows: 4)!
+        term.feed("\u{1b}[3;5H")   // move away from home first
+        term.feed("\u{1b}[0H")
+        let grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 0)
+        XCTAssertEqual(grid.cursor.col, 0)
+    }
+
     func testUnterminatedDCSConsumesWithoutGrowthThenRecovers() {
         let term = HarnessGridTerminal(cols: 20, rows: 4)!
         // A long DCS payload (consumed, not accumulated) then a proper ST and printable text.

@@ -336,6 +336,11 @@ final class HarnessSlider: NSControl {
     var maxValue: Double = 1
     private var value: Double = 0
 
+    /// Fired once when an interactive drag finishes (mouse-up), distinct from the per-tick `action`
+    /// that fires continuously while dragging. Lets a continuous slider apply live on every tick but
+    /// persist (a full JSON encode + atomic write) only once at the end of the gesture.
+    var onCommit: (() -> Void)?
+
     private static let knobSize: CGFloat = 14
     private static let trackHeight: CGFloat = 4
 
@@ -404,6 +409,8 @@ final class HarnessSlider: NSControl {
     }
     override func mouseUp(with event: NSEvent) {
         updateFromEvent(event, commit: true)
+        // The gesture is over: let an observer persist once (the per-tick `action` only applied live).
+        onCommit?()
         currentDrag = false
         let point = convert(event.locationInWindow, from: nil)
         if !bounds.contains(point) { isActive = false }

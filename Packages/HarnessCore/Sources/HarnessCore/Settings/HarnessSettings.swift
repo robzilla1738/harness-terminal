@@ -134,17 +134,28 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var notchOpenOnHover: Bool
     /// Terminal color interpretation. `.accurate` is the authored sRGB identity path.
     /// `.vivid` opts into Display-P3 conversion plus a capped saturation lift.
+    ///
+    /// INVARIANT: `colorRendering` and the legacy `vividColors` bool are deliberately kept in lockstep
+    /// by their mutual `didSet`s (vivid ⇔ true) so the new enum and the old on-disk bool always agree
+    /// — old configs/callers keep working while new code reads the explicit mode. The `!=` guard in
+    /// each setter is what stops the two `didSet`s from recursing forever; never drop it.
     public var colorRendering: TerminalColorRenderingMode {
         didSet {
             let legacyValue = colorRendering == .vivid
             if vividColors != legacyValue { vividColors = legacyValue }
         }
     }
-    /// Stored for future gamut policy. Accurate mode currently resolves to sRGB; vivid mode
-    /// resolves to Display-P3.
+    /// INVARIANT: stored and round-tripped through Codable for forward/migration compatibility, but
+    /// NOT consulted by gamut resolution today — `TerminalColorGamut.resolved` derives the gamut
+    /// purely from `colorRendering` (accurate → sRGB, vivid → Display-P3). Kept so a future policy
+    /// can honor an explicit request without a schema break; don't remove it just because it's unread.
     public var colorGamut: TerminalColorGamut
     /// Text antialiasing coverage mode. This only maps to glyph coverage gamma; it never
     /// participates in RGB conversion.
+    ///
+    /// INVARIANT: paired with the legacy `linearBlending` bool the same way `colorRendering`/`vividColors`
+    /// are — the mutual `didSet`s keep them in sync (crisp ⇔ true) for on-disk back-compat, and the
+    /// `!=` guard breaks the otherwise-infinite write loop. `.native`/`.soft` both map to `false`.
     public var textRendering: TerminalTextRenderingMode {
         didSet {
             let legacyValue = textRendering == .crisp
@@ -342,7 +353,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         notificationEvents: [String: Bool] = [:],
         boldIsBright: Bool = true
     ) {
-        self.fontSize = fontSize
+        self.fontSize = HarnessSettings.clampedFontSize(fontSize)
         self.fontFamily = fontFamily
         self.defaultShell = defaultShell
         self.defaultCWD = defaultCWD
@@ -351,8 +362,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.restoreWindowSize = restoreWindowSize
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
-        self.windowPaddingX = windowPaddingX
-        self.windowPaddingY = windowPaddingY
+        self.windowPaddingX = HarnessSettings.clampedPadding(windowPaddingX)
+        self.windowPaddingY = HarnessSettings.clampedPadding(windowPaddingY)
         self.customBackgroundHex = customBackgroundHex
         self.customForegroundHex = customForegroundHex
         self.customCursorHex = customCursorHex
@@ -485,7 +496,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         let imported = TerminalConfigImporter.load()
         let fallback = HarnessSettings.makeDefaults(imported: imported)
 
-        fontSize = try container.decodeIfPresent(Float.self, forKey: .fontSize) ?? fallback.fontSize
+        fontSize = HarnessSettings.clampedFontSize(
+            try container.decodeIfPresent(Float.self, forKey: .fontSize) ?? fallback.fontSize)
         fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? fallback.fontFamily
         defaultShell = try container.decodeIfPresent(String.self, forKey: .defaultShell) ?? fallback.defaultShell
         defaultCWD = try container.decodeIfPresent(String.self, forKey: .defaultCWD) ?? fallback.defaultCWD
@@ -494,8 +506,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         restoreWindowSize = try container.decodeIfPresent(Bool.self, forKey: .restoreWindowSize) ?? fallback.restoreWindowSize
         backgroundOpacity = try container.decodeIfPresent(Float.self, forKey: .backgroundOpacity) ?? fallback.backgroundOpacity
         backgroundBlur = try container.decodeIfPresent(Int.self, forKey: .backgroundBlur) ?? fallback.backgroundBlur
-        windowPaddingX = try container.decodeIfPresent(Float.self, forKey: .windowPaddingX) ?? fallback.windowPaddingX
-        windowPaddingY = try container.decodeIfPresent(Float.self, forKey: .windowPaddingY) ?? fallback.windowPaddingY
+        windowPaddingX = HarnessSettings.clampedPadding(
+            try container.decodeIfPresent(Float.self, forKey: .windowPaddingX) ?? fallback.windowPaddingX)
+        windowPaddingY = HarnessSettings.clampedPadding(
+            try container.decodeIfPresent(Float.self, forKey: .windowPaddingY) ?? fallback.windowPaddingY)
         customBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customBackgroundHex) ?? fallback.customBackgroundHex
         customForegroundHex = try container.decodeIfPresent(String.self, forKey: .customForegroundHex) ?? fallback.customForegroundHex
         customCursorHex = try container.decodeIfPresent(String.self, forKey: .customCursorHex) ?? fallback.customCursorHex
@@ -617,6 +631,14 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             if clampedOpacity != settings.backgroundOpacity { settings.backgroundOpacity = clampedOpacity; didMutate = true }
             let clampedBlur = HarnessSettings.clampedBlur(settings.backgroundBlur)
             if clampedBlur != settings.backgroundBlur { settings.backgroundBlur = clampedBlur; didMutate = true }
+            // Recover hand-edited or runaway font sizes that would overflow the glyph atlas (huge)
+            // or balloon the grid allocation (tiny). 8–32 matches the Cmd+/- zoom policy.
+            let clampedFontSize = HarnessSettings.clampedFontSize(settings.fontSize)
+            if clampedFontSize != settings.fontSize { settings.fontSize = clampedFontSize; didMutate = true }
+            let clampedPaddingX = HarnessSettings.clampedPadding(settings.windowPaddingX)
+            if clampedPaddingX != settings.windowPaddingX { settings.windowPaddingX = clampedPaddingX; didMutate = true }
+            let clampedPaddingY = HarnessSettings.clampedPadding(settings.windowPaddingY)
+            if clampedPaddingY != settings.windowPaddingY { settings.windowPaddingY = clampedPaddingY; didMutate = true }
             // One-shot color-fidelity migration: explicit vividColors/colorRendering keys
             // are the user's gamut choice. Older files that lack both never made one, so
             // land them on accurate sRGB.
@@ -681,6 +703,19 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Minimum-contrast WCAG ratio bounds. 1 = off (no adjustment); 21 = maximum (black on white).
     public static func clampedContrast(_ value: Double) -> Double {
         max(1, min(21, value))
+    }
+
+    /// Font-size bounds (points), matching the Cmd+/- zoom policy in `SessionCoordinator.applyFontSize`.
+    /// Out-of-range values are a footgun: ≥~500 overflows the glyph atlas page (invisible text),
+    /// ≤~1 forces a multi-hundred-megabyte grid allocation. Clamp at every persistence boundary.
+    public static func clampedFontSize(_ value: Float) -> Float {
+        max(8, min(32, value))
+    }
+
+    /// Window padding (points) is never negative. The renderer already neutralizes negatives, so
+    /// this is belt-and-braces — it keeps the persisted value sane regardless of the read site.
+    public static func clampedPadding(_ value: Float) -> Float {
+        max(0, value)
     }
 
     public func save() throws {

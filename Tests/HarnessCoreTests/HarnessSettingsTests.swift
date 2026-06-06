@@ -333,6 +333,59 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(HarnessSettings.clampedBlur(999), 100)
     }
 
+    func testClampedFontSizeStaysInZoomRange() {
+        // 8–32 matches the Cmd+/- zoom policy; out-of-range values are footguns
+        // (huge → glyph-atlas overflow → invisible text; tiny → multi-hundred-MB grid alloc).
+        XCTAssertEqual(HarnessSettings.clampedFontSize(0), 8, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedFontSize(1), 8, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedFontSize(8), 8, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedFontSize(16), 16, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedFontSize(32), 32, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedFontSize(999), 32, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedFontSize(-5), 8, accuracy: 0.001)
+    }
+
+    func testFontSizeIsClampedAtEveryPersistenceBoundary() throws {
+        // init clamps.
+        XCTAssertEqual(HarnessSettings(fontSize: 999).fontSize, 32, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings(fontSize: 1).fontSize, 8, accuracy: 0.001)
+
+        // init(from:) clamps a decoded out-of-range value.
+        let huge = try JSONDecoder().decode(HarnessSettings.self, from: Data(#"{ "fontSize": 999 }"#.utf8))
+        XCTAssertEqual(huge.fontSize, 32, accuracy: 0.001)
+        let tiny = try JSONDecoder().decode(HarnessSettings.self, from: Data(#"{ "fontSize": 1 }"#.utf8))
+        XCTAssertEqual(tiny.fontSize, 8, accuracy: 0.001)
+        let negative = try JSONDecoder().decode(HarnessSettings.self, from: Data(#"{ "fontSize": -5 }"#.utf8))
+        XCTAssertEqual(negative.fontSize, 8, accuracy: 0.001)
+    }
+
+    func testLoadClampsRunawayFontSizeAndPaddingAndRewritesOnce() throws {
+        try withTemporaryHarnessHome { root in
+            try HarnessPaths.ensureDirectories()
+            let url = root.appendingPathComponent("settings.json")
+            // A hand-edited file with a runaway font size and negative padding. load() must clamp
+            // and persist the recovered state (the didMutate rewrite path), like the opacity floor.
+            try Data(#"{ "fontSize": 999, "windowPaddingX": -10, "windowPaddingY": -3 }"#.utf8).write(to: url)
+
+            let settings = HarnessSettings.load()
+            XCTAssertEqual(settings.fontSize, 32, accuracy: 0.001)
+            XCTAssertEqual(settings.windowPaddingX, 0, accuracy: 0.001)
+            XCTAssertEqual(settings.windowPaddingY, 0, accuracy: 0.001)
+
+            // The migrated, clamped state is persisted back to disk.
+            let reloaded = try JSONDecoder().decode(HarnessSettings.self, from: try Data(contentsOf: url))
+            XCTAssertEqual(reloaded.fontSize, 32, accuracy: 0.001)
+            XCTAssertEqual(reloaded.windowPaddingX, 0, accuracy: 0.001)
+        }
+    }
+
+    func testClampedPaddingNeverNegative() {
+        XCTAssertEqual(HarnessSettings.clampedPadding(-10), 0, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedPadding(0), 0, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings.clampedPadding(14), 14, accuracy: 0.001)
+        XCTAssertEqual(HarnessSettings(windowPaddingX: -5, windowPaddingY: -1).windowPaddingX, 0, accuracy: 0.001)
+    }
+
     func testAgentColorOverridesNormalizeAndFallbackToDefaults() throws {
         let data = Data("""
         {

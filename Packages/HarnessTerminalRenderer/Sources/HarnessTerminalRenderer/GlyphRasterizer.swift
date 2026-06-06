@@ -167,7 +167,10 @@ public final class GlyphRasterizer {
     /// changes behavior for a correctly-resolved font.
     private static func fontNameMatches(_ font: CTFont, requested: String) -> Bool {
         let want = normalizedFontName(requested)
-        guard !want.isEmpty else { return true }
+        // An empty/whitespace-only family is not a match: returning true here would accept
+        // CTFont's proportional default instead of falling back to monospace Menlo (the same
+        // broken-letter-spacing footgun an unknown family triggers). Treat it as unresolvable.
+        guard !want.isEmpty else { return false }
         return normalizedFontName(CTFontCopyFamilyName(font) as String) == want
             || normalizedFontName(CTFontCopyPostScriptName(font) as String) == want
     }

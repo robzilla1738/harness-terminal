@@ -84,6 +84,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     // QoL additions: resize overlay (T1), balanced padding (T2), minimum contrast (T5),
     // auto light/dark (T6), paste protection (E).
     private let resizeOverlaySegment = HarnessSegmented(frame: .zero)
+    private let resizeOverlayPositionSegment = HarnessSegmented(frame: .zero)
     private let paddingBalanceToggle = HarnessToggle(title: "Center grid (distribute padding evenly)")
     private let autoThemeToggle = HarnessToggle(title: "Match the macOS light/dark appearance")
     private let lightThemePopup = HarnessSelect(frame: .zero)
@@ -208,6 +209,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         opacitySlider.doubleValue = Double(settings.backgroundOpacity)
         opacitySlider.target = self
         opacitySlider.action = #selector(opacityDidChange)
+        opacitySlider.onCommit = { [weak self] in self?.flushAndApply() }
         opacitySlider.isContinuous = true
         opacityLabel.stringValue = formatPercent(settings.backgroundOpacity)
         opacityLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -219,6 +221,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         blurSlider.doubleValue = Double(settings.backgroundBlur)
         blurSlider.target = self
         blurSlider.action = #selector(blurDidChange)
+        blurSlider.onCommit = { [weak self] in self?.flushAndApply() }
         blurSlider.isContinuous = true
         blurLabel.stringValue = formatBlur(settings.backgroundBlur)
         blurLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -230,6 +233,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         windowBorderOpacitySlider.doubleValue = Double(settings.windowBorderOpacity)
         windowBorderOpacitySlider.target = self
         windowBorderOpacitySlider.action = #selector(windowBorderOpacityDidChange)
+        windowBorderOpacitySlider.onCommit = { [weak self] in self?.flushAndApply() }
         windowBorderOpacitySlider.isContinuous = true
         windowBorderOpacityLabel.stringValue = formatPercent(settings.windowBorderOpacity)
         windowBorderOpacityLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -415,6 +419,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         resizeOverlaySegment.selectItem(withTitle: resizeOverlayTitle(settings.resizeOverlay))
         resizeOverlaySegment.target = self
         resizeOverlaySegment.action = #selector(appearanceTextDidCommit)
+        resizeOverlayPositionSegment.setSegments(["Center", "Top right", "Bottom right"])
+        resizeOverlayPositionSegment.selectItem(withTitle: resizeOverlayPositionTitle(settings.resizeOverlayPosition))
+        resizeOverlayPositionSegment.target = self
+        resizeOverlayPositionSegment.action = #selector(appearanceTextDidCommit)
         // Balanced padding (T2)
         paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
         paddingBalanceToggle.target = self
@@ -426,6 +434,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         minContrastSlider.isContinuous = true
         minContrastSlider.target = self
         minContrastSlider.action = #selector(minContrastChanged)
+        minContrastSlider.onCommit = { [weak self] in self?.flushAndApply() }
         updateMinContrastLabel()
         // Paste protection (E)
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
@@ -762,6 +771,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
                               hint: "Distribute leftover padding evenly so the grid is centered."),
             settingsRow("Resize overlay", resizeOverlaySegment,
                         hint: "Show the grid size while resizing the window."),
+            settingsRow("Overlay position", resizeOverlayPositionSegment,
+                        hint: "Where the resize overlay is drawn within the surface."),
             settingsToggleRow("Transparent title bar", transparentTitlebarToggle),
             settingsToggleRow("Status line", showStatusLineToggle),
             settingsToggleRow("Sidebar", sidebarVisibleToggle),
@@ -1790,20 +1801,23 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     // MARK: - Live apply
 
+    // The four continuous sliders apply live on every drag tick but persist only once on commit
+    // (`onCommit`, wired in setup), so scrubbing never spams a JSON encode + atomic write per frame.
+
     @objc private func opacityDidChange() {
         opacityLabel.stringValue = formatPercent(Float(opacitySlider.doubleValue))
-        flushAndApply()
+        applySettingsLive()
     }
 
     @objc private func blurDidChange() {
         let rounded = Int(blurSlider.doubleValue.rounded())
         blurLabel.stringValue = formatBlur(rounded)
-        flushAndApply()
+        applySettingsLive()
     }
 
     @objc private func windowBorderOpacityDidChange() {
         windowBorderOpacityLabel.stringValue = formatPercent(Float(windowBorderOpacitySlider.doubleValue))
-        flushAndApply()
+        applySettingsLive()
     }
 
     @objc private func themeDidChange() {
@@ -1831,6 +1845,22 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
+    private func resizeOverlayPositionTitle(_ position: ResizeOverlayPosition) -> String {
+        switch position {
+        case .center: return "Center"
+        case .topRight: return "Top right"
+        case .bottomRight: return "Bottom right"
+        }
+    }
+
+    private func resizeOverlayPositionValue(_ title: String?) -> ResizeOverlayPosition {
+        switch title {
+        case "Top right": return .topRight
+        case "Bottom right": return .bottomRight
+        default: return .center
+        }
+    }
+
     private func updateMinContrastLabel() {
         let value = minContrastSlider.doubleValue
         minContrastLabel.stringValue = value <= 1.01 ? "Off" : String(format: "%.1f:1", value)
@@ -1838,7 +1868,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func minContrastChanged() {
         updateMinContrastLabel()
-        appearanceTextDidCommit()
+        applySettingsLive()
     }
 
     /// Enable/disable auto light/dark and apply it. Both theme names are set together (seeding from
@@ -2009,6 +2039,24 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func appearanceTextDidCommit() {
         flushAndApply()
+        // A hex field that committed non-empty-but-invalid text wrote `nil` (drop to theme) into
+        // settings, yet the field still shows the rejected red text. Re-sync every hex field to the
+        // resolved on-disk state so the UI never silently disagrees with what was actually saved.
+        resyncColorFieldsFromSettings()
+    }
+
+    /// Write each color field back from the resolved setting it produced, then refresh its swatch.
+    /// Invalid input resolved to `nil` → the field clears (the override dropped to the theme); valid
+    /// input round-trips to its normalized form. Keeps the form honest after a commit.
+    private func resyncColorFieldsFromSettings() {
+        let settings = SessionCoordinator.shared.settings
+        for binding in colorBindings {
+            let resolved = settings[keyPath: binding.keyPath] ?? ""
+            if binding.field.stringValue != resolved {
+                binding.field.stringValue = resolved
+            }
+            refreshColorBinding(binding)
+        }
     }
 
     @objc private func appearanceTextDidChange(_ note: Notification) {
@@ -2075,7 +2123,24 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.applySettingsToHosts()
     }
 
+    /// Modal confirm for a destructive, instantly-applied reset. Mirrors the sidebar's delete/close
+    /// alerts. Returns true only when the user explicitly confirms.
+    private func confirmDestructive(message: String, info: String, confirmTitle: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = info
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     @objc private func resetAgentColors() {
+        guard confirmDestructive(
+            message: "Reset agent colors?",
+            info: "All custom agent color overrides will be removed. This can't be undone.",
+            confirmTitle: "Reset"
+        ) else { return }
         let coordinator = SessionCoordinator.shared
         coordinator.settings.agentColorOverrides.removeAll()
         for (kind, well) in agentColorWells {
@@ -2119,6 +2184,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         offMainPipelineToggle.state = settings.offMainParserFramePipeline ? .on : .off
         liveResizeReflowToggle.state = settings.liveResizeReflow ? .on : .off
         resizeOverlaySegment.selectItem(withTitle: resizeOverlayTitle(settings.resizeOverlay))
+        resizeOverlayPositionSegment.selectItem(withTitle: resizeOverlayPositionTitle(settings.resizeOverlayPosition))
         paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
         minContrastSlider.doubleValue = settings.minimumContrast
         updateMinContrastLabel()
@@ -2171,6 +2237,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     }
 
     @objc private func resetToDefaults() {
+        guard confirmDestructive(
+            message: "Reset appearance to defaults?",
+            info: "Colors, palette, font, padding, and other visual settings will be restored to their defaults. This can't be undone.",
+            confirmTitle: "Reset"
+        ) else { return }
         SessionCoordinator.shared.settings.resetToImportedConfig(imported: TerminalConfigImporter.load())
         syncAppearanceControlsFromSettings()
         flushAndApply()
@@ -2191,6 +2262,15 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// to the live terminal/window. Called from every control's action so the
     /// settings window behaves entirely live.
     private func flushAndApply() {
+        applySettingsLive()
+        try? SessionCoordinator.shared.settings.save()
+    }
+
+    /// Push every field into HarnessSettings and apply it to the live surfaces, but DO NOT persist.
+    /// Used on continuous slider drag ticks (60–120 Hz) so scrubbing never triggers a JSON encode +
+    /// atomic write per tick; persistence happens once on the gesture's commit (`onCommit`). Every
+    /// other control still goes through `flushAndApply`, which saves.
+    private func applySettingsLive() {
         let coordinator = SessionCoordinator.shared
         coordinator.settings.backgroundOpacity = HarnessSettings.clampedOpacity(Float(opacitySlider.doubleValue))
         coordinator.settings.backgroundBlur = HarnessSettings.clampedBlur(Int(blurSlider.doubleValue.rounded()))
@@ -2205,9 +2285,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.showStatusLine = showStatusLineToggle.state == .on
         coordinator.settings.sidebarVisible = sidebarVisibleToggle.state == .on
         coordinator.settings.restoreWindowSize = restoreWindowSizeToggle.state == .on
-        coordinator.settings.windowPaddingX = Float(paddingXField.stringValue) ?? 12
-        coordinator.settings.windowPaddingY = Float(paddingYField.stringValue) ?? 12
-        coordinator.settings.fontSize = Float(fontSizeField.stringValue) ?? 14
+        coordinator.settings.windowPaddingX = HarnessSettings.clampedPadding(Float(paddingXField.stringValue) ?? 12)
+        coordinator.settings.windowPaddingY = HarnessSettings.clampedPadding(Float(paddingYField.stringValue) ?? 12)
+        coordinator.settings.fontSize = HarnessSettings.clampedFontSize(Float(fontSizeField.stringValue) ?? 14)
         coordinator.settings.fontFamily = fontFamilyField.stringValue
         coordinator.settings.defaultShell = shellField.stringValue
         coordinator.settings.defaultCWD = cwdField.stringValue
@@ -2227,6 +2307,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.offMainParserFramePipeline = offMainPipelineToggle.state == .on
         coordinator.settings.liveResizeReflow = liveResizeReflowToggle.state == .on
         coordinator.settings.resizeOverlay = resizeOverlayValue(resizeOverlaySegment.titleOfSelectedItem)
+        coordinator.settings.resizeOverlayPosition = resizeOverlayPositionValue(resizeOverlayPositionSegment.titleOfSelectedItem)
         coordinator.settings.windowPaddingBalance = paddingBalanceToggle.state == .on
         coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)
         coordinator.settings.pasteProtection = pasteProtectionToggle.state == .on
@@ -2235,14 +2316,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             coordinator.settings.setEventEnabled(event, toggle.state == .on)
         }
         coordinator.settings.commandFinishedThresholdSeconds = max(1, Int(commandFinishedThresholdField.stringValue) ?? 10)
+        // Reflect the clamp back into the field so typing "0" doesn't leave the UI showing 0 while
+        // the setting is silently 1 (and a non-numeric entry resets to the persisted value).
+        let clampedThreshold = String(coordinator.settings.commandFinishedThresholdSeconds)
+        if commandFinishedThresholdField.stringValue != clampedThreshold {
+            commandFinishedThresholdField.stringValue = clampedThreshold
+        }
         coordinator.settings.experienceMode = selectedExperienceMode
         coordinator.settings.prefixKeyEnabled = selectedPrefixEnabled
         coordinator.settings.statusLineEnabled = selectedStatusLineEnabled
-        try? coordinator.settings.save()
 
-        // Theme switching (and its color seeding) is handled by themeDidChange, so
-        // flushAndApply only ever pushes the current settings to the live surfaces —
-        // scrubbing a slider never fires a setTheme IPC.
+        // Theme switching (and its color seeding) is handled by themeDidChange, so this only ever
+        // pushes the current settings to the live surfaces — scrubbing a slider never fires a
+        // setTheme IPC. Persistence is the caller's job (`flushAndApply` saves; drag ticks don't).
         coordinator.applySettingsToHosts()
         NotchPanelController.shared.refreshVisibility()
         updateFontReadout()

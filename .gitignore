@@ -24,6 +24,7 @@ Harness-notarize.zip
 # Local-only agent notes
 .claude/
 .cursor/
+.codex-workflows/
 claude.md
 agents.md
 design-system.md
