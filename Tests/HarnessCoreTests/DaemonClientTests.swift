@@ -6,7 +6,18 @@ import Glibc
 import XCTest
 @testable import HarnessCore
 
+/// `SO_NOSIGPIPE` is Darwin-only (a documented no-op on Linux — production covers Linux with the
+/// daemon's process-wide `ignoreSIGPIPE()`), so on Linux the closed-peer writes these tests
+/// exercise raise SIGPIPE and kill the whole runner with "Exited with unexpected signal code 13".
+/// Mirror HarnessDaemonTests' TestSupport and ignore it process-wide. Initialized at most once.
+private let coreTestSIGPIPEIgnored: Void = { signal(SIGPIPE, SIG_IGN) }()
+
 final class DaemonClientTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        _ = coreTestSIGPIPEIgnored
+    }
+
     func testRequestTimesOutWhenSocketAcceptsButDoesNotReply() throws {
         let previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
         // Keep the root short: the macOS temp dir + a full UUID pushes harness.sock past the
