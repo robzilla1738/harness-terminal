@@ -544,6 +544,32 @@ final class EngineConformanceTests: XCTestCase {
                        "row 0 should have scrolled when the region is full-screen")
     }
 
+    func testBareDECSTBMHomesOnSingleRowGrid() {
+        // Regression: on a 1-row grid the full-screen identity degenerates to top==bottom==0,
+        // so a `t < b` guard would silently drop the `ESC[r` cursor-home. 1-row grids are
+        // reachable (status-line panes, single-row splits). The reset must still home.
+        let term = HarnessGridTerminal(cols: 10, rows: 1)!
+        term.feed("\u{1b}[1;5H")        // move cursor to col 4 (1-based col 5)
+        var grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.col, 4, "precondition: cursor parked at col 4")
+        term.feed("\u{1b}[r")           // bare DECSTBM -> full-screen reset must home
+        grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 0)
+        XCTAssertEqual(grid.cursor.col, 0, "ESC[r must home the cursor on a 1-row grid")
+    }
+
+    func testExplicitDegenerateDECSTBMNoOpsOnSingleRowGrid() {
+        // `ESC[2;2r` on a 1-row grid is an explicit degenerate request (top==bottom==row 1),
+        // NOT the full-screen identity (which arrives as top=0,bottom=rows-1). It clamps to
+        // (0,0) but must still no-op: the cursor must stay put, unlike bare `ESC[r`.
+        let term = HarnessGridTerminal(cols: 10, rows: 1)!
+        term.feed("\u{1b}[1;5H")        // move cursor to col 4
+        term.feed("\u{1b}[2;2r")        // explicit degenerate region -> must be ignored
+        let grid = term.readGrid()!
+        XCTAssertEqual(grid.cursor.row, 0)
+        XCTAssertEqual(grid.cursor.col, 4, "explicit degenerate DECSTBM must not home")
+    }
+
     func testDECRCWithoutPriorSaveRestoresDefaultPen() {
         // `ESC[31m ESC[2;6H ESC8 X` with no prior DECSC: xterm/Ghostty home the cursor AND
         // reset the SGR pen, so X prints at (0,0) with the DEFAULT (no) foreground, not red.

@@ -1471,9 +1471,15 @@ final class TerminalScreen {
         let t = clamp(top, 0, rows - 1)
         let b = clamp(bottom, 0, rows - 1)
         // Invalid DECSTBM (top >= bottom) is a complete no-op in xterm/Ghostty — it must
-        // not reset the region or home the cursor. (`ESC[r` maps absent params to the full
-        // screen, which is valid and still homes via the t<b path below.)
-        guard t < b else { return }
+        // not reset the region or home the cursor. The one exception is the full-screen
+        // identity: `ESC[r` maps absent params to top=0, bottom=rows-1, the valid reset that
+        // must still home. On a 1-row grid that identity degenerates to t==b==0, so guarding
+        // on `t < b` alone silently drops the home on single-row panes (status lines, 1-row
+        // splits). Discriminate on the PRE-clamp request: a genuine full-screen reset arrives
+        // as (0, rows-1); an explicit degenerate request like `ESC[2;2r` arrives as (1, 1)
+        // and only *clamps* to (0, 0) on a 1-row grid — that must still no-op.
+        let isFullScreenReset = (top == 0 && bottom == rows - 1)
+        guard t < b || isFullScreenReset else { return }
         scrollTop = t
         scrollBottom = b
         moveCursor(row: 0, col: 0)

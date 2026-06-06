@@ -313,6 +313,9 @@ struct HarnessCLI {
         case .invalid(let raw):
             fputs("new-split: --pane must be a pane UUID (got '\(raw)')\n", harnessStderr)
             exit(1)
+        case .dangling:
+            fputs("new-split: --pane requires a value\n", harnessStderr)
+            exit(1)
         }
         let response = try checkedRequest(client, .newSplit(tabID: tabID, paneID: paneID, direction: direction))
         if case let .paneID(id) = response { print(id.uuidString) }
@@ -852,7 +855,15 @@ struct HarnessCLI {
     }
 
     static func resolveDetachSequence(_ args: [String]) -> DetachKeys {
-        guard let raw = flagValue(args, flag: "--detach-keys") else { return .absent }
+        guard let raw = flagValue(args, flag: "--detach-keys") else {
+            // A dangling `--detach-keys` (last token, no value) must not silently keep the default:
+            // the user asked for a custom sequence and would otherwise get a different one.
+            if flagIsDangling(args, flag: "--detach-keys") {
+                return .invalid("harness-cli: --detach-keys requires a value "
+                    + "('C-a d', '0x01 0x64', or comma-separated decimal bytes).\n")
+            }
+            return .absent
+        }
         guard let parsed = parseDetachSequence(raw) else {
             return .invalid(
                 "harness-cli: invalid --detach-keys '\(raw)'. "
@@ -1068,6 +1079,9 @@ struct HarnessCLI {
         case .valid(let id): mainPaneID = id
         case .invalid(let raw):
             fputs("select-layout: --main must be a pane UUID (got '\(raw)')\n", harnessStderr)
+            exit(1)
+        case .dangling:
+            fputs("select-layout: --main requires a value\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .applyLayout(tabID: tabID, layout: layout, mainPaneID: mainPaneID))
@@ -1416,16 +1430,31 @@ struct HarnessCLI {
         return args[index + 1]
     }
 
+    /// True when `flag` is present in `args` but has no following value (it is the last token).
+    /// `flagValue` collapses this with "absent" by returning nil for both — so a truncated script
+    /// arg like `new-split --tab X --pane` would silently target the active pane (#92's class).
+    /// Callers that could act on a wrong target must error loudly on dangling instead of falling
+    /// back. (A flag whose "value" is itself another `--flag` is treated as a real, if bogus,
+    /// value and rejected downstream by the type check — only a missing trailing token is dangling.)
+    static func flagIsDangling(_ args: [String], flag: String) -> Bool {
+        guard let index = args.firstIndex(of: flag) else { return false }
+        return index + 1 >= args.count
+    }
+
     /// Outcome of resolving an optional UUID-valued flag without collapsing "absent" and "invalid"
     /// into the same nil — the silent-fallback class fixed elsewhere (list-panes/kill-pane, #68).
     enum OptionalUUID: Equatable {
         case absent              // flag not supplied; caller keeps its default (e.g. active pane)
         case valid(UUID)         // flag supplied and a well-formed UUID
         case invalid(String)     // flag supplied but not a UUID; caller should error loudly
+        case dangling            // flag supplied as the last token with no value; error loudly
     }
 
     static func optionalUUIDFlag(_ args: [String], flag: String) -> OptionalUUID {
-        guard let raw = flagValue(args, flag: flag) else { return .absent }
+        guard let raw = flagValue(args, flag: flag) else {
+            // nil means either absent or present-but-dangling; only the latter is an error.
+            return flagIsDangling(args, flag: flag) ? .dangling : .absent
+        }
         guard let id = UUID(uuidString: raw) else { return .invalid(raw) }
         return .valid(id)
     }

@@ -33,35 +33,54 @@ final class HarnessCLITests: XCTestCase {
         XCTAssertEqual(HarnessCLI.flagValue(["--tab", "--oops"], flag: "--tab"), "--oops")
     }
 
-    /// Drift guard: `CLICommandCatalog` is the single source of truth for shell completions, so it
-    /// must list every top-level verb the `HarnessCLI.main` dispatch `switch` accepts — otherwise a
-    /// new subcommand silently never completes. This is the dispatch switch's canonical verb list
-    /// (the first label of each `case`, excluding pure aliases like `--version`/`setw`). Whenever a
-    /// `case` is added to the dispatch in `HarnessCLI.swift`, add it here too; the assertion below
-    /// then fails until the catalog grows the matching entry.
+    /// The hand-maintained mirror of the `HarnessCLI.main` dispatch `switch`: the canonical verb of
+    /// each `case` (the first label, excluding pure aliases like `--version`/`setw`). Whenever a
+    /// `case` is added to or removed from the dispatch in `HarnessCLI.swift`, update this set; the
+    /// bidirectional drift guard below then fails until the catalog matches.
+    static let dispatchVerbs: Set<String> = [
+        "color-check", "theme-preview", "remote", "daemon", "version",
+        "list-workspaces", "list-surfaces", "list-sessions", "list-agents", "doctor",
+        "completions", "list-windows", "list-panes", "has-session", "list-commands",
+        "get-snapshot", "new-workspace", "new-session", "new-tab", "new-split",
+        "select-workspace", "select-tab", "select-session", "close-tab", "close-session",
+        "promote-session", "demote-session", "send", "notify", "install", "ping",
+        "send-keys", "capture-pane", "pipe-pane", "wait-for", "link-window", "unlink-window",
+        "control-mode", "kill-pane", "swap-pane", "resize-pane", "zoom-pane", "copy-mode",
+        "rename-tab", "rename-session", "rename-workspace", "detect-agent", "install-hooks",
+        "install-shell-integration", "attach", "attach-window", "record", "replay",
+        "daemon-stats", "list-clients", "detach-client", "bind-key", "unbind-key", "list-keys",
+        "set-buffer", "list-buffers", "show-buffer", "delete-buffer", "paste-buffer",
+        "save-buffer", "load-buffer", "select-layout", "next-layout", "previous-layout",
+        "rotate-window", "break-pane", "join-pane", "move-pane", "renumber-windows",
+        "respawn-pane", "select-pane", "set-option", "show-options", "set-environment",
+        "show-environment", "bind-hook", "unbind-hook", "list-hooks", "display-message",
+    ]
+
+    /// Catalog verbs that are *intentionally* not dispatch cases (e.g. a completion-only stub for a
+    /// verb handled outside the main switch). Empty today — every catalog verb is also dispatched.
+    /// Add a verb here ONLY with a comment justifying why it has no dispatch case.
+    static let nonDispatchCatalogVerbs: Set<String> = []
+
+    /// Forward drift guard: `CLICommandCatalog` is the single source of truth for shell completions,
+    /// so it must list every top-level verb the dispatch `switch` accepts — otherwise a new
+    /// subcommand silently never completes.
     func testCatalogCoversEveryDispatchCommand() {
-        let dispatchVerbs: Set<String> = [
-            "color-check", "theme-preview", "remote", "daemon", "version",
-            "list-workspaces", "list-surfaces", "list-sessions", "list-agents", "doctor",
-            "completions", "list-windows", "list-panes", "has-session", "list-commands",
-            "get-snapshot", "new-workspace", "new-session", "new-tab", "new-split",
-            "select-workspace", "select-tab", "select-session", "close-tab", "close-session",
-            "promote-session", "demote-session", "send", "notify", "install", "ping",
-            "send-keys", "capture-pane", "pipe-pane", "wait-for", "link-window", "unlink-window",
-            "control-mode", "kill-pane", "swap-pane", "resize-pane", "zoom-pane", "copy-mode",
-            "rename-tab", "rename-session", "rename-workspace", "detect-agent", "install-hooks",
-            "install-shell-integration", "attach", "attach-window", "record", "replay",
-            "daemon-stats", "list-clients", "detach-client", "bind-key", "unbind-key", "list-keys",
-            "set-buffer", "list-buffers", "show-buffer", "delete-buffer", "paste-buffer",
-            "save-buffer", "load-buffer", "select-layout", "next-layout", "previous-layout",
-            "rotate-window", "break-pane", "join-pane", "move-pane", "renumber-windows",
-            "respawn-pane", "select-pane", "set-option", "show-options", "set-environment",
-            "show-environment", "bind-hook", "unbind-hook", "list-hooks", "display-message",
-        ]
         let catalog = Set(CLICommandCatalog.canonicalNames)
-        let missing = dispatchVerbs.subtracting(catalog).sorted()
+        let missing = Self.dispatchVerbs.subtracting(catalog).sorted()
         XCTAssertTrue(missing.isEmpty,
                       "CLICommandCatalog is missing dispatch verbs (shell completions will drop them): \(missing)")
+    }
+
+    /// Reverse drift guard: every catalog verb must map to a real dispatch case (modulo the explicit
+    /// `nonDispatchCatalogVerbs` allowlist). Without this, a future catalog-only verb would ship
+    /// phantom completions for a command that does not exist — completing to a hard error.
+    func testEveryCatalogCommandIsDispatched() {
+        let catalog = Set(CLICommandCatalog.canonicalNames)
+        let phantom = catalog.subtracting(Self.dispatchVerbs)
+            .subtracting(Self.nonDispatchCatalogVerbs).sorted()
+        XCTAssertTrue(phantom.isEmpty,
+                      "CLICommandCatalog has verbs with no dispatch case (completions point at nothing): \(phantom). "
+                      + "Add a dispatch case in HarnessCLI.swift (and to dispatchVerbs), or allowlist it in nonDispatchCatalogVerbs with a reason.")
     }
 
     // MARK: - bind-hook (`--if` trap)
@@ -150,6 +169,18 @@ final class HarnessCLITests: XCTestCase {
         XCTAssertTrue(message.contains("C-a d"), "message should list an accepted format")
     }
 
+    func testResolveDetachSequenceDanglingFlagFailsLoudly() {
+        // `--detach-keys` as the LAST token (truncated script arg) has no value. flagValue returns
+        // nil, which previously collapsed to .absent and silently kept the default detach keys —
+        // not what the user asked for. It must now be .invalid so the user gets a value to detach.
+        guard case .invalid(let message) =
+            HarnessCLI.resolveDetachSequence(["attach", "--surface", "x", "--detach-keys"]) else {
+            return XCTFail("expected .invalid for a dangling --detach-keys")
+        }
+        XCTAssertTrue(message.contains("--detach-keys"), "message should name the flag")
+        XCTAssertTrue(message.contains("requires a value"), "message should say a value is required")
+    }
+
     // MARK: - optionalUUIDFlag (new-split --pane / select-layout --main)
 
     func testOptionalUUIDFlagAbsentIsAbsent() {
@@ -172,5 +203,23 @@ final class HarnessCLITests: XCTestCase {
         XCTAssertEqual(
             HarnessCLI.optionalUUIDFlag(["--pane", "not-a-uuid"], flag: "--pane"),
             .invalid("not-a-uuid"))
+    }
+
+    func testOptionalUUIDFlagDanglingIsDistinctFromAbsent() {
+        // `--pane` as the LAST token (truncated `new-split --tab X --pane`) has no value. flagValue
+        // returns nil, which previously collapsed to .absent and silently split the ACTIVE pane —
+        // a wrong-target action. It must now be .dangling so the handler errors loudly.
+        XCTAssertEqual(
+            HarnessCLI.optionalUUIDFlag(["new-split", "--tab", "X", "--pane"], flag: "--pane"),
+            .dangling)
+    }
+
+    func testFlagIsDanglingDistinguishesAbsentDanglingAndValued() {
+        // Present with a following value → not dangling.
+        XCTAssertFalse(HarnessCLI.flagIsDangling(["--pane", "v"], flag: "--pane"))
+        // Present as the last token → dangling.
+        XCTAssertTrue(HarnessCLI.flagIsDangling(["new-split", "--pane"], flag: "--pane"))
+        // Absent entirely → not dangling (it's just absent).
+        XCTAssertFalse(HarnessCLI.flagIsDangling(["--tab", "t"], flag: "--pane"))
     }
 }
