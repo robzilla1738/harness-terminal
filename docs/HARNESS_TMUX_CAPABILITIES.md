@@ -500,8 +500,7 @@ Tabs
   Cmd-1..9      jump to tab
 
 Sessions
-  prefix n/p    next / previous session
-  prefix 0..9   jump to session
+  prefix (/)    previous / next session
 
 Copy mode
   prefix [      enter

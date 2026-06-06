@@ -362,7 +362,7 @@ PANES        prefix %  split →      prefix "  split ↓
 TABS         prefix c  new          prefix ,  rename
              Cmd-1..9  jump N        Cmd-Shift-[ ]  prev/next
 
-SESSIONS     prefix n/p  next/prev   prefix 0..9  jump N
+SESSIONS     prefix (/)  previous/next session
 
 COPY MODE    prefix [  enter        hjkl move   v/V/C-v select   y yank
              / ? search  n/N next   [ ] jump prompt           q/Esc exit
