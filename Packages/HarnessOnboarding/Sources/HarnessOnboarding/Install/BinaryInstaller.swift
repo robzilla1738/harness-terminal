@@ -110,21 +110,34 @@ enum BinaryInstaller {
 
         try HarnessCLIPaths.ensureDirectories()
 
+        // Re-running onboarding from an *older* Harness.app (Help → Welcome re-opens this wizard)
+        // must never silently downgrade a newer installed daemon/CLI. The bundled CLI + daemon
+        // always ship from the same app build, so a single source-vs-installed `harness-cli`
+        // build-number comparison governs the overwrite decision for *both* binaries (the daemon
+        // has no version flag of its own). The v1.3.2 BinaryRefresher doesn't heal this — it
+        // byte-diffs against the launching app's own bundle, not the previously installed copy.
+        let cliSrc = cliSource ?? findBestSource(named: "harness-cli")
+        let daemonSrc = daemonSource ?? findBestSource(named: "HarnessDaemon")
+        let sourceBuild = cliSrc.flatMap { buildNumberProbe($0) }
+        let installedBuild = buildNumberProbe(HarnessCLIPaths.installedCLIPath)
+
         // Copy CLI
-        if let src = cliSource ?? findBestSource(named: "harness-cli") {
+        if let src = cliSrc {
             let dest = HarnessCLIPaths.installedCLIPath
-            try copyReplacing(src: src, dest: dest, executable: true)
-            messages.append("harness-cli → \(dest.path)")
+            let outcome = try copyReplacing(src: src, dest: dest, executable: true,
+                                            sourceBuild: sourceBuild, installedBuild: installedBuild)
+            messages.append(outcome.message(binary: "harness-cli", dest: dest))
             cliOK = true
         } else {
             messages.append("harness-cli source not found; skipping binary copy")
         }
 
-        // Copy Daemon
-        if let src = daemonSource ?? findBestSource(named: "HarnessDaemon") {
+        // Copy Daemon — same build comparison as the CLI (they ship together from one app build).
+        if let src = daemonSrc {
             let dest = HarnessCLIPaths.installedDaemonPath
-            try copyReplacing(src: src, dest: dest, executable: true)
-            messages.append("HarnessDaemon → \(dest.path)")
+            let outcome = try copyReplacing(src: src, dest: dest, executable: true,
+                                            sourceBuild: sourceBuild, installedBuild: installedBuild)
+            messages.append(outcome.message(binary: "HarnessDaemon", dest: dest))
             daemonOK = true
         } else {
             messages.append("HarnessDaemon source not found; skipping binary copy")
@@ -190,20 +203,86 @@ enum BinaryInstaller {
         return nil
     }
 
-    private static func copyReplacing(src: URL, dest: URL, executable: Bool) throws {
+    /// What an overwrite attempt decided to do, so the wizard can surface it (e.g. a "kept newer
+    /// installed daemon" status when re-run from an older app).
+    enum CopyOutcome: Equatable {
+        case copied
+        case skippedIdentical
+        case keptNewerInstalled
+
+        func message(binary: String, dest: URL) -> String {
+            switch self {
+            case .copied:             "\(binary) → \(dest.path)"
+            case .skippedIdentical:   "\(binary) already current → \(dest.path)"
+            case .keptNewerInstalled: "kept newer installed \(binary) → \(dest.path)"
+            }
+        }
+    }
+
+    /// Read a binary's build number by running `<binary> version --json` and parsing `cliBuild`.
+    /// Overridable so tests can stage fake source/installed builds without real executables.
+    /// Returns nil when the binary is absent or doesn't answer (e.g. HarnessDaemon has no version
+    /// flag — the daemon's overwrite decision reuses the CLI build instead).
+    static var buildNumberProbe: (URL) -> Int? = { url in
+        guard FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
+        let process = Process()
+        process.executableURL = url
+        process.arguments = ["version", "--json"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do { try process.run() } catch { return nil }
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let build = object["cliBuild"] as? Int else { return nil }
+        return build
+    }
+
+    /// Copy `src` over `dest`, but never *downgrade*: skip a byte-identical install, and when the
+    /// bytes differ keep the installed copy if its build is newer than the source's. With no build
+    /// info on either side we fall back to the original replace-in-place behaviour.
+    /// `internal` (not private) so the version-decision is unit-testable without invoking the real
+    /// launchctl bootstrap in `performInstall`.
+    @discardableResult
+    static func copyReplacing(src: URL, dest: URL, executable: Bool,
+                              sourceBuild: Int? = nil, installedBuild: Int? = nil) throws -> CopyOutcome {
         if src.standardizedFileURL.path == dest.standardizedFileURL.path {
             if executable {
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
             }
-            return
+            return .skippedIdentical
         }
         if FileManager.default.fileExists(atPath: dest.path) {
+            // Identical bytes — nothing to do (and definitely no downgrade).
+            if filesAreIdentical(src, dest) {
+                if executable {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
+                }
+                return .skippedIdentical
+            }
+            // Different bytes: keep the installed copy when it is strictly newer than the source.
+            if let installedBuild, let sourceBuild, installedBuild > sourceBuild {
+                return .keptNewerInstalled
+            }
             try FileManager.default.removeItem(at: dest)
         }
         try FileManager.default.copyItem(at: src, to: dest)
         if executable {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
         }
+        return .copied
+    }
+
+    /// Cheap byte-equality: compare sizes first, then contents only if they match.
+    private static func filesAreIdentical(_ a: URL, _ b: URL) -> Bool {
+        let fm = FileManager.default
+        let sizeA = (try? fm.attributesOfItem(atPath: a.path)[.size]) as? Int
+        let sizeB = (try? fm.attributesOfItem(atPath: b.path)[.size]) as? Int
+        if let sizeA, let sizeB, sizeA != sizeB { return false }
+        guard let dataA = try? Data(contentsOf: a), let dataB = try? Data(contentsOf: b) else { return false }
+        return dataA == dataB
     }
 
     /// The exact plist template captured from the real LaunchAgentInstaller at project creation.

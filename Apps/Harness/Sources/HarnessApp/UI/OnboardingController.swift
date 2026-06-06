@@ -38,5 +38,10 @@ enum OnboardingController {
             guard let kind = AgentKind(rawValue: agentID) else { return false }
             return (try? AgentHookInstaller.install(agent: kind)) != nil
         }
+        // Single source of truth: the wizard writes the same catalog-generated fish completion the
+        // `harness-cli completions fish` / installer path emits — never a hand-maintained list.
+        OnboardingEnvironment.fishCompletionScript = {
+            CompletionGenerator.script(for: .fish)
+        }
     }
 }

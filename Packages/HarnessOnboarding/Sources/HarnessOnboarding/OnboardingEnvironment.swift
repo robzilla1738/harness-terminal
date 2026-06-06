@@ -26,4 +26,10 @@ public enum OnboardingEnvironment {
 
     /// Install Harness notification hooks for the agent `id`; returns true on success.
     public static var installHooks: (_ agentID: String) -> Bool = { _ in false }
+
+    /// The canonical fish completion script for `harness-cli`, generated from `CLICommandCatalog`
+    /// (`CompletionGenerator.script(for: .fish)`). `HarnessApp` populates this; left unset (preview/
+    /// test isolation) the Shell step simply skips writing the fish completion rather than embedding
+    /// a second, drift-prone command list. This keeps the catalog the single source of truth.
+    public static var fishCompletionScript: () -> String? = { nil }
 }

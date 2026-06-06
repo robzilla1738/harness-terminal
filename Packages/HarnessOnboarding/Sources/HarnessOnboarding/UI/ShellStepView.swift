@@ -3,6 +3,8 @@ import Foundation
 
 /// Shell integration step. Profile-editing behavior is unchanged; the UI presents it calmly.
 struct ShellStepView: View {
+    /// Surfaced to the wizard so it can lock Continue/Skip while a profile update / completion write runs.
+    @Binding var busy: Bool
     @State private var shells: [ShellInfo] = []
     @State private var messages: [String] = []
     @State private var isWorking = false
@@ -17,6 +19,8 @@ struct ShellStepView: View {
     }
 
     private var allConfigured: Bool { !shells.isEmpty && shells.allSatisfy(\.alreadyHas) }
+    /// No shell has the Harness PATH block yet — leaving now means `harness-cli` isn't on PATH.
+    private var noneConfigured: Bool { !shells.isEmpty && shells.allSatisfy { !$0.alreadyHas } }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -47,6 +51,18 @@ struct ShellStepView: View {
                     .frame(maxWidth: 500)
             }
 
+            // Non-blocking heads-up if the user leaves this step with no profile updated: harness-cli
+            // won't be on PATH until shell integration is applied, and the wizard reopens any time.
+            if noneConfigured && !success {
+                Text("Skip and harness-cli won't be on your PATH until you apply shell integration. Reopen this anytime from Help → Welcome to Harness.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .frame(maxWidth: 460)
+                    .transition(.opacity)
+            }
+
             Button(action: applyIntegration) {
                 if isWorking {
                     ProgressView().controlSize(.small)
@@ -57,6 +73,8 @@ struct ShellStepView: View {
             .buttonStyle(GlassPrimaryButtonStyle(minWidth: 140))
             .disabled(isWorking)
         }
+        .animation(Motion.spring, value: noneConfigured)
+        .onChange(of: isWorking) { busy = isWorking }
         .onAppear(perform: detectShells)
     }
 
@@ -117,31 +135,13 @@ struct ShellStepView: View {
     }
 
     private func installFishCompletion() {
+        // Single source of truth: the fish script comes from the host's catalog-driven generator
+        // (`CompletionGenerator.script(for: .fish)`, injected via OnboardingEnvironment) — the same
+        // one `harness-cli completions fish` and the installer emit. When the host hasn't wired it
+        // (preview/test isolation) we skip rather than embed a second, drift-prone command list.
+        guard let fishScript = OnboardingEnvironment.fishCompletionScript() else { return }
         isWorking = true
         defer { isWorking = false }
-        let fishScript = """
-        # Fish completion for harness-cli (embedded by the onboarding wizard)
-        set -l __harness_cli_subcommands \\
-            doctor completions color-check theme-preview \\
-            ping list-workspaces list-surfaces list-sessions list-windows list-panes list-agents has-session \\
-            list-commands get-snapshot daemon-stats list-clients detach-client \\
-            new-workspace new-session new-tab new-split \\
-            select-workspace select-session select-tab \\
-            close-tab close-session promote-session demote-session \\
-            send send-keys capture-pane pipe-pane wait-for display-message respawn-pane \\
-            kill-pane swap-pane resize-pane zoom-pane copy-mode select-pane \\
-            rename-tab rename-session rename-workspace \\
-            detect-agent install-hooks install-shell-integration attach attach-window notify \\
-            bind-key unbind-key list-keys \\
-            set-buffer list-buffers show-buffer delete-buffer paste-buffer save-buffer load-buffer \\
-            select-layout next-layout previous-layout rotate-window \\
-            break-pane join-pane move-pane renumber-windows link-window unlink-window \\
-            set-option show-options set-environment show-environment \\
-            bind-hook unbind-hook list-hooks control-mode install
-
-        complete -c harness-cli -f -n "not __fish_seen_subcommand_from $__harness_cli_subcommands" \\
-            -a "$__harness_cli_subcommands"
-        """
 
         do {
             let dir = FileManager.default.homeDirectoryForCurrentUser

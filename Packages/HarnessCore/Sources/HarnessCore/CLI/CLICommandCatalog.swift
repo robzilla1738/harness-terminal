@@ -27,6 +27,8 @@ public enum CLICommandCatalog {
         // Query / inspection
         .init("doctor", "Diagnose the daemon, socket, paths, and integrations", json: true),
         .init("version", "Print CLI and daemon versions", aliases: ["--version", "-v"], json: true),
+        .init("color-check", "Print ANSI/256/truecolor diagnostic swatches"),
+        .init("theme-preview", "Print deterministic themed sample output"),
         .init("ping", "Check the daemon is reachable"),
         .init("daemon-stats", "Daemon pid, uptime, surface/client counts", json: true),
         .init("list-workspaces", "List workspaces", json: true),
@@ -112,6 +114,8 @@ public enum CLICommandCatalog {
         .init("install-hooks", "Install agent notification hooks"),
         .init("install-shell-integration", "Install OSC 133 shell integration"),
         .init("completions", "Print a shell completion script (zsh|fish|bash)"),
+        .init("remote", "Manage remote daemons reached over SSH (list|add|remove)"),
+        .init("daemon", "Run the daemon in the foreground (execs HarnessDaemon)"),
     ]
 
     /// Every name a user might type for a command (canonical names + aliases), in catalog order.

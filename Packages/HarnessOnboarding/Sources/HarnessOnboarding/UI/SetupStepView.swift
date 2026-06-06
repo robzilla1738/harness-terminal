@@ -3,6 +3,8 @@ import AppKit
 
 /// One-click setup. Behavior stays in BinaryInstaller; the UI is reduced to status, action, and recovery text.
 struct SetupStepView: View {
+    /// Surfaced to the wizard so it can lock Continue/Skip while an install or hook-wire runs.
+    @Binding var busy: Bool
     @State private var cliStatus = BinaryInstaller.detectCLI()
     @State private var daemonStatus = BinaryInstaller.detectDaemon()
     @State private var isInstalling = false
@@ -121,11 +123,21 @@ struct SetupStepView: View {
         .animation(Motion.spring, value: isSuccess)
         .animation(Motion.spring, value: notifState)
         .animation(Motion.spring, value: agents)
+        .onChange(of: isInstalling) { busy = isInstalling || installingHooks }
+        .onChange(of: installingHooks) { busy = isInstalling || installingHooks }
         .onAppear {
             if case .willInstall = cliStatus { cliStatus = BinaryInstaller.detectCLI() }
             if case .willInstall = daemonStatus { daemonStatus = BinaryInstaller.detectDaemon() }
             NotificationPermission.current { notifState = $0 }
             agents = OnboardingEnvironment.detectAgents()
+        }
+        // Detection happens once on appear; re-run it when the wizard window regains key so an agent
+        // the user installed (or whose hooks they set up) in another app while the wizard was open is
+        // picked up without reopening the wizard. detectAgents defaults to empty → the row hides.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            guard !isInstalling, !installingHooks else { return }
+            agents = OnboardingEnvironment.detectAgents()
+            NotificationPermission.current { notifState = $0 }
         }
     }
 

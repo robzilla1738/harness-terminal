@@ -23,6 +23,11 @@ struct OnboardingWizardView: View {
     let onSkip: () -> Void
 
     @State private var currentStep: OnboardingStep = .welcome
+    /// True while the current step is running a one-shot install/apply (Setup or Shell). The footer
+    /// Continue and the header Skip are locked while it's set so the user can't advance — or tear
+    /// down the wizard — mid-write. The work itself is synchronous main-actor I/O (intentionally not
+    /// cancellable), so this is purely a UI gate against a confusing half-applied state.
+    @State private var stepBusy = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -86,6 +91,7 @@ struct OnboardingWizardView: View {
                 Button("Skip", action: onSkip)
                     .buttonStyle(GlassSmallButtonStyle())
                     .accessibilityLabel("Skip onboarding")
+                    .disabled(stepBusy)
             }
         }
         .frame(height: 24)
@@ -127,8 +133,8 @@ struct OnboardingWizardView: View {
         switch step {
         case .welcome:  WelcomeStepView()
         case .discover: DiscoverStepView()
-        case .setup:    SetupStepView()
-        case .shell:    ShellStepView()
+        case .setup:    SetupStepView(busy: $stepBusy)
+        case .shell:    ShellStepView(busy: $stepBusy)
         case .complete: CompleteStepView(onOpenDemo: onFinishWithDemo)
         }
     }
@@ -150,17 +156,21 @@ struct OnboardingWizardView: View {
                 Button(currentStep == .welcome ? "Start" : "Continue", action: advance)
                     .buttonStyle(GlassPrimaryButtonStyle(minWidth: 118))
                     .keyboardShortcut(.defaultAction)
+                    .disabled(stepBusy)
             }
         }
     }
 
     private func advance() {
-        guard currentIndex < steps.count - 1 else { return }
+        // Locked while the current step is mid-install/apply (see `stepBusy`).
+        guard !stepBusy, currentIndex < steps.count - 1 else { return }
+        stepBusy = false   // the step we're leaving can't be busy anymore
         currentStep = steps[currentIndex + 1]
     }
 
     private func goBack() {
-        guard currentIndex > 0 else { return }
+        guard !stepBusy, currentIndex > 0 else { return }
+        stepBusy = false
         currentStep = steps[currentIndex - 1]
     }
 }
