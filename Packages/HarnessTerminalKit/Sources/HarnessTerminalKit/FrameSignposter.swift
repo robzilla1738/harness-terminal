@@ -46,10 +46,18 @@ final class FrameSignposter: @unchecked Sendable {
     /// (`bindableInstanceBuffers`). Attributes a slow encode to the value boundary that paid it.
     private var instanceBuildSamples: [UInt64] = []
     private var uploadSamples: [UInt64] = []
-    /// Presents skipped since the last flush (nil drawable / encode failure) — work was pending
-    /// but nothing reached the glass that turn; the scheduler retried on a later tick.
-    private var droppedFrames = 0
+    /// Presents skipped since the last flush — work was pending but nothing reached the glass that
+    /// turn; the scheduler retried on a later tick. Counted per cause so a flush line can tell
+    /// drawable-pool exhaustion (vsync/window-server pressure) from a renderer encode failure.
+    private var droppedNilDrawable = 0
+    private var droppedEncodeFailure = 0
     private let presentLogEvery = 120
+
+    /// Why a present was skipped: `nilDrawable` = `nextDrawable()` returned nothing (pool
+    /// exhausted / layer hidden), `encodeFailure` = the renderer bailed after acquiring one.
+    enum FrameDropCause {
+        case nilDrawable, encodeFailure
+    }
 
     init() {
         // `open` (Finder, `make preview`) does not forward the calling shell's environment to a
@@ -88,41 +96,48 @@ final class FrameSignposter: @unchecked Sendable {
         let sched = Self.percentilesMicros(scheduleSamples)
         let build = Self.percentilesMicros(instanceBuildSamples)
         let up = Self.percentilesMicros(uploadSamples)
-        let dropped = droppedFrames
+        let droppedDrawable = droppedNilDrawable
+        let droppedEncode = droppedEncodeFailure
         presentSamples.removeAll(keepingCapacity: true)
         drawableWaitSamples.removeAll(keepingCapacity: true)
         semaphoreWaitSamples.removeAll(keepingCapacity: true)
         scheduleSamples.removeAll(keepingCapacity: true)
         instanceBuildSamples.removeAll(keepingCapacity: true)
         uploadSamples.removeAll(keepingCapacity: true)
-        droppedFrames = 0
+        droppedNilDrawable = 0
+        droppedEncodeFailure = 0
         #if canImport(os)
         logger.log("""
-        present µs p50=\(total.p50) p95=\(total.p95) max=\(total.max) | \
-        drawableWait p50=\(drawable.p50) p95=\(drawable.p95) | \
+        present µs p50=\(total.p50) p95=\(total.p95) p99=\(total.p99) max=\(total.max) | \
+        drawableWait p50=\(drawable.p50) p95=\(drawable.p95) p99=\(drawable.p99) | \
         semaphoreWait p50=\(semaphore.p50) p95=\(semaphore.p95) | \
         schedule p50=\(sched.p50) p95=\(sched.p95) | \
         instanceBuild p50=\(build.p50) p95=\(build.p95) | \
         upload p50=\(up.p50) p95=\(up.p95) | \
-        dropped=\(dropped) over \(frames) frames
+        dropped=\(droppedDrawable + droppedEncode) (drawable=\(droppedDrawable) encode=\(droppedEncode)) \
+        over \(frames) frames
         """)
         #endif
     }
 
-    /// Count a skipped present (nil drawable / encode failure); included in the periodic
-    /// `recordPresent` flush line. Main-thread only; no-op when disabled.
-    func recordFrameDrop() {
+    /// Count a skipped present by cause; included in the periodic `recordPresent` flush line.
+    /// Main-thread only; no-op when disabled.
+    func recordFrameDrop(_ cause: FrameDropCause) {
         guard enabled else { return }
-        droppedFrames += 1
+        switch cause {
+        case .nilDrawable: droppedNilDrawable += 1
+        case .encodeFailure: droppedEncodeFailure += 1
+        }
     }
 
     // Internal (not private) so the unit tests pin the percentile math directly.
-    static func percentilesMicros(_ samples: [UInt64]) -> (p50: UInt64, p95: UInt64, max: UInt64) {
-        guard !samples.isEmpty else { return (0, 0, 0) }
+    static func percentilesMicros(_ samples: [UInt64]) -> (p50: UInt64, p95: UInt64, p99: UInt64, max: UInt64) {
+        guard !samples.isEmpty else { return (0, 0, 0, 0) }
         let sorted = samples.sorted()
         return (
             sorted[sorted.count / 2] / 1000,
             sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))] / 1000,
+            sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.99))] / 1000,
             (sorted.last ?? 0) / 1000
         )
     }

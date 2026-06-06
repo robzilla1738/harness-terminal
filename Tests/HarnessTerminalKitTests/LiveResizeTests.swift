@@ -305,10 +305,18 @@ final class LiveResizeTests: XCTestCase {
         let p = FrameSignposter.percentilesMicros(samples)
         XCTAssertEqual(p.p50, 51) // sorted[50] (0-indexed) = 51µs
         XCTAssertEqual(p.p95, 96) // sorted[95] = 96µs
+        XCTAssertEqual(p.p99, 100) // sorted[99] = 100µs
         XCTAssertEqual(p.max, 100)
         let empty = FrameSignposter.percentilesMicros([])
         XCTAssertEqual(empty.p50, 0)
+        XCTAssertEqual(empty.p99, 0)
         XCTAssertEqual(empty.max, 0)
+        // p99 sits strictly between p95 and max on a wider spread (1…1000µs).
+        let wide: [UInt64] = (1...1000).map { UInt64($0) * 1000 }
+        let w = FrameSignposter.percentilesMicros(wide)
+        XCTAssertEqual(w.p95, 951)
+        XCTAssertEqual(w.p99, 991)
+        XCTAssertEqual(w.max, 1000)
     }
 
     // MARK: - Window-hosted routing (real Metal renderer; skips when unavailable)

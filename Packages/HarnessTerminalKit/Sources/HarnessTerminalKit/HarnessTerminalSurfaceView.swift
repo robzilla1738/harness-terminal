@@ -1214,7 +1214,20 @@ public final class HarnessTerminalSurfaceView: NSView {
         link.isPaused = true
         link.add(to: .current, forMode: .common)
         renderLink = link
+        applyPreferredFrameRateRange()
         scheduler.start()
+    }
+
+    /// On a variable-refresh (ProMotion) display, ask for the panel's full rate while the link is
+    /// awake — the WWDC-recommended range form (min 60 lets the system adapt down for power). A
+    /// no-op on fixed 60Hz panels and when the system already drives the link at native rate; the
+    /// link only runs while there's pending paint, so this never holds the panel at 120Hz at idle.
+    /// Re-applied on backing-property changes (the cross-monitor drag path).
+    private func applyPreferredFrameRateRange() {
+        guard let link = renderLink,
+              let maxFPS = window?.screen?.maximumFramesPerSecond, maxFPS > 60 else { return }
+        link.preferredFrameRateRange = CAFrameRateRange(
+            minimum: 60, maximum: Float(maxFPS), preferred: Float(maxFPS))
     }
 
     private func stopDisplayLink() {
@@ -1226,6 +1239,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         buildRenderer()
+        applyPreferredFrameRateRange() // the view may have moved to a different-refresh display
         // Backing scale changed (e.g. the drag crossed monitors): a frozen drag origin is in
         // old-scale device pixels — drop it, recompute at the new scale, and re-freeze so the
         // rest of the drag stays anchored.
@@ -1914,7 +1928,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// scheduler (and wake the link) to retry on the next tick rather than leaving a frame unshown.
     private func presentBuiltFrame(_ result: SurfaceFrameBuildResult) {
         guard renderGeneration == result.generation, window != nil, let renderer else { return }
-        if presentFrame(result, damage: result.damage, scrollShift: result.scrollShift) {
+        let outcome = presentFrame(result, damage: result.damage, scrollShift: result.scrollShift)
+        if outcome == .presented {
             // Remember the presented frame so a live resize can re-stretch it without rebuilding
             // (and without touching the emulator queue). See `repaintLastFrame`.
             lastPresentedResult = result
@@ -1935,7 +1950,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             // disagree about what's on the glass, so drop the cache: the retry re-encodes fully.
             renderer.invalidateRowReuseCache()
             lastPresentedResultIsRendererCoherent = false
-            FrameSignposter.shared.recordFrameDrop()
+            FrameSignposter.shared.recordFrameDrop(
+                outcome == .nilDrawable ? .nilDrawable : .encodeFailure)
             scheduleRender() // transient encode/present failure — retry next tick
         }
         StartupMetrics.shared.mark(.firstDrawablePresented)
@@ -1955,11 +1971,13 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// here, not upstream). When signposts are enabled we also record a rolling p50/p95 breakdown
     /// (total / drawable wait / semaphore wait / schedule). A `false` return is a skipped present
     /// (nil drawable or encode failure) — callers decide whether to retry or fall back; only
-    /// `presentBuiltFrame` counts a genuine drop (`recordFrameDrop`).
+    /// `presentBuiltFrame` counts a genuine drop (`recordFrameDrop`), keyed by which failure it was.
+    private enum PresentAttempt { case presented, nilDrawable, encodeFailure }
+
     private func presentFrame(
         _ result: SurfaceFrameBuildResult, damage: TerminalDamage?, scrollShift: Int = 0
-    ) -> Bool {
-        guard let renderer else { return false }
+    ) -> PresentAttempt {
+        guard let renderer else { return .encodeFailure }
         // Smooth scroll is applied at present time from the CURRENT fraction (render-only state):
         // a fraction-only tick re-presents the same frame with just a new uniform. Rounded to
         // whole device pixels so glyphs stay crisp mid-scroll (no sub-pixel resampling).
@@ -1980,12 +1998,12 @@ public final class HarnessTerminalSurfaceView: NSView {
         let sp = FrameSignposter.shared
         let presentStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
         var drawableWaitNanos: UInt64 = 0
-        let didPresent = sp.interval("present") { () -> Bool in
+        let outcome = sp.interval("present") { () -> PresentAttempt in
             let drawableStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
             guard let drawable = sp.interval("drawableWait", { metalLayer.nextDrawable() })
-            else { return false }
+            else { return .nilDrawable }
             if sp.enabled { drawableWaitNanos = DispatchTime.now().uptimeNanoseconds &- drawableStart }
-            return renderer.present(
+            let presented = renderer.present(
                 result.frame,
                 to: drawable,
                 clearColor: result.clearColor,
@@ -1999,8 +2017,9 @@ public final class HarnessTerminalSurfaceView: NSView {
                 frameBuildNanos: result.frameBuildNanos,
                 synchronizedWithTransaction: metalLayer.presentsWithTransaction
             )
+            return presented ? .presented : .encodeFailure
         }
-        if sp.enabled, didPresent {
+        if sp.enabled, outcome == .presented {
             sp.recordPresent(
                 nanos: DispatchTime.now().uptimeNanoseconds &- presentStart,
                 drawableWait: drawableWaitNanos,
@@ -2010,7 +2029,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 upload: renderer.stats.uploadNanos
             )
         }
-        return didPresent
+        return outcome
     }
 
     /// Append the buffer line just below the scrolled viewport as a display-only (rows+1)th row —
@@ -2062,7 +2081,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         } else {
             damage = TerminalDamage(full: true)
         }
-        let didPresent = presentFrame(result, damage: damage)
+        let didPresent = presentFrame(result, damage: damage) == .presented
         if didPresent {
             lastPresentedResultIsRendererCoherent = renderer.stats.rowCacheCoherent
             onRenderStats?(renderer.stats)
