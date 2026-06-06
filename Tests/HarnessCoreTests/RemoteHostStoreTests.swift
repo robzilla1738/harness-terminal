@@ -47,15 +47,21 @@ final class RemoteHostStoreTests: XCTestCase {
     }
 
     func testUpsertReportsSavedFalseWhenWriteFails() throws {
-        // Make the on-disk write fail by stripping write permission from the sessions directory that
-        // holds remote-hosts.json: the atomic write can't create its temp file, so saveLocked()
-        // returns false. The mutating API must surface that (saved == false) instead of silently
-        // swallowing it — the silent-write-failure class the audit flagged for `harness-cli remote
-        // add`. (The flock degrades to unlocked when its sidecar can't be created, which is fine.)
+        // Force the on-disk write to fail in a way that holds even when tests run as root (the
+        // Linux CI container — root ignores permission bits, so a chmod-based setup passes the
+        // write and fails the test there): replace the sessions *directory* with a regular file.
+        // Creating remote-hosts.json (and the flock sidecar, which degrades to unlocked) then
+        // fails with ENOTDIR for any uid, and ensureDirectories() can't silently heal it because
+        // a file already occupies the path. The mutating API must surface the failure
+        // (saved == false) instead of silently swallowing it.
         let sessions = HarnessPaths.sessionsDirectory
         let fm = FileManager.default
-        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: sessions.path)
-        defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sessions.path) }
+        try? fm.removeItem(at: sessions)
+        fm.createFile(atPath: sessions.path, contents: Data())
+        defer {
+            try? fm.removeItem(at: sessions)
+            try? fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        }
 
         let store = RemoteHostStore()
         let result = store.upsert(RemoteHost(name: "devbox", sshTarget: "rob@devbox", remoteSocketPath: "/tmp/x.sock"))
