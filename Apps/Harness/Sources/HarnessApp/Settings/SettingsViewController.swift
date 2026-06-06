@@ -1241,7 +1241,17 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func buildAdvancedPage() -> NSView {
         let header = pageHeader(title: "Advanced", trailing: nil)
         advDaemonControls.removeAll() // repopulated by the adv* factories below
+        // The adv* controls are rebuilt on every Advanced-page show, so the prior batch's identifiers
+        // are stale (keyed by ObjectIdentifier of freed controls). Clear the map alongside the control
+        // list, otherwise it grows unbounded across reopens.
+        advOptKeys.removeAll()
         loadAdvancedValues()
+        // The performance toggles are member controls (not rebuilt by the adv* factories), so unlike
+        // the daemon-backed controls they don't get refreshed by `loadAdvancedValues`. Re-read their
+        // state from settings here so a rebuilt page reflects changes made since the last build.
+        let perfSettings = SessionCoordinator.shared.settings
+        offMainPipelineToggle.state = perfSettings.offMainParserFramePipeline ? .on : .off
+        liveResizeReflowToggle.state = perfSettings.liveResizeReflow ? .on : .off
 
         let statusGroup = settingsGroup("Status bar", [
             settingsCaption("Format the bottom status bar (FormatString tokens like #{cwd_basename}, #{git_branch}, #{time:%H:%M}). The on/off switch is in Appearance ▸ Window."),
@@ -2390,16 +2400,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         updateFontReadout()
     }
 
-    /// When presented inline, the host sets this so custom dismissal can save first.
-    var onClose: (() -> Void)?
-
-    @objc private func closeWindow() {
+    /// Safety net for the apply-only/persist-on-commit split (#89): continuous sliders apply live on
+    /// every drag tick but only persist in `HarnessSlider.mouseUp → onCommit`. If a drag never gets
+    /// its mouse-up (window closed programmatically mid-drag, a modal steals the gesture, the app
+    /// deactivates mid-track), the live-applied value would never be saved. Flushing on teardown
+    /// guarantees the visible state is the persisted state. `flushAndApply` is idempotent (read
+    /// controls → settings → save), so a redundant call after a normal commit is harmless.
+    func persistPendingState() {
         flushAndApply()
-        if let onClose {
-            onClose()
-        } else {
-            view.window?.close()
-        }
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        persistPendingState()
     }
 
     // MARK: - Font picker (Terminal page)
@@ -2551,6 +2564,9 @@ final class SettingsSidebarButton: NSControl {
 @MainActor
 enum SettingsWindowController {
     private static var window: NSWindow?
+    /// Retained for the window's lifetime so its `windowWillClose` flush actually fires (NSWindow
+    /// holds the delegate weakly). Closing the prior window drops the old proxy.
+    private static var closeProxy: SettingsWindowCloseProxy?
 
     static func show() {
         window?.close()
@@ -2565,6 +2581,12 @@ enum SettingsWindowController {
         win.isReleasedWhenClosed = false
         win.minSize = NSSize(width: 840, height: 600)
         win.setContentSize(NSSize(width: 940, height: 680))
+        // Persist on close (incl. via the titlebar button) so a slider drag that never got its
+        // mouse-up still saves its live-applied value (#89). Mirrors `viewWillDisappear`; both are
+        // safe to fire because `persistPendingState` is idempotent.
+        let proxy = SettingsWindowCloseProxy { [weak controller] in controller?.persistPendingState() }
+        win.delegate = proxy
+        closeProxy = proxy
         window = win
         // Match the active theme's light/dark so the native titlebar + any system-colored
         // text track the themed chrome (mirrors MainWindowController).
@@ -2573,4 +2595,15 @@ enum SettingsWindowController {
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+}
+
+/// Thin `NSWindowDelegate` that flushes the settings controller's pending state when the settings
+/// window closes. Kept separate from the view controller so the controller doesn't have to be the
+/// window's delegate (it isn't responsible for window lifecycle), and retained by
+/// `SettingsWindowController` since NSWindow holds its delegate weakly.
+@MainActor
+final class SettingsWindowCloseProxy: NSObject, NSWindowDelegate {
+    private let onWillClose: () -> Void
+    init(onWillClose: @escaping () -> Void) { self.onWillClose = onWillClose }
+    func windowWillClose(_ notification: Notification) { onWillClose() }
 }

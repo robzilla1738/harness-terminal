@@ -50,10 +50,12 @@ public final class DaemonClient: @unchecked Sendable {
     /// delivery thread (e.g. the GUI hops to main); this method only guarantees the *call* order.
     ///
     /// Compatibility: uses `replayScrollbackSequenced` to learn the dedup boundary. An old daemon
-    /// rejects that request (`.error`), so we fall back to plain `replayScrollback` and flush with a
-    /// boundary of 0 — i.e. deliver every buffered frame, no dedup. That can re-show a small overlap
-    /// but never drops output; it matches "today's behavior" the moment a usable sequence is absent.
-    /// `fromSequence` is passed through to the replay (nil = full history).
+    /// rejects that request (`.error`), so we fall back to plain `replayScrollback`. Without a
+    /// boundary the buffered frames can't be deduped against the replay — and that replay (taken
+    /// after the subscribe) already covers them — so on the old-daemon path we DISCARD the buffer
+    /// and restore the original replay-then-subscribe ordering: no double-delivery, at the cost of
+    /// the small historical gap an old daemon's missing boundary makes unavoidable. The probe, not
+    /// just the dedup, decides ordering. `fromSequence` is passed through (nil = full history).
     @discardableResult
     public func attachReplayingSurfaceOutput(
         surfaceID: String,
@@ -73,20 +75,28 @@ public final class DaemonClient: @unchecked Sendable {
 
         // 2. Replay AFTER the subscription is live, so every byte the replay omits is already in the
         //    buffer. Prefer the sequenced replay (gives the dedup boundary); on an old daemon that
-        //    rejects it, fall back to the plain replay with boundary 0 (no dedup, replay-then-stream).
+        //    rejects it, fall back to the plain replay — and remember we got NO usable boundary.
         var replayText = ""
         var endSequence: UInt64 = 0
+        var haveBoundary = false
         if case let .replayResult(text, end)? = try? request(.replayScrollbackSequenced(surfaceID: surfaceID, fromSequence: fromSequence), timeout: replayTimeout) {
             replayText = text
             endSequence = end
+            haveBoundary = true
         } else if case let .text(text)? = try? request(.replayScrollback(surfaceID: surfaceID, fromSequence: fromSequence), timeout: replayTimeout) {
-            replayText = text // legacy daemon: no usable boundary → deliver all buffered frames
+            replayText = text // legacy daemon: no usable boundary
         }
 
-        // 3. Deliver the replayed history, THEN release the buffered live frames (deduped). The
-        //    caller's sink keeps both in one order, so history always lands before live output.
+        // 3. Deliver the replayed history, THEN release the buffered live frames. With a real
+        //    boundary, flush deduped (gap-free). Without one (old daemon), discard the buffer and
+        //    fall back to replay-then-subscribe ordering — the replay already covers the buffered
+        //    tail, so flushing it would double-deliver. The caller's sink keeps both in one order.
         onReplay(replayText)
-        subscription.flushBuffered(droppingSequencesBelow: endSequence, onData: onData)
+        if haveBoundary {
+            subscription.flushBuffered(droppingSequencesBelow: endSequence, onData: onData)
+        } else {
+            subscription.discardBufferedAndDeliverDirect()
+        }
         return subscription
     }
 
@@ -218,6 +228,20 @@ public final class DaemonSubscription: @unchecked Sendable {
     private let bufferLock = NSLock()
     private var buffering = false
     private var pendingFrames: [(Data, UInt64)] = []
+    /// Running byte total of `pendingFrames`, so the cap check stays O(1) on the read hot path.
+    private var pendingBytes = 0
+    /// Cap on buffered live output while a replay is outstanding. A flooding surface against a slow
+    /// daemon could otherwise buffer the entire replay window (default 5 s) of output in memory.
+    /// On overflow we drop the OLDEST buffered frames (a byte ring) to stay under the cap, set
+    /// `bufferOverflowed`, and at flush time skip dedup — dropping-oldest broke buffer contiguity,
+    /// so the replay-boundary dedup can no longer prove which frames are duplicates; delivering all
+    /// remaining frames after the replay risks a momentary visible duplication but never drops live
+    /// output, and bounds memory. A few MiB is far above any real terminal's per-replay-window
+    /// output yet small enough that the worst-case flush is a single bounded `onData`.
+    private static let maxPendingBufferBytes = 4 * 1024 * 1024
+    /// Set once `pendingFrames` had to drop a frame to respect the cap (see above): tells
+    /// `flushBuffered` to skip dedup and deliver everything that survived.
+    private var bufferOverflowed = false
 
     init(fd: Int32) {
         self.fd = fd
@@ -336,6 +360,17 @@ public final class DaemonSubscription: @unchecked Sendable {
                     self.bufferLock.lock()
                     if self.buffering {
                         self.pendingFrames.append((data, sequence))
+                        self.pendingBytes += data.count
+                        // Bound the buffer: under a flood + slow replay, drop the OLDEST frames so
+                        // memory stays capped. Dropping-oldest (not refusing the newest) keeps the
+                        // freshest output; the `bufferOverflowed` flag makes the flush skip dedup so
+                        // a dropped frame can never be mistaken for a kept one.
+                        while self.pendingBytes > Self.maxPendingBufferBytes,
+                              self.pendingFrames.count > 1 {
+                            let evicted = self.pendingFrames.removeFirst()
+                            self.pendingBytes -= evicted.0.count
+                            self.bufferOverflowed = true
+                        }
                         self.bufferLock.unlock()
                         return
                     }
@@ -363,7 +398,19 @@ public final class DaemonSubscription: @unchecked Sendable {
     /// so a frame arriving mid-flush either lands in `pendingFrames` (drained here, in order) or is
     /// delivered directly after the flag flips, never both and never out of order. `onData` is the
     /// SAME closure the read loop forwards to, so flushed and live frames share one ordered sink.
-    /// Returns the number of frames dropped as duplicates (for tests / diagnostics).
+    ///
+    /// The surviving frames are CONCATENATED into a single `onData` call (their bytes are already in
+    /// order, and every consumer ignores the per-frame sequence on delivery), so a large buffer
+    /// flushes as ONE main-thread hop instead of one per frame — the per-frame `main.async` storm
+    /// the old loop caused under a big buffer.
+    ///
+    /// If the buffer overflowed its byte cap (oldest frames were dropped to bound memory), dedup is
+    /// SKIPPED: dropping-oldest broke buffer contiguity so `endSequence` can no longer prove which
+    /// remaining frames are replay duplicates. Everything that survived is delivered after the
+    /// replay — a momentary visible duplication is possible under that pathological flood, but no
+    /// live output is lost and memory stayed bounded.
+    ///
+    /// Returns the number of frames dropped as duplicates (0 when overflowed / boundary 0).
     @discardableResult
     func flushBuffered(
         droppingSequencesBelow endSequence: UInt64,
@@ -371,14 +418,39 @@ public final class DaemonSubscription: @unchecked Sendable {
     ) -> Int {
         bufferLock.lock()
         defer { bufferLock.unlock() }
+        let skipDedup = bufferOverflowed || endSequence == 0
         var dropped = 0
+        var coalesced = Data()
+        var lastSequence: UInt64 = 0
         for (data, sequence) in pendingFrames {
-            if sequence < endSequence { dropped += 1; continue }
-            onData(data, sequence)
+            if !skipDedup, sequence < endSequence { dropped += 1; continue }
+            coalesced.append(data)
+            lastSequence = sequence
         }
+        if !coalesced.isEmpty { onData(coalesced, lastSequence) }
         pendingFrames.removeAll(keepingCapacity: false)
+        pendingBytes = 0
+        bufferOverflowed = false
         buffering = false
         return dropped
+    }
+
+    /// Old-daemon attach path: a daemon too old to answer `replayScrollbackSequenced` gives no
+    /// dedup boundary, so the buffered live frames can't be deduped against the plain replay text —
+    /// and that replay (taken AFTER the subscribe) already covers the buffered tail, so flushing
+    /// them re-shows the overlap. Restore the ORIGINAL replay-then-subscribe ordering instead:
+    /// DROP everything buffered (it's a subset of the replay text, modulo the same tiny historical
+    /// gap the pre-buffering code always had) and switch to direct delivery for subsequent live
+    /// frames. No double-delivery; the only cost is the historical gap an old daemon can't avoid.
+    /// Like `flushBuffered`, runs under `bufferLock` so the flag flip and the buffer drop are atomic
+    /// against a frame arriving mid-call.
+    func discardBufferedAndDeliverDirect() {
+        bufferLock.lock()
+        defer { bufferLock.unlock() }
+        pendingFrames.removeAll(keepingCapacity: false)
+        pendingBytes = 0
+        bufferOverflowed = false
+        buffering = false
     }
 
     /// Generic read loop: decodes every pushed reply and forwards its response. Used by

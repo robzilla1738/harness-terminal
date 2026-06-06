@@ -66,6 +66,18 @@ public final class RealPty: @unchecked Sendable {
     /// `waitpid` claims it) — it reads this record to still deliver a real status to `onExit`.
     /// Guarded by `lifecycleLock`.
     private var reapedExit: (generation: UInt64, status: Int32?)?
+    /// Generations whose `waitpid` watcher has already returned (i.e. that child has been reaped
+    /// and its PID may now be recycled to an unrelated process). `reapedExit` is a SINGLE slot
+    /// overwritten on every reap, so it can't answer "was generation N reaped?" once a later
+    /// generation also dies — the SIGKILL escalation must consult this set instead, or it could
+    /// fall through to `kill(pid, …)` on a recycled PID. Generations are monotonic, so once a
+    /// generation older than every live escalation's `dyingGeneration` is recorded it can never
+    /// be queried again; the set is pruned to a small bound on insert. Guarded by `lifecycleLock`.
+    private var reapedGenerations: Set<UInt64> = []
+    /// Bound on `reapedGenerations`. Only generations with an outstanding kill-escalation timer
+    /// (≤ a handful at once) are ever queried, so a small cap can't drop a still-needed entry —
+    /// when over the cap we evict the lowest generations, which are necessarily the oldest/dead.
+    private static let maxReapedGenerationsTracked = 32
     private let lifecycleLock = NSLock()
 
     private let readQueue = DispatchQueue(label: "com.robert.harness.realpty.read")
@@ -155,6 +167,29 @@ public final class RealPty: @unchecked Sendable {
     /// assert a TERM-ignoring child is actually reaped within the grace window.
     var childPIDForTesting: pid_t {
         lifecycleLock.lock(); defer { lifecycleLock.unlock() }; return childPID
+    }
+
+    /// Test hook: drive the reap-record bookkeeping deterministically (no PTY/timing) so the
+    /// respawn-then-both-die-within-grace sequence — where a later generation's reap overwrites
+    /// the single-slot `reapedExit` — can be asserted against the SET the escalation actually
+    /// consults. Mirrors what `watchForExit` records.
+    func recordReapedGenerationForTesting(_ gen: UInt64, status: Int32? = nil) {
+        lifecycleLock.lock()
+        reapedExit = (gen, status)
+        recordReapedGenerationLocked(gen)
+        lifecycleLock.unlock()
+    }
+
+    /// Test hook: the answer the SIGKILL escalation uses for "was `gen` reaped?".
+    func wasGenerationReapedForTesting(_ gen: UInt64) -> Bool {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        return reapedGenerations.contains(gen)
+    }
+
+    /// Test hook: current tracked-generation count, to assert the prune bound.
+    var reapedGenerationCountForTesting: Int {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        return reapedGenerations.count
     }
 
     /// `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` exported to the child — the terminal-identity the
@@ -260,6 +295,21 @@ public final class RealPty: @unchecked Sendable {
         AgentDetector.registerRootPID(spawned.pid, forSurfaceKey: id)
         startReading(fd: spawned.master, generation: gen)
         watchForExit(pid: spawned.pid, generation: gen)
+    }
+
+    /// No-spawn initializer for deterministic unit tests of the reap-record bookkeeping
+    /// (`recordReapedGenerationLocked` + the SIGKILL escalation's set lookup). Forks no shell
+    /// and binds no fd, so it runs in the normal `swift test` pass (outside the live-PTY gate).
+    /// `forTesting` is a required, otherwise-unused label so this can never be selected by
+    /// production call sites.
+    init(forTesting: Void) {
+        self.id = UUID().uuidString
+        self.termProgram = ""
+        self.termProgramVersion = ""
+        self.maxScrollbackBytes = 0
+        self.extraEnvironment = [:]
+        self.shell = "/bin/sh"
+        self.scrollbackFile = nil
     }
 
     public func write(_ data: Data) {
@@ -530,15 +580,18 @@ public final class RealPty: @unchecked Sendable {
     /// `dyingGeneration` is the generation the SIGTERM'd child was tagged with — i.e. the value
     /// captured *before* close()/respawn() bumped `generation`. We only deliver SIGKILL when that
     /// child is still the not-yet-reaped one: if `watchForExit` already recorded a reap for that
-    /// generation, the PID may have been recycled, so we must not signal it. `watchForExit` stays
-    /// the SOLE reaper — we never `waitpid` here; SIGKILL just unblocks its pending `waitpid(…,0)`,
-    /// which then returns and reaps the zombie.
+    /// generation, the PID may have been recycled, so we must not signal it. We consult the
+    /// `reapedGenerations` SET — not the single-slot `reapedExit`, which a later generation's reap
+    /// overwrites, leaving a stale `dyingGeneration` mismatch that would wrongly fall through to
+    /// `kill(pid, …)` on a possibly-recycled PID. `watchForExit` stays the SOLE reaper — we never
+    /// `waitpid` here; SIGKILL just unblocks its pending `waitpid(…,0)`, which then returns and
+    /// reaps the zombie.
     private func scheduleKillEscalation(pid: pid_t, dyingGeneration: UInt64) {
         guard pid > 0 else { return }
         killQueue.asyncAfter(deadline: .now() + killGrace) { [weak self] in
             guard let self else { return }
             self.lifecycleLock.lock()
-            let alreadyReaped = self.reapedExit?.generation == dyingGeneration
+            let alreadyReaped = self.reapedGenerations.contains(dyingGeneration)
             self.lifecycleLock.unlock()
             // Already reaped ⇒ the watcher's waitpid returned and the PID may be recycled — don't
             // signal it. Still unreaped but the process is gone (kill(pid,0)!=0) ⇒ nothing to do.
@@ -885,8 +938,20 @@ public final class RealPty: @unchecked Sendable {
             // generation-tagged record instead, so the real status still reaches onExit.
             self.lifecycleLock.lock()
             self.reapedExit = (gen, decoded)
+            self.recordReapedGenerationLocked(gen)
             self.lifecycleLock.unlock()
             self.childEnded(generation: gen, exitStatus: decoded)
+        }
+    }
+
+    /// Mark `gen`'s child as reaped (its `waitpid` watcher returned), pruning to a bound. Caller
+    /// holds `lifecycleLock`. Generations are monotonic and only those with a live kill-escalation
+    /// timer are queried, so evicting the lowest entries over the cap is always safe.
+    private func recordReapedGenerationLocked(_ gen: UInt64) {
+        reapedGenerations.insert(gen)
+        while reapedGenerations.count > Self.maxReapedGenerationsTracked,
+              let lowest = reapedGenerations.min() {
+            reapedGenerations.remove(lowest)
         }
     }
 

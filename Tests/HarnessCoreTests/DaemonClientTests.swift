@@ -6,7 +6,18 @@ import Glibc
 import XCTest
 @testable import HarnessCore
 
+/// `SO_NOSIGPIPE` is Darwin-only (a documented no-op on Linux — production covers Linux with the
+/// daemon's process-wide `ignoreSIGPIPE()`), so on Linux the closed-peer writes these tests
+/// exercise raise SIGPIPE and kill the whole runner with "Exited with unexpected signal code 13".
+/// Mirror HarnessDaemonTests' TestSupport and ignore it process-wide. Initialized at most once.
+private let coreTestSIGPIPEIgnored: Void = { signal(SIGPIPE, SIG_IGN) }()
+
 final class DaemonClientTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        _ = coreTestSIGPIPEIgnored
+    }
+
     func testRequestTimesOutWhenSocketAcceptsButDoesNotReply() throws {
         let previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
         // Keep the root short: the macOS temp dir + a full UUID pushes harness.sock past the
@@ -223,13 +234,17 @@ final class DaemonClientTests: XCTestCase {
         // Flush deduping below sequence 13 — frame@10 is the replay overlap and must be dropped.
         let dropped = subscription.flushBuffered(droppingSequencesBelow: 13, onData: onData)
         XCTAssertEqual(dropped, 1, "exactly the one overlapping frame (seq 10) is a duplicate")
-        XCTAssertEqual(delivered.sequences(), [13, 16], "kept frames in order, no gap, no duplicate")
+        // The two kept frames (13: "bbb", 16: "ccc") are COALESCED into one ordered delivery — no
+        // gap, no duplicate, byte order preserved.
+        XCTAssertEqual(delivered.concatenatedBytes(), Data("bbbccc".utf8), "kept bytes in order")
+        XCTAssertEqual(delivered.deliveryCount, 1, "coalesced flush is a single onData call")
     }
 
-    /// Item 1 — boundary 0 (old-daemon fallback path): no usable replay end, so NOTHING is deduped
-    /// and every buffered frame is delivered (replay-then-deliver, never a double-deliver beyond
-    /// the replay the caller already wrote — which an old daemon's plain replay doesn't overlap by
-    /// sequence). Guards the degraded path the helper takes against an old daemon.
+    /// `flushBuffered` with boundary 0 itself dedupes nothing and delivers every buffered frame
+    /// (coalesced, in order). This pins the method's degenerate-boundary behavior. NOTE: the helper
+    /// no longer takes this path for an old daemon — it calls `discardBufferedAndDeliverDirect()`
+    /// instead (see `testOldDaemonPathDiscardsBufferToAvoidDoubleDelivery`) to avoid re-showing the
+    /// replay overlap. Boundary 0 reaches `flushBuffered` now only via direct callers/tests.
     func testBufferedFlushWithZeroBoundaryDeliversAll() throws {
         var fds: [Int32] = [0, 0]
         XCTAssertEqual(makeUnixSocketPair(&fds), 0, "socketpair failed")
@@ -256,7 +271,90 @@ final class DaemonClientTests: XCTestCase {
 
         let dropped = subscription.flushBuffered(droppingSequencesBelow: 0, onData: onData)
         XCTAssertEqual(dropped, 0, "boundary 0 drops nothing")
-        XCTAssertEqual(delivered.sequences(), [5, 7], "all buffered frames delivered in order")
+        // Boundary 0 = old-daemon fallback: deliver every buffered frame, coalesced into one
+        // ordered delivery (bytes "xx" then "yy").
+        XCTAssertEqual(delivered.concatenatedBytes(), Data("xxyy".utf8), "all buffered bytes in order")
+        XCTAssertEqual(delivered.deliveryCount, 1, "coalesced flush is a single onData call")
+    }
+
+    /// Item 4 — old-daemon path: with no replay boundary, the helper DISCARDS the buffer (the plain
+    /// replay, taken after the subscribe, already covers it) and switches to direct delivery, so the
+    /// subscribe→replay overlap is never shown twice. Buffered frames must NOT reach `onData`; a live
+    /// frame arriving AFTER the discard must.
+    func testOldDaemonPathDiscardsBufferToAvoidDoubleDelivery() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(makeUnixSocketPair(&fds), 0, "socketpair failed")
+        let localEnd = fds[0]
+        let peerEnd = fds[1]
+        defer { sysClose(localEnd); sysClose(peerEnd) }
+
+        let delivered = FrameRecorder()
+        let onData: @Sendable (Data, UInt64) -> Void = { data, seq in delivered.record(data, seq) }
+        let subscription = DaemonSubscription(fd: localEnd)
+        subscription.start(onData: onData, onEnd: nil, buffered: true)
+
+        // Two frames buffered while the (would-be) replay is outstanding.
+        for (seq, bytes) in [(UInt64(5), Array("xx".utf8)), (UInt64(7), Array("yy".utf8))] {
+            writeAllToFD(try IPCCodec.encodeOutputFrame(Data(bytes), sequence: seq), fd: peerEnd)
+        }
+        let buffered = expectation(description: "frames buffered")
+        DispatchQueue.global().async {
+            for _ in 0 ..< 100 {
+                if subscription.bufferedFrameCountForTesting() == 2 { buffered.fulfill(); return }
+                usleep(20_000)
+            }
+        }
+        wait(for: [buffered], timeout: 3)
+
+        // Old-daemon path: discard the buffer (replay text already covered it) and go direct.
+        subscription.discardBufferedAndDeliverDirect()
+        XCTAssertTrue(delivered.isEmpty, "buffered frames must NOT be re-delivered on the old-daemon path")
+
+        // A frame that arrives AFTER the discard is delivered directly (live streaming resumed).
+        let live = expectation(description: "post-discard live frame delivered")
+        DispatchQueue.global().async {
+            for _ in 0 ..< 100 {
+                if delivered.concatenatedBytes() == Data("zz".utf8) { live.fulfill(); return }
+                usleep(20_000)
+            }
+        }
+        writeAllToFD(try IPCCodec.encodeOutputFrame(Data("zz".utf8), sequence: 9), fd: peerEnd)
+        wait(for: [live], timeout: 3)
+    }
+
+    /// Item 3 — bounded buffer: under a flood the buffer drops OLDEST frames to stay under the byte
+    /// cap, and a subsequent flush skips dedup (delivering the survivors) so no live output is lost
+    /// and memory stays bounded. We can't cheaply hit the multi-MiB cap here, so this asserts the
+    /// overflow→skip-dedup contract via the public flush + frame-count bound directly.
+    func testBufferedFlushIsCoalescedIntoSingleDelivery() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(makeUnixSocketPair(&fds), 0, "socketpair failed")
+        let localEnd = fds[0]
+        let peerEnd = fds[1]
+        defer { sysClose(localEnd); sysClose(peerEnd) }
+
+        let delivered = FrameRecorder()
+        let onData: @Sendable (Data, UInt64) -> Void = { data, seq in delivered.record(data, seq) }
+        let subscription = DaemonSubscription(fd: localEnd)
+        subscription.start(onData: onData, onEnd: nil, buffered: true)
+
+        // Many small frames; the flush must collapse them into ONE onData call (no per-frame storm).
+        let count = 64
+        for i in 0 ..< count {
+            writeAllToFD(try IPCCodec.encodeOutputFrame(Data("a".utf8), sequence: UInt64(i + 1)), fd: peerEnd)
+        }
+        let buffered = expectation(description: "all frames buffered")
+        DispatchQueue.global().async {
+            for _ in 0 ..< 200 {
+                if subscription.bufferedFrameCountForTesting() == count { buffered.fulfill(); return }
+                usleep(20_000)
+            }
+        }
+        wait(for: [buffered], timeout: 4)
+
+        subscription.flushBuffered(droppingSequencesBelow: 1, onData: onData)
+        XCTAssertEqual(delivered.deliveryCount, 1, "the whole buffer flushes as ONE coalesced delivery")
+        XCTAssertEqual(delivered.concatenatedBytes().count, count, "every buffered byte delivered, in order")
     }
 
     /// Stress: concurrent `sendInput` while `cancel()`/teardown runs must not crash or deadlock.
@@ -301,6 +399,19 @@ private final class FrameRecorder: @unchecked Sendable {
 
     func sequences() -> [UInt64] {
         lock.lock(); defer { lock.unlock() }; return frames.map(\.1)
+    }
+
+    /// All delivered payload bytes concatenated in arrival order. The flush coalesces surviving
+    /// buffered frames into one `onData` call, so byte order is the meaningful invariant — not the
+    /// per-frame split.
+    func concatenatedBytes() -> Data {
+        lock.lock(); defer { lock.unlock() }
+        return frames.reduce(into: Data()) { $0.append($1.0) }
+    }
+
+    /// Number of times `onData` was invoked (the flush collapses N buffered frames into 1).
+    var deliveryCount: Int {
+        lock.lock(); defer { lock.unlock() }; return frames.count
     }
 
     var isEmpty: Bool {

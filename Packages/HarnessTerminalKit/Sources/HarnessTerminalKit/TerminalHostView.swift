@@ -929,6 +929,21 @@ private final class SurfaceIO: @unchecked Sendable {
     /// fast drag must not storm the IPC socket. Each call bumps this; a queued send drops itself if
     /// a newer call superseded it. Guarded by `lock`.
     private var resizeVoteEpoch: UInt64 = 0
+    /// Coalescing buffer for the per-call `.sendData` fallback (used only when the persistent
+    /// subscription can't deliver — torn down, or evicted for slowness — e.g. during a daemon
+    /// restart). Each fallback `client.request` connects + blocks reading; an SSH-tunnel endpoint
+    /// `connect()`s even when the remote daemon is gone, so a naïve per-keystroke fallback replays
+    /// N keystrokes as N × the read timeout in a stalled burst. Instead we accumulate all bytes
+    /// awaiting a fallback here and drain them as ONE ordered request per attempt. Guarded by `lock`.
+    private var pendingFallback = Data()
+    /// Whether a fallback drain is already enqueued on `queue`; keeps `send` from piling up one
+    /// blocking request per keystroke. Guarded by `lock`.
+    private var fallbackDrainScheduled = false
+    /// Short read timeout for the fallback request. The persistent subscription is the real input
+    /// path; the fallback only covers the brief window between subscription death and the
+    /// main-thread `attach(nil)`, so it must fail fast (not the default 2 s) to avoid stalling the
+    /// serial input queue while a daemon is down.
+    private let fallbackTimeout: TimeInterval = 0.3
 
     init(surfaceID: String, endpoint: Endpoint = .localControlSocket) {
         self.surfaceID = surfaceID
@@ -941,6 +956,10 @@ private final class SurfaceIO: @unchecked Sendable {
         lock.lock()
         self.subscription = subscription
         let rows = lastRows, cols = lastCols
+        // Schedule a drain through the fresh subscription for any bytes that fell back while it was
+        // down, unless one is already pending (avoid two concurrent drains).
+        let scheduleDrain = subscription != nil && !pendingFallback.isEmpty && !fallbackDrainScheduled
+        if scheduleDrain { fallbackDrainScheduled = true }
         lock.unlock()
         // Re-assert the grid size on attach: a surface respawned by a restarted daemon comes up at
         // the daemon's placeholder size until a client resize vote arrives. Send it on the
@@ -951,6 +970,11 @@ private final class SurfaceIO: @unchecked Sendable {
                 subscription.resize(surfaceID, rows: rows, cols: cols)
             }
         }
+        // Flush any buffered fallback input through the recovered subscription, in order.
+        // `drainFallback` clears `fallbackDrainScheduled` itself.
+        if scheduleDrain {
+            queue.async { [weak self] in self?.drainFallback() }
+        }
     }
 
     private var currentSubscription: DaemonSubscription? {
@@ -958,20 +982,70 @@ private final class SurfaceIO: @unchecked Sendable {
     }
 
     func send(_ data: Data) {
+        guard !data.isEmpty else { return }
         // Stay on `queue` so keystrokes are ordered and off the main thread (matching the old
         // path); the write itself is now one frame on the persistent fd with no socket setup or
         // reply wait. Before the subscription exists (first keystrokes), fall back to the client.
-        queue.async { [weak self, client, surfaceID] in
-            // Prefer the persistent subscription fd. If it can't deliver — torn down, or the daemon
-            // evicted this slow subscriber past its write-backlog cap while staying reachable —
-            // `sendInput` returns false; fall back to a one-shot `.sendData` RPC on THIS queue
-            // (mirrors the pre-subscription path, preserving keystroke order). Without this the
-            // keystroke is silently dropped in the window between socket death and the main-thread
-            // `attach(nil)`. No main hop.
-            if let sub = self?.currentSubscription, sub.sendInput(data, surfaceID: surfaceID) {
+        queue.async { [weak self, surfaceID] in
+            guard let self else { return }
+            // Once any byte is awaiting a fallback drain, ALL later bytes must queue behind it —
+            // even if the subscription has recovered — or they'd jump ahead and reorder input. So
+            // check the pending buffer first, under the lock.
+            self.lock.lock()
+            let draining = !self.pendingFallback.isEmpty || self.fallbackDrainScheduled
+            self.lock.unlock()
+            if !draining,
+               let sub = self.currentSubscription,
+               sub.sendInput(data, surfaceID: surfaceID) {
+                // Healthy fast path: one frame on the persistent fd, no socket setup or reply wait.
                 return
             }
-            _ = try? client.request(.sendData(surfaceID: surfaceID, data: data))
+            // Subscription can't deliver — torn down, evicted for slowness, or not yet attached.
+            // Buffer the bytes and ensure exactly one coalescing drain is scheduled, so N keystrokes
+            // during an outage produce ordered single-request attempts instead of N blocking RPCs.
+            self.enqueueFallback(data)
+        }
+    }
+
+    /// Append `data` to the fallback buffer and schedule one drain if none is pending. Runs on
+    /// `queue`. Coalesces a burst of keystrokes (during subscription loss / daemon restart) into a
+    /// single ordered `.sendData` request per attempt, bounding the stall to one `fallbackTimeout`.
+    private func enqueueFallback(_ data: Data) {
+        lock.lock()
+        pendingFallback.append(data)
+        guard !fallbackDrainScheduled else { lock.unlock(); return }
+        fallbackDrainScheduled = true
+        lock.unlock()
+        queue.async { [weak self] in self?.drainFallback() }
+    }
+
+    /// Drain the coalesced fallback buffer in order. Prefers a recovered subscription; otherwise
+    /// one short-timeout `.sendData` RPC carrying everything buffered. On failure the bytes stay
+    /// buffered and the next `send` re-schedules a drain (single retry per keystroke burst, never
+    /// N × timeout). Runs on `queue`.
+    private func drainFallback() {
+        lock.lock()
+        let batch = pendingFallback
+        pendingFallback.removeAll(keepingCapacity: true)
+        fallbackDrainScheduled = false
+        lock.unlock()
+        guard !batch.isEmpty else { return }
+
+        if let sub = currentSubscription, sub.sendInput(batch, surfaceID: surfaceID) {
+            return // subscription recovered — delivered in order, buffer already cleared
+        }
+        do {
+            _ = try client.request(.sendData(surfaceID: surfaceID, data: batch), timeout: fallbackTimeout)
+        } catch {
+            // Still unreachable (e.g. daemon mid-restart): re-buffer this batch AHEAD of anything
+            // that accumulated while the request was in flight, preserving byte order. We do NOT
+            // auto-re-arm here — that would busy-spin one fallbackTimeout request after another
+            // while the daemon is down. The next `send` re-schedules a drain (so a typing user
+            // keeps retrying once per keystroke), and `attach()` flushes on reattach, so buffered
+            // bytes are never stranded once delivery is possible again.
+            lock.lock()
+            pendingFallback = batch + pendingFallback
+            lock.unlock()
         }
     }
 
