@@ -34,6 +34,13 @@ final class GlyphRasterizerTests: XCTestCase {
                        "fallback metrics must match Menlo so the cell grid stays monospace-coherent")
     }
 
+    func testEmptyFamilyFallsBackToMonospaceMenlo() {
+        // An empty (or whitespace-only) family must resolve like an unknown family — to Menlo —
+        // not silently accept CoreText's proportional default whose advances break the grid.
+        XCTAssertEqual(GlyphRasterizer(fontFamily: "", size: 14, scale: 2).primaryFamilyName, "Menlo")
+        XCTAssertEqual(GlyphRasterizer(fontFamily: "   ", size: 14, scale: 2).primaryFamilyName, "Menlo")
+    }
+
     func testRasterizesLetterWithInk() {
         guard let glyph = rasterizer.rasterize(codepoint: UInt32(UnicodeScalar("A").value)) else {
             return XCTFail("expected a glyph for 'A'")
