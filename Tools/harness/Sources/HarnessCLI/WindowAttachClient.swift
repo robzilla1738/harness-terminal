@@ -552,16 +552,7 @@ private final class WindowSession: @unchecked Sendable {
     /// this client's own tty facts (the daemon fills PTY-backed values on its side).
     private func fillExtendedContext(_ context: inout FormatContext, session: SessionGroup?) {
         context.paneCurrentCommand = tab.currentCommand
-        context.paneDead = tab.exitStatus != nil
-        context.paneExitStatus = tab.exitStatus
-        context.sessionID = session?.id.uuidString
-        context.windowID = tab.id.uuidString
-        context.sessionWindows = session?.tabs.count
-        context.windowPanes = tab.rootPane.allPaneIDs().count
-        if let session { context.windowActive = tab.id == session.activeTabID }
-        if let session, let snapshot = latestSnapshot {
-            context.sessionGroup = snapshot.groupName(of: session)
-        }
+        context.applySnapshotMetadata(tab: tab, session: session, snapshot: latestSnapshot)
         // The compositor knows the agent state from the snapshot like the GUI does.
         context.agentKind = context.agentKind ?? tab.agent?.kind.rawValue
         context.agentActivity = context.agentActivity ?? tab.agent?.activity.rawValue

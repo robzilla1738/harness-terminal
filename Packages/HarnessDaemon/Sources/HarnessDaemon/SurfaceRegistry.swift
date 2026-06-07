@@ -1190,14 +1190,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             context.historyBytes = live.historyBytes
         }
-        context.paneDead = tab.map { $0.exitStatus != nil }
-        context.paneExitStatus = tab?.exitStatus
-        context.sessionID = session?.id.uuidString
-        context.windowID = tab?.id.uuidString
-        context.sessionWindows = session?.tabs.count
-        context.windowPanes = tab?.rootPane.allPaneIDs().count
-        if let tab, let session { context.windowActive = tab.id == session.activeTabID }
-        context.sessionGroup = session.flatMap { editor.snapshot.groupName(of: $0) }
+        context.applySnapshotMetadata(tab: tab, session: session, snapshot: editor.snapshot)
         context.sessionAttached = attachedClientCountProvider?()
         context.serverPID = Int(getpid())
         return context
