@@ -51,12 +51,12 @@ final class SettingsViewControllerFollowSystemThemeTests: XCTestCase {
         XCTAssertFalse(setTheme.contains("settings.systemLightThemeName ="))
         XCTAssertFalse(setTheme.contains("settings.systemDarkThemeName ="))
 
-        let flushAndApply = try sourceBlock(named: "flushAndApply", in: settingsSource)
-        XCTAssertTrue(flushAndApply.contains("previousAppearanceMode != nextAppearanceMode"))
-        XCTAssertTrue(flushAndApply.contains("coordinator.settings.clearThemeColorOverrides()"))
-        XCTAssertTrue(flushAndApply.contains("paletteHexValues = HarnessSettings.normalizedPalette(coordinator.settings.paletteHex)"))
-        XCTAssertFalse(flushAndApply.contains("coordinator.settings.systemLightThemeName = selectedAppearanceMode"))
-        XCTAssertFalse(flushAndApply.contains("coordinator.settings.systemDarkThemeName = selectedAppearanceMode"))
+        let applySettingsLive = try sourceBlock(named: "applySettingsLive", in: settingsSource)
+        XCTAssertTrue(applySettingsLive.contains("previousAppearanceMode != nextAppearanceMode"))
+        XCTAssertTrue(applySettingsLive.contains("coordinator.settings.clearThemeColorOverrides()"))
+        XCTAssertTrue(applySettingsLive.contains("paletteHexValues = HarnessSettings.normalizedPalette(coordinator.settings.paletteHex)"))
+        XCTAssertFalse(applySettingsLive.contains("coordinator.settings.systemLightThemeName = selectedAppearanceMode"))
+        XCTAssertFalse(applySettingsLive.contains("coordinator.settings.systemDarkThemeName = selectedAppearanceMode"))
     }
 
     func testClearThemeColorOverridesClearsExactResetFieldsAndPreservesNonResetFields() {

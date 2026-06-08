@@ -668,6 +668,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
                 return HarnessSettings.makeDefaults(imported: imported)
             }
             let hasStoredColorChoice = settingsDataContainsColorChoice(data)
+            let hasStoredImportOwnedVisualChoice = settingsDataContainsImportOwnedVisualChoice(data)
             // Track whether any migration below actually changed something, so a no-op launch never
             // rewrites settings.json (a needless write — and a corruption window — on every start).
             var didMutate = false
@@ -679,7 +680,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             // via Settings / `source-config` / prefix `r` (the consented path). Either way we record
             // the new signature so we don't re-evaluate this every launch.
             if let imported, settings.importedConfigSignature != imported.signature {
-                if settings.hasUserVisualCustomizations {
+                if settings.hasUserVisualCustomizations || hasStoredImportOwnedVisualChoice {
                     settings.importedConfigSignature = imported.signature
                 } else {
                     settings.applyImportedDefaults(imported)
@@ -744,6 +745,16 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         }
         return object[CodingKeys.vividColors.stringValue] != nil
             || object[CodingKeys.colorRendering.stringValue] != nil
+    }
+
+    private static func settingsDataContainsImportOwnedVisualChoice(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return object[CodingKeys.backgroundOpacity.stringValue] != nil
+            || object[CodingKeys.backgroundBlur.stringValue] != nil
+            || object[CodingKeys.windowPaddingX.stringValue] != nil
+            || object[CodingKeys.windowPaddingY.stringValue] != nil
     }
 
     /// Opacity bounds. The user can pick any value from fully transparent to
