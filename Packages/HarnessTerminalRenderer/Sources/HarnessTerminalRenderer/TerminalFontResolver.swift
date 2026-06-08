@@ -33,6 +33,9 @@ public enum TerminalFontResolver {
 
     public static func resolve(fontFamily requestedFamily: String, size pointSize: CGFloat) -> ResolvedTerminalFont {
         let requested = normalizedRequest(requestedFamily)
+        if requested.isEmpty {
+            return menloFallback(requestedFamily: requested, size: pointSize)
+        }
         if let candidate = exactFont(named: requested, size: pointSize) {
             return ResolvedTerminalFont(
                 requestedFamily: requested,
@@ -57,9 +60,13 @@ public enum TerminalFontResolver {
             }
         }
 
+        return menloFallback(requestedFamily: requested, size: pointSize)
+    }
+
+    private static func menloFallback(requestedFamily: String, size pointSize: CGFloat) -> ResolvedTerminalFont {
         let font = CTFontCreateWithName("Menlo" as CFString, pointSize, nil)
         return ResolvedTerminalFont(
-            requestedFamily: requested,
+            requestedFamily: requestedFamily,
             effectiveFamily: CTFontCopyFamilyName(font) as String,
             effectivePostScriptName: CTFontCopyPostScriptName(font) as String,
             pointSize: pointSize,
@@ -73,8 +80,7 @@ public enum TerminalFontResolver {
     }
 
     private static func normalizedRequest(_ family: String) -> String {
-        let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? defaultFontFamily : trimmed
+        family.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func exactFont(named name: String, size: CGFloat) -> (font: CTFont, family: String, postScriptName: String)? {

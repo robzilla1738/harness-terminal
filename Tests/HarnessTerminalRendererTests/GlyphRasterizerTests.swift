@@ -110,8 +110,8 @@ final class GlyphRasterizerTests: XCTestCase {
     func testEmptyFamilyFallsBackToMonospaceMenlo() {
         // An empty (or whitespace-only) family must resolve like an unknown family — to Menlo —
         // not silently accept CoreText's proportional default whose advances break the grid.
-        XCTAssertEqual(GlyphRasterizer(fontFamily: "", size: 14, scale: 2).primaryFamilyName, "Menlo")
-        XCTAssertEqual(GlyphRasterizer(fontFamily: "   ", size: 14, scale: 2).primaryFamilyName, "Menlo")
+        XCTAssertEqual(GlyphRasterizer(fontFamily: "", size: 14, scale: 2).fontResolution.effectiveFamily, "Menlo")
+        XCTAssertEqual(GlyphRasterizer(fontFamily: "   ", size: 14, scale: 2).fontResolution.effectiveFamily, "Menlo")
     }
 
     func testRasterizesLetterWithInk() {
@@ -126,33 +126,30 @@ final class GlyphRasterizerTests: XCTestCase {
         XCTAssertGreaterThan(glyph.bearingY, 0)
     }
 
-    func testNativeRasterizationDoesNotApplyCoreGraphicsFontSmoothing() {
+    func testNativeRasterizationUsesUnsmoothedCoreGraphicsCoverage() {
         let scalar = UnicodeScalar("A").value
         guard let glyph = rasterizer.rasterize(codepoint: scalar) else {
             return XCTFail("expected a glyph for 'A'")
         }
 
         let actualCoverage = glyph.coverage.reduce(0) { $0 + Int($1) }
-        let nativeCoverage = referenceCoverageSum(codepoint: scalar, smoothFonts: false)
-        let smoothedCoverage = referenceCoverageSum(codepoint: scalar, smoothFonts: true)
+        let unsmoothedCoverage = referenceCoverageSum(codepoint: scalar, smoothFonts: false)
 
-        XCTAssertEqual(actualCoverage, nativeCoverage)
-        XCTAssertGreaterThan(
-            smoothedCoverage,
-            nativeCoverage + nativeCoverage / 5,
-            "CoreGraphics font smoothing materially thickens grayscale coverage"
-        )
+        XCTAssertEqual(actualCoverage, unsmoothedCoverage)
     }
 
-    func test3270NerdFontRasterizationUsesNativeCoverage() throws {
+    func test3270NerdFontCrispRasterizationUsesSyntheticThickeningOnly() throws {
         let resolved = TerminalFontResolver.resolve(fontFamily: "3270 Nerd Font", size: 16)
         try XCTSkipIf(resolved.effectiveFamily != "3270 Nerd Font", "3270 Nerd Font is not installed")
-        let rasterizer = GlyphRasterizer(fontFamily: "3270 Nerd Font", size: 16, scale: 2)
+        let native = GlyphRasterizer(fontFamily: "3270 Nerd Font", size: 16, scale: 2)
+        let crisp = GlyphRasterizer(fontFamily: "3270 Nerd Font", size: 16, scale: 2, fontThicken: true)
         let scalar = UnicodeScalar("W").value
-        let glyph = try XCTUnwrap(rasterizer.rasterize(codepoint: scalar))
+        let nativeGlyph = try XCTUnwrap(native.rasterize(codepoint: scalar))
+        let crispGlyph = try XCTUnwrap(crisp.rasterize(codepoint: scalar))
 
-        let actualCoverage = glyph.coverage.reduce(0) { $0 + Int($1) }
-        let nativeCoverage = referenceCoverageSum(
+        let nativeCoverage = coverageSum(nativeGlyph)
+        let crispCoverage = coverageSum(crispGlyph)
+        let unsmoothedCoverage = referenceCoverageSum(
             codepoint: scalar,
             fontName: "3270 Nerd Font",
             size: 16,
@@ -165,8 +162,9 @@ final class GlyphRasterizerTests: XCTestCase {
             smoothFonts: true
         )
 
-        XCTAssertEqual(actualCoverage, nativeCoverage)
-        XCTAssertGreaterThan(smoothedCoverage, nativeCoverage + nativeCoverage / 5)
+        XCTAssertEqual(nativeCoverage, unsmoothedCoverage)
+        XCTAssertGreaterThan(crispCoverage, nativeCoverage)
+        XCTAssertLessThan(crispCoverage, smoothedCoverage)
     }
 
     func test3270NerdFontThickeningStaysNoHeavierThanBold() throws {
