@@ -1,3 +1,4 @@
+// swift-format-ignore-file
 // Generated from Resources/themes.json by `EXPORT_THEMES=1 swift test --filter ThemeCatalogEmbedTests`.
 // Do NOT edit by hand. Base64-encoded JSON of [HarnessThemeDefinition] (the community theme catalog).
 enum BundledThemesData {

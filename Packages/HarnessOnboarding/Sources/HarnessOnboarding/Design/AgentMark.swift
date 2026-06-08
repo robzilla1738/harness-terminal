@@ -1,3 +1,4 @@
+// swift-format-ignore-file
 import SwiftUI
 import AppKit
 import CoreGraphics

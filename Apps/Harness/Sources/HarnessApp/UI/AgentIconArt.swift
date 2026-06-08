@@ -1,3 +1,4 @@
+// swift-format-ignore-file
 // Brand marks for the agents Harness detects, as raw SVG geometry (a viewBox plus its
 // subpath `d` strings) rendered to a `CGPath` by `SVGPathParser` and tinted at draw time —
 // no bundled raster assets, crisp at any size. Sources (see docs/THIRD-PARTY-NOTICES.md):

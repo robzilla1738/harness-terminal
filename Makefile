@@ -1,7 +1,18 @@
-.PHONY: build bench preview preview-stop preview-clean release release-notes package dmg smoke-dmg sign appcast finalize hotfix-release icon clean video-skills video-dev video-check video-render video-doctor
+.PHONY: build bench fmt fmt-check preview preview-stop preview-clean release release-notes package dmg smoke-dmg sign appcast finalize hotfix-release icon clean video-skills video-dev video-check video-render video-doctor
 
 build:
 	swift build
+
+# Apply / check the shared swift-format style (config in .swift-format). Advisory: CI
+# surfaces drift but never blocks a merge on it. Generated files opt out via a
+# `// swift-format-ignore-file` header. `fmt` rewrites in place; `fmt-check` only lints.
+FMT_PATHS := Apps Packages Tools Tests Package.swift
+
+fmt:
+	swift format --in-place --recursive --parallel $(FMT_PATHS)
+
+fmt-check:
+	swift format lint --recursive --parallel $(FMT_PATHS)
 
 bench:
 	HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks

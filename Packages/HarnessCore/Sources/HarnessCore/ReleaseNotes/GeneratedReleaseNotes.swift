@@ -1,3 +1,4 @@
+// swift-format-ignore-file
 // Generated from the CHANGELOG.md [1.8.0] block by Scripts/generate-release-notes.swift.
 // DO NOT EDIT BY HAND — regenerate in release prep after updating CHANGELOG.md:
 //   swift Scripts/generate-release-notes.swift
