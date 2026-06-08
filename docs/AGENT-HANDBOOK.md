@@ -529,11 +529,13 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 ## Build and test
 
 ```bash
-make build | preview | preview-stop | preview-clean | release | release-notes | package | dmg | smoke-dmg | sign | appcast | finalize | hotfix-release | icon | clean
+make build | fmt | fmt-check | preview | preview-stop | preview-clean | release | release-notes | package | dmg | smoke-dmg | sign | appcast | finalize | hotfix-release | icon | clean
 xcodegen generate
 swift test                                    # fast, deterministic
 HARNESS_LIVE_DAEMON_TESTS=1 swift test        # + real shell / socket tests
 ```
+
+**Code style:** the shared swift-format config lives in [`.swift-format`](../.swift-format) (4-space indent, 120 cols). `make fmt` rewrites in place; `make fmt-check` lints only. Generated/data files (theme base64, the width table, generated release notes, SVG/art geometry) opt out with a `// swift-format-ignore-file` header. CI's **Format lint** job surfaces drift but is **advisory** — it never blocks a merge.
 
 `make package` is an alias for `make release`. Optional marketing video targets (`video-dev`, `video-render`, …) live in the Makefile and run under `marketing/video` — see [marketing/README.md](marketing/README.md).
 
