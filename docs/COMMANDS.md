@@ -163,6 +163,13 @@ host), `-l` (login user), and the flag-only `-4 -6 -A -T -q -v`. Example:
 | `save-buffer [--name <name>] <path>` | Write a paste buffer to a file. |
 | `load-buffer [--name <name>] <path>` | Read a file into a new paste buffer. |
 
+The `--name`/`--data`/`--surface`/`--stdin` long flags above are the `harness-cli`
+forms. **Bindable forms** (the `:` prompt, `bind-key`, `source-file`) name the buffer
+with `-b <name>` and take the text/name positionally, matching a `.tmux.conf`:
+`set-buffer -b mybuf "text"`, `paste-buffer -b mybuf` (pastes into the focused pane),
+`show-buffer -b mybuf`, `delete-buffer -b mybuf`. (`save-buffer`/`load-buffer` are
+CLI-only.)
+
 ## Bindings
 
 | Command | Effect |
@@ -246,6 +253,60 @@ Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pan
 | `source-config` (alias `source`, `reload-config`) | Re-import the imported terminal config and refresh chrome. |
 | `reload-keybindings` | Re-read `keybindings.json` so an external edit takes effect. |
 
+## Format string variables
+
+`FormatString` powers `display-message`, the status line (`status-left/right/center`),
+`pane-border-format`, `set-titles-string`, and hook `--if` conditions. A token is written
+`#{name}`. Unknown or unavailable tokens render empty. IDs render with the same `$`/`@`/`%`
+prefixes the `-t` target grammar uses, so a displayed id pastes straight back into a target.
+
+| Token (aliases) | Value |
+|---|---|
+| `#{pane_id}` | Active pane's surface id, `%`-prefixed. |
+| `#{pane_title}` (`pane_name`) | Pane/tab title. |
+| `#{pane_cwd}` (`pane_current_path`) | Working directory. |
+| `#{cwd_basename}` | Last path component of the cwd. |
+| `#{pane_active}` | `1` if the pane is its tab's active pane, else `0`. |
+| `#{pane_index}` | Pane index in flat order (honors `pane-base-index`). |
+| `#{pane_pid}` | Pane shell PID. |
+| `#{pane_current_command}` | Foreground process name. |
+| `#{pane_width}` / `#{pane_height}` | Pane size in cells. |
+| `#{pane_dead}` | `1` if the pane's process has exited (`remain-on-exit`), else `0`. |
+| `#{pane_dead_status}` | Exit status of a dead pane. |
+| `#{history_bytes}` | Scrollback size in bytes. |
+| `#{session_name}` | Session name. |
+| `#{session_id}` | Session id, `$`-prefixed. |
+| `#{session_windows}` | Window (tab) count in the session. |
+| `#{session_attached}` | Attached client count (daemon-wide; see TMUX_PARITY.md). |
+| `#{session_group}` | Session group name (empty if ungrouped). |
+| `#{window_name}` (`tab_name`) | Tab title. |
+| `#{window_index}` (`tab_index`) | Tab index (honors `base-index`). |
+| `#{window_id}` | Window id, `@`-prefixed. |
+| `#{window_panes}` | Pane count in the tab. |
+| `#{window_active}` | `1` if this is the session's active tab. |
+| `#{window_flags}` | tmux-style flags: `Z` zoom, `#` activity, `~` silence, `!` bell. |
+| `#{window_zoomed_flag}` / `#{window_activity_flag}` / `#{window_silence_flag}` / `#{window_bell_flag}` | Individual `0`/`1` flags derived from `#{window_flags}`. |
+| `#{client_name}` | Attaching client label. |
+| `#{client_width}` / `#{client_height}` | Client terminal size. |
+| `#{client_tty}` | Client tty path. |
+| `#{client_termname}` | Client `$TERM`. |
+| `#{workspace_name}` | Workspace name (Harness-specific level above sessions). |
+| `#{agent_kind}` | Detected agent (`claude-code`, `codex`, …); empty if none. |
+| `#{agent_activity}` | Agent activity state. |
+| `#{git_branch}` | Current git branch of the pane's cwd. |
+| `#{pid}` | Daemon (server) PID. |
+| `#{socket_path}` | Daemon control-socket path. |
+| `#{version}` | Harness version. |
+| `#{host}` (`hostname`) | Full hostname. |
+| `#{host_short}` | Hostname up to the first dot. |
+| `#{user}` (`username`) | Current user. |
+
+**Operators** (applied inside a token): conditionals `#{?cond,then,else}`, comparison
+`==`, glob match `m:`, substitution `s/pattern/replace/`, arithmetic `e|op|…|`, width
+truncation `=N:` / `=-N:` (left/right), and `time:`/strftime date formatting. Inline
+styling uses `#[fg=…,bg=…,bold,underline,reverse,…]`. The authoritative resolver is
+`Packages/HarnessCore/Sources/HarnessCore/Format/FormatString.swift`.
+
 ## Composition
 
 | Form | Effect |
@@ -253,4 +314,5 @@ Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pan
 | `a ; b ; c` | Sequence. Commits each in order; later steps see the post-state of earlier ones. |
 | `"literal text"` / `'literal text'` | Quoted arguments preserve whitespace and `;`. An unterminated quote is a parse error (it is **not** silently swallowed to end of line). |
 
-See `docs/KEYBINDINGS.md` for the default key tables and `Packages/HarnessCore/Sources/HarnessCore/Format/FormatString.swift` for the `FormatString` token list and operators.
+See the [Format string variables](#format-string-variables) section above for the
+`FormatString` token list and operators, and `docs/KEYBINDINGS.md` for the default key tables.
