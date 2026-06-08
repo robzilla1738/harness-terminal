@@ -1,10 +1,15 @@
 import Foundation
+import HarnessCore
 @testable import HarnessTerminalKit
 import XCTest
 
 @MainActor
 final class HarnessTerminalSurfaceWorkerTests: XCTestCase {
-    private func configure(_ view: HarnessTerminalSurfaceView, offMain: Bool) {
+    private func configure(
+        _ view: HarnessTerminalSurfaceView,
+        offMain: Bool,
+        textRendering: TerminalTextRenderingMode = .native
+    ) {
         view.configureAppearance(
             fontFamily: "Menlo",
             fontSize: 14,
@@ -25,7 +30,7 @@ final class HarnessTerminalSurfaceWorkerTests: XCTestCase {
             copyOnSelect: false,
             scrollbackLines: 10_000,
             linearBlending: false,
-            textRendering: .native,
+            textRendering: textRendering,
             ligatures: true,
             promptGutter: false,
             offMainParserFramePipeline: offMain
@@ -38,6 +43,22 @@ final class HarnessTerminalSurfaceWorkerTests: XCTestCase {
                 continuation.resume()
             }
         }
+    }
+
+    func testCrispTextRenderingEnablesSurfaceFontThickening() {
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: false)
+
+        configure(view, offMain: false, textRendering: .native)
+        XCTAssertFalse(view.testingFontThickenConfiguration.enabled)
+        XCTAssertEqual(view.testingFontThickenConfiguration.strength, 255)
+
+        configure(view, offMain: false, textRendering: .crisp)
+        XCTAssertTrue(view.testingFontThickenConfiguration.enabled)
+        XCTAssertEqual(view.testingFontThickenConfiguration.strength, 255)
+
+        configure(view, offMain: false, textRendering: .soft)
+        XCTAssertFalse(view.testingFontThickenConfiguration.enabled)
+        XCTAssertEqual(view.testingFontThickenConfiguration.strength, 255)
     }
 
     func testOffMainDSRResponseIsDeliveredAfterVisibleOutput() async {
