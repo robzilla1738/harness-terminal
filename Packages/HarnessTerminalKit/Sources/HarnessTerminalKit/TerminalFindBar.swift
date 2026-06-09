@@ -9,10 +9,14 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
     var onClose: (() -> Void)?
+    /// Fires with the new (useRegex, caseSensitive) state when either toggle is flipped.
+    var onOptionsChanged: ((_ useRegex: Bool, _ caseSensitive: Bool) -> Void)?
 
     private let backdrop = NSVisualEffectView()
     private let searchField = NSSearchField()
     private let countLabel = NSTextField(labelWithString: "")
+    private let caseButton = NSButton()
+    private let regexButton = NSButton()
     private let prevButton = NSButton()
     private let nextButton = NSButton()
     private let closeButton = NSButton()
@@ -47,11 +51,13 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         countLabel.alignment = .right
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
 
+        configureToggleButton(caseButton, symbol: "textformat", tooltip: "Match case", action: #selector(caseTapped))
+        configureToggleButton(regexButton, symbol: "asterisk", tooltip: "Regular expression", action: #selector(regexTapped))
         configureIconButton(prevButton, symbol: "chevron.up", tooltip: "Previous match (⇧⌘G)", action: #selector(previousTapped))
         configureIconButton(nextButton, symbol: "chevron.down", tooltip: "Next match (⌘G)", action: #selector(nextTapped))
         configureIconButton(closeButton, symbol: "xmark", tooltip: "Close (Esc)", action: #selector(closeTapped))
 
-        let stack = NSStackView(views: [searchField, countLabel, prevButton, nextButton, closeButton])
+        let stack = NSStackView(views: [searchField, countLabel, caseButton, regexButton, prevButton, nextButton, closeButton])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .horizontal
         stack.alignment = .centerY
@@ -149,6 +155,27 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         button.action = action
         button.controlSize = .small
         button.setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    /// A push-on/push-off icon toggle (case / regex). The bordered bezel gives a visible on-state.
+    private func configureToggleButton(_ button: NSButton, symbol: String, tooltip: String, action: Selector) {
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        button.imagePosition = .imageOnly
+        button.setButtonType(.pushOnPushOff)
+        button.bezelStyle = .roundRect
+        button.state = .off
+        button.toolTip = tooltip
+        button.target = self
+        button.action = action
+        button.controlSize = .small
+        button.setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    @objc private func caseTapped() { emitOptions() }
+    @objc private func regexTapped() { emitOptions() }
+    private func emitOptions() {
+        onOptionsChanged?(regexButton.state == .on, caseButton.state == .on)
     }
 
     private func roundedMask(radius: CGFloat) -> NSImage {

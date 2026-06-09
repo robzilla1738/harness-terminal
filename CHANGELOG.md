@@ -9,6 +9,14 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
+- **Find bar: regex + match-case.** The in-pane find bar (⌘F) gained two toggles — a regular-
+  expression mode (`NSRegularExpression`; an invalid pattern just shows 0 matches) and case-
+  sensitivity. Previously it was case-insensitive substring only. Match highlighting and `n of m`
+  counts work identically in both modes; wide (CJK) glyphs keep their column alignment.
+- **Unlimited scrollback.** Setting Scrollback to **0** (Settings ▸ Terminal) now means *unlimited*
+  rather than zero lines — mapped to a bounded, OOM-safe ceiling so a runaway flood can't exhaust
+  memory. Any positive value still caps to exactly that many lines (floored at 100). The on-disk
+  persisted scrollback stays separately byte-capped.
 - **Four Ghostty-style quality-of-life features.**
   - **Scroll speed multiplier** (Settings ▸ Terminal ▸ Behavior, or `scrollMultiplier`): scale
     mouse-wheel / trackpad scroll distance (1× = native). Previously a fixed 3-lines-per-notch.

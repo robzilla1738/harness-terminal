@@ -118,10 +118,17 @@ public final class TerminalEmulator: VTParserHandler {
     /// has no scrollback to scroll.
     public var isAlternateScreenActive: Bool { onAlternateScreen }
 
-    /// Cap on retained primary-screen scrollback.
+    /// The ceiling `maxScrollbackLines == 0` ("unlimited", tmux/ghostty convention) maps to. A true
+    /// `Int.max` would let a `yes`-flood grow the in-RAM history until the GUI OOMs; a million lines
+    /// is "effectively unlimited" for any human session while staying bounded (a few hundred MB
+    /// worst case). The on-disk persistence (`ScrollbackFile`) stays separately byte-capped.
+    public static let unlimitedScrollbackLines = 1_000_000
+
+    /// Cap on retained primary-screen scrollback. `0` means **unlimited** (mapped to a bounded
+    /// OOM-safe ceiling — see `unlimitedScrollbackLines`); a positive value caps to exactly that.
     public var maxScrollbackLines: Int {
         get { primary.maxHistoryLines }
-        set { primary.maxHistoryLines = max(0, newValue) }
+        set { primary.maxHistoryLines = newValue <= 0 ? Self.unlimitedScrollbackLines : newValue }
     }
 
     /// Read the viewport scrolled `offset` lines up into scrollback (0 = live bottom).

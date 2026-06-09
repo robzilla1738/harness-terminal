@@ -503,6 +503,11 @@ public final class HarnessTerminalSurfaceView: NSView {
     // MARK: Find (in-scrollback search bar)
     /// True while the Cmd+F find bar is open; gates highlight rendering + scroll-to-match.
     private var findActive = false
+    /// Last query, kept so toggling regex / case re-runs the search without retyping.
+    private var findQuery = ""
+    /// Find-bar option toggles (regex pattern vs. literal; case-sensitive vs. -insensitive).
+    private var findUseRegex = false
+    private var findCaseSensitive = false
     /// All matches for the current query, in buffer-line order (history + viewport space).
     private var findMatches: [TerminalBufferMatch] = []
     /// Index of the "current" match within `findMatches` (the one we scrolled to).
@@ -2950,18 +2955,28 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Run/refresh the search for `query` (incremental as the user types). Empty clears matches.
     public func updateFind(query: String) {
         findActive = true
+        findQuery = query
         if query.isEmpty {
             findMatches = []
             findCurrentIndex = 0
         } else {
             findMatches = emulatorSync { emulator in
-                TerminalBufferSearch.matches(query: query, lineCount: emulator.bufferLineCount) { emulator.bufferLine($0) }
+                TerminalBufferSearch.matches(query: query, lineCount: emulator.bufferLineCount,
+                                             caseSensitive: findCaseSensitive, regex: findUseRegex) { emulator.bufferLine($0) }
             }
             findCurrentIndex = 0
             if !findMatches.isEmpty { scrollToCurrentMatch() }
         }
         onFindResultsChanged?(findMatches.isEmpty ? 0 : findCurrentIndex + 1, findMatches.count)
         scheduleRender()
+    }
+
+    /// Toggle regex / case-sensitivity from the find bar and re-run the current query.
+    public func setFindOptions(useRegex: Bool, caseSensitive: Bool) {
+        guard useRegex != findUseRegex || caseSensitive != findCaseSensitive else { return }
+        findUseRegex = useRegex
+        findCaseSensitive = caseSensitive
+        updateFind(query: findQuery)
     }
 
     public func findNext() { advanceFind(by: 1) }

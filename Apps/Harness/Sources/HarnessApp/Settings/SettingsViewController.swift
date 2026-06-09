@@ -949,7 +949,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         scrollMultiplierLabel.alignment = .right
         let behaviorGroup = settingsGroup("Behavior", [
             settingsRow("Cursor style", cursorStyleSegment),
-            settingsRow("Scrollback", scrollbackField),
+            settingsRow("Scrollback", scrollbackField, hint: "Lines of history to keep (0 = unlimited)."),
             settingsToggleRow("Blink cursor", cursorBlinkToggle),
             settingsToggleRow("Copy on select", copyOnSelectToggle),
             settingsToggleRow("Paste protection", pasteProtectionToggle),
@@ -2425,7 +2425,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.fontFamily = fontFamilyField.stringValue
         coordinator.settings.defaultShell = shellField.stringValue
         coordinator.settings.defaultCWD = cwdField.stringValue
-        coordinator.settings.scrollbackLines = max(100, Int(scrollbackField.stringValue) ?? 10_000)
+        // `0` = unlimited (mapped to a bounded OOM-safe ceiling in the engine); any other value
+        // floors at 100 so a typo can't leave a barely-usable scrollback.
+        let rawScrollback = Int(scrollbackField.stringValue) ?? 10_000
+        coordinator.settings.scrollbackLines = rawScrollback <= 0 ? 0 : max(100, rawScrollback)
         coordinator.settings.cursorStyle = cursorStyleValue(cursorStyleSegment.titleOfSelectedItem)
         coordinator.settings.cursorBlink = cursorBlinkToggle.state == .on
         coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on

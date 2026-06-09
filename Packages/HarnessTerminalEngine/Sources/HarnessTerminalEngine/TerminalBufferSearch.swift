@@ -19,7 +19,11 @@ public enum TerminalBufferSearch {
     /// (its base scalar plus any combining marks; a wide char's spacer tail and blank cells become a
     /// space), so a match's offset is the grid column directly. Both sides are canonically normalized
     /// (NFC) so a decomposed mark stream (base + combining) matches a precomposed query and vice-versa.
-    public static func matches(query: String, lineCount: Int, line: (Int) -> [TerminalGridCell]) -> [TerminalBufferMatch] {
+    public static func matches(query: String, lineCount: Int, caseSensitive: Bool = false,
+                               regex: Bool = false, line: (Int) -> [TerminalGridCell]) -> [TerminalBufferMatch] {
+        if regex {
+            return regexMatches(pattern: query, lineCount: lineCount, caseSensitive: caseSensitive, line: line)
+        }
         // Segment the query the SAME way the engine lays out cells: each width>0 scalar starts a new
         // unit; width-0 combining scalars fold onto it. This keeps needle units 1:1 with hay cells
         // even where Swift's grapheme segmentation disagrees with cell layout — e.g. the Thai spacing
@@ -55,7 +59,10 @@ public enum TerminalBufferSearch {
                 needleUnits.append(String(scalar))
             }
         }
-        let needle = needleUnits.map { $0.precomposedStringWithCanonicalMapping.lowercased() }
+        let needle = needleUnits.map { unit -> String in
+            let n = unit.precomposedStringWithCanonicalMapping
+            return caseSensitive ? n : n.lowercased()
+        }
         guard !needle.isEmpty, lineCount > 0 else { return [] }
         var out: [TerminalBufferMatch] = []
         for i in 0 ..< lineCount {
@@ -67,9 +74,8 @@ public enum TerminalBufferSearch {
             // on each keystroke in the find bar).
             let hay: [String] = cells.map { cell in
                 if cell.width == .spacerTail || cell.codepoint == 0 { return " " }
-                return cell.combining0 == 0
-                    ? cell.cluster.lowercased()
-                    : cell.cluster.precomposedStringWithCanonicalMapping.lowercased()
+                let base = cell.combining0 == 0 ? cell.cluster : cell.cluster.precomposedStringWithCanonicalMapping
+                return caseSensitive ? base : base.lowercased()
             }
             var c = 0
             let last = hay.count - needle.count
@@ -82,6 +88,36 @@ public enum TerminalBufferSearch {
                 } else {
                     c += 1
                 }
+            }
+        }
+        return out
+    }
+
+    /// Regex (`NSRegularExpression`) search. Each cell contributes exactly one `Character` to the
+    /// line string (a wide char's spacer tail + blank cells → a space), so a UTF-16 match range maps
+    /// back to grid columns by counting Characters — the same one-cell-per-column invariant the
+    /// substring path relies on. An invalid pattern (or one with no match) yields nothing, so the
+    /// find bar simply shows "0". Empty (zero-width) matches are skipped. Per-line, non-overlapping.
+    private static func regexMatches(pattern: String, lineCount: Int, caseSensitive: Bool,
+                                     line: (Int) -> [TerminalGridCell]) -> [TerminalBufferMatch] {
+        guard !pattern.isEmpty, lineCount > 0 else { return [] }
+        let options: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
+        guard let re = try? NSRegularExpression(pattern: pattern, options: options) else { return [] }
+        var out: [TerminalBufferMatch] = []
+        for i in 0 ..< lineCount {
+            let cells = line(i)
+            var lineStr = String()
+            lineStr.reserveCapacity(cells.count)
+            for cell in cells {
+                if cell.width == .spacerTail || cell.codepoint == 0 { lineStr.append(" ") }
+                else { lineStr.append(cell.cluster.first ?? " ") } // one Character per cell ⇒ column == Character distance
+            }
+            let ns = lineStr as NSString
+            for m in re.matches(in: lineStr, options: [], range: NSRange(location: 0, length: ns.length)) {
+                guard m.range.length > 0, let r = Range(m.range, in: lineStr) else { continue }
+                let startCol = lineStr.distance(from: lineStr.startIndex, to: r.lowerBound)
+                let endCol = lineStr.distance(from: lineStr.startIndex, to: r.upperBound)
+                out.append(TerminalBufferMatch(bufferLine: i, columns: startCol ..< endCol))
             }
         }
         return out

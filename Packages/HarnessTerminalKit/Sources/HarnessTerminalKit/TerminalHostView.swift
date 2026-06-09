@@ -522,6 +522,9 @@ public final class TerminalHostView: NSView {
         bar.onQueryChanged = { [weak self] query in self?.nativeView.updateFind(query: query) }
         bar.onNext = { [weak self] in self?.nativeView.findNext() }
         bar.onPrevious = { [weak self] in self?.nativeView.findPrevious() }
+        bar.onOptionsChanged = { [weak self] useRegex, caseSensitive in
+            self?.nativeView.setFindOptions(useRegex: useRegex, caseSensitive: caseSensitive)
+        }
         bar.onClose = { [weak self] in self?.hideFind() }
         addSubview(bar)
         NSLayoutConstraint.activate([
