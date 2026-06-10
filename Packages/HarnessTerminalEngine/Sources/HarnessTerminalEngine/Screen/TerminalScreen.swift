@@ -30,7 +30,7 @@ final class TerminalScreen {
     /// (the same coordinate space as `bufferLine` and prompt marks), so an image rides scrollback
     /// and reflow with the line it sits on instead of being dropped. Pixels live in `imageStore`
     /// keyed by id.
-    private struct ImagePlacement { var id: Int; var absRow: Int; var col: Int; var cols: Int; var rows: Int; var z: Int }
+    private struct ImagePlacement { var id: Int; var absRow: Int; var col: Int; var cols: Int; var rows: Int; var z: Int; var kittyID: Int? }
     private var placements: [ImagePlacement] = []
     private var imageStore: [Int: DecodedImage] = [:]
     private var nextImageID = 1
@@ -47,6 +47,20 @@ final class TerminalScreen {
     var cursorShape: TerminalCursorShape = .default
     var cursorBlinking: Bool? = nil
     var autowrap = true
+
+    /// IRM (insert/replace mode, ANSI mode 4). When set, each printed glyph opens space at the
+    /// cursor and shifts the rest of the line right (dropping what falls off the right edge) instead
+    /// of overwriting; off (replace) by default. Toggled by `CSI 4 h` / `CSI 4 l`.
+    var insertMode = false
+
+    /// DECOM (origin mode, DEC private mode 6). When set, CUP/HVP/VPA address rows relative to the
+    /// top scroll margin and confine the cursor to the scroll region; when reset (default) they are
+    /// screen-absolute. Set via `setOriginMode(_:)`, which also homes the cursor per the DEC spec.
+    private(set) var originMode = false
+
+    /// The last graphic scalar written to a cell (post-charset translation), for REP (`CSI Ps b`),
+    /// which repeats the preceding character. 0 = nothing printed yet (REP is then a no-op).
+    private var lastGraphicChar: UInt32 = 0
 
     /// Inclusive scroll region (DECSTBM). Defaults to the whole screen.
     private var scrollTop = 0
@@ -78,11 +92,35 @@ final class TerminalScreen {
     private var rowMarks: [SemanticMark?]
     /// Whether this screen accumulates scrollback (primary = true, alternate = false).
     let recordsHistory: Bool
-    /// Cap on retained scrollback lines.
+    /// Cap on retained scrollback lines. `0` means **unlimited** — history grows unbounded and is
+    /// never trimmed (the user opted into unlimited scrollback). Any positive value caps the ring.
     var maxHistoryLines = 10_000
 
     /// Number of scrolled-off lines currently retained.
     var historyCount: Int { history.count }
+
+    /// Whether virtual line `index` (0 = oldest history; `historyCount` = first active row) soft-
+    /// wraps into the next line. Out-of-range → `false` (treated as a hard line end).
+    func isLineWrapped(_ index: Int) -> Bool {
+        guard index >= 0 else { return false }
+        if index < history.count { return history[index].wrapped }
+        let r = index - history.count
+        return r >= 0 && r < rowWrapped.count ? rowWrapped[r] : false
+    }
+
+    /// The virtual-line span `[first, last]` of the logical (soft-wrapped) line containing `line` —
+    /// the maximal run of physical lines joined by soft wraps. Drives triple-click logical-line
+    /// selection. A hard-wrapped (unwrapped) line returns just itself.
+    func logicalLineSpan(containing line: Int) -> ClosedRange<Int> {
+        let total = history.count + rows
+        guard total > 0 else { return 0 ... 0 }
+        let clamped = max(0, min(line, total - 1))
+        var first = clamped
+        while first > 0, isLineWrapped(first - 1) { first -= 1 }
+        var last = clamped
+        while last < total - 1, isLineWrapped(last) { last += 1 }
+        return first ... last
+    }
 
     // MARK: - Dirty-row damage
     /// Viewport rows whose cell content changed since the last `consumeDamage()`. Cursor
@@ -273,19 +311,37 @@ final class TerminalScreen {
 
     /// Place a decoded image at the cursor. `cols`/`rows`, when > 0, override the computed cell
     /// footprint (Kitty `c`/`r`, iTerm2 width/height). Advances the cursor below the image.
-    func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0) {
+    func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0, kittyID: Int? = nil) {
         let fCols = cols > 0 ? cols : max(1, Int((Double(image.pixelWidth) / Double(max(1, cellPixelWidth))).rounded(.up)))
         let fRows = rows > 0 ? rows : max(1, Int((Double(image.pixelHeight) / Double(max(1, cellPixelHeight))).rounded(.up)))
         let id = nextImageID; nextImageID += 1
         imageStore[id] = image
         imageByteTotal += image.byteCount
-        placements.append(ImagePlacement(id: id, absRow: history.count + cursorRow, col: cursorCol, cols: fCols, rows: fRows, z: z))
+        placements.append(ImagePlacement(id: id, absRow: history.count + cursorRow, col: cursorCol, cols: fCols, rows: fRows, z: z, kittyID: kittyID))
         evictImagesIfNeeded()
         // The image overlays the rows it covers from the current cursor row down.
         markRowsDirty(cursorRow ..< (cursorRow + fRows))
         // Move the cursor below the image so following output doesn't overlap it (the placement
         // rides along if these line feeds scroll the screen).
         for _ in 0 ..< fRows { lineFeed() }
+    }
+
+    /// Kitty `a=d` delete. `kittyID == nil` removes every placement (`d=a`); a non-nil value
+    /// removes only placements transmitted/placed under that Kitty image id (`d=i`). Frees the
+    /// pixels and repaints the rows the removed images covered.
+    func deleteImages(kittyID: Int?) {
+        guard !placements.isEmpty else { return }
+        var removedAny = false
+        placements.removeAll { p in
+            guard kittyID == nil || p.kittyID == kittyID else { return false }
+            if let bytes = imageStore.removeValue(forKey: p.id)?.byteCount { imageByteTotal -= bytes }
+            let row = p.absRow - history.count
+            let lo = max(0, row), hi = min(rows, row + p.rows)
+            if lo < hi { markRowsDirty(lo ..< hi) }
+            removedAny = true
+            return true
+        }
+        if removedAny, imageStore.isEmpty { imageByteTotal = 0 } // guard against drift
     }
 
     /// Enforce the per-screen image byte budget by dropping the oldest placements (LRU by age).
@@ -355,6 +411,30 @@ final class TerminalScreen {
         }
         markRowDirty(cursorRow)   // cursor shape/blink changed → repaint its row
     }
+
+    /// att610 (DECSET/DECRST 12): program-controlled cursor blink — drives the same flag
+    /// DECSCUSR's odd/even Ps values do, leaving the shape untouched.
+    func setCursorBlink(_ on: Bool) {
+        cursorBlinking = on
+        markRowDirty(cursorRow)
+    }
+
+    /// The DECSCUSR parameter (0–6) matching the current cursor shape + blink — for the DECRQSS
+    /// reply to a `DCS $ q SP q ST` query. `.default` reports 0.
+    var cursorStylePs: Int {
+        switch (cursorShape, cursorBlinking) {
+        case (.block, true): return 1
+        case (.block, false): return 2
+        case (.underline, true): return 3
+        case (.underline, false): return 4
+        case (.bar, true): return 5
+        case (.bar, false): return 6
+        default: return 0
+        }
+    }
+
+    /// The DECSTBM scroll region as 1-based inclusive rows — for the DECRQSS reply to `DCS $ q r ST`.
+    var scrollRegionOneBased: (top: Int, bottom: Int) { (scrollTop + 1, scrollBottom + 1) }
 
     /// A snapshot scrolled `offset` lines up into history (0 = the live viewport). The
     /// window spans `rows` lines over the virtual sequence [history ++ viewport]; history
@@ -662,9 +742,10 @@ final class TerminalScreen {
         } else if boundary < historyCount {
             history.removeLast(historyCount - boundary)
         }
-        // Scrollback cap, exactly as reflow applies it (drop oldest overflow).
-        let trimmedFront = max(0, boundary - maxHistoryLines)
-        if history.count > maxHistoryLines { history.removeFirst(history.count - maxHistoryLines) }
+        // Scrollback cap, exactly as reflow applies it (drop oldest overflow). `maxHistoryLines == 0`
+        // is unlimited: trim nothing and shift no images off the front.
+        let trimmedFront = maxHistoryLines > 0 ? max(0, boundary - maxHistoryLines) : 0
+        if maxHistoryLines > 0, history.count > maxHistoryLines { history.removeFirst(history.count - maxHistoryLines) }
 
         cells = newCells
         rowWrapped = newWrapped
@@ -1013,7 +1094,7 @@ final class TerminalScreen {
         var newHistory: [HistoryLine] = []
         if viewportTop > 0 {
             for i in 0 ..< viewportTop { newHistory.append(HistoryLine(cells: out[i], wrapped: outWrapped[i], mark: outMarks[i])) }
-            if newHistory.count > maxHistoryLines { newHistory.removeFirst(newHistory.count - maxHistoryLines) }
+            if maxHistoryLines > 0, newHistory.count > maxHistoryLines { newHistory.removeFirst(newHistory.count - maxHistoryLines) }
         }
         // Viewport = the next `nr` rows, blank-padded at the bottom if content is shorter.
         var newCells = [TerminalGridCell]()
@@ -1120,6 +1201,10 @@ final class TerminalScreen {
             wrapLine()
         }
 
+        // IRM (insert mode): open `w` cells at the cursor, shifting the line's tail right, before
+        // writing the glyph over them.
+        if insertMode { openCellsForInsert(w) }
+        lastGraphicChar = scalar
         if w == 2 {
             writeCell(makeCell(scalar, width: .wide), at: cursorCol)
             if cursorCol + 1 < cols {
@@ -1132,6 +1217,16 @@ final class TerminalScreen {
         }
     }
 
+    /// Open `n` cells at the cursor for IRM insert-mode printing: shift the line's tail right by `n`,
+    /// dropping cells that fall off the right edge. The opened cells are immediately overwritten by
+    /// the printed glyph, so they need not be blanked here.
+    private func openCellsForInsert(_ n: Int) {
+        guard cursorRow >= 0, cursorRow < rows, cursorCol < cols else { return }
+        let count = min(n, cols - cursorCol)
+        let rowStart = cursorRow * cols
+        moveCells(dst: rowStart + cursorCol + count, src: rowStart + cursorCol, count: cols - cursorCol - count)
+    }
+
     /// Write a run of printable ASCII bytes (each `0x20...0x7E`, always width 1, never combining)
     /// at the cursor. Byte-for-byte equivalent to `print(UInt32(b))` for each `b`, but batched per
     /// row: the cell template (pen + hyperlink, constant across a run with no embedded escapes) is
@@ -1141,6 +1236,11 @@ final class TerminalScreen {
     func printASCIIRun(_ bytes: UnsafeBufferPointer<UInt8>) {
         let n = bytes.count
         guard n > 0 else { return }
+        // IRM shifts the line on every glyph; the batched row-fill can't express that. Replay
+        // scalar-wise (byte-identical to `print`) so the fast path stays the common replace case.
+        if insertMode { for b in bytes { print(UInt32(b)) }; return }
+        // All bytes are width-1 graphic ASCII, so the last one is the trailing graphic char (REP).
+        lastGraphicChar = UInt32(bytes[n - 1])
         var template = makeCell(0, width: .normal)
         var i = 0
         while i < n {
@@ -1208,6 +1308,9 @@ final class TerminalScreen {
     func printCodepointRun(_ codepoints: UnsafeBufferPointer<UInt32>) {
         let n = codepoints.count
         guard n > 0 else { return }
+        // IRM shifts the line on every glyph; the batched writes can't express that. Replay
+        // scalar-wise (byte-identical to `print`) so the fast path stays the common replace case.
+        if insertMode { for cp in codepoints { print(cp) }; return }
         var template = makeCell(0, width: .normal)
         var lastMarkedRow = -1
         var i = 0
@@ -1236,6 +1339,7 @@ final class TerminalScreen {
             guard cursorRow >= 0, cursorRow < rows else { return }
             let rowBase = cursorRow * cols
             let writeRow = cursorRow
+            lastGraphicChar = scalar // base glyph (w >= 1 here) — trailing graphic char for REP
             if w == 2 {
                 template.codepoint = scalar
                 template.width = .wide
@@ -1464,6 +1568,69 @@ final class TerminalScreen {
         moveCursor(row: cursorRow + dRow, col: cursorCol + dCol)
     }
 
+    /// CUP / HVP absolute positioning, honoring DECOM (origin mode). Row and col are 0-based. With
+    /// origin mode the row is relative to the top scroll margin and confined to the scroll region;
+    /// there are no horizontal margins, so the column stays screen-absolute.
+    func cursorPosition(row: Int, col: Int) {
+        guard originMode else { moveCursor(row: row, col: col); return }
+        cursorRow = clamp(scrollTop + row, scrollTop, scrollBottom)
+        cursorCol = clamp(col, 0, cols - 1)
+        pendingWrap = false
+    }
+
+    /// VPA absolute row positioning, honoring DECOM (origin mode); the column is unchanged.
+    func cursorToRow(_ row: Int) {
+        guard originMode else { moveCursorRow(row); return }
+        cursorRow = clamp(scrollTop + row, scrollTop, scrollBottom)
+        pendingWrap = false
+    }
+
+    /// DECOM (origin mode) set/reset. Per the DEC spec, selecting OR clearing it homes the cursor —
+    /// to the scroll-region top when set, the screen top when reset.
+    func setOriginMode(_ on: Bool) {
+        originMode = on
+        moveCursor(row: on ? scrollTop : 0, col: 0)
+    }
+
+    /// REP (`CSI Ps b`) — repeat the last graphic character printed `n` times. A no-op when nothing
+    /// has been printed yet. Repeats route through `print`, so wrap, width, and IRM apply as usual.
+    func repeatLastGraphicChar(_ n: Int) {
+        guard lastGraphicChar != 0 else { return }
+        let scalar = lastGraphicChar
+        for _ in 0 ..< max(1, n) { print(scalar) }
+    }
+
+    /// DECALN (`ESC # 8`) — screen alignment test: fill the whole screen with `E` in the default
+    /// rendition, reset the scroll region to full screen, and home the cursor.
+    func screenAlignmentTest() {
+        fillCells(0, cells.count, with: TerminalGridCell(codepoint: 0x45)) // 'E'
+        for r in 0 ..< rows { rowWrapped[r] = false; rowMarks[r] = nil }
+        clearImages()
+        scrollTop = 0
+        scrollBottom = rows - 1
+        cursorRow = 0
+        cursorCol = 0
+        pendingWrap = false
+        lastGraphicChar = 0x45
+        markFullyDirty()
+    }
+
+    /// DECSTR (`CSI ! p`) — soft terminal reset. Returns the cursor-visibility, insert/replace,
+    /// origin, scroll-region, saved-cursor, and rendition (SGR) state to defaults WITHOUT clearing
+    /// the screen, moving the cursor, or changing autowrap (left at its modern default-on, matching
+    /// xterm — disabling it here would surprise apps that soft-reset mid-draw). Charset and the
+    /// host-facing keyboard modes are reset by the emulator's `softReset`.
+    func softReset() {
+        cursorVisible = true
+        insertMode = false
+        originMode = false
+        scrollTop = 0
+        scrollBottom = rows - 1
+        pen = Pen()
+        savedCursor = nil
+        pendingWrap = false
+    }
+
     // MARK: - Scroll region
 
     /// Set the inclusive scroll region (DECSTBM). 0-based, clamped; resets cursor to home.
@@ -1482,7 +1649,8 @@ final class TerminalScreen {
         guard t < b || isFullScreenReset else { return }
         scrollTop = t
         scrollBottom = b
-        moveCursor(row: 0, col: 0)
+        // DECSTBM homes the cursor — to the region top under origin mode, the screen top otherwise.
+        moveCursor(row: originMode ? t : 0, col: 0)
     }
 
     func scrollUp(_ n: Int) {
@@ -1512,10 +1680,13 @@ final class TerminalScreen {
             // terminal at full scrollback pay O(maxHistoryLines) per output line. Amortize: let the
             // buffer overshoot by a bounded slack, then trim back to the cap in one batch (≈O(1)
             // amortized). Readers clamp to `history.count`, so the transient margin just exposes a
-            // little extra scrollback — never less than configured. Slack is 0 when scrollback is off.
-            let slack = min(1024, maxHistoryLines / 4)
-            if history.count > maxHistoryLines + slack {
-                dropHistoryHead(history.count - maxHistoryLines)
+            // little extra scrollback — never less than configured. `maxHistoryLines == 0` is
+            // unlimited: skip the trim entirely so history grows unbounded.
+            if maxHistoryLines > 0 {
+                let slack = min(1024, maxHistoryLines / 4)
+                if history.count > maxHistoryLines + slack {
+                    dropHistoryHead(history.count - maxHistoryLines)
+                }
             }
         }
 
@@ -1912,6 +2083,9 @@ final class TerminalScreen {
         pendingWrap = false
         cursorVisible = true
         autowrap = true
+        insertMode = false
+        originMode = false
+        lastGraphicChar = 0
         scrollTop = 0
         scrollBottom = rows - 1
         tabStops = Self.defaultTabStops(cols)

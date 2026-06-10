@@ -12,7 +12,7 @@ public final class DaemonServer: @unchecked Sendable {
     public let registry: SurfaceRegistry
     private var listener: DispatchSourceRead?
     private let queue = DispatchQueue(label: "com.robert.harness.daemon")
-    private var clientBuffers: [Int32: Data] = [:]
+    private var clientBuffers: [Int32: IPCReadBuffer] = [:]
     private var clientSources: [Int32: DispatchSourceRead] = [:]
     /// Unsent reply bytes per client, flushed by a writable `DispatchSource` when the socket
     /// was full. Client FDs are non-blocking, so a slow/stuck client buffers here instead of
@@ -33,6 +33,12 @@ public final class DaemonServer: @unchecked Sendable {
     /// Drop a client whose backlog grows past this — it isn't draining; buffering more would
     /// be an unbounded memory sink. Sized for a couple of large captures in flight.
     private let maxWriteBacklog = 32 * 1024 * 1024
+    /// Per-connection cap on buffered bytes that have not yet decoded into a frame. A legit
+    /// frame buffers at most `IPCCodec.maxPayloadLength` + framing overhead while it trickles
+    /// in; the codec rejects larger declared lengths outright, so unconsumed bytes beyond this
+    /// can never complete into a frame — defense in depth against codec drift or a misbehaving
+    /// peer turning `clientBuffers` into a per-connection memory sink.
+    private let maxPartialFrameBytes = IPCCodec.maxPayloadLength + 4096
     private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
     /// FDs subscribed to layout-change pushes (`subscribeSnapshot`).
     private var snapshotSubscribers: Set<Int32> = []
@@ -88,8 +94,34 @@ public final class DaemonServer: @unchecked Sendable {
     public func start() throws {
         try HarnessPaths.ensureDirectories()
         if FileManager.default.fileExists(atPath: HarnessPaths.socketURL.path) {
-            if case .pong = try? DaemonClient().request(.ping, timeout: 0.2) {
-                throw DaemonError.alreadyRunning
+            // Stale-socket recovery ordering: consult the PID file FIRST. If it names a dead
+            // or non-HarnessDaemon process the socket is definitively stale — remove it without
+            // spending the 200 ms ping timeout. Only fall back to the ping when the PID file is
+            // absent, unparsable, or names a live HarnessDaemon (the ping is the authoritative
+            // two-daemon guard for that last case, as documented in DaemonLifecycle).
+            var socketIsClearlyStale = false
+            if let raw = try? String(contentsOf: HarnessPaths.daemonPIDURL, encoding: .utf8),
+               let priorPID = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                let decision = DaemonLifecycle.priorInstanceDecision(
+                    priorPID: priorPID,
+                    ownPID: getpid(),
+                    isAlive: DaemonLifecycle.processIsAlive,
+                    executablePath: DaemonLifecycle.executablePath(of:)
+                )
+                if decision == .stale {
+                    // Dead or recycled PID — the socket is leftover from a crashed/killed daemon;
+                    // no need to ping it.
+                    socketIsClearlyStale = true
+                }
+                // .refuse here means a live HarnessDaemon owns the PID: fall through to the
+                // ping, which is the authoritative "is it really serving?" check.
+                // .proceed means the PID file was written by us (re-exec path): also fall through.
+            }
+            // Ping only when the PID file didn't already tell us the socket is stale.
+            if !socketIsClearlyStale {
+                if case .pong = try? DaemonClient().request(.ping, timeout: 0.2) {
+                    throw DaemonError.alreadyRunning
+                }
             }
             try FileManager.default.removeItem(at: HarnessPaths.socketURL)
         }
@@ -112,19 +144,38 @@ public final class DaemonServer: @unchecked Sendable {
             }
         }
         let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+
+        // Close the creation-time permission window: set umask(0o177) so bind() creates
+        // the socket file with exactly 0o600 permissions (rw-------), not whatever the
+        // process umask happens to be. This is listener setup on the daemon's single-
+        // threaded startup path — signal handlers and DispatchSource event handlers are
+        // not yet running, so umask is safe to change briefly here.
+        //
+        // Parent directory is 0o700 (ensureDirectories above), so this is defense-in-depth:
+        // even a relaxed umask wouldn't grant access via the parent, but belt-and-suspenders
+        // is correct for a control socket that can spawn PTYs. The chmod below stays as the
+        // second layer in case some platform creates AF_UNIX sockets without obeying umask.
+        let prevUmask = umask(0o177)
         let bindResult = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 bind(fd, $0, size)
             }
         }
+        // Restore umask immediately after bind so we don't affect any other file
+        // creation in the process lifetime. bind() is the only call that needs
+        // the restricted mask.
+        umask(prevUmask)
+
         guard bindResult == 0 else {
             close(fd)
             throw DaemonError.bindFailed
         }
-        // Restrict the control socket to the owner. A world- or group-writable
-        // control socket would let any local process drive the daemon (spawn PTYs,
-        // read pane output, run hook shell commands). 0o600 means only our UID can
-        // even connect; the peer-credential check on accept is the second layer.
+        // Belt-and-suspenders: explicitly restrict the socket to owner-only even
+        // though the umask above should have produced 0o600 at bind time. A world-
+        // or group-writable control socket would let any local process drive the
+        // daemon (spawn PTYs, read pane output, run hook shell commands). 0o600 means
+        // only our UID can even connect; the peer-credential check on accept is the
+        // second layer.
         if chmod(HarnessPaths.socketURL.path, 0o600) != 0 {
             close(fd)
             throw DaemonError.bindFailed
@@ -164,7 +215,7 @@ public final class DaemonServer: @unchecked Sendable {
         setNoSigPipe(clientFD)
         // Non-blocking so a slow/stuck client never blocks `write` on the serial queue.
         _ = harness_set_nonblocking(clientFD)
-        clientBuffers[clientFD] = Data()
+        clientBuffers[clientFD] = IPCReadBuffer()
         // Don't auto-register the connection as a client — `DaemonClient.request`
         // opens a fresh socket per call, and bookkeeping every one of those would
         // make `list-clients` useless. Clients announce themselves with
@@ -202,8 +253,8 @@ public final class DaemonServer: @unchecked Sendable {
             source.cancel()
             return
         }
-        var data = clientBuffers[fd] ?? Data()
-        data.append(contentsOf: buffer.prefix(count))
+        var data = clientBuffers[fd] ?? IPCReadBuffer()
+        data.append(buffer, count: count)
         clientBuffers[fd] = data
 
         while true {
@@ -219,7 +270,7 @@ public final class DaemonServer: @unchecked Sendable {
                 continue
             } catch {
                 // Oversized/garbage frame — the stream can't be re-synced. Drop the client.
-                clientBuffers[fd] = Data()
+                clientBuffers[fd] = IPCReadBuffer()
                 source.cancel()
                 return
             }
@@ -284,25 +335,39 @@ public final class DaemonServer: @unchecked Sendable {
             send(response, to: fd)
         }
         clientBuffers[fd] = data
+        // Partial-frame cap: bytes still buffered after the decode loop are an incomplete
+        // frame. More than one max-size frame's worth can never decode (the codec rejects
+        // larger declared lengths as soon as the header arrives), so the stream is broken
+        // or abusive — drop it instead of buffering without bound.
+        if data.count > maxPartialFrameBytes {
+            clientBuffers[fd] = IPCReadBuffer()
+            source.cancel()
+        }
     }
 
     /// `wait-for`: register/wake fds on a named channel. `wait`/`lock` defer the reply (the
     /// client's socket read blocks) until a `signal`/`unlock` from another connection sends
     /// it. All on the serial queue — no blocking here, no registry lock.
-    private func handleWaitFor(channel: String, mode: String, fd: Int32) {
+    private func handleWaitFor(channel: String, mode: WaitForMode, fd: Int32) {
         switch mode {
-        case "signal":
+        case .signal:
             for waiter in waitForRegistry.signal(channel: channel) { send(.ok, to: waiter) }
             send(.ok, to: fd)
-        case "lock":
+        case .lock:
             if waitForRegistry.lock(channel: channel, fd: fd) { send(.ok, to: fd) }
             // else: held — reply deferred until `unlock` grants it.
-        case "unlock":
+        case .unlock:
             if let granted = waitForRegistry.unlock(channel: channel) { send(.ok, to: granted) }
             send(.ok, to: fd)
-        default: // "wait"
-            waitForRegistry.wait(channel: channel, fd: fd)
-            // reply deferred until a `signal`.
+        case .wait:
+            // wait() returns false when the per-channel waiter cap is reached. In that
+            // case reply immediately with an error so the client's socket unblocks rather
+            // than hanging forever waiting for a signal that might never arrive (too many
+            // concurrent waiters on the same channel is a scripting error).
+            if !waitForRegistry.wait(channel: channel, fd: fd) {
+                send(.error("wait-for channel '\(channel)' has too many waiters"), to: fd)
+            }
+            // On true: reply deferred until a `signal`.
         }
     }
 
@@ -598,9 +663,14 @@ public final class DaemonServer: @unchecked Sendable {
         // socket layer. Otherwise a scan/monitor tick could fire against a half-stopped server.
         AgentScanner.shared.stop()
         registry.stopMonitoring()
-        // Persist any buffered scrollback before tearing down, so a graceful restart replays the
-        // most recent output instead of losing the last debounce window.
+        // Persist any buffered scrollback AND the latest layout snapshot before tearing down, so a
+        // graceful restart replays the most recent output and restores the last committed layout
+        // instead of losing the last debounce window of either.
         registry.flushAllScrollback()
+        registry.flushSnapshot()
+        // Flush the debounced stores (options / environment / hooks / paste buffers) so the last
+        // mutation in any burst's debounce window is never silently discarded on shutdown.
+        registry.flushAllStores()
         queue.sync {
             listener?.cancel() // cancel handler closes the listener fd
             listener = nil

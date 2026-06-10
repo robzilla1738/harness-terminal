@@ -105,4 +105,67 @@ final class CharacterWidthTests: XCTestCase {
         XCTAssertEqual(CharacterWidth.width(of: 0x0E4F), 1) // ๏ FONGMAN (spacing)
         XCTAssertEqual(CharacterWidth.width(of: 0x0E33), 1) // ำ SARA AM (spacing)
     }
+
+    /// The UCD-derived table must agree with the child process's `wcwidth` on the EAW=Wide
+    /// emoji every modern CLI prints (npm/vitest/eslint/cargo status glyphs, agent CLIs).
+    /// The old hand-curated ranges missed all of these — each measured 1 while the program
+    /// counted 2, desyncing the cursor and overlapping the next glyph.
+    func testEmojiWideWidths() {
+        // BMP Wide emoji below the CJK blocks (the most common offenders).
+        XCTAssertEqual(CharacterWidth.width(of: 0x231A), 2) // ⌚ watch
+        XCTAssertEqual(CharacterWidth.width(of: 0x23F0), 2) // ⏰ alarm clock
+        XCTAssertEqual(CharacterWidth.width(of: 0x26A1), 2) // ⚡ high voltage
+        XCTAssertEqual(CharacterWidth.width(of: 0x2705), 2) // ✅ check mark button
+        XCTAssertEqual(CharacterWidth.width(of: 0x2728), 2) // ✨ sparkles
+        XCTAssertEqual(CharacterWidth.width(of: 0x274C), 2) // ❌ cross mark
+        XCTAssertEqual(CharacterWidth.width(of: 0x2757), 2) // ❗ exclamation
+        XCTAssertEqual(CharacterWidth.width(of: 0x2B1B), 2) // ⬛ black large square
+        XCTAssertEqual(CharacterWidth.width(of: 0x2B50), 2) // ⭐ star
+        XCTAssertEqual(CharacterWidth.width(of: 0x2B55), 2) // ⭕ hollow red circle
+
+        // Astral blocks the old table omitted entirely.
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F004), 2) // 🀄 mahjong red dragon
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F0CF), 2) // 🃏 joker
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F680), 2) // 🚀 rocket
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F697), 2) // 🚗 automobile
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F6F4), 2) // 🛴 kick scooter
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F7E0), 2) // 🟠 orange circle
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F7EB), 2) // 🟫 brown square
+        XCTAssertEqual(CharacterWidth.width(of: 0x1FA70), 2) // 🩰 ballet shoes
+        XCTAssertEqual(CharacterWidth.width(of: 0x1FAE0), 2) // 🫠 melting face
+        XCTAssertEqual(CharacterWidth.width(of: 0x1FAF6), 2) // 🫶 heart hands
+
+        // Narrow neighbors must stay narrow — the wide runs must not over-reach.
+        XCTAssertEqual(CharacterWidth.width(of: 0x2713), 1) // ✓ plain check (EAW=N)
+        XCTAssertEqual(CharacterWidth.width(of: 0x2714), 1) // ✔ heavy check (text-default)
+        XCTAssertEqual(CharacterWidth.width(of: 0x2691), 1) // ⚑ black flag (EAW=N)
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F650), 1) // ornamental dingbats (EAW=N)
+        // Regional indicators are narrow per scalar (flag pairing is grapheme-level).
+        XCTAssertEqual(CharacterWidth.width(of: 0x1F1E6), 1)
+        // PUA (Nerd Font icons) must stay narrow — promoting them breaks powerline prompts.
+        XCTAssertEqual(CharacterWidth.width(of: 0xE0B0), 1)
+    }
+
+    /// Combining/format scalars the old hand-curated zero-width list missed. Each consumed a
+    /// spurious column, shifting every glyph after it on the row.
+    func testUCDZeroWidthCoverage() {
+        XCTAssertEqual(CharacterWidth.width(of: 0x05BF), 0) // Hebrew point RAFE
+        XCTAssertEqual(CharacterWidth.width(of: 0x05C1), 0) // Hebrew SHIN DOT
+        XCTAssertEqual(CharacterWidth.width(of: 0x0610), 0) // Arabic sign (run start)
+        XCTAssertEqual(CharacterWidth.width(of: 0x061C), 0) // ARABIC LETTER MARK (Cf)
+        XCTAssertEqual(CharacterWidth.width(of: 0x0730), 0) // Syriac PTHAHA ABOVE
+        XCTAssertEqual(CharacterWidth.width(of: 0x094D), 0) // Devanagari VIRAMA
+        XCTAssertEqual(CharacterWidth.width(of: 0x09CD), 0) // Bengali VIRAMA
+        XCTAssertEqual(CharacterWidth.width(of: 0x0BCD), 0) // Tamil VIRAMA
+        XCTAssertEqual(CharacterWidth.width(of: 0x0EB1), 0) // Lao vowel sign MAI KAN
+        XCTAssertEqual(CharacterWidth.width(of: 0x0F71), 0) // Tibetan vowel sign AA
+        XCTAssertEqual(CharacterWidth.width(of: 0x1A60), 0) // Tai Tham sign SAKOT
+        XCTAssertEqual(CharacterWidth.width(of: 0x2060), 0) // WORD JOINER (Cf)
+        XCTAssertEqual(CharacterWidth.width(of: 0xA9B3), 0) // Javanese CECAK TELU
+
+        // Deliberate deviations (documented in CharacterWidth's type doc) hold steady.
+        XCTAssertEqual(CharacterWidth.width(of: 0x00AD), 1) // soft hyphen: tier-1, narrow
+        XCTAssertEqual(CharacterWidth.width(of: 0x1160), 1) // Hangul jamo V: narrow until Phase 3
+        XCTAssertEqual(CharacterWidth.width(of: 0xD7B0), 1) // Hangul jamo ext-B: narrow
+    }
 }

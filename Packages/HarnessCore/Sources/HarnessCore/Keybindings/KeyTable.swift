@@ -233,8 +233,27 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "$"), command: .copyModeCommand(.endOfLine), note: "End of line"),
             Binding(spec: KeySpec(key: "w"), command: .copyModeCommand(.nextWord), note: "Next word"),
             Binding(spec: KeySpec(key: "b"), command: .copyModeCommand(.previousWord), note: "Previous word"),
+            Binding(spec: KeySpec(key: "e"), command: .copyModeCommand(.nextWordEnd), note: "End of next word"),
+            Binding(spec: KeySpec(key: "^"), command: .copyModeCommand(.backToIndentation), note: "Back to indentation"),
+            // Big-WORD motions (W/B/E): Harness's word motions are whitespace-delimited, so these
+            // share the w/b/e implementation (tmux `next-space`/`previous-space`/`next-space-end`).
+            Binding(spec: KeySpec(key: "W"), command: .copyModeCommand(.nextWord), note: "Next space-delimited word"),
+            Binding(spec: KeySpec(key: "B"), command: .copyModeCommand(.previousWord), note: "Previous space-delimited word"),
+            Binding(spec: KeySpec(key: "E"), command: .copyModeCommand(.nextWordEnd), note: "End of next space-delimited word"),
+            // Jump-to-char (f/F/t/T) — the front-end captures the next keystroke as the target;
+            // `;`/`,` repeat it forward / reversed.
+            Binding(spec: KeySpec(key: "f"), command: .copyModeCommand(.jump(.forward, nil)), note: "Jump to char"),
+            Binding(spec: KeySpec(key: "F"), command: .copyModeCommand(.jump(.backward, nil)), note: "Jump to char (back)"),
+            Binding(spec: KeySpec(key: "t"), command: .copyModeCommand(.jump(.toForward, nil)), note: "Jump before char"),
+            Binding(spec: KeySpec(key: "T"), command: .copyModeCommand(.jump(.toBackward, nil)), note: "Jump after char (back)"),
+            Binding(spec: KeySpec(key: ";"), command: .copyModeCommand(.jumpAgain), note: "Repeat jump"),
+            Binding(spec: KeySpec(key: ","), command: .copyModeCommand(.jumpReverse), note: "Repeat jump reversed"),
+            Binding(spec: KeySpec(key: "o"), command: .copyModeCommand(.otherEnd), note: "Other end of selection"),
             Binding(spec: KeySpec(key: "g"), command: .copyModeCommand(.top), note: "Top of history"),
             Binding(spec: KeySpec(key: "G"), command: .copyModeCommand(.bottom), note: "Bottom of history"),
+            Binding(spec: KeySpec(key: "H"), command: .copyModeCommand(.topLine), note: "Top of window"),
+            Binding(spec: KeySpec(key: "M"), command: .copyModeCommand(.middleLine), note: "Middle of window"),
+            Binding(spec: KeySpec(key: "L"), command: .copyModeCommand(.bottomLine), note: "Bottom of window"),
             Binding(spec: KeySpec(key: "["), command: .copyModeCommand(.previousPrompt), note: "Previous prompt"),
             Binding(spec: KeySpec(key: "]"), command: .copyModeCommand(.nextPrompt), note: "Next prompt"),
             Binding(spec: KeySpec(key: "PageUp"), command: .copyModeCommand(.pageUp), note: "Page up"),

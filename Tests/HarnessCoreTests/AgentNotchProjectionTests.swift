@@ -60,6 +60,42 @@ final class AgentNotchProjectionTests: XCTestCase {
         XCTAssertEqual(projection.sessionCount, 2)
     }
 
+    func testWaitingAgentIsNeverAlsoCountedAsWorking() {
+        // Regression: one agent reported as `.working` while it also needs input must read as
+        // waiting only — not "1 waiting" AND "1 working" for the same Claude Code instance.
+        let workingAndWaiting = row(id: "agent:a", waitingCount: 1, activity: .working)
+        let trulyWorking = row(id: "agent:b", waitingCount: 0, activity: .working)
+        let idle = row(id: "agent:c", waitingCount: 0, activity: .idle)
+
+        XCTAssertFalse(workingAndWaiting.isWorking, "an agent that needs input is not working")
+        XCTAssertTrue(trulyWorking.isWorking)
+        XCTAssertFalse(idle.isWorking)
+
+        let projection = AgentNotchDashboardProjection(
+            agents: [], rows: [workingAndWaiting, trulyWorking, idle]
+        )
+        XCTAssertEqual(projection.waitingCount, 1)
+        XCTAssertEqual(projection.workingCount, 1, "only the non-waiting working agent counts as working")
+    }
+
+    private func row(id: String, waitingCount: Int, activity: AgentActivity) -> AgentNotchRowSummary {
+        AgentNotchRowSummary(
+            id: id,
+            rowKind: .agent,
+            workspaceID: UUID(),
+            workspaceName: "Default",
+            sessionID: UUID(),
+            sessionName: "s",
+            tabID: UUID(),
+            title: "Claude Code",
+            detail: "Done",
+            tabCount: 1,
+            waitingCount: waitingCount,
+            agentKind: .claudeCode,
+            agentActivity: activity
+        )
+    }
+
     func testRowsExpandMultipleAgentTabsInOneSessionWithoutGenericDuplicate() {
         let sessionID = UUID()
         let cursorTab = Tab(

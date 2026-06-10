@@ -27,6 +27,12 @@ public enum SpecialKey: Sendable, Equatable {
     case capsLock, scrollLock, printScreen, pause, menu
     case leftShift, rightShift, leftControl, rightControl
     case leftAlt, rightAlt, leftSuper, rightSuper
+    // Numeric keypad (F30): plain bytes normally, SS3 application forms under DECKPAM
+    // (`modes.keypadApplication`), kitty functional codepoints when kitty is active.
+    case keypad0, keypad1, keypad2, keypad3, keypad4
+    case keypad5, keypad6, keypad7, keypad8, keypad9
+    case keypadDecimal, keypadDivide, keypadMultiply
+    case keypadMinus, keypadPlus, keypadEnter, keypadEquals
 }
 
 /// A key event's lifecycle phase, reported when the program enables Kitty "report event types"
@@ -54,6 +60,9 @@ public enum MouseEventKind: Sendable {
     case press
     case release
     case drag
+    /// Pointer motion with NO button held — reported only under any-event tracking
+    /// (DECSET 1003). Encodes as the "no button" code (3) plus the motion bit (32).
+    case move
 }
 
 /// Encodes keyboard input into the bytes a terminal application expects, honoring the
@@ -151,8 +160,41 @@ public struct InputEncoder: Sendable {
             return [0x7F]
         case .tab:
             return modifiers.contains(.shift) ? esc("[Z") : [0x09]
+        case .keypad0, .keypad1, .keypad2, .keypad3, .keypad4,
+             .keypad5, .keypad6, .keypad7, .keypad8, .keypad9,
+             .keypadDecimal, .keypadDivide, .keypadMultiply,
+             .keypadMinus, .keypadPlus, .keypadEnter, .keypadEquals:
+            return keypadLegacy(key, modes)
         default:
-            return [] // Kitty-only keys (modifiers/keypad/F13+/locks) have no legacy encoding.
+            return [] // Kitty-only keys (modifiers/locks) have no legacy encoding.
+        }
+    }
+
+    /// DECKPAM/DECKPNM (F30): in application keypad mode the numeric keypad emits the xterm
+    /// SS3 forms (`SS3 p`…`SS3 y` for 0–9, operators per the VT220 table); in numeric mode
+    /// (the default) it emits the plain bytes — byte-identical to the text path the host
+    /// previously fell through to, so nothing changes until a program sends `ESC =`.
+    private func keypadLegacy(_ key: SpecialKey, _ modes: TerminalModes) -> [UInt8] {
+        let application = modes.keypadApplication
+        switch key {
+        case .keypad0: return application ? esc("Op") : [0x30]
+        case .keypad1: return application ? esc("Oq") : [0x31]
+        case .keypad2: return application ? esc("Or") : [0x32]
+        case .keypad3: return application ? esc("Os") : [0x33]
+        case .keypad4: return application ? esc("Ot") : [0x34]
+        case .keypad5: return application ? esc("Ou") : [0x35]
+        case .keypad6: return application ? esc("Ov") : [0x36]
+        case .keypad7: return application ? esc("Ow") : [0x37]
+        case .keypad8: return application ? esc("Ox") : [0x38]
+        case .keypad9: return application ? esc("Oy") : [0x39]
+        case .keypadDecimal: return application ? esc("On") : [0x2E]
+        case .keypadDivide: return application ? esc("Oo") : [0x2F]
+        case .keypadMultiply: return application ? esc("Oj") : [0x2A]
+        case .keypadMinus: return application ? esc("Om") : [0x2D]
+        case .keypadPlus: return application ? esc("Ok") : [0x2B]
+        case .keypadEnter: return application ? esc("OM") : [0x0D]
+        case .keypadEquals: return application ? esc("OX") : [0x3D]
+        default: return []
         }
     }
 
@@ -212,19 +254,32 @@ public struct InputEncoder: Sendable {
         kind: MouseEventKind,
         column: Int,
         row: Int,
+        pixelPosition: (x: Int, y: Int)? = nil,
         modifiers: KeyModifiers = [],
         modes: TerminalModes
     ) -> [UInt8] {
         guard modes.mouseTrackingEnabled else { return [] }
         // Base button + xterm mouse modifier bits (shift 4, meta/alt 8, control 16) +
-        // motion bit (32) for drags.
-        var code = button.rawValue
+        // motion bit (32) for drags and button-less motion. Motion with no button held
+        // (any-event tracking, 1003) reports the "no button" base code 3.
+        var code = (kind == .move) ? 3 : button.rawValue
         if modifiers.contains(.shift) { code += 4 }
         if modifiers.contains(.option) { code += 8 }
         if modifiers.contains(.control) { code += 16 }
-        if kind == .drag { code += 32 }
+        if kind == .drag || kind == .move { code += 32 }
         let col = column + 1
         let line = row + 1
+
+        // SGR-pixel (DECSET 1016): the 1006 framing with pixel coordinates, taking precedence
+        // over 1006 when both are set (xterm semantics). The host supplies the pointer's
+        // 0-based pixel position within the text area — the same space the XTWINOPS `CSI 14 t`
+        // report uses — so programs can divide consistently. A 1016-only client whose host
+        // can't produce pixels (headless) degrades to the cell-based forms below rather than
+        // going silent.
+        if modes.mouseSGRPixel, let pixel = pixelPosition {
+            let final: Character = (kind == .release) ? "m" : "M"
+            return esc("[<\(code);\(max(1, pixel.x + 1));\(max(1, pixel.y + 1))\(final)")
+        }
 
         if modes.mouseSGR {
             let final: Character = (kind == .release) ? "m" : "M"
@@ -242,9 +297,35 @@ public struct InputEncoder: Sendable {
 
     /// Wrap pasted text in bracketed-paste markers when the mode is enabled.
     public func encodePaste(_ text: String, modes: TerminalModes) -> [UInt8] {
-        let body = Array(text.utf8)
+        var body = Array(text.utf8)
         guard modes.bracketedPaste else { return body }
+        // Defang paste injection: a clipboard payload that itself contains the bracketed-paste END
+        // marker would otherwise close the paste early, so everything after it reaches the program
+        // as typed input — running on paste, the exact attack bracketed paste exists to prevent.
+        // Strip every embedded end marker before wrapping, like kitty/ghostty/foot. Only the 7-bit
+        // `ESC[201~` form is removed: all six bytes are ASCII (< 0x80) and so can never fall inside
+        // a UTF-8 multi-byte scalar in `body`, making the byte scan safe.
+        stripBracketedPasteEnd(&body)
         return esc("[200~") + body + esc("[201~")
+    }
+
+    /// Remove every 7-bit bracketed-paste end marker (`ESC [ 2 0 1 ~`) from `body`, in place.
+    private func stripBracketedPasteEnd(_ body: inout [UInt8]) {
+        let marker: [UInt8] = [0x1B, 0x5B, 0x32, 0x30, 0x31, 0x7E] // ESC [ 2 0 1 ~
+        // Common case — a paste with no ESC at all — touches nothing and allocates nothing.
+        guard body.contains(marker[0]) else { return }
+        var out: [UInt8] = []
+        out.reserveCapacity(body.count)
+        var i = 0
+        while i < body.count {
+            if body[i] == marker[0], i + marker.count <= body.count, body[i ..< i + marker.count].elementsEqual(marker) {
+                i += marker.count
+            } else {
+                out.append(body[i])
+                i += 1
+            }
+        }
+        body = out
     }
 
     // MARK: - Helpers
@@ -343,6 +424,24 @@ public struct InputEncoder: Sendable {
         case .rightAlt: return 57449
         case .leftSuper: return 57444
         case .rightSuper: return 57450
+        // Kitty functional keypad codepoints (the kitty keyboard protocol's KP_* block).
+        case .keypad0: return 57399
+        case .keypad1: return 57400
+        case .keypad2: return 57401
+        case .keypad3: return 57402
+        case .keypad4: return 57403
+        case .keypad5: return 57404
+        case .keypad6: return 57405
+        case .keypad7: return 57406
+        case .keypad8: return 57407
+        case .keypad9: return 57408
+        case .keypadDecimal: return 57409
+        case .keypadDivide: return 57410
+        case .keypadMultiply: return 57411
+        case .keypadMinus: return 57412
+        case .keypadPlus: return 57413
+        case .keypadEnter: return 57414
+        case .keypadEquals: return 57415
         default: return nil
         }
     }

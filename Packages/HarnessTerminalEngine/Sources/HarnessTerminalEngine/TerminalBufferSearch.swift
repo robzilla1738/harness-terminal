@@ -10,16 +10,54 @@ public struct TerminalBufferMatch: Equatable, Sendable {
     }
 }
 
-/// Case-insensitive substring search over the terminal's full buffer (history + viewport).
-/// Pure and Foundation-only so it's unit-testable off the GUI; the surface drives it with
-/// `TerminalEmulator.bufferLineCount` / `bufferLine(_:)`.
+/// Tunables for a buffer search: plain substring (the default) vs. `NSRegularExpression`, and
+/// case-insensitive (the default) vs. case-sensitive. Surfaced as the two find-bar toggles.
+public struct TerminalBufferSearchOptions: Equatable, Sendable {
+    /// Interpret `query` as an `NSRegularExpression` pattern instead of a literal substring.
+    public var isRegex: Bool
+    /// Match case exactly. When `false` both query and buffer are case-folded before comparison.
+    public var caseSensitive: Bool
+
+    public init(isRegex: Bool = false, caseSensitive: Bool = false) {
+        self.isRegex = isRegex
+        self.caseSensitive = caseSensitive
+    }
+
+    /// The historical behavior: literal substring, case-insensitive.
+    public static let `default` = TerminalBufferSearchOptions()
+}
+
+/// Substring or regex search over the terminal's full buffer (history + viewport), case-folded
+/// unless `caseSensitive`. Pure and Foundation-only so it's unit-testable off the GUI; the surface
+/// drives it with `TerminalEmulator.bufferLineCount` / `bufferLine(_:)`.
 public enum TerminalBufferSearch {
-    /// Find every (non-overlapping) match of `query` across lines `0..<lineCount`.
-    /// `line(i)` returns the cells for buffer line `i`. Each cell maps to exactly one needle unit
-    /// (its base scalar plus any combining marks; a wide char's spacer tail and blank cells become a
-    /// space), so a match's offset is the grid column directly. Both sides are canonically normalized
-    /// (NFC) so a decomposed mark stream (base + combining) matches a precomposed query and vice-versa.
+    /// Find every (non-overlapping) substring match (literal, case-insensitive) — the default path
+    /// most callers use. Equivalent to `matches(query:options:lineCount:line:)` with `.default`.
     public static func matches(query: String, lineCount: Int, line: (Int) -> [TerminalGridCell]) -> [TerminalBufferMatch] {
+        matches(query: query, options: .default, lineCount: lineCount, line: line)
+    }
+
+    /// Find every (non-overlapping) match of `query` across lines `0..<lineCount`, honoring `options`
+    /// (regex vs. substring, case-sensitivity). `line(i)` returns the cells for buffer line `i`. Each
+    /// cell maps to exactly one column, so a match's offsets are grid columns directly. An invalid
+    /// regex yields no matches (the find bar shows 0 results rather than crashing).
+    public static func matches(query: String, options: TerminalBufferSearchOptions, lineCount: Int, line: (Int) -> [TerminalGridCell]) -> [TerminalBufferMatch] {
+        guard !query.isEmpty, lineCount > 0 else { return [] }
+        if options.isRegex {
+            return regexMatches(pattern: query, caseSensitive: options.caseSensitive, lineCount: lineCount, line: line)
+        }
+        return substringMatches(query: query, caseSensitive: options.caseSensitive, lineCount: lineCount, line: line)
+    }
+
+    /// Literal substring search. Each cell maps to exactly one needle unit (its base scalar plus any
+    /// combining marks; a wide char's spacer tail and blank cells become a space), so a match's
+    /// offset is the grid column directly. Both sides are canonically normalized (NFC) so a
+    /// decomposed mark stream (base + combining) matches a precomposed query and vice-versa, and
+    /// case-folded to lowercase unless `caseSensitive`.
+    private static func substringMatches(query: String, caseSensitive: Bool, lineCount: Int, line: (Int) -> [TerminalGridCell]) -> [TerminalBufferMatch] {
+        // Case folding is applied AFTER NFC normalization on both the query and each cell. When
+        // `caseSensitive` is set this is the identity, so comparison is exact.
+        let fold: (String) -> String = caseSensitive ? { $0 } : { $0.lowercased() }
         // Segment the query the SAME way the engine lays out cells: each width>0 scalar starts a new
         // unit; width-0 combining scalars fold onto it. This keeps needle units 1:1 with hay cells
         // even where Swift's grapheme segmentation disagrees with cell layout — e.g. the Thai spacing
@@ -55,7 +93,7 @@ public enum TerminalBufferSearch {
                 needleUnits.append(String(scalar))
             }
         }
-        let needle = needleUnits.map { $0.precomposedStringWithCanonicalMapping.lowercased() }
+        let needle = needleUnits.map { fold($0.precomposedStringWithCanonicalMapping) }
         guard !needle.isEmpty, lineCount > 0 else { return [] }
         var out: [TerminalBufferMatch] = []
         for i in 0 ..< lineCount {
@@ -68,8 +106,8 @@ public enum TerminalBufferSearch {
             let hay: [String] = cells.map { cell in
                 if cell.width == .spacerTail || cell.codepoint == 0 { return " " }
                 return cell.combining0 == 0
-                    ? cell.cluster.lowercased()
-                    : cell.cluster.precomposedStringWithCanonicalMapping.lowercased()
+                    ? fold(cell.cluster)
+                    : fold(cell.cluster.precomposedStringWithCanonicalMapping)
             }
             var c = 0
             let last = hay.count - needle.count
@@ -82,6 +120,56 @@ public enum TerminalBufferSearch {
                 } else {
                     c += 1
                 }
+            }
+        }
+        return out
+    }
+
+    /// Regex search via `NSRegularExpression`. Each line is rendered to a string where every cell
+    /// contributes exactly one non-empty unit (its cluster; spacer tails / blanks become a space),
+    /// so a UTF-16 match range maps cleanly back to a half-open *column* range. Matches are
+    /// non-overlapping (NSRegularExpression's default) and zero-width matches (e.g. `a*` against an
+    /// empty stretch) are skipped so they neither loop nor produce empty highlights.
+    private static func regexMatches(pattern: String, caseSensitive: Bool, lineCount: Int, line: (Int) -> [TerminalGridCell]) -> [TerminalBufferMatch] {
+        var regexOptions: NSRegularExpression.Options = []
+        if !caseSensitive { regexOptions.insert(.caseInsensitive) }
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: regexOptions) else { return [] }
+        var out: [TerminalBufferMatch] = []
+        for i in 0 ..< lineCount {
+            let cells = line(i)
+            guard !cells.isEmpty else { continue }
+            // Build the line text and remember where each cell starts, so a character range maps back
+            // to columns. Units are NFC-normalized (only when a cell carries combining marks) so the
+            // pattern sees the same composed form the substring path does; case folding is handled by
+            // the regex's `.caseInsensitive` option rather than here.
+            var hay = ""
+            var cellStarts: [String.Index] = []
+            cellStarts.reserveCapacity(cells.count)
+            for cell in cells {
+                cellStarts.append(hay.endIndex)
+                let unit: String
+                if cell.width == .spacerTail || cell.codepoint == 0 {
+                    unit = " "
+                } else {
+                    let cluster = cell.combining0 == 0 ? cell.cluster : cell.cluster.precomposedStringWithCanonicalMapping
+                    unit = cluster.isEmpty ? " " : cluster
+                }
+                hay += unit
+            }
+            let fullRange = NSRange(hay.startIndex ..< hay.endIndex, in: hay)
+            regex.enumerateMatches(in: hay, options: [], range: fullRange) { result, _, _ in
+                guard let result, result.range.length > 0,
+                      let charRange = Range(result.range, in: hay) else { return }
+                // First column = the cell containing the match start; last column = the cell holding
+                // the final matched character. `cellStarts` is strictly increasing (every unit is
+                // non-empty), so a simple sweep resolves both unambiguously.
+                var firstColumn = 0
+                var lastColumn = 0
+                for c in cellStarts.indices {
+                    if cellStarts[c] <= charRange.lowerBound { firstColumn = c }
+                    if cellStarts[c] < charRange.upperBound { lastColumn = c }
+                }
+                out.append(TerminalBufferMatch(bufferLine: i, columns: firstColumn ..< (lastColumn + 1)))
             }
         }
         return out

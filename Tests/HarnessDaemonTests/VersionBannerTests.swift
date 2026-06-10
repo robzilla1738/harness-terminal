@@ -109,12 +109,7 @@ final class VersionBannerTests: XCTestCase {
         contains needle: String,
         timeout: TimeInterval = 8
     ) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if capture(registry, surfaceID).contains(needle) { return true }
-            usleep(50_000)
-        }
-        return false
+        waitUntil(timeout: timeout) { capture(registry, surfaceID).contains(needle) }
     }
 
     private func surfaceIDs(_ registry: SurfaceRegistry) -> Set<String> {

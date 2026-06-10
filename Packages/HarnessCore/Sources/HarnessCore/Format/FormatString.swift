@@ -10,6 +10,68 @@ import Foundation
 /// Unknown tokens evaluate to the empty string rather than throwing so a
 /// user-customized status line with a typo still renders.
 public enum FormatString {
+    // MARK: - Process-lifetime caches
+
+    // DateFormatter is expensive to construct (~0.3 ms per call) and the status line re-evaluates
+    // every 750 ms, so creating one per `#{time:…}` evaluation wastes significant CPU. Cache by
+    // ICU format string — the ICU pattern (not the raw strftime pattern) is the key because that
+    // is the stable post-translation form.
+    //
+    // `nonisolated(unsafe)`: `@unchecked Sendable` / actor isolation can't be applied to a static
+    // on an enum; the companion NSLock serializes all reads and writes, matching the pattern in
+    // `AgentDetector` (same codebase). The cache is bounded to 32 entries to prevent an adversarial
+    // status format from growing it without limit.
+    private static let dateFormatterLock = NSLock()
+    nonisolated(unsafe) private static var dateFormatterCache: [String: DateFormatter] = [:]
+    private static let dateFormatterCacheLimit = 32
+
+    // `ProcessInfo.hostName` and `NSUserName()` are stable for the lifetime of the process (a
+    // hostname change requires a network-stack restart, and the logged-in user never changes mid-
+    // session). Per-process caching matches tmux's behaviour and avoids a gethostbyname/getpwuid
+    // round-trip on every 750 ms status-line tick.
+    private static let processIdentityLock = NSLock()
+    nonisolated(unsafe) private static var cachedHostName: String? = nil
+    nonisolated(unsafe) private static var cachedUserName: String? = nil
+
+    /// Cached hostname — resolved once per process lifetime (matches tmux behaviour).
+    private static func hostName() -> String {
+        processIdentityLock.lock()
+        defer { processIdentityLock.unlock() }
+        if let cached = cachedHostName { return cached }
+        let name = ProcessInfo.processInfo.hostName
+        cachedHostName = name
+        return name
+    }
+
+    /// Cached username — resolved once per process lifetime.
+    private static func userName() -> String {
+        processIdentityLock.lock()
+        defer { processIdentityLock.unlock() }
+        if let cached = cachedUserName { return cached }
+        let name = NSUserName()
+        cachedUserName = name
+        return name
+    }
+
+    /// Return (creating if absent) a `DateFormatter` for the given ICU `format` string. Thread-safe;
+    /// bounded to `dateFormatterCacheLimit` entries (oldest-insertion eviction: a real LRU would need
+    /// an ordered dict; given ≤a few distinct time formats in any one config the ordering is fine).
+    private static func dateFormatter(icuFormat: String) -> DateFormatter {
+        dateFormatterLock.lock()
+        defer { dateFormatterLock.unlock() }
+        if let cached = dateFormatterCache[icuFormat] { return cached }
+        let formatter = DateFormatter()
+        formatter.dateFormat = icuFormat
+        // Evict one arbitrary entry once the cap is hit, keeping memory bounded.
+        if dateFormatterCache.count >= dateFormatterCacheLimit,
+           let evictKey = dateFormatterCache.keys.first
+        {
+            dateFormatterCache.removeValue(forKey: evictKey)
+        }
+        dateFormatterCache[icuFormat] = formatter
+        return formatter
+    }
+
     public static func evaluate(_ source: String, context: FormatContext) -> String {
         evaluateStyled(source, context: context).map(\.text).joined()
     }
@@ -101,35 +163,96 @@ public enum FormatString {
         // M=month-in-year) — visibly wrong. We translate strftime to ICU here
         // so the user-facing syntax matches the standard strftime / date(1)
         // format the docstring promises.
+        //
+        // The formatter is retrieved from the process-lifetime cache (keyed on the ICU form)
+        // rather than allocated fresh on every tick — the status line re-evaluates at 750 ms
+        // and DateFormatter construction costs ~0.3 ms, which is the dominant work per frame.
         if body.hasPrefix("time:") {
             let format = String(body.dropFirst("time:".count))
-            let formatter = DateFormatter()
-            formatter.dateFormat = strftimeToICU(format)
+            let icu = strftimeToICU(format)
+            let formatter = dateFormatter(icuFormat: icu)
             return formatter.string(from: context.now)
         }
         // Operators (tmux): equality, regex match, regex substitution, arithmetic.
         if body.hasPrefix("==:") { return operatorEquals(String(body.dropFirst(3)), context: context) }
+        if body.hasPrefix("!=:") { return operatorEquals(String(body.dropFirst(3)), context: context, negate: true) }
+        if body.hasPrefix("||:") { return operatorLogical(String(body.dropFirst(3)), context: context, and: false) }
+        if body.hasPrefix("&&:") { return operatorLogical(String(body.dropFirst(3)), context: context, and: true) }
         if body.hasPrefix("m:") { return operatorMatch(String(body.dropFirst(2)), context: context) }
         if body.hasPrefix("s/") { return operatorSubstitute(body, context: context) }
         if body.hasPrefix("e|") { return operatorMath(body, context: context) }
+        if body.hasPrefix("n:") { return operatorLength(String(body.dropFirst(2)), context: context) }
+        if body.hasPrefix("T:") { return operatorExpandTwice(String(body.dropFirst(2)), context: context) }
+        if body.hasPrefix("a:") { return operatorChar(String(body.dropFirst(2)), context: context) }
+        if let padded = operatorPad(body, context: context) { return padded }
         return resolve(token: body, context: context)
     }
 
     // MARK: - Operators
 
-    private static func operatorEquals(_ body: String, context: FormatContext) -> String {
+    private static func operatorEquals(_ body: String, context: FormatContext, negate: Bool = false) -> String {
         let parts = topLevelSplit(body, on: ",")
         guard parts.count >= 2 else { return "" }
-        let a = evaluate(wrapInline(parts[0]), context: context)
-        let b = evaluate(wrapInline(parts[1]), context: context)
-        return a == b ? "1" : ""
+        let a = evaluate(parts[0], context: context)
+        let b = evaluate(parts[1], context: context)
+        return (a == b) != negate ? "1" : ""
+    }
+
+    /// `#{||:A,B}` / `#{&&:A,B}` — logical or / and. An operand is "true" when it expands non-empty
+    /// (tmux's truthiness), so these compose with `#{?…}` like comparisons do.
+    private static func operatorLogical(_ body: String, context: FormatContext, and: Bool) -> String {
+        let parts = topLevelSplit(body, on: ",")
+        guard parts.count >= 2 else { return "" }
+        let a = !evaluate(parts[0], context: context).isEmpty
+        let b = !evaluate(parts[1], context: context).isEmpty
+        return (and ? (a && b) : (a || b)) ? "1" : ""
+    }
+
+    // The argument to these modifiers is a *format string* (tmux semantics): bare text is literal
+    // and `#{…}` expands — so we `evaluate` it directly rather than wrapping it as a single token.
+
+    /// `#{n:body}` — the display-column width of the expanded body (tmux's length modifier).
+    private static func operatorLength(_ body: String, context: FormatContext) -> String {
+        String(DisplayWidth.columns(of: evaluate(body, context: context)))
+    }
+
+    /// `#{T:body}` — expand the body, then expand the *result* again as a format string. The
+    /// idiomatic way to store a format in a user-var and render it (`#{T:#{@my_format}}`).
+    private static let maxExpandDepth = 32
+    private static func operatorExpandTwice(_ body: String, context: FormatContext) -> String {
+        // T: re-expands its own produced output, so a self-referential user option
+        // (`@v = "#{T:#{@v}}"`) would recurse until the daemon's stack overflows. Bound the
+        // re-expansion depth; past the limit, stop expanding (render empty) rather than crash.
+        guard context.expansionDepth < maxExpandDepth else { return "" }
+        var inner = context
+        inner.expansionDepth += 1
+        return evaluate(evaluate(body, context: inner), context: inner)
+    }
+
+    /// `#{a:N}` — the character whose decimal Unicode scalar value is N (`#{a:65}` → "A").
+    private static func operatorChar(_ body: String, context: FormatContext) -> String {
+        let arg = evaluate(body, context: context).trimmingCharacters(in: .whitespaces)
+        guard let code = UInt32(arg), let scalar = Unicode.Scalar(code) else { return "" }
+        return String(scalar)
+    }
+
+    /// `#{pN:body}` — pad the expanded body with spaces to at least N display columns
+    /// (left-justified). Returns nil when `body` isn't the `p<digits>:` shape, so tokens that merely
+    /// start with `p` (e.g. `pane_…`) fall through to normal resolution. Never truncates.
+    private static func operatorPad(_ body: String, context: FormatContext) -> String? {
+        guard body.hasPrefix("p"), let colon = body.firstIndex(of: ":") else { return nil }
+        let widthStr = body[body.index(after: body.startIndex)..<colon]
+        guard !widthStr.isEmpty, let width = Int(widthStr), width >= 0 else { return nil }
+        let resolved = evaluate(String(body[body.index(after: colon)...]), context: context)
+        let cols = DisplayWidth.columns(of: resolved)
+        return cols >= width ? resolved : resolved + String(repeating: " ", count: width - cols)
     }
 
     private static func operatorMatch(_ body: String, context: FormatContext) -> String {
         let parts = topLevelSplit(body, on: ",")
         guard parts.count >= 2 else { return "" }
-        let pattern = evaluate(wrapInline(parts[0]), context: context)
-        let str = evaluate(wrapInline(parts[1]), context: context)
+        let pattern = evaluate(parts[0], context: context)
+        let str = evaluate(parts[1], context: context)
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return "" }
         return regex.firstMatch(in: str, range: NSRange(str.startIndex..., in: str)) != nil ? "1" : ""
     }
@@ -143,7 +266,7 @@ public enum FormatString {
         guard pieces.count == 3, let colon = pieces[2].firstIndex(of: ":") else { return "" }
         let re = pieces[0], rep = pieces[1]
         let flags = String(pieces[2][pieces[2].startIndex..<colon])
-        let target = evaluate(wrapInline(String(pieces[2][pieces[2].index(after: colon)...])), context: context)
+        let target = evaluate(String(pieces[2][pieces[2].index(after: colon)...]), context: context)
         var options: NSRegularExpression.Options = []
         if flags.contains("i") { options.insert(.caseInsensitive) }
         guard let regex = try? NSRegularExpression(pattern: re, options: options) else { return target }
@@ -156,8 +279,8 @@ public enum FormatString {
         let parts = topLevelSplit(String(body.dropFirst(2)), on: "|")
         guard parts.count >= 3 else { return "" }
         let op = parts[0].first.map(String.init) ?? "+"
-        let a = Double(evaluate(wrapInline(parts[1]), context: context).trimmingCharacters(in: .whitespaces)) ?? 0
-        let b = Double(evaluate(wrapInline(parts[2]), context: context).trimmingCharacters(in: .whitespaces)) ?? 0
+        let a = Double(evaluate(parts[1], context: context).trimmingCharacters(in: .whitespaces)) ?? 0
+        let b = Double(evaluate(parts[2], context: context).trimmingCharacters(in: .whitespaces)) ?? 0
         let result: Double
         switch op {
         case "-": result = a - b
@@ -239,18 +362,19 @@ public enum FormatString {
         // Split on top-level commas. Commas inside #{...} are protected.
         let parts = topLevelSplit(body, on: ",")
         guard parts.count >= 2 else { return "" }
-        let condition = resolve(token: parts[0], context: context)
+        // Evaluate the test as a full expression so a nested operator/comparison works, e.g.
+        // `#{?#{==:#{pane_current_command},vim},…,…}` (common in real `.tmux.conf`): a wrapped
+        // `#{…}` test runs through the token evaluator, a bare variable name resolves directly.
+        // (Previously the test was only ever resolved as a bare token, so any nested operator read
+        // as "unknown" → empty → falsy, and the else-branch always won.)
+        let test = parts[0]
+        let condition = test.contains("#{")
+            ? evaluate(test, context: context)
+            : evaluateToken(test, context: context)
         let truthy = !condition.isEmpty && condition != "0" && condition != "false"
-        if truthy { return evaluate(wrapInline(parts[1]), context: context) }
-        if parts.count >= 3 { return evaluate(wrapInline(parts[2]), context: context) }
+        if truthy { return evaluate(parts[1], context: context) }
+        if parts.count >= 3 { return evaluate(parts[2], context: context) }
         return ""
-    }
-
-    private static func wrapInline(_ part: String) -> String {
-        // If the part looks like a format string (has `#{`), pass through.
-        // Otherwise treat as literal text — that matches user intuition for
-        // `#{?agent_activity,● working,}` where `● working` is a literal.
-        part.contains("#{") ? part : part
     }
 
     private static func topLevelSplit(_ source: String, on separator: Character) -> [String] {
@@ -324,7 +448,11 @@ public enum FormatString {
     }
 
     private static func resolve(token: String, context: FormatContext) -> String {
+        // User options (`#{@name}`): resolved by the builder into `userOptions`. Unset → empty.
+        if token.hasPrefix("@") { return context.userOptions[token] ?? "" }
         switch token {
+        // The command that triggered the current hook (`command-error`'s failing command).
+        case "hook": return context.hookCommand ?? ""
         // tmux renders pane ids as `%id`; the `%` prefix matches the `-t` pane grammar
         // (TargetSpec.parsePaneToken) so a displayed id round-trips straight into a target,
         // exactly like session_id (`$`) and window_id (`@`) below.
@@ -376,11 +504,13 @@ public enum FormatString {
         case "pid": return context.serverPID.map(String.init) ?? ""
         case "socket_path": return HarnessPaths.socketURL.path
         case "version": return HarnessVersion.short
-        case "host", "hostname": return ProcessInfo.processInfo.hostName
+        // Resolved once per process — hostname/username are stable for the process lifetime
+        // (a hostname change needs a network-stack restart; user never changes mid-session).
+        case "host", "hostname": return hostName()
         case "host_short":
-            let host = ProcessInfo.processInfo.hostName
+            let host = hostName()
             return host.split(separator: ".").first.map(String.init) ?? host
-        case "user", "username": return NSUserName()
+        case "user", "username": return userName()
         default: return ""
         }
     }
@@ -405,6 +535,8 @@ public struct FormatContext: Sendable {
     public var clientName: String?
     /// tmux-style window flags: `Z` zoomed, `*` active, `#` activity, `!` bell, `M` marked.
     public var windowFlags: String?
+    /// The command that triggered the current hook, surfaced as `#{hook}` (set for `command-error`).
+    public var hookCommand: String? = nil
     public var now: Date
     // Extended tmux-parity fields. All optional: a builder fills what its vantage point
     // knows (the daemon has PTY facts, the attach client has tty facts) and the rest
@@ -434,6 +566,15 @@ public struct FormatContext: Sendable {
     public var clientHeight: Int?
     public var clientTTY: String?
     public var clientTermname: String?
+    /// User options (`@`-prefixed, e.g. `@my_var`) resolved for this vantage point's scope chain.
+    /// Keyed by the full option name *including* the `@`, matching `#{@name}` and the OptionStore
+    /// key. The builder fills it from the OptionStore; `#{@unset}` renders empty.
+    public var userOptions: [String: String] = [:]
+
+    /// Recursion guard for `#{T:…}` (expand-twice): bounds re-expansion of produced output so a
+    /// self-referential user option (`@v = "#{T:#{@v}}"`) can't recurse until the daemon's stack
+    /// overflows. Internal plumbing — builders never set it (defaults to 0).
+    var expansionDepth: Int = 0
 
     public init(
         paneID: String? = nil,

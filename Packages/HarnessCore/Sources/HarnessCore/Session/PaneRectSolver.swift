@@ -35,6 +35,17 @@ public enum PaneBorderStatus: String, Sendable, Equatable {
     }
 }
 
+/// Which window edge the `status` band occupies (tmux `status-position`). The pane
+/// area is the complementary band; the GUI status footer and the `attach` compositor
+/// both anchor off this so the layout matches end-to-end.
+public enum StatusPosition: String, Sendable, Equatable {
+    case bottom, top
+
+    public init(option value: String) {
+        self = StatusPosition(rawValue: value.lowercased()) ?? .bottom
+    }
+}
+
 /// Computes pane interior rectangles from a `PaneNode` split tree for a content
 /// area of `cols` x `rows` cells, reserving one cell between siblings for a
 /// border. Shared by the `harness attach` compositor (and reusable by the GUI).
@@ -52,16 +63,23 @@ public enum PaneRectSolver {
     /// When a split has too little room for a 1-cell divider plus a 1-cell pane
     /// on each side, we drop the border for that split so both panes stay
     /// visible. `border` controls whether a divider cell is reserved at all.
+    ///
+    /// `yOrigin` shifts every produced rect (interior `y` and `labelRow`) down by that
+    /// many rows so the caller can reserve a top status band: pass `0` for a bottom status
+    /// line (pane area starts at row 0) or the status row count for a top status line (pane
+    /// area starts below the band). Coordinates stay absolute end-to-end — the compositor
+    /// consumes them as-is.
     public static func solve(
         _ node: PaneNode,
         cols: Int,
         rows: Int,
         border: Bool = true,
-        paneBorderStatus: PaneBorderStatus = .off
+        paneBorderStatus: PaneBorderStatus = .off,
+        yOrigin: Int = 0
     ) -> [PaneRect] {
         guard cols > 0, rows > 0 else { return [] }
         var out: [PaneRect] = []
-        solve(node, x: 0, y: 0, cols: cols, rows: rows, border: border, status: paneBorderStatus, into: &out)
+        solve(node, x: 0, y: yOrigin, cols: cols, rows: rows, border: border, status: paneBorderStatus, into: &out)
         return out
     }
 

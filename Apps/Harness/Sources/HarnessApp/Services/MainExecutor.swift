@@ -139,7 +139,20 @@ final class MainExecutor: CommandExecutor {
                 throw CommandExecutionError.noActiveSurface
             }
             coordinator.requestDaemon(.sendKeys(surfaceID: surfaceID.uuidString, keys: keys))
+        case .sendKeysLiteral(let text):
+            guard let surfaceID = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
+            coordinator.requestDaemon(.sendData(surfaceID: surfaceID.uuidString, data: Data(text.utf8)))
+        case .sendKeysHex(let hex):
+            guard let surfaceID = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
+            let bytes = hex.compactMap { tok -> UInt8? in
+                UInt8(tok.hasPrefix("0x") || tok.hasPrefix("0X") ? String(tok.dropFirst(2)) : tok, radix: 16)
+            }
+            coordinator.requestDaemon(.sendData(surfaceID: surfaceID.uuidString, data: Data(bytes)))
         case .displayMessage(let format):
+            DisplayMessage.show(format)
+        case .displayMessagePrint(let format):
+            // The GUI client has no stdout to print to, so `-p` surfaces the message like a normal
+            // display-message (the visual surface is the GUI's "output").
             DisplayMessage.show(format)
         case .runShell(let shellCommand, let captureToBuffer):
             RunShell.run(shellCommand, captureToBuffer: captureToBuffer)
@@ -246,6 +259,9 @@ final class MainExecutor: CommandExecutor {
         case .respawnPane(let keepHistory):
             guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
             coordinator.requestDaemon(.respawnPane(surfaceID: sid.uuidString, keepHistory: keepHistory))
+        case .clearHistory:
+            guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
+            coordinator.requestDaemon(.clearHistory(surfaceID: sid.uuidString))
         case let .movePane(direction, source):
             try runViaTranslator(.movePane(direction: direction, source: source), coordinator: coordinator)
         case .renumberWindows:

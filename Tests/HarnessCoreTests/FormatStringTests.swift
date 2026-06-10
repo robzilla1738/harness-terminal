@@ -35,6 +35,22 @@ final class FormatStringTests: XCTestCase {
                        "idle")
     }
 
+    func testConditionalTestEvaluatesNestedOperators() {
+        // The conditional TEST may itself be a nested operator/comparison — a `.tmux.conf` staple
+        // like `#{?#{==:#{pane_current_command},vim},…,…}`. Before, the test was only resolved as a
+        // bare token, so any nested operator read as unknown → empty → falsy and the else always won.
+        let ctx = context()
+        XCTAssertEqual(FormatString.evaluate("#{?#{==:a,a},Y,N}", context: ctx), "Y")
+        XCTAssertEqual(FormatString.evaluate("#{?#{==:a,b},Y,N}", context: ctx), "N")
+        // …with a token resolved inside the comparison (session_name == "work").
+        XCTAssertEqual(FormatString.evaluate("#{?#{==:#{session_name},work},Y,N}", context: ctx), "Y")
+        XCTAssertEqual(FormatString.evaluate("#{?#{==:#{session_name},nope},Y,N}", context: ctx), "N")
+        // A nested regex-match test resolves too.
+        XCTAssertEqual(FormatString.evaluate("#{?#{m:wor,#{session_name}},Y,N}", context: ctx), "Y")
+        // The bare-variable test path is unchanged (regression): a non-empty variable is truthy.
+        XCTAssertEqual(FormatString.evaluate("#{?session_name,Y,N}", context: ctx), "Y")
+    }
+
     func testTruncationCapsLength() {
         let result = FormatString.evaluate("#{=4:pane_cwd}", context: context())
         XCTAssertEqual(result, "/Use")
@@ -162,6 +178,7 @@ final class OptionStoreTests: XCTestCase {
         let writer = OptionStore(url: url)
         let custom = " custom · #{session_name} "
         writer.set(.string(custom), key: "status-left", scope: .global)
+        writer.flush()  // saves are debounced; force the write before reloading
 
         let reader = OptionStore(url: url)
         XCTAssertEqual(reader.get("status-left", scope: .global)?.stringValue, custom)
@@ -188,6 +205,56 @@ final class OptionStoreTests: XCTestCase {
         XCTAssertEqual(OptionStore.builtinDefaults["set-titles"]?.boolValue, false)
         XCTAssertNotNil(OptionStore.builtinDefaults["set-titles-string"]?.stringValue)
         XCTAssertEqual(OptionStore.builtinDefaults["detach-on-destroy"]?.boolValue, true)
+    }
+
+    // MARK: - Scope-chain edges (roadmap PR-11)
+
+    /// The deepest scope wins, and a per-target value is isolated to that target: a sibling pane
+    /// with no override still inherits the less-specific (session) value.
+    func testPaneScopeWinsAndSiblingPanesAreIsolated() {
+        let store = OptionStore(url: tmpURL())
+        store.set(.string("session"), key: "status-left", scope: .session)
+        store.set(.string("pane-1"), key: "status-left", scope: .pane, target: "pane-1")
+        XCTAssertEqual(store.get("status-left", scope: .pane, target: "pane-1")?.stringValue, "pane-1")
+        XCTAssertEqual(store.get("status-left", scope: .pane, target: "pane-2")?.stringValue, "session",
+                       "a pane with no override inherits the session value, not pane-1's")
+    }
+
+    /// `unset` at a specific scope falls back to the next-less-specific value (not all the way to
+    /// the builtin default) — the inheritance chain still resolves after an override is cleared.
+    func testUnsetFallsBackToLessSpecificScope() {
+        let store = OptionStore(url: tmpURL())
+        store.set(.string("session"), key: "status-left", scope: .session)
+        store.set(.string("pane"), key: "status-left", scope: .pane, target: "pane-1")
+        XCTAssertEqual(store.get("status-left", scope: .pane, target: "pane-1")?.stringValue, "pane")
+        store.unset(key: "status-left", scope: .pane, target: "pane-1")
+        XCTAssertEqual(store.get("status-left", scope: .pane, target: "pane-1")?.stringValue, "session",
+                       "clearing the pane override falls back to the session value")
+    }
+
+    /// A recognized-for-set-option but unseeded key (tmux-compat options with no builtin default)
+    /// reads back nil rather than a bogus empty value — the `builtinDefaults` fallback is honest.
+    func testUnseededRecognizedKeyReadsNil() {
+        let store = OptionStore(url: tmpURL())
+        XCTAssertTrue(OptionStore.isRecognizedOptionKey("status-interval"))
+        XCTAssertNil(store.get("status-interval"), "unseeded option with no default reads nil")
+    }
+
+    /// `removeAll(scope:target:)` — the surface-teardown GC — clears every key stored at
+    /// exactly that (scope, target) and leaves other targets and scopes alone.
+    func testRemoveAllClearsOnlyTheNamedTarget() {
+        let store = OptionStore(url: tmpURL())
+        store.set(.string("a"), key: "@one", scope: .pane, target: "pane-1")
+        store.set(.string("b"), key: "@two", scope: .pane, target: "pane-1")
+        store.set(.string("c"), key: "@one", scope: .pane, target: "pane-2")
+        store.set(.string("d"), key: "@one", scope: .tab, target: "tab-1")
+        store.removeAll(scope: .pane, target: "pane-1")
+        XCTAssertNil(store.get("@one", scope: .pane, target: "pane-1"))
+        XCTAssertNil(store.get("@two", scope: .pane, target: "pane-1"))
+        XCTAssertEqual(store.get("@one", scope: .pane, target: "pane-2")?.stringValue, "c",
+                       "a sibling target's values survive")
+        XCTAssertEqual(store.get("@one", scope: .tab, target: "tab-1")?.stringValue, "d",
+                       "another scope's values survive")
     }
 }
 

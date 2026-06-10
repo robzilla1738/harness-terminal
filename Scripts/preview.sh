@@ -8,6 +8,13 @@ PREVIEW_HOME="$ROOT/.harness-preview"
 APP="$PREVIEW_HOME/HarnessPreview.app"
 mkdir -p "$PREVIEW_HOME"
 
+# Stop any GUI instance launched by a previous `make preview`. We use `open -n` below (a fresh
+# instance every time), so without this each run would stack another preview app — each with its
+# own notch panel and its own window list — making visual testing unreliable (e.g. a notch click
+# can't deminiaturize a window owned by a different instance). The daemon is left running so
+# sessions persist across rebuilds.
+pkill -f "$APP/Contents/MacOS/Harness" 2>/dev/null || true
+
 echo "Building debug preview..."
 swift build --product Harness
 swift build --product HarnessDaemon

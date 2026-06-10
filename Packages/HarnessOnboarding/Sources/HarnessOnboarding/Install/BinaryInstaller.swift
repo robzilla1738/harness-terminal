@@ -56,7 +56,7 @@ enum BinaryInstaller {
     /// The `Contents/MacOS` directory of the host app. Embedded in Harness.app this is where
     /// the bundled `harness-cli` + `HarnessDaemon` live (copied in by the "Copy Bundled Tools"
     /// build step), so the Install step copies straight out of the running bundle.
-    private static var bundledMacOSDir: URL? {
+    nonisolated private static var bundledMacOSDir: URL? {
         Bundle.main.executableURL?.deletingLastPathComponent()
     }
 
@@ -102,7 +102,14 @@ enum BinaryInstaller {
 
     // MARK: - The actual install (idempotent, user-friendly)
 
-    static func performInstall(cliSource: URL?, daemonSource: URL?) throws -> InstallReport {
+    // NOTE: performInstall and its helpers are `nonisolated` because they touch only the
+    // filesystem and spawn Processes — they read/write no @MainActor state.  The one
+    // exception is `buildNumberProbe`, which is a `static var` and therefore @MainActor-
+    // isolated.  Callers that need to run off the main thread should capture the closure
+    // in a local `let` before leaving the main actor (the call site in SetupStepView does
+    // exactly this via `Task.detached`).  See SetupStepView.performInstall for the pattern.
+
+    nonisolated static func performInstall(cliSource: URL?, daemonSource: URL?, probe: (@Sendable (URL) -> Int?)? = nil) throws -> InstallReport {
         var messages: [String] = []
         var cliOK = false
         var daemonOK = false
@@ -118,8 +125,13 @@ enum BinaryInstaller {
         // byte-diffs against the launching app's own bundle, not the previously installed copy.
         let cliSrc = cliSource ?? findBestSource(named: "harness-cli")
         let daemonSrc = daemonSource ?? findBestSource(named: "HarnessDaemon")
-        let sourceBuild = cliSrc.flatMap { buildNumberProbe($0) }
-        let installedBuild = buildNumberProbe(HarnessCLIPaths.installedCLIPath)
+        // Use the caller-provided probe closure (captured before going off-main) so we
+        // never touch the @MainActor `buildNumberProbe` static var from a nonisolated context.
+        // The default (nil) falls back to the same DispatchSemaphore-bounded implementation
+        // that the static var holds, but avoids the actor-isolation issue.
+        let resolvedProbe: (URL) -> Int? = probe ?? BinaryInstaller.defaultBuildNumberProbe
+        let sourceBuild = cliSrc.flatMap { resolvedProbe($0) }
+        let installedBuild = resolvedProbe(HarnessCLIPaths.installedCLIPath)
 
         // Copy CLI
         if let src = cliSrc {
@@ -190,7 +202,7 @@ enum BinaryInstaller {
 
     // MARK: - Helpers
 
-    private static func findBestSource(named binary: String) -> URL? {
+    nonisolated private static func findBestSource(named binary: String) -> URL? {
         if let bundled = bundledMacOSDir?.appendingPathComponent(binary),
            FileManager.default.fileExists(atPath: bundled.path) { return bundled }
 
@@ -220,19 +232,17 @@ enum BinaryInstaller {
     }
 
     /// How long `buildNumberProbe` waits for `version --json` before declaring the binary
-    /// unresponsive. The probe runs (synchronously) on the main actor inside `performInstall`,
-    /// so this bound is what keeps a wedged binary from freezing the wizard with Continue/Skip
-    /// locked forever — the failure surfaces as "no version info" and install proceeds on the
-    /// no-build fallback path.
-    static let probeTimeout: TimeInterval = 3
+    /// unresponsive. The probe runs off the main thread (see `performInstall` + the
+    /// `Task.detached` in `SetupStepView`), so this bound is the maximum extra latency
+    /// the install step can add per binary before giving up and proceeding on the
+    /// no-build fallback path. `nonisolated` so the Sendable probe closure below can read it.
+    nonisolated static let probeTimeout: TimeInterval = 3
 
-    /// Read a binary's build number by running `<binary> version --json` and parsing `cliBuild`.
-    /// Overridable so tests can stage fake source/installed builds without real executables.
-    /// Returns nil when the binary is absent or doesn't answer (e.g. HarnessDaemon has no version
-    /// flag — the daemon's overwrite decision reuses the CLI build instead). Every wait below is
-    /// bounded: the old unbounded `readToEnd` + `waitUntilExit` hung the main thread for good if
-    /// a corrupted/stuck binary never exited.
-    static var buildNumberProbe: (URL) -> Int? = { url in
+    /// The actual build-number probe implementation.  `nonisolated` + `let` so
+    /// `performInstall` can access it safely from a detached task without touching the
+    /// @MainActor-isolated `buildNumberProbe` static var.  The two always hold the same
+    /// code; `buildNumberProbe` is kept for backwards compatibility with existing tests.
+    nonisolated static let defaultBuildNumberProbe: @Sendable (URL) -> Int? = { url in
         guard FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
         let process = Process()
         process.executableURL = url
@@ -268,14 +278,26 @@ enum BinaryInstaller {
         return build
     }
 
+    /// Read a binary's build number by running `<binary> version --json` and parsing `cliBuild`.
+    /// Overridable so tests can stage fake source/installed builds without real executables.
+    /// Returns nil when the binary is absent or doesn't answer (e.g. HarnessDaemon has no version
+    /// flag — the daemon's overwrite decision reuses the CLI build instead). Every wait below is
+    /// bounded: the old unbounded `readToEnd` + `waitUntilExit` hung the main thread for good if
+    /// a corrupted/stuck binary never exited.
+    ///
+    /// In production code, prefer `defaultBuildNumberProbe` (nonisolated) when calling from a
+    /// detached task — this var is @MainActor-isolated (being a static var on a @MainActor type).
+    /// Tests override this var to inject fake probes without spawning real processes.
+    static var buildNumberProbe: @Sendable (URL) -> Int? = defaultBuildNumberProbe
+
     /// Copy `src` over `dest`, but never *downgrade*: skip a byte-identical install, and when the
     /// bytes differ keep the installed copy if its build is newer than the source's. With no build
     /// info on either side we fall back to the original replace-in-place behaviour.
     /// `internal` (not private) so the version-decision is unit-testable without invoking the real
     /// launchctl bootstrap in `performInstall`.
     @discardableResult
-    static func copyReplacing(src: URL, dest: URL, executable: Bool,
-                              sourceBuild: Int? = nil, installedBuild: Int? = nil) throws -> CopyOutcome {
+    nonisolated static func copyReplacing(src: URL, dest: URL, executable: Bool,
+                                          sourceBuild: Int? = nil, installedBuild: Int? = nil) throws -> CopyOutcome {
         if src.standardizedFileURL.path == dest.standardizedFileURL.path {
             if executable {
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
@@ -304,7 +326,7 @@ enum BinaryInstaller {
     }
 
     /// Cheap byte-equality: compare sizes first, then contents only if they match.
-    private static func filesAreIdentical(_ a: URL, _ b: URL) -> Bool {
+    nonisolated private static func filesAreIdentical(_ a: URL, _ b: URL) -> Bool {
         let fm = FileManager.default
         let sizeA = (try? fm.attributesOfItem(atPath: a.path)[.size]) as? Int
         let sizeB = (try? fm.attributesOfItem(atPath: b.path)[.size]) as? Int
@@ -314,7 +336,7 @@ enum BinaryInstaller {
     }
 
     /// The exact plist template captured from the real LaunchAgentInstaller at project creation.
-    private static func launchAgentPlist(daemonPath: URL, harnessHome: URL, logPath: URL) -> String {
+    nonisolated private static func launchAgentPlist(daemonPath: URL, harnessHome: URL, logPath: URL) -> String {
         """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -353,7 +375,7 @@ enum BinaryInstaller {
         """
     }
 
-    private static func runLaunchctl(_ arguments: [String]) -> (status: Int32, output: String) {
+    nonisolated private static func runLaunchctl(_ arguments: [String]) -> (status: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = arguments

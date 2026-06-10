@@ -63,15 +63,13 @@ final class FormatContextDaemonTests: XCTestCase {
         // The scan only commits when the probe succeeds — poll a few cycles like the
         // daemon's own ~1.5s timer would.
         var command: String?
-        let deadline = Date().addingTimeInterval(8)
-        while Date() < deadline {
+        waitUntil(timeout: 8) {
             registry.refreshSurfaceMetadata()
             command = registry.snapshot.workspaces
                 .flatMap(\.sessions).flatMap(\.tabs)
                 .first { $0.rootPane.allSurfaceIDs().map(\.uuidString).contains(surface.surfaceID) }?
                 .currentCommand
-            if command?.isEmpty == false { break }
-            usleep(200_000)
+            return command?.isEmpty == false
         }
         XCTAssertFalse(command?.isEmpty ?? true, "scan never committed a foreground command")
     }

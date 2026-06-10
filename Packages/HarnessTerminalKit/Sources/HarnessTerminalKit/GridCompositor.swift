@@ -85,7 +85,12 @@ public final class GridCompositor {
     /// Render `panes` plus an optional `status` line (drawn on the bottom row)
     /// into ANSI. Convenience over `render(panes:statusLines:)` for the single-line
     /// case: styled segments (with `#[…]` spans) take precedence over a plain string.
-    public func render(panes: [CompositorPane], status: String? = nil, statusSegments: [StyledSegment]? = nil) -> String {
+    public func render(
+        panes: [CompositorPane],
+        status: String? = nil,
+        statusSegments: [StyledSegment]? = nil,
+        statusPosition: StatusPosition = .bottom
+    ) -> String {
         let lines: [[StyledSegment]]?
         if let statusSegments {
             lines = [statusSegments]
@@ -95,25 +100,34 @@ public final class GridCompositor {
         } else {
             lines = nil
         }
-        return render(panes: panes, statusLines: lines)
+        return render(panes: panes, statusLines: lines, statusPosition: statusPosition)
     }
 
     /// Render `panes` plus N status lines (tmux `status 2..5`). `statusLines` is
-    /// **bottom-to-top**: index 0 is the bottom (main) line drawn on the last row,
-    /// index 1 the row above it, and so on. The pane area is the top
-    /// `rows - statusLines.count` rows, so borders and panes never overlap the status
-    /// band. `nil`/empty hides the status entirely.
-    public func render(panes: [CompositorPane], statusLines: [[StyledSegment]]?) -> String {
+    /// **band-relative from the main line outward**: index 0 is the main line, index 1 the
+    /// next row, and so on. With `statusPosition == .bottom` the main line is the last row
+    /// and extras stack upward; with `.top` the main line is row 0 and extras stack downward.
+    /// The pane area is the complementary `rows - statusLines.count` rows — the caller must
+    /// have solved its pane rects with a matching `yOrigin` (0 for bottom, `statusCount` for
+    /// top) so panes/borders never overlap the band. `nil`/empty hides the status entirely.
+    public func render(
+        panes: [CompositorPane],
+        statusLines: [[StyledSegment]]?,
+        statusPosition: StatusPosition = .bottom
+    ) -> String {
         let statusCount = max(0, min(rows, statusLines?.count ?? 0))
         var buffer = [RenderCell](repeating: .blank, count: cols * rows)
 
         // 1) Borders: fill the pane area with box-drawing lines, then panes
         //    paint their interiors over them. We classify each pane-area cell by
         //    whether it is covered by a pane; uncovered cells become borders.
+        //    The pane area is the band complementary to the status rows: it starts
+        //    below the band for a top status line, or at row 0 for a bottom one.
         let paneArea = rows - statusCount
-        paintBorders(into: &buffer, panes: panes, paneAreaRows: paneArea)
+        let paneAreaY0 = statusPosition == .top ? statusCount : 0
+        paintBorders(into: &buffer, panes: panes, paneAreaY0: paneAreaY0, paneAreaRows: paneArea)
 
-        // 2) Panes.
+        // 2) Panes (rects already absolute, including the `yOrigin` reservation).
         var cursor: (x: Int, y: Int)? = nil
         for pane in panes {
             paint(pane: pane, into: &buffer, into: &cursor)
@@ -125,10 +139,12 @@ public final class GridCompositor {
             paintBorderLabel(label, row: row, paneX: pane.rect.x, paneCols: pane.rect.cols, active: pane.isActive, into: &buffer)
         }
 
-        // 3) Status lines, bottom-to-top: line i sits on row `rows - 1 - i`.
+        // 3) Status lines from the main line outward: at the bottom, line i sits on row
+        //    `rows - 1 - i` (stack upward); at the top, line i sits on row `i` (stack downward).
         if let statusLines {
             for (i, line) in statusLines.prefix(statusCount).enumerated() {
-                paintStatusSegments(line, row: rows - 1 - i, into: &buffer)
+                let row = statusPosition == .top ? i : rows - 1 - i
+                paintStatusSegments(line, row: row, into: &buffer)
             }
         }
 
@@ -276,26 +292,29 @@ public final class GridCompositor {
     private func paintBorders(
         into buffer: inout [RenderCell],
         panes: [CompositorPane],
+        paneAreaY0: Int,
         paneAreaRows: Int
     ) {
         guard paneAreaRows > 0 else { return }
-        // Coverage map: true where a pane interior sits.
-        var covered = [Bool](repeating: false, count: cols * paneAreaRows)
+        let y1 = paneAreaY0 + paneAreaRows
+        // Coverage map (whole-frame so we can index absolute rows): true where a pane interior sits.
+        var covered = [Bool](repeating: false, count: cols * rows)
         for pane in panes {
             let r = pane.rect
-            for y in max(0, r.y) ..< min(paneAreaRows, r.y + r.rows) {
+            for y in max(paneAreaY0, r.y) ..< min(y1, r.y + r.rows) {
                 for x in max(0, r.x) ..< min(cols, r.x + r.cols) {
                     covered[y * cols + x] = true
                 }
             }
         }
 
+        // A cell is a border only inside the pane-area band and not covered by a pane.
         func isBorder(_ x: Int, _ y: Int) -> Bool {
-            guard x >= 0, x < cols, y >= 0, y < paneAreaRows else { return false }
+            guard x >= 0, x < cols, y >= paneAreaY0, y < y1 else { return false }
             return !covered[y * cols + x]
         }
 
-        for y in 0 ..< paneAreaRows {
+        for y in paneAreaY0 ..< y1 {
             for x in 0 ..< cols where isBorder(x, y) {
                 let up = isBorder(x, y - 1)
                 let down = isBorder(x, y + 1)

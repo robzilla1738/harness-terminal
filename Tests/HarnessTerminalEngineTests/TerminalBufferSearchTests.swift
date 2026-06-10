@@ -53,4 +53,69 @@ final class TerminalBufferSearchTests: XCTestCase {
         let matches = TerminalBufferSearch.matches(query: "hit", lineCount: 1, line: { _ in cells })
         XCTAssertEqual(matches, [TerminalBufferMatch(bufferLine: 0, columns: 2 ..< 5)])
     }
+
+    // MARK: - Case sensitivity
+
+    func testCaseSensitiveSubstringRespectsCase() {
+        let (count, line) = lines(["Hello WORLD"])
+        let sensitive = TerminalBufferSearchOptions(isRegex: false, caseSensitive: true)
+        // Lowercase query no longer matches the uppercase buffer text...
+        XCTAssertTrue(TerminalBufferSearch.matches(query: "world", options: sensitive, lineCount: count, line: line).isEmpty)
+        // ...but the exact-case query does.
+        XCTAssertEqual(
+            TerminalBufferSearch.matches(query: "WORLD", options: sensitive, lineCount: count, line: line),
+            [TerminalBufferMatch(bufferLine: 0, columns: 6 ..< 11)]
+        )
+    }
+
+    // MARK: - Regex
+
+    func testRegexCharacterClassMatchesEachWord() {
+        let (count, line) = lines(["the quick brown fox"])
+        let regex = TerminalBufferSearchOptions(isRegex: true, caseSensitive: false)
+        let matches = TerminalBufferSearch.matches(query: "[a-z]+", options: regex, lineCount: count, line: line)
+        XCTAssertEqual(matches, [
+            TerminalBufferMatch(bufferLine: 0, columns: 0 ..< 3),   // the
+            TerminalBufferMatch(bufferLine: 0, columns: 4 ..< 9),   // quick
+            TerminalBufferMatch(bufferLine: 0, columns: 10 ..< 15), // brown
+            TerminalBufferMatch(bufferLine: 0, columns: 16 ..< 19), // fox
+        ])
+    }
+
+    func testRegexWildcardSpansAcrossSpaces() {
+        let (count, line) = lines(["the quick brown fox"])
+        let regex = TerminalBufferSearchOptions(isRegex: true, caseSensitive: false)
+        let matches = TerminalBufferSearch.matches(query: "quick.*fox", options: regex, lineCount: count, line: line)
+        XCTAssertEqual(matches, [TerminalBufferMatch(bufferLine: 0, columns: 4 ..< 19)])
+    }
+
+    func testRegexCaseSensitivity() {
+        let (count, line) = lines(["Hello WORLD"])
+        let sensitive = TerminalBufferSearchOptions(isRegex: true, caseSensitive: true)
+        XCTAssertTrue(TerminalBufferSearch.matches(query: "world", options: sensitive, lineCount: count, line: line).isEmpty)
+        XCTAssertEqual(
+            TerminalBufferSearch.matches(query: "WOR.D", options: sensitive, lineCount: count, line: line),
+            [TerminalBufferMatch(bufferLine: 0, columns: 6 ..< 11)]
+        )
+    }
+
+    func testInvalidRegexReturnsEmpty() {
+        let (count, line) = lines(["anything"])
+        let regex = TerminalBufferSearchOptions(isRegex: true, caseSensitive: false)
+        // An unterminated character class is an invalid pattern — no crash, no matches.
+        XCTAssertTrue(TerminalBufferSearch.matches(query: "[", options: regex, lineCount: count, line: line).isEmpty)
+    }
+
+    func testRegexColumnMappingOverWideChar() {
+        // The regex path renders one unit per cell, so a wide glyph's spacer tail must not shift the
+        // column range it reports — mirrors `testWideCharSpacerTailDoesNotShiftColumns`.
+        var cells: [TerminalGridCell] = [
+            TerminalGridCell(codepoint: "あ".unicodeScalars.first!.value, width: .normal),
+            TerminalGridCell(width: .spacerTail),
+        ]
+        cells += "hit".unicodeScalars.map { TerminalGridCell(codepoint: $0.value) }
+        let regex = TerminalBufferSearchOptions(isRegex: true, caseSensitive: false)
+        let matches = TerminalBufferSearch.matches(query: "h.t", options: regex, lineCount: 1, line: { _ in cells })
+        XCTAssertEqual(matches, [TerminalBufferMatch(bufferLine: 0, columns: 2 ..< 5)])
+    }
 }

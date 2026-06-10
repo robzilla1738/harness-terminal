@@ -37,6 +37,7 @@ final class EnvironmentStoreTests: XCTestCase {
         let first = EnvironmentStore(url: url)
         first.set("kept", key: "TOKEN")
         first.set("svalue", key: "S", sessionID: "abc")
+        first.flush()  // saves are debounced; force the write before reloading
 
         let reloaded = EnvironmentStore(url: url)
         XCTAssertEqual(reloaded.resolved(sessionID: "abc")["TOKEN"], "kept")
@@ -58,6 +59,7 @@ final class EnvironmentStoreTests: XCTestCase {
 
         // A subsequent set persists cleanly to the original path.
         store.set("v", key: "K")
+        store.flush()  // saves are debounced; force the write before reloading
         XCTAssertEqual(EnvironmentStore(url: url).resolved(sessionID: nil)["K"], "v")
     }
 }

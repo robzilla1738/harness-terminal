@@ -21,6 +21,24 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("respawn-pane --clear-history"), .respawnPane(keepHistory: false))
     }
 
+    func testParsesClearHistoryAndAlias() throws {
+        // PR-18: `clear-history` clears scrollback WITHOUT respawning the shell (unlike
+        // `respawn-pane -k`). The `clearhist` short alias matches tmux muscle memory.
+        XCTAssertEqual(try CommandParser.parse("clear-history"), .clearHistory)
+        XCTAssertEqual(try CommandParser.parse("clearhist"), .clearHistory)
+        // It takes the universal `-t` like the other per-pane verbs — and so does the alias.
+        // (A per-pane verb missing from `universalTargetCommands` would silently drop `-t` and
+        // clear the *focused* pane: the strict-resolution footgun this guards against.)
+        XCTAssertEqual(
+            try CommandParser.parse("clear-history -t :2"),
+            .targeted(TargetSpec(window: .byIndex(2), raw: ":2"), .clearHistory)
+        )
+        XCTAssertEqual(
+            try CommandParser.parse("clearhist -t :2"),
+            .targeted(TargetSpec(window: .byIndex(2), raw: ":2"), .clearHistory)
+        )
+    }
+
     func testParsesNavigationAndSessions() throws {
         XCTAssertEqual(try CommandParser.parse("next-window"), .nextWindow)
         XCTAssertEqual(try CommandParser.parse("previous-window"), .previousWindow)

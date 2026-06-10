@@ -93,6 +93,39 @@ final class GridCompositorTests: XCTestCase {
         XCTAssertTrue(out.contains("\u{1b}[23;1H"), "second line painted on the row above")
     }
 
+    func testTopStatusPositionPaintsBandAtTopAndPanesBelow() {
+        // tmux `status-position top` with `status 2`: the band sits at the TOP — main line on
+        // row 1, the extra row just below it — and the pane area is pushed down to start below
+        // the band, exactly the `yOrigin = statusCount` the attach client solves panes with.
+        let comp = GridCompositor(cols: 80, rows: 24)
+        let grid = snapshot(80, 22, "P")
+        let out = comp.render(
+            panes: [pane(0, 2, 80, 22, grid)], // yOrigin = statusCount (2)
+            statusLines: [
+                [StyledSegment(text: "MAINLINE")],
+                [StyledSegment(text: "LOWERLINE")],
+            ],
+            statusPosition: .top
+        )
+        XCTAssertTrue(out.contains("MAINLINE") && out.contains("LOWERLINE") && out.contains("P"))
+        // Main line on the top row (1), the extra row just below it (2).
+        XCTAssertTrue(out.contains("\u{1b}[1;1H"), "main line painted on the top row")
+        XCTAssertTrue(out.contains("\u{1b}[2;1H"), "second line painted on the row below it")
+        // Top-to-bottom paint order proves the band is above the panes: main → extra → pane.
+        let iMain = out.range(of: "MAINLINE")!.lowerBound
+        let iExtra = out.range(of: "LOWERLINE")!.lowerBound
+        let iPane = out.range(of: "P")!.lowerBound
+        XCTAssertTrue(iMain < iExtra && iExtra < iPane, "band paints above the pane content")
+    }
+
+    func testBottomStatusPositionMatchesDefault() {
+        // The explicit `.bottom` argument is byte-identical to the default overload.
+        let grid = snapshot(80, 23, "x")
+        let a = GridCompositor(cols: 80, rows: 24).render(panes: [pane(0, 0, 80, 23, grid)], statusLines: [[StyledSegment(text: "S")]])
+        let b = GridCompositor(cols: 80, rows: 24).render(panes: [pane(0, 0, 80, 23, grid)], statusLines: [[StyledSegment(text: "S")]], statusPosition: .bottom)
+        XCTAssertEqual(a, b, "default position is .bottom — no behavior change for existing callers")
+    }
+
     func testPaneBaseStyleDimsDefaultCells() {
         // `window-style bg=colour235`: a default-colored cell in an inactive pane gets the
         // base background (palette 235), while an explicitly-colored cell is untouched.

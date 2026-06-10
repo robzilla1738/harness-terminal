@@ -147,7 +147,11 @@ enum MetalShaders {
         out.position = float4(pixelToNDC(px, viewport), 0.0, 1.0);
         out.color = inst.color;
         out.params = inst.params;
-        out.localPx = corner * inst.size;
+        // x is ABSOLUTE (instance origin + local) so dotted/dashed/undercurl patterns keep a
+        // continuous phase across the per-cell instances — adjacent cells' patterns connect
+        // instead of restarting at every cell boundary. y stays local (distance from the
+        // instance top), which is what the line/wave coverage math measures against.
+        out.localPx = float2(inst.origin.x + corner.x * inst.size.x, corner.y * inst.size.y);
         out.kind = inst.kind;
         return out;
     }

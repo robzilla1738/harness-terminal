@@ -1,4 +1,4 @@
-.PHONY: build bench preview preview-stop preview-clean release release-notes package dmg smoke-dmg sign appcast finalize hotfix-release icon clean video-skills video-dev video-check video-render video-doctor
+.PHONY: build bench bench-record bench-check preview preview-stop preview-clean release release-notes package dmg smoke-dmg sign appcast finalize hotfix-release icon clean
 
 build:
 	swift build
@@ -6,12 +6,37 @@ build:
 bench:
 	HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks
 
+# Record the current run as the committed benchmark baseline (do this deliberately, in the
+# same PR as an intentional performance change, on the hardware class you gate on).
+bench-record:
+	HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks 2>&1 \
+		| python3 Scripts/benchmarks/compare_benchmarks.py --record benchmark-baselines.json
+
+# Compare a fresh run against the committed baseline; exits non-zero on a >15% regression.
+bench-check:
+	HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks 2>&1 \
+		| python3 Scripts/benchmarks/compare_benchmarks.py --baseline benchmark-baselines.json
+
 preview:
 	./Scripts/preview.sh
 
+# preview-stop prefers a PID file (.harness-preview/.preview-pids, one PID per line) when
+# present, falling back to a pkill pattern that deliberately does NOT embed $(CURDIR):
+# the old '$(CURDIR)/...' pattern broke on repo paths containing spaces (the shell split
+# it into multiple pkill arguments). The bundle-relative pattern matches only the preview
+# app's binaries regardless of where the repo lives. preview.sh launches via `open` (no
+# child PID to record), so today the fallback is the normal path; anything that starts
+# the preview binaries directly can write the PID file to get precise targeting.
 preview-stop:
-	-pkill -f '$(CURDIR)/.harness-preview/HarnessPreview.app/Contents/MacOS/Harness' 2>/dev/null
-	-pkill -f '$(CURDIR)/.harness-preview/HarnessPreview.app/Contents/MacOS/HarnessDaemon' 2>/dev/null
+	@if [ -f .harness-preview/.preview-pids ]; then \
+		while IFS= read -r pid; do \
+			[ -n "$$pid" ] && kill "$$pid" 2>/dev/null || true; \
+		done < .harness-preview/.preview-pids; \
+		rm -f .harness-preview/.preview-pids; \
+	else \
+		pkill -f 'HarnessPreview.app/Contents/MacOS/Harness' 2>/dev/null || true; \
+		pkill -f 'HarnessPreview.app/Contents/MacOS/HarnessDaemon' 2>/dev/null || true; \
+	fi
 
 preview-clean:
 	rm -rf .harness-preview
@@ -59,19 +84,3 @@ hotfix-release:
 clean:
 	swift package clean
 	rm -rf Harness.app Harness.dmg Harness-notarize.zip dist .dmg-staging .icon-staging.iconset
-
-# HyperFrames marketing video (marketing/video — see marketing/README.md)
-video-skills:
-	cd marketing/video && npx skills add heygen-com/hyperframes -y
-
-video-dev:
-	cd marketing/video && npm run dev
-
-video-check:
-	cd marketing/video && npm run check
-
-video-render:
-	cd marketing/video && npm run render
-
-video-doctor:
-	cd marketing/video && npx hyperframes doctor

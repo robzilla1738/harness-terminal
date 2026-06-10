@@ -17,7 +17,12 @@ packages:
     path: .
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    from: 2.6.0
+    # MUST match Package.swift's `.upToNextMinor(from: "2.9.2")` exactly — Sparkle is the
+    # auto-update framework, the single most security-sensitive dependency, and a drift here
+    # means Xcode builds and SPM builds ship different versions of it under one app version.
+    # `minorVersion` is XcodeGen's upToNextMinor; CI's manifest-lint asserts the three pins
+    # (Package.swift / project.yml / project.pbxproj) agree.
+    minorVersion: 2.9.2
 targets:
   Harness:
     type: application
@@ -203,6 +208,111 @@ targets:
       GENERATE_INFOPLIST_FILE: YES
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "15.0"
+  # ── SPM test targets surfaced in Xcode ─────────────────────────────────────────
+  # Product → Test previously ran only Core/Daemon/Kit/CopyMode — under 40% of the suite —
+  # so engine conformance, reflow goldens, renderer parity, theme, onboarding and the
+  # compositor parity suites never ran in Xcode (CI's `swift test` covered them, local
+  # development didn't). Two SPM test targets stay deliberately SPM-only: HarnessCLITests
+  # and HarnessAppTests depend on *executable* targets (harness-cli, HarnessApp), which an
+  # Xcode unit-test bundle can't link as a package product — run those via `swift test`.
+  HarnessTerminalEngineTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessTerminalEngineTests
+    dependencies:
+      - package: Harness
+        product: HarnessTerminalEngine
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessTerminalEngineTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+  HarnessThemeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessThemeTests
+    dependencies:
+      - package: Harness
+        product: HarnessTheme
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessThemeTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+  HarnessTerminalRendererTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessTerminalRendererTests
+    dependencies:
+      - package: Harness
+        product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalRenderer
+      - package: Harness
+        product: HarnessTerminalEngine
+      - package: Harness
+        product: HarnessTheme
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessTerminalRendererTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+  HarnessOnboardingTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessOnboardingTests
+    dependencies:
+      - package: Harness
+        product: HarnessOnboarding
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessOnboardingTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+  GridCompositorParityTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/GridCompositorParityTests
+    dependencies:
+      - package: Harness
+        product: HarnessTerminalKit
+      - package: Harness
+        product: HarnessOnboarding
+      - package: Harness
+        product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalEngine
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.GridCompositorParityTests
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+  HarnessBenchmarks:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/HarnessBenchmarks
+    dependencies:
+      - package: Harness
+        product: HarnessCore
+      - package: Harness
+        product: HarnessTerminalEngine
+      - package: Harness
+        product: HarnessTerminalKit
+      - package: Harness
+        product: HarnessTerminalRenderer
+      - package: Harness
+        product: HarnessTheme
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.HarnessBenchmarks
+      GENERATE_INFOPLIST_FILE: YES
+      SWIFT_VERSION: "6.0"
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
 schemes:
   Harness:
     build:
@@ -214,6 +324,12 @@ schemes:
         HarnessDaemonTests: [test]
         HarnessTerminalKitTests: [test]
         HarnessCopyModeTests: [test]
+        HarnessTerminalEngineTests: [test]
+        HarnessThemeTests: [test]
+        HarnessTerminalRendererTests: [test]
+        HarnessOnboardingTests: [test]
+        GridCompositorParityTests: [test]
+        HarnessBenchmarks: [test]
     run:
       config: Debug
     test:
@@ -223,3 +339,11 @@ schemes:
         - HarnessDaemonTests
         - HarnessTerminalKitTests
         - HarnessCopyModeTests
+        - HarnessTerminalEngineTests
+        - HarnessThemeTests
+        - HarnessTerminalRendererTests
+        - HarnessOnboardingTests
+        - GridCompositorParityTests
+        # Benchmarks are env-gated (HARNESS_BENCHMARKS=1) and skip themselves in a plain
+        # test run, so including them costs nothing and lets Xcode run them on demand.
+        - HarnessBenchmarks

@@ -202,6 +202,8 @@ private final class WindowSession: @unchecked Sendable {
     private var copyMode: CopyModeState?
     private var copyModeSurface: String?
     private var copyModeSearchEntry: String?
+    /// Set while a jump-to-char motion (`f`/`F`/`t`/`T`) is waiting for its target byte.
+    private var copyModeJumpEntry: CopyModeJumpKind?
     /// `synchronize-panes`: mirror forwarded input to every pane in the window.
     private var synchronize = false
     /// `display-panes`: overlay pane numbers until the next key / timeout.
@@ -219,6 +221,11 @@ private final class WindowSession: @unchecked Sendable {
     private var sigwinch: DispatchSourceSignal?
     private var sigterm: DispatchSourceSignal?
     private var snapshotSubscription: DaemonSubscription?
+    /// Periodic status redraw so time/clock tokens advance (tmux `status-interval`). Re-armed by
+    /// `refreshStatusOptions`; `statusIntervalSeconds` caches the armed value (-1 = never armed) so
+    /// re-arming is a no-op unless the interval actually changed.
+    private var statusTimer: DispatchSourceTimer?
+    private var statusIntervalSeconds = -1
 
     init(client: DaemonClient, tab: Tab, workspaceID: WorkspaceID?, sessionID: SessionID, configuration: WindowAttachClient.Configuration) {
         self.client = client
@@ -260,12 +267,15 @@ private final class WindowSession: @unchecked Sendable {
 
         reservedStatus = reservedStatusRows()
         let contentRows = max(1, rows - reservedStatus) // reserve the status band (status 1..5)
+        // A top status band pushes the pane area down by the reserved row count; a bottom band
+        // leaves it at row 0. Both the solver and the compositor key off the same value.
+        let yOrigin = statusPosition == .top ? reservedStatus : 0
 
         // Compute rects. A zoomed pane takes the whole content area.
         if let zoomed = tab.zoomedPaneID, let leaf = findLeaf(tab.rootPane, paneID: zoomed) {
-            rects = [PaneRect(paneID: leaf.id, surfaceID: leaf.surfaceID, x: 0, y: 0, cols: cols, rows: contentRows)]
+            rects = [PaneRect(paneID: leaf.id, surfaceID: leaf.surfaceID, x: 0, y: yOrigin, cols: cols, rows: contentRows)]
         } else {
-            rects = PaneRectSolver.solve(tab.rootPane, cols: cols, rows: contentRows, paneBorderStatus: paneBorderStatus)
+            rects = PaneRectSolver.solve(tab.rootPane, cols: cols, rows: contentRows, paneBorderStatus: paneBorderStatus, yOrigin: yOrigin)
         }
 
         let wanted = Set(rects.map { $0.surfaceID.uuidString })
@@ -285,7 +295,7 @@ private final class WindowSession: @unchecked Sendable {
         // the state fields inline rather than calling exitCopyMode() to avoid a re-entrant relayout;
         // this rebuild already invalidates + composes below.
         if copyMode != nil, let cms = copyModeSurface, !wanted.contains(cms) {
-            copyMode = nil; copyModeSurface = nil; copyModeSearchEntry = nil; copyModePending.removeAll()
+            copyMode = nil; copyModeSurface = nil; copyModeSearchEntry = nil; copyModeJumpEntry = nil; copyModePending.removeAll()
         }
 
         // Create terminals + subscriptions for new panes; resize existing ones.
@@ -426,7 +436,7 @@ private final class WindowSession: @unchecked Sendable {
                 ))
             }
         }
-        var ansi = compositor.render(panes: panes, statusLines: statusLineSet())
+        var ansi = compositor.render(panes: panes, statusLines: statusLineSet(), statusPosition: statusPosition)
         if showPaneNumbers { ansi += paneNumbersOverlay() }
         writeOut(ansi)
     }
@@ -444,6 +454,12 @@ private final class WindowSession: @unchecked Sendable {
         let count = OptionStore.Value(parsing: statusOptions["status"] ?? "on").statusLineCount
         if count > 0 { return count }
         return (copyMode != nil || statusOverride != nil) ? 1 : 0
+    }
+
+    /// `status-position` (bottom/top), refreshed with the other status options. Drives both
+    /// where the band paints and the pane area's `yOrigin`, so the two always agree.
+    private var statusPosition: StatusPosition {
+        StatusPosition(option: statusOptions["status-position"] ?? "bottom")
     }
 
     private func statusLineSet() -> [[StyledSegment]]? {
@@ -660,6 +676,30 @@ private final class WindowSession: @unchecked Sendable {
         }
         for entry in entries where entry.key == "set-titles-string" { setTitlesString = entry.value }
         applyOuterTitle()
+        refreshStatusIntervalTimer()
+    }
+
+    /// (Re)arm the periodic status redraw from `status-interval` (tmux: seconds between status-line
+    /// redraws, default 15; `0` disables). Without it, time/clock tokens (`#{time:…}`) in the status
+    /// bar would only advance on some other event. Idempotent — a no-op when the interval is
+    /// unchanged — so the per-push option refresh doesn't churn the timer. Runs on `renderQueue`.
+    private func refreshStatusIntervalTimer() {
+        let seconds = statusOptions["status-interval"].flatMap { Int($0) } ?? 15
+        guard seconds != statusIntervalSeconds else { return }
+        statusIntervalSeconds = seconds
+        statusTimer?.cancel()
+        statusTimer = nil
+        guard seconds > 0 else { return }
+        let timer = DispatchSource.makeTimerSource(queue: renderQueue)
+        timer.schedule(deadline: .now() + .seconds(seconds), repeating: .seconds(seconds), leeway: .milliseconds(200))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.tornDown else { return }
+            // Recompose so time/clock tokens pick up a fresh `now`; the compositor diff emits only
+            // the cells that actually changed, so an unchanged status line costs nothing on the wire.
+            self.composeAndWrite()
+        }
+        timer.resume()
+        statusTimer = timer
     }
 
     /// OSC 2 to the outer terminal when `set-titles` is on (tmux behavior); restores an
@@ -931,7 +971,7 @@ private final class WindowSession: @unchecked Sendable {
     }
 
     private func exitCopyMode() {
-        copyMode = nil; copyModeSurface = nil; copyModeSearchEntry = nil; copyModePending.removeAll()
+        copyMode = nil; copyModeSurface = nil; copyModeSearchEntry = nil; copyModeJumpEntry = nil; copyModePending.removeAll()
         relayoutIfStatusBandChanged()
         compositor.invalidate(); composeAndWrite()
     }
@@ -943,6 +983,12 @@ private final class WindowSession: @unchecked Sendable {
 
     private func handleCopyModeByte(_ byte: UInt8) {
         guard copyMode != nil else { return }
+        // A pending jump-to-char (`f`/`F`/`t`/`T`) consumes the next byte as its target (Esc cancels).
+        if let kind = copyModeJumpEntry {
+            copyModeJumpEntry = nil
+            if byte != 0x1b { performCopyMode(.jump(kind, String(Unicode.Scalar(byte)))) } else { composeAndWrite() }
+            return
+        }
         if copyModeSearchEntry != nil { handleCopyModeSearchByte(byte); return }
         copyModePending.append(byte)
         switch copyModeDecode(copyModePending) {
@@ -1017,6 +1063,8 @@ private final class WindowSession: @unchecked Sendable {
             exitCopyMode()
         case .beginSearchEntry:
             copyModeSearchEntry = ""; composeAndWrite()
+        case let .beginJumpEntry(kind):
+            copyModeJumpEntry = kind; composeAndWrite()
         }
     }
 
@@ -1316,6 +1364,10 @@ private final class WindowSession: @unchecked Sendable {
             flashStatus(set ? "marked pane" : "marked pane cleared")
         case let .displayMessage(format):
             flashStatus(FormatString.evaluate(format, context: formatContext(target: target)))
+        case let .displayMessagePrint(format):
+            // The attach client owns the tty, so it can't cleanly print to stdout mid-render —
+            // surface `-p` as a status flash like display-message (the CLI subcommand path prints).
+            flashStatus(FormatString.evaluate(format, context: formatContext(target: target)))
         case .sendPrefix:
             if let active = activeSurface {
                 _ = try? client.request(.sendData(surfaceID: active, data: Data([configuration.prefix])), timeout: 1)
@@ -1528,6 +1580,7 @@ private final class WindowSession: @unchecked Sendable {
         snapshotSubscription?.cancel()
         sigwinch?.cancel()
         sigterm?.cancel()
+        statusTimer?.cancel()
         for sub in subscriptions.values { sub.cancel() }
         for sid in terminals.keys {
             _ = try? client.request(.detachSurface(surfaceID: sid), timeout: 1)

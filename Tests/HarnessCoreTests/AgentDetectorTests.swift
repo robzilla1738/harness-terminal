@@ -42,6 +42,25 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
     }
 
+    /// PR-12: the map-sharing `detect(pid:table:parents:)` overload (used by the per-tick scan to
+    /// avoid rebuilding the `pid → ppid` table per surface) must find the same agent as the
+    /// self-building `detect(pid:table:)` overload.
+    func testDetectWithSharedMapMatchesSelfBuildingOverload() throws {
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["5"]
+        try child.run()
+        defer { if child.isRunning { child.terminate() } }
+
+        let table = AgentTable(entries: [AgentTableEntry(kind: .generic, executables: ["sleep"])])
+        let shared = AgentDetector.detect(pid: getpid(), table: table, parents: ProcessScan.parentMap())
+        let selfBuilt = AgentDetector.detect(pid: getpid(), table: table)
+
+        XCTAssertEqual(shared?.pid, child.processIdentifier, "shared-map detect finds the spawned descendant")
+        XCTAssertEqual(shared?.pid, selfBuilt?.pid, "both overloads resolve the same PID")
+        XCTAssertEqual(shared?.kind, selfBuilt?.kind, "both overloads resolve the same agent kind")
+    }
+
     /// Regression: native Claude Code installs symlink `claude` to a version-numbered
     /// binary (e.g. .../versions/2.1.152), so `proc_pidpath`'s lastPathComponent is the
     /// version, not "claude". Detection must still match via argv[0] — that's what

@@ -235,7 +235,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
         let key = "\(coordinator.structureRevision)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
         guard force || key != lastStructureKey else {
-            paneContainer?.refreshChrome(snapshot: coordinator.snapshot)
+            // No per-pane chrome work needed on the fast path (structure unchanged).
             return
         }
         lastStructureKey = key
@@ -310,26 +310,10 @@ final class PaneContainerView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func refreshChrome(snapshot: SessionSnapshot) {
-        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
-        for surfaceID in tab.rootPane.allSurfaceIDs() {
-            if let match = tabFor(surfaceID: surfaceID, in: snapshot),
-               let host = TerminalPaneRegistryAccess.host(for: surfaceID)
-            {
-            }
-        }
-    }
-
-    private func tabFor(surfaceID: SurfaceID, in snapshot: SessionSnapshot) -> Tab? {
-        for workspace in snapshot.workspaces {
-            for session in workspace.sessions {
-                for tab in session.tabs where tab.rootPane.allSurfaceIDs().contains(surfaceID) {
-                    return tab
-                }
-            }
-        }
-        return nil
-    }
+    // refreshChrome(snapshot:) was removed: its `if let match, let host` body was completely
+    // empty — the loop did nothing.  See the comment above reloadIfNeeded for context.
+    //
+    // tabFor(surfaceID:in:) was also removed: it was only used by refreshChrome.
 
     private func build(node: PaneNode, cwd: String, into parent: NSView) {
         switch node {
@@ -343,8 +327,6 @@ final class PaneContainerView: NSView {
                 host.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
                 host.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
             ])
-            if let tab = coordinator.snapshot.activeWorkspace?.activeTab {
-            }
         case let .branch(direction, ratio, firstNode, secondNode):
             let split = HarnessSplitView()
             split.dividerStyle = .thin
@@ -369,7 +351,13 @@ final class PaneContainerView: NSView {
             // at ~final bounds instead of resizing (and re-sizing its PTY) twice.
             build(node: firstNode, cwd: cwd, into: first)
             build(node: secondNode, cwd: cwd, into: second)
-            DispatchQueue.main.async {
+            // [weak split]: rapid tab switching can tear down this PaneContainerView before the
+            // async fires, leaving `split` pointing at a detached view with stale bounds — a
+            // no-op setPosition call that can confuse AppKit's divider accounting on the new
+            // container. The explicit bounds check below guards the case where layout hasn't
+            // run yet (zero-size container), which would force the divider to one edge.
+            DispatchQueue.main.async { [weak split] in
+                guard let split, split.bounds.width > 1, split.bounds.height > 1 else { return }
                 let position = (direction == .horizontal ? split.frame.width : split.frame.height) * ratio
                 if position > 50 {
                     split.setPosition(position, ofDividerAt: 0)

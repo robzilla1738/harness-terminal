@@ -9,6 +9,12 @@ final class NotchPanelController: NSObject {
     private let model = AgentNotchViewModel()
     private var panel: NotchPanel?
     private var started = false
+    /// Whether the panel is currently ordered in. Tracked so live snapshot updates can refresh
+    /// the HUD's data *without* re-asserting the panel frame or z-order on every tick — that
+    /// per-tick `setFrame` + `orderFrontRegardless` was interrupting the open/close animation and
+    /// is what made the HUD feel glitchy. The panel is (re)positioned only when it actually needs
+    /// to be: enable/disable, screen-parameter changes, and first show.
+    private var isPanelVisible = false
 
     private override init() {
         super.init()
@@ -17,23 +23,23 @@ final class NotchPanelController: NSObject {
     func start() {
         guard !started else { return }
         started = true
-        model.refreshFromCoordinator()
         observeNotifications()
         refreshVisibility()
     }
 
+    /// Full path: refresh data, (re)build + position the panel, and match its visibility to the
+    /// current enabled state. Geometry is recomputed here only — it depends on the screen, not on
+    /// the session snapshot. Called on launch, on the Settings toggle, from the menu, and on
+    /// screen-parameter changes.
     func refreshVisibility() {
         model.refreshFromCoordinator()
-        guard SessionCoordinator.shared.settings.notchVisibilityMode
-            .isEnabled(for: SessionCoordinator.shared.settings.experienceMode)
-        else {
-            model.close()
-            panel?.orderOut(nil)
+        guard isEnabled else {
+            hidePanel()
             return
         }
         createPanelIfNeeded()
         updatePanelGeometry()
-        panel?.orderFrontRegardless()
+        showPanel()
     }
 
     func openFromMenu() {
@@ -48,6 +54,11 @@ final class NotchPanelController: NSObject {
 
     func closeFromMenu() {
         model.close()
+    }
+
+    private var isEnabled: Bool {
+        SessionCoordinator.shared.settings.notchVisibilityMode
+            .isEnabled(for: SessionCoordinator.shared.settings.experienceMode)
     }
 
     private func observeNotifications() {
@@ -67,37 +78,60 @@ final class NotchPanelController: NSObject {
 
     private func createPanelIfNeeded() {
         guard panel == nil else { return }
-        let metrics = (NSScreen.main ?? NSScreen.screens.first).map(NotchGeometry.metrics(for:)) ?? NotchGeometry.fallback
+        let metrics = currentMetrics()
         model.updateGeometry(metrics)
-        let frame = nsRect(metrics.panelFrame)
-        let panel = NotchPanel(contentRect: frame)
+        let panel = NotchPanel(contentRect: nsRect(metrics.panelFrame))
         panel.contentView = NSHostingView(rootView: AgentNotchRootView(model: model))
         self.panel = panel
     }
 
     private func updatePanelGeometry() {
-        guard let panel,
-              let screen = NSScreen.main ?? NSScreen.screens.first
-        else { return }
-        let metrics = NotchGeometry.metrics(for: screen)
+        guard let panel else { return }
+        let metrics = currentMetrics()
         model.updateGeometry(metrics)
         panel.setFrame(nsRect(metrics.panelFrame), display: true)
     }
 
+    private func showPanel() {
+        guard let panel, !isPanelVisible else { return }
+        panel.orderFrontRegardless()
+        isPanelVisible = true
+    }
+
+    private func hidePanel() {
+        model.close()
+        guard isPanelVisible else { return }
+        panel?.orderOut(nil)
+        isPanelVisible = false
+    }
+
+    /// Live data path: a session-snapshot tick only refreshes the HUD's rows/peeks, and only while
+    /// it is on screen. The panel frame and z-order are deliberately left alone so an in-flight
+    /// open/close animation is never interrupted. An enabled-state flip arrives via
+    /// `refreshVisibility` (the Settings toggle calls it directly); we reconcile here defensively
+    /// if the two ever diverge.
+    private func refreshData() {
+        if isEnabled != isPanelVisible {
+            refreshVisibility()
+            return
+        }
+        guard isPanelVisible else { return }
+        model.refreshFromCoordinator()
+    }
+
     @objc private func snapshotChanged(_ note: Notification) {
-        refreshVisibility()
+        refreshData()
     }
 
     @objc private func screenParametersChanged(_ note: Notification) {
         refreshVisibility()
     }
 
+    private func currentMetrics() -> NotchLayoutMetrics {
+        (NSScreen.main ?? NSScreen.screens.first).map(NotchGeometry.metrics(for:)) ?? NotchGeometry.fallback
+    }
+
     private func nsRect(_ rect: NotchRect) -> NSRect {
-        NSRect(
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height
-        )
+        NSRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
     }
 }

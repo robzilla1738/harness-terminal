@@ -32,10 +32,9 @@ final class EndpointClientTests: XCTestCase {
     func testExplicitUnixEndpointReachesDaemon() throws {
         let endpoint = Endpoint.unix(path: HarnessPaths.socketURL.path)
         let client = DaemonClient(endpoint: endpoint)
-        var pinged = false
-        for _ in 0 ..< 50 {
-            if case .pong = (try? client.request(.ping, timeout: 0.4)) { pinged = true; break }
-            usleep(100_000)
+        let pinged = waitUntil(timeout: 10) {
+            if case .pong = (try? client.request(.ping, timeout: 0.4)) { return true }
+            return false
         }
         XCTAssertTrue(pinged, "client with an explicit .unix endpoint should reach the daemon")
     }

@@ -195,6 +195,96 @@ public enum IPCCodec {
         return body
     }
 
+    // MARK: - IPCReadBuffer overloads (streaming hot path)
+    //
+    // The `inout Data` entry points above consume with `Data.removeFirst` — an O(remaining)
+    // left-shift per frame, which is quadratic on a long-lived subscription under flood. These
+    // overloads carry the exact same framing/error contract over `IPCReadBuffer`, whose offset-
+    // based `consume` is O(1) amortized. The streaming read loops (DaemonServer.readClient,
+    // DaemonSubscription.start) use these; the one-shot request/reply path and the codec tests
+    // keep the `Data` API (byte-identical behavior, proven by `IPCCodecTests`' dual-path suite).
+
+    /// `decodeReplyOrData(from: inout Data)` over an `IPCReadBuffer`. Same nil/throws contract.
+    public static func decodeReplyOrData(from buffer: inout IPCReadBuffer) throws -> DecodedReplyFrame? {
+        guard let first = buffer.first else { return nil }
+        if first == outputFrameMagic {
+            guard let (bodyOffset, bodyCount) = try locateBinaryFrame(in: buffer) else { return nil }
+            guard bodyCount >= 8 else {
+                buffer.consume(5 + bodyCount)
+                throw FrameError.undecodable
+            }
+            var sequence: UInt64 = 0
+            for k in 0 ..< 8 { sequence = (sequence << 8) | UInt64(buffer.byte(at: bodyOffset + k)) }
+            let payload = buffer.payloadData(at: bodyOffset + 8, count: bodyCount - 8)
+            buffer.consume(5 + bodyCount)
+            return .output(payload, sequence: sequence)
+        }
+        guard let payload = try extractPayload(from: &buffer) else { return nil }
+        do {
+            let reply = try JSONDecoder().decode(IPCReply.self, from: payload)
+            return .reply(reply.response)
+        } catch {
+            throw FrameError.undecodable
+        }
+    }
+
+    /// `decodeRequestOrInput(from: inout Data)` over an `IPCReadBuffer`. Same nil/throws contract.
+    public static func decodeRequestOrInput(from buffer: inout IPCReadBuffer) throws -> DecodedRequestFrame? {
+        guard let first = buffer.first else { return nil }
+        if first == inputFrameMagic {
+            guard let (bodyOffset, bodyCount) = try locateBinaryFrame(in: buffer) else { return nil }
+            guard bodyCount >= 2 else {
+                buffer.consume(5 + bodyCount)
+                throw FrameError.undecodable
+            }
+            let surfaceLength = (Int(buffer.byte(at: bodyOffset)) << 8) | Int(buffer.byte(at: bodyOffset + 1))
+            guard bodyCount >= 2 + surfaceLength else {
+                buffer.consume(5 + bodyCount)
+                throw FrameError.undecodable
+            }
+            let surfaceID = String(decoding: buffer.payloadData(at: bodyOffset + 2, count: surfaceLength), as: UTF8.self)
+            let payload = buffer.payloadData(at: bodyOffset + 2 + surfaceLength, count: bodyCount - 2 - surfaceLength)
+            buffer.consume(5 + bodyCount)
+            return .input(surfaceID: surfaceID, payload: payload)
+        }
+        guard let payload = try extractPayload(from: &buffer) else { return nil }
+        do {
+            return .request(try JSONDecoder().decode(IPCEnvelope.self, from: payload).request)
+        } catch {
+            throw FrameError.undecodable
+        }
+    }
+
+    /// JSON-frame extractor over `IPCReadBuffer` — `extractPayload(from: inout Data)`'s twin.
+    private static func extractPayload(from buffer: inout IPCReadBuffer) throws -> Data? {
+        guard buffer.count >= 4 else { return nil }
+        let length = (UInt32(buffer.byte(at: 0)) << 24)
+            | (UInt32(buffer.byte(at: 1)) << 16)
+            | (UInt32(buffer.byte(at: 2)) << 8)
+            | UInt32(buffer.byte(at: 3))
+        guard length <= UInt32(maxPayloadLength) else { throw FrameError.tooLarge(Int(length)) }
+        let total = 4 + Int(length)
+        guard buffer.count >= total else { return nil }
+        let payload = buffer.payloadData(at: 4, count: Int(length))
+        buffer.consume(total)
+        return payload
+    }
+
+    /// Locate (don't consume) the next `[magic][len:4 BE][body]` frame: returns the body's offset
+    /// and length once fully buffered, nil when incomplete. The caller consumes `5 + count` after
+    /// copying what it needs — splitting locate/consume avoids materializing the body twice for
+    /// frames that carry an inner structure (sequence headers, surfaceID prefixes).
+    private static func locateBinaryFrame(in buffer: IPCReadBuffer) throws -> (offset: Int, count: Int)? {
+        guard buffer.count >= 5 else { return nil }
+        let length = (UInt32(buffer.byte(at: 1)) << 24)
+            | (UInt32(buffer.byte(at: 2)) << 16)
+            | (UInt32(buffer.byte(at: 3)) << 8)
+            | UInt32(buffer.byte(at: 4))
+        guard length <= UInt32(maxPayloadLength) else { throw FrameError.tooLarge(Int(length)) }
+        guard buffer.count >= 5 + Int(length) else { return nil }
+        return (5, Int(length))
+    }
+
     private static func appendUInt16BE(_ value: UInt16, to data: inout Data) {
         data.append(UInt8(truncatingIfNeeded: value >> 8))
         data.append(UInt8(truncatingIfNeeded: value))

@@ -6,6 +6,350 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Added
+
+- **Shell integration is auto-injected at spawn** (zsh / bash / fish): prompt marks, the
+  success/failure gutter, and jump-to-prompt work out of the box with no
+  `install-shell-integration` step. zsh rides a `ZDOTDIR` shim that restores your real
+  `ZDOTDIR` and chains to your own `.zshenv` — the integration loads from `.zshenv`
+  (before `.zshrc`), so an rc that overwrites `precmd_functions=(…)` wholesale removes
+  the marks (same as kitty/Ghostty); fish rides an `XDG_DATA_DIRS` vendor dir;
+  bash uses the `--posix` + `$ENV` technique (kitty/Ghostty lineage) and **requires
+  bash ≥ 4.4** — older bash (notably the stock macOS 3.2, which never reads `$ENV` under
+  `--posix`) spawns untouched, the same floor Ghostty ships; **known caveats:
+  `shopt -q login_shell` reports off inside injected bash panes** (the shim replays the
+  login startup files itself) **and `~/.bash_logout` does not run on pane exit** (the
+  shell is not a login shell under the injected vehicle). Idempotent alongside a manual
+  install; never active for non-interactive shells; opt out with
+  `set-option shell-integration off` (applies to subsequently spawned panes). User
+  `set-environment` values always win: a collision with any of the injection's variables
+  drops the whole injection for that pane (spawn untouched).
+- Parity long tail (engine/core half): the numeric keypad honors DECKPAM/DECKPNM —
+  application mode emits the xterm SS3 forms, numeric mode stays byte-identical to plain
+  typing, and the kitty protocol reports the functional KP codepoints; OSC 1337
+  `CurrentDir=` reports the cwd (absolute paths only, the OSC 7 trust policy) and
+  `SetUserVar=` stores per-surface user variables (base64-decoded, name/size/population
+  bounded, cleared by RIS) that the GUI surfaces as pane-scoped `@name` user options —
+  readable from `#{@name}` format tokens; new `windowInheritCWD` setting (default **on**,
+  matching the shipped behavior and Ghostty's default) lets new tabs/windows be pinned to
+  `defaultCWD` instead of inheriting the focused pane's directory.
+- `persist-scrollback` option (default on, per-pane with global fallback): turning it off
+  stops writing a surface's scrollback to disk AND synchronously wipes what's already
+  there — the secrets-at-rest control documented in the new `docs/SECURITY-POSTURE.md`
+  (which also records the no-sandbox rationale, the hardened-runtime/notarization and
+  Sparkle EdDSA/HTTPS audit, the Services surface, and the control-socket posture).
+- `Scripts/scorecard.sh` + `docs/SCORECARD.md`: the Harness-vs-Ghostty comparative
+  scorecard — cold start (per-phase from `startup.log` vs wall-clock-to-window),
+  sustained PTY throughput (the cross-terminal stress runner, including the issue #27
+  re-measure set), idle power (`powermetrics`, app + daemon summed), long-session memory,
+  and Harness-side input-to-photon percentiles. Orchestration + reporting only — no
+  production code; numbers are receipts, never CI gates; probe asymmetries are stated in
+  the report itself.
+- VT conformance polish (engine): DA1 now identifies as a VT220-class terminal with Sixel
+  and ANSI color (`CSI ?62;4;22c`); DA3 (`CSI = c`) replies with DECRPTUI; DECRQM gains the
+  ANSI (non-private) form (`CSI Ps $ p`) with the conformance-correct state-0 reply for
+  unrecognized modes, and the private form now also reports modes 5/12/47/1047/1048/1049/1016;
+  DECSET 1048 saves/restores the cursor; DECSET/DECRST 12 (att610) controls cursor blink;
+  DECSET 5 (DECSCNM reverse video) and DECSET 1016 (SGR-pixel mouse) are tracked and
+  reported (rendering/encoding land with the kit half); XTWINOPS `CSI 22/23 t` push/pop the
+  title on a depth-capped stack and `CSI 18/14 t` report the text-area size in
+  characters/pixels — the pixel report derives from the same host-supplied cell metrics
+  inline images use (window resize/move remain deliberate non-goals).
+- VT polish, kit/renderer half: any-event mouse tracking (DECSET 1003) now reports
+  button-less pointer motion (deduped per cell), and SGR-pixel mouse (DECSET 1016) encodes
+  pixel coordinates — taking precedence over 1006, degrading to cell coordinates when the
+  host can't supply pixels; DECSCNM reverse video actually renders (the screen's default
+  fg/bg swap, in every pipeline including resize previews and copy mode — explicit SGR
+  colors keep their values); SGR blink (`SGR 5`) renders — blinking cells' glyphs hide on
+  the off-phase, driven by a timer that exists only while blinking content is visible, and
+  a phase flip re-encodes exactly the rows containing blink cells; dotted/dashed/undercurl
+  underline patterns keep a continuous phase across cells instead of restarting at every
+  cell boundary.
+
+### Changed
+
+- Mechanical decomposition (renderer): the Metal renderer's CPU-side instance/cache value
+  types (GPU instance layouts, per-row encode caches, upload-cache keys) moved to
+  `TerminalRenderInstances.swift` — same definitions, zero logic change.
+
+- Mechanical decomposition (daemon + core): `SurfaceRegistry`'s output monitoring and the
+  version-banner one-shot moved to extension files (same members, same locks — the
+  single-lock serialization is untouched); `SessionEditor`'s split-tree algebra (the pure
+  `PaneNode` walks/rewrites) moved to `SessionEditor+SplitTree.swift`; and
+  `HarnessSettings.init(from:)`'s 35 uniform hand-written `decodeIfPresent ?? fallback`
+  lines now funnel through a default-instance-driven keypath decoder — the typo class
+  where a line decodes one key but falls back to a different field's default can no longer
+  be written (migrations and deliberate non-default fallbacks stay hand-written).
+
+### Fixed
+
+- A stale scrollback index can no longer crash a shipping build: `HistoryRingBuffer`'s
+  empty-buffer release trap is replaced by a graceful fallback to the most recently
+  appended line (the debug assert stays). The daemon also caps per-connection buffered
+  partial-frame bytes at one max IPC frame + slack, dropping a stream that can never
+  decode instead of buffering it without bound.
+- **Unicode width tables are now derived from the Unicode Character Database** (15.1) instead of
+  hand-curated ranges. The old tables missed ~140 East-Asian-Wide codepoints — including the
+  emoji every modern CLI prints (⭐ ⚡ ✨ ❌ ✅ ⌚, the U+1F680–6FF transport block 🚀🚗, colored
+  shapes 🟠🟢, and U+1FA70+ extended pictographs 🫠🫶) — which Harness measured width-1 while the
+  child process's `wcwidth` counted 2, desyncing the cursor and overlapping glyphs in npm/vitest/
+  cargo/agent-CLI output. The zero-width side gains the full combining repertoire (Devanagari
+  virama, Hebrew/Arabic/Syriac/Indic/Lao/Tibetan marks, bidi isolates). Deliberate deviations are
+  documented in `CharacterWidth.swift` (soft hyphen narrow; Hangul conjoining jamo V/T narrow
+  until the grapheme layer composes syllables; regional indicators narrow per scalar).
+- The Xcode scheme now runs ten test targets instead of four — engine conformance, reflow
+  goldens, renderer parity, theme, onboarding, and compositor-parity suites were silently
+  skipped in Product → Test (CI's `swift test` covered them; local Xcode runs did not).
+- Sparkle is pinned to the same version (2.9.2, up-to-next-minor) in all three manifests
+  (`Package.swift`, `project.yml`, `project.pbxproj`); they had drifted (2.6.0 in the Xcode
+  path), letting SPM and Xcode builds ship different versions of the auto-update framework.
+  A new CI `manifest-lint` job asserts the three stay in agreement.
+- The stale-daemon PID-file identity check compares the exact executable basename instead of a
+  spoofable substring match; the daemon's control socket is created under `umask(0o177)` so it
+  never exists with broader permissions, even momentarily.
+- Scrollback persistence is fsync'd: appends reach stable storage before the debounce window
+  closes, and compaction syncs the replacement file before the atomic rename — a daemon crash
+  can no longer lose the last ~2 s of scrollback or leave a truncated log.
+- `wait-for` channels cap concurrent waiters (1 024) instead of accumulating blocked fds without
+  bound; the agent scanner skips a tick when the previous scan is still running instead of
+  queuing scans behind each other under load.
+- The onboarding installer and the in-app "Install CLI" flow no longer run `launchctl` and
+  version probes on the main thread (up to ~8 s of beachball on first run); the menu-bar menu
+  no longer performs a blocking daemon round-trip inside `menuNeedsUpdate`.
+- Structure changes in background tabs (e.g. a `harness-cli split` against an unfocused tab)
+  now bump the structure revision — the fingerprint covers all live surfaces, not just the
+  active tab.
+- Store writes (options, hooks, environment, paste buffers) are debounced (150 ms) instead of
+  hitting the disk synchronously under lock on every mutation; a graceful shutdown flushes all
+  debounce windows. `source-file`-style bursts of `set-option` no longer serialize on disk I/O.
+- Option/buffer save failures and remote-host lock degradation are logged to stderr instead of
+  being silently swallowed.
+
+### Performance
+
+- Frame building with the find bar open no longer scans every search match per cell
+  (O(matches × cells) — hundreds of matches over a 19 K-cell viewport while scrolling):
+  highlights are bucketed once per build into per-row sorted merged column intervals that
+  `appendRow` consumes with a monotonic cursor. The baked (`build`) and overlay
+  (`applyHighlights`) paths share the one index, so they remain byte-identical by
+  construction; pinned by randomized differential tests and a new
+  `build_frame_search_highlights_160x48` benchmark (~200 hits).
+- Idle-efficiency bundle: the cursor-blink timer now exists only while its pane is
+  effectively focused and un-occluded (unfocused panes used to tick a 0.53 s timer forever
+  just to early-out — 20 background panes ≈ 40 pointless main-runloop wakeups/s); the
+  daemon's 500 ms monitor tick skips the registry lock and option reads entirely when no
+  fresh output/bell arrived and silence monitoring is disarmed (the orphan sweep is
+  preserved — racing-read entries are born flagged); and the shell cwd tracker parks its
+  2 Hz process-tree scan while the app is inactive, relaxes to 0.5 Hz after ~5 s of no cwd
+  movement, and snaps back on tab/pane creation, focus change, or any observed change.
+- Git branch labels are event-driven instead of polled: the app watches each repository's
+  resolved `HEAD` file (one watcher per repo/worktree, shared by all its tabs) and reads the
+  branch in-process — no more `git rev-parse` subprocess per tab every 2 seconds, and labels
+  update instantly on checkout instead of up to 2 s late. A tab that leaves a repository now
+  clears its stale branch label (previously it stuck forever), and an identical branch
+  re-send no longer bumps the snapshot revision or wakes subscribers.
+- The GUI subscribes to the daemon's snapshot-push channel (the same one `attach-window`
+  uses), so external structure changes (`harness-cli split-pane` against a GUI session)
+  arrive instantly via push instead of being discovered by the old 0.5 Hz blind full-snapshot
+  poll — which is gone, along with its forever-ticking fetch+decode even while idle and
+  inactive. A 30 s app-active-only safety poll remains purely as push-loss insurance
+  (the daemon drops subscribers whose write backlog exceeds its cap). Branch watchers and
+  the safety poll pause while the app is inactive and refresh on re-activate.
+- The PTY-output and keystroke IPC read loops consume frames in O(1) amortized via an
+  offset-tracking read buffer (`IPCReadBuffer`) instead of `Data.removeFirst`'s O(remaining)
+  byte shift per frame — quadratic under flood on both the app's subscription loop and the
+  daemon's per-client loop. Keystroke writes no longer copy the payload an extra time
+  (`writeFrame` writes straight from the frame's storage).
+- The status line no longer constructs a `DateFormatter` per `#{time:…}` evaluation (cached by
+  format, ~0.3 ms per 750 ms tick) nor re-resolves `#{host}`/`#{user}` via syscalls each tick;
+  the daemon logger reuses one ISO-8601 formatter.
+- On Linux, post-fork fd cleanup uses `close_range(2)` (kernel 5.9+, loop fallback) instead of
+  up to 65 k `close` syscalls per shell spawn.
+- The benchmark suite is now enforceable: `Scripts/benchmarks/compare_benchmarks.py` plus
+  `make bench-record` / `make bench-check` gate hot-path regressions (>15 %) against a
+  committed baseline (`benchmark-baselines.json`, recorded deliberately on real hardware).
+
+### Removed
+
+- Two dead empty-bodied functions that ran O(hosts × tabs) scans on every daemon sync
+  (`syncWaitingRings`, `PaneContainerView.refreshChrome`), the stale `video-*` Makefile
+  targets, and the 300 ms timing kick after tab/session creation (replaced by the
+  notification-driven cwd scan).
+
+## [1.9.0] - 2026-06-09
+
+### Added
+- **Quick terminal: a Quake-style global-hotkey dropdown.** A global shortcut (Settings ▸ Keys ▸
+  Quick Terminal; default ⌘⌥`) drops a terminal down from the top of the active screen and toggles
+  it away again, even when Harness is in the background. It floats above other windows, shows on
+  every Space, and hosts its own session. It's built on Carbon `RegisterEventHotKey`, so it needs
+  no Accessibility permission. Off by default.
+- **Find bar: regular-expression and case-sensitivity toggles.** The find bar (⌘F) gains two
+  latching buttons next to the search field: **Aa** (match case) and **{}** (regular expression).
+  Search was previously substring-only and always case-insensitive; regex mode runs an
+  `NSRegularExpression` over each scrollback line (an invalid pattern simply shows no results).
+- **Unlimited scrollback.** Setting the scrollback line count to **0** (Settings ▸ Terminal ▸
+  Behavior, or `scrollbackLines`) now means *unlimited* — the live history grows unbounded instead
+  of trimming the oldest lines. Persisted (on-disk) scrollback is still capped by a large safety
+  ceiling so a runaway process can't fill the disk.
+- **Four Ghostty-style quality-of-life features.**
+  - **Scroll speed multiplier** (Settings ▸ Terminal ▸ Behavior, or `scrollMultiplier`): scale
+    mouse-wheel / trackpad scroll distance (1× = native). Previously a fixed 3-lines-per-notch.
+  - **Hide cursor while typing**: the mouse cursor hides until the mouse next moves on a keystroke
+    (off by default, matching Ghostty's `mouse-hide-while-typing`).
+  - **Config reload-on-save**: editing `settings.json` or `keybindings.json` outside the app (a
+    text editor, a dotfile sync, `harness-cli`) now applies live — no relaunch. The app's own saves
+    are no-ops (it compares the reloaded values), and the watch survives atomic saves.
+  - **Triple-click selects the logical line** across soft wraps (Ghostty/iTerm2/kitty), not just the
+    one display row — driven by the engine's wrap flags.
+- **Terminal bell feedback (audible / visual).** A bell (`\a` / BEL) on the *focused* surface
+  previously produced no feedback at all — only a tmux window-flag + background notification. A
+  new **Bell** setting (Settings ▸ Appearance: off / audible / visual / both, default **visual**)
+  is honored on every bell regardless of focus: audible rings the system beep; visual flashes the
+  ringing surface briefly. The tmux `visual-bell` / `bell-action` options bridge in — `bell-action
+  off`/`none` silences everything (feedback and notification); `visual-bell on`/`off`/`both`
+  overrides the audible/visual split. The unfocused OS-notification path is unchanged.
+- **`clear-history` — clear a pane's scrollback without respawning the shell.** Previously the
+  only way to clear scrollback was `respawn-pane -k`, which *kills the running process*.
+  `clear-history` (alias `clearhist`) resets the in-memory ring **and** the persisted scrollback
+  file in place and pushes `ESC[3J` to attached clients, leaving the shell untouched — so
+  `bind C-k clear-history` is now real muscle memory. Takes the universal `-t` like every other
+  per-pane verb (a missing target fails loudly, never clears the focused pane); CLI:
+  `harness-cli clear-history --surface <id>`.
+- **`status-interval` is now honored** (tmux: seconds between status-line redraws, default 15,
+  `0` disables). The GUI status footer and the `attach-window` compositor both re-render the
+  status band on this cadence so `#{time:%H:%M}` and other time tokens advance without an
+  unrelated event; a runtime `set-option status-interval N` re-arms both in step. (The GUI
+  previously hard-coded a 1s tick; it now follows the option like the compositor.)
+- **Bindable `send-keys -l`/`-H`, `display-message -p`, and four more hooks.** `send-keys -l <text>`
+  (literal) and `-H <hex…>` (raw bytes) now work from keybindings / the `:` prompt / hooks, not just
+  the CLI (previously the flags were dropped and the words were token-parsed). `display-message -p`
+  prints the rendered format to stdout for scripting. New hook events: `command-error` (fires when a
+  server-executed command can't resolve, with the failing command as `#{hook}`), `pane-focus-in` /
+  `pane-focus-out`, and `window-pane-changed` (active-pane change). A list-driven test now forces
+  every hook event to have a firing test.
+- **Copy-mode jump-to-char and friends.** vi `f`/`F`/`t`/`T` jump to a character on the line (the
+  front-end captures the next keystroke as the target), `;`/`,` repeat the jump forward/reversed,
+  `o` swaps the selection's other end, `goto-line N` jumps to a line, and `W`/`B`/`E` are bound as
+  the whitespace-delimited (big-WORD) motions. Previously a bound `jump-forward` (etc.) was a
+  parse-time failure. Works in both the GUI overlay and the `attach-window` compositor.
+- **More format operators.** Building on the nested-conditional fix: `#{!=:a,b}` (not-equal),
+  `#{||:a,b}` / `#{&&:a,b}` (logical or/and), `#{n:…}` (display-column length), `#{T:…}` (expand,
+  then expand the result again), `#{a:65}` (character from a code point), and `#{pN:…}` (pad to N
+  columns). Their argument is a format string, matching tmux (bare text is literal, `#{…}` expands).
+- **Kitty graphics protocol: ack, query, transmit-once/place-many, delete.** The decoder was
+  display-only; the control protocol is now answered. Commands with an image id/number get an
+  `APC G i=<id>;OK ST` ack (or an `EBADF`/`ENOENT` error), gated by quietness (`q=1` silences OK,
+  `q=2` silences errors) — so `icat`/`timg`/`chafa`, which gate on the `a=q` query reply, detect
+  support instead of hanging. `a=t` transmits an image for later use and `a=p` places it (the
+  transmit-once / place-many model image plugins rely on), and `a=d` deletes placements (`d=a`
+  all, `d=i` by id) so a redrawing TUI can clear stale images. Animation (`a=a`) stays deferred.
+- **`status-position` is now honored** (tmux `set -g status-position top|bottom`, default bottom).
+  The GUI status footer moves to the top or bottom of the window and its `status 2..5` rows
+  stack so the main line stays against the terminal; the `attach-window` compositor reserves and
+  paints the band at the matching edge. Changing it in Settings ▸ Advanced re-lays-out live.
+  Previously the option (and its Settings toggle) existed but nothing read it.
+- **`@`-prefixed user options.** `set-option @my_var value` is stored and `#{@my_var}` now renders
+  it (resolved through the scope chain, global preferred) — the mechanism theme/status-line
+  `.tmux.conf` plugins rely on. Previously `@`-options were accepted but `#{@foo}` always read empty.
+- **VoiceOver support for the terminal grid.** The Metal-backed surface view now conforms to the
+  AppKit static-text accessibility protocol (role `.textArea`, the scrollback + screen as the
+  accessible value, line/character navigation, cursor as the insertion point), so VoiceOver can
+  read terminal output and navigate it — previously the grid was entirely invisible to it.
+- **Secure Keyboard Entry** (Edit ▸ Secure Keyboard Entry, off by default). When on, Harness takes
+  the process-global `EnableSecureEventInput` lock while it's the active app, so another local
+  process can't keylog keystrokes typed at a sudo / ssh-passphrase prompt. The lock is released
+  whenever Harness is backgrounded or quits (balanced accounting, pinned by test).
+
+### Changed
+- **Agent scanning builds the process tree once per tick.** The ~1.5s agent scan rebuilt the whole
+  `pid → ppid` map once *per surface*; it now builds it once per tick and shares it across all
+  surfaces (O(surfaces × processes) syscalls → O(processes)). The GUI shell-cwd tracker now uses
+  that same shared `ProcessScan` primitive instead of its own duplicate. No behavior change.
+- **One key-encoder.** `send-keys` / keybinding tokens are now encoded by the same engine
+  `InputEncoder` that physical keypresses use, instead of a second hand-maintained escape table
+  kept in agreement by hand. Tokens resolve to the engine's `SpecialKey`/`KeyModifiers` and gain a
+  `modes:` seam for mode-correct encoding. Common keys are byte-identical; Option-modified editing
+  keys now match a physical Alt+key (e.g. `send-keys M-Left` emits the readline word-motion `ESC b`
+  rather than the CSI modifier form). The daemon's `send-keys` is mode-blind by design (it's a
+  byte-pipe with no live per-surface emulator) and passes default/normal modes.
+- **Layout persistence moved off the input-latency path.** The daemon no longer does a full
+  prettyPrinted `layout.json` encode + atomic write under the registry lock on every mutation;
+  writes are now coalesced through a 0.5s debounce and flushed synchronously on graceful
+  shutdown, so a burst of agent activity no longer taxes keystroke latency. `layout.json` is now
+  written compactly (still deterministically key-sorted).
+
+### Fixed
+- **The window-edge border now hugs the rounded corners.** The hairline border (Settings ▸
+  Appearance) drew its corner with a fixed 10 pt radius read from the wrong layer. On macOS 26 the
+  window server rounds corners at 16 pt, so that 10 pt arc fell outside the window's clip and
+  disappeared, leaving the border on the straight edges only. It now reads the real corner radius
+  and follows the system's continuous-curve corner, so the perimeter stays unbroken.
+- **The agent notch opens and closes as one motion.** Closing faded the content out in about
+  0.1 s while the shape took 0.45 s to collapse, so the pill emptied and then shrank. The content
+  now fades on the same spring as the shape, the open/close springs are gentler, and the panel no
+  longer re-asserts its frame and window level on every metadata tick, which had been interrupting
+  the animation mid-flight.
+- **The notch no longer shows one agent as both waiting and working.** A single Claude Code
+  instance waiting on input could read "1 waiting" and "1 working" at the same time: a lingering
+  OSC 9;4 progress signal promoted the waiting agent to working, and the two counts were tallied
+  independently. Waiting now supersedes working wherever a count is derived.
+- **The agent-update peek clears the notch.** On a notched Mac the peek's single line sat at the
+  top of the card, partly behind the camera housing, so its title was clipped. Its content now
+  sits below the notch reserve, the way the full dropdown already did.
+- **Clicking a notch row restores a minimized window.** Before, it brought the window forward when
+  it was in the background but did nothing when it was minimized to the Dock. It now deminiaturizes
+  (and unhides) the target window before bringing it to the front.
+- **`capture-pane` (plain mode) now strips DCS / charset-designation escapes.** The scrollback
+  ANSI filter behind `capture-pane` (without `-e`) only neutralized CSI and OSC sequences, so a
+  DCS reply (e.g. a DECRQSS/XTGETTCAP answer) leaked its raw payload and a charset-designation
+  escape (`ESC ( B`) leaked a stray byte into the "plain text" capture. It now folds in the full
+  C1 string family (DCS/SOS/PM/APC) and consumes multi-byte escapes (intermediates + final).
+- **VT correctness cluster (REP / IRM / DECOM / DECSTR / DECALN).** Five control functions that
+  were previously dropped now work: `CSI Ps b` (**REP**) repeats the preceding graphic character;
+  `CSI 4 h/l` (**IRM**) toggles insert vs. replace mode so insert-mode editors shift the line
+  instead of overwriting; `CSI ?6 h/l` (**DECOM**, origin mode) makes CUP/HVP/VPA address rows
+  relative to the scroll region and confines the cursor to it; `CSI ! p` (**DECSTR**) performs a
+  soft terminal reset (cursor visibility, insert/replace, origin, scroll region, saved cursor, and
+  SGR back to defaults); and `ESC # 8` (**DECALN**) fills the screen with `E` for alignment.
+  DECSTR/DECALN were being swallowed by the intermediate-byte guards, and REP/IRM/DECOM had no
+  handler at all.
+- **DCS device-control strings are now demuxed instead of all being fed to the Sixel decoder.**
+  The parser routed any DCS containing a `q` into the Sixel decoder, so DECRQSS (`DCS $ q …`),
+  XTGETTCAP (`DCS + q …`), and tmux control-mode passthrough (`DCS tmux; …`) decoded as nothing
+  and were silently dropped. DCS is now demuxed by its header (params / intermediate / final):
+  real Sixel still decodes, **DECRQSS** is answered for the settings the engine tracks (cursor
+  style `DECSCUSR`, scroll region `DECSTBM`), **XTGETTCAP** answers the stable capabilities
+  (`TN`, `Co`/`colors`, `RGB`), and tmux passthrough is recognized rather than misread.
+- **Primary device attributes (DA1) now advertise Sixel.** The `CSI c` reply is `CSI ?1;2;4c`
+  (feature code `4` = Sixel), so tools that gate graphics on the DA1 response (`img2sixel`,
+  `chafa`, `timg`) will actually emit Sixel — which the engine decodes.
+- **Three copy-mode motions were silently mis-aliased to the wrong action.** `next-word-end`
+  landed on a word *start* (aliased to `next-word`), `top-line`/`bottom-line` jumped to the
+  scrollback *extent* (aliased to `history-top`/`history-bottom`) instead of the visible top/bottom
+  row, and `back-to-indentation` went to column 0 ignoring indent (aliased to `start-of-line`).
+  Each is now its own motion — plus `middle-line` — and bound to the vi keys `e`, `H`/`M`/`L`,
+  and `^` in copy mode.
+- **`set-option` now rejects unknown option names loudly.** A typo or unsupported invention like
+  `set -g moused on` was silently persisted and never read; it now fails with `unknown option: …`
+  in every front-end (CLI, the `:` prompt, `source-file`). Real Harness options, recognized tmux
+  options (accepted for `.tmux.conf` migration even when not yet honored), and `@`-prefixed user
+  options are all still accepted.
+- **Format conditionals can now nest an operator in the test.** `#{?#{==:#{pane_current_command},vim},…,…}`
+  and friends (a `.tmux.conf` staple) previously evaluated the test only as a bare token, so any
+  nested comparison/operator read as unknown → empty → falsy and the else-branch always won. The
+  test is now evaluated as a full expression. Also removes a dead identity-no-op helper.
+
+### Security
+- **Paste-injection hardening.** A clipboard payload that embeds the bracketed-paste end marker
+  (`ESC[201~`) can no longer terminate the paste early and run the trailing text as typed input —
+  every embedded end marker is stripped before the paste is wrapped, matching kitty/ghostty/foot.
+- **OSC 7 working-directory validation.** A directory report is now honored only when it is a
+  `file://` URL resolving to an absolute path; a relative path, a non-`file` scheme, or junk is
+  ignored, so program output can't steer the cwd inherited by new tabs.
+
 ## [1.8.0] - 2026-06-07
 
 The tmux-parity close-out: every remaining tracked gap is either shipped, adapted with a

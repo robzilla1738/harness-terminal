@@ -53,7 +53,7 @@ final class AgentNotchViewModel: ObservableObject {
     }
 
     var workingCount: Int {
-        rows.filter { $0.agentActivity == .working }.count
+        rows.filter(\.isWorking).count
     }
 
     var agentCount: Int {
@@ -98,11 +98,23 @@ final class AgentNotchViewModel: ObservableObject {
     }
 
     var openAnimation: Animation {
-        reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.38, dampingFraction: 0.8)
+        // Calm, barely-damped grow (utility HUD, not a bouncy toy): a touch more damping than
+        // before so the shape settles without overshoot.
+        reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.36, dampingFraction: 0.86)
     }
 
     var closeAnimation: Animation {
-        reduceMotion ? .easeOut(duration: 0.10) : .spring(response: 0.45, dampingFraction: 1.0)
+        // Snappy, fully damped collapse. Kept close to the content-fade so the pill never lingers
+        // empty while the shape is still shrinking.
+        reduceMotion ? .easeOut(duration: 0.10) : .spring(response: 0.30, dampingFraction: 1.0)
+    }
+
+    /// In-place changes while already presented (a row appearing/leaving, a badge or count
+    /// updating). The single driver for content animation: applied in `refreshFromCoordinator`
+    /// so the view carries no implicit `.animation(value:)` of its own (two competing drivers
+    /// were a glitch source). Presentation changes use the open/close springs above instead.
+    var contentAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.30, dampingFraction: 0.88)
     }
 
     func updateGeometry(_ geometry: NotchLayoutMetrics) {
@@ -115,7 +127,6 @@ final class AgentNotchViewModel: ObservableObject {
         let coordinator = SessionCoordinator.shared
         openOnHover = coordinator.settings.notchOpenOnHover
         let currentAgents = coordinator.agentsList()
-        agents = AgentNotchProjection.sortedAgents(currentAgents)
         var updatedRows = AgentNotchProjection.rows(from: coordinator.snapshot, agents: currentAgents)
         // Reconcile OSC 9;4 progress state with detector-driven activity. The projection
         // derives agentActivity from the daemon snapshot (AgentDetector), which Claude Code
@@ -132,16 +143,42 @@ final class AgentNotchViewModel: ObservableObject {
         var progress: [String: Int] = [:]
         for i in updatedRows.indices {
             guard let tabID = updatedRows[i].tabID, let surfaces = tabSurfaces[tabID] else { continue }
-            if surfaces.contains(where: { tracker.isActive($0) }) {
+            // OSC 9;4 promotes an idle/working row to .working, but must never override a waiting
+            // or errored agent: one that needs your input (or has errored) is not "working", even
+            // if a stale progress report lingers. Otherwise the same agent reads as both
+            // "waiting" and "working" at once.
+            if updatedRows[i].waitingCount == 0,
+               updatedRows[i].agentActivity != .errored,
+               surfaces.contains(where: { tracker.isActive($0) }) {
                 updatedRows[i].agentActivity = .working
             }
             if let percent = surfaces.compactMap({ tracker.progressPercent($0) }).first {
                 progress[updatedRows[i].id] = percent
             }
         }
-        rows = updatedRows
-        rowProgress = progress
-        sessionCount = Set(rows.map(\.sessionID)).count
+        let sortedAgents = AgentNotchProjection.sortedAgents(currentAgents)
+        let newSessionCount = Set(updatedRows.map(\.sessionID)).count
+
+        // Publish only when something the HUD actually shows changed. A snapshot tick fires on any
+        // metadata update (cwd, git, agent activity elsewhere); without this guard the open list
+        // re-renders — and re-diffs its TimelineView — on every one, which reads as jitter.
+        guard sortedAgents != agents
+            || updatedRows != rows
+            || progress != rowProgress
+            || newSessionCount != sessionCount
+        else {
+            considerPeek()
+            return
+        }
+
+        // One explicit driver for the in-place change, so it animates smoothly without competing
+        // with the presentation springs (or with implicit view animations, which are now gone).
+        withAnimation(contentAnimation) {
+            agents = sortedAgents
+            rows = updatedRows
+            rowProgress = progress
+            sessionCount = newSessionCount
+        }
         considerPeek()
     }
 
@@ -247,9 +284,20 @@ final class AgentNotchViewModel: ObservableObject {
 enum AgentNotchWindowActivator {
     static func bringHarnessToFront() {
         NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.canBecomeMain && !(window is NSPanel) {
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
+        // A hidden app (⌘H) must be unhidden before any window can come forward.
+        if NSApp.isHidden { NSApp.unhide(nil) }
+        // Candidate terminal windows (never the notch/quick-terminal panels). Prefer one that's
+        // minimized into the Dock — that's the case `makeKeyAndOrderFront` alone can't handle, and
+        // a miniaturized window can report `canBecomeMain == false`, so don't filter on it here.
+        let windows = NSApp.windows.filter { !($0 is NSPanel) }
+        guard let target = windows.first(where: { $0.isMiniaturized })
+            ?? windows.first(where: { $0.canBecomeMain })
+            ?? windows.first
+        else { return }
+        // `makeKeyAndOrderFront` only reorders an on-screen/background window; a Dock-minimized
+        // window must be deminiaturized first. This makes a notch-row click restore the terminal
+        // whether it was backgrounded OR minimized.
+        if target.isMiniaturized { target.deminiaturize(nil) }
+        target.makeKeyAndOrderFront(nil)
     }
 }
