@@ -5,7 +5,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     // v4: selection/bold/cursor-text/minimum-contrast/palette are now honored
     // (previously imported then discarded), so bump to force a one-time re-import.
     // v6: light/dark theme pairs are now imported into system appearance settings.
-    private static let signatureVersion = "v6"
+    // v7: `macos-option-as-alt` is now imported into the Option-key behavior setting.
+    private static let signatureVersion = "v7"
 
     public var fontFamily: String?
     public var fontSize: Float?
@@ -33,6 +34,9 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     public var copyOnSelect: Bool?
     /// Ghostty `bold-is-bright`: bold + palette 0-7 maps to bright 8-15.
     public var boldIsBright: Bool?
+    /// Ghostty `macos-option-as-alt`: false = compose characters, true = Meta, left/right
+    /// = only that Option key is Meta.
+    public var optionAsMeta: OptionAsMetaMode?
 
     public var signature: String {
         var parts: [String] = []
@@ -60,6 +64,7 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         parts.append(cursorBlink.map { String($0) } ?? "")
         parts.append(copyOnSelect.map { String($0) } ?? "")
         parts.append(boldIsBright.map { String($0) } ?? "")
+        parts.append(optionAsMeta?.rawValue ?? "")
         return parts.joined(separator: "|")
     }
 
@@ -86,7 +91,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         cursorStyle: String? = nil,
         cursorBlink: Bool? = nil,
         copyOnSelect: Bool? = nil,
-        boldIsBright: Bool? = nil
+        boldIsBright: Bool? = nil,
+        optionAsMeta: OptionAsMetaMode? = nil
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -111,6 +117,7 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         self.cursorBlink = cursorBlink
         self.copyOnSelect = copyOnSelect
         self.boldIsBright = boldIsBright
+        self.optionAsMeta = optionAsMeta
     }
 
     public var hasTerminalColorOverrides: Bool {
@@ -274,7 +281,22 @@ public enum TerminalConfigImporter {
         if let value = values["bold-is-bright"].flatMap(parseBool) {
             defaults.boldIsBright = value
         }
+        if let value = values["macos-option-as-alt"].flatMap(parseOptionAsMeta) {
+            defaults.optionAsMeta = value
+        }
         return defaults
+    }
+
+    /// Ghostty `macos-option-as-alt`: boolean forms map to Meta/compose; `left`/`right`
+    /// make only that Option key Meta.
+    private static func parseOptionAsMeta(_ raw: String) -> OptionAsMetaMode? {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "yes", "1", "on": return .meta
+        case "false", "no", "0", "off": return .composed
+        case "left": return .leftMetaOnly
+        case "right": return .rightMetaOnly
+        default: return nil
+        }
     }
 
     private static func normalizeHex(_ raw: String) -> String? {
@@ -344,7 +366,8 @@ private extension ImportedTerminalConfig {
             cursorStyle: newer.cursorStyle ?? cursorStyle,
             cursorBlink: newer.cursorBlink ?? cursorBlink,
             copyOnSelect: newer.copyOnSelect ?? copyOnSelect,
-            boldIsBright: newer.boldIsBright ?? boldIsBright
+            boldIsBright: newer.boldIsBright ?? boldIsBright,
+            optionAsMeta: newer.optionAsMeta ?? optionAsMeta
         )
     }
 

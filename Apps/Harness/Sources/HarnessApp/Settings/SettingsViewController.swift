@@ -90,6 +90,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let resizeOverlaySegment = HarnessSegmented(frame: .zero)
     private let resizeOverlayPositionSegment = HarnessSegmented(frame: .zero)
     private let bellSegment = HarnessSegmented(frame: .zero)
+    private let optionKeySegment = HarnessSegmented(frame: .zero)
     private let paddingBalanceToggle = HarnessToggle(title: "Center grid (distribute padding evenly)")
     private let minContrastSlider = HarnessSlider(frame: .zero)
     private let minContrastLabel = NSTextField(labelWithString: "")
@@ -447,6 +448,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         bellSegment.selectItem(withTitle: bellModeTitle(settings.bellMode))
         bellSegment.target = self
         bellSegment.action = #selector(appearanceTextDidCommit)
+        optionKeySegment.setSegments(["Characters", "Meta (Esc+)", "Left Meta", "Right Meta"])
+        optionKeySegment.selectItem(withTitle: optionKeyTitle(settings.optionAsMeta))
+        optionKeySegment.target = self
+        optionKeySegment.action = #selector(appearanceTextDidCommit)
         // Balanced padding (T2)
         paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
         paddingBalanceToggle.target = self
@@ -653,7 +658,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         0: ["appearance", "theme", "system", "macos", "opacity", "blur", "padding", "window", "transparent", "titlebar", "sidebar", "restore", "remember", "size"],
         1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status", "soft", "native", "crisp", "rendering", "gamma"],
         2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session", "harness", "controls", "experience"],
-        3: ["keys", "prefix", "binding", "keybinding", "shortcut"],
+        3: ["keys", "prefix", "binding", "keybinding", "shortcut", "option", "meta", "alt", "compose", "accent", "esc"],
         4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "notify", "banner", "bell", "sound", "detection"],
         5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"],
     ]
@@ -1013,13 +1018,18 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Prefix key", keyRecorder, hint: "Click to record a new shortcut. Esc cancels."),
         ])
 
+        let optionKeyGroup = settingsGroup("Option Key", [
+            settingsRow("Behavior", optionKeySegment,
+                        hint: "Characters types what your keyboard layout produces (@, |, é — dead keys included), matching Terminal.app and Ghostty. Meta sends Esc-prefixed keys for readline/emacs (alt-b, alt-f). Left/Right make only that Option key Meta."),
+        ])
+
         let quickTerminalGroup = settingsGroup("Quick Terminal", [
             settingsToggleRow("Enable", quickTerminalToggle),
             settingsRow("Hotkey", quickTerminalHotkeyRecorder,
                         hint: "Global shortcut that drops a terminal down from the top of the screen, even when Harness is in the background."),
         ])
 
-        let stack = NSStackView(views: [header, prefixGroup, quickTerminalGroup])
+        let stack = NSStackView(views: [header, prefixGroup, optionKeyGroup, quickTerminalGroup])
         stack.orientation = .vertical
         stack.alignment = .width
         stack.spacing = 18
@@ -2000,6 +2010,24 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
+    private func optionKeyTitle(_ mode: OptionAsMetaMode) -> String {
+        switch mode {
+        case .composed: return "Characters"
+        case .meta: return "Meta (Esc+)"
+        case .leftMetaOnly: return "Left Meta"
+        case .rightMetaOnly: return "Right Meta"
+        }
+    }
+
+    private func optionKeyValue(_ title: String?) -> OptionAsMetaMode {
+        switch title {
+        case "Meta (Esc+)": return .meta
+        case "Left Meta": return .leftMetaOnly
+        case "Right Meta": return .rightMetaOnly
+        default: return .composed
+        }
+    }
+
     private func updateMinContrastLabel() {
         let value = minContrastSlider.doubleValue
         minContrastLabel.stringValue = value <= 1.01 ? "Off" : String(format: "%.1f:1", value)
@@ -2384,6 +2412,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         resizeOverlaySegment.selectItem(withTitle: resizeOverlayTitle(settings.resizeOverlay))
         resizeOverlayPositionSegment.selectItem(withTitle: resizeOverlayPositionTitle(settings.resizeOverlayPosition))
         bellSegment.selectItem(withTitle: bellModeTitle(settings.bellMode))
+        optionKeySegment.selectItem(withTitle: optionKeyTitle(settings.optionAsMeta))
         paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
         minContrastSlider.doubleValue = settings.minimumContrast
         updateMinContrastLabel()
@@ -2528,6 +2557,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.bellMode = bellModeValue(bellSegment.titleOfSelectedItem)
         coordinator.settings.scrollMultiplier = HarnessSettings.clampedScrollMultiplier(scrollMultiplierSlider.doubleValue)
         coordinator.settings.mouseHideWhileTyping = mouseHideToggle.state == .on
+        coordinator.settings.optionAsMeta = optionKeyValue(optionKeySegment.titleOfSelectedItem)
         coordinator.settings.quickTerminalEnabled = quickTerminalToggle.state == .on
         coordinator.settings.windowPaddingBalance = paddingBalanceToggle.state == .on
         coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)

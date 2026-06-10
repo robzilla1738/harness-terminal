@@ -406,6 +406,7 @@ public final class TerminalHostView: NSView {
         // Behavior (not appearance) settings — set directly rather than bloating the appearance call.
         nativeView.scrollMultiplier = CGFloat(HarnessSettings.clampedScrollMultiplier(settings.scrollMultiplier))
         nativeView.mouseHideWhileTyping = settings.mouseHideWhileTyping
+        nativeView.optionAsMeta = settings.optionAsMeta
         // Resize overlay: legible on any theme via the canvas FG fill + BG text (same trick as the
         // pane-border label), positioned per settings.
         resizeHUD.applyColors(

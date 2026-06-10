@@ -70,6 +70,17 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ### Changed
 
+- **The Option key now types composed characters by default** — `@`, `|`, `é`, dead keys,
+  whatever the macOS keyboard layout produces — matching Terminal.app / iTerm2 / Ghostty /
+  kitty and unblocking international layouts that need Option for everyday symbols (#155).
+  Readline/emacs users who relied on the old always-Meta behavior pick it back up in
+  Settings ▸ Keys ▸ Option Key: *Meta (Esc+)*, or *Left/Right Meta* to split the two Option
+  keys (the Ghostty `macos-option-as-alt` shape — the config import now carries it over,
+  `left`/`right` included). Unchanged in every mode: ⌥←/⌥→/⌥⌫ word motion keeps its Esc
+  encoding (macOS terminal convention), Ctrl+Option combos still take the escape-code path,
+  `M-…` key-table bindings still match the physical modifiers, and Kitty-protocol reports
+  stay spec-true — a composing Option no longer sets a stale alt bit.
+
 - Mechanical decomposition (renderer): the Metal renderer's CPU-side instance/cache value
   types (GPU instance layouts, per-row encode caches, upload-cache keys) moved to
   `TerminalRenderInstances.swift` — same definitions, zero logic change.

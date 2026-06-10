@@ -10,7 +10,8 @@ Harness reads compatible source terminal configs so your colors and font carry o
 **What's imported** (`TerminalConfigImporter`, covered by `TerminalConfigImporterTests`):
 colors (background/foreground/cursor/selection/bold/cursor-text), the 16-color ANSI palette,
 font **face**, `background-opacity`, `background-blur`, window padding, cursor style, cursor
-blink, copy-on-select, and the default shell.
+blink, copy-on-select, the Option-key behavior (`macos-option-as-alt`, including the
+`left`/`right` split forms), and the default shell.
 
 **What's not imported:** the font **size** is Harness-owned (default 16) — a terminal's size
 preference doesn't carry over, only the face does.

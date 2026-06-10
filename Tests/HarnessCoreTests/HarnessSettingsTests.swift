@@ -939,6 +939,35 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.agentColorOverrides, defaults.agentColorOverrides)
         XCTAssertEqual(decoded.boldIsBright, defaults.boldIsBright)
         XCTAssertEqual(decoded.resizeOverlayPosition, defaults.resizeOverlayPosition)
+        XCTAssertEqual(decoded.optionAsMeta, defaults.optionAsMeta)
+    }
+
+    func testOptionAsMetaDefaultsToComposedAndRoundTrips() throws {
+        XCTAssertEqual(HarnessSettings().optionAsMeta, .composed,
+                       "industry default (Terminal.app/iTerm2/Ghostty/kitty): Option composes characters")
+        var settings = HarnessSettings()
+        settings.optionAsMeta = .leftMetaOnly
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: data)
+        XCTAssertEqual(decoded.optionAsMeta, .leftMetaOnly)
+        // The stored raw value is the Ghostty-shaped short form.
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["optionAsMeta"] as? String, "left")
+    }
+
+    func testUnknownOptionAsMetaRawValueFallsBackWithoutFailingDecode() throws {
+        // Forward compatibility: an unknown enum raw value (newer Harness, hand-edit) must
+        // fall back to the field default — not throw and send the WHOLE file down the
+        // corrupt-backup path.
+        let decoded = try JSONDecoder().decode(
+            HarnessSettings.self,
+            from: Data(#"{ "optionAsMeta": "banana", "fontSize": 18 }"#.utf8)
+        )
+        XCTAssertEqual(
+            decoded.optionAsMeta,
+            HarnessSettings.makeDefaults(imported: TerminalConfigImporter.load()).optionAsMeta
+        )
+        XCTAssertEqual(decoded.fontSize, 18, "the rest of the file still decodes")
     }
 
     func testWindowInheritCWDDefaultsOnAndDecodesExplicitOff() throws {

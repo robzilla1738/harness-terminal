@@ -84,6 +84,21 @@ public enum BellMode: String, Codable, Sendable, CaseIterable {
     case both
 }
 
+/// How the Option key behaves for text-producing keys (Ghostty `macos-option-as-alt`).
+/// `.composed` (default) lets Option type whatever the macOS keyboard layout produces —
+/// `@`, `|`, `é`, dead keys — matching Terminal.app / iTerm2 / Ghostty / kitty (#155).
+/// `.meta` restores the classic Esc-prefix behavior readline/emacs users expect
+/// (alt-b / alt-f); `.leftMetaOnly` / `.rightMetaOnly` split the two Option keys so one
+/// side stays Meta while the other composes. Option+arrow/backspace word motion keeps
+/// its Meta encoding in every mode (macOS terminal convention), and Ctrl+Option combos
+/// always take the escape-code path — no composition happens there.
+public enum OptionAsMetaMode: String, Codable, Sendable, CaseIterable {
+    case composed
+    case meta
+    case leftMetaOnly = "left"
+    case rightMetaOnly = "right"
+}
+
 private enum LegacyHarnessSettingsCodingKeys: String, CodingKey {
     case tmuxControlsEnabled
     /// Removed in favor of the per-event `notificationEvents` map; still read here to migrate
@@ -278,6 +293,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Hide the mouse cursor while typing until the mouse next moves (Ghostty
     /// `mouse-hide-while-typing`). Off by default (matching Ghostty).
     public var mouseHideWhileTyping: Bool
+    /// Option-key behavior for text keys (Ghostty `macos-option-as-alt`): compose characters
+    /// via the keyboard layout (default — option+L types `@` on international layouts, #155),
+    /// act as Meta (Esc-prefix), or split by physical side.
+    public var optionAsMeta: OptionAsMetaMode
     /// Enable the quick terminal: a Quake-style dropdown surface summoned by a global hotkey from
     /// anywhere, even when Harness is in the background. Off by default.
     public var quickTerminalEnabled: Bool
@@ -409,6 +428,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         bellMode: BellMode = .visual,
         scrollMultiplier: Double = 1,
         mouseHideWhileTyping: Bool = false,
+        optionAsMeta: OptionAsMetaMode = .composed,
         quickTerminalEnabled: Bool = false,
         quickTerminalHotkey: String = "cmd-opt-`",
         windowPaddingBalance: Bool = true,
@@ -479,6 +499,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.bellMode = bellMode
         self.scrollMultiplier = scrollMultiplier
         self.mouseHideWhileTyping = mouseHideWhileTyping
+        self.optionAsMeta = optionAsMeta
         self.quickTerminalEnabled = quickTerminalEnabled
         self.quickTerminalHotkey = quickTerminalHotkey
         self.windowPaddingBalance = windowPaddingBalance
@@ -601,6 +622,18 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         func decode<T: Decodable>(_ key: Keys, _ field: KeyPath<HarnessSettings, T>) throws -> T {
             try container.decodeIfPresent(T.self, forKey: key) ?? fallback[keyPath: field]
         }
+
+        /// String-raw enum fields decode leniently: an unknown raw value (a file written by a
+        /// newer Harness, or a hand-edit) falls back to the field default instead of failing the
+        /// WHOLE settings decode into the corrupt-backup path. A type mismatch still throws —
+        /// that's real corruption, not forward drift.
+        func decodeEnum<T: RawRepresentable>(_ key: Keys, _ field: KeyPath<HarnessSettings, T>) throws -> T
+        where T.RawValue == String {
+            guard let raw = try container.decodeIfPresent(String.self, forKey: key) else {
+                return fallback[keyPath: field]
+            }
+            return T(rawValue: raw) ?? fallback[keyPath: field]
+        }
     }
 
     /// Decoder that gracefully accepts older settings files missing the newer fields.
@@ -719,6 +752,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         bellMode = try fields.decode(.bellMode, \.bellMode)
         scrollMultiplier = HarnessSettings.clampedScrollMultiplier(try fields.decode(.scrollMultiplier, \.scrollMultiplier))
         mouseHideWhileTyping = try fields.decode(.mouseHideWhileTyping, \.mouseHideWhileTyping)
+        optionAsMeta = try fields.decodeEnum(.optionAsMeta, \.optionAsMeta)
         quickTerminalEnabled = try fields.decode(.quickTerminalEnabled, \.quickTerminalEnabled)
         quickTerminalHotkey = try fields.decode(.quickTerminalHotkey, \.quickTerminalHotkey)
         windowPaddingBalance = try fields.decode(.windowPaddingBalance, \.windowPaddingBalance)
@@ -923,6 +957,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.cursorStyle { settings.cursorStyle = value }
         if let value = imported.cursorBlink { settings.cursorBlink = value }
         if let value = imported.copyOnSelect { settings.copyOnSelect = value }
+        if let value = imported.optionAsMeta { settings.optionAsMeta = value }
         if let value = imported.minimumContrast { settings.minimumContrast = HarnessSettings.clampedContrast(value) }
         if let value = imported.boldIsBright { settings.boldIsBright = value }
         settings.selectionBackgroundHex = imported.selectionBackgroundHex
@@ -953,6 +988,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.cursorStyle { cursorStyle = value }
         if let value = imported.cursorBlink { cursorBlink = value }
         if let value = imported.copyOnSelect { copyOnSelect = value }
+        if let value = imported.optionAsMeta { optionAsMeta = value }
         if let value = imported.minimumContrast { minimumContrast = HarnessSettings.clampedContrast(value) }
         if let value = imported.boldIsBright { boldIsBright = value }
         selectionBackgroundHex = imported.selectionBackgroundHex

@@ -431,6 +431,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     var scrollMultiplier: CGFloat = 1
     /// Hide the cursor while typing until the mouse next moves (Ghostty `mouse-hide-while-typing`).
     var mouseHideWhileTyping = false
+    var optionAsMeta: OptionAsMetaMode = .composed
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
     /// Smooth-scroll sub-line position. The continuous scrollback position is
@@ -3764,6 +3765,14 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
 
+        // A composing Option is not a modifier for the text path: drop it so the input context
+        // can deliver the layout's character (option+L → @ on German/Nordic layouts — #155;
+        // dead keys included via the marked-text path), and so Kitty modes report the key
+        // without a stale alt bit (kitty itself treats a composing Option the same way).
+        // Special keys (above) keep Meta semantics in every mode — opt+arrow word motion is
+        // macOS terminal convention — and Ctrl+Option combos never compose.
+        mods = Self.effectiveTextModifiers(mods, mode: optionAsMeta, eventFlags: flags)
+
         // Control/Option — or Kitty "report all keys as escape codes" — take the encoder path:
         // Meta prefix + Control collapsing in legacy mode, full CSI-u (with alternate-key and
         // associated-text fields) under Kitty. Plain keys otherwise go through the input context so
@@ -3806,6 +3815,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             emit(inputEncoder.encode(special, modifiers: mods, event: .release, modes: modes))
             return
         }
+        // Keep release events symmetric with the press: a composing Option was stripped from
+        // the press encoding, so strip it here too.
+        mods = Self.effectiveTextModifiers(mods, mode: optionAsMeta, eventFlags: flags)
         // Plain (text-producing) keys only have a release event when they're reported as escape
         // codes in the first place: Ctrl/Option-modified, or under "report all keys" (0b1000).
         let modified = mods.contains(.control) || mods.contains(.option)
@@ -3821,6 +3833,38 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func emit(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         onInput?(Data(bytes))
+    }
+
+    /// Strip a composing Option from the text-path modifier set: when the held Option side(s)
+    /// compose characters (per `mode`), the key is plain text — not Meta, no Kitty alt bit.
+    /// Control is never stripped (Ctrl+Option combos don't compose). `internal` so the
+    /// modifier seam can be unit-tested.
+    static func effectiveTextModifiers(
+        _ mods: KeyModifiers, mode: OptionAsMetaMode, eventFlags: NSEvent.ModifierFlags
+    ) -> KeyModifiers {
+        var result = mods
+        if result.contains(.option), !result.contains(.control),
+           !optionActsAsMeta(mode, eventFlags: eventFlags) {
+            result.remove(.option)
+        }
+        return result
+    }
+
+    /// Whether the held Option key(s) act as Meta for text keys. The side-split modes read the
+    /// event's device-dependent modifier bits (NX_DEVICELALTKEYMASK / NX_DEVICERALTKEYMASK);
+    /// an event without side bits (synthesized input, some assistive hardware) honors the
+    /// user's Meta intent rather than silently composing. With both Options held, Meta wins
+    /// when the meta-designated side is down.
+    static func optionActsAsMeta(_ mode: OptionAsMetaMode, eventFlags: NSEvent.ModifierFlags) -> Bool {
+        switch mode {
+        case .meta: return true
+        case .composed: return false
+        case .leftMetaOnly, .rightMetaOnly:
+            let left = eventFlags.rawValue & 0x0000_0020 != 0
+            let right = eventFlags.rawValue & 0x0000_0040 != 0
+            guard left || right else { return true }
+            return mode == .leftMetaOnly ? left : right
+        }
     }
 
     /// Map an NSEvent to a SpecialKey using the AppKit function-key unicode values.

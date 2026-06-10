@@ -38,6 +38,18 @@ final class TerminalConfigImporterTests: XCTestCase {
         XCTAssertNil(imported.themeName)
     }
 
+    func testMacosOptionAsAltImportsAllForms() {
+        XCTAssertEqual(TerminalConfigImporter.parse("macos-option-as-alt = true").optionAsMeta, .meta)
+        XCTAssertEqual(TerminalConfigImporter.parse("macos-option-as-alt = false").optionAsMeta, .composed)
+        XCTAssertEqual(TerminalConfigImporter.parse("macos-option-as-alt = left").optionAsMeta, .leftMetaOnly)
+        XCTAssertEqual(TerminalConfigImporter.parse("macos-option-as-alt = right").optionAsMeta, .rightMetaOnly)
+        XCTAssertNil(TerminalConfigImporter.parse("macos-option-as-alt = sideways").optionAsMeta)
+        XCTAssertNil(TerminalConfigImporter.parse("font-family = Menlo").optionAsMeta)
+
+        let imported = TerminalConfigImporter.parse("macos-option-as-alt = left")
+        XCTAssertEqual(HarnessSettings.makeDefaults(imported: imported).optionAsMeta, .leftMetaOnly)
+    }
+
     func testSingleThemeStaysLiteralEvenWithColonInName() {
         // A lone light:/dark: prefix without its counterpart is not the dual form.
         let imported = TerminalConfigImporter.parse("""
@@ -106,7 +118,7 @@ final class TerminalConfigImporterTests: XCTestCase {
         XCTAssertEqual(imported.cursorStyle, "block")
         XCTAssertEqual(imported.cursorBlink, false)
         XCTAssertEqual(imported.copyOnSelect, true)
-        XCTAssertTrue(imported.signature.hasPrefix("v6|"))
+        XCTAssertTrue(imported.signature.hasPrefix("v7|"))
         XCTAssertEqual(imported.fontFamily, "JetBrainsMono Nerd Font")
         XCTAssertEqual(imported.fontSize, 17)
         XCTAssertEqual(imported.windowPaddingX, 14)
