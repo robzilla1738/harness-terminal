@@ -2105,7 +2105,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         systemDarkThemePopup.selectItem(withTitle: settings.systemDarkThemeName)
     }
 
-    private func seedUnsetSystemThemeNames(settings: inout HarnessSettings, selectedThemeName: String) {
+    /// Static (not instance) so tests can exercise the real seeding rule without
+    /// instantiating the view controller.
+    static func seedUnsetSystemThemeNames(settings: inout HarnessSettings, selectedThemeName: String) {
         if settings.systemLightThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             settings.systemLightThemeName = ThemeManager.defaultSystemLightThemeName
         }
@@ -2497,7 +2499,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             }
         }
         if previousAppearanceMode != .macOSSystem && nextAppearanceMode == .macOSSystem {
-            seedUnsetSystemThemeNames(settings: &coordinator.settings, selectedThemeName: coordinator.snapshot.themeName)
+            Self.seedUnsetSystemThemeNames(settings: &coordinator.settings, selectedThemeName: coordinator.snapshot.themeName)
             syncSystemThemePickersFromSettings()
         }
         coordinator.settings.fontSize = HarnessSettings.clampedFontSize(Float(fontSizeField.stringValue) ?? 14)
