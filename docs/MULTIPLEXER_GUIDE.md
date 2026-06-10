@@ -131,7 +131,7 @@ Enter with **`prefix [`**. Copy mode is modal and vim-flavored (`mode-keys vi`):
 | `w` / `b` | Next / previous word |
 | `g` / `G` | Top / bottom of history |
 | `PageUp`/`PageDown`, `C-u`/`C-d` | Page / half-page scroll |
-| `[` / `]` | **Jump to previous / next shell prompt** (needs OSC 133 — see §13) |
+| `[` / `]` | **Jump to previous / next shell prompt** (needs OSC 133 — see §12) |
 | `v` / `V` / `C-v` | Start char / line / rectangle (block) selection |
 | `/` … `Enter`, `?` | Search forward / backward; `n` / `N` cycle matches |
 | `y` or `Enter` | Yank selection to the clipboard **and** a paste buffer, then exit |
@@ -289,19 +289,7 @@ would be useful, use `choose-window` instead.
 
 ---
 
-## 12. Appearance behavior
-
-Harness owns the terminal canvas and chrome. Choose **Settings > Appearance > Appearance** to keep
-the selected Harness theme or to follow macOS light and dark mode with Harness's `macos-system`
-appearance mode.
-
-Program ANSI output stays untouched unless **Apply theme colors to terminal output** is enabled in
-Harness settings. With the default off, full-screen apps and command output keep their own SGR
-colors while Harness still themes the canvas, cursor, selection, and OSC color replies.
-
----
-
-## 13. Shell integration (prompt marks + the success/failure gutter)
+## 12. Shell integration (prompt marks + the success/failure gutter)
 
 Harness understands **OSC 133** semantic prompts. Once installed, each shell prompt is marked and
 each command's exit status is recorded, which powers:
@@ -325,7 +313,7 @@ on `$HARNESS` (exported by the daemon into every pane). Details:
 
 ---
 
-## 14. Agent hooks (notifications)
+## 13. Agent hooks (notifications)
 
 Harness detects coding agents (Claude Code, Codex, Cursor, Pi, Hermes, OpenClaw, and more) and
 can notify you when one stops or needs input. For the agents with a hook mechanism, wire it up
@@ -341,7 +329,7 @@ automatically and notify via Harness's activity path, so there's nothing to inst
 
 ---
 
-## 15. macOS shortcuts (no prefix)
+## 14. macOS shortcuts (no prefix)
 
 | Shortcut | Action | | Shortcut | Action |
 |---|---|---|---|---|
@@ -360,7 +348,7 @@ automatically and notify via Harness's activity path, so there's nothing to inst
 
 ---
 
-## 16. One-screen cheat sheet
+## 15. One-screen cheat sheet
 
 ```
 PREFIX = Ctrl-A   (Settings ▸ Keys to change;  prefix ? = live cheatsheet)
