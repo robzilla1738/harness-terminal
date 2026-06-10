@@ -120,6 +120,16 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ### Fixed
 
+- **Follow-macOS appearance now re-skins the terminal on the system light/dark flip** —
+  the appearance handler refreshed window chrome only, so the canvas kept the pre-flip
+  palette until an unrelated settings change forced a reapply; the flip now routes through
+  the same full per-host re-apply the settings path uses (with a distributed-notification
+  backstop for the transition). And **cleared color overrides stay cleared across
+  relaunches**: absent color keys no longer fall back to the source-terminal import at
+  decode (the import-aware fallback made "cleared" and "never set" indistinguishable and
+  resurrected imported colors over an appearance-mode switch); first-run backfill remains
+  the explicit signature-gated import in `load()`.
+
 - A stale scrollback index can no longer crash a shipping build: `HistoryRingBuffer`'s
   empty-buffer release trap is replaced by a graceful fallback to the most recently
   appended line (the debug assert stays). The daemon also caps per-connection buffered
