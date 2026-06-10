@@ -288,6 +288,39 @@ final class FrameBuilderTests: XCTestCase {
         }
     }
 
+    func testSystemANSIFrameColoursStayScopedToRenderingMode() {
+        let systemLightPalette = [
+            "#000000", "#C41A16", "#007400", "#886A08",
+            "#0000B6", "#AA0D91", "#0071A1", "#BFBFBF",
+            "#666666", "#FF6E67", "#00A000", "#B8860B",
+            "#0000FF", "#FF00FF", "#00A2B8", "#FFFFFF",
+        ].map { RGBColor(hex: $0)! }
+        let resolver = CellColorResolver(
+            palette: ANSIPalette(base16: systemLightPalette),
+            defaultForeground: RGBColor(hex: "#1D1D1F")!,
+            defaultBackground: RGBColor(hex: "#F5F5F7")!
+        )
+        let term = HarnessGridTerminal(cols: 2, rows: 1)!
+        term.feed("\u{1b}[31;44mA")
+        let snapshot = term.readGrid()!
+        let systemRed = RGBColor(hex: "#C41A16")!
+        let systemBlue = RGBColor(hex: "#0000B6")!
+
+        for mode in [TerminalColorRenderingMode.accurate, .vivid] {
+            let builder = FrameBuilder(
+                resolver: resolver,
+                cursorColor: RGBColor(hex: "#0066CC")!,
+                colorRendering: mode,
+                colorGamut: .auto
+            )
+            let cell = builder.build(snapshot).cell(row: 0, column: 0)!
+
+            XCTAssertEqual(cell.foreground, builder.renderColor(systemRed), "\(mode) foreground uses system ANSI red")
+            XCTAssertEqual(cell.background, builder.renderColor(systemBlue), "\(mode) background uses system ANSI blue")
+            XCTAssertTrue(cell.drawBackground)
+        }
+    }
+
     func testTextAndColorRenderingAreOrthogonal() {
         var settings = HarnessSettings()
         let source = RGBColor(red: 255, green: 0, blue: 0)

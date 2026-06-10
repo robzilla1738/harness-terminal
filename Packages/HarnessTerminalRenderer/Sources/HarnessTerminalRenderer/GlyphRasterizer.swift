@@ -64,7 +64,10 @@ struct ShapedRunKey: Hashable {
 public final class GlyphRasterizer {
     /// Pixels-per-point (e.g. 2.0 on Retina). All returned glyph sizes are in pixels.
     public let scale: CGFloat
+    public let fontResolution: ResolvedTerminalFont
     private let pointSize: CGFloat
+    private let fontThicken: Bool
+    private let fontThickenStrength: Int
     private let regular: CTFont
     private let bold: CTFont
     private let italic: CTFont
@@ -100,58 +103,55 @@ public final class GlyphRasterizer {
         )
     }
 
-    public init(fontFamily: String, size: CGFloat, scale: CGFloat = 2.0, shapedRunCacheLimit: Int = 3_000) {
+    public convenience init(
+        fontFamily: String,
+        size: CGFloat,
+        scale: CGFloat = 2.0,
+        shapedRunCacheLimit: Int = 3_000,
+        fontThicken: Bool = false,
+        fontThickenStrength: Int = 255
+    ) {
+        self.init(
+            resolvedFont: TerminalFontResolver.resolve(fontFamily: fontFamily, size: size),
+            scale: scale,
+            shapedRunCacheLimit: shapedRunCacheLimit,
+            fontThicken: fontThicken,
+            fontThickenStrength: fontThickenStrength
+        )
+    }
+
+    public init(
+        resolvedFont: ResolvedTerminalFont,
+        scale: CGFloat = 2.0,
+        shapedRunCacheLimit: Int = 3_000,
+        fontThicken: Bool = false,
+        fontThickenStrength: Int = 255
+    ) {
         self.scale = scale
-        self.pointSize = size
+        self.pointSize = resolvedFont.pointSize
         self.shapedRunCacheLimit = max(1, shapedRunCacheLimit)
         // Init only creates the four CTFont objects (regular/bold/italic/bold-italic) — it
         // does NOT rasterize any glyphs. Rasterization is on demand per codepoint via
         // `rasterize(...)`, so startup never pays to pre-rasterize ASCII or any warm-up set.
         // Keep it that way: no eager glyph loop here.
-        // Resolve the family to a real face, detecting `CTFontCreateWithName`'s silent
-        // substitution (it would otherwise return a glyph-less system font for an unmatched
-        // family — the root of the Nerd Font tofu bug, #37). Never fails — an unresolvable
-        // family falls back to Menlo (monospace), and the symbol font covers icons on top.
-        let base = Self.resolvePrimaryFont(family: fontFamily, size: size)
+        self.fontResolution = resolvedFont
+        self.fontThicken = fontThicken
+        self.fontThickenStrength = max(0, min(255, fontThickenStrength))
+        let base = TerminalFontResolver.makeFont(from: resolvedFont)
         regular = base
-        bold = Self.applyTraits(base, size: size, add: .traitBold)
-        italic = Self.applyTraits(base, size: size, add: .traitItalic)
-        boldItalic = Self.applyTraits(base, size: size, add: [.traitBold, .traitItalic])
+        bold = Self.applyTraits(base, size: resolvedFont.pointSize, add: .traitBold)
+        italic = Self.applyTraits(base, size: resolvedFont.pointSize, add: .traitItalic)
+        boldItalic = Self.applyTraits(base, size: resolvedFont.pointSize, add: [.traitBold, .traitItalic])
         regularPSName = CTFontCopyPostScriptName(regular) as String
         boldPSName = CTFontCopyPostScriptName(bold) as String
         italicPSName = CTFontCopyPostScriptName(italic) as String
         boldItalicPSName = CTFontCopyPostScriptName(boldItalic) as String
-        symbolFont = Self.resolveSymbolFallback(size: size)
+        symbolFont = Self.resolveSymbolFallback(size: resolvedFont.pointSize)
     }
 
     private static func applyTraits(_ font: CTFont, size: CGFloat, add traits: CTFontSymbolicTraits) -> CTFont {
         CTFontCreateCopyWithSymbolicTraits(font, size, nil, traits, traits) ?? font
     }
-
-    /// Resolve the user's font family to a real `CTFont`, working around `CTFontCreateWithName`'s
-    /// silent substitution. It resolves PostScript names first and only loosely matches family /
-    /// display names; if the resolved face's family/PostScript name doesn't match what was
-    /// requested, retry via an explicit family-name descriptor.
-    /// When NEITHER resolves (the configured family simply isn't installed — e.g. a fresh machine
-    /// without the default Nerd Font), do NOT accept the substitute: it is a PROPORTIONAL system
-    /// face whose advances disagree with the monospace cell grid, so every glyph lands at its
-    /// natural width inside cells sized for a font that isn't there — text renders with broken
-    /// letter-spacing. Fall back to Menlo instead: monospaced, ships with every macOS, and the
-    /// bundled symbol font still covers Nerd icon codepoints on top of it.
-    private static func resolvePrimaryFont(family: String, size: CGFloat) -> CTFont {
-        let byName = CTFontCreateWithName(family as CFString, size, nil)
-        if fontNameMatches(byName, requested: family) { return byName }
-        let descriptor = CTFontDescriptorCreateWithAttributes(
-            [kCTFontFamilyNameAttribute as String: family] as CFDictionary
-        )
-        let byFamily = CTFontCreateWithFontDescriptor(descriptor, size, nil)
-        if fontNameMatches(byFamily, requested: family) { return byFamily }
-        return CTFontCreateWithName("Menlo" as CFString, size, nil)
-    }
-
-    /// The resolved primary face's family name — internal so the missing-font fallback test can
-    /// pin that an unresolvable family lands on Menlo rather than the proportional substitute.
-    var primaryFamilyName: String { CTFontCopyFamilyName(regular) as String }
 
     /// Resolve the bundled "Symbols Nerd Font Mono" by name, verifying it actually activated
     /// (PostScript name `SymbolsNFM`) rather than silently substituting. `nil` when the font isn't
@@ -159,24 +159,6 @@ public final class GlyphRasterizer {
     private static func resolveSymbolFallback(size: CGFloat) -> CTFont? {
         let font = CTFontCreateWithName("Symbols Nerd Font Mono" as CFString, size, nil)
         return (CTFontCopyPostScriptName(font) as String) == "SymbolsNFM" ? font : nil
-    }
-
-    /// Whether a resolved font's family or PostScript name matches the requested family, ignoring
-    /// case / spaces / hyphens / underscores. The common case (`CTFontCreateWithName` already
-    /// resolved correctly) matches on the family name and returns immediately, so this never
-    /// changes behavior for a correctly-resolved font.
-    private static func fontNameMatches(_ font: CTFont, requested: String) -> Bool {
-        let want = normalizedFontName(requested)
-        // An empty/whitespace-only family is not a match: returning true here would accept
-        // CTFont's proportional default instead of falling back to monospace Menlo (the same
-        // broken-letter-spacing footgun an unknown family triggers). Treat it as unresolvable.
-        guard !want.isEmpty else { return false }
-        return normalizedFontName(CTFontCopyFamilyName(font) as String) == want
-            || normalizedFontName(CTFontCopyPostScriptName(font) as String) == want
-    }
-
-    private static func normalizedFontName(_ name: String) -> String {
-        name.lowercased().filter { !$0.isWhitespace && $0 != "-" && $0 != "_" }
     }
 
     private static func isLastResort(_ font: CTFont) -> Bool {
@@ -318,7 +300,12 @@ public final class GlyphRasterizer {
         ctx.textPosition = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTLineDraw(line, ctx)
 
-        let coverage = readCoverage(ctx, width: pxW, height: pxH)
+        // Thicken composed clusters the same way single glyphs are thickened, so crisp-mode
+        // Thai/combining-mark text doesn't render visibly thinner than its neighbors.
+        let rawCoverage = readCoverage(ctx, width: pxW, height: pxH)
+        let coverage = fontThicken
+            ? thickenCoverage(rawCoverage, width: pxW, height: pxH, strength: fontThickenStrength)
+            : rawCoverage
         return RasterizedGlyph(
             width: pxW, height: pxH, bearingX: leftPx - pad, bearingY: topPx + pad, coverage: coverage
         )
@@ -467,9 +454,6 @@ public final class GlyphRasterizer {
 
         ctx.setAllowsAntialiasing(true)
         ctx.setShouldAntialias(true)
-        // Harness owns text weight through the explicit glyph gamma setting. CoreGraphics font
-        // smoothing inflates grayscale coverage before Metal blends it, making regular text look
-        // artificially bold even when the user selected native rendering.
         ctx.setShouldSmoothFonts(false)
         ctx.setFillColor(gray: 1, alpha: 1) // white ink on the zero-cleared (black) bitmap
         ctx.scaleBy(x: scale, y: scale)
@@ -479,7 +463,10 @@ public final class GlyphRasterizer {
         var position = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTFontDrawGlyphs(font, &g, &position, 1, ctx)
 
-        let coverage = readCoverage(ctx, width: pxW, height: pxH)
+        let rawCoverage = readCoverage(ctx, width: pxW, height: pxH)
+        let coverage = fontThicken
+            ? thickenCoverage(rawCoverage, width: pxW, height: pxH, strength: fontThickenStrength)
+            : rawCoverage
         // bearingX = bitmap-left relative to the pen; bearingY = rows from the bitmap top down to
         // the baseline. The renderer places the bitmap top at (baseline − bearingY), so with the
         // baseline at integer row `topPx + pad`, every glyph renders on the exact same baseline.
@@ -512,6 +499,27 @@ public final class GlyphRasterizer {
             let rowStart = y * bytesPerRow
             for x in 0 ..< width {
                 out[y * width + x] = src[rowStart + x]
+            }
+        }
+        return out
+    }
+
+    private func thickenCoverage(_ coverage: [UInt8], width: Int, height: Int, strength: Int) -> [UInt8] {
+        guard width > 0, height > 0 else { return coverage }
+        let clampedStrength = min(255, max(0, strength))
+        let lightestSupportedBoost = 1
+        let strongestSupportedBoost = 2
+        let amount = lightestSupportedBoost + ((strongestSupportedBoost - lightestSupportedBoost) * clampedStrength + 127) / 255
+        var out = coverage
+        for y in 0 ..< height {
+            for x in 0 ..< width {
+                let index = y * width + x
+                var neighbor = Int(coverage[index])
+                if x > 0 { neighbor = max(neighbor, Int(coverage[index - 1])) }
+                if x + 1 < width { neighbor = max(neighbor, Int(coverage[index + 1])) }
+                let current = Int(coverage[index])
+                let boosted = current + ((neighbor - current) * amount + 127) / 255
+                out[index] = UInt8(min(255, max(current, boosted)))
             }
         }
         return out

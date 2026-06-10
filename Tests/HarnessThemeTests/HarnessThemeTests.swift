@@ -241,6 +241,15 @@ final class ThemeDiagnosticsTests: XCTestCase {
         XCTAssertTrue(output.contains("\u{1B}[38;2;255;255;255;48;2;0;64;128m"))
     }
 
+    func testColorCheckKeepsProgramANSISequencesLiteral() {
+        let output = ThemeDiagnostics.colorCheck()
+
+        XCTAssertTrue(output.contains("\u{1B}[40m  \u{1B}[0m"))
+        XCTAssertTrue(output.contains("\u{1B}[101m  \u{1B}[0m"))
+        XCTAssertTrue(output.contains("\u{1B}[48;5;16m  \u{1B}[0m"))
+        XCTAssertTrue(output.contains("\u{1B}[48;2;255;0;0m red \u{1B}[0m"))
+    }
+
     func testThemePreviewContainsPromptDiagnosticsAndAgentSections() {
         let output = ThemeDiagnostics.themePreview(HarnessThemeCatalog.theme(named: "Dracula")!)
 

@@ -163,16 +163,43 @@ public final class TerminalMetalRenderer {
     /// Index of the ring slot the current frame writes into; advanced once per `encode`.
     private var frameSlot = 0
 
-    public init?(
+    public convenience init?(
         device: MTLDevice,
         fontFamily: String,
         fontSize: CGFloat,
         scale: CGFloat,
         atlasSize: Int = 1024,
-        atlasMaxPages: Int = 4
+        atlasMaxPages: Int = 4,
+        fontThicken: Bool = false,
+        fontThickenStrength: Int = 255
+    ) {
+        self.init(
+            device: device,
+            resolvedFont: TerminalFontResolver.resolve(fontFamily: fontFamily, size: fontSize),
+            scale: scale,
+            atlasSize: atlasSize,
+            atlasMaxPages: atlasMaxPages,
+            fontThicken: fontThicken,
+            fontThickenStrength: fontThickenStrength
+        )
+    }
+
+    public init?(
+        device: MTLDevice,
+        resolvedFont: ResolvedTerminalFont,
+        scale: CGFloat,
+        atlasSize: Int = 1024,
+        atlasMaxPages: Int = 4,
+        fontThicken: Bool = false,
+        fontThickenStrength: Int = 255
     ) {
         guard let queue = device.makeCommandQueue() else { return nil }
-        let rasterizer = GlyphRasterizer(fontFamily: fontFamily, size: fontSize, scale: scale)
+        let rasterizer = GlyphRasterizer(
+            resolvedFont: resolvedFont,
+            scale: scale,
+            fontThicken: fontThicken,
+            fontThickenStrength: fontThickenStrength
+        )
         guard let atlas = GlyphAtlas(
             device: device,
             rasterizer: rasterizer,
