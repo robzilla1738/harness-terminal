@@ -65,7 +65,9 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(applySettings.contains("updateChromeAndHosts()"))
         XCTAssertTrue(applySettings.contains("\"chromeChanged\": true"))
         let updateChromeAndHosts = try sourceBlock(named: "updateChromeAndHosts", in: coordinatorSource)
-        XCTAssertTrue(updateChromeAndHosts.contains("refreshChromePalette()"))
+        // Parameterized so the OS-flip path can pass the freshly-read system appearance
+        // (nil default = resolve live, the settings-apply path's behavior).
+        XCTAssertTrue(updateChromeAndHosts.contains("refreshChromePalette(systemAppearance: systemAppearance)"))
         XCTAssertTrue(updateChromeAndHosts.contains("host.applySettings(settings)"))
     }
 
