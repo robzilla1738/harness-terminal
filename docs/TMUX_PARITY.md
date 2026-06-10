@@ -3,8 +3,11 @@
 Harness targets **capability parity** with tmux, not byte-for-byte emulation: Harness is a
 native GUI terminal with a daemon-owned session model, so a handful of tmux concepts are
 *adapted* to that architecture and a few are *rejected* with rationale. This document is
-the single honest ledger. Updated last for v1.9.0 (the #114 roadmap's full run, #115–#138,
-plus #139): quick terminal, bell feedback with `visual-bell`/`bell-action` bridging,
+the single honest ledger. Updated last for the v1.10 queue (#140–#154, plus #46): auto-injected
+OSC 133 shell integration with the `shell-integration` opt-out, the `persist-scrollback`
+option, and prefix `(` / `)` session switching (`switch-client -n/-p` adapted — see ADAPT).
+Before that, v1.9.0 (the #114 roadmap's full run, #115–#138, plus #139): quick terminal, bell
+feedback with `visual-bell`/`bell-action` bridging,
 unlimited scrollback (`scrollback 0` → disk-capped), `clear-history`, `status-interval`/
 `status-position`, bindable `send-keys -l`/`-H`, `display-message -p`, copy-mode jump-to-char,
 and the Kitty graphics control protocol (ack/query/transmit-once/delete). The 2026-06
@@ -34,6 +37,7 @@ close-out series was PRs #102–#108. User-facing usage lives in
 | tmux | Harness adaptation | Why |
 |---|---|---|
 | `attach-session` | `harness-cli attach` / `attach-window` (compositor) | The GUI is the primary attached client; terminal attach is the remote/SSH path |
+| `switch-client -n/-p/-t` (session switching) | `next-session` / `previous-session` / `select-session <index>` on the default `prefix (` / `)` keys — cycle/jump the focused sidebar session within the active workspace; bindable verbs shared by the `:` prompt, `keybindings.json`, the compositor, and hooks (no standalone CLI subcommand; `switch-client -T` key tables are at parity above) | Sessions are always-visible sidebar rows grouped in workspaces, not exclusive attachments — "switching the client" means focusing another row, and cycling is workspace-scoped |
 | `start-server` / `kill-server` | `harness-cli start-server` (ensure via launchctl) / `kill-server` (SIGTERM; launchd KeepAlive respawns with sessions restored — `launchctl bootout` for a permanent stop) | launchd supervises the daemon; pretending otherwise would lie |
 | Grouped-session **layout** sharing | Window *create/kill* propagates (overlap-matched, divergence-safe); per-window split layouts may diverge between members. Killing the group's LAST window leaves each member an independent default window (Harness sessions never die from a window kill; tmux would destroy the whole group) | tmux shares one window object; Harness links windows (clones sharing live surfaces) — the model that also powers `link-window` |
 | `default-terminal` | Aliases the `terminal-identity` option | TERM is pinned (`xterm-256color`); identity (TERM_PROGRAM/XTVERSION) is the meaningful adjustable |

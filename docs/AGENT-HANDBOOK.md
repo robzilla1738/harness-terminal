@@ -138,12 +138,19 @@ users moving in keep their colors/font — kept by product decision.
   exact same baseline row. Drawing at a fractional position while rounding the bearing
   independently (the old path) left a sub-pixel residual per glyph — a wavy / "squiggly" baseline.
   Glyph rasterization uses grayscale antialiasing with CoreGraphics font smoothing disabled; the
-  explicit `textRendering`/glyph-gamma setting is the only intentional text-weight control.
+  explicit `textRendering` setting is the only intentional text-weight control — glyph coverage
+  gamma, plus in Crisp mode a synthetic thicken pass (`GlyphRasterizer.thickenCoverage`) applied
+  identically to the single-glyph, shaped-ligature, and composed-cluster paths (off by default;
+  byte-identical when off).
 - **Nerd Font / Powerline glyphs never tofu:** the app bundles **Symbols Nerd Font Mono** (MIT,
   `Apps/Harness/Resources/Fonts/`) auto-activated via Info.plist `ATSApplicationFontsPath` — NOT a
   SwiftPM `Bundle.module` resource (that footgun crashed the app for the theme catalog; see the
-  `Package.swift` note). `GlyphRasterizer` resolves the user font robustly (a family-name
-  descriptor retry when `CTFontCreateWithName` silently substitutes a non-Nerd system font) and
+  `Package.swift` note). The configured font resolves through **one `TerminalFontResolver`**
+  (family/PostScript/full/display-name matching that detects `CTFontCreateWithName`'s silent
+  proportional substitution; an unmatched family walks the default-font chain and lands on
+  monospace Menlo) — the surface view, `TerminalMetalRenderer`, and `GlyphRasterizer` construct
+  from the same `ResolvedTerminalFont`, with bold/italic faces derived from that resolved
+  face — and `GlyphRasterizer`
   falls back to the bundled symbol font for PUA codepoints (`isNerdFontCodepoint`: `U+E000–F8FF`,
   `U+F0000–FFFFD`); `TerminalMetalRenderer` routes those codepoints out of the ligature shaper to
   the per-cell path (where the fallback applies), since CoreText shaping is what substituted a
@@ -408,7 +415,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `customBackgroundHex`, `customForegroundHex`, `customCursorHex` | Canvas colors; resolved via `ThemeManager.resolvedCanvas` (custom > theme preset > baseline) for terminal **and** chrome |
 | `windowPaddingX/Y`, `backgroundOpacity` (0.05–1), `backgroundBlur` (0–100) | Chrome translucency; one uniform CGS `WindowBlur` for the whole window (terminal stays opaque) |
 | `colorRendering`, `colorGamut`, `vividColors` | Accurate sRGB identity by default; vivid is opt-in Display-P3 output with first-party sRGB→P3 conversion plus a capped saturation lift (`vividColors` is the legacy alias) |
-| `textRendering`, `linearBlending` | Glyph coverage gamma only (`native`/`crisp`/`soft`); never changes RGB conversion (`linearBlending` is the legacy crisp alias) |
+| `textRendering`, `linearBlending` | Glyph coverage weight (`native`/`crisp`/`soft`): coverage gamma, and `crisp` additionally enables the synthetic thicken pass in `GlyphRasterizer`; never changes RGB conversion (`linearBlending` is the legacy crisp alias) |
 | `ligatures`, `applyThemeToTerminalOutput` | Programming ligatures (CoreText shaping); theme palette recolors program output (off = untouched) |
 | `offMainParserFramePipeline` | **Default ON**; moves terminal byte ingestion and frame building to a per-surface serial worker while AppKit and Metal presentation stay on the main actor. Race-guarded for production: `nextDrawable` keeps its timeout (a stalled GPU/occluded window can't block the main thread), the `lastPlainFrame` row-reuse cache is **generation-tagged** (a frame built against a superseded grid is dropped, never presented), frame builds coalesce **latest-wins** on the worker, a failed encode/present re-arms `needsRender`, and resize/first-paint render **synchronously** (`RenderScheduler.renderSynchronously`) so they land inside the `CATransaction` with no stretch flicker. An explicit stored `false` opts out (legacy byte-for-byte main-thread path) |
 | `showPromptGutter` | Draws the OSC 133 prompt gutter stripe (green/red success/failure) when shell integration marks are present |
@@ -577,6 +584,8 @@ App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The lau
 
 **HarnessBenchmarks** (opt-in perf baselines for VT parse / readGrid / scrollback / IPC codec / compositor / frame building / renderer stats / atlas caches / off-main stall sampling): `make bench` or `HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks` (skipped otherwise so `swift test` stays fast). Benchmarks print JSON timing lines; do not gate CI on absolute timings. The engine gate is `testConsumerScoreboard` (`consumer_<workload>` with the `feedNanos`/`frameBuildNanos` split — parse dominates, frame build is ~0.1 ms); `testIPCInclusiveScoreboard` runs the same payloads through the real `IPCCodec` output frame to confirm the daemon framing/chunking tax is negligible. The cross-terminal `Scripts/benchmarks/terminal_stress_runner.py` drain is **not** an engine measure (PTY-drain, ±25–33% on window focus, can move opposite to engine speed) — gate on the in-process scoreboard, not the drain ratios.
 
+**Comparative receipts (`Scripts/scorecard.sh` + [docs/SCORECARD.md](docs/SCORECARD.md)):** the Harness-vs-Ghostty scorecard — cold start (startup.log phase deltas vs wall-clock-to-window), sustained PTY throughput, idle power (`powermetrics`; app + daemon summed), long-session memory, and Harness-side input-to-photon percentiles. Orchestration + reporting only; run sections on quiet, plugged-in owner hardware and commit the results to the doc — numbers are **receipts, never CI gates**, and probe asymmetries are stated in the report itself. `--dry-run` self-checks the helpers (Linux-safe).
+
 **Frame signpost instrumentation (`HARNESS_FRAME_SIGNPOSTS=1`):** `FrameSignposter` (`HarnessTerminalKit`) is gated off by default (each call is a single branch when disabled, so it is safe on the hot path). Enable with `PREVIEW_SIGNPOSTS=1 make preview` — `open` strips the shell environment, so the preview script passes the flag as a launch argument (`open -n … --args -HARNESS_FRAME_SIGNPOSTS 1`, read via `UserDefaults`); setting `HARNESS_FRAME_SIGNPOSTS=1` in the launch environment also works for direct binary launches (`xctrace … --launch`). This enables `os_signpost` intervals around the per-frame `parse → gridRead → frameBuild → present` pipeline on the `com.robert.harness / frame` track, and `TerminalRenderStats` splits `encodeNanos` into `buildInstancesNanos` (CPU instance build) + `uploadNanos` (GPU buffer upload) so a slow encode is attributable per value boundary (grid read / frame build / instance build / upload). The periodic log line blends samples from ALL presenting surfaces — single visible surface for attribution. The `present` interval is the most informative: it wraps `nextDrawable()` + `inFlightSemaphore.wait()` on the main thread and captures the vsync / GPU back-pressure stall. Every 120 frames it also logs p50/p95/max present latency (µs) to the unified log, readable with `log stream --predicate 'subsystem == "com.robert.harness"'` without Instruments. Profile with `xctrace record --template 'os_signpost'` on a `make preview` run.
 
 New mode/persistence/security tests also live in **HarnessCoreTests** (`ExperienceModeTests`, `SessionPersistenceTests`, `HookRegistryTests`, perms in `HarnessPathsTests`) and **HarnessDaemonTests** (`closeEphemeralSessions` + socket-perms in `DaemonRoundTripTests`).
@@ -609,7 +618,11 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Tab prev/next | `Cmd+Shift+[` / `]` |
 | Font +/- / reset | `Cmd++` / `Cmd+-` / `Cmd+0` |
 
-**Prefix (default `Ctrl-A`):** [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md)
+**Prefix (default `Ctrl-A`):** [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md). Session navigation
+rides the prefix table (#46): `prefix (` / `prefix )` cycle the focused sidebar session in the
+active workspace via the bindable `previous-session` / `next-session` verbs (plus
+`select-session <index>`) — shared by the `:` prompt, `keybindings.json`, the compositor prefix
+table, and hooks; not standalone `harness-cli` subcommands.
 
 ---
 

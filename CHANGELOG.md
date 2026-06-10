@@ -67,6 +67,30 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
   a phase flip re-encodes exactly the rows containing blink cells; dotted/dashed/undercurl
   underline patterns keep a continuous phase across cells instead of restarting at every
   cell boundary.
+- **Session navigation from the prefix keymap** (#46): `prefix (` / `prefix )` cycle the
+  focused sidebar session within the active workspace (tmux's `switch-client -p`/`-n` keys),
+  backed by new `previous-session` / `next-session` / `select-session <index>` commands in
+  the shared vocabulary — usable from the `:` prompt, rebindable via `keybindings.json` /
+  `bind-key`, and routed through `CommandIPCTranslator` so the `attach-window` compositor
+  and hook-fired commands resolve them identically (they are bindable verbs, not standalone
+  `harness-cli` subcommands — the UUID-based `harness-cli select-session` is unchanged). The
+  prefix cheatsheet lists the new keys, and an existing `keybindings.json` gains the two
+  defaults on load without touching custom bindings.
+- **Crisp text rendering now thickens glyphs** (#48): the Crisp mode (Settings ▸ Colors ▸
+  Text rendering) applies Ghostty-style synthetic glyph thickening (a coverage-boost pass at
+  full strength, alongside Crisp's existing coverage gamma) — and it applies *uniformly*
+  across all three rasterization paths: single glyphs, shaped ligature runs, AND composed
+  clusters (Thai base + vowel + tone marks via CTLineDraw), which previously rendered
+  visibly thinner than their neighbors in crisp mode. The default (Native) stays
+  byte-identical; CoreGraphics font smoothing remains off.
+- **System appearance mode** (#58): a Settings ▸ Appearance popup — **Theme** (always render
+  the selected theme) or **Follow macOS Appearance** with separate **Light Theme** / **Dark
+  Theme** picks resolved live from the system appearance (terminal canvas and chrome both
+  refresh on the macOS light/dark flip). Settings files carrying the legacy auto light/dark
+  theme pair migrate to Follow macOS automatically, preserving both picks; switching modes
+  (or either pick) clears stale per-theme color overrides so the new palette seeds cleanly; a
+  source-terminal config import maps Ghostty's `theme = light:X,dark:Y` onto the same
+  mechanism without overwriting visuals the user already customized.
 
 ### Changed
 
@@ -99,6 +123,14 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
   virama, Hebrew/Arabic/Syriac/Indic/Lao/Tibetan marks, bidi isolates). Deliberate deviations are
   documented in `CharacterWidth.swift` (soft hyphen narrow; Hangul conjoining jamo V/T narrow
   until the grapheme layer composes syllables; regional indicators narrow per scalar).
+- Configured terminal fonts resolve through one shared `TerminalFontResolver` (#48): the
+  requested family is matched once against its family/PostScript/full/display names —
+  detecting `CTFontCreateWithName`'s silent proportional substitution — and an unmatched
+  family walks an explicit fallback chain (the default JetBrainsMono Nerd Font, then Menlo,
+  then Monaco) before landing on monospace Menlo, the #37-era guarantee. The surface view,
+  Metal renderer, and glyph rasterizer all construct from the same `ResolvedTerminalFont`,
+  so the effective face — and the bold/italic faces derived from it — is identical at every
+  call site instead of being re-derived privately inside the rasterizer.
 - The Xcode scheme now runs ten test targets instead of four — engine conformance, reflow
   goldens, renderer parity, theme, onboarding, and compositor-parity suites were silently
   skipped in Product → Test (CI's `swift test` covered them; local Xcode runs did not).
