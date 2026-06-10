@@ -101,12 +101,19 @@ final class MainWindowController: NSWindowController {
     }
 
     func effectiveAppearanceDidChange() {
-        guard let window else { return }
-        let didRefresh = SessionCoordinator.shared.refreshChromeForEffectiveAppearanceChange(
-            systemAppearance: HarnessChrome.systemAppearance(from: window.effectiveAppearance)
-        )
-        if didRefresh {
-            applyChrome()
+        // Senders can fire mid-transition (the NSApp KVO lands before the window's own
+        // appearance settles); hop one runloop turn so the chrome palette, the theme
+        // resolution, and the window all read the same settled value. Idempotent — the
+        // KVO, the split view's viewDidChangeEffectiveAppearance, and the distributed
+        // theme notification may all schedule this for one flip.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            let didRefresh = SessionCoordinator.shared.refreshChromeForEffectiveAppearanceChange(
+                systemAppearance: HarnessChrome.systemAppearance(from: window.effectiveAppearance)
+            )
+            if didRefresh {
+                self.applyChrome()
+            }
         }
     }
 

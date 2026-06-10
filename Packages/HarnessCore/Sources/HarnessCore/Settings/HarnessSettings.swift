@@ -689,20 +689,29 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             systemLightThemeName = try container.decodeIfPresent(String.self, forKey: .systemLightThemeName) ?? defaultSettings.systemLightThemeName
             systemDarkThemeName = try container.decodeIfPresent(String.self, forKey: .systemDarkThemeName) ?? defaultSettings.systemDarkThemeName
         }
-        customBackgroundHex = try fields.decode(.customBackgroundHex, \.customBackgroundHex)
-        customForegroundHex = try fields.decode(.customForegroundHex, \.customForegroundHex)
-        customCursorHex = try fields.decode(.customCursorHex, \.customCursorHex)
+        // Color overrides decode PLAINLY (absent = nil) — never through the import-aware
+        // fallback. JSONEncoder omits nil keys, so "user cleared this" and "never set" look
+        // identical in the file; an import-aware fallback would resurrect the source
+        // terminal's colors on every launch, silently undoing clearThemeColorOverrides()
+        // (and with it the appearance-mode switch that relies on it). First-run/backfill
+        // import happens exclusively through load()'s explicit signature-gated path.
+        customBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customBackgroundHex)
+        customForegroundHex = try container.decodeIfPresent(String.self, forKey: .customForegroundHex)
+        customCursorHex = try container.decodeIfPresent(String.self, forKey: .customCursorHex)
         importedConfigSignature = try container.decodeIfPresent(String.self, forKey: .importedConfigSignature)
         prefixKey = try fields.decode(.prefixKey, \.prefixKey)
         scrollbackLines = try fields.decode(.scrollbackLines, \.scrollbackLines)
         cursorStyle = try fields.decode(.cursorStyle, \.cursorStyle)
         cursorBlink = try fields.decode(.cursorBlink, \.cursorBlink)
         copyOnSelect = try fields.decode(.copyOnSelect, \.copyOnSelect)
-        selectionBackgroundHex = try fields.decode(.selectionBackgroundHex, \.selectionBackgroundHex)
-        selectionForegroundHex = try fields.decode(.selectionForegroundHex, \.selectionForegroundHex)
-        boldColorHex = try fields.decode(.boldColorHex, \.boldColorHex)
-        cursorTextHex = try fields.decode(.cursorTextHex, \.cursorTextHex)
-        paletteHex = HarnessSettings.normalizedPalette(try fields.decode(.paletteHex, \.paletteHex))
+        selectionBackgroundHex = try container.decodeIfPresent(String.self, forKey: .selectionBackgroundHex)
+        selectionForegroundHex = try container.decodeIfPresent(String.self, forKey: .selectionForegroundHex)
+        boldColorHex = try container.decodeIfPresent(String.self, forKey: .boldColorHex)
+        cursorTextHex = try container.decodeIfPresent(String.self, forKey: .cursorTextHex)
+        paletteHex = HarnessSettings.normalizedPalette(
+            try container.decodeIfPresent([String?].self, forKey: .paletteHex)
+                ?? Array(repeating: nil, count: 16)
+        )
         let agentColors = try container.decodeIfPresent([String: String].self, forKey: .agentColorOverrides) ?? fallback.agentColorOverrides
         agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColors)
         dividerHex = try container.decodeIfPresent(String.self, forKey: .dividerHex)

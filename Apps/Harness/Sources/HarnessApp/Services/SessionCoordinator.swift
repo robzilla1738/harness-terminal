@@ -342,10 +342,11 @@ final class SessionCoordinator: NSObject {
         ) else {
             return false
         }
-        refreshChromePalette(systemAppearance: systemAppearance)
-        for host in terminalHosts.allHosts() {
-            pushBorderColors(to: host)
-        }
+        // The flip must re-skin the TERMINAL CANVAS, not just the window chrome: route
+        // through the same full host re-apply the settings path uses (theme + appearance
+        // + borders per host), or the canvas keeps rendering the pre-flip palette until
+        // an unrelated settings change forces a reapply.
+        updateChromeAndHosts(systemAppearance: systemAppearance)
         NotificationCenter.default.post(
             name: NotificationBus.shared.snapshotChanged,
             object: nil,
@@ -530,8 +531,8 @@ final class SessionCoordinator: NSObject {
     /// Called by both `applyThemeToAllHosts` and `applySettingsToHosts`; each caller adds
     /// its own divergent extras after this returns. Chrome goes through the appearance-aware
     /// `refreshChromePalette()` so `.macOSSystem` resolution applies on every path.
-    private func updateChromeAndHosts() {
-        refreshChromePalette()
+    private func updateChromeAndHosts(systemAppearance: HarnessSystemAppearance? = nil) {
+        refreshChromePalette(systemAppearance: systemAppearance)
         let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
         for host in terminalHosts.allHosts() {
             host.applyTheme(named: snapshot.themeName)

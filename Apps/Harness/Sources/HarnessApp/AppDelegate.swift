@@ -52,6 +52,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.mainWindowController?.effectiveAppearanceDidChange()
             }
         }
+        // Belt-and-suspenders for the system light/dark flip: the KVO above (and the split
+        // view's viewDidChangeEffectiveAppearance) can be swallowed when the window's
+        // appearance is overridden or the transition lands mid-runloop. The distributed
+        // interface-theme notification always fires on the flip; the handler hops a runloop
+        // turn and re-skins idempotently, so a duplicate trigger is harmless.
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                (NSApp.delegate as? AppDelegate)?.mainWindowController?.effectiveAppearanceDidChange()
+            }
+        }
         // Request notification authorization once at launch instead of on every
         // notification post. macOS only shows the system prompt the first time
         // and silently denies after; doing it eagerly means notifications can

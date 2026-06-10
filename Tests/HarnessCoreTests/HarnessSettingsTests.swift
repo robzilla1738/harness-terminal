@@ -996,6 +996,28 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.textRendering, defaults.textRendering)
     }
 
+    func testClearedColorOverridesStayClearedAcrossSaveLoad() throws {
+        // JSONEncoder omits nil keys, so "user cleared this" and "never set" are identical
+        // in the file — the decode must NOT resurrect color overrides from the import-aware
+        // fallback, or clearThemeColorOverrides() (and the appearance-mode switch that calls
+        // it) silently un-clears on the next launch on any machine with an importable
+        // source-terminal config. Import backfill belongs exclusively to load()'s explicit
+        // signature-gated path.
+        var settings = HarnessSettings()
+        settings.customBackgroundHex = "#123456"
+        settings.paletteHex[3] = "#ABCDEF"
+        settings.clearThemeColorOverrides()
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertNil(decoded.customBackgroundHex)
+        XCTAssertNil(decoded.customForegroundHex)
+        XCTAssertNil(decoded.customCursorHex)
+        XCTAssertNil(decoded.selectionBackgroundHex)
+        XCTAssertNil(decoded.selectionForegroundHex)
+        XCTAssertNil(decoded.boldColorHex)
+        XCTAssertNil(decoded.cursorTextHex)
+        XCTAssertTrue(decoded.paletteHex.allSatisfy { $0 == nil })
+    }
+
     func testWindowInheritCWDDefaultsOnAndDecodesExplicitOff() throws {
         XCTAssertTrue(HarnessSettings().windowInheritCWD, "inherit is the shipped behavior — default on")
         let legacy = try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8))
