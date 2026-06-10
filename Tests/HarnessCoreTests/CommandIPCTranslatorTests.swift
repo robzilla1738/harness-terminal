@@ -435,6 +435,42 @@ final class CommandIPCTranslatorTests: XCTestCase {
         XCTAssertEqual(withIndex, 2, "window 3 under base-index 1 is array position 2")
     }
 
+    func testSessionNavigationSelectsSessionsInCurrentWorkspace() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let first = try XCTUnwrap(ws.activeSessionID)
+        let second = try XCTUnwrap(editor.addSession(to: ws.id, name: "two"))
+        let third = try XCTUnwrap(editor.addSession(to: ws.id, name: "three"))
+        XCTAssertTrue(editor.selectSession(workspaceID: ws.id, sessionID: second))
+        let target = CommandTarget(snapshot: editor.snapshot)
+
+        guard case let .requests(nextRequests) = CommandIPCTranslator.translate(.nextSession, target: target),
+              case let .selectSession(nextWorkspace, nextSession) = nextRequests.first
+        else { return XCTFail("expected next-session to select the next session") }
+        XCTAssertEqual(nextWorkspace, ws.id)
+        XCTAssertEqual(nextSession, third)
+
+        guard case let .requests(previousRequests) = CommandIPCTranslator.translate(.previousSession, target: target),
+              case let .selectSession(previousWorkspace, previousSession) = previousRequests.first
+        else { return XCTFail("expected previous-session to select the previous session") }
+        XCTAssertEqual(previousWorkspace, ws.id)
+        XCTAssertEqual(previousSession, first)
+    }
+
+    func testSelectSessionByIndexSelectsCurrentWorkspaceSession() throws {
+        var editor = SessionEditor()
+        let ws = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        _ = try XCTUnwrap(editor.addSession(to: ws.id, name: "two"))
+        let third = try XCTUnwrap(editor.addSession(to: ws.id, name: "three"))
+        let target = CommandTarget(snapshot: editor.snapshot)
+
+        guard case let .requests(requests) = CommandIPCTranslator.translate(.selectSession(index: 2), target: target),
+              case let .selectSession(workspaceID, sessionID) = requests.first
+        else { return XCTFail("expected select-session to emit selectSession") }
+        XCTAssertEqual(workspaceID, ws.id)
+        XCTAssertEqual(sessionID, third)
+    }
+
     func testMovePaneResolvesToJoin() throws {
         let (target, _, _) = try makeTarget(splitOnce: true)
         let firstPane = try XCTUnwrap(target.paneOrder.first)

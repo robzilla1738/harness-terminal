@@ -379,6 +379,16 @@ public enum CommandIPCTranslator {
             guard let newName, let session = target.session else { return .clientLocal(command) }
             return .requests([.renameSession(sessionID: session.id, name: newName)])
 
+        case .nextSession:
+            return adjacentSession(target: target, delta: 1)
+
+        case .previousSession:
+            return adjacentSession(target: target, delta: -1)
+
+        case let .selectSession(index):
+            guard let ws = target.workspace, index >= 0, index < ws.sessions.count else { return .unresolved }
+            return .requests([.selectSession(workspaceID: ws.id, sessionID: ws.sessions[index].id)])
+
         case let .selectWorkspace(index):
             let workspaces = target.snapshot.workspaces
             guard index >= 0, index < workspaces.count else { return .unresolved }
@@ -503,5 +513,15 @@ public enum CommandIPCTranslator {
         else { return .unresolved }
         let next = ((idx + delta) % workspaces.count + workspaces.count) % workspaces.count
         return .requests([.selectWorkspace(id: workspaces[next].id)])
+    }
+
+    private static func adjacentSession(target: CommandTarget, delta: Int) -> CommandTranslation {
+        guard let ws = target.workspace, !ws.sessions.isEmpty,
+              let session = target.session,
+              let idx = ws.sessions.firstIndex(where: { $0.id == session.id })
+        else { return .unresolved }
+        let next = ((idx + delta) % ws.sessions.count + ws.sessions.count) % ws.sessions.count
+        guard ws.sessions[next].id != session.id else { return .unresolved }
+        return .requests([.selectSession(workspaceID: ws.id, sessionID: ws.sessions[next].id)])
     }
 }

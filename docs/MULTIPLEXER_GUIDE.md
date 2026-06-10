@@ -88,7 +88,6 @@ pane into the current one (Harness's `move-pane`/`join-pane`).
 | Keys | Action |
 |---|---|
 | `prefix c` | New tab |
-| `prefix n` / `prefix p` | Next / previous tab |
 | `prefix ,` | Rename the current tab |
 | `Cmd-1` … `Cmd-9` | Jump straight to tab 1–9 (shown as `⌘N` on the pills) |
 | `Cmd-Shift-[` / `Cmd-Shift-]` | Previous / next tab |
@@ -106,6 +105,9 @@ sidebar rather than something you "attach" to one at a time.
 
 - New session / workspace from the sidebar `+`, the palette, or `harness-cli new-session` /
   `new-workspace`.
+- `prefix n` / `prefix p` move to the next / previous tab in the active session.
+- `prefix (` / `prefix )` move to the previous / next session in the active workspace.
+- `prefix 0` ... `prefix 9` jump to workspace 0 through 9.
 - **Persistence** (see [MODES.md](MODES.md)): a session survives a *clean* quit if the global
   "keep sessions on quit" is on **or** the session is pinned. Pin/unpin from the sidebar context
   menu or `harness-cli promote-session` / `demote-session`. A crash leaves everything running.
@@ -357,13 +359,15 @@ PANES        prefix %  split →      prefix "  split ↓
              prefix S-←→↑↓  resize   prefix Space  layouts
              prefix m / j  mark / join pane     prefix S  sync-panes
 
-TABS         prefix c  new          prefix n/p  next/prev   prefix ,  rename
+TABS         prefix c  new          prefix ,  rename
              Cmd-1..9  jump N        Cmd-Shift-[ ]  prev/next
+
+SESSIONS     prefix (/)  previous/next session
 
 COPY MODE    prefix [  enter        hjkl move   v/V/C-v select   y yank
              / ? search  n/N next   [ ] jump prompt           q/Esc exit
 
-SESSION      prefix d  detach       View ▸ Detach/Reattach Pane
+CLIENT       prefix d  detach       View ▸ Detach/Reattach Pane
              attach over ssh:  harness-cli attach-window [--session NAME]
 
 COMMAND      prefix :  or Cmd-;     Cmd-K palette     harness-cli <verb>

@@ -45,6 +45,9 @@ final class CommandParserTests: XCTestCase {
         XCTAssertEqual(try CommandParser.parse("select-window 3"), .selectWindow(index: 3))
         XCTAssertEqual(try CommandParser.parse("new-session"), .newSession(name: nil))
         XCTAssertEqual(try CommandParser.parse("new-session -s api"), .newSession(name: "api"))
+        XCTAssertEqual(try CommandParser.parse("next-session"), .nextSession)
+        XCTAssertEqual(try CommandParser.parse("previous-session"), .previousSession)
+        XCTAssertEqual(try CommandParser.parse("select-session 3"), .selectSession(index: 3))
         XCTAssertEqual(try CommandParser.parse("select-workspace 2"), .selectWorkspace(index: 2))
     }
 

@@ -164,12 +164,13 @@ visible instead of being hidden behind an attach prompt.
 | Shortcut | What it does |
 | --- | --- |
 | `prefix c` | New tab. |
-| `prefix n` | Next tab. |
-| `prefix p` | Previous tab. |
 | `prefix ,` | Rename current tab. |
 | `Cmd-T` | New tab. |
 | `Cmd-1` through `Cmd-9` | Jump to tab 1 through 9. |
 | `Cmd-Shift-[` / `Cmd-Shift-]` | Previous / next tab. |
+| `prefix n` / `prefix p` | Next / previous tab. |
+| `prefix (` / `prefix )` | Previous / next session. |
+| `prefix 0` through `prefix 9` | Jump to workspace 0 through 9. |
 | `Cmd-Shift-N` | New workspace. |
 
 Useful CLI commands:
@@ -267,6 +268,7 @@ Inside `attach-window`:
 | `prefix x` | Kill pane. |
 | `prefix c` | New tab. |
 | `prefix n` / `prefix p` | Next / previous tab. |
+| `prefix (` / `prefix )` | Previous / next session. |
 | `prefix d` | Detach the attached client. |
 | `prefix [` | Copy mode. |
 
@@ -493,10 +495,12 @@ Panes
 
 Tabs
   prefix c      new tab
-  prefix n/p    next / previous tab
   prefix ,      rename tab
   Cmd-T         new tab
   Cmd-1..9      jump to tab
+
+Sessions
+  prefix (/)    previous / next session
 
 Copy mode
   prefix [      enter

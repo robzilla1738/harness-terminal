@@ -118,6 +118,12 @@ final class MainExecutor: CommandExecutor {
                 coordinator.requestDaemon(.renameSession(sessionID: sessionID, name: newName))
                 coordinator.syncFromDaemon()
             }
+        case .nextSession:
+            cycleActiveSession(coordinator: coordinator, forward: true)
+        case .previousSession:
+            cycleActiveSession(coordinator: coordinator, forward: false)
+        case .selectSession(let index):
+            selectSession(coordinator: coordinator, atIndex: index)
         case .selectWorkspace(let index):
             coordinator.selectWorkspace(byIndex: index)
         case .nextWorkspace, .previousWorkspace:
@@ -511,6 +517,25 @@ final class MainExecutor: CommandExecutor {
         else { return }
         coordinator.requestDaemon(.selectTab(workspaceID: workspace.id, tabID: session.tabs[index].id))
         coordinator.syncFromDaemon()
+    }
+
+    @MainActor
+    private func cycleActiveSession(coordinator: SessionCoordinator, forward: Bool) {
+        guard let workspace = coordinator.snapshot.activeWorkspace,
+              let activeSessionID = workspace.activeSessionID,
+              let currentIdx = workspace.sessions.firstIndex(where: { $0.id == activeSessionID }),
+              !workspace.sessions.isEmpty
+        else { return }
+        let nextIdx = (currentIdx + (forward ? 1 : -1) + workspace.sessions.count) % workspace.sessions.count
+        coordinator.selectSession(workspaceID: workspace.id, sessionID: workspace.sessions[nextIdx].id)
+    }
+
+    @MainActor
+    private func selectSession(coordinator: SessionCoordinator, atIndex index: Int) {
+        guard let workspace = coordinator.snapshot.activeWorkspace,
+              index >= 0, index < workspace.sessions.count
+        else { return }
+        coordinator.selectSession(workspaceID: workspace.id, sessionID: workspace.sessions[index].id)
     }
 
     @MainActor

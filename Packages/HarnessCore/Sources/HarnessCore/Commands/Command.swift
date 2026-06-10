@@ -39,6 +39,9 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case newSession(name: String?)
     case killSession
     case renameSession(newName: String?)
+    case nextSession
+    case previousSession
+    case selectSession(index: Int)
     case selectWorkspace(index: Int)               // workspace 0..9
     case nextWorkspace
     case previousWorkspace
@@ -199,6 +202,9 @@ extension Command {
         case let .newSession(name): return "new-session\(name.map { " -s \($0)" } ?? "")"
         case .killSession: return "kill-session"
         case let .renameSession(name): return "rename-session\(name.map { " \($0)" } ?? "")"
+        case .nextSession: return "next-session"
+        case .previousSession: return "previous-session"
+        case let .selectSession(index): return "select-session \(index)"
         case let .selectWorkspace(index): return "select-workspace \(index)"
         case .nextWorkspace: return "next-workspace"
         case .previousWorkspace: return "previous-workspace"
