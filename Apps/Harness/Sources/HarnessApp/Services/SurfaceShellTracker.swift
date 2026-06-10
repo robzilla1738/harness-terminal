@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import HarnessCore
@@ -21,6 +22,20 @@ final class SurfaceShellTracker {
     /// Set while a background scan is in flight so ticks don't pile up — a proc-tree walk on a
     /// loaded machine can exceed the 500ms interval, and stacking scans just wastes CPU.
     private var scanning = false
+    /// `true` between `start()` and `stop()` — distinct from `timer != nil` because the timer
+    /// is also parked while the app is inactive (idle efficiency), and an activate must not
+    /// resurrect a tracker that was never started (headless tests) or was stopped.
+    private var started = false
+    /// Consecutive scans with zero cwd changes. Past `idleScansBeforeBackoff` the cadence
+    /// stretches to `relaxedInterval`; any change — or a `bumpScan` from surface create/focus —
+    /// snaps it back to `baseInterval`.
+    private var unchangedScans = 0
+    private var currentInterval: TimeInterval = SurfaceShellTracker.baseInterval
+    private static let baseInterval: TimeInterval = 0.5
+    private static let relaxedInterval: TimeInterval = 2.0
+    /// ~5 s of stability before relaxing — long enough that interactive bursts (cd, tab
+    /// switching) never see the slow cadence, short enough to matter for idle power.
+    private static let idleScansBeforeBackoff = 10
     /// Serial queue for the blocking `proc_listpids` / `sysctl(KERN_PROCARGS2)` / `proc_pidinfo`
     /// syscalls. Kept off the main thread: scanning every process on a busy machine can take
     /// many milliseconds, and doing it on `.main` every 500ms drops frames.
@@ -29,9 +44,57 @@ final class SurfaceShellTracker {
     private init() {}
 
     func start() {
-        guard timer == nil else { return }
+        guard !started else { return }
+        started = true
+        // Park while inactive: an inactive app's tabs rarely change cwd, and a 2 Hz
+        // process-tree walk is exactly the kind of background wakeup macOS punishes.
+        // Changes made while away are caught by the activate-time bumpScan.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidResignActive),
+            name: NSApplication.didResignActiveNotification, object: nil
+        )
+        scheduleTimer(interval: currentInterval)
+    }
+
+    func stop() {
+        started = false
+        NotificationCenter.default.removeObserver(self)
+        cancelTimer()
+    }
+
+    /// Force a re-scan immediately (call after creating a new tab/surface so we don't wait
+    /// for the next tick), and snap a relaxed cadence back to the base interval.
+    func bumpScan() {
+        resetCadence()
+        tick()
+    }
+
+    /// Lighter than `bumpScan`: the user is interacting (pane/tab focus change), so a
+    /// relaxed cadence snaps back to responsive — but no immediate scan is forced (focus
+    /// alone doesn't move a cwd; the next tick at base cadence is soon enough).
+    func noteUserInteraction() {
+        resetCadence()
+    }
+
+    @objc private func appDidBecomeActive() {
+        guard started, timer == nil else { return }
+        resetCadence()
+        scheduleTimer(interval: currentInterval)
+        tick() // catch up immediately on anything that moved while parked
+    }
+
+    @objc private func appDidResignActive() {
+        cancelTimer()
+    }
+
+    private func scheduleTimer(interval: TimeInterval) {
+        cancelTimer()
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak self] in
             self?.tick()
         }
@@ -39,18 +102,44 @@ final class SurfaceShellTracker {
         self.timer = timer
     }
 
-    func stop() {
+    private func cancelTimer() {
         timer?.cancel()
         timer = nil
     }
 
-    /// Force a re-scan immediately (call after creating a new tab/surface so
-    /// we don't wait up to 500ms for the first cwd to land).
-    func bumpScan() {
-        tick()
+    private func resetCadence() {
+        unchangedScans = 0
+        guard currentInterval != Self.baseInterval else { return }
+        currentInterval = Self.baseInterval
+        if timer != nil { scheduleTimer(interval: currentInterval) }
     }
 
+    /// Adaptive cadence bookkeeping, fed by `applyCwds` with whether the scan changed anything.
+    private func noteScanResult(changedAnything: Bool) {
+        if changedAnything {
+            resetCadence()
+            return
+        }
+        unchangedScans += 1
+        if unchangedScans >= Self.idleScansBeforeBackoff, currentInterval != Self.relaxedInterval {
+            currentInterval = Self.relaxedInterval
+            if timer != nil { scheduleTimer(interval: currentInterval) }
+        }
+    }
+
+    // MARK: Test seams (cadence + pause/resume are timing behavior — assert state, not clocks)
+
+    var currentIntervalForTesting: TimeInterval { currentInterval }
+    var timerIsScheduledForTesting: Bool { timer != nil }
+    func noteScanResultForTesting(changedAnything: Bool) { noteScanResult(changedAnything: changedAnything) }
+
     private func tick() {
+        // `scanning` is read and written here on the main actor (the class is @MainActor),
+        // so the guard + assignment below are an atomic check-and-set from the actor's
+        // perspective: no second tick() — from the timer *or* bumpScan() — can slip through
+        // between the guard and the assignment. This is what makes the flag safe without
+        // an additional lock: both tick() call sites run on the main actor before the async
+        // dispatch hands work to scanQueue.
         guard !scanning else { return }
         scanning = true
         Self.scanQueue.async { [weak self] in
@@ -68,16 +157,20 @@ final class SurfaceShellTracker {
     /// Apply a fresh surface→cwd scan on the main actor: forget dead surfaces and push every
     /// changed cwd to the coordinator. Pure dictionary work — no syscalls, so it's cheap.
     private func applyCwds(_ cwds: [String: String]) {
+        var changedAnything = false
         let live = Set(cwds.keys)
         for surface in lastReportedCwd.keys where !live.contains(surface) {
             lastReportedCwd.removeValue(forKey: surface)
+            changedAnything = true // a surface died; stay at the responsive cadence
         }
         let coordinator = SessionCoordinator.shared
         for (surfaceID, cwd) in cwds where lastReportedCwd[surfaceID] != cwd {
+            changedAnything = true
             lastReportedCwd[surfaceID] = cwd
             guard let uuid = UUID(uuidString: surfaceID) else { continue }
             coordinator.surfaceShellTrackerDidUpdateCwd(uuid, cwd: cwd)
         }
+        noteScanResult(changedAnything: changedAnything)
     }
 
     // MARK: - Process introspection (pure syscalls; run off the main actor)
@@ -114,24 +207,13 @@ final class SurfaceShellTracker {
     /// (root would be depth 0, immediate children depth 1, …). Used so we can
     /// prefer deeper PIDs when picking which process represents a surface.
     private nonisolated static func processTree(rootedAt root: pid_t) -> [(pid: pid_t, depth: Int)] {
-        let count = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard count > 0 else { return [] }
-        let bufferCount = Int(count) / MemoryLayout<pid_t>.size
-        var pids = [pid_t](repeating: 0, count: bufferCount)
-        let bytes = proc_listpids(
-            UInt32(PROC_ALL_PIDS),
-            0,
-            &pids,
-            Int32(MemoryLayout<pid_t>.size * bufferCount)
-        )
-        let actual = Int(bytes) / MemoryLayout<pid_t>.size
-        let all = pids.prefix(actual).filter { $0 > 0 }
-
-        var parents: [pid_t: pid_t] = [:]
-        for pid in all { parents[pid] = parentPID(pid) }
-
+        // One source of process-tree truth: `ProcessScan.parentMap()` is the shared primitive the
+        // daemon's agent scanner uses too (previously this view kept its own `proc_listpids` +
+        // `parentPID` copy, which could drift). We still compute depth here since the tracker
+        // prefers the deepest PID per surface.
+        let parents = ProcessScan.parentMap()
         var result: [(pid: pid_t, depth: Int)] = []
-        for candidate in all where candidate != root {
+        for candidate in parents.keys where candidate != root {
             var cursor = candidate
             var depth = 0
             while let parent = parents[cursor], parent != 0, depth < 32 {
@@ -144,14 +226,6 @@ final class SurfaceShellTracker {
             }
         }
         return result
-    }
-
-    private nonisolated static func parentPID(_ pid: pid_t) -> pid_t {
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        let bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
-        guard bytes == size else { return 0 }
-        return pid_t(info.pbi_ppid)
     }
 
     /// Read another process's working directory via `proc_pidinfo`.

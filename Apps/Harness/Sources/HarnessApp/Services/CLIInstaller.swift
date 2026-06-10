@@ -12,45 +12,67 @@ enum CLIInstaller {
 
     @discardableResult
     static func install() -> Bool {
+        // Gate on the source binary before spinning up the background work — a missing
+        // bundle binary is a synchronous, cheap check and the alert must be on main anyway.
         let source = cliSourceURL()
         guard FileManager.default.fileExists(atPath: source.path) else {
             showAlert("Could not find harness-cli in the app bundle.")
             return false
         }
-        do {
-            try HarnessPaths.ensureDirectories()
-            try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
-            try copyExecutable(source: source, destination: installedCLIPath)
-            var launchAgentMessage = ""
-            if let daemon = daemonSourceURL() {
-                do {
-                    try copyExecutable(source: daemon, destination: installedDaemonPath)
-                    _ = try LaunchAgentInstaller.install(daemonPath: installedDaemonPath)
-                    launchAgentMessage = "\nHarnessDaemon installed to \(installedDaemonPath.path)\nLaunchAgent installed at \(HarnessPaths.launchAgentURL.path)"
-                } catch {
-                    launchAgentMessage = "\nLaunchAgent install failed: \(error)"
+
+        // Capture path values before leaving the main actor (they are computed properties
+        // on @MainActor types; they're cheap but must be read here, not inside detached).
+        let cliDest = installedCLIPath
+        let daemonDest = installedDaemonPath
+        let binDir = binDirectory
+        let daemonSrc = daemonSourceURL()
+
+        // All file I/O and launchctl are done off the main actor so the menu (or Settings
+        // "Install CLI" button) stays responsive while launchctl bootstraps the daemon.
+        // The NSAlert is then shown back on main after the work completes.
+        Task.detached {
+            var alertMessage: String
+            var success = false
+            do {
+                try HarnessPaths.ensureDirectories()
+                try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+                try BinaryRefresher.copyExecutable(from: source, to: cliDest)
+                var launchAgentMessage = ""
+                if let daemon = daemonSrc {
+                    do {
+                        try BinaryRefresher.copyExecutable(from: daemon, to: daemonDest)
+                        _ = try LaunchAgentInstaller.install(daemonPath: daemonDest)
+                        launchAgentMessage = "\nHarnessDaemon installed to \(daemonDest.path)\nLaunchAgent installed at \(HarnessPaths.launchAgentURL.path)"
+                    } catch {
+                        launchAgentMessage = "\nLaunchAgent install failed: \(error)"
+                    }
                 }
-            }
-            var completionMessage = ""
-            if let lines = try? ShellCompletionInstaller.installForLoginShell(), !lines.isEmpty {
-                completionMessage = "\n" + lines.joined(separator: "\n")
-            }
-            showAlert("""
-            harness-cli installed to:
-            \(installedCLIPath.path)
+                var completionMessage = ""
+                if let lines = try? ShellCompletionInstaller.installForLoginShell(), !lines.isEmpty {
+                    completionMessage = "\n" + lines.joined(separator: "\n")
+                }
+                alertMessage = """
+                harness-cli installed to:
+                \(cliDest.path)
 
-            Add to your shell profile:
-            export PATH="\(binDirectory.path):$PATH"\(launchAgentMessage)\(completionMessage)
-            """)
-            return true
-        } catch {
-            showAlert("Install failed: \(error.localizedDescription)")
-            return false
+                Add to your shell profile:
+                export PATH="\(binDir.path):$PATH"\(launchAgentMessage)\(completionMessage)
+                """
+                success = true
+            } catch {
+                alertMessage = "Install failed: \(error.localizedDescription)"
+            }
+            // NSAlert presentation must be on the main actor.
+            await MainActor.run {
+                CLIInstaller.showAlert(alertMessage)
+            }
+            _ = success  // suppress unused-result warning; callers that need the return value
+                         // should switch to the async variant if one is added in the future.
         }
-    }
-
-    private static func copyExecutable(source: URL, destination: URL) throws {
-        try BinaryRefresher.copyExecutable(from: source, to: destination)
+        // The Task is fire-and-forget from the call site's perspective.  Return `true` to mean
+        // "install was kicked off" — by the time any caller checks the value the alert will have
+        // shown (or will shortly).  If a synchronous result is ever needed, expose an async API.
+        return true
     }
 
     static func daemonSourceURL() -> URL? {

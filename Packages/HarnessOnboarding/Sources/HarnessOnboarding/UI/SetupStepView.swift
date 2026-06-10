@@ -175,19 +175,36 @@ struct SetupStepView: View {
         isInstalling = true
         errorMessage = nil
 
-        Task {
+        // Capture inputs on the main actor before handing off to the background — both
+        // `cliStatus`/`daemonStatus` (SwiftUI @State, main-actor-bound) and the
+        // `buildNumberProbe` closure (a @MainActor static var on BinaryInstaller).
+        // `performInstall` is `nonisolated` so it can safely run off-main; all blocking
+        // Process+semaphore work (version probe, launchctl) stays off the main thread.
+        let cliSrc = cliStatus.asFoundPath()
+        let daemonSrc = daemonStatus.asFoundPath()
+        let probe = BinaryInstaller.buildNumberProbe   // capture before leaving main actor
+
+        Task.detached {
             do {
-                let cliSrc = cliStatus.asFoundPath()
-                let daemonSrc = daemonStatus.asFoundPath()
-                let report = try BinaryInstaller.performInstall(cliSource: cliSrc, daemonSource: daemonSrc)
-                installReport = report
-                cliStatus = BinaryInstaller.detectCLI()
-                daemonStatus = BinaryInstaller.detectDaemon()
-                NSSound(named: "Glass")?.play()
+                let report = try BinaryInstaller.performInstall(
+                    cliSource: cliSrc,
+                    daemonSource: daemonSrc,
+                    probe: probe
+                )
+                await MainActor.run {
+                    installReport = report
+                    cliStatus = BinaryInstaller.detectCLI()
+                    daemonStatus = BinaryInstaller.detectDaemon()
+                    isInstalling = false
+                    NSSound(named: "Glass")?.play()
+                }
             } catch {
-                errorMessage = "Install failed: \(error.localizedDescription)\nRun `harness-cli install` from Harness.app or a build output."
+                let msg = "Install failed: \(error.localizedDescription)\nRun `harness-cli install` from Harness.app or a build output."
+                await MainActor.run {
+                    errorMessage = msg
+                    isInstalling = false
+                }
             }
-            isInstalling = false
         }
     }
 }

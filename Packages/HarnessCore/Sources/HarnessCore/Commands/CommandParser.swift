@@ -59,7 +59,7 @@ public enum CommandParser {
     /// (not in the alias table) are listed explicitly.
     private static let universalTargetCommands: Set<String> = [
         "split-window", "kill-pane", "zoom-pane", "resize-pane", "break-pane",
-        "respawn-pane", "send-keys", "pipe-pane",
+        "respawn-pane", "clear-history", "send-keys", "pipe-pane",
         "synchronize-panes", "synchronize-pane", "setw-synchronize",
         "kill-window", "kill-tab", "rename-window", "rename-tab",
         "new-window", "new-tab", "rotate-window", "select-layout",
@@ -85,6 +85,7 @@ public enum CommandParser {
         "resizep": "resize-pane", "swapp": "swap-pane", "swapw": "swap-window",
         "movew": "move-window", "rotatew": "rotate-window", "breakp": "break-pane",
         "joinp": "join-pane", "respawnp": "respawn-pane", "movep": "move-pane",
+        "clearhist": "clear-history",
         "respawnw": "respawn-window", "refreshc": "refresh-client",
         "renumberw": "renumber-windows",
         "renamew": "rename-window", "rename": "rename-window",
@@ -115,7 +116,7 @@ public enum CommandParser {
         "move-window", "new-session", "new-window", "next-layout", "next-pane", "next-window",
         "next-workspace", "pipe-pane", "previous-layout", "previous-pane", "previous-window",
         "previous-workspace", "reload-keybindings", "rename-session", "rename-window",
-        "renumber-windows", "respawn-pane", "rotate-window", "select-layout", "select-pane",
+        "renumber-windows", "respawn-pane", "clear-history", "rotate-window", "select-layout", "select-pane",
         "select-window", "select-workspace", "send-keys", "send-prefix", "show-cheatsheet",
         "source-config", "source-file", "swap-pane", "swap-window", "switch-client",
         "synchronize-panes", "unbind-key", "unlink-window", "zoom-pane",
@@ -270,10 +271,17 @@ public enum CommandParser {
                     return .copyModeCommand(action)
                 }
             }
-            return .sendKeys(keys: tokens.filter { !$0.hasPrefix("-") })
+            let positional = tokens.filter { !$0.hasPrefix("-") }
+            // `-l` sends the literal text verbatim; `-H` sends raw bytes from hex tokens. Both
+            // bypass key-token interpretation (previously the flags were dropped and the words
+            // were token-parsed, so a bound `send-keys -l` silently lost its literal meaning).
+            if tokens.contains("-H") { return .sendKeysHex(hex: positional) }
+            if tokens.contains("-l") { return .sendKeysLiteral(text: positional.joined(separator: " ")) }
+            return .sendKeys(keys: positional)
         case "display-message":
             let format = tokens.first { !$0.hasPrefix("-") } ?? ""
-            return .displayMessage(format: format)
+            // `-p` prints the rendered format to stdout (scripting) instead of flashing it.
+            return tokens.contains("-p") ? .displayMessagePrint(format: format) : .displayMessage(format: format)
         case "run-shell":
             guard let cmd = tokens.first(where: { !$0.hasPrefix("-") }) else {
                 throw CommandParseError.missingArgument("run-shell requires a command string")
@@ -349,6 +357,8 @@ public enum CommandParser {
             return .breakPane
         case "respawn-pane":
             return .respawnPane(keepHistory: !(tokens.contains("-k") || tokens.contains("--clear-history")))
+        case "clear-history", "clearhist":
+            return .clearHistory
         case "move-pane":
             // move-pane -s <src> [-t <dst>] [-h|-v] — like join-pane with an
             // explicit source. `-v` stacks (horizontal divider); default/`-h` is

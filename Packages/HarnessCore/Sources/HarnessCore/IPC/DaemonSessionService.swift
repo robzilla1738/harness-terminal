@@ -106,6 +106,18 @@ public final class DaemonSessionService: @unchecked Sendable {
         }
     }
 
+    /// Long-lived snapshot-push subscription on the **current** endpoint (see
+    /// `DaemonClient.subscribeSnapshot`). The subscription is pinned to the endpoint at call
+    /// time; after `switchEndpoint` the caller must cancel it and subscribe again.
+    @discardableResult
+    public func subscribeSnapshot(
+        label: String? = nil,
+        onRevision: @escaping @Sendable (Int) -> Void,
+        onEnd: (@Sendable () -> Void)? = nil
+    ) throws -> DaemonSubscription {
+        try currentClient().subscribeSnapshot(label: label, onRevision: onRevision, onEnd: onEnd)
+    }
+
     public func fetchSnapshot() throws -> SessionSnapshot {
         let response = try request(.getSnapshot)
         guard case let .snapshot(snapshot) = response else {

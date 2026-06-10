@@ -142,6 +142,10 @@ public enum ShellIntegration {
     # Emits OSC 133;A to mark each prompt and OSC 133;D;<exit> to report the previous command's
     # status, so Harness draws the prompt gutter, colors success/failure, and jumps between
     # prompts. Active only inside a Harness pane (the daemon exports $HARNESS).
+    # Interactive only (kitty/Ghostty do the same): `exit` in a sourced file skips the rest
+    # of the file, so scripts and `fish -c` never register the hooks (the vendor_conf.d
+    # vehicle would otherwise run this for every fish).
+    status is-interactive; or exit
     if set -q HARNESS; and test "$TERM" != dumb
         function __harness_osc133_prompt --on-event fish_prompt
             printf '\\033]133;A\\007'

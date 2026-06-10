@@ -185,4 +185,76 @@ final class SessionPersistenceTests: XCTestCase {
         try XCTUnwrap(editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
             .first { $0.id == tabID }).persistent
     }
+
+    // MARK: - layout.json write path (off the synchronous critical path)
+
+    /// The compact (non-prettyPrinted) encode must still round-trip losslessly, and the on-disk
+    /// file must be single-line so the format change is real (not just claimed in a comment).
+    func testCompactEncodeRoundTrips() throws {
+        var editor = SessionEditor()
+        let wsID = try XCTUnwrap(editor.snapshot.activeWorkspace).id
+        _ = editor.addSession(to: wsID, name: "work")
+        let snapshot = editor.snapshot
+
+        let store = SessionStore()
+        try store.saveImmediately(snapshot)
+
+        let onDisk = try String(contentsOf: HarnessPaths.snapshotURL, encoding: .utf8)
+        XCTAssertFalse(onDisk.contains("\n"), "layout.json is written compact, not prettyPrinted")
+
+        let reloaded = store.load()
+        // `savedAt` is stamped at write time, so compare the structural fields rather than `==`.
+        XCTAssertEqual(reloaded.workspaces, snapshot.workspaces)
+        XCTAssertEqual(reloaded.version, snapshot.version)
+        XCTAssertEqual(reloaded.revision, snapshot.revision)
+        XCTAssertEqual(reloaded.activeWorkspaceID, snapshot.activeWorkspaceID)
+    }
+
+    /// `save()` is debounced: it must NOT write synchronously (that's the whole point of moving the
+    /// write off the caller's latency path), but the write must land shortly after.
+    func testDebouncedSaveDefersTheWrite() {
+        let store = SessionStore()
+        let url = HarnessPaths.snapshotURL
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "no layout.json before save")
+
+        store.save(SessionSnapshot())
+        // The debounce window is 0.5s, so the write cannot have happened in the time save() takes
+        // to return — the file is still absent here.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "save() must not write synchronously")
+
+        waitForFile(at: url, message: "the debounced write must land")
+    }
+
+    /// The destination is pinned at `save()` time. A `HARNESS_HOME` change before the debounced
+    /// write fires must NOT redirect the write — a late write resolving the real home would pollute
+    /// a user's live session state during a test run. Regression guard for that exact hazard.
+    func testDebouncedSaveTargetsPinnedHomeNotChangedEnv() throws {
+        let pinnedURL = HarnessPaths.snapshotURL
+        let store = SessionStore()
+        store.save(SessionSnapshot())
+
+        // Repoint HARNESS_HOME immediately, exactly as a test tearDown would.
+        let other = FileManager.default.temporaryDirectory
+            .appendingPathComponent("harness-other-\(UUID().uuidString)", isDirectory: true)
+        setenv("HARNESS_HOME", other.path, 1)
+        defer {
+            if let root { setenv("HARNESS_HOME", root.path, 1) } // restore for tearDown
+            try? FileManager.default.removeItem(at: other)
+        }
+
+        waitForFile(at: pinnedURL, message: "the debounced write must land at the pinned URL")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: other.appendingPathComponent("sessions/layout.json").path),
+            "a since-changed HARNESS_HOME must not capture the pinned write")
+    }
+
+    /// Spin until `url` exists (the debounced write lands asynchronously on the store's queue),
+    /// failing on timeout. A plain poll keeps the helper free of `@Sendable` closure capture.
+    private func waitForFile(at url: URL, message: String) {
+        let deadline = Date().addingTimeInterval(3)
+        while !FileManager.default.fileExists(atPath: url.path), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), message)
+    }
 }

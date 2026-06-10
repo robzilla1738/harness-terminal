@@ -18,13 +18,30 @@ final class WaitForRegistry {
     }
     private var channels: [String: Channel] = [:]
 
+    /// Hard per-channel ceiling on the number of concurrently blocked `wait` fds. Without
+    /// this a malicious or buggy script can park an unbounded number of connections on a
+    /// single channel, pinning their reply buffers and exhausting daemon FDs. 1 024 is far
+    /// above any realistic scripting workload; at the cap we reject immediately so the
+    /// caller's socket unblocks rather than silently accumulating.
+    static let maxWaitersPerChannel = 1024
+
     /// Number of channels currently carrying state. Exposed for diagnostics/tests to assert that
     /// emptied channels are pruned (so the map can't grow without bound).
     var activeChannelCount: Int { channels.count }
 
     /// `wait-for <channel>`: register the fd; the caller defers its reply until `signal`.
-    func wait(channel: String, fd: Int32) {
+    /// Returns `true` if the fd was registered (reply stays deferred), `false` if the channel
+    /// is at the per-channel cap (caller should send an immediate error reply to `fd`).
+    @discardableResult
+    func wait(channel: String, fd: Int32) -> Bool {
+        let current = channels[channel]?.waiters.count ?? 0
+        guard current < Self.maxWaitersPerChannel else {
+            // At cap: reject immediately so the fd doesn't block indefinitely. The error
+            // shape mirrors the registry's .error(_:) response used elsewhere in the IPC path.
+            return false
+        }
         channels[channel, default: Channel()].waiters.append(fd)
+        return true
     }
 
     /// `wait-for -S <channel>`: wake every `wait`er. Returns their fds (the caller sends each

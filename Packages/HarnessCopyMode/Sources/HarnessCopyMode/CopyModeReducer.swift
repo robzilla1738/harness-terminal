@@ -41,8 +41,14 @@ public enum CopyModeReducer {
         case .cursorDown: s.cursor.line = min(grid.totalLines - 1, s.cursor.line + 1)
         case .startOfLine: s.cursor.column = 0
         case .endOfLine: s.cursor.column = grid.renderedLine(s.cursor.line).lastContentColumn
+        case .backToIndentation: s.cursor.column = firstContentColumn(s.cursor.line, grid: grid)
         case .top: s.cursor = GridPosition(line: 0, column: 0)
         case .bottom: s.cursor = GridPosition(line: max(0, grid.totalLines - 1), column: 0)
+        // H/M/L move within the *visible window* (relative to viewTop), unlike history-top/bottom
+        // which jump to the scrollback extent. Column is preserved (reveal clamps it).
+        case .topLine: s.cursor.line = s.viewTop
+        case .middleLine: s.cursor.line = min(grid.totalLines - 1, s.viewTop + max(1, grid.viewportRows) / 2)
+        case .bottomLine: s.cursor.line = min(grid.totalLines - 1, s.viewTop + max(1, grid.viewportRows) - 1)
         case .previousPrompt:
             if let target = grid.promptRows.last(where: { $0 < s.cursor.line }) {
                 s.cursor = GridPosition(line: target, column: 0)
@@ -57,6 +63,30 @@ public enum CopyModeReducer {
         case .halfPageDown: s.cursor.line = min(grid.totalLines - 1, s.cursor.line + max(1, grid.viewportRows / 2))
         case .nextWord: s.cursor = nextWord(from: s.cursor, grid: grid)
         case .previousWord: s.cursor = previousWord(from: s.cursor, grid: grid)
+        case .nextWordEnd: s.cursor = nextWordEnd(from: s.cursor, grid: grid)
+
+        case let .jump(kind, target):
+            // No target yet (the bindable form): ask the front-end to capture the next keystroke
+            // and re-dispatch with it filled in. Otherwise perform the on-line jump and remember it.
+            guard let ch = target?.first else { return (s, .beginJumpEntry(kind)) }
+            if let landing = jump(kind, ch, from: s.cursor, grid: grid, repeating: false) {
+                s.cursor = landing
+            }
+            s.lastJump = CopyModeJump(kind: kind, target: ch)
+        case .jumpAgain:
+            if let j = s.lastJump, let landing = jump(j.kind, j.target, from: s.cursor, grid: grid, repeating: true) {
+                s.cursor = landing
+            }
+        case .jumpReverse:
+            if let j = s.lastJump,
+               let landing = jump(j.kind.reversed, j.target, from: s.cursor, grid: grid, repeating: true) {
+                s.cursor = landing
+            }
+        case .otherEnd:
+            // Swap the selection anchor and the cursor (vi `o`) so the moving end flips.
+            if let a = s.anchor { s.anchor = s.cursor; s.cursor = a }
+        case let .gotoLine(n):
+            s.cursor = GridPosition(line: min(max(0, n - 1), max(0, grid.totalLines - 1)), column: 0)
 
         case .beginSelection:
             if s.mode == .char { s.mode = .none; s.anchor = nil }
@@ -171,6 +201,66 @@ public enum CopyModeReducer {
             if i < rl.chars.count, !isSeparator(rl.chars[i]) { break }
         }
         return GridPosition(line: line, column: i < rl.columnOf.count ? rl.columnOf[i] : 0)
+    }
+
+    /// vi `e` — the end (last char) of the next word, crossing line boundaries. Always advances at
+    /// least one character so a repeat steps forward off the current word's end.
+    private static func nextWordEnd(from pos: GridPosition, grid: CopyModeGridSource) -> GridPosition {
+        var line = pos.line
+        var rl = grid.renderedLine(line)
+        var i = rl.charIndex(atOrAfter: pos.column) + 1 // step at least one char forward
+        // Skip separators, advancing across lines, to land inside the next word.
+        while true {
+            while i < rl.chars.count, isSeparator(rl.chars[i]) { i += 1 }
+            if i < rl.chars.count { break }
+            if line >= grid.totalLines - 1 {
+                return GridPosition(line: line, column: rl.columnOf.last ?? 0)
+            }
+            line += 1
+            rl = grid.renderedLine(line)
+            i = 0
+        }
+        // Advance to the last non-separator char of this word.
+        while i + 1 < rl.chars.count, !isSeparator(rl.chars[i + 1]) { i += 1 }
+        return GridPosition(line: line, column: i < rl.columnOf.count ? rl.columnOf[i] : 0)
+    }
+
+    /// vi `f`/`F`/`t`/`T` jump-to-char, confined to the cursor's line (like vi). `forward`/`backward`
+    /// land on the next/previous `target`; `toForward`/`toBackward` land one cell before/after it.
+    /// `repeating` (from `;`/`,`) starts a `to`-jump one extra char along so it doesn't stick on the
+    /// target the cursor is already adjacent to. Returns nil when there's no match (cursor unchanged).
+    private static func jump(
+        _ kind: CopyModeJumpKind,
+        _ target: Character,
+        from pos: GridPosition,
+        grid: CopyModeGridSource,
+        repeating: Bool
+    ) -> GridPosition? {
+        let rl = grid.renderedLine(pos.line)
+        let ci = rl.charIndex(atOrAfter: pos.column)
+        func at(_ index: Int) -> GridPosition? {
+            guard index >= 0, index < rl.columnOf.count else { return nil }
+            return GridPosition(line: pos.line, column: rl.columnOf[index])
+        }
+        switch kind {
+        case .forward, .toForward:
+            var j = ci + ((kind == .toForward && repeating) ? 2 : 1)
+            while j < rl.chars.count, rl.chars[j] != target { j += 1 }
+            guard j < rl.chars.count else { return nil }
+            return at(kind == .toForward ? j - 1 : j)
+        case .backward, .toBackward:
+            var j = ci - ((kind == .toBackward && repeating) ? 2 : 1)
+            while j >= 0, j < rl.chars.count, rl.chars[j] != target { j -= 1 }
+            guard j >= 0, j < rl.chars.count else { return nil }
+            return at(kind == .toBackward ? j + 1 : j)
+        }
+    }
+
+    /// Grid column of the first non-blank character on `line` (0 when the line is blank) — vi `^`.
+    private static func firstContentColumn(_ line: Int, grid: CopyModeGridSource) -> Int {
+        let rl = grid.renderedLine(line)
+        for (i, ch) in rl.chars.enumerated() where !isSeparator(ch) { return rl.columnOf[i] }
+        return 0
     }
 
     private static func previousWord(from pos: GridPosition, grid: CopyModeGridSource) -> GridPosition {

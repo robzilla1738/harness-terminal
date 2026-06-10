@@ -34,6 +34,11 @@ public final class PasteBufferStore: @unchecked Sendable {
     private let lock = NSLock()
     private let configuration: Configuration
     private let url: URL
+    // Debounced write — mirrors OptionStore/HookRegistry/EnvironmentStore. Rapid set-buffer calls
+    // (e.g. a script filling multiple buffers) produce one disk write at the end of the burst.
+    private let saveQueue = DispatchQueue(label: "com.robert.harness.paste-buffer-store-save")
+    private var pendingSave: DispatchWorkItem?
+    private let debounceInterval: TimeInterval = 0.15
 
     public init(url: URL = HarnessPaths.buffersURL, configuration: Configuration = Configuration()) {
         self.url = url
@@ -143,12 +148,46 @@ public final class PasteBufferStore: @unchecked Sendable {
     }
 
     private func save(_ snapshot: [Buffer]) {
+        // Caller already holds the pre-snapshot under the lock and passes it in — no second
+        // lock acquisition needed. Enqueue onto `saveQueue` so the mutation path never blocks
+        // on I/O and bursts coalesce to one write.
+        saveQueue.async { [weak self] in
+            self?.scheduleSave(snapshot)
+        }
+    }
+
+    /// Synchronously write the current buffers to disk, bypassing the debounce. Called on daemon
+    /// shutdown so the last set-buffer in the debounce window is never lost.
+    public func flush() {
+        saveQueue.sync { [weak self] in
+            guard let self else { return }
+            pendingSave?.cancel()
+            pendingSave = nil
+            lock.lock()
+            let snapshot = buffers
+            lock.unlock()
+            writeToDisk(snapshot)
+        }
+    }
+
+    private func scheduleSave(_ snapshot: [Buffer]) {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.writeToDisk(snapshot) }
+        pendingSave = work
+        saveQueue.asyncAfter(deadline: .now() + debounceInterval, execute: work)
+    }
+
+    private func writeToDisk(_ snapshot: [Buffer]) {
+        // Failures are logged to stderr — not silently swallowed — matching every other store's
+        // `HarnessPaths.atomicWrite` contract.
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(snapshot) {
-            try? data.write(to: url, options: .atomic)
+        guard let data = try? encoder.encode(snapshot) else {
+            fputs("HarnessDaemon: failed to encode buffers.json\n", harnessStderr)
+            return
         }
+        HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon")
     }
 }

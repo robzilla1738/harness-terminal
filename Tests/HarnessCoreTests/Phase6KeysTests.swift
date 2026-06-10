@@ -1,15 +1,10 @@
 import XCTest
 @testable import HarnessCore
 
-/// Phase 6: `send-keys -H` hex encoding and the seeded-and-consultable `root` (`bind -n`) table.
+/// Phase 6: the seeded-and-consultable `root` (`bind -n`) table. (The `send-keys -H` hex-encoding
+/// test moved to `KeyTokenParserTests` in HarnessTerminalEngineTests when `KeyTokenParser` moved
+/// next to `InputEncoder`.)
 final class Phase6KeysTests: XCTestCase {
-    func testHexBytesEncoding() {
-        XCTAssertEqual(KeyTokenParser.hexBytes(["1b", "5b", "41"]), Data([0x1b, 0x5b, 0x41]))
-        XCTAssertEqual(KeyTokenParser.hexBytes(["0x0d"]), Data([0x0d]))
-        XCTAssertEqual(KeyTokenParser.hexBytes(["zz", "41"]), Data([0x41])) // non-hex skipped
-        XCTAssertEqual(KeyTokenParser.hexBytes([]), Data())
-    }
-
     func testRootTableSeededAndBindable() {
         var set = KeyTableSet.defaults
         // Seeded (empty) so `bind-key -T root` is a real surface, not a no-op.

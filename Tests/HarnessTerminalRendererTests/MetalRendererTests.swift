@@ -742,6 +742,7 @@ final class MetalRendererTests: XCTestCase {
             ("strikethrough", { $0.strikethrough = true }),
             ("overline", { $0.overline = true }),
             ("width", { $0.width = .wide }),
+            ("blink", { $0.blink = true }),
             ("drawBackground", { $0.drawBackground = false }),
         ]
         var seen: [UInt64: String] = [base: "base"]
@@ -753,6 +754,35 @@ final class MetalRendererTests: XCTestCase {
             }
             seen[k] = name
         }
+    }
+
+    /// The SGR blink PHASE folds into the content key only for rows that contain blink
+    /// cells — a phase flip re-encodes exactly the blink rows; blink-free rows stay
+    /// phase-independent (no whole-grid re-encode twice a second while anything blinks).
+    func testContentKeyFoldsBlinkPhaseOnlyIntoBlinkRows() {
+        let fg = RenderColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let bg = RenderColor(red: 0, green: 0, blue: 0, alpha: 1)
+        func makeFrame(blink: Bool) -> TerminalFrame {
+            let cell = RenderCell(row: 0, column: 0, codepoint: 0x41, foreground: fg, background: bg,
+                                  underlineColor: fg, bold: false, italic: false, underline: .none,
+                                  strikethrough: false, overline: false, blink: blink,
+                                  width: .normal, drawBackground: true)
+            return TerminalFrame(columns: 1, rows: 1, cells: [cell],
+                                 cursor: CursorRender(row: 0, column: 0, visible: false,
+                                                      color: fg, textColor: bg))
+        }
+        let blinkFrame = makeFrame(blink: true)
+        let plainFrame = makeFrame(blink: false)
+        XCTAssertNotEqual(
+            TerminalMetalRenderer.rowContentKey(blinkFrame, row: 0, blinkHidden: false),
+            TerminalMetalRenderer.rowContentKey(blinkFrame, row: 0, blinkHidden: true),
+            "a blink row's key must change with the phase"
+        )
+        XCTAssertEqual(
+            TerminalMetalRenderer.rowContentKey(plainFrame, row: 0, blinkHidden: false),
+            TerminalMetalRenderer.rowContentKey(plainFrame, row: 0, blinkHidden: true),
+            "a blink-free row's key must be phase-independent"
+        )
     }
 
     func testContentKeyIgnoresTrailingInsignificantCells() {

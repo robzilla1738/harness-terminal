@@ -26,6 +26,18 @@ public enum ProcessScan {
         #endif
     }
 
+    /// The whole `pid → ppid` table in a single pass. Building this once per scan and reusing it
+    /// across surfaces collapses the agent scan from O(surfaces × processes) syscalls to
+    /// O(processes): one `livePIDs()` enumeration plus one `parentPID` lookup per PID — work that
+    /// is identical for every surface within a tick, so doing it per-surface was pure waste.
+    public static func parentMap() -> [Int32: Int32] {
+        let pids = livePIDs()
+        var parents: [Int32: Int32] = [:]
+        parents.reserveCapacity(pids.count)
+        for pid in pids { parents[pid] = parentPID(pid) }
+        return parents
+    }
+
     /// Parent PID of `pid`, or 0 when it can't be determined.
     public static func parentPID(_ pid: Int32) -> Int32 {
         #if canImport(Darwin)

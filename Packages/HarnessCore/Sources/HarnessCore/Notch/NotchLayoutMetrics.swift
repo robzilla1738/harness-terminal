@@ -60,7 +60,14 @@ public struct NotchLayoutMetrics: Sendable, Equatable {
     /// Transient peek card (one-row live activity): slightly wider than the closed notch so
     /// the dropped row reads as the notch stretching, never as a detached toast.
     public var peekWidth: Double { closedWidth + 144 }
-    public var peekHeight: Double { closedHeight + 26 }
+    /// Reserve above the peek's content so its single line clears the physical notch (the camera
+    /// housing occludes the top-center ~`closedHeight` points). On a notchless Mac the content
+    /// just needs to sit below the top edge. Without this the title — drawn at the very top
+    /// center — gets clipped by the hardware (the open HUD is fine: its top row is the header,
+    /// whose center is empty where the notch sits).
+    public var peekTopInset: Double { hasPhysicalNotch ? closedHeight : 6 }
+    /// One row of content plus bottom breathing room, all below `peekTopInset`.
+    public var peekHeight: Double { peekTopInset + 36 }
 
     public init(
         hasPhysicalNotch: Bool,

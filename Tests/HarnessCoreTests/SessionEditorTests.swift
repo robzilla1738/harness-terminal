@@ -343,6 +343,38 @@ final class SessionEditorTests: XCTestCase {
         let after = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeTab)
         XCTAssertEqual(after.rootPane.allPaneIDs(), [root])
     }
+
+    // MARK: - Git branch label (`setTabGitBranch`)
+
+    func testSetTabGitBranchSetsClearsAndDedups() throws {
+        var editor = SessionEditor()
+        let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let tab = try XCTUnwrap(workspace.activeTab)
+
+        XCTAssertTrue(editor.setTabGitBranch(workspaceID: workspace.id, tabID: tab.id, branch: "main"))
+        XCTAssertEqual(editor.snapshot.activeWorkspace?.activeTab?.gitBranch, "main")
+        let revisionAfterSet = editor.snapshot.revision
+
+        // Idempotent re-send: no change, no revision bump (no subscriber wake-up).
+        XCTAssertFalse(editor.setTabGitBranch(workspaceID: workspace.id, tabID: tab.id, branch: "main"))
+        XCTAssertEqual(editor.snapshot.revision, revisionAfterSet)
+
+        // `nil` CLEARS — a tab whose directory leaves a repository drops its stale label.
+        XCTAssertTrue(editor.setTabGitBranch(workspaceID: workspace.id, tabID: tab.id, branch: nil))
+        XCTAssertNil(editor.snapshot.activeWorkspace?.activeTab?.gitBranch)
+        XCTAssertGreaterThan(editor.snapshot.revision, revisionAfterSet)
+
+        // Clearing an already-clear label is also a no-op.
+        XCTAssertFalse(editor.setTabGitBranch(workspaceID: workspace.id, tabID: tab.id, branch: nil))
+    }
+
+    func testSetTabGitBranchUnknownTabIsNoOp() throws {
+        var editor = SessionEditor()
+        let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let revision = editor.snapshot.revision
+        XCTAssertFalse(editor.setTabGitBranch(workspaceID: workspace.id, tabID: UUID(), branch: "main"))
+        XCTAssertEqual(editor.snapshot.revision, revision)
+    }
 }
 
 private struct LegacySnapshot: Codable {

@@ -334,6 +334,27 @@ final class CommandIPCTranslatorTests: XCTestCase {
         else { return XCTFail("respawn-window -t :99 must be unresolved, not respawn the focused window") }
     }
 
+    /// PR-18: bare `clear-history` resolves the active pane's surface and emits one
+    /// `.clearHistory(surfaceID:)` — the non-respawn scrollback clear.
+    func testClearHistoryResolvesActiveSurface() throws {
+        let (target, _, paneID) = try makeTarget()
+        guard case let .requests(reqs) = CommandIPCTranslator.translate(.clearHistory, target: target),
+              case let .clearHistory(surfaceID) = reqs.first
+        else { return XCTFail("clear-history must translate to a single clearHistory request") }
+        XCTAssertEqual(reqs.count, 1)
+        XCTAssertEqual(surfaceID, target.surfaceID(of: paneID))
+    }
+
+    /// A `clear-history` with an unresolvable `-t` is loud (`.unresolved`) — never a silent
+    /// clear of the caller's focused pane (the strict-resolution policy).
+    func testTargetedClearHistoryRejectsMissingTarget() throws {
+        let (target, _, _) = try makeTarget()
+        let spec = TargetSpec(window: .byIndex(99), raw: ":99")
+        guard case .unresolved = CommandIPCTranslator.translate(
+            .targeted(spec, .clearHistory), target: target)
+        else { return XCTFail("clear-history -t :99 must be unresolved, not clear the focused pane") }
+    }
+
     /// `swap-pane -s X -t Y` swaps X with Y (neither needs to be the active pane);
     /// `-s X` alone swaps X with the current pane; an unresolvable `-s` is loud.
     func testSwapPaneSourceFlagResolves() throws {

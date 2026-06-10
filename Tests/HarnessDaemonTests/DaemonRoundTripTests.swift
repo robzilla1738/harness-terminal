@@ -37,11 +37,11 @@ final class DaemonRoundTripTests: XCTestCase {
 
     private func waitForDaemonReady() throws {
         let client = DaemonClient()
-        for _ in 0 ..< 50 {
-            if case .pong = (try? client.request(.ping, timeout: 0.4)) { return }
-            usleep(100_000)
+        let ready = waitUntil(timeout: 10) {
+            if case .pong = (try? client.request(.ping, timeout: 0.4)) { return true }
+            return false
         }
-        XCTFail("daemon did not become ready")
+        if !ready { XCTFail("daemon did not become ready") }
     }
 
     func testControlSocketIsOwnerOnly() throws {
@@ -193,11 +193,7 @@ final class DaemonRoundTripTests: XCTestCase {
         defer { subscription.cancel() }
 
         // Wait for the burst to finish and the stream to settle.
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline {
-            if burstDone.value == true, combined.contains(marker(total - 1)) { break }
-            usleep(50_000)
-        }
+        waitUntil(timeout: 15) { burstDone.value == true && combined.contains(marker(total - 1)) }
         usleep(400_000) // let any trailing frames flush before the authoritative re-replay
 
         // Ground truth: a full re-replay AFTER everything settled is exactly what the surface holds.
@@ -455,6 +451,34 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertGreaterThan(seen.value, 0)
     }
 
+    /// `updateTabGitBranch` semantics on the wire: setting commits (revision bump → push
+    /// fan-out), an identical re-send is absorbed WITHOUT a commit (the revision is the
+    /// deterministic proxy — `pushSnapshotRevision` fires exactly once per commit), and
+    /// `nil` CLEARS the label. The event-driven branch monitor relies on all three (zero
+    /// subscriber fan-out at steady state; no stale label after leaving a repo).
+    func testUpdateTabGitBranchDedupsAndNilClears() throws {
+        let client = DaemonClient()
+        guard case let .snapshot(initial) = try client.request(.getSnapshot),
+              let ws = initial.activeWorkspace, let tab = ws.activeTab
+        else { return XCTFail("no default tab") }
+
+        _ = try client.request(.updateTabGitBranch(workspaceID: ws.id, tabID: tab.id, branch: "main"))
+        guard case let .snapshot(afterSet) = try client.request(.getSnapshot) else { return XCTFail() }
+        XCTAssertEqual(afterSet.activeWorkspace?.activeTab?.gitBranch, "main")
+        XCTAssertGreaterThan(afterSet.revision, initial.revision, "a real change must commit")
+
+        // Identical re-send: absorbed, no commit, no revision bump.
+        _ = try client.request(.updateTabGitBranch(workspaceID: ws.id, tabID: tab.id, branch: "main"))
+        guard case let .snapshot(afterDup) = try client.request(.getSnapshot) else { return XCTFail() }
+        XCTAssertEqual(afterDup.revision, afterSet.revision, "idempotent re-send must not commit")
+
+        // `nil` clears the stale label.
+        _ = try client.request(.updateTabGitBranch(workspaceID: ws.id, tabID: tab.id, branch: nil))
+        guard case let .snapshot(afterClear) = try client.request(.getSnapshot) else { return XCTFail() }
+        XCTAssertNil(afterClear.activeWorkspace?.activeTab?.gitBranch)
+        XCTAssertGreaterThan(afterClear.revision, afterSet.revision)
+    }
+
     /// Hook symmetry for long-lived subscription clients: registering a subscription must fire
     /// `client-attached`, and its disconnect must fire `client-detached`. Regression for the
     /// attach hook only firing on explicit `identifyClient` — every real client (GUI, attach,
@@ -517,7 +541,7 @@ final class DaemonRoundTripTests: XCTestCase {
         // Register via subscription only — exactly how the GUI and attach clients connect.
         let subscription = try client.subscribeSurfaceOutput(surfaceID: target.surfaceID, label: "count-test") { _, _ in }
         defer { subscription.cancel() }
-        _ = try client.request(.displayMessage(format: "\(marker)=#{session_attached}"))
+        _ = try client.request(.displayMessage(format: "\(marker)=#{session_attached}", print: false))
         wait(for: [rendered], timeout: 5)
         XCTAssertEqual(body.value, "\(marker)=1", "subscription client must be counted")
     }

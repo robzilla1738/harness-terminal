@@ -37,7 +37,7 @@ final class SurfaceRegistryTests: XCTestCase {
         guard case let .text(empty) = registry.handle(.showMessages) else { return XCTFail("expected text") }
         XCTAssertTrue(empty.isEmpty)
         for index in 0 ..< 55 {
-            _ = registry.handle(.displayMessage(format: "msg-\(index)"))
+            _ = registry.handle(.displayMessage(format: "msg-\(index)", print: false))
         }
         guard case let .text(log) = registry.handle(.showMessages) else { return XCTFail("expected text") }
         let lines = log.split(separator: "\n")
@@ -73,12 +73,8 @@ final class SurfaceRegistryTests: XCTestCase {
         // Let the shell come up, then exit with a known code.
         usleep(400_000)
         _ = registry.handle(.sendData(surfaceID: sid, data: Data("exit 3\n".utf8)))
-        var deadTab: Tab?
-        for _ in 0 ..< 100 {
-            if let candidate = tab(), candidate.exitStatus != nil { deadTab = candidate; break }
-            usleep(100_000)
-        }
-        let dead = try XCTUnwrap(deadTab, "retained pane should record an exit status")
+        waitUntil(timeout: 12) { tab()?.exitStatus != nil }
+        let dead = try XCTUnwrap(tab(), "retained pane should record an exit status")
         XCTAssertEqual(dead.exitStatus, 3)
         XCTAssertEqual(dead.status, .idle, "waiting status must not survive the pane's death")
         XCTAssertNil(dead.notificationText, "notification must not survive the pane's death")
@@ -109,11 +105,7 @@ final class SurfaceRegistryTests: XCTestCase {
         func killAndAwaitDeath() -> Bool {
             usleep(400_000)
             _ = registry.handle(.sendData(surfaceID: sid, data: Data("exit 5\n".utf8)))
-            for _ in 0 ..< 100 {
-                if tab()?.exitStatus != nil { return true }
-                usleep(100_000)
-            }
-            return false
+            return waitUntil(timeout: 12) { tab()?.exitStatus != nil }
         }
 
         XCTAssertTrue(killAndAwaitDeath(), "the pane must be retained with an exit status")
@@ -182,6 +174,44 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertEqual(registry.surfaceTelemetry.surfaceCount, after.count)
     }
 
+    /// A surface created via `ensureSurface` — the path the quick-terminal dropdown (and any
+    /// host-driven reserved surface) uses — must be LIVE (capturable, counted in `listSurfaces`)
+    /// yet stay entirely OUT of the persisted workspace→session→tab→pane layout, and must NOT
+    /// bump the layout revision. The quick terminal reuses a fixed reserved ID it never attaches
+    /// to a tab; were `ensureSurface` to insert it into the layout it would leak into the sidebar
+    /// and, never attached, never be reaped. (Invariant salvaged from the abandoned pr21b
+    /// explicit-IPC branch, adapted to main's host-internal `ensureSurface` mechanism.)
+    func testEnsureSurfaceCreatesLiveSurfaceOutsideTheLayout() {
+        let registry = SurfaceRegistry()
+        let reserved = "00000000-0000-0000-0000-000000000021"
+        let revisionBefore = registry.revision
+
+        guard case .ok = registry.handle(.ensureSurface(
+            surfaceID: reserved, cwd: "/tmp", shell: nil, rows: 24, cols: 80, scrollbackBytes: nil
+        )) else { return XCTFail("ensureSurface should report ok") }
+
+        // Live: the daemon holds a PTY session for it (capture reads the `sessions` map and
+        // returns text, not "Surface not found"), even though it is absent from the
+        // layout-derived `listSurfaces`/`SurfaceSummary` view.
+        guard case .text = registry.handle(.capturePane(surfaceID: reserved, includeScrollback: false)) else {
+            return XCTFail("the ensured surface must be live/capturable")
+        }
+
+        // Out of layout: it appears in no pane of any workspace/session/tab.
+        let layoutSurfaceIDs = registry.snapshot.workspaces
+            .flatMap(\.sessions)
+            .flatMap(\.tabs)
+            .flatMap { $0.rootPane.allSurfaceIDs() }
+            .map(\.uuidString)
+        XCTAssertFalse(layoutSurfaceIDs.contains(reserved),
+                       "the ensured surface must never enter the persisted layout")
+
+        // A layout-detached ensure is not a layout mutation → it must not bump the revision
+        // (distinguishing it from newTab/newSplit, which do).
+        XCTAssertEqual(registry.revision, revisionBefore,
+                       "ensureSurface of a detached surface must not bump the layout revision")
+    }
+
     func testNewWorkspaceTabAndSelectMutateSnapshotAndBumpRevision() {
         let registry = SurfaceRegistry()
         let startRevision = registry.snapshot.revision
@@ -199,6 +229,20 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertTrue(registry.snapshot.workspaces.contains { $0.id == wsID })
         XCTAssertEqual(registry.snapshot.activeWorkspaceID, wsID)
         XCTAssertGreaterThan(registry.snapshot.revision, startRevision)
+    }
+
+    /// Layout writes are now debounced (off the per-mutation critical path), so a graceful shutdown
+    /// must flush the latest snapshot synchronously — otherwise the last debounce window of layout
+    /// changes would be lost on restart. `flushSnapshot()` is the path `DaemonServer.stop()` calls.
+    func testFlushSnapshotPersistsLatestLayoutSynchronously() {
+        let registry = SurfaceRegistry()
+        guard case let .workspaceID(wsID) = registry.handle(.newWorkspace(name: "flush-me")) else {
+            return XCTFail("expected workspaceID")
+        }
+        registry.flushSnapshot()
+        let reloaded = SessionStore().load()
+        XCTAssertTrue(reloaded.workspaces.contains { $0.id == wsID && $0.name == "flush-me" },
+                      "flushSnapshot must persist the latest layout for a graceful restart")
     }
 
     func testNewTabUsesConfiguredShellWhenProvided() throws {
@@ -607,11 +651,9 @@ final class SurfaceRegistryTests: XCTestCase {
         // "(A Document Being Saved By …)" — spaces and parens are a bash syntax error unquoted.
         _ = registry.handle(.sendData(surfaceID: sid, data: Data("cd '\(canonicalDest)'\n".utf8)))
 
-        var updated = false
-        for _ in 0 ..< 50 {
+        let updated = waitUntil(timeout: 10) {
             registry.refreshSurfaceMetadata()
-            if tabCwd().map({ ($0 as NSString).resolvingSymlinksInPath }) == canonicalDest { updated = true; break }
-            usleep(100_000)
+            return tabCwd().map { ($0 as NSString).resolvingSymlinksInPath } == canonicalDest
         }
         XCTAssertTrue(updated, "off-lock refresh must still propagate the live shell's cwd to the tab")
     }
@@ -703,5 +745,71 @@ final class SurfaceRegistryTests: XCTestCase {
         // The live set must include the layout-referenced surface via the snapshot half of the
         // union — the property that protects a failed-to-spawn surface (in layout, not in sessions).
         XCTAssertTrue(registry.scrollbackLiveSurfaceKeys().contains(referencedSurface.uuidString))
+    }
+
+    // MARK: - Monitor tick idle precheck (idle efficiency)
+
+    /// A quiet monitor tick (no fresh output/bell, silence disarmed) must skip the full pass —
+    /// no registry lock, no option reads. Ticks are driven by hand after cancelling the real
+    /// timer; counts are compared relatively so an in-flight timer tick can't skew them (it
+    /// would be a quiet tick itself and is skipped identically).
+    func testQuietMonitorTickSkipsFullPass() throws {
+        let registry = SurfaceRegistry()
+        registry.stopMonitoring()
+        guard case let .surfaces(initial) = registry.handle(.listSurfaces),
+              let target = initial.first else { return XCTFail("expected a default surface") }
+
+        // Fresh output: the tick takes the full pass (drain + registry lock).
+        registry.noteSurfaceOutputForTesting(surfaceKey: target.surfaceID, data: Data("hello".utf8))
+        registry.processMonitorsForTesting()
+        let afterFresh = registry.monitorFullPassCountForTesting
+        XCTAssertGreaterThanOrEqual(afterFresh, 1, "a tick with fresh output must process")
+
+        // Quiet ticks: skipped entirely, even though the monitor entry persists.
+        registry.processMonitorsForTesting()
+        registry.processMonitorsForTesting()
+        XCTAssertEqual(registry.monitorFullPassCountForTesting, afterFresh,
+                       "quiet ticks must not take the full pass")
+        XCTAssertTrue(registry.monitorEntryKeysForTesting.contains(target.surfaceID),
+                      "the persistent per-surface entry alone must not force full passes")
+    }
+
+    /// Arming `monitor-silence` via the real `setOption` path must restore per-tick full
+    /// passes (silence needs idle evaluation with no fresh output); disarming stops them.
+    func testSilenceArmedTransitionGatesFullPasses() throws {
+        let registry = SurfaceRegistry()
+        registry.stopMonitoring()
+        guard case let .surfaces(initial) = registry.handle(.listSurfaces),
+              initial.first != nil else { return XCTFail("expected a default surface") }
+
+        registry.processMonitorsForTesting()
+        let base = registry.monitorFullPassCountForTesting
+
+        guard case .ok = registry.handle(.setOption(scope: "global", target: nil, key: "monitor-silence", rawValue: "5"))
+        else { return XCTFail("setOption failed") }
+        registry.processMonitorsForTesting()
+        XCTAssertEqual(registry.monitorFullPassCountForTesting, base + 1,
+                       "an armed silence monitor needs the full pass every tick")
+
+        guard case .ok = registry.handle(.setOption(scope: "global", target: nil, key: "monitor-silence", rawValue: "0"))
+        else { return XCTFail("setOption failed") }
+        registry.processMonitorsForTesting()
+        XCTAssertEqual(registry.monitorFullPassCountForTesting, base + 1,
+                       "disarming must return quiet ticks to the skip path")
+    }
+
+    /// The orphan sweep survives the precheck: an entry recreated by a PTY read racing a
+    /// close is born with `sawOutput = true`, so the very next tick takes the full pass and
+    /// evicts it — `monitors` can't accumulate dead-surface keys.
+    func testOrphanMonitorEntryIsSweptDespitePrecheck() throws {
+        let registry = SurfaceRegistry()
+        registry.stopMonitoring()
+        let deadKey = UUID().uuidString // no tab anywhere for this key
+        registry.noteSurfaceOutputForTesting(surfaceKey: deadKey, data: Data("x".utf8))
+        XCTAssertTrue(registry.monitorEntryKeysForTesting.contains(deadKey))
+
+        registry.processMonitorsForTesting() // fresh flag → full pass → sweep
+        XCTAssertFalse(registry.monitorEntryKeysForTesting.contains(deadKey),
+                       "the racing-read orphan must be evicted on the next tick")
     }
 }

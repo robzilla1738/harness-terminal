@@ -495,4 +495,30 @@ final class FrameBuilderTests: XCTestCase {
         let f = b.build(term.readGrid()!)
         XCTAssertTrue(f.promptGutter.isEmpty, "no gutter when disabled")
     }
+
+    /// SGR 5/25 blink rides the grid cell into `RenderCell.blink` (the renderer's phase
+    /// driver keys on it); plain cells stay `blink == false`.
+    func testBlinkAttributeReachesRenderCells() {
+        let term = HarnessGridTerminal(cols: 10, rows: 1)!
+        term.feed("a\u{1b}[5mb\u{1b}[25mc")
+        let f = builder.build(term.readGrid()!)
+        XCTAssertFalse(f.cell(row: 0, column: 0)!.blink)
+        XCTAssertTrue(f.cell(row: 0, column: 1)!.blink, "SGR 5 marks the cell as blinking")
+        XCTAssertFalse(f.cell(row: 0, column: 2)!.blink, "SGR 25 clears blink")
+    }
+
+    /// `TerminalFrame.hasBlink` is computed once at build so the view's blink-timer
+    /// decision is a field read, not a per-present O(cells) scan on the main thread.
+    func testFrameHasBlinkComputedAtBuild() {
+        let term = HarnessGridTerminal(cols: 10, rows: 2)!
+        term.feed("plain")
+        XCTAssertFalse(builder.build(term.readGrid()!).hasBlink)
+        term.feed("\u{1b}[5mB\u{1b}[25m")
+        XCTAssertTrue(builder.build(term.readGrid()!).hasBlink)
+        // The shifted fast path computes it from its assembled rows too.
+        let snap = term.readGrid()!
+        if let shifted = builder.buildShifted(snap, reusing: builder.build(snap), shift: 1) {
+            XCTAssertTrue(shifted.hasBlink)
+        }
+    }
 }

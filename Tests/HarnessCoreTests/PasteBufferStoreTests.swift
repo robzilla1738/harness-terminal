@@ -14,6 +14,7 @@ final class PasteBufferStoreTests: XCTestCase {
         XCTAssertEqual(store.set(Data("second".utf8)), "buffer1")
         XCTAssertEqual(store.set(Data("named".utf8), name: "scratch"), "scratch")
         XCTAssertEqual(store.list().count, 3)
+        store.flush()  // saves are debounced; force the write before reopening
         // Reopening picks up the existing auto index so we don't collide.
         let reopened = PasteBufferStore(url: url)
         XCTAssertEqual(reopened.set(Data("third".utf8)), "buffer2")
@@ -65,6 +66,7 @@ final class PasteBufferStoreTests: XCTestCase {
         XCTAssertEqual(store.get("a")?.data, Data("keep-me".utf8), "existing buffers survive a rejected set")
         XCTAssertEqual(store.get("b")?.data, Data("and-me".utf8))
         XCTAssertEqual(store.list().count, 2)
+        store.flush()  // saves are debounced; force the write before reopening
 
         // And the on-disk file still holds the two buffers (not an empty array).
         let reopened = PasteBufferStore(url: url, configuration: .init(maxBuffers: 50, maxTotalBytes: 1024))
@@ -116,6 +118,7 @@ final class PasteBufferStoreTests: XCTestCase {
 
         // A normal mutation then writes fresh state without touching the backup.
         store.set(Data("new".utf8), name: "x")
+        store.flush()  // saves are debounced; force the write before reloading
         XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), "{ not valid buffers json ")
         XCTAssertEqual(PasteBufferStore(url: url).get("x")?.data, Data("new".utf8))
     }

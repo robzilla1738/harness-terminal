@@ -89,9 +89,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     // auto light/dark (T6), paste protection (E).
     private let resizeOverlaySegment = HarnessSegmented(frame: .zero)
     private let resizeOverlayPositionSegment = HarnessSegmented(frame: .zero)
+    private let bellSegment = HarnessSegmented(frame: .zero)
     private let paddingBalanceToggle = HarnessToggle(title: "Center grid (distribute padding evenly)")
     private let minContrastSlider = HarnessSlider(frame: .zero)
     private let minContrastLabel = NSTextField(labelWithString: "")
+    private let scrollMultiplierSlider = HarnessSlider(frame: .zero)
+    private let scrollMultiplierLabel = NSTextField(labelWithString: "")
+    private let mouseHideToggle = HarnessToggle(title: "Hide the mouse cursor while typing")
     private let pasteProtectionToggle = HarnessToggle(title: "Confirm risky pastes (multi-line or control characters)")
     private let boldIsBrightToggle = HarnessToggle(title: "Bold uses bright colors")
     private let notificationTestButton = NSButton(title: "Send Test Notification", target: nil, action: nil)
@@ -113,6 +117,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private var agentIconViews: [AgentKind: NSImageView] = [:]
     private var colorBindings: [ColorBinding] = []
     private var keyRecorder: KeyRecorderView!
+    private let quickTerminalToggle = HarnessToggle(title: "Enable quick terminal (global dropdown)")
+    private var quickTerminalHotkeyRecorder: KeyRecorderView!
     /// Live "Installed ✓ / Install hooks" buttons keyed by agent (Agents page).
     private var hookButtons: [AgentKind: NSButton] = [:]
 
@@ -437,6 +443,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         resizeOverlayPositionSegment.selectItem(withTitle: resizeOverlayPositionTitle(settings.resizeOverlayPosition))
         resizeOverlayPositionSegment.target = self
         resizeOverlayPositionSegment.action = #selector(appearanceTextDidCommit)
+        bellSegment.setSegments(["Off", "Audible", "Visual", "Both"])
+        bellSegment.selectItem(withTitle: bellModeTitle(settings.bellMode))
+        bellSegment.target = self
+        bellSegment.action = #selector(appearanceTextDidCommit)
         // Balanced padding (T2)
         paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
         paddingBalanceToggle.target = self
@@ -450,6 +460,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         minContrastSlider.action = #selector(minContrastChanged)
         minContrastSlider.onCommit = { [weak self] in self?.flushAndApply() }
         updateMinContrastLabel()
+
+        scrollMultiplierSlider.minValue = 0.1
+        scrollMultiplierSlider.maxValue = 10
+        scrollMultiplierSlider.doubleValue = settings.scrollMultiplier
+        scrollMultiplierSlider.isContinuous = true
+        scrollMultiplierSlider.target = self
+        scrollMultiplierSlider.action = #selector(scrollMultiplierChanged)
+        scrollMultiplierSlider.onCommit = { [weak self] in self?.flushAndApply() }
+        updateScrollMultiplierLabel()
+
+        mouseHideToggle.state = settings.mouseHideWhileTyping ? .on : .off
+        mouseHideToggle.target = self
+        mouseHideToggle.action = #selector(appearanceTextDidCommit)
         // Paste protection (E)
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
         pasteProtectionToggle.target = self
@@ -477,6 +500,16 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             SessionCoordinator.shared.settings.prefixKey = value
             try? SessionCoordinator.shared.settings.save()
             PrefixKeymap.shared.rebuildFromSettings()
+        }
+
+        quickTerminalToggle.state = settings.quickTerminalEnabled ? .on : .off
+        quickTerminalToggle.target = self
+        quickTerminalToggle.action = #selector(appearanceTextDidCommit)
+        quickTerminalHotkeyRecorder = KeyRecorderView(initial: settings.quickTerminalHotkey)
+        quickTerminalHotkeyRecorder.onChange = { value in
+            SessionCoordinator.shared.settings.quickTerminalHotkey = value
+            try? SessionCoordinator.shared.settings.save()
+            QuickTerminalController.shared.rebuildFromSettings()
         }
 
         updateFontReadout()
@@ -782,6 +815,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
                         hint: "Show the grid size while resizing the window."),
             settingsRow("Overlay position", resizeOverlayPositionSegment,
                         hint: "Where the resize overlay is drawn within the surface."),
+            settingsRow("Bell", bellSegment,
+                        hint: "Feedback when a program rings the bell (\\a). Visual = a brief flash."),
             settingsToggleRow("Transparent title bar", transparentTitlebarToggle),
             settingsToggleRow("Status line", showStatusLineToggle),
             settingsToggleRow("Sidebar", sidebarVisibleToggle),
@@ -919,12 +954,21 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             leadingRow(defaultTerminalButton),
             defaultTerminalStatusField,
         ])
+        let scrollMultiplierRow = NSStackView(views: [scrollMultiplierSlider, scrollMultiplierLabel])
+        scrollMultiplierRow.orientation = .horizontal
+        scrollMultiplierRow.spacing = 12
+        scrollMultiplierSlider.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        scrollMultiplierLabel.widthAnchor.constraint(equalToConstant: 84).isActive = true
+        scrollMultiplierLabel.alignment = .right
         let behaviorGroup = settingsGroup("Behavior", [
             settingsRow("Cursor style", cursorStyleSegment),
             settingsRow("Scrollback", scrollbackField),
             settingsToggleRow("Blink cursor", cursorBlinkToggle),
             settingsToggleRow("Copy on select", copyOnSelectToggle),
             settingsToggleRow("Paste protection", pasteProtectionToggle),
+            settingsRow("Scroll speed", scrollMultiplierRow,
+                        hint: "Mouse-wheel / trackpad scroll multiplier (1× = native)."),
+            settingsToggleRow("Hide cursor while typing", mouseHideToggle),
             settingsToggleRow("Keep sessions running", keepSessionsToggle),
         ])
 
@@ -969,7 +1013,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Prefix key", keyRecorder, hint: "Click to record a new shortcut. Esc cancels."),
         ])
 
-        let stack = NSStackView(views: [header, prefixGroup])
+        let quickTerminalGroup = settingsGroup("Quick Terminal", [
+            settingsToggleRow("Enable", quickTerminalToggle),
+            settingsRow("Hotkey", quickTerminalHotkeyRecorder,
+                        hint: "Global shortcut that drops a terminal down from the top of the screen, even when Harness is in the background."),
+        ])
+
+        let stack = NSStackView(views: [header, prefixGroup, quickTerminalGroup])
         stack.orientation = .vertical
         stack.alignment = .width
         stack.spacing = 18
@@ -1932,6 +1982,24 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
     }
 
+    private func bellModeTitle(_ mode: BellMode) -> String {
+        switch mode {
+        case .off: return "Off"
+        case .audible: return "Audible"
+        case .visual: return "Visual"
+        case .both: return "Both"
+        }
+    }
+
+    private func bellModeValue(_ title: String?) -> BellMode {
+        switch title {
+        case "Off": return .off
+        case "Audible": return .audible
+        case "Both": return .both
+        default: return .visual
+        }
+    }
+
     private func updateMinContrastLabel() {
         let value = minContrastSlider.doubleValue
         minContrastLabel.stringValue = value <= 1.01 ? "Off" : String(format: "%.1f:1", value)
@@ -1939,6 +2007,16 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func minContrastChanged() {
         updateMinContrastLabel()
+        applySettingsLive()
+    }
+
+    private func updateScrollMultiplierLabel() {
+        let value = scrollMultiplierSlider.doubleValue
+        scrollMultiplierLabel.stringValue = abs(value - 1) < 0.05 ? "1.0× (native)" : String(format: "%.1f×", value)
+    }
+
+    @objc private func scrollMultiplierChanged() {
+        updateScrollMultiplierLabel()
         applySettingsLive()
     }
 
@@ -2303,9 +2381,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         liveResizeReflowToggle.state = settings.liveResizeReflow ? .on : .off
         resizeOverlaySegment.selectItem(withTitle: resizeOverlayTitle(settings.resizeOverlay))
         resizeOverlayPositionSegment.selectItem(withTitle: resizeOverlayPositionTitle(settings.resizeOverlayPosition))
+        bellSegment.selectItem(withTitle: bellModeTitle(settings.bellMode))
         paddingBalanceToggle.state = settings.windowPaddingBalance ? .on : .off
         minContrastSlider.doubleValue = settings.minimumContrast
         updateMinContrastLabel()
+        scrollMultiplierSlider.doubleValue = settings.scrollMultiplier
+        updateScrollMultiplierLabel()
+        mouseHideToggle.state = settings.mouseHideWhileTyping ? .on : .off
+        quickTerminalToggle.state = settings.quickTerminalEnabled ? .on : .off
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
         boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
         for (event, toggle) in eventToggles {
@@ -2421,7 +2504,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.fontFamily = fontFamilyField.stringValue
         coordinator.settings.defaultShell = shellField.stringValue
         coordinator.settings.defaultCWD = cwdField.stringValue
-        coordinator.settings.scrollbackLines = max(100, Int(scrollbackField.stringValue) ?? 10_000)
+        // `0` is the unlimited sentinel (kept verbatim); any other value is floored at 100 lines.
+        let enteredScrollback = Int(scrollbackField.stringValue) ?? 10_000
+        coordinator.settings.scrollbackLines = enteredScrollback == 0 ? 0 : max(100, enteredScrollback)
         coordinator.settings.cursorStyle = cursorStyleValue(cursorStyleSegment.titleOfSelectedItem)
         coordinator.settings.cursorBlink = cursorBlinkToggle.state == .on
         coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on
@@ -2438,6 +2523,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.liveResizeReflow = liveResizeReflowToggle.state == .on
         coordinator.settings.resizeOverlay = resizeOverlayValue(resizeOverlaySegment.titleOfSelectedItem)
         coordinator.settings.resizeOverlayPosition = resizeOverlayPositionValue(resizeOverlayPositionSegment.titleOfSelectedItem)
+        coordinator.settings.bellMode = bellModeValue(bellSegment.titleOfSelectedItem)
+        coordinator.settings.scrollMultiplier = HarnessSettings.clampedScrollMultiplier(scrollMultiplierSlider.doubleValue)
+        coordinator.settings.mouseHideWhileTyping = mouseHideToggle.state == .on
+        coordinator.settings.quickTerminalEnabled = quickTerminalToggle.state == .on
         coordinator.settings.windowPaddingBalance = paddingBalanceToggle.state == .on
         coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)
         coordinator.settings.pasteProtection = pasteProtectionToggle.state == .on
@@ -2464,6 +2553,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // setTheme IPC. Persistence is the caller's job (`flushAndApply` saves; drag ticks don't).
         coordinator.applySettingsToHosts()
         NotchPanelController.shared.refreshVisibility()
+        QuickTerminalController.shared.rebuildFromSettings()
         updateFontReadout()
     }
 

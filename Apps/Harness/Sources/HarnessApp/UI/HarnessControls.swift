@@ -42,6 +42,13 @@ final class HarnessTextFieldCell: NSTextFieldCell {
 @MainActor
 final class HarnessTextField: NSTextField {
     private var focused = false
+    /// Cheap guard: track one representative NSColor from the last-applied palette so
+    /// layout()-driven applyChrome() calls are no-ops when the palette hasn't changed.
+    /// NSColor uses isEqual: for `==`, which compares the underlying color values, so this
+    /// correctly detects a theme change (a new palette with different colors) while skipping
+    /// redundant redraws when layout fires on the same theme. Focus/state changes bypass this
+    /// guard by calling applyChrome() directly (not via layout).
+    private var lastChromeToken: NSColor?
 
     override class var cellClass: AnyClass? {
         get { HarnessTextFieldCell.self }
@@ -74,6 +81,13 @@ final class HarnessTextField: NSTextField {
 
     override func layout() {
         super.layout()
+        // Skip the CALayer color writes when the palette hasn't changed since the last layout
+        // pass — surfaceElevated is a stable sentinel for palette identity (HarnessChrome.update()
+        // always builds a fresh NSColor). Focus/state paths call applyChrome() directly,
+        // bypassing this guard, so they always apply.
+        let token = HarnessChrome.current.surfaceElevated
+        guard token != lastChromeToken else { return }
+        lastChromeToken = token
         applyChrome()
     }
 
@@ -107,6 +121,8 @@ final class HarnessSearchField: NSView, NSTextFieldDelegate {
     var onChange: ((String) -> Void)?
     private let field = NSTextField()
     private let magnifier = NSImageView()
+    // Same layout-churn guard as HarnessTextField — skip redundant CALayer writes.
+    private var lastChromeToken: NSColor?
 
     var stringValue: String {
         get { field.stringValue }
@@ -162,6 +178,9 @@ final class HarnessSearchField: NSView, NSTextFieldDelegate {
 
     override func layout() {
         super.layout()
+        let token = HarnessChrome.current.surfaceElevated
+        guard token != lastChromeToken else { return }
+        lastChromeToken = token
         applyChrome()
     }
 
@@ -331,6 +350,8 @@ final class HarnessSlider: NSControl {
     private let knob = CALayer()
     private var trackingArea: NSTrackingArea?
     private var isActive = false { didSet { applyChrome() } }
+    // Same layout-churn guard as HarnessTextField — skip redundant CALayer color writes.
+    private var lastChromeToken: NSColor?
 
     var minValue: Double = 0
     var maxValue: Double = 1
@@ -384,6 +405,11 @@ final class HarnessSlider: NSControl {
                             width: Self.knobSize, height: Self.knobSize)
         knob.cornerRadius = Self.knobSize / 2
         CATransaction.commit()
+        // Guard redundant color writes: isActive changes bypass this by calling applyChrome()
+        // directly via the didSet above.
+        let token = HarnessChrome.current.surfaceElevated
+        guard token != lastChromeToken else { return }
+        lastChromeToken = token
         applyChrome()
     }
 
@@ -553,6 +579,8 @@ final class HarnessSegmented: NSControl {
     private var selectedIndex = 0
     private var hoverIndex: Int? { didSet { applyChrome() } }
     private var trackingArea: NSTrackingArea?
+    // Same layout-churn guard as HarnessTextField — skip redundant CALayer color writes.
+    private var lastChromeToken: NSColor?
 
     var selectedSegment: Int {
         get { selectedIndex }
@@ -630,6 +658,10 @@ final class HarnessSegmented: NSControl {
             labels[i].frame = NSRect(x: CGFloat(i) * w + 4, y: (bounds.height - textHeight) / 2,
                                      width: max(0, w - 8), height: textHeight)
         }
+        // Hover/selection changes bypass this guard via their own applyChrome() calls.
+        let token = HarnessChrome.current.surfaceElevated
+        guard token != lastChromeToken else { return }
+        lastChromeToken = token
         applyChrome()
     }
 
@@ -691,6 +723,8 @@ final class HarnessSelect: NSControl {
     private var items: [String] = []
     private var selected: String?
     private var popover: HarnessSelectPopover?
+    // Same layout-churn guard as HarnessTextField — skip redundant CALayer color writes.
+    private var lastChromeToken: NSColor?
 
     var titleOfSelectedItem: String? { selected }
 
@@ -738,7 +772,14 @@ final class HarnessSelect: NSControl {
         setAccessibilityValue(title)
     }
 
-    override func layout() { super.layout(); applyChrome() }
+    override func layout() {
+        super.layout()
+        // Hover changes bypass this guard via isHovered.didSet → applyChrome().
+        let token = HarnessChrome.current.surfaceElevated
+        guard token != lastChromeToken else { return }
+        lastChromeToken = token
+        applyChrome()
+    }
 
     /// Leaving the window (e.g. the Settings window closing) must tear down any open popover
     /// so its child panel + event monitor can't outlive the control.
@@ -777,6 +818,12 @@ final class HarnessSelect: NSControl {
             self.setAccessibilityValue(choice)
             if let action { _ = NSApp.sendAction(action, to: self.target, from: self) }
         }
+        // Release the popover (and its `allItems` array) immediately when it closes, rather
+        // than holding it until the next showPopover call.  The [weak self] guard in the
+        // closure prevents a use-after-nil if the control itself is deallocated first.
+        pop.onDismiss = { [weak self] in
+            self?.popover = nil
+        }
         popover = pop
         // The control's rect in screen coordinates; the popover hangs from its bottom edge.
         let screenRect = window.convertToScreen(convert(bounds, to: nil))
@@ -799,6 +846,12 @@ final class HarnessSelectPopover: NSObject {
     private let allItems: [String]
     private let initialSelection: String?
     private let onPick: (String) -> Void
+    /// Called once, after the panel + event monitor have been fully torn down.
+    /// `HarnessSelect` uses this to nil its own `popover` reference so the 490-item
+    /// `allItems` array is released immediately on dismiss rather than held until the
+    /// next popover open.  Not set by default — callers that don't need the callback
+    /// can skip it.
+    var onDismiss: (() -> Void)?
     private var panel: NSPanel?
     private let search = HarnessSearchField()
     private let stack = NSStackView()
@@ -915,6 +968,11 @@ final class HarnessSelectPopover: NSObject {
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         if let panel { panel.parent?.removeChildWindow(panel); panel.orderOut(nil) }
         panel = nil
+        // Notify the owner so it can nil its own reference to this popover.  This releases
+        // the `allItems` array (up to 490 theme names) immediately rather than retaining it
+        // until the next popover open or window close.  The callback is invoked after all
+        // teardown so the owner cannot re-enter dismiss() via its own cleanup.
+        onDismiss?()
     }
 }
 

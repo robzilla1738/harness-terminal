@@ -134,6 +134,28 @@ final class ScrollbackFileTests: XCTestCase {
                       "most-recent output must survive the flood")
     }
 
+    /// `retentionCap == 0` requests unlimited scrollback: the on-disk log keeps everything,
+    /// bounded only by the large safety ceiling. Output far past the normal 64 KiB floor / 128 KiB
+    /// high-water must NOT be compacted away (contrast `testCompactionTrimsToRetentionCap`).
+    func testUnlimitedRetentionKeepsEverythingBelowSafetyCeiling() throws {
+        let fileURL = url()
+        let file = ScrollbackFile(url: fileURL, retentionCap: 0) // 0 = unlimited
+        // ~1 MiB — far past the normal floor/high-water, but trivially under the 512 MiB safety
+        // ceiling, so nothing is trimmed.
+        let total = 1 * 1024 * 1024
+        file.append(Data(repeating: UInt8(ascii: "x"), count: total))
+        let marker = Data("END".utf8)
+        file.append(marker)
+        file.flush()
+
+        let size = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int)
+        XCTAssertEqual(size, total + marker.count,
+                       "unlimited scrollback must keep the whole log below the safety ceiling")
+        // And the full tail is replayable.
+        let tail = ScrollbackFile.loadTail(url: fileURL, maxBytes: ScrollbackFile.unlimitedSafetyCap)
+        XCTAssertEqual(tail.count, total + marker.count)
+    }
+
     /// A new `ScrollbackFile` over an existing log keeps appending to it (the cross-restart
     /// continuity path), rather than truncating.
     func testReopenAppendsToExistingLog() throws {

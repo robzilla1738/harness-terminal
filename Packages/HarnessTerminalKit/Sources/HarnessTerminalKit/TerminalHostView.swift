@@ -8,6 +8,10 @@ import HarnessTheme
 public protocol TerminalHostDelegate: AnyObject {
     func terminalHostDidChangeTitle(_ title: String, surfaceID: SurfaceID)
     func terminalHostDidChangeWorkingDirectory(_ path: String, surfaceID: SurfaceID)
+    /// OSC 1337 `SetUserVar=` — optional: hosts that don't surface user variables ignore it.
+    func terminalHostDidSetUserVariable(_ name: String, value: String, surfaceID: SurfaceID)
+    /// RIS dropped the engine's user variables — optional: hosts that mirrored them clear their copies.
+    func terminalHostDidClearUserVariables(surfaceID: SurfaceID)
     func terminalHostDidChangeFocus(_ focused: Bool, surfaceID: SurfaceID)
     func terminalHostDidRingBell(surfaceID: SurfaceID)
     /// A shell command finished (OSC 133) after running `duration` seconds, with `exitCode`.
@@ -20,6 +24,10 @@ public protocol TerminalHostDelegate: AnyObject {
 }
 
 extension TerminalHostDelegate {
+    /// Default no-op — only the GUI surfaces user variables (as pane-scoped `@` options).
+    public func terminalHostDidSetUserVariable(_ name: String, value: String, surfaceID: SurfaceID) {}
+    /// Default no-op — only the GUI mirrors user variables, so only it has copies to clear.
+    public func terminalHostDidClearUserVariables(surfaceID: SurfaceID) {}
     /// Default no-op so non-GUI conformers (e.g. the compositor) need not handle command timing.
     public func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID) {}
     /// Default no-op — only the GUI tab strip renders progress.
@@ -227,6 +235,14 @@ public final class TerminalHostView: NSView {
             guard let self else { return }
             self.hostDelegate?.terminalHostDidChangeWorkingDirectory(path, surfaceID: self.surfaceID)
         }
+        native.onUserVar = { [weak self] name, value in
+            guard let self else { return }
+            self.hostDelegate?.terminalHostDidSetUserVariable(name, value: value, surfaceID: self.surfaceID)
+        }
+        native.onUserVarsCleared = { [weak self] in
+            guard let self else { return }
+            self.hostDelegate?.terminalHostDidClearUserVariables(surfaceID: self.surfaceID)
+        }
         native.onBell = { [weak self] in
             guard let self else { return }
             self.hostDelegate?.terminalHostDidRingBell(surfaceID: self.surfaceID)
@@ -387,6 +403,9 @@ public final class TerminalHostView: NSView {
             offMainParserFramePipeline: settings.offMainParserFramePipeline,
             liveResizeReflow: settings.liveResizeReflow
         )
+        // Behavior (not appearance) settings — set directly rather than bloating the appearance call.
+        nativeView.scrollMultiplier = CGFloat(HarnessSettings.clampedScrollMultiplier(settings.scrollMultiplier))
+        nativeView.mouseHideWhileTyping = settings.mouseHideWhileTyping
         // Resize overlay: legible on any theme via the canvas FG fill + BG text (same trick as the
         // pane-border label), positioned per settings.
         resizeHUD.applyColors(
@@ -557,6 +576,12 @@ public final class TerminalHostView: NSView {
         hostDelegate?.terminalHostDidChangeFocus(true, surfaceID: surfaceID)
     }
 
+    /// Visual bell — flash the surface (the `visual` channel of the bell feedback). The decision of
+    /// *whether* to flash lives in `SessionCoordinator` (settings + tmux options); this just paints.
+    public func flashBell() {
+        nativeView.flashBell()
+    }
+
     // MARK: - Find (Cmd+F)
 
     private var findBar: TerminalFindBar?
@@ -570,7 +595,9 @@ public final class TerminalHostView: NSView {
     private func showFind() {
         guard findBar == nil else { findBar?.focusField(); return }
         let bar = TerminalFindBar()
-        bar.onQueryChanged = { [weak self] query in self?.nativeView.updateFind(query: query) }
+        bar.onQueryChanged = { [weak self, weak bar] query in
+            self?.nativeView.updateFind(query: query, options: bar?.searchOptions ?? .default)
+        }
         bar.onNext = { [weak self] in self?.nativeView.findNext() }
         bar.onPrevious = { [weak self] in self?.nativeView.findPrevious() }
         bar.onClose = { [weak self] in self?.hideFind() }
@@ -700,6 +727,13 @@ public final class TerminalHostView: NSView {
 
     /// Returns true iff the daemon acknowledged the surface (`.ok`). Reconnect gates resubscribe on
     /// this so it never subscribes to a surface the (still-restarting) daemon hasn't recreated yet.
+    /// Convert the line-based `scrollbackLines` setting into the daemon's byte budget. `0`
+    /// (unlimited) is passed through as the sentinel the daemon maps to its on-disk safety ceiling;
+    /// any positive count is sized at ~160 bytes/line.
+    private static func scrollbackBytes(forLines lines: Int) -> Int {
+        lines == 0 ? 0 : lines * 160
+    }
+
     @discardableResult
     private func ensureDaemonSurface(cwd: String?, shell: String, settings: HarnessSettings?) -> Bool {
         do {
@@ -709,7 +743,7 @@ public final class TerminalHostView: NSView {
                 shell: shell,
                 rows: 24,
                 cols: 80,
-                scrollbackBytes: (settings?.scrollbackLines ?? 10_000) * 160
+                scrollbackBytes: Self.scrollbackBytes(forLines: settings?.scrollbackLines ?? 10_000)
             )) {
                 return true
             }
@@ -817,7 +851,7 @@ public final class TerminalHostView: NSView {
         let sid = surfaceID.uuidString
         let cwd = cachedCwd ?? FileManager.default.homeDirectoryForCurrentUser.path
         let shell = cachedShell
-        let scrollbackBytes = (cachedSettings?.scrollbackLines ?? 10_000) * 160
+        let scrollbackBytes = Self.scrollbackBytes(forLines: cachedSettings?.scrollbackLines ?? 10_000)
         let onData = makeOutputDataHandler()
         let onEnd = makeOutputEndHandler()
         // The view touches are built on main as `@Sendable` closures capturing `[weak self]`, so the

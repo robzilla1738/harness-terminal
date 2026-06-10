@@ -1,4 +1,5 @@
 import AppKit
+import HarnessTerminalEngine
 
 /// A compact browser-style find bar that floats in the top-trailing corner of a terminal pane.
 /// It owns only the UI + key handling; the actual search runs on the surface, which reports
@@ -12,10 +13,17 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
 
     private let backdrop = NSVisualEffectView()
     private let searchField = NSSearchField()
+    private let caseButton = NSButton()
+    private let regexButton = NSButton()
     private let countLabel = NSTextField(labelWithString: "")
     private let prevButton = NSButton()
     private let nextButton = NSButton()
     private let closeButton = NSButton()
+
+    /// The current match mode, read by the surface when (re)running the search.
+    var searchOptions: TerminalBufferSearchOptions {
+        TerminalBufferSearchOptions(isRegex: regexButton.state == .on, caseSensitive: caseButton.state == .on)
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -47,11 +55,13 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         countLabel.alignment = .right
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
 
+        configureToggleButton(caseButton, symbol: "textformat", tooltip: "Match case", action: #selector(caseToggled))
+        configureToggleButton(regexButton, symbol: "curlybraces", tooltip: "Use regular expression", action: #selector(regexToggled))
         configureIconButton(prevButton, symbol: "chevron.up", tooltip: "Previous match (⇧⌘G)", action: #selector(previousTapped))
         configureIconButton(nextButton, symbol: "chevron.down", tooltip: "Next match (⌘G)", action: #selector(nextTapped))
         configureIconButton(closeButton, symbol: "xmark", tooltip: "Close (Esc)", action: #selector(closeTapped))
 
-        let stack = NSStackView(views: [searchField, countLabel, prevButton, nextButton, closeButton])
+        let stack = NSStackView(views: [searchField, caseButton, regexButton, countLabel, prevButton, nextButton, closeButton])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .horizontal
         stack.alignment = .centerY
@@ -106,6 +116,10 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
     @objc private func nextTapped() { onNext?() }
     @objc private func closeTapped() { onClose?() }
 
+    // Toggling a match-mode button re-runs the current query under the new options.
+    @objc private func caseToggled() { updateToggleTint(caseButton); onQueryChanged?(searchField.stringValue) }
+    @objc private func regexToggled() { updateToggleTint(regexButton); onQueryChanged?(searchField.stringValue) }
+
     // MARK: - NSSearchFieldDelegate / field editor commands
 
     func controlTextDidChange(_ obj: Notification) {
@@ -149,6 +163,27 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         button.action = action
         button.controlSize = .small
         button.setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    /// A borderless icon button that latches on/off and tints itself with the accent color while on,
+    /// so the active match modes (case / regex) read at a glance.
+    private func configureToggleButton(_ button: NSButton, symbol: String, tooltip: String, action: Selector) {
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.setButtonType(.pushOnPushOff)
+        button.toolTip = tooltip
+        button.target = self
+        button.action = action
+        button.controlSize = .small
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        updateToggleTint(button)
+    }
+
+    private func updateToggleTint(_ button: NSButton) {
+        button.contentTintColor = button.state == .on ? .controlAccentColor : .secondaryLabelColor
     }
 
     private func roundedMask(radius: CGFloat) -> NSImage {

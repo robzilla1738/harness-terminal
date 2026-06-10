@@ -23,8 +23,12 @@ private struct SurfaceFrameBuildConfiguration: Sendable {
     var selectionForeground: RGBColor?
     var promptGutterEnabled: Bool
 
-    func makeBuilder() -> FrameBuilder {
-        FrameBuilder(
+    /// `reverseVideo` is per-build state (DECSET 5 can flip any time), not configuration —
+    /// it rides the resolver copy so a build stays a pure function of (config, modes).
+    func makeBuilder(reverseVideo: Bool = false) -> FrameBuilder {
+        var resolver = self.resolver
+        resolver.reverseVideo = reverseVideo
+        return FrameBuilder(
             resolver: resolver,
             cursorColor: cursorColor,
             cursorTextColor: cursorTextColor,
@@ -284,6 +288,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onProgress: ((TerminalProgressReport) -> Void)?
     /// Reported working directory (OSC 7) — the host forwards this to its delegate.
     public var onPwd: ((String) -> Void)?
+    /// OSC 1337 `SetUserVar=` (decoded + validated by the engine) — the host surfaces these
+    /// as pane-scoped `@name` user options so format strings can read them.
+    public var onUserVar: ((_ name: String, _ value: String) -> Void)?
+    /// RIS dropped every user variable — the host clears the `@` options it pushed for
+    /// this surface so `#{@name}` doesn't keep serving pre-reset values.
+    public var onUserVarsCleared: (() -> Void)?
     /// Terminal bell (BEL) — the host forwards this to its delegate.
     public var onBell: (() -> Void)?
     /// A shell command finished (OSC 133), with its run duration + exit code — the host forwards
@@ -379,6 +389,14 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Blink phase: false hides the cursor on the off-beat. Reset to true on activity.
     private var cursorBlinkVisible = true
     private var blinkTimer: Timer?
+    /// SGR text blink (`SGR 5`): phase driver for blinking CELLS, independent of the cursor
+    /// timer (cursor blink follows focus; text blink follows content + visibility). Exists
+    /// only while the last presented frame contained blink cells and the pane is visible.
+    private var textBlinkTimer: Timer?
+    private var textBlinkHidden = false
+    /// Whether the most recently presented frame contained SGR-blink cells — drives
+    /// `updateTextBlinkTimer` across occlusion changes without rescanning a frame.
+    private var lastFrameHadBlink = false
     /// First-responder state — the cursor only blinks while focused.
     private var focused = false
     /// Whether the host window is key. Combined with `focused` for the user-visible focus
@@ -406,6 +424,11 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var copyOnSelect = false
     /// Confirm before pasting risky (multi-line / control-char) text when bracketed paste is off.
     private var pasteProtection = true
+    /// Mouse-wheel / trackpad scroll-distance multiplier (Ghostty `mouse-scroll-multiplier`).
+    /// 1 = native. Set from `HarnessSettings.scrollMultiplier` (already clamped).
+    var scrollMultiplier: CGFloat = 1
+    /// Hide the cursor while typing until the mouse next moves (Ghostty `mouse-hide-while-typing`).
+    var mouseHideWhileTyping = false
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
     /// Smooth-scroll sub-line position. The continuous scrollback position is
@@ -489,6 +512,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var copyModeTables: KeyTableSet?
     /// In-progress search query (nil = not entering a search). Shown in the status row.
     private var copyModeSearchEntry: String?
+    /// Set while a jump-to-char motion (`f`/`F`/`t`/`T`) is waiting for its target keystroke.
+    private var copyModeJumpEntry: CopyModeJumpKind?
     /// `mode-keys` option value (`vi` / `emacs`); the host sets it from the daemon option.
     public var copyModeKeys: String = "vi"
     public var isInCopyMode: Bool { copyMode != nil }
@@ -510,6 +535,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Underline drawn beneath the hovered link. A sublayer of the Metal layer so it composites
     /// above the terminal content without intercepting clicks (a subview would eat the ⌘-click).
     private let linkUnderlineLayer = CALayer()
+    /// Visual-bell flash: a full-surface translucent layer composited above the terminal content,
+    /// faded out in one shot by `flashBell()`. Hidden at rest so it never affects normal rendering.
+    private let bellFlashLayer = CALayer()
+    /// Bumped per `flashBell()` so a flash that restarts mid-fade doesn't get hidden by the older
+    /// animation's completion block.
+    private var bellFlashGeneration: UInt64 = 0
     private var trackingArea: NSTrackingArea?
 
     public init(
@@ -742,15 +773,17 @@ public final class HarnessTerminalSurfaceView: NSView {
     func testingPresentResizePreview(cols: Int, rows: Int, token: UInt64) -> Bool {
         let config = frameBuildConfiguration
         let bg = canvasBackground
+        let fg = canvasForeground
         let opacity = canvasOpacity
         let generation = renderGeneration
         let result: SurfaceFrameBuildResult? = emulatorState.sync { emulator in
             guard let preview = emulator.previewViewportReflow(cols: cols, rows: rows) else { return nil }
-            let builder = config.makeBuilder()
+            let reverseVideo = emulator.modes.reverseVideo
+            let builder = config.makeBuilder(reverseVideo: reverseVideo)
             let frame = builder.build(preview, region: nil, imageProvider: { emulator.image(for: $0) })
             return SurfaceFrameBuildResult(
                 generation: generation, frame: frame, damage: nil,
-                frameBuildNanos: 0, clearColor: builder.renderColor(bg, alpha: opacity)
+                frameBuildNanos: 0, clearColor: builder.renderColor(reverseVideo ? fg : bg, alpha: opacity)
             )
         }
         guard let result else { return false }
@@ -949,6 +982,17 @@ public final class HarnessTerminalSurfaceView: NSView {
         return body(emulatorState.emulator)
     }
 
+    /// Snapshot the buffer text + cursor position for the accessibility (VoiceOver) layer, taken
+    /// atomically under the one emulator-access seam. Lives here (not the `+Accessibility` extension)
+    /// because `emulatorSync` is file-private. Lines are the full scrollback + screen, so VoiceOver
+    /// can review history; the cursor line is offset past the scrollback so it indexes those lines.
+    func accessibilitySnapshot() -> (lines: [String], cursorLine: Int, cursorColumn: Int) {
+        emulatorSync { emulator in
+            let cursor = emulator.readGrid().cursor
+            return (emulator.captureLines(joinWrapped: false), emulator.historyCount + cursor.row, cursor.col)
+        }
+    }
+
     /// Main-thread mirror of the emulator state the *input* paths need (key/mouse/paste encoding),
     /// refreshed by every parsed chunk's main hop in `receiveOffMain`. Reading the mirror keeps a
     /// keystroke from doing a `queue.sync` against the parser — a held arrow key must never stall
@@ -1011,6 +1055,46 @@ public final class HarnessTerminalSurfaceView: NSView {
         linkUnderlineLayer.isHidden = true
         linkUnderlineLayer.backgroundColor = NSColor.linkColor.cgColor
         metalLayer.addSublayer(linkUnderlineLayer)
+        // Visual-bell flash: a full-surface sublayer above the content, hidden at rest.
+        bellFlashLayer.isHidden = true
+        bellFlashLayer.opacity = 0
+        metalLayer.addSublayer(bellFlashLayer)
+    }
+
+    /// Visual bell — a brief theme-foreground flash over the surface (the `visual` channel of the
+    /// `bellMode` setting / tmux `visual-bell`). Composites a translucent sublayer above the Metal
+    /// content and fades it out; the terminal content underneath is untouched. Re-entrant safe: a
+    /// second bell mid-fade just restarts the animation. Must be called on the main thread.
+    public func flashBell() {
+        let c = canvasForeground
+        let flash = CGColor(srgbRed: CGFloat(c.red) / 255, green: CGFloat(c.green) / 255,
+                            blue: CGFloat(c.blue) / 255, alpha: 1)
+        // Set geometry + color with implicit animation disabled, then run one explicit fade so a
+        // resize-driven implicit bounds animation can't blur the flash.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bellFlashLayer.frame = bounds
+        bellFlashLayer.backgroundColor = flash
+        bellFlashLayer.isHidden = false
+        CATransaction.commit()
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.28 // peak: visible but not a jarring full-white blink
+        fade.toValue = 0
+        fade.duration = 0.16
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        fade.isRemovedOnCompletion = true
+        let token = bellFlashGeneration &+ 1
+        bellFlashGeneration = token
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            // Only hide if no newer flash superseded this one (avoid hiding mid-restart).
+            guard let self, self.bellFlashGeneration == token else { return }
+            self.bellFlashLayer.isHidden = true
+        }
+        bellFlashLayer.opacity = 0
+        bellFlashLayer.add(fade, forKey: "bellFlash")
+        CATransaction.commit()
     }
 
     private var layerColorSpaceName: CFString {
@@ -1048,6 +1132,20 @@ public final class HarnessTerminalSurfaceView: NSView {
                 self?.onPwd?(path)
             } else {
                 DispatchQueue.main.async { [weak self] in self?.onPwd?(path) }
+            }
+        }
+        emulator.onUserVariableChange = { [weak self] name, value in
+            if Thread.isMainThread {
+                self?.onUserVar?(name, value)
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.onUserVar?(name, value) }
+            }
+        }
+        emulator.onUserVariablesCleared = { [weak self] in
+            if Thread.isMainThread {
+                self?.onUserVarsCleared?()
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.onUserVarsCleared?() }
             }
         }
         emulator.onBell = { [weak self] in
@@ -1159,6 +1257,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         // advancement match what the renderer draws.
         if let renderer {
             emulatorSync { $0.setCellPixelSize(width: renderer.cellPixelWidth, height: renderer.cellPixelHeight) }
+            renderer.textBlinkHidden = textBlinkHidden // a fresh renderer adopts the current phase
         }
         invalidateRenderGeneration()
     }
@@ -1180,11 +1279,13 @@ public final class HarnessTerminalSurfaceView: NSView {
             buildRenderer() // pick up the real backing scale
             startDisplayLink()
             updateGridSize()
-            restartBlinkTimer()
             scheduleRender()
             // Track the window's key state: focus (hollow cursor, blink, DECSET 1004
             // reports) means "first responder in the key window", not just first responder.
+            // Refresh it BEFORE arming the blink timer — the timer only schedules while
+            // `effectivelyFocused`, which reads this flag.
             windowIsKey = window.isKeyWindow
+            restartBlinkTimer()
             let nc = NotificationCenter.default
             windowKeyObservers.append(nc.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
@@ -1222,11 +1323,15 @@ public final class HarnessTerminalSurfaceView: NSView {
             window.makeFirstResponder(self)
             focusStateChanged()
         } else {
-            // Removed from the window (pane closed / re-mounted): stop the blink timer so
-            // it doesn't keep the run loop (and a dangling render) alive. The timer holds
+            // Removed from the window (pane closed / re-mounted): stop the blink timers so
+            // they don't keep the run loop (and a dangling render) alive. The timers hold
             // `[weak self]`, so this is the teardown hook (no retain cycle either way).
             blinkTimer?.invalidate()
             blinkTimer = nil
+            textBlinkTimer?.invalidate()
+            textBlinkTimer = nil
+            textBlinkHidden = false
+            renderer?.textBlinkHidden = false
             stopDisplayLink()
             invalidateRenderGeneration()
             // A view can leave the window MID-DRAG (tab close / pane remount during a live
@@ -1293,6 +1398,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func setWindowOccluded(_ occluded: Bool) {
         guard occluded != scheduler.isOccluded else { return }
         scheduler.setOccluded(occluded)
+        // Blink timers follow visibility (idle efficiency): a covered/minimized pane has
+        // nothing to blink — stop the wakeups; re-arm when it can show again.
+        restartBlinkTimer()
+        updateTextBlinkTimer(frameHasBlink: lastFrameHadBlink)
         if !occluded { scheduleRender() }
     }
 
@@ -1697,16 +1806,20 @@ public final class HarnessTerminalSurfaceView: NSView {
             : []
         let selectionRegion = currentSelectionRegion
         let plain = scrollOffset == 0 && selectionRegion == nil && markedText.isEmpty && findHits.isEmpty
+        // DECSCNM: a flip arrives with full-screen damage (the engine dirties on real change),
+        // so the swapped build repaints everything and the plain-frame cache rebuilds.
+        let reverseVideo = emulator.modes.reverseVideo
+        let builder = reverseVideo ? frameBuildConfiguration.makeBuilder(reverseVideo: true) : frameBuilder
         let frameBuildStart = DispatchTime.now().uptimeNanoseconds
         var frame: TerminalFrame
         if plain {
-            frame = frameBuilder.build(grid, region: nil,
-                                       imageProvider: { emulator.image(for: $0) },
-                                       reusing: lastPlainFrame, damage: damage)
+            frame = builder.build(grid, region: nil,
+                                  imageProvider: { emulator.image(for: $0) },
+                                  reusing: lastPlainFrame, damage: damage)
         } else {
-            frame = frameBuilder.build(grid, region: selectionRegion,
-                                       searchHighlights: findHits,
-                                       imageProvider: { emulator.image(for: $0) })
+            frame = builder.build(grid, region: selectionRegion,
+                                  searchHighlights: findHits,
+                                  imageProvider: { emulator.image(for: $0) })
         }
         let frameBuildNanos = DispatchTime.now().uptimeNanoseconds &- frameBuildStart
         // IME preedit: draw the in-progress composition over the grid at the cursor.
@@ -1735,7 +1848,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let didPresent = renderer.present(
             frame,
             to: drawable,
-            clearColor: frameBuilder.renderColor(canvasBackground, alpha: canvasOpacity),
+            clearColor: builder.renderColor(reverseVideo ? canvasForeground : canvasBackground, alpha: canvasOpacity),
             origin: (originOffsetX, originOffsetY),
             gamma: glyphGamma,
             ligatures: ligaturesEnabled,
@@ -1743,8 +1856,10 @@ public final class HarnessTerminalSurfaceView: NSView {
             frameBuildNanos: frameBuildNanos,
             synchronizedWithTransaction: metalLayer.presentsWithTransaction
         )
-        if didPresent { onRenderStats?(renderer.stats) }
-        else { scheduleRender() } // transient encode/present failure — retry next tick
+        if didPresent {
+            onRenderStats?(renderer.stats)
+            updateTextBlinkTimer(frameHasBlink: frame.hasBlink)
+        } else { scheduleRender() } // transient encode/present failure — retry next tick
         StartupMetrics.shared.mark(.firstDrawablePresented) // idempotent: only the first present counts
         // Retain only a plain frame for row reuse; a selection/scrollback/preedit frame would
         // poison the cache with overlay-baked cells, so drop it. (`plain` already excludes IME.)
@@ -1822,7 +1937,10 @@ public final class HarnessTerminalSurfaceView: NSView {
                 state.lastViewportFrame = nil
                 state.lastOverlayKeys = [:]
             }
-            let builder = config.makeBuilder()
+            // DECSCNM: read on the emulator's queue (serialized with the feed that set it);
+            // a flip arrives with full-screen damage, so the swap repaints everything.
+            let reverseVideo = emulator.modes.reverseVideo
+            let builder = config.makeBuilder(reverseVideo: reverseVideo)
             let frameBuildStart = DispatchTime.now().uptimeNanoseconds
             var frame: TerminalFrame
             var renderDamage: TerminalDamage?
@@ -2013,7 +2131,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 scrollShift: scrollShift,
                 hasPeekRow: peekRow,
                 frameBuildNanos: DispatchTime.now().uptimeNanoseconds &- frameBuildStart,
-                clearColor: builder.renderColor(bg, alpha: opacity)
+                clearColor: builder.renderColor(reverseVideo ? fg : bg, alpha: opacity)
             )
         }
 
@@ -2068,6 +2186,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             // could not distinguish from a normal full encode).
             lastPresentedResultIsRendererCoherent = renderer.stats.rowCacheCoherent
             onRenderStats?(renderer.stats)
+            updateTextBlinkTimer(frameHasBlink: result.frame.hasBlink)
         } else {
             // A genuine drop: nothing reached the glass this turn (repaintLastFrame failures
             // don't count — their callers fall back to another present in the same turn).
@@ -2247,6 +2366,7 @@ public final class HarnessTerminalSurfaceView: NSView {
               markedText.isEmpty, !findActive else { return }
         let config = frameBuildConfiguration
         let bg = canvasBackground
+        let fg = canvasForeground
         let opacity = canvasOpacity
         let isFocused = effectivelyFocused
         let generation = renderGeneration
@@ -2260,7 +2380,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             guard state.isLatestPreviewToken(token) else { return }
             guard let preview = emulator.previewViewportReflow(cols: nc, rows: nr) else { return }
             let buildStart = DispatchTime.now().uptimeNanoseconds
-            let builder = config.makeBuilder()
+            let reverseVideo = emulator.modes.reverseVideo
+            let builder = config.makeBuilder(reverseVideo: reverseVideo)
             var frame = FrameSignposter.shared.interval("frameBuild") {
                 builder.build(preview, region: nil, imageProvider: { emulator.image(for: $0) })
             }
@@ -2270,7 +2391,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             let result = SurfaceFrameBuildResult(
                 generation: generation, frame: frame, damage: nil,
                 frameBuildNanos: DispatchTime.now().uptimeNanoseconds &- buildStart,
-                clearColor: builder.renderColor(bg, alpha: opacity)
+                clearColor: builder.renderColor(reverseVideo ? fg : bg, alpha: opacity)
             )
             DispatchQueue.main.async { [weak self] in
                 self?.presentResizePreview(result, cols: nc, rows: nr, token: token)
@@ -2311,14 +2432,23 @@ public final class HarnessTerminalSurfaceView: NSView {
     // block cursor's glyph inversion re-encodes exactly its own row (`previousCursor` key diff),
     // so each toggle costs ≤1 encoded row + one present — never a grid rebuild. Pinned by
     // `testCursorBlinkReencodesAtMostTheCursorRow`.
+    //
+    // The timer exists only while a blink can actually show: focused (first responder in the
+    // key window), un-occluded, and in a window. Focus + occlusion transitions re-enter here,
+    // so an unfocused/covered pane costs ZERO runloop wakeups instead of ticking forever just
+    // to early-out (20 background panes used to wake the main runloop ~40×/s for nothing).
     private func restartBlinkTimer() {
         blinkTimer?.invalidate()
         blinkTimer = nil
+        // Solid on stop: the unfocused hollow cursor renders steady, and a pane must never
+        // strand mid-off-beat (invisible cursor) when its timer goes away.
         cursorBlinkVisible = true
-        guard cursorBlinkEnabled else { return }
+        guard cursorBlinkEnabled, effectivelyFocused, !scheduler.isOccluded else { return }
         let timer = Timer(timeInterval: 0.53, repeats: true) { [weak self] _ in
             guard let self else { return }
             MainActor.assumeIsolated {
+                // Belt-and-braces: transitions stop the timer synchronously, but a tick already
+                // queued on the runloop when focus flips must still not toggle.
                 guard self.effectivelyFocused else { return }
                 self.cursorBlinkVisible.toggle()
                 self.scheduleRender()
@@ -2328,12 +2458,51 @@ public final class HarnessTerminalSurfaceView: NSView {
         blinkTimer = timer
     }
 
+    /// Test seam: whether the blink timer is currently scheduled (the idle-efficiency
+    /// contract — no timer while unfocused or occluded).
+    func testingBlinkTimerIsScheduled() -> Bool { blinkTimer != nil }
+
     /// Reset the cursor to solid after activity (typing/output), matching common terminals.
     private func wakeCursor() {
         guard cursorBlinkEnabled else { return }
         if !cursorBlinkVisible {
             cursorBlinkVisible = true
             scheduleRender()
+        }
+    }
+
+    // MARK: - SGR text blink (blinking cells)
+
+    /// Start/stop the text-blink phase driver. Called with every presented frame's blink
+    /// state and on occlusion changes: the timer exists only while blinking content is
+    /// actually visible (no idle wakeups for the overwhelmingly common no-blink case), and
+    /// parking always lands on the VISIBLE phase so text can never strand invisible.
+    /// Each tick flips the renderer's phase and schedules a render; only rows containing
+    /// blink cells re-encode (the renderer dirties exactly its `hasBlink` rows on a phase
+    /// mismatch), so a tick costs O(blink rows) — same shape as a cursor blink toggle.
+    private func updateTextBlinkTimer(frameHasBlink: Bool) {
+        lastFrameHadBlink = frameHasBlink
+        let shouldRun = frameHasBlink && !scheduler.isOccluded
+        if shouldRun {
+            guard textBlinkTimer == nil else { return }
+            let timer = Timer(timeInterval: 0.53, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.textBlinkHidden.toggle()
+                    self.renderer?.textBlinkHidden = self.textBlinkHidden
+                    self.scheduleRender()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            textBlinkTimer = timer
+        } else if textBlinkTimer != nil {
+            textBlinkTimer?.invalidate()
+            textBlinkTimer = nil
+            if textBlinkHidden {
+                textBlinkHidden = false
+                renderer?.textBlinkHidden = false
+                scheduleRender()
+            }
         }
     }
 
@@ -2526,10 +2695,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func unitColumnRange(viewportRow row: Int, column: Int) -> ClosedRange<Int> {
         switch selectionGranularity {
         case .character: return column ... column
-        // Line selection covers the DISPLAY row, consistent with copy mode's line ops.
-        // Most terminals (Ghostty/iTerm2/kitty) triple-click the LOGICAL line across
-        // soft wraps — that needs wrap-flag plumbing through the selection region;
-        // tracked in the release-audit backlog.
+        // Per-row column extent for `.line` granularity is the full display row. Triple-click's
+        // LOGICAL-line span (across soft wraps, Ghostty/iTerm2/kitty) is handled at mouse-down by
+        // anchoring the selection across the wrapped viewport rows (see `logicalLineViewportRowSpan`);
+        // the multi-row linear region then fills each row to full width here.
         case .line: return 0 ... max(0, columns - 1)
         case .word:
             return emulatorSync { emu in
@@ -2588,12 +2757,35 @@ public final class HarnessTerminalSurfaceView: NSView {
         emit(inputEncoder.encodeMouse(
             button: button, kind: kind,
             column: pos.column, row: pos.row,
+            pixelPosition: modes.mouseSGRPixel ? textAreaPixelPosition(of: event) : nil,
             modifiers: mouseModifiers(event), modes: modes
         ))
     }
 
+    /// Pointer position within the text area in DEVICE pixels (0-based) — the coordinate
+    /// space of SGR-pixel mouse reporting (DECSET 1016), consistent with the engine's
+    /// `CSI 14 t` report (grid cells × renderer cell pixel size). Clamped into the grid box.
+    private func textAreaPixelPosition(of event: NSEvent) -> (x: Int, y: Int)? {
+        guard let renderer, columns > 0, rows > 0 else { return nil }
+        let scale = window?.backingScaleFactor ?? 2.0
+        let cellH = CGFloat(renderer.cellPixelHeight) / scale
+        let p = convert(event.locationInWindow, from: nil)
+        // Same mapping as `cell(at:)`, kept un-rounded: points from the grid origin, with the
+        // smooth-scroll translate added back so the reported pixel matches what's on screen.
+        let xPoints = p.x - gridOriginPointsX
+        let yPointsFromTop = bounds.height - p.y - gridOriginPointsY + scrollFraction * cellH
+        let maxX = columns * renderer.cellPixelWidth - 1
+        let maxY = rows * renderer.cellPixelHeight - 1
+        let x = min(max(0, Int((xPoints * scale).rounded(.down))), max(0, maxX))
+        let y = min(max(0, Int((yPointsFromTop * scale).rounded(.down))), max(0, maxY))
+        return (x: x, y: y)
+    }
+
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        // A press starts a drag-coded sequence; forget the hover-motion dedupe cell so the
+        // first post-release move back into it isn't swallowed as a duplicate.
+        lastReportedMotionCell = nil
         if copyMode != nil { return } // copy mode is keyboard-driven; ignore clicks
         // ⌘-click opens an OSC 8 hyperlink or an auto-detected URL.
         // ⌘ overrides mouse reporting, the same way Shift overrides it for selection.
@@ -2614,9 +2806,31 @@ public final class HarnessTerminalSurfaceView: NSView {
         default: selectionGranularity = .character
         }
         selectionRectangular = event.modifierFlags.contains(.option)
-        selectionAnchor = pos
-        selectionHead = pos
+        if event.clickCount >= 3, !selectionRectangular {
+            // Triple-click selects the whole LOGICAL line across soft wraps (Ghostty/iTerm2/kitty),
+            // not just the display row. Span the wrapped viewport rows; `.line` granularity then
+            // fills each to full width and the multi-row linear region covers the logical line.
+            let span = logicalLineViewportRowSpan(at: pos.row)
+            selectionAnchor = (row: span.lowerBound, column: 0)
+            selectionHead = (row: span.upperBound, column: max(0, columns - 1))
+        } else {
+            selectionAnchor = pos
+            selectionHead = pos
+        }
         scheduleRender()
+    }
+
+    /// The viewport-row span of the logical (soft-wrapped) line at viewport `row`, clamped to the
+    /// visible viewport — the rows a triple-click selects. Maps the viewport row into virtual-line
+    /// space (history + scroll offset), asks the emulator for the wrapped-line span, and maps back.
+    private func logicalLineViewportRowSpan(at row: Int) -> ClosedRange<Int> {
+        emulatorSync { emu in
+            let base = emu.historyCount - scrollOffset // virtual-line index of viewport row 0
+            let span = emu.logicalLineRowSpan(virtualLine: base + row)
+            let first = max(0, span.lowerBound - base)
+            let last = min(rows - 1, span.upperBound - base)
+            return first ... Swift.max(first, last)
+        }
     }
 
     /// The clickable URL at a grid cell (OSC 8 hyperlink first, else an auto-detected URL).
@@ -2759,11 +2973,30 @@ public final class HarnessTerminalSurfaceView: NSView {
     public override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         updateLinkHover(at: event.locationInWindow, modifiers: event.modifierFlags)
+        reportAnyEventMotionIfArmed(event)
     }
 
     public override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         clearLinkHover()
+        lastReportedMotionCell = nil
+    }
+
+    /// Last grid cell reported for button-less motion, deduping any-event tracking to one
+    /// report per cell crossed — AppKit delivers `mouseMoved` at event rate, and per-cell is
+    /// the protocol's resolution (kept even in SGR-pixel mode so a wiggle inside one cell
+    /// can't flood the PTY).
+    private var lastReportedMotionCell: (row: Int, column: Int)?
+
+    /// DECSET 1003 any-event tracking: report pointer MOTION with no button held. Shift
+    /// keeps its standard local-override meaning, and copy mode owns the surface.
+    private func reportAnyEventMotionIfArmed(_ event: NSEvent) {
+        guard copyMode == nil, inputModes().mouseAny,
+              !event.modifierFlags.contains(.shift) else { return }
+        guard let pos = cell(at: event.locationInWindow) else { return }
+        if let last = lastReportedMotionCell, last == pos { return }
+        lastReportedMotionCell = pos
+        reportMouse(event, button: .left, kind: .move) // button is ignored for .move (base code 3)
     }
 
     public override func flagsChanged(with event: NSEvent) {
@@ -2868,15 +3101,16 @@ public final class HarnessTerminalSurfaceView: NSView {
         scheduleRender()
     }
 
-    /// Run/refresh the search for `query` (incremental as the user types). Empty clears matches.
-    public func updateFind(query: String) {
+    /// Run/refresh the search for `query` (incremental as the user types), honoring the find bar's
+    /// match mode (`options`). Empty clears matches.
+    public func updateFind(query: String, options: TerminalBufferSearchOptions = .default) {
         findActive = true
         if query.isEmpty {
             findMatches = []
             findCurrentIndex = 0
         } else {
             findMatches = emulatorSync { emulator in
-                TerminalBufferSearch.matches(query: query, lineCount: emulator.bufferLineCount) { emulator.bufferLine($0) }
+                TerminalBufferSearch.matches(query: query, options: options, lineCount: emulator.bufferLineCount) { emulator.bufferLine($0) }
             }
             findCurrentIndex = 0
             if !findMatches.isEmpty { scrollToCurrentMatch() }
@@ -2993,9 +3227,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// notch is the expected feel; only the trackpad scrolls by pixels.
     private func continuousWheelLines(_ event: NSEvent, cellHeight: CGFloat) -> CGFloat {
         let delta = event.scrollingDeltaY
-        if event.hasPreciseScrollingDeltas { return delta / cellHeight }
+        if event.hasPreciseScrollingDeltas { return delta / cellHeight * scrollMultiplier }
         let ticks = delta > 0 ? max(delta, 1) : min(delta, -1)
-        return ticks * Self.mouseWheelLinesPerTick
+        return ticks * Self.mouseWheelLinesPerTick * scrollMultiplier
     }
 
     /// Convert a wheel/trackpad event into a signed whole-line scroll count, carrying the
@@ -3007,13 +3241,13 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func consumeWheelLines(_ event: NSEvent, cellHeight: CGFloat) -> Int {
         let delta = event.scrollingDeltaY
         if event.hasPreciseScrollingDeltas {
-            wheelLineRemainder += delta / cellHeight
+            wheelLineRemainder += delta / cellHeight * scrollMultiplier
         } else {
             // macOS simulates acceleration on non-precise wheels by ramping the delta from 0.1
             // upward — a slow single notch would otherwise accumulate 0.3 lines and do nothing
             // until the fourth click. Clamp a notch to at least one full tick (Ghostty parity).
             let ticks = delta > 0 ? max(delta, 1) : min(delta, -1)
-            wheelLineRemainder += ticks * Self.mouseWheelLinesPerTick
+            wheelLineRemainder += ticks * Self.mouseWheelLinesPerTick * scrollMultiplier
         }
         let whole = wheelLineRemainder < 0 ? wheelLineRemainder.rounded(.up) : wheelLineRemainder.rounded(.down)
         wheelLineRemainder -= whole
@@ -3419,11 +3653,20 @@ public final class HarnessTerminalSurfaceView: NSView {
             if inputModes().focusReporting {
                 emit([0x1B, 0x5B, now ? 0x49 : 0x4F]) // ESC [ I / ESC [ O
             }
+            // Blink timer lives only while focused (idle efficiency): start on focus-in,
+            // stop (cursor solid) on focus-out — see `restartBlinkTimer`.
+            restartBlinkTimer()
         }
         scheduleRender()
     }
 
     public override func keyDown(with event: NSEvent) {
+        // Mouse-hide-while-typing (Ghostty): a typing keystroke hides the cursor until the mouse
+        // next moves. Skip bare ⌘-shortcuts — those are app commands, not text input. AppKit
+        // auto-restores the cursor on the next mouse move, so this is self-correcting.
+        if mouseHideWhileTyping, !event.modifierFlags.contains(.command) {
+            NSCursor.setHiddenUntilMouseMoves(true)
+        }
         // Copy mode is modal: it consumes every key (motions, search entry, copy/cancel)
         // and nothing reaches the PTY. ⌘ shortcuts still fall through to the app.
         if copyMode != nil, !event.modifierFlags.contains(.command) {
@@ -3567,6 +3810,20 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Map an NSEvent to a SpecialKey using the AppKit function-key unicode values.
     /// `internal` (not `private`) so the NSEvent→SpecialKey seam can be unit-tested.
     static func specialKey(for event: NSEvent) -> SpecialKey? {
+        // Numeric-keypad keys (F30, DECKPAM): the character alone can't distinguish keypad
+        // '7' from top-row '7', so key off `.numericPad` + the hardware keycode. Arrow keys
+        // also carry `.numericPad`; the keycode table only claims true keypad codes and
+        // everything else falls through to the character switch below. In numeric mode the
+        // encoder emits the same plain byte the text path used to, so nothing changes until
+        // a program enables application keypad (`ESC =`). Only the UNMODIFIED key is claimed
+        // (Shift/NumLock aside): `keypadLegacy` ignores modifiers, so claiming Ctrl/Option
+        // combos here would drop the control collapse / ESC meta prefix the text path applies
+        // — modified keypad keys keep their pre-keypad byte output in both keypad modes.
+        if event.modifierFlags.contains(.numericPad),
+           event.modifierFlags.isDisjoint(with: [.control, .option, .command]),
+           let keypad = keypadKey(forKeyCode: event.keyCode) {
+            return keypad
+        }
         guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else { return nil }
         switch Int(scalar.value) {
         case NSUpArrowFunctionKey: return .up
@@ -3607,6 +3864,30 @@ public final class HarnessTerminalSurfaceView: NSView {
         case 0x7F: return .backspace          // delete (backspace) key
         case 0x1B: return .escape
         case 0x09, 0x19: return .tab  // 0x19 = NSBackTabCharacter (Shift-Tab); encoder emits ESC[Z
+        default: return nil
+        }
+    }
+
+    /// ANSI keypad hardware keycodes (kVK_ANSI_Keypad*) → encoder keys.
+    private static func keypadKey(forKeyCode keyCode: UInt16) -> SpecialKey? {
+        switch keyCode {
+        case 82: return .keypad0
+        case 83: return .keypad1
+        case 84: return .keypad2
+        case 85: return .keypad3
+        case 86: return .keypad4
+        case 87: return .keypad5
+        case 88: return .keypad6
+        case 89: return .keypad7
+        case 91: return .keypad8
+        case 92: return .keypad9
+        case 65: return .keypadDecimal
+        case 75: return .keypadDivide
+        case 67: return .keypadMultiply
+        case 78: return .keypadMinus
+        case 69: return .keypadPlus
+        case 76: return .keypadEnter
+        case 81: return .keypadEquals
         default: return nil
         }
     }
@@ -3653,6 +3934,17 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func handleCopyModeKey(_ event: NSEvent) {
+        // A pending jump-to-char (`f`/`F`/`t`/`T`) consumes the very next keystroke as its target.
+        if let kind = copyModeJumpEntry {
+            copyModeJumpEntry = nil
+            let chars = event.charactersIgnoringModifiers ?? ""
+            if chars.unicodeScalars.first?.value != 0x1B, let ch = chars.first { // Escape cancels
+                handleCopyModeAction(.jump(kind, String(ch)))
+            } else {
+                scheduleRender()
+            }
+            return
+        }
         // Interactive search-query entry captures raw keys until Enter / Escape.
         if copyModeSearchEntry != nil {
             handleSearchEntryKey(event)
@@ -3688,6 +3980,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             exitCopyMode()
         case .beginSearchEntry:
             copyModeSearchEntry = ""
+            scheduleRender()
+        case let .beginJumpEntry(kind):
+            copyModeJumpEntry = kind
             scheduleRender()
         }
     }
@@ -3803,16 +4098,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         let hits = cm.viewportSearchHits(rows: rows).map { m in
             TerminalSelection((m.line, m.startColumn), (m.line, max(m.startColumn, m.endColumn - 1)))
         }
+        let reverseVideo = emulator.modes.reverseVideo
+        let builder = reverseVideo ? frameBuildConfiguration.makeBuilder(reverseVideo: true) : frameBuilder
         let frameBuildStart = DispatchTime.now().uptimeNanoseconds
-        var frame = frameBuilder.build(grid, region: region, searchHighlights: hits,
-                                       copyModeCursor: cm.viewportCursor(rows: rows),
-                                       imageProvider: { emulator.image(for: $0) })
+        var frame = builder.build(grid, region: region, searchHighlights: hits,
+                                  copyModeCursor: cm.viewportCursor(rows: rows),
+                                  imageProvider: { emulator.image(for: $0) })
         let frameBuildNanos = DispatchTime.now().uptimeNanoseconds &- frameBuildStart
         let statusText = copyModeSearchEntry.map { (cm.search.reverse ? "?" : "/") + $0 } ?? cm.statusLine()
         overlayCopyModeStatus(into: &frame, text: statusText)
         let didPresent = renderer.present(
             frame, to: drawable,
-            clearColor: frameBuilder.renderColor(canvasBackground, alpha: canvasOpacity),
+            clearColor: builder.renderColor(reverseVideo ? canvasForeground : canvasBackground, alpha: canvasOpacity),
             origin: (originOffsetX, originOffsetY), gamma: glyphGamma, ligatures: ligaturesEnabled,
             frameBuildNanos: frameBuildNanos,
             synchronizedWithTransaction: metalLayer.presentsWithTransaction

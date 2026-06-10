@@ -59,10 +59,14 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(refreshChrome.contains("foregroundHex: settings.customForegroundHex"))
         XCTAssertTrue(refreshChrome.contains("cursorHex: settings.customCursorHex"))
 
+        // applySettingsToHosts routes through the shared updateChromeAndHosts loop (main's
+        // factoring), which in turn goes through the appearance-aware refreshChromePalette().
         let applySettings = try sourceBlock(named: "applySettingsToHosts", in: coordinatorSource)
-        XCTAssertTrue(applySettings.contains("refreshChromePalette()"))
-        XCTAssertTrue(applySettings.contains("host.applySettings(settings)"))
+        XCTAssertTrue(applySettings.contains("updateChromeAndHosts()"))
         XCTAssertTrue(applySettings.contains("\"chromeChanged\": true"))
+        let updateChromeAndHosts = try sourceBlock(named: "updateChromeAndHosts", in: coordinatorSource)
+        XCTAssertTrue(updateChromeAndHosts.contains("refreshChromePalette()"))
+        XCTAssertTrue(updateChromeAndHosts.contains("host.applySettings(settings)"))
     }
 
     private func sourceFile(_ path: String) throws -> String {

@@ -182,6 +182,16 @@ final class VTParser {
     private var stringKind: StringKind = .dcs
     private var stringBuffer: [UInt8] = []
 
+    #if DEBUG
+    /// Debug-only tripwire for the parser's single-threaded contract (see the `feed` docs). Set
+    /// across a public `feed`/`feedScalarwise` call and asserted to be clear on entry, so any
+    /// concurrent feed from a second thread — or a handler that synchronously re-enters `feed` —
+    /// traps loudly in debug instead of corrupting parser state. Compiled out of release builds:
+    /// the contract is enforced by the caller (the GUI confines all feeds to one per-surface
+    /// serial queue), so this never touches the shipping hot path.
+    private var isFeeding = false
+    #endif
+
     /// Append an intermediate byte, dropping anything past the cap.
     private func appendIntermediate(_ byte: UInt8) {
         if intermediates.count < maxIntermediates { intermediates.append(byte) }
@@ -200,11 +210,30 @@ final class VTParser {
         utf8Remaining = 0
     }
 
+    /// Feed a chunk of bytes to the parser.
+    ///
+    /// **Not thread-safe and not reentrant.** The parser holds mutable state and hands the
+    /// handler borrowed `UnsafeBufferPointer` views (CSI params, print runs) that are only valid
+    /// for the duration of the synchronous call — so all feeds, plus any access to the screen the
+    /// handler mutates, must be serialized by the caller. The GUI confines this to one
+    /// per-surface serial queue (`SurfaceEmulatorState` in HarnessTerminalKit); a handler must
+    /// never synchronously re-enter `feed`. Violations trap in debug via `isFeeding`.
     func feed(_ bytes: [UInt8]) {
+        #if DEBUG
+        assert(!isFeeding, "VTParser.feed is not reentrant or thread-safe — serialize feeds on one queue")
+        isFeeding = true
+        defer { isFeeding = false }
+        #endif
         bytes.withUnsafeBufferPointer { feedBuffer($0) }
     }
 
+    /// See `feed(_ bytes:)` for the single-threaded, non-reentrant contract.
     func feed(_ data: Data) {
+        #if DEBUG
+        assert(!isFeeding, "VTParser.feed is not reentrant or thread-safe — serialize feeds on one queue")
+        isFeeding = true
+        defer { isFeeding = false }
+        #endif
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
             feedBuffer(UnsafeBufferPointer(start: base, count: raw.count))
@@ -213,8 +242,13 @@ final class VTParser {
 
     /// Test/reference seam: drive every byte through the per-byte scalar path, bypassing the
     /// printable-ASCII run fast path. Used by tests to prove the run path is byte-for-byte
-    /// equivalent to repeated scalar printing.
+    /// equivalent to repeated scalar printing. Same single-threaded contract as `feed(_ bytes:)`.
     func feedScalarwise(_ bytes: [UInt8]) {
+        #if DEBUG
+        assert(!isFeeding, "VTParser.feed is not reentrant or thread-safe — serialize feeds on one queue")
+        isFeeding = true
+        defer { isFeeding = false }
+        #endif
         for b in bytes { feed(b) }
     }
 

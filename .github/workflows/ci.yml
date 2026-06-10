@@ -12,9 +12,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pin the toolchain to a known major so a `latest-stable` jump (e.g. to a new Xcode with
+  # Pin the toolchain to a known minor so a `latest-stable` jump (e.g. to a new Xcode with
   # source-breaking changes) can't turn a green main red without a deliberate bump here.
-  XCODE_VERSION: "16"
+  # Deliberately pinned to a full minor version (not just "16") so the runner picks the
+  # exact SDK we tested against. Bump intentionally when adopting new language/SDK features.
+  XCODE_VERSION: "16.3"
 
 jobs:
   build-test:
@@ -73,8 +75,21 @@ jobs:
 
       # All eight suites (Core / Engine / CopyMode / Theme / Renderer / Kit / Daemon).
       # Renderer tests run offscreen, which is fine on a headless runner.
+      # --enable-code-coverage instruments the test binary so SPM emits per-target .json
+      # coverage files under .build/<triple>/debug/codecov/. No floor gate is enforced yet
+      # (no stable baseline exists); the artifact below archives the data for trend tracking.
       - name: Test
-        run: swift test
+        run: swift test --enable-code-coverage
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-macos
+          # SPM writes coverage JSON into .build/<triple>/debug/codecov/. The triple varies
+          # (arm64-apple-macosx14.0, x86_64-apple-macosx12.0, …) so we glob for the directory
+          # regardless of the exact architecture/OS suffix.
+          path: .build/*/debug/codecov/*.json
+          if-no-files-found: warn
 
   linux-build-test:
     name: Build & test (Linux, headless daemon)
@@ -97,9 +112,9 @@ jobs:
 
       # Deterministic suites (Core / Engine / CopyMode / Theme / CLI / Daemon) plus the live PTY /
       # socket / scrollback-persistence round-trips, which run fine in the Linux container.
-      - name: Test
-        run: swift test
-
+      # The plain `swift test` run was removed: `HARNESS_LIVE_DAEMON_TESTS=1` subsumes it —
+      # the gated tests skip-unless-env, so deterministic tests run either way, and there is
+      # no value in running deterministic tests twice in the same job.
       - name: Live daemon tests
         env:
           HARNESS_LIVE_DAEMON_TESTS: "1"
@@ -149,6 +164,10 @@ jobs:
     name: Format lint (advisory)
     runs-on: macos-15
     # Style only — never block a merge on formatting. Surfaces drift for a human to clean up.
+    # Kept advisory (continue-on-error: true) because `swift format lint` operates on the full
+    # tree and the current codebase has pre-existing style violations that would make this job
+    # fail on every PR, breaking CI for non-style changes. Remove continue-on-error once the
+    # tree is clean and violations are held at zero.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -163,6 +182,47 @@ jobs:
           # `swift format` ships with the toolchain; lint (don't rewrite) the first-party sources.
           swift format lint --recursive --parallel \
             Apps Packages Tools Tests Package.swift || true
+
+  manifest-lint:
+    name: Manifest version agreement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert Sparkle version consistency
+        run: |
+          set -euo pipefail
+          # Extract the Sparkle version pinned in each manifest location. The three sources must
+          # agree so a version bump in one file is never silently left behind in the others.
+
+          # Package.swift: upToNextMinor(from: "X.Y.Z")
+          pkg_ver=$(grep -oP 'upToNextMinor\(from:\s*"\K[0-9]+\.[0-9]+\.[0-9]+' Package.swift | head -1)
+
+          # project.yml (xcodegen): `minorVersion: X.Y.Z` (upToNextMinor — must mirror
+          # Package.swift's .upToNextMinor) or a legacy `from: X.Y.Z` if someone reverts the key.
+          yml_ver=$(grep -oP '(minorVersion|from):\s*\K[0-9]+\.[0-9]+\.[0-9]+' project.yml 2>/dev/null | head -1 || echo "absent")
+
+          # Harness.xcodeproj/project.pbxproj: minimumVersion = X.Y.Z
+          pbx_ver=$(grep -oP 'minimumVersion = \K[0-9]+\.[0-9]+\.[0-9]+' Harness.xcodeproj/project.pbxproj 2>/dev/null | head -1 || echo "absent")
+
+          echo "Package.swift Sparkle version : ${pkg_ver}"
+          echo "project.yml   Sparkle version : ${yml_ver}"
+          echo "project.pbxproj minimumVersion: ${pbx_ver}"
+
+          ok=1
+          if [ "${yml_ver}" != "absent" ] && [ "${pkg_ver}" != "${yml_ver}" ]; then
+            echo "ERROR: Package.swift (${pkg_ver}) and project.yml (${yml_ver}) disagree on Sparkle version" >&2
+            ok=0
+          fi
+          if [ "${pbx_ver}" != "absent" ] && [ "${pkg_ver}" != "${pbx_ver}" ]; then
+            echo "ERROR: Package.swift (${pkg_ver}) and project.pbxproj (${pbx_ver}) disagree on Sparkle version" >&2
+            ok=0
+          fi
+          if [ "${ok}" -eq 0 ]; then
+            echo "Bump all three files to the same version to fix this." >&2
+            exit 1
+          fi
+          echo "Sparkle version consistent across manifests: ${pkg_ver}"
 
   benchmarks:
     name: Benchmarks (non-blocking)
@@ -180,4 +240,19 @@ jobs:
       - name: Run benchmark suite
         env:
           HARNESS_BENCHMARKS: "1"
-        run: swift test -c release --filter HarnessBenchmarks
+        # tee the output to a JSON file so we can archive it as an artifact for trend tracking.
+        # swift test doesn't emit structured JSON natively here, so we capture the full log;
+        # the benchmarks themselves write JSON lines to stdout (see the benchmark runner).
+        # mkdir: tee opens its file before swift test creates .build on a cold cache.
+        # pipefail: without it the tee pipe would mask a benchmark failure.
+        run: |
+          set -o pipefail
+          mkdir -p .build
+          swift test -c release --filter HarnessBenchmarks 2>&1 | tee .build/benchmark-results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: .build/benchmark-results.txt
+          if-no-files-found: warn

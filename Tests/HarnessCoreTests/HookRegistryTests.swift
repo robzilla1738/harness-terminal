@@ -11,6 +11,7 @@ final class HookRegistryTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let registry = HookRegistry(url: url)
         _ = registry.bind(event: .afterNewTab, command: .displayMessage(format: "hi"))
+        registry.flush()  // saves are debounced; force the write before reloading
         // A fresh registry over the same file must see the persisted binding.
         let reloaded = HookRegistry(url: url)
         XCTAssertEqual(reloaded.list(event: .afterNewTab).count, 1)
@@ -74,6 +75,7 @@ final class HookRegistryTests: XCTestCase {
             }
         }
 
+        registry.flush()  // saves are debounced; force the last write before reading the file
         // The persisted file must be parseable — a torn encode produces invalid/garbled JSON.
         // (Which exact coherent snapshot won the last save is timing-dependent; coherence is
         // the invariant, captured by decode + reload below.)

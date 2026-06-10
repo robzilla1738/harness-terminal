@@ -12,9 +12,23 @@ swift package resolve
 rm -rf "$ROOT/.build/release"/*.bundle
 
 echo "Building release binaries..."
-swift build -c release --product Harness
-swift build -c release --product HarnessDaemon
-swift build -c release --product harness-cli
+# Cross-module-optimization experiment (roadmap PR-37, strictly bench-gated): opt in with
+# HARNESS_CMO=1. Keep only if `make bench-check` shows wins beyond noise with the full
+# suite green, and record the compile-time cost in the PR/release notes. Off by default —
+# release artifacts stay byte-stable until the measurement says otherwise.
+# Plain string (word-split deliberately below): an empty array + `set -u` errors on the
+# bash 3.2 macOS ships.
+CMO_FLAGS=""
+if [ "${HARNESS_CMO:-0}" = "1" ]; then
+  echo "  (cross-module optimization ON — bench-gated experiment)"
+  CMO_FLAGS="-Xswiftc -cross-module-optimization"
+fi
+# shellcheck disable=SC2086
+swift build -c release --product Harness $CMO_FLAGS
+# shellcheck disable=SC2086
+swift build -c release --product HarnessDaemon $CMO_FLAGS
+# shellcheck disable=SC2086
+swift build -c release --product harness-cli $CMO_FLAGS
 
 echo "Packaging Harness.app..."
 "$ROOT/Scripts/package-app.sh" release

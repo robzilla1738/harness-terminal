@@ -1,14 +1,18 @@
 import Foundation
 import HarnessCore
+import HarnessTerminalEngine
 
 /// Single source of truth for Harness session layout and notifications.
 /// @unchecked Sendable: all access to `sessions` and `editor` is serialized by `lock`.
 public final class SurfaceRegistry: @unchecked Sendable {
     private var sessions: [DaemonSurfaceID: RealPty] = [:]
-    private var editor = SessionEditor()
+    var editor = SessionEditor()
     private let store = SessionStore()
-    private let lock = NSLock()
-    private let bufferStore = PasteBufferStore()
+    let lock = NSLock()
+    // Kept non-public: PasteBufferStore mutations are all internal to SurfaceRegistry; external
+    // callers (DaemonServer) reach it only through `handle(_:)`. The `internal` visibility (not
+    // `private`) allows `flushAllStores()` in this same file to reach it.
+    let bufferStore = PasteBufferStore()
     public let optionStore = OptionStore()
     public let environmentStore = EnvironmentStore()
     public let hookRegistry = HookRegistry()
@@ -16,12 +20,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// One-shot first-run / post-update banner, consumed by the first freshly created
     /// surface (see `injectVersionBannerIfPending`). nil when disabled (tests, embedded
     /// registries) or once shown for this build.
-    private var pendingVersionBanner: PendingVersionBanner?
-    private let versionBannerStore = VersionBannerStore()
+    var pendingVersionBanner: PendingVersionBanner?
+    let versionBannerStore = VersionBannerStore()
     /// Set when the seen-build ack failed to reach disk (full disk, permissions): retried
     /// on later surface creations — without re-rendering the banner — so a transient write
     /// failure can't replay the one-shot card on the next daemon start.
-    private var versionAckRetryNeeded = false
+    var versionAckRetryNeeded = false
     /// tmux `show-messages`: recent rendered display-message lines (most recent last),
     /// capped so a chatty hook can't grow the daemon. Own lock (not `lock`): appends
     /// come from both the IPC handler (lock held) and hook firing (hookQueue, no lock).
@@ -35,65 +39,26 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// Hooks fire fire-and-forget here, never under `lock`, so a hook-bound command
     /// can re-enter `handle` (which locks) without deadlocking. Serial so hook
     /// reactions run in the order their events occurred.
-    private let hookQueue = DispatchQueue(label: "com.robert.harness.hooks")
+    let hookQueue = DispatchQueue(label: "com.robert.harness.hooks")
     private var hookExecutor: DaemonCommandExecutor?
     /// Invoked after every layout commit with the new revision. `DaemonServer` uses
     /// this to push `snapshotChanged` to snapshot subscribers (the compositor).
     public var onSnapshotCommitted: ((Int) -> Void)?
 
-    // MARK: Monitoring (Phase 5)
-    /// Cheap per-surface output state, updated on the PTY read thread and drained by
-    /// `processMonitors` on a timer. Kept off `lock` (its own tiny lock) so the hot output
-    /// path never contends with layout mutations.
-    private struct SurfaceMonitor {
-        var sawOutput = false
-        var sawBell = false
-        var lastOutput = Date()
-        /// OSC-aware bell-scan state, carried across PTY chunks (a sequence can split over reads).
-        var bellScan: SurfaceRegistry.BellScanState = .normal
-    }
-
-    /// State for the lightweight bell scan in `noteSurfaceOutput`. A BEL (0x07) is a real terminal
-    /// bell only in `normal`; a BEL terminating or inside a string sequence (OSC/DCS/APC/PM/SOS) is
-    /// not — most importantly the OSC 133 prompt marks shell integration emits on every prompt.
-    enum BellScanState: Equatable { case normal, esc, string, stringEsc }
-
-    /// Scan `data` for real control-BELs, threading `state` across calls so a sequence split across
-    /// chunks is handled. Returns true if a genuine bell (not a string-sequence terminator) was
-    /// seen. Static + pure so it is unit-testable.
-    static func scanForBell(_ data: Data, state: inout BellScanState) -> Bool {
-        var sawBell = false
-        for byte in data {
-            switch state {
-            case .normal:
-                if byte == 0x1B { state = .esc }
-                else if byte == 0x07 { sawBell = true }
-            case .esc:
-                switch byte {
-                case 0x5D, 0x50, 0x5F, 0x5E, 0x58: state = .string   // OSC ] / DCS P / APC _ / PM ^ / SOS X
-                case 0x1B: state = .esc                              // ESC restarts escape parsing
-                case 0x07: sawBell = true; state = .normal           // BEL after a non-string ESC: real
-                default: state = .normal                             // CSI, ST, other escapes
-                }
-            case .string:
-                // A BEL terminates an OSC (xterm) and is data inside the others — never a bell.
-                // CAN/SUB abort a string sequence (as the VT parser does), so an unterminated string
-                // can't pin the scanner and swallow every later bell.
-                if byte == 0x07 { state = .normal }
-                else if byte == 0x18 || byte == 0x1A { state = .normal } // CAN / SUB abort
-                else if byte == 0x1B { state = .stringEsc }
-            case .stringEsc:
-                if byte == 0x5C { state = .normal }                  // ST (ESC \) terminates the string
-                else if byte == 0x1B { state = .stringEsc }          // another ESC; keep waiting
-                else { state = .string }                             // ESC was data; stay in the string
-            }
-        }
-        return sawBell
-    }
-    private var monitors: [String: SurfaceMonitor] = [:]
-    private let monitorLock = NSLock()
-    private var monitorTimer: DispatchSourceTimer?
-
+    var monitors: [String: SurfaceMonitor] = [:]
+    let monitorLock = NSLock()
+    var monitorTimer: DispatchSourceTimer?
+    /// Cached "is silence monitoring armed" (`monitor-silence` > 0), refreshed from the
+    /// `setOption` path and at startup. Lets a quiet monitor tick skip the registry lock +
+    /// option reads entirely: gating on the *other* option values is useless (`monitor-bell`
+    /// defaults true), but silence is the only alert that needs evaluating with no fresh
+    /// output — activity/bell both require a flag the precheck already sees under
+    /// `monitorLock`. Lock-guarded mirror (same pattern as `DaemonServer.CountBox`) because
+    /// the tick reads it without the registry lock.
+    let silenceArmed = FlagBox()
+    /// Test-only: counts full `processMonitors` passes (the ones that take the registry
+    /// lock), so a test can prove a quiet tick skipped it.
+    var monitorFullPasses = 0
     public init(enableVersionBanner: Bool = false) {
         let defaultShell = HarnessSettings.load().defaultShell
         let trimmedDefaultShell = defaultShell.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -139,96 +104,63 @@ public final class SurfaceRegistry: @unchecked Sendable {
         hookRegistry.setExecutor { command, context in
             executor.execute(command, context: context)
         }
+        refreshSilenceArmedCache() // seed from the on-disk option store before the timer runs
         startMonitorTimer()
     }
 
-    // MARK: - Output monitoring (activity / silence / bell)
-
-    private func startMonitorTimer() {
-        let timer = DispatchSource.makeTimerSource(queue: hookQueue)
-        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
-        timer.setEventHandler { [weak self] in self?.processMonitors() }
-        timer.resume()
-        monitorTimer = timer
+    /// Re-resolve `persist-scrollback` for the live surfaces a `set-option` can affect (an
+    /// exact pane target hits one; broader scopes re-resolve all) and push the result into
+    /// each surface's scrollback file. Runs under the registry lock (called from `handle`).
+    private func applyScrollbackPersistenceOption(scope: OptionStore.Scope, target: String?) {
+        let affected: [String]
+        if scope == .pane, let target {
+            // Pane targets arrive in TWO spellings: `-T <surface-id>` names the surface
+            // directly, while both front-ends' no-target forms (CLI `callingPaneTarget`,
+            // GUI `CommandIPCTranslator`) send the owning `PaneLeaf.id` — an independent
+            // UUID. Accept either; a target matching neither names no live pane (the
+            // spawn-time read still picks the stored value up for a later revive).
+            let surfaceKey = sessions[target] != nil ? target : surfaceKey(forPaneID: target)
+            affected = surfaceKey.map { [$0] } ?? []
+        } else {
+            affected = Array(sessions.keys)
+        }
+        for key in affected {
+            sessions[key]?.setScrollbackPersistence(enabled: resolvedPersistScrollback(forSurfaceKey: key))
+        }
     }
 
-    /// Stop the periodic activity/silence/bell monitor timer (orderly daemon shutdown / tests).
-    public func stopMonitoring() {
-        monitorTimer?.cancel()
-        monitorTimer = nil
+    /// The surface backing the pane leaf whose `PaneLeaf.id` is `paneID`, from the layout
+    /// snapshot. Needed because pane-scoped option targets sent by the front-ends are
+    /// PaneIDs, while the registry's sessions are keyed by surface ID.
+    private func surfaceKey(forPaneID paneID: String) -> String? {
+        for workspace in editor.snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    if let leaf = tab.rootPane.allLeaves().first(where: { $0.id.uuidString == paneID }) {
+                        return leaf.surfaceID.uuidString
+                    }
+                }
+            }
+        }
+        return nil
     }
 
-    /// Record output for a surface — runs on the PTY read thread, so it must stay cheap
-    /// (no `lock`, no snapshot walk): just flag output / bell and stamp the time.
-    private func noteSurfaceOutput(surfaceKey: String, data: Data) {
-        monitorLock.lock()
-        var m = monitors[surfaceKey] ?? SurfaceMonitor()
-        m.sawOutput = true
-        m.lastOutput = Date()
-        // Parser-aware bell: a raw `data.contains(0x07)` mistakes the OSC-terminator BEL that shell
-        // integration emits on every prompt (OSC 133) for a real terminal bell. The scan threads
-        // its state through `m.bellScan` so a sequence spanning chunks is still handled correctly.
-        if Self.scanForBell(data, state: &m.bellScan) { m.sawBell = true }
-        monitors[surfaceKey] = m
-        monitorLock.unlock()
-    }
-
-    /// Drain the monitor state (timer) and raise activity/silence/bell alerts on non-current
-    /// windows, gated on the matching option. Sets the tab flag (surfaced as `#`/`~`/`!` in
-    /// `#{window_flags}`) and fires the hook — both only on a real transition.
-    private func processMonitors() {
-        monitorLock.lock()
-        let now = Date()
-        var drained: [String: (sawOutput: Bool, sawBell: Bool, idle: TimeInterval)] = [:]
-        for (key, m) in monitors {
-            drained[key] = (m.sawOutput, m.sawBell, now.timeIntervalSince(m.lastOutput))
-            monitors[key]?.sawOutput = false
-            monitors[key]?.sawBell = false
-        }
-        monitorLock.unlock()
-        guard !drained.isEmpty else { return }
-
-        lock.lock()
-        defer { lock.unlock() }
-        let wantActivity = optionStore.get("monitor-activity")?.boolValue ?? false
-        let wantBell = optionStore.get("monitor-bell")?.boolValue ?? true
-        let silenceSeconds = optionStore.get("monitor-silence")?.intValue ?? 0
-        // The orphan sweep runs even when every monitor option is off, so dead-surface keys never
-        // accumulate; only the alert processing below is gated on the options being enabled.
-        let monitoring = wantActivity || wantBell || silenceSeconds > 0
-        var changed = false
-        var fired: [(HookEvent, String)] = []
-        var orphans: [String] = []
-        for (key, st) in drained {
-            guard let match = editor.tab(forSurfaceKey: key) else {
-                // Output for a surface with no tab — an in-flight PTY read raced `closeSurfaces`
-                // and re-created the monitor entry after teardown. Evict it so `monitors` can't
-                // grow unbounded with dead-surface keys that nothing will ever clean.
-                orphans.append(key)
-                continue
-            }
-            guard monitoring,
-                  !editor.tabIsCurrent(workspaceID: match.workspaceID, tabID: match.tabID) else { continue }
-            if wantActivity, st.sawOutput,
-               editor.setTabAlerts(workspaceID: match.workspaceID, tabID: match.tabID, activity: true) {
-                changed = true; fired.append((.paneActivity, key))
-            }
-            if wantBell, st.sawBell,
-               editor.setTabAlerts(workspaceID: match.workspaceID, tabID: match.tabID, bell: true) {
-                changed = true; fired.append((.paneBell, key))
-            }
-            if silenceSeconds > 0, !st.sawOutput, st.idle >= Double(silenceSeconds),
-               editor.setTabAlerts(workspaceID: match.workspaceID, tabID: match.tabID, silence: true) {
-                changed = true; fired.append((.paneSilence, key))
+    /// Effective `persist-scrollback` for a surface. Pane-scoped values live under EITHER
+    /// the surface id (`-T <surface-id>`) or the owning `PaneLeaf.id` (what both front-ends
+    /// send for `-p` without `-T`) — two independent UUIDs for the same pane — so the read
+    /// must consult both exact targets before the global fallback. Exact-match reads (not
+    /// `OptionStore.get`, whose miss falls through to global) so a pane-level value under
+    /// the second spelling isn't shadowed by the global default.
+    private func resolvedPersistScrollback(forSurfaceKey surfaceID: String) -> Bool {
+        let paneID = editor.paneLocation(forSurfaceKey: surfaceID)?.paneID.uuidString
+        for target in [surfaceID, paneID] {
+            guard let target else { continue }
+            if let value = optionStore.snapshot(scope: .pane)
+                .first(where: { $0.0.key == "persist-scrollback" && $0.0.target == target })?.1 {
+                return value.boolValue
             }
         }
-        if changed { commit() }
-        for (event, key) in fired { fireHookLocked(event, surfaceKey: key) }
-        if !orphans.isEmpty {
-            monitorLock.lock()
-            for key in orphans { monitors.removeValue(forKey: key) }
-            monitorLock.unlock()
-        }
+        return optionStore.get("persist-scrollback")?.boolValue ?? true
     }
 
     public var snapshot: SessionSnapshot {
@@ -575,8 +507,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             return .ok
         case let .updateTabGitBranch(workspaceID, tabID, branch):
-            editor.updateTabMetadata(workspaceID: workspaceID, tabID: tabID, gitBranch: branch, cwd: nil)
-            commit()
+            // `setTabGitBranch` (not `updateTabMetadata`) so `nil` clears a stale label when a
+            // tab leaves a repository. Commit only on real change — an idempotent re-send must
+            // not bump the revision and wake every snapshot subscriber.
+            if editor.setTabGitBranch(workspaceID: workspaceID, tabID: tabID, branch: branch) {
+                commit()
+            }
             return .ok
         case .getSnapshot:
             return .snapshot(editor.snapshot)
@@ -603,7 +539,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case .attachSurface:
             return .ok
         case let .sendKeys(surfaceID, keys):
-            let bytes = KeyTokenParser.encode(keys: keys)
+            // The daemon is a byte-pipe: it does not run a live per-surface emulator, so it can't
+            // know the target's DECCKM / Kitty state and passes default modes. That yields the
+            // normal-mode encoding (byte-identical to before this unified onto InputEncoder). A
+            // client that DOES emulate could thread real modes for mode-correct injection.
+            let bytes = KeyTokenParser.encode(keys: keys, modes: TerminalModes())
             if let session = sessions[surfaceID] {
                 session.write(bytes)
                 return .ok
@@ -811,18 +751,22 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // Persist the new focus server-side so every client agrees on the active
             // pane (not just the caller). Best-effort: the neighbor is in the same tab.
             if let loc = editor.tab(containingPaneID: neighbor) {
+                let previousFocus = activeSurfaceKeyLocked(workspaceID: loc.workspaceID, tabID: loc.tabID)
                 _ = editor.setActivePane(workspaceID: loc.workspaceID, tabID: loc.tabID, paneID: neighbor)
                 commit()
+                firePaneFocusChangeLocked(previousSurfaceKey: previousFocus, newPaneID: neighbor)
             }
             return .paneID(neighbor)
         case let .selectPane(tabID, paneID):
             guard let loc = editor.tab(containingPaneID: paneID), loc.tabID == tabID else {
                 return .error("Pane not found in tab")
             }
+            let previousFocus = activeSurfaceKeyLocked(workspaceID: loc.workspaceID, tabID: tabID)
             guard editor.setActivePane(workspaceID: loc.workspaceID, tabID: tabID, paneID: paneID) else {
                 return .error("Could not select pane")
             }
             commit()
+            firePaneFocusChangeLocked(previousSurfaceKey: previousFocus, newPaneID: paneID)
             return .ok
         case let .applyLayout(tabID, layout, mainPaneID):
             guard let template = LayoutTemplate(rawValue: layout) else {
@@ -913,6 +857,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .error("Could not respawn surface")
             }
             return .ok
+        case let .clearHistory(surfaceID):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            session.clearScrollback()
+            // Tell attached clients to drop their local scrollback too (their emulators hold the
+            // history we just cleared server-side). `ESC[3J` clears the saved-lines buffer; the
+            // visible screen and the running process are untouched.
+            session.injectSyntheticOutput(Data("\u{1b}[3J".utf8))
+            return .ok
         case let .setOption(scopeRaw, target, key, raw):
             guard let scope = OptionStore.Scope(rawValue: scopeRaw) else {
                 return .error("Unknown option scope: \(scopeRaw)")
@@ -923,13 +875,34 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard !key.contains(":"), !(target?.contains(":") ?? false) else {
                 return .error("Option name/target must not contain ':'")
             }
+            // Reject unknown option names loudly (a `@`-prefixed user option always passes), so a
+            // typo like `moused` fails in every front-end instead of being silently persisted and
+            // never read — the project's no-silent-failure invariant.
+            guard OptionStore.isRecognizedOptionKey(key) else {
+                return .error("unknown option: \(key)")
+            }
             // Scoped reads resolve by exact target and only fall back toward broader scopes —
             // a nil-target non-global option is stored but unreachable by every read path.
             // Reject it (defense in depth behind the CLI's own -T requirement).
             guard scope == .global || target != nil else {
                 return .error("\(scopeRaw) scope requires a target")
             }
+            // `persist-scrollback` is read per pane (with global fallback) only — a tab/
+            // session/workspace-scoped value would be stored but unreachable by every read
+            // path (the OptionStore fallback widens with nil targets only): a silent no-op
+            // on a security control. Reject loudly instead.
+            if key == "persist-scrollback", scope != .pane, scope != .global {
+                return .error("persist-scrollback is pane- or global-scoped")
+            }
             optionStore.set(.init(parsing: raw), key: key, scope: scope, target: target)
+            // Keep the monitor tick's lock-free precheck honest: silence arming changed.
+            if key == "monitor-silence" { refreshSilenceArmedCache() }
+            // Apply the secrets-at-rest toggle to live surfaces immediately: disabling wipes
+            // the on-disk log synchronously (the user's intent is "gone now", not "gone at
+            // the next spawn"); re-enabling resumes persistence from that point — including
+            // for surfaces spawned while the option was off (they carry a suspended log
+            // writer) — documented in docs/SECURITY-POSTURE.md.
+            if key == "persist-scrollback" { applyScrollbackPersistenceOption(scope: scope, target: target) }
             // Nudge snapshot subscribers (the attach-window compositor) so a runtime option
             // change — status-*, mouse, pane-style, mode-keys — reaches attached clients instead
             // of being stuck at their startup values. Re-uses the snapshot push as a generic
@@ -972,11 +945,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case .showMessages:
             messageLogLock.lock(); defer { messageLogLock.unlock() }
             return .text(messageLog.joined(separator: "\n"))
-        case let .displayMessage(format):
-            // Render via FormatString using whatever context the daemon can
-            // build right now (active workspace/tab from snapshot). UI clients
-            // observe the notification bus and decide how to surface it.
-            postDisplayMessage(FormatString.evaluate(format, context: buildFormatContext()))
+        case let .displayMessage(format, print):
+            // Render via FormatString using whatever context the daemon can build right now
+            // (active workspace/tab from snapshot).
+            let rendered = FormatString.evaluate(format, context: buildFormatContext())
+            // `-p`: hand the text back for the caller's stdout, without flashing the message.
+            if print { return .text(rendered) }
+            // Otherwise post it; UI clients observe the notification bus and surface it.
+            postDisplayMessage(rendered)
             return .ok
         }
     }
@@ -1200,6 +1176,22 @@ public final class SurfaceRegistry: @unchecked Sendable {
         context.sessionGroup = session.flatMap { editor.snapshot.groupName(of: $0) }
         context.sessionAttached = attachedClientCountProvider?()
         context.serverPID = Int(getpid())
+        // User options (`@name`) so `#{@name}` renders. Resolve each distinct `@` key through the
+        // scope chain, preferring this context's pane — the GUI stores OSC 1337 `SetUserVar`
+        // values pane-scoped under the SURFACE key, which the broader-scope lookups (nil-target
+        // fallback only) can never reach — then tab/session, falling back to global (the dominant
+        // usage for theme/statusline plugins). A context with no named surface uses the active
+        // pane, so the status line still renders the focused pane's user variables.
+        var userOptions: [String: String] = [:]
+        let paneKey = surfaceKey ?? activeSurfaceKey
+        for (scopedKey, _) in optionStore.snapshot() where scopedKey.key.hasPrefix("@") && userOptions[scopedKey.key] == nil {
+            let value = paneKey.flatMap { optionStore.get(scopedKey.key, scope: .pane, target: $0) }
+                ?? optionStore.get(scopedKey.key, scope: .tab, target: tab?.id.uuidString)
+                ?? optionStore.get(scopedKey.key, scope: .session, target: session?.id.uuidString)
+                ?? optionStore.get(scopedKey.key, scope: .global)
+            if let value { userOptions[scopedKey.key] = value.stringValue }
+        }
+        context.userOptions = userOptions
         return context
     }
 
@@ -1210,9 +1202,20 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// commands run after the current mutation commits and the lock is released.
     /// `context` overrides the snapshot-derived one for events whose subject is gone
     /// by fire time (session-closed captures its context before the mutation).
-    private func fireHookLocked(_ event: HookEvent, surfaceKey: String? = nil, context: FormatContext? = nil) {
+    func fireHookLocked(_ event: HookEvent, surfaceKey: String? = nil, context: FormatContext? = nil) {
         let resolved = context ?? buildFormatContext(surfaceKey: surfaceKey)
         hookQueue.async { [weak self] in self?.hookRegistry.fire(event, context: resolved) }
+    }
+
+    /// Fire the focus/active-pane hooks when the focused pane moves from `previousSurfaceKey` to
+    /// `newPaneID`: `pane-focus-out` (old), `window-pane-changed`, then `pane-focus-in` (new). A
+    /// no-op when focus didn't actually change. Call with the lock held, after `commit()`.
+    private func firePaneFocusChangeLocked(previousSurfaceKey: String?, newPaneID: PaneID) {
+        let newKey = editor.surfaceID(forPaneID: newPaneID)?.uuidString
+        guard newKey != previousSurfaceKey else { return }
+        if let previousSurfaceKey { fireHookLocked(.paneFocusOut, surfaceKey: previousSurfaceKey) }
+        fireHookLocked(.windowPaneChanged, surfaceKey: newKey)
+        fireHookLocked(.paneFocusIn, surfaceKey: newKey)
     }
 
     /// Client attach/detach originate in `DaemonServer` (which owns FDs), outside the
@@ -1225,6 +1228,20 @@ public final class SurfaceRegistry: @unchecked Sendable {
     public func fireClientDetached(label: String?) {
         lock.lock(); let context = buildFormatContext(clientName: label); lock.unlock()
         hookQueue.async { [weak self] in self?.hookRegistry.fire(.clientDetached, context: context) }
+    }
+
+    /// Fire `command-error` after a command failed to resolve in the daemon executor. The failing
+    /// command text becomes the hook's `#{hook}` subject. Invoked from the hook queue (no registry
+    /// lock held), so it acquires the lock to build a consistent context — like the client hooks.
+    public func fireCommandError(failedCommand: String) {
+        lock.lock()
+        var context = buildFormatContext()
+        lock.unlock()
+        context.hookCommand = failedCommand
+        // Bind an immutable copy for the async capture — Swift 6 strict concurrency rejects
+        // capturing the mutated `var` directly (matches the `let context` sibling hooks above).
+        let resolved = context
+        hookQueue.async { [weak self] in self?.hookRegistry.fire(.commandError, context: resolved) }
     }
 
     // MARK: - Hook target resolution + shell execution
@@ -1250,6 +1267,15 @@ public final class SurfaceRegistry: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard let pane = editor.snapshot.activeWorkspace?.activeTab?.rootPane.allPaneIDs().first else { return nil }
         return editor.surfaceID(forPaneID: pane)?.uuidString
+    }
+
+    /// Surface key of a specific tab's currently-active pane — computed **lock-free** for callers
+    /// already inside `handle()` (which holds `lock`). The locking `activePaneSurfaceKey()` would
+    /// re-enter the non-recursive `lock` and deadlock; it also reads the active *tab's* first leaf,
+    /// not this tab's real active pane, so the focus-change hooks need this exact-pane variant.
+    private func activeSurfaceKeyLocked(workspaceID: WorkspaceID, tabID: TabID) -> String? {
+        editor.activePaneID(workspaceID: workspaceID, tabID: tabID)
+            .flatMap { editor.surfaceID(forPaneID: $0)?.uuidString }
     }
 
     /// Run `command` via `/bin/sh -c` for a `run-shell` hook. Async (fire-and-forget);
@@ -1299,15 +1325,42 @@ public final class SurfaceRegistry: @unchecked Sendable {
         )
     }
 
-    private func commit() {
+    func commit() {
         let revision = editor.snapshot.revision
-        do {
-            try store.saveImmediately(editor.snapshot)
-        } catch {
-            fputs("HarnessDaemon snapshot save failed: \(error)\n", harnessStderr)
-        }
+        // The revision bump + snapshot-changed fan-out stay synchronous under the registry lock
+        // (callers depend on the post landing before they return). The disk write does NOT: a
+        // full prettyPrinted encode + atomic write on every mutation sat on the input-latency path,
+        // firing several times a second under agent activity. Hand it to the store's existing
+        // 0.5s-debounced, queue-confined `save()` instead, which coalesces a burst of mutations
+        // into one write. A graceful shutdown flushes the last window synchronously via
+        // `flushSnapshot()` (DaemonServer.stop), so the debounce can't drop committed layout.
+        store.save(editor.snapshot)
         NotificationBus.shared.postSnapshotChanged(revision: revision)
         onSnapshotCommitted?(revision)
+    }
+
+    /// Synchronously flush OptionStore, EnvironmentStore, HookRegistry, and PasteBufferStore to
+    /// disk, bypassing their debounce windows. Called on graceful daemon shutdown alongside
+    /// `flushSnapshot()` so the last mutation in any debounce window is never lost.
+    public func flushAllStores() {
+        optionStore.flush()
+        environmentStore.flush()
+        hookRegistry.flush()
+        bufferStore.flush()
+    }
+
+    /// Synchronously persist the current layout snapshot, bypassing the debounce. Called on
+    /// graceful daemon shutdown (`DaemonServer.stop`) so the last debounce window of layout
+    /// mutations isn't lost — the snapshot counterpart of `flushAllScrollback()`.
+    public func flushSnapshot() {
+        lock.lock()
+        let snapshot = editor.snapshot
+        lock.unlock()
+        do {
+            try store.saveImmediately(snapshot)
+        } catch {
+            fputs("HarnessDaemon snapshot flush failed: \(error)\n", harnessStderr)
+        }
     }
 
     /// `freshlyCreated` marks a surface the user just asked for (new tab/session/split/
@@ -1341,6 +1394,34 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // `terminal-identity` option the GUI/CLI sets; the app reads the same value for its
             // XTVERSION reply.
             let identity = TerminalIdentity.spec(forOption: optionStore.get(TerminalIdentity.optionKey)?.stringValue)
+            // `persist-scrollback off` (pane-scoped — either target spelling — falling back
+            // to global): spawn with the scrollback file suspended AND remove any log a
+            // previously-persisted run left behind — the opt-out means no scrollback at
+            // rest, not just no new writes. The file is attached-but-suspended (not absent)
+            // so a later `persist-scrollback on` resumes on-disk persistence for this live
+            // surface — including across a live `respawn-pane` — without RealPty surgery.
+            let persistScrollback = resolvedPersistScrollback(forSurfaceKey: surfaceID)
+            let scrollbackURL = HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
+            if !persistScrollback { try? FileManager.default.removeItem(at: scrollbackURL) }
+            // Shell-integration auto-inject (opt-out via `shell-integration off`): prompt
+            // marks work out of the box. The user's `set-environment` table always wins,
+            // and the plan is ALL-or-nothing: if any of its env keys would lose that merge,
+            // a partial apply (e.g. bash `--posix` with the USER's $ENV) would corrupt the
+            // spawn — drop the whole plan instead. Best-effort: a nil plan spawns untouched.
+            var spawnEnvironment = extraEnvironment(forSurfaceKey: surfaceID)
+            var integrationPlan: ShellIntegrationInjector.Plan? =
+                (optionStore.get("shell-integration")?.boolValue ?? true)
+                    ? ShellIntegrationInjector.plan(
+                        shellPath: shellPath,
+                        baseEnvironment: ProcessInfo.processInfo.environment)
+                    : nil
+            if let plan = integrationPlan {
+                if plan.environment.keys.allSatisfy({ spawnEnvironment[$0] == nil }) {
+                    for (key, value) in plan.environment { spawnEnvironment[key] = value }
+                } else {
+                    integrationPlan = nil
+                }
+            }
             let session = try RealPty(
                 id: surfaceID,
                 cwd: workDir,
@@ -1348,11 +1429,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 rows: rows,
                 cols: cols,
                 scrollbackBytes: scrollbackBytes ?? 1024 * 1024,
-                extraEnvironment: extraEnvironment(forSurfaceKey: surfaceID),
+                extraEnvironment: spawnEnvironment,
                 termProgram: identity.name,
                 termProgramVersion: identity.version,
-                scrollbackURL: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
+                scrollbackURL: scrollbackURL,
+                launchArgumentsOverride: integrationPlan?.argumentsOverride
             )
+            if !persistScrollback { session.setScrollbackPersistence(enabled: false) }
             session.onExit = { [weak self, weak session] exitStatus in
                 self?.removeSurfaceIfCurrent(surfaceID: surfaceID, session: session, exitStatus: exitStatus)
             }
@@ -1376,29 +1459,6 @@ public final class SurfaceRegistry: @unchecked Sendable {
             fputs("HarnessDaemon surface launch failed for \(surfaceID): \(error)\n", harnessStderr)
             return nil
         }
-    }
-
-    /// Consume the pending one-shot banner: render at the surface's spawn width and write
-    /// it into the surface's output stream (scrollback + fan-out, like real shell output).
-    /// The `update-banner` option (default on) suppresses the output; either way the state
-    /// file records the current build immediately, so the banner never repeats — not on
-    /// later surfaces, and not after a daemon restart. The on-screen render stays
-    /// at-most-once per run regardless; only the durable ack is retried on failure.
-    private func injectVersionBannerIfPending(into session: RealPty, columns: Int) {
-        if versionAckRetryNeeded { versionAckRetryNeeded = !versionBannerStore.markSeen() }
-        guard let banner = pendingVersionBanner else { return }
-        pendingVersionBanner = nil
-        // Ack BEFORE the option check: suppressing the banner still consumes the one-shot.
-        versionAckRetryNeeded = !versionBannerStore.markSeen()
-        guard optionStore.get("update-banner")?.boolValue ?? true else { return }
-        let bytes: Data
-        switch banner {
-        case .welcome:
-            bytes = TerminalBanner.welcome(version: HarnessVersion.short, columns: columns)
-        case .whatsNew:
-            bytes = TerminalBanner.whatsNew(ReleaseNotes.current, columns: columns)
-        }
-        session.injectSyntheticOutput(bytes)
     }
 
     private func shellCandidate(for requested: String?) -> String {
@@ -1528,6 +1588,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
             stopPipe(surfaceID: surfaceID)
             // Drop the output monitor too, else it leaks across tab/session/pane churn.
             monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
+            // GC the surface's pane-scoped options (OSC 1337 user variables, per-pane
+            // overrides): the surface key is gone for good, so they would otherwise sit
+            // in options.json forever — unbounded growth under name churn.
+            optionStore.removeAll(scope: .pane, target: surfaceID)
         }
     }
 

@@ -42,9 +42,15 @@ public enum DaemonLifecycle {
         if priorPID == ownPID { return .proceed }
         guard isAlive(priorPID) else { return .stale }
         guard let path = executablePath(priorPID),
-              URL(fileURLWithPath: path).lastPathComponent.contains("HarnessDaemon")
+              URL(fileURLWithPath: path).lastPathComponent == "HarnessDaemon"
         else {
-            // Alive, but not our daemon — a recycled PID. Treat as stale and reclaim the file.
+            // Alive, but not our daemon — a recycled PID, or a binary whose name only
+            // contains "HarnessDaemon" as a substring (e.g. "HarnessDaemon-old"). Exact
+            // basename comparison prevents both false positives from recycled PIDs and
+            // spoofing via a process named something like "not-HarnessDaemon". If this
+            // daemon is ever deployed under a different binary name (e.g. wrapped for
+            // testing), this check will treat the prior instance as stale — which is safe
+            // because DaemonServer.start()'s socket ping is the authoritative guard.
             return .stale
         }
         return .refuse
