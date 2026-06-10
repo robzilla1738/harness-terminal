@@ -28,8 +28,6 @@ struct AgentNotchRootView: View {
                 .onTapGesture {
                     if !model.isOpen { model.open() }
                 }
-                .animation(contentAnimation, value: model.openContentHeight)
-                .animation(contentAnimation, value: model.waitingCount)
                 .accessibilityElement(children: .contain)
         }
         .frame(
@@ -105,8 +103,11 @@ struct AgentNotchRootView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 14)
-            .padding(.top, CGFloat(model.geometry.hasPhysicalNotch ? model.geometry.closedHeight - 22 : 4))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            // Pin content below the notch reserve so the single line is never occluded by the
+            // physical notch (the open HUD doesn't need this — its top row is the header).
+            .padding(.top, CGFloat(model.geometry.peekTopInset))
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(peekTitle(event)), \(peekReason(event))")
@@ -310,28 +311,24 @@ struct AgentNotchRootView: View {
         reduceTransparency ? .clear : .black.opacity(0.52)
     }
 
-    /// In-place value changes while open (row count, badges) — presentation changes are
-    /// animated by the model's asymmetric springs instead.
-    private var contentAnimation: Animation {
-        reduceMotion
-            ? .easeOut(duration: 0.12)
-            : .spring(response: 0.30, dampingFraction: 0.88)
-    }
-
+    /// Plain opacity that inherits the ambient open/close spring, so the closed pill's content
+    /// crossfades in lockstep with the shape rather than on a separate, faster clock.
     private var closedTransition: AnyTransition {
-        .opacity.animation(.easeOut(duration: reduceMotion ? 0.08 : 0.14))
+        reduceMotion ? .opacity.animation(.easeOut(duration: 0.08)) : .opacity
     }
 
-    /// Incoming expanded content fades in and settles upward just after the shape starts
-    /// growing (skill: shape leads by 40–90 ms); outgoing content drops away fast.
+    /// Incoming expanded content fades in and settles up just after the shape starts growing
+    /// (skill: shape leads by 40–90 ms). Outgoing content fades with the *ambient* close spring —
+    /// not a fixed fast curve — so it collapses together with the shape instead of leaving an
+    /// empty pill that then shrinks (the old 0.10 s removal vs 0.45 s collapse desync).
     private var expandedContentTransition: AnyTransition {
         if reduceMotion {
             return .opacity.animation(.easeOut(duration: 0.10))
         }
         return .asymmetric(
-            insertion: .opacity.combined(with: .offset(y: 8))
-                .animation(.easeOut(duration: 0.20).delay(0.06)),
-            removal: .opacity.animation(.easeIn(duration: 0.10))
+            insertion: .opacity.combined(with: .offset(y: 6))
+                .animation(.easeOut(duration: 0.22).delay(0.05)),
+            removal: .opacity
         )
     }
 

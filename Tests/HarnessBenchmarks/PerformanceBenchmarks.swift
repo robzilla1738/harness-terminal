@@ -827,6 +827,12 @@ final class PerformanceBenchmarks: XCTestCase {
     /// the GPU encode + drawable/vsync wait, which need a real `CAMetalLayer` (measured headfully /
     /// via the `os_signpost` "frame" track); a tiny number here with laggy typing localizes the
     /// latency to that downstream present path rather than the engine.
+    ///
+    /// Scope note: this benchmark measures *engine-side echo* — the path from byte ingestion
+    /// through VT parse, grid mutation, damage accumulation, and incremental frame construction.
+    /// It does NOT measure end-to-end PTY round-trip latency (keystroke → kernel → shell → pty
+    /// read → parse), which depends on the OS scheduler, PTY buffer flush policy, and the running
+    /// program, and cannot be driven deterministically in a unit benchmark.
     func testLocalEchoLatency() throws {
         try skipUnlessEnabled()
         let cols = 120, rows = 40
@@ -1096,6 +1102,65 @@ final class PerformanceBenchmarks: XCTestCase {
 
     func testBuildFrame240x80() throws {
         try runFrameBuildBenchmark(name: "build_frame_240x80", cols: 240, rows: 80)
+    }
+
+    /// Frame build with the find bar open: ~200 search hits spread over the viewport — the
+    /// scrolling-with-search-active workload. Pins the per-row interval index (used to be a
+    /// per-cell O(matches) `contains` scan: matches × cells per build).
+    func testBuildFrameSearchHighlights160x48() throws {
+        try skipUnlessEnabled()
+        let cols = 160, rows = 48
+        let snapshot = filledSnapshot(cols: cols, rows: rows)
+        let theme = HarnessThemeCatalog.theme(named: "Dracula")!
+        let builder = FrameBuilder(
+            theme: theme,
+            searchBackground: RGBColor(red: 200, green: 180, blue: 40)
+        )
+        // ~200 short hits, 4–5 per row, deterministic layout (no RNG → stable benchmark).
+        var highlights: [TerminalSelection] = []
+        for row in 0 ..< rows {
+            for slot in 0 ..< 4 + (row % 2) {
+                let start = (slot * 37 + row * 11) % (cols - 6)
+                highlights.append(TerminalSelection((row, start), (row, start + 5)))
+            }
+        }
+        let nanos = timedNanos {
+            _ = builder.build(snapshot, region: nil, searchHighlights: highlights)
+        }
+        printBenchmark("build_frame_search_highlights_160x48",
+                       nanos: nanos,
+                       fields: [("cells", "\(cols * rows)"), ("hits", "\(highlights.count)")])
+        measure {
+            _ = builder.build(snapshot, region: nil, searchHighlights: highlights)
+        }
+    }
+
+    /// Combining-mark-heavy frame build (roadmap PR-37 prerequisite): Thai script stacks a
+    /// vowel + tone on most bases, so every such cell carries `combining0/1` and the
+    /// renderer's cluster path allocates a `String` per glyph encode. This pins the cost so
+    /// the candidate optimization (cluster-allocation avoidance) is measurable — per the
+    /// micro-pass rule, that change lands only if THIS number moves beyond noise.
+    func testBuildFrameCombiningHeavy160x48() throws {
+        try skipUnlessEnabled()
+        let cols = 160, rows = 48
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        // Thai cells with combining marks: บ + ◌ี (U+0E35) + ◌้ (U+0E49), repeated.
+        let cluster = "\u{0E1A}\u{0E35}\u{0E49}"
+        var stream = "\u{1b}[?25l"
+        for row in 0 ..< rows {
+            stream += "\u{1b}[\(row + 1);1H" + String(repeating: cluster, count: cols / 2)
+        }
+        term.feed(stream)
+        let snapshot = term.readGrid()!
+        let builder = FrameBuilder(theme: HarnessThemeCatalog.theme(named: "Dracula")!)
+        let nanos = timedNanos {
+            _ = builder.build(snapshot)
+        }
+        printBenchmark("build_frame_combining_heavy_160x48", nanos: nanos,
+                       fields: [("cells", "\(cols * rows)")])
+        measure {
+            _ = builder.build(snapshot)
+        }
     }
 
     func testRenderEncodeStats160x48() throws {

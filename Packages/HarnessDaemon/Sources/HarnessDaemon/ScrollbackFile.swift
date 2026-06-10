@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import HarnessCore
 
@@ -19,6 +24,12 @@ import HarnessCore
 /// ring's head-index eviction. @unchecked Sendable: all disk state is confined to `queue`.
 final class ScrollbackFile: @unchecked Sendable {
     static let minimumRetentionCap = 64 * 1024
+    /// On-disk safety ceiling for "unlimited" scrollback (`scrollbackLines == 0`, surfaced as a
+    /// `retentionCap` of `0`). The GUI emulator keeps a truly-unbounded line history, but the
+    /// persisted log — and the daemon's in-memory replay ring sized from it — stays bounded here so
+    /// a runaway producer can never fill the disk or OOM the session-authority daemon. 512 MiB of
+    /// raw PTY output is far more replay history than any reattach needs.
+    static let unlimitedSafetyCap = 512 * 1024 * 1024
 
     private let url: URL
     /// Retain roughly this many bytes on disk — sized to the surface's in-memory ring cap so
@@ -48,14 +59,32 @@ final class ScrollbackFile: @unchecked Sendable {
     /// Set once the surface is gone for good; stops a late debounced flush from resurrecting a file
     /// we just deleted.
     private var closed = false
+    /// `persist-scrollback off`: drop appends instead of writing them (queue-confined).
+    private var suspended = false
     /// Current on-disk size, seeded from the existing file so compaction accounting survives a
     /// restart that loaded a pre-existing log.
     private var fileBytes: Int
 
     init(url: URL, retentionCap: Int) {
         self.url = url
-        self.retentionCap = max(retentionCap, Self.minimumRetentionCap)
+        // `0` = unlimited: keep effectively all history, bounded only by the large on-disk safety
+        // ceiling so the log can't grow without limit. Any other value gets the normal floor.
+        self.retentionCap = retentionCap == 0
+            ? Self.unlimitedSafetyCap
+            : max(retentionCap, Self.minimumRetentionCap)
         self.fileBytes = Self.compactExistingLogIfNeeded(url: url, retentionCap: self.retentionCap)
+        // Re-assert owner-only on a pre-existing log too, so files created by builds that
+        // predate the permission tightening are fixed on the first load after an upgrade.
+        Self.restrictToOwner(url)
+    }
+
+    /// `.scroll` logs hold raw PTY output — potentially echoed secrets — so they are
+    /// owner-only (0600), making SECURITY-POSTURE.md's at-rest claim literal rather than
+    /// relying on the 0700 parent directory alone. Re-applied after every creation path
+    /// because atomic writes (temp + rename) mint a fresh inode with default (0644)
+    /// permissions; in-place appends inherit whatever the file was created with.
+    private static func restrictToOwner(_ url: URL) {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     /// Read the persisted tail (at most `maxBytes`) for seeding `RealPty`'s in-memory ring on
@@ -83,7 +112,7 @@ final class ScrollbackFile: @unchecked Sendable {
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
         queue.async { [weak self] in
-            guard let self, !self.closed else { return }
+            guard let self, !self.closed, !self.suspended else { return }
             self.pending.append(data)
             // Bound RAM under a sustained flood: once buffered output crosses the cap, flush
             // synchronously rather than re-arming the debounce (which a gapless stream would
@@ -111,17 +140,38 @@ final class ScrollbackFile: @unchecked Sendable {
         queue.asyncAfter(deadline: deadline, execute: work)
     }
 
+    /// Persistence opt-out (`persist-scrollback off`): stop accepting writes AND wipe what
+    /// is already on disk — the intent is "no scrollback at rest for this surface", so a
+    /// half-measure that stops future writes but keeps the old log would be a lie.
+    /// Synchronous (like `reset`/`delete`) so the caller knows the log is gone before the
+    /// option set returns, and a previously-armed debounced flush can't resurrect it.
+    /// Re-enabling resumes persistence from that point; output produced while suspended is
+    /// memory-only by design.
+    func setSuspended(_ suspended: Bool) {
+        queue.sync {
+            self.suspended = suspended
+            guard suspended else { return }
+            self.pendingFlush?.cancel()
+            self.flushDeadline = nil
+            self.pending.removeAll(keepingCapacity: false)
+            try? FileManager.default.removeItem(at: self.url)
+            self.fileBytes = 0
+        }
+    }
+
     /// Synchronously persist any buffered output. Called on graceful shutdown so the last
     /// debounce window isn't lost when the daemon exits.
     func flush() {
         queue.sync { self.flushPending() }
     }
 
-    /// Drop all persisted history (used by `respawn(clearHistory: true)` — the user asked to
-    /// start clean). The file may be written to again afterwards.
+    /// Drop all persisted history (used by `respawn(clearHistory: true)` and `clear-history` — the
+    /// user asked to start clean). The file may be written to again afterwards. **Synchronous** (like
+    /// `delete()`): the caller — `clear-history` / a respawn — must know the on-disk log is gone
+    /// before it returns, so a daemon restart or a reattach that races the clear can't replay the
+    /// stale scrollback, and a previously-armed debounced flush can't resurrect it.
     func reset() {
-        queue.async { [weak self] in
-            guard let self else { return }
+        queue.sync {
             self.pendingFlush?.cancel()
             self.flushDeadline = nil
             self.pending.removeAll(keepingCapacity: true)
@@ -157,11 +207,17 @@ final class ScrollbackFile: @unchecked Sendable {
     }
 
     private func appendToDisk(_ data: Data) -> Bool {
+        // Concurrency note: `appendToDisk` is only ever called from `flushPending()`, which
+        // is only ever dispatched onto `queue` (the serial DispatchQueue this type owns).
+        // All appends are therefore serialized — the seekToEnd + write pair below is NOT
+        // racy (no other writer can interleave between the two calls). pwrite is not needed.
         let fm = FileManager.default
         if !fm.fileExists(atPath: url.path) {
             // First write: create the (owner-only) directory + file in one shot.
             try? HarnessPaths.ensureDirectories()
-            return HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon scrollback")
+            guard HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon scrollback") else { return false }
+            Self.restrictToOwner(url)
+            return true
         }
         guard let handle = try? FileHandle(forWritingTo: url) else {
             // Fall back to a full rewrite if we somehow can't open for append. The rewrite
@@ -172,12 +228,21 @@ final class ScrollbackFile: @unchecked Sendable {
                 fputs("HarnessDaemon scrollback: append-open and read both failed for \(url.lastPathComponent); dropping flush\n", harnessStderr)
                 return false
             }
-            return HarnessPaths.atomicWrite(existing + data, to: url, label: "HarnessDaemon scrollback")
+            guard HarnessPaths.atomicWrite(existing + data, to: url, label: "HarnessDaemon scrollback") else { return false }
+            Self.restrictToOwner(url)
+            return true
         }
         defer { try? handle.close() }
         do {
             try handle.seekToEnd()
             try handle.write(contentsOf: data)
+            // fsync so the appended bytes reach stable storage before we return. Using
+            // plain fsync (not F_FULLFSYNC) — the extra journal-barrier cost of F_FULLFSYNC
+            // is disproportionate for scrollback: the goal is crash durability (surviving a
+            // daemon kill), not power-loss durability (surviving an immediate power cut).
+            // fdatasync on Glibc is equivalent to fsync for our use (we don't care about
+            // metadata timestamps); fsync is available on both Darwin and Glibc.
+            _ = fsync(handle.fileDescriptor)
             return true
         } catch {
             fputs("HarnessDaemon scrollback: append failed for \(url.lastPathComponent): \(error)\n", harnessStderr)
@@ -186,12 +251,38 @@ final class ScrollbackFile: @unchecked Sendable {
     }
 
     /// Trim the log back to the retention cap by rewriting just its tail. Atomic (temp + rename)
-    /// so a crash mid-compaction leaves the previous complete log intact.
+    /// so a crash mid-compaction leaves the previous complete log intact. The temp file is
+    /// fsynced before the rename so a crash during or immediately after compaction never leaves
+    /// a zero-length or partial new file — if the rename didn't complete the old log survives,
+    /// and if it did the new file is fully durable.
     private func compact() {
         guard let data = try? Data(contentsOf: url), data.count > retentionCap else { return }
-        let tail = data.suffix(retentionCap)
-        if HarnessPaths.atomicWrite(Data(tail), to: url, label: "HarnessDaemon scrollback") {
+        let tail = Data(data.suffix(retentionCap))
+        // Write to a temp file alongside the log, fsync it, then rename atomically.
+        // `HarnessPaths.atomicWrite` (Data.write(options: .atomic)) does the temp+rename
+        // but does not fsync the temp before renaming, so a crash in the write window
+        // could leave a renamed-in file with no durable content. Do it manually here.
+        let tmp = url.appendingPathExtension("compact-tmp")
+        do {
+            try tail.write(to: tmp)
+            // Owner-only BEFORE the rename, so the log is never visible with loose perms.
+            Self.restrictToOwner(tmp)
+            // fsync the temp file so its content is durable before we replace the log.
+            // See the comment in appendToDisk for the fsync vs F_FULLFSYNC choice.
+            if let tmpHandle = try? FileHandle(forReadingFrom: tmp) {
+                _ = fsync(tmpHandle.fileDescriptor)
+                try? tmpHandle.close()
+            }
+            // POSIX rename(2), not FileManager's replace APIs: it atomically replaces the
+            // destination on both Darwin and Linux, while corelibs-foundation's replaceItemAt
+            // can leave the original missing when it fails partway.
+            guard rename(tmp.path, url.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
             fileBytes = tail.count
+        } catch {
+            fputs("HarnessDaemon scrollback: compaction failed for \(url.lastPathComponent): \(error)\n", harnessStderr)
+            try? FileManager.default.removeItem(at: tmp)
         }
     }
 }

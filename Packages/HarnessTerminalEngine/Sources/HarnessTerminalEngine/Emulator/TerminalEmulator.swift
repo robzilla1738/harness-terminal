@@ -12,6 +12,13 @@ import Dispatch // DispatchTime: a monotonic clock for command-duration timing (
 ///
 /// PTY spawning, scrollback storage, and process lifecycle are NOT here — they are
 /// daemon-owned. The emulator only consumes bytes and renders the viewport.
+///
+/// **Threading contract:** this type is not thread-safe. `feed`, the screen it mutates, and the
+/// `onResponse`/`onBell`/… callbacks must all be driven from a single serialized context — the
+/// GUI confines each surface's emulator to one serial queue (`SurfaceEmulatorState` in
+/// HarnessTerminalKit). The underlying `VTParser` hands borrowed buffer views to the handler that
+/// are only valid within the synchronous `feed` call, so concurrent or reentrant feeds would be a
+/// use-after-free; `VTParser` carries a debug-only tripwire that traps on violations.
 public final class TerminalEmulator: VTParserHandler {
     private var parser: VTParser!
     private let primary: TerminalScreen
@@ -56,6 +63,15 @@ public final class TerminalEmulator: VTParserHandler {
     public var terminalVersion: String = ""
     /// Numeric firmware field of the secondary-DA reply (`CSI > 1 ; n ; 0 c`).
     public var secondaryDAVersion: Int = 0
+    /// Title as last set by OSC 0/2 (the value XTWINOPS 22/23 push and pop).
+    public private(set) var currentTitle = ""
+    /// XTWINOPS title stack (`CSI 22 t` push / `CSI 23 t` pop). Depth-capped like xterm's;
+    /// pushes beyond the cap are dropped (a runaway program can't grow it without bound).
+    private var titleStack: [String] = []
+    private static let titleStackLimit = 10
+    /// DECSET 1048 state for DECRPM: xterm tracks save/restore-cursor as a mode bit (set on
+    /// `h`, cleared on `l`) even though the observable effect is the save/restore action.
+    private var mode1048Saved = false
     /// Resolves the terminal's current colors so the engine can answer OSC 10/11/12/4 *queries*
     /// (e.g. a TUI reading the background to pick a light/dark theme). The host supplies it from
     /// the resolved theme; nil roles get no reply.
@@ -70,6 +86,16 @@ public final class TerminalEmulator: VTParserHandler {
     public var onProgress: ((TerminalProgressReport) -> Void)?
     /// Mouse pointer shape requested via OSC 22 (e.g. `text`, `pointer`, `default`); nil clears.
     public var onPointerShapeChange: ((String?) -> Void)?
+    /// iTerm2 `OSC 1337 ; SetUserVar=name=<base64>` landed (already decoded + validated).
+    /// The host surfaces these to format strings as pane-scoped `@name` user options.
+    public var onUserVariableChange: ((_ name: String, _ value: String) -> Void)?
+    /// RIS dropped every user variable — hosts that mirrored them (pane-scoped `@` options)
+    /// must clear their copies too, or `#{@name}` keeps serving pre-reset values. Fired only
+    /// when there was something to clear.
+    public var onUserVariablesCleared: (() -> Void)?
+    /// User variables set via OSC 1337 `SetUserVar=` (count- and size-capped; RIS clears).
+    public private(set) var userVariables: [String: String] = [:]
+    private static let maxUserVariables = 64
     /// Last OSC-22 pointer shape (nil = terminal default). Surfaced for hosts that prefer polling.
     public private(set) var pointerShape: String?
     /// When the current command started running (OSC 133 `C`/`B`), for command-duration timing.
@@ -94,6 +120,12 @@ public final class TerminalEmulator: VTParserHandler {
     /// a hostile stream can open many distinct ids that each send `m=1` and never finish. Cap the
     /// count of concurrently-reassembling images so the dictionary can't grow without bound.
     private let maxKittyPendingImages = 64
+    /// Transmitted-but-not-yet-placed images, keyed by Kitty image id (`i=`). Populated by `a=t`
+    /// (and `a=T`), consumed by `a=p` (place-many) — the transmit-once/place-many model image
+    /// plugins use. Bounded by count + total bytes; oldest evicted on overflow.
+    private var kittyTransmitted: [(id: Int, image: DecodedImage)] = []
+    private let maxKittyTransmittedImages = 64
+    private var kittyTransmittedBytes = 0
 
     public init(cols: Int, rows: Int) {
         let c = max(1, cols)
@@ -112,7 +144,8 @@ public final class TerminalEmulator: VTParserHandler {
     /// has no scrollback to scroll.
     public var isAlternateScreenActive: Bool { onAlternateScreen }
 
-    /// Cap on retained primary-screen scrollback.
+    /// Cap on retained primary-screen scrollback. `0` means **unlimited** (history is never
+    /// trimmed); any positive value caps the ring. Negative inputs clamp to `0` (unlimited).
     public var maxScrollbackLines: Int {
         get { primary.maxHistoryLines }
         set { primary.maxHistoryLines = max(0, newValue) }
@@ -196,6 +229,13 @@ public final class TerminalEmulator: VTParserHandler {
     /// joins soft-wrapped physical rows into their logical line.
     public func captureLines(joinWrapped: Bool) -> [String] { current.captureLines(joinWrapped: joinWrapped) }
 
+    /// Virtual-line span `[first, last]` of the logical (soft-wrapped) line containing virtual
+    /// `line` (space: `[history ++ viewport]`, 0 = oldest). Drives triple-click logical-line
+    /// selection — a hard-ended line returns just itself.
+    public func logicalLineRowSpan(virtualLine line: Int) -> ClosedRange<Int> {
+        current.logicalLineSpan(containing: line)
+    }
+
     // MARK: - VTParserHandler
 
     func parserPrint(_ scalar: UInt32) {
@@ -254,6 +294,11 @@ public final class TerminalEmulator: VTParserHandler {
             if intermediates == [0x28] { g0 = charset } else { g1 = charset }
             return
         }
+        // DECALN — `ESC # 8` (intermediate '#'): screen alignment test, fill the screen with 'E'.
+        if intermediates == [0x23], final == 0x38 {
+            current.screenAlignmentTest()
+            return
+        }
         // Other intermediate sequences are accepted but not acted on.
         guard intermediates.isEmpty else { return }
         switch final {
@@ -289,6 +334,17 @@ public final class TerminalEmulator: VTParserHandler {
             current.setCursorStyle(argRaw(params, 0, 0))
             return
         }
+        // DECSTR — `CSI ! p` (intermediate '!'): soft terminal reset.
+        if intermediates == [0x21], final == 0x70 {
+            softReset()
+            return
+        }
+        // DECRQM, ANSI form — `CSI Ps $ p` (no private marker): report a non-private mode's
+        // state. The private form (`CSI ? Ps $ p`) routes through `handlePrivateMode`.
+        if intermediates == [0x24], final == 0x70 {
+            for g in 0 ..< params.count { reportANSIMode(params.first(g)) }
+            return
+        }
         guard intermediates.isEmpty else { return }
         switch final {
         case 0x41: current.moveCursorRelative(dRow: -arg(params, 0, 1), dCol: 0) // CUU
@@ -298,8 +354,8 @@ public final class TerminalEmulator: VTParserHandler {
         case 0x45: cursorNextLine(arg(params, 0, 1))   // CNL
         case 0x46: cursorPrevLine(arg(params, 0, 1))   // CPL
         case 0x47: current.moveCursorCol(arg(params, 0, 1) - 1) // CHA
-        case 0x48, 0x66: // CUP / HVP
-            current.moveCursor(row: arg(params, 0, 1) - 1, col: arg(params, 1, 1) - 1)
+        case 0x48, 0x66: // CUP / HVP (origin-mode aware)
+            current.cursorPosition(row: arg(params, 0, 1) - 1, col: arg(params, 1, 1) - 1)
         case 0x4A: current.eraseInDisplay(mode: argRaw(params, 0, 0)) // ED
         case 0x4B: current.eraseInLine(mode: argRaw(params, 0, 0))    // EL
         case 0x4C: current.insertLines(arg(params, 0, 1))   // IL
@@ -309,7 +365,10 @@ public final class TerminalEmulator: VTParserHandler {
         case 0x58: current.eraseCharacters(arg(params, 0, 1))  // ECH
         case 0x53: current.scrollUp(arg(params, 0, 1))   // SU
         case 0x54: current.scrollDown(arg(params, 0, 1)) // SD
-        case 0x64: current.moveCursorRow(arg(params, 0, 1) - 1) // VPA
+        case 0x64: current.cursorToRow(arg(params, 0, 1) - 1) // VPA (origin-mode aware)
+        case 0x62: current.repeatLastGraphicChar(arg(params, 0, 1)) // REP — repeat last graphic char
+        case 0x68: setANSIMode(params, true)  // SM — set mode (IRM…)
+        case 0x6C: setANSIMode(params, false) // RM — reset mode
         case 0x6D: current.applySGR(params)            // SGR
         case 0x72: setScrollRegion(params)             // DECSTBM
         case 0x73: current.saveCursor()                // ANSI save cursor
@@ -320,14 +379,108 @@ public final class TerminalEmulator: VTParserHandler {
             argRaw(params, 0, 0) == 3 ? current.clearAllTabStops() : current.clearTabStop()
         case 0x49: current.cursorForwardTabs(arg(params, 0, 1))  // CHT — forward N tab stops
         case 0x5A: current.cursorBackwardTabs(arg(params, 0, 1)) // CBT — back N tab stops
+        case 0x74: handleWindowOps(params)             // XTWINOPS (title stack + size reports)
         default: break
         }
     }
 
     func parserDCS(_ data: [UInt8]) {
-        // Sixel images arrive as DCS `… q …`. Decode + place (A2/A3).
-        guard data.contains(0x71) /* 'q' */, let image = SixelDecoder.decode(data) else { return }
-        placeImage(image, z: 0)
+        // tmux control-mode passthrough (`DCS tmux; … ST`). Recognized so it is never misread as
+        // Sixel; driving the wrapped sequences is out of scope here (tracked separately).
+        if data.starts(with: Self.tmuxPassthroughPrefix) { return }
+        // Demux the DCS by its header — params (0x30–0x3F), then intermediates (0x20–0x2F), then a
+        // final byte (0x40–0x7E), with the device-control data after the final, mirroring CSI. The
+        // old `data.contains("q")` test sent every DCS that happened to contain a 'q' (DECRQSS `$q`,
+        // XTGETTCAP `+q`, tmux passthrough) into the Sixel decoder, where it decoded as nothing.
+        var i = 0
+        let n = data.count
+        while i < n, (0x30 ... 0x3F).contains(data[i]) { i += 1 } // parameter bytes
+        var intermediate: UInt8?
+        while i < n, (0x20 ... 0x2F).contains(data[i]) { intermediate = data[i]; i += 1 } // intermediates
+        guard i < n else { return } // header with no final byte — malformed, ignore
+        let final = data[i]
+        let payload = Array(data[(i + 1)...])
+        switch (intermediate, final) {
+        case (nil, 0x71): // 'q' — Sixel image (no intermediate)
+            if let image = SixelDecoder.decode(data) { placeImage(image, z: 0) }
+        case (0x24, 0x71): // '$' 'q' — DECRQSS: request the value of a setting
+            handleDECRQSS(payload)
+        case (0x2B, 0x71): // '+' 'q' — XTGETTCAP: terminfo capability query
+            handleXTGETTCAP(payload)
+        default:
+            break // unrecognized device-control string — ignore rather than misroute
+        }
+    }
+
+    /// `DCS tmux;` — the tmux control-mode passthrough introducer.
+    private static let tmuxPassthroughPrefix = Array("tmux;".utf8)
+
+    /// DECRQSS (`DCS $ q Pt ST`) — report the current value of the setting named by `Pt` (the
+    /// intermediate+final of the CSI that sets it). Reply `DCS 1 $ r <value> Pt ST` when we can
+    /// answer, or the "invalid request" form `DCS 0 $ r Pt ST` otherwise. We answer for the
+    /// settings the engine actually tracks: DECSCUSR (`SP q`) and DECSTBM (`r`).
+    private func handleDECRQSS(_ request: [UInt8]) {
+        let pt = String(decoding: request, as: UTF8.self)
+        switch pt {
+        case " q": // DECSCUSR — cursor style
+            respond("\u{1b}P1$r\(current.cursorStylePs) q\u{1b}\\")
+        case "r": // DECSTBM — scroll region (top;bottom, 1-based)
+            let region = current.scrollRegionOneBased
+            respond("\u{1b}P1$r\(region.top);\(region.bottom)r\u{1b}\\")
+        default:
+            respond("\u{1b}P0$r\(pt)\u{1b}\\") // request not recognized
+        }
+    }
+
+    /// XTGETTCAP (`DCS + q Pt ST`) — answer terminfo/termcap capability queries for the handful of
+    /// stable, statically-known capabilities (`TN` terminal name, `Co`/`colors` palette size, `RGB`
+    /// truecolor). Names and values are hex-encoded per the protocol; unknown names get the negative
+    /// `DCS 0 + r <name> ST` reply so a querier doesn't wait.
+    private func handleXTGETTCAP(_ request: [UInt8]) {
+        // The request is one or more `;`-separated hex-encoded capability names.
+        for nameHex in request.split(separator: 0x3B, omittingEmptySubsequences: false) {
+            guard let name = Self.decodeHex(Array(nameHex)) else { continue }
+            let value: String?
+            switch name {
+            case "TN": value = terminalName            // terminal name
+            case "Co", "colors": value = "256"          // palette size
+            case "RGB": value = "8/8/8"                 // 24-bit truecolor (bits per channel)
+            default: value = nil
+            }
+            if let value {
+                respond("\u{1b}P1+r\(Self.encodeHex(name))=\(Self.encodeHex(value))\u{1b}\\")
+            } else {
+                respond("\u{1b}P0+r\(Self.encodeHex(name))\u{1b}\\")
+            }
+        }
+    }
+
+    /// Decode an ASCII hex string (`"5452"` → `"TN"`); nil on odd length or a non-hex digit.
+    private static func decodeHex(_ bytes: [UInt8]) -> String? {
+        guard bytes.count % 2 == 0 else { return nil }
+        var out = [UInt8]()
+        out.reserveCapacity(bytes.count / 2)
+        var idx = bytes.startIndex
+        while idx < bytes.count {
+            guard let hi = hexValue(bytes[idx]), let lo = hexValue(bytes[idx + 1]) else { return nil }
+            out.append(UInt8(hi << 4 | lo))
+            idx += 2
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    private static func hexValue(_ b: UInt8) -> Int? {
+        switch b {
+        case 0x30 ... 0x39: return Int(b - 0x30)
+        case 0x41 ... 0x46: return Int(b - 0x41 + 10)
+        case 0x61 ... 0x66: return Int(b - 0x61 + 10)
+        default: return nil
+        }
+    }
+
+    /// Hex-encode a string for an XTGETTCAP reply (`"TN"` → `"544e"`).
+    private static func encodeHex(_ s: String) -> String {
+        s.utf8.map { String(format: "%02x", $0) }.joined()
     }
 
     func parserAPC(_ data: [UInt8]) {
@@ -349,8 +502,37 @@ public final class TerminalEmulator: VTParserHandler {
         }
     }
 
-    private func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0) {
-        current.placeImage(image, cols: cols, rows: rows, z: z)
+    private func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0, kittyID: Int? = nil) {
+        current.placeImage(image, cols: cols, rows: rows, z: z, kittyID: kittyID)
+    }
+
+    /// Store a transmitted image for later `a=p` placement, bounded by count + total bytes.
+    private func storeKittyTransmitted(id: Int, image: DecodedImage) {
+        kittyTransmitted.removeAll { existing in
+            if existing.id == id { kittyTransmittedBytes -= existing.image.byteCount; return true }
+            return false
+        }
+        kittyTransmitted.append((id, image))
+        kittyTransmittedBytes += image.byteCount
+        while (kittyTransmitted.count > maxKittyTransmittedImages
+               || kittyTransmittedBytes > ImageLimits.maxBytesPerScreen),
+              !kittyTransmitted.isEmpty {
+            kittyTransmittedBytes -= kittyTransmitted.removeFirst().image.byteCount
+        }
+    }
+
+    private func kittyTransmitted(id: Int) -> DecodedImage? {
+        kittyTransmitted.first { $0.id == id }?.image
+    }
+
+    /// Emit the Kitty graphics ack `APC G <i|I>=<id> ; <message> ST`. Per spec it's sent only when
+    /// the client gave an addressable id (`i=`) or number (`I=`), and is suppressed by quietness:
+    /// `q=1` silences the OK reply, `q=2` silences errors too.
+    private func kittyAck(idKey: String, id: Int, ok: Bool, message: String, quietness: Int) {
+        guard id != 0 else { return }
+        if ok, quietness >= 1 { return }
+        if !ok, quietness >= 2 { return }
+        respond("\u{1b}_G\(idKey)=\(id);\(message)\u{1b}\\")
     }
 
     private func handleKittyGraphics(_ cmd: KittyGraphicsCommand) {
@@ -385,15 +567,106 @@ public final class TerminalEmulator: VTParserHandler {
             base = cmd
             payload = cmd.payload
         }
-        // Only transmit+display / put actions place an image; deletes/queries are ignored.
-        guard base.action == "T" || base.action == "p" else { return }
-        guard let image = base.decode(base64Payload: payload) else { return }
-        placeImage(image, cols: base.cols, rows: base.rows, z: base.z)
+        // Echo whichever handle the client used (`i=` preferred, else `I=`) back in the ack.
+        let echoKey = base.imageID != 0 ? "i" : "I"
+        let echoID = base.imageID != 0 ? base.imageID : base.imageNumber
+
+        switch base.action {
+        case "q":
+            // Query (capability/decodability probe): validate without placing or storing. Answering
+            // this is what gates detection in `icat`/`timg`/`chafa`, so it must reply.
+            let ok = base.decode(base64Payload: payload) != nil
+            kittyAck(idKey: echoKey, id: echoID, ok: ok,
+                     message: ok ? "OK" : "EBADF:could not decode image", quietness: base.quietness)
+
+        case "t", "T":
+            // Transmit (`t`) stores for later place-many; transmit+display (`T`) also places now.
+            guard let image = base.decode(base64Payload: payload) else {
+                kittyAck(idKey: echoKey, id: echoID, ok: false,
+                         message: "EBADF:could not decode image", quietness: base.quietness)
+                return
+            }
+            if base.imageID != 0 { storeKittyTransmitted(id: base.imageID, image: image) }
+            if base.action == "T" {
+                placeImage(image, cols: base.cols, rows: base.rows, z: base.z,
+                           kittyID: base.imageID != 0 ? base.imageID : nil)
+            }
+            kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
+
+        case "p":
+            // Put/place a previously-transmitted image by id (transmit-once / place-many).
+            guard base.imageID != 0, let image = kittyTransmitted(id: base.imageID) else {
+                kittyAck(idKey: echoKey, id: echoID, ok: false,
+                         message: "ENOENT:image not found", quietness: base.quietness)
+                return
+            }
+            placeImage(image, cols: base.cols, rows: base.rows, z: base.z, kittyID: base.imageID)
+            kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
+
+        case "d":
+            // Delete placements: `d=i`/`d=I` by image id, otherwise (`d=a`/`d=A`/default) all.
+            switch base.deleteTarget {
+            case "i", "I":
+                if base.imageID != 0 {
+                    current.deleteImages(kittyID: base.imageID)
+                    kittyTransmitted.removeAll { e in
+                        e.id == base.imageID ? { kittyTransmittedBytes -= e.image.byteCount; return true }() : false
+                    }
+                }
+            default:
+                current.deleteImages(kittyID: nil)
+                kittyTransmitted.removeAll(); kittyTransmittedBytes = 0
+            }
+            kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
+
+        default:
+            break // `a=a` (animation) and any unknown action are deliberately ignored (deferred).
+        }
     }
 
     /// iTerm2 inline image (`OSC 1337 ; File=…:<base64>`). width/height args may be cells (`N`),
     /// pixels (`Npx`), or percent (`N%`); only plain cell counts are honored here — pixel/percent
     /// fall back to the footprint computed from the image's pixels.
+    /// The OSC 1337 family beyond inline images (F20): `CurrentDir=` reports the cwd with
+    /// the same trust policy as OSC 7 (absolute paths only — hostile output must not steer
+    /// the inherited cwd), and `SetUserVar=name=<base64>` stores a per-surface user variable
+    /// (surfaced to format strings by the host as a pane-scoped `@name` option). Anything
+    /// else falls through to the image handler, which ignores what it can't parse.
+    private func handleITerm2OSC(_ payload: String) {
+        if payload.hasPrefix("CurrentDir=") {
+            let path = String(payload.dropFirst("CurrentDir=".count))
+            guard path.hasPrefix("/") else { return }
+            onWorkingDirectoryChange?(path)
+            return
+        }
+        if payload.hasPrefix("SetUserVar=") {
+            let body = String(payload.dropFirst("SetUserVar=".count))
+            guard let eq = body.firstIndex(of: "=") else { return }
+            let name = String(body[..<eq])
+            let encoded = String(body[body.index(after: eq)...])
+            // Bound everything a hostile stream controls: name shape + length (ASCII only —
+            // Unicode `isLetter`/`isNumber` would admit lookalikes like `½`), the base64 TEXT
+            // before decoding (4096 bytes ≈ 5464 base64 chars with padding, so a multi-MiB
+            // payload is never decoded), decoded value size + content (no C0/DEL/C1 — values
+            // are later format-expanded into status lines and other clients' TTYs, where a
+            // control byte is escape injection), and the variable-table population (new names
+            // rejected past the cap; existing names stay updatable).
+            guard !name.isEmpty, name.count <= 64,
+                  name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }),
+                  encoded.utf8.count <= 5464,
+                  let data = Data(base64Encoded: encoded), data.count <= 4096,
+                  let value = String(data: data, encoding: .utf8),
+                  value.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F && !(0x80 ... 0x9F).contains($0.value) })
+            else { return }
+            if userVariables[name] == value { return } // same-value rewrite: no host round trip
+            if userVariables[name] == nil, userVariables.count >= Self.maxUserVariables { return }
+            userVariables[name] = value
+            onUserVariableChange?(name, value)
+            return
+        }
+        handleITerm2Image(payload)
+    }
+
     private func handleITerm2Image(_ payload: String) {
         guard let parsed = ITerm2InlineImage.parse(Array(payload.utf8)) else { return }
         func cells(_ s: String?) -> Int {
@@ -409,7 +682,9 @@ public final class TerminalEmulator: VTParserHandler {
         let code = String(text[text.startIndex ..< semi])
         let payload = String(text[text.index(after: semi)...])
         switch code {
-        case "0", "2": onTitleChange?(payload)            // icon+title / title
+        case "0", "2": // icon+title / title (tracked so XTWINOPS 22/23 can push/pop it)
+            currentTitle = payload
+            onTitleChange?(payload)
         case "7": handleWorkingDirectoryOSC(payload)       // cwd as file:// URL
         case "8": handleHyperlinkOSC(payload)              // OSC 8 hyperlinks
         case "10": handleColorQuery(code: "10", role: .foreground, payload: payload)
@@ -421,7 +696,7 @@ public final class TerminalEmulator: VTParserHandler {
         case "777": handleNotify777(payload)               // OSC 777 ; notify ; <title> ; <body>
         case "22": setPointerShape(payload)                // OSC 22 ; <shape> — mouse cursor shape
         case "133": handleSemanticPrompt(payload)          // OSC 133 ; A/B/C/D — shell integration
-        case "1337": handleITerm2Image(payload)            // iTerm2 inline image (File=…)
+        case "1337": handleITerm2OSC(payload)              // iTerm2 family (File=/CurrentDir=/SetUserVar=)
         default: break
         }
     }
@@ -593,6 +868,29 @@ public final class TerminalEmulator: VTParserHandler {
         current.setScrollRegion(top: top, bottom: bottom)
     }
 
+    /// ANSI SM/RM (`CSI Ps h` / `CSI Ps l`, no private marker). Only IRM (mode 4) is meaningful;
+    /// other ANSI modes (e.g. LNM 20) are not implemented and are ignored.
+    private func setANSIMode(_ params: CSIParams, _ set: Bool) {
+        for g in 0 ..< params.count where params.first(g) == 4 {
+            current.insertMode = set // IRM — insert/replace mode
+        }
+    }
+
+    /// DECSTR (`CSI ! p`) soft terminal reset: return the active screen's state (cursor visibility,
+    /// insert/replace, origin, scroll region, saved cursor, SGR) plus the host-facing keyboard modes
+    /// and charset designations to defaults, without clearing the screen or moving the cursor.
+    private func softReset() {
+        current.softReset()
+        modes.cursorKeysApplication = false
+        modes.keypadApplication = false
+        // The screen's softReset() discards savedCursor — DECRQM ?1048 must not keep
+        // reporting "set" for a save that no longer exists.
+        mode1048Saved = false
+        g0 = .ascii
+        g1 = .ascii
+        glUsesG1 = false
+    }
+
     private func handlePrivateMode(final: UInt8, intermediates: [UInt8], params: [Int], marker: UInt8?) {
         // Kitty keyboard protocol — `CSI u` with a private introducer (push/pop/set/query).
         if final == 0x75, intermediates.isEmpty {
@@ -619,6 +917,12 @@ public final class TerminalEmulator: VTParserHandler {
             respond("\u{1b}[>1;\(secondaryDAVersion);0c")
             return
         }
+        // Tertiary DA — `CSI = c`: reply DECRPTUI (`DCS ! | <8-hex-digit unit id> ST`). The
+        // all-zero site/serial is what xterm reports; tools only check that a reply arrives.
+        if final == 0x63, marker == 0x3D, intermediates.isEmpty {
+            respond("\u{1b}P!|00000000\u{1b}\\")
+            return
+        }
         // DECRQM: `CSI ? Ps $ p` — report a private mode's current state.
         if final == 0x70, intermediates == [0x24] { // '$' then 'p'
             for p in params { reportPrivateMode(p) }
@@ -628,18 +932,29 @@ public final class TerminalEmulator: VTParserHandler {
         guard final == 0x68 || final == 0x6C else { return }
         for p in params {
             switch p {
+            case 5: // DECSCNM reverse video — whole-screen fg/bg swap (resolved at render)
+                if modes.reverseVideo != set {
+                    modes.reverseVideo = set
+                    current.markFullyDirty()
+                }
+            case 6: current.setOriginMode(set)             // DECOM origin mode
             case 7: current.autowrap = set                 // DECAWM autowrap
+            case 12: current.setCursorBlink(set)           // att610 cursor blink
             case 25: current.cursorVisible = set           // DECTCEM cursor visibility
             case 1000: modes.mouseClick = set              // X10/normal mouse
             case 1002: modes.mouseDrag = set               // button-event tracking
             case 1003: modes.mouseAny = set                // any-event tracking
             case 1006: modes.mouseSGR = set                // SGR extended coordinates
+            case 1016: modes.mouseSGRPixel = set           // SGR-pixel extended coordinates
             case 1004: modes.focusReporting = set          // focus in/out reporting
             case 1007: modes.alternateScroll = set         // wheel → arrows on alt screen
             case 2004: modes.bracketedPaste = set          // bracketed paste
             case 2026: modes.synchronizedOutput = set      // synchronized output (no tearing)
             case 1: modes.cursorKeysApplication = set      // DECCKM
             case 47, 1047: switchAlternate(set, clearOnEnter: true, saveCursor: false)
+            case 1048: // save (h) / restore (l) cursor without the screen switch
+                mode1048Saved = set
+                set ? current.saveCursor() : current.restoreCursor()
             case 1049: switchAlternate(set, clearOnEnter: true, saveCursor: true)
             default: break
             }
@@ -651,20 +966,63 @@ public final class TerminalEmulator: VTParserHandler {
     private func reportPrivateMode(_ p: Int) {
         let state: Int
         switch p {
+        case 5: state = modes.reverseVideo ? 1 : 2
+        case 6: state = current.originMode ? 1 : 2
         case 7: state = current.autowrap ? 1 : 2
+        case 12: state = current.cursorBlinking == true ? 1 : 2 // nil = user default → "reset"
         case 25: state = current.cursorVisible ? 1 : 2
         case 1000: state = modes.mouseClick ? 1 : 2
         case 1002: state = modes.mouseDrag ? 1 : 2
         case 1003: state = modes.mouseAny ? 1 : 2
         case 1006: state = modes.mouseSGR ? 1 : 2
+        case 1016: state = modes.mouseSGRPixel ? 1 : 2
         case 1004: state = modes.focusReporting ? 1 : 2
         case 1007: state = modes.alternateScroll ? 1 : 2
         case 2004: state = modes.bracketedPaste ? 1 : 2
         case 2026: state = modes.synchronizedOutput ? 1 : 2
         case 1: state = modes.cursorKeysApplication ? 1 : 2
+        case 47, 1047, 1049: state = onAlternateScreen ? 1 : 2
+        case 1048: state = mode1048Saved ? 1 : 2 // xterm tracks save/restore as a mode bit
         default: state = 0 // not recognized
         }
         respond("\u{1b}[?\(p);\(state)$y")
+    }
+
+    /// DECRPM reply for the ANSI (non-private) DECRQM form: `CSI Ps ; Pm $ y`. Only IRM
+    /// (mode 4) is implemented; every other ANSI mode reports 0 (not recognized) — the
+    /// conformance-correct answer, letting programs feature-detect instead of assuming.
+    private func reportANSIMode(_ p: Int) {
+        let state: Int
+        switch p {
+        case 4: state = current.insertMode ? 1 : 2
+        default: state = 0 // not recognized
+        }
+        respond("\u{1b}[\(p);\(state)$y")
+    }
+
+    /// XTWINOPS (`CSI Ps ; … t`). Implemented: the title stack (22 push / 23 pop) and the
+    /// size *reports* (18 chars / 14 pixels). Resize/move/iconify remain deliberate
+    /// non-goals — the window belongs to the user — and unknown Ps are ignored.
+    private func handleWindowOps(_ params: CSIParams) {
+        switch argRaw(params, 0, 0) {
+        case 14: // text area size in pixels → CSI 4 ; height ; width t
+            // Derived from the cell pixel size the host already supplies for inline images
+            // (`setCellPixelSize`, kept current on every font/scale change) — one source of
+            // truth, and the same space SGR-pixel (1016) mouse coordinates use. A headless
+            // consumer reports the screen's synthetic 8×16 default rather than silence, so
+            // a querying program never hangs.
+            respond("\u{1b}[4;\(rows * current.cellPixelHeight);\(cols * current.cellPixelWidth)t")
+        case 18: // text area size in characters → CSI 8 ; rows ; cols t
+            respond("\u{1b}[8;\(rows);\(cols)t")
+        case 22: // push title (Ps2 0/1/2 — icon and window title are one value here)
+            if titleStack.count < Self.titleStackLimit { titleStack.append(currentTitle) }
+        case 23: // pop title — restores (and re-announces) the saved title
+            if let restored = titleStack.popLast() {
+                currentTitle = restored
+                onTitleChange?(restored)
+            }
+        default: break
+        }
     }
 
     /// Kitty keyboard protocol control, dispatched by the private introducer:
@@ -724,8 +1082,12 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     private func deviceAttributes() {
-        // Identify as a VT100 with Advanced Video Option (a safe, widely-accepted reply).
-        respond("\u{1b}[?1;2c")
+        // Identify as a VT220-class terminal (62) with Sixel graphics (4) and ANSI color (22) —
+        // the same class Ghostty/xterm report. `parserDCS` decodes Sixel, so tools that gate on
+        // the DA1 feature list (img2sixel, chafa, timg) will actually emit it; the 62 class is
+        // what makes capability-probing TUIs try VT220-level sequences we do implement (DECRQM,
+        // DA3, the title stack) instead of degrading to VT100.
+        respond("\u{1b}[?62;4;22c")
     }
 
     private func respond(_ s: String) {
@@ -733,16 +1095,24 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     private func handleWorkingDirectoryOSC(_ payload: String) {
-        // OSC 7 value is a file URL: file://host/path
+        // OSC 7 reports the shell's cwd as a file URL: `file://<host>/<absolute-path>`. Accept only
+        // a `file://` URL that resolves to an absolute path; ignore a relative path, a non-`file`
+        // scheme, or junk, so hostile output can't steer the cwd inherited by new tabs to an
+        // attacker-chosen value. No existence check — the path may live on a remote host (cwd
+        // reported over ssh), and the engine is filesystem-agnostic by design.
+        let path: String
         if let url = URL(string: payload), url.isFileURL {
-            onWorkingDirectoryChange?(url.path)
+            path = url.path
         } else if payload.hasPrefix("file://") {
-            // Fallback: strip scheme + authority manually.
+            // Fallback: strip scheme + authority manually (URL() rejects some unencoded paths).
             let withoutScheme = String(payload.dropFirst("file://".count))
-            if let slash = withoutScheme.firstIndex(of: "/") {
-                onWorkingDirectoryChange?(String(withoutScheme[slash...]))
-            }
+            guard let slash = withoutScheme.firstIndex(of: "/") else { return }
+            path = String(withoutScheme[slash...])
+        } else {
+            return
         }
+        guard path.hasPrefix("/") else { return }
+        onWorkingDirectoryChange?(path)
     }
 
     private func fullReset() {
@@ -756,8 +1126,21 @@ public final class TerminalEmulator: VTParserHandler {
         g0 = .ascii
         g1 = .ascii
         glUsesG1 = false
+        // RIS empties the XTWINOPS title stack (xterm behavior); the title itself persists.
+        titleStack.removeAll()
+        mode1048Saved = false
         kittyPending.removeAll()
+        // RIS returns the terminal to its initial state, so the transmitted-image cache
+        // (transmit-once / place-many storage) must reset too — same cleanup as `d=a`
+        // delete-all — otherwise images survive a full reset and keep occupying the
+        // per-screen byte budget.
+        kittyTransmitted.removeAll()
+        kittyTransmittedBytes = 0
         pointerShape = nil
+        if !userVariables.isEmpty {
+            userVariables.removeAll()
+            onUserVariablesCleared?()
+        }
         hyperlinks.removeAll()
         hyperlinkKeys.removeAll()
         nextHyperlinkID = 1
@@ -783,6 +1166,12 @@ public struct TerminalModes: Sendable, Equatable {
     public var mouseDrag = false
     public var mouseAny = false
     public var mouseSGR = false
+    /// DECSET 1016: SGR-pixel mouse reporting — same `CSI < … M/m` framing as 1006 but with
+    /// pixel coordinates. Takes precedence over 1006 when both are set (xterm semantics).
+    public var mouseSGRPixel = false
+    /// DECSET 5 (DECSCNM): whole-screen reverse video. Resolved at render time (the renderer
+    /// swaps default fg/bg), so the engine only tracks the flag and dirties the screen.
+    public var reverseVideo = false
     /// DEC private mode 2026 (synchronized output): while set, the program is mid-frame and the
     /// renderer should hold the last presented frame rather than paint partial updates — no
     /// tearing in TUIs (vim, fzf, btop, …). Cleared by the program (or a renderer-side timeout).

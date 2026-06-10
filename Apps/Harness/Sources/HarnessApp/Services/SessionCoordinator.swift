@@ -14,7 +14,23 @@ final class SessionCoordinator: NSObject {
     private(set) var snapshot = SessionSnapshot()
     private var lastRevision = -1
     private let terminalHosts = TerminalPaneRegistry()
-    private var metadataTask: Task<Void, Never>?
+    /// Event-driven branch labels: watches each repository's `HEAD` and pushes
+    /// `updateTabGitBranch` only on real change (replaced the 2 s git-subprocess poll).
+    private let gitBranchMonitor = GitBranchMonitor()
+    /// Long-lived push channel: the daemon sends every committed revision, the handler
+    /// syncs when it differs from `lastRevision`. This is how external structure changes
+    /// (`harness-cli split-pane` against a GUI session) reach the app now that the
+    /// 2 s metadata poll is gone.
+    private var snapshotSubscription: DaemonSubscription?
+    /// Invalidates stale subscription callbacks: bumped on every (re)subscribe, checked by
+    /// the previous subscription's `onEnd` (its `cancel()` fires `onEnd` too — without the
+    /// guard, replacing a subscription would schedule a duplicate resubscribe).
+    private var snapshotSubscriptionGeneration = 0
+    private var snapshotResubscribeDelay: TimeInterval = 1
+    /// Push-loss insurance, not the mechanism: the daemon drops subscribers whose write
+    /// backlog exceeds its cap, and a dropped fd silently stops pushes. Runs only while
+    /// the app is active.
+    private var safetyPollTimer: Timer?
     private var pushedNotificationKeys: Set<String> = []
     /// Last-seen agent activity per surface key, so we can fire a notification the
     /// moment an agent transitions out of `working` (i.e. stopped producing output —
@@ -25,6 +41,9 @@ final class SessionCoordinator: NSObject {
     /// working→idle→working mid-task can't spam "stopped" pings.
     private var lastStopNotifyAt: [String: Date] = [:]
     var settings = HarnessSettings.load()
+    /// Hot-reload watchers for `settings.json` / `keybindings.json` (Ghostty config-reload-on-save).
+    /// Held for the coordinator's lifetime.
+    private var configWatchers: [FileWatcher] = []
     /// Which daemon the GUI currently drives: the local one, or a remote daemon over an SSH tunnel.
     /// New terminal panes are bound to this endpoint, and `daemon` (session/layout IPC) tracks it.
     private(set) var activeEndpoint: Endpoint = .localControlSocket
@@ -51,7 +70,10 @@ final class SessionCoordinator: NSObject {
     /// used as the default for new tabs/sessions so they open where the user is
     /// working — matching Terminal.app / iTerm. `nil` when unknown.
     private var activeTabCWD: String? {
-        guard let cwd = snapshot.activeWorkspace?.activeTab?.cwd, !cwd.isEmpty else { return nil }
+        // `window-inherit-cwd` (default on): off pins new tabs/sessions to `defaultCWD`
+        // by making the inherited value resolve to nil at every consumer.
+        guard settings.windowInheritCWD,
+              let cwd = snapshot.activeWorkspace?.activeTab?.cwd, !cwd.isEmpty else { return nil }
         return cwd
     }
 
@@ -78,7 +100,38 @@ final class SessionCoordinator: NSObject {
         // `DaemonLauncher.ensureRunning` callback in AppDelegate performs the first
         // hydration the moment the daemon answers — after the window is on screen.
         observeNotifications()
-        startMetadataRefresh()
+        configureGitBranchMonitor()
+        observeAppActivation()
+        startSafetyPoll()
+        startConfigWatchers()
+    }
+
+    /// Watch the on-disk config so an external edit (a text editor, `harness-cli set-option`, a
+    /// dotfile sync) applies live — Ghostty's config-reload-on-save. The `fresh != settings` guard
+    /// makes the app's OWN saves a no-op: it already updated the in-memory `settings` before writing,
+    /// so the reload loads identical values and does nothing. `FileWatcher` delivers on the main
+    /// queue, so `assumeIsolated` is safe (and hop-free) for this @MainActor coordinator.
+    private func startConfigWatchers() {
+        let settingsWatcher = FileWatcher(url: HarnessPaths.settingsURL) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let fresh = HarnessSettings.load()
+                guard fresh != self.settings else { return }
+                self.settings = fresh
+                self.applySettingsToHosts()
+                // An external toggle of `secureKeyboardEntry` must re-sync the process-global
+                // secure-input lock, exactly as `setSecureKeyboardEntry` does — otherwise the
+                // lock can stay held after the setting is turned off via an editor / harness-cli.
+                SecureKeyboardEntry.shared.settingChanged()
+            }
+        }
+        let keybindingsWatcher = FileWatcher(url: KeybindingsStore.fileURL) { [weak self] in
+            MainActor.assumeIsolated {
+                guard self != nil else { return }
+                KeybindingsService.shared.reload()
+            }
+        }
+        configWatchers = [settingsWatcher, keybindingsWatcher]
     }
 
     private func observeNotifications() {
@@ -154,6 +207,11 @@ final class SessionCoordinator: NSObject {
         activeEndpoint = endpoint
         daemon.switchEndpoint(endpoint)
         terminalHosts.prune(keeping: [])
+        // Re-point the push channel: the old subscription is pinned to the old daemon
+        // (its onEnd is invalidated by the generation bump inside). A failed attempt has
+        // no onEnd to retry from, so back off explicitly.
+        startSnapshotSubscription()
+        if snapshotSubscription == nil { scheduleSnapshotResubscribe() }
         _ = syncFromDaemon()
     }
 
@@ -171,8 +229,15 @@ final class SessionCoordinator: NSObject {
         }
         StartupMetrics.shared.mark(.firstSnapshot) // idempotent: records the first hydration only
         let structureChanged = structureFingerprint(remote) != structureFingerprint(snapshot)
+        // A CLI-driven theme change arrives by push (metadata-only), so it must force the
+        // chrome path itself — recurring syncs otherwise never rebuild renderers.
+        let themeChanged = remote.themeName != snapshot.themeName
         snapshot = remote
         lastRevision = remote.revision
+        // The daemon answered: bring up the push channel if it isn't already, and reconcile
+        // the branch watchers against the fresh tab set (cheap when nothing moved).
+        startSnapshotSubscriptionIfNeeded()
+        gitBranchMonitor.update(tabs: gitBranchRecords(from: remote))
         if structureChanged {
             structureRevision += 1
             // Drop hosts for surfaces the daemon no longer knows: killPane / remote closes remount
@@ -189,10 +254,9 @@ final class SessionCoordinator: NSObject {
         }
         pushNewRemoteNotifications(from: remote)
         pushAgentActivityNotifications(from: remote)
-        if !metadataOnly {
+        if !metadataOnly || themeChanged {
             applyThemeToAllHosts()
         }
-        syncWaitingRings()
         updateDockBadge(from: remote)
         reflectRemoteActivePane()
         NotificationCenter.default.post(
@@ -201,7 +265,7 @@ final class SessionCoordinator: NSObject {
             userInfo: [
                 "revision": remote.revision,
                 "structureChanged": structureChanged,
-                "chromeChanged": !metadataOnly,
+                "chromeChanged": !metadataOnly || themeChanged,
                 "metadataOnly": metadataOnly,
             ]
         )
@@ -220,29 +284,37 @@ final class SessionCoordinator: NSObject {
         fputs("Harness: closeEphemeralSessions did not confirm before quit\n", harnessStderr)
     }
 
-    private func structureFingerprint(_ snap: SessionSnapshot) -> String {
-        guard let ws = snap.activeWorkspace, let session = ws.activeSession, let tab = session.activeTab else { return "" }
-        let surfaces = tab.rootPane.allSurfaceIDs().map(\.uuidString).sorted().joined(separator: ",")
-        return "\(ws.id)|\(session.id)|\(tab.id)|\(surfaces)"
+    private func structureFingerprint(_ snap: SessionSnapshot) -> Int {
+        var hasher = Hasher()
+        // Include the active workspace/session/tab identity so intra-tab focus changes
+        // and tab switches still bump structureRevision (same behaviour as before).
+        if let ws = snap.activeWorkspace {
+            hasher.combine(ws.id)
+            if let session = ws.activeSession {
+                hasher.combine(session.id)
+                if let tab = session.activeTab { hasher.combine(tab.id) }
+            }
+        }
+        // Walk *all* workspaces/sessions/tabs so a split added to a background tab (e.g.
+        // via the CLI) bumps structureRevision even when that tab isn't active.  This mirrors
+        // the prune pass at syncFromDaemon which also walks the full set.
+        for ws in snap.workspaces {
+            for session in ws.sessions {
+                for tab in session.tabs {
+                    for surface in tab.rootPane.allSurfaceIDs() {
+                        hasher.combine(surface)
+                    }
+                }
+            }
+        }
+        return hasher.finalize()
     }
 
     private func applyThemeToAllHosts() {
-        HarnessChrome.update(
-            themeName: snapshot.themeName,
-            opacity: CGFloat(settings.backgroundOpacity),
-            blur: settings.backgroundBlur,
-            backgroundHex: settings.customBackgroundHex,
-            foregroundHex: settings.customForegroundHex,
-            cursorHex: settings.customCursorHex
-        )
-        let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
-        for host in terminalHosts.allHosts() {
-            host.applyTheme(named: snapshot.themeName)
-            host.applySettings(settings)
-            host.allowProgramClipboardAccess = allowClipboard
-            applyTerminalIdentity(to: host)
-            pushBorderColors(to: host)
-        }
+        updateChromeAndHosts()
+        // applyThemeToAllHosts is called after a full snapshot sync and needs to adopt
+        // any synchronize-panes changes that arrived with the snapshot, rebuild the sibling
+        // lists for input mirroring, and re-assert the marked-pane border.
         adoptSynchronizeOptions()
         refreshSyncSiblings()
         reassertMarkedPane()
@@ -265,14 +337,14 @@ final class SessionCoordinator: NSObject {
         )
     }
 
-    private func syncWaitingRings() {
-        for host in terminalHosts.allHosts() {
-            if let match = snapshot.workspaces.flatMap({ workspace in workspace.sessions.flatMap { $0.tabs } }).first(where: { tab in
-                tab.rootPane.allSurfaceIDs().contains(host.surfaceID)
-            }) {
-            }
-        }
-    }
+    // syncWaitingRings() was removed: the function iterated all hosts × all tabs with a
+    // completely empty `if let match` body — it found the owning tab for each host but then
+    // did nothing with it.  Searching the codebase for "waiting ring", "waitingRing", and
+    // "ring" found no TerminalHostView API to call (the border colours are pushed once via
+    // pushBorderColors; there is no per-tab waiting-ring toggle on the host).  The only live
+    // call site was in syncFromDaemon, which is updated below to remove the call.  If a
+    // per-host waiting indicator is needed in the future, add an `applyWaiting(_:)` API to
+    // TerminalHostView and re-introduce the loop at that point.
 
     private func pushNewRemoteNotifications(from snapshot: SessionSnapshot) {
         for workspace in snapshot.workspaces {
@@ -398,6 +470,27 @@ final class SessionCoordinator: NSObject {
 
     /// Push the current `settings` to every live terminal host and refresh chrome.
     func applySettingsToHosts() {
+        updateChromeAndHosts()
+        // applySettingsToHosts does NOT call adoptSynchronizeOptions / refreshSyncSiblings /
+        // reassertMarkedPane because it runs on pure settings changes (font, opacity, colours)
+        // that cannot affect the synchronize-panes or marked-pane state.  A post below notifies
+        // chrome consumers (window, sidebar, status line) so they repaint with the new palette.
+        NotificationCenter.default.post(
+            name: NotificationBus.shared.snapshotChanged,
+            object: nil,
+            userInfo: [
+                "revision": snapshot.revision,
+                "structureChanged": false,
+                "chromeChanged": true,
+            ]
+        )
+    }
+
+    /// Shared per-host update loop: refresh the global chrome palette and push the current
+    /// theme + settings + identity + border colours to every live terminal host.
+    /// Called by both `applyThemeToAllHosts` and `applySettingsToHosts`; each caller adds
+    /// its own divergent extras after this returns.
+    private func updateChromeAndHosts() {
         HarnessChrome.update(
             themeName: snapshot.themeName,
             opacity: CGFloat(settings.backgroundOpacity),
@@ -414,15 +507,6 @@ final class SessionCoordinator: NSObject {
             applyTerminalIdentity(to: host)
             pushBorderColors(to: host)
         }
-        NotificationCenter.default.post(
-            name: NotificationBus.shared.snapshotChanged,
-            object: nil,
-            userInfo: [
-                "revision": snapshot.revision,
-                "structureChanged": false,
-                "chromeChanged": true,
-            ]
-        )
     }
 
     /// The live `FormatString` context for the active workspace/session/tab/pane.
@@ -553,19 +637,22 @@ final class SessionCoordinator: NSObject {
     func addSession(to workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) {
         requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, name: name, shell: settings.defaultShell))
         syncFromDaemon()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            SurfaceShellTracker.shared.bumpScan()
-        }
+        // Kick the cwd tracker immediately after session creation so the shell's working
+        // directory lights up as early as possible.  A second kick follows the daemon's next
+        // snapshotChanged notification (which arrives once the PTY/surface is live), so there
+        // is no fixed timing dependency — the notification-driven path handles the "shell not
+        // yet spawned" window without a magic timeout.
+        SurfaceShellTracker.shared.bumpScan()
     }
 
     func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) {
         requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, shell: settings.defaultShell))
         syncFromDaemon()
-        // The shell will spawn imminently — kick the cwd tracker so the new
-        // tab's path lights up without waiting for the next 500ms tick.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            SurfaceShellTracker.shared.bumpScan()
-        }
+        // Kick the cwd tracker immediately so the new tab's path lights up without waiting
+        // for the next 500ms tick.  When the daemon posts snapshotChanged for the new PTY
+        // surface, syncFromDaemon is called again and SurfaceShellTracker's next tick picks
+        // up the final cwd — removing the need for an additional 300ms delayed kick.
+        SurfaceShellTracker.shared.bumpScan()
     }
 
     func openDefaultTerminalLaunch(_ launch: DefaultTerminalLaunchRequest) {
@@ -708,9 +795,9 @@ final class SessionCoordinator: NSObject {
             setActiveSurface(surfaceID)
             terminalHosts.host(for: surfaceID)?.focusTerminal()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            SurfaceShellTracker.shared.bumpScan()
-        }
+        // Same rationale as addTab: kick immediately, rely on the daemon's snapshotChanged
+        // for any follow-up scan once the new PTY surface is live.
+        SurfaceShellTracker.shared.bumpScan()
     }
 
     /// Toggle the find bar (⌘F) on the active pane's terminal surface.
@@ -903,6 +990,9 @@ final class SessionCoordinator: NSObject {
             lastActiveSurfaceID = old
         }
         activeSurfaceID = surfaceID
+        // Focus changed: snap the cwd tracker back to its responsive cadence (it relaxes
+        // while nothing moves) — interaction predicts cwd changes.
+        SurfaceShellTracker.shared.noteUserInteraction()
         // Refresh `window-style`/`pane-style` before the border toggle so each host has the
         // current base before it re-resolves active vs inactive on the focus change.
         refreshPaneStyles()
@@ -1502,37 +1592,169 @@ final class SessionCoordinator: NSObject {
         }
     }
 
-    private func startMetadataRefresh() {
-        metadataTask?.cancel()
-        metadataTask = Task { [weak self] in
-            let git = GitMetadataProvider()
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                let work = await MainActor.run { () -> [(WorkspaceID, Tab)] in
-                    guard let self, let workspace = self.snapshot.activeWorkspace else { return [] }
-                    return workspace.sessions.flatMap { $0.tabs }.map { (workspace.id, $0) }
-                }
-                let updates = work.compactMap { workspaceID, tab -> (WorkspaceID, TabID, String?)? in
-                    let updated = git.refresh(tab: tab)
-                    guard updated.gitBranch != tab.gitBranch else { return nil }
-                    return (workspaceID, tab.id, updated.gitBranch)
-                }
-                await MainActor.run {
-                    guard let self else { return }
-                    for update in updates {
-                        self.logIfFailed(.updateTabGitBranch(
-                            workspaceID: update.0,
-                            tabID: update.1,
-                            branch: update.2
-                        ))
+    /// Persist the secure-keyboard-entry setting and apply it immediately (takes/releases the
+    /// process-global secure-input lock based on the new value + current app-active state).
+    func setSecureKeyboardEntry(_ enabled: Bool) {
+        guard settings.secureKeyboardEntry != enabled else { return }
+        settings.secureKeyboardEntry = enabled
+        try? settings.save()
+        SecureKeyboardEntry.shared.settingChanged()
+    }
+
+    // MARK: Event-driven metadata + snapshot pushes
+    // (replaced the 2 s loop that spawned `git rev-parse` per tab per tick and blind-synced
+    // a full snapshot at 0.5 Hz forever)
+
+    private func configureGitBranchMonitor() {
+        gitBranchMonitor.onBranchChange = { [weak self] workspaceID, tabID, branch in
+            // The daemon commit pushes back through the snapshot subscription, which is
+            // what refreshes the visible label — no manual re-sync here.
+            self?.logIfFailed(.updateTabGitBranch(workspaceID: workspaceID, tabID: tabID, branch: branch))
+        }
+    }
+
+    /// The active workspace's tabs, shaped for the branch monitor. Matches the old poll's
+    /// scope: background workspaces refresh when they become active.
+    private func gitBranchRecords(from snapshot: SessionSnapshot) -> [GitBranchMonitor.TabRecord] {
+        guard let workspace = snapshot.activeWorkspace else { return [] }
+        return workspace.sessions.flatMap(\.tabs).map { tab in
+            GitBranchMonitor.TabRecord(
+                workspaceID: workspace.id,
+                tabID: tab.id,
+                cwd: tab.cwd,
+                snapshotBranch: tab.gitBranch
+            )
+        }
+    }
+
+    /// Subscribe to the daemon's snapshot pushes if not already subscribed. Called after
+    /// every successful sync, so the channel comes up as soon as the daemon answers; the
+    /// follow-up async sync closes the fetch→subscribe race (a revision committed between
+    /// the snapshot we just fetched and the subscription registering).
+    private func startSnapshotSubscriptionIfNeeded() {
+        guard snapshotSubscription == nil else { return }
+        startSnapshotSubscription()
+        guard snapshotSubscription != nil else {
+            // The subscribe attempt failed (daemon briefly down): without this, recovery
+            // would degrade to the 30 s safety poll — onEnd never fires for a channel
+            // that never came up.
+            scheduleSnapshotResubscribe()
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { _ = self?.syncFromDaemon(metadataOnly: true) }
+        }
+    }
+
+    private func startSnapshotSubscription() {
+        snapshotSubscriptionGeneration += 1
+        let generation = snapshotSubscriptionGeneration
+        snapshotSubscription?.cancel()
+        snapshotSubscription = try? daemon.subscribeSnapshot(
+            label: "harness-app",
+            onRevision: { [weak self] revision in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, generation == self.snapshotSubscriptionGeneration else { return }
+                        self.handlePushedRevision(revision)
                     }
+                }
+            },
+            onEnd: { [weak self] in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, generation == self.snapshotSubscriptionGeneration else { return }
+                        self.snapshotSubscription = nil
+                        self.scheduleSnapshotResubscribe()
+                    }
+                }
+            }
+        )
+        if snapshotSubscription != nil { snapshotResubscribeDelay = 1 }
+    }
+
+    private func handlePushedRevision(_ revision: Int) {
+        // Echo guard: our own mutations sync synchronously, so the push for a revision we
+        // already hold must not trigger a second fetch.
+        guard revision != lastRevision else { return }
+        // metadataOnly: a pushed revision must never rebuild every pane's renderer — the
+        // daemon commits at ~1.5 s cadence while an agent streams. Structure changes still
+        // remount (structureChanged is computed independently) and a CLI theme change still
+        // applies (themeChanged forces the chrome path inside syncFromDaemon).
+        syncFromDaemon(metadataOnly: true)
+    }
+
+    /// The daemon went away (restart, backlog eviction, socket death): retry with capped
+    /// backoff until it answers. On success, sync immediately — revisions pushed during
+    /// the gap were lost with the socket.
+    private func scheduleSnapshotResubscribe() {
+        let delay = snapshotResubscribeDelay
+        snapshotResubscribeDelay = min(delay * 2, 8)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.snapshotSubscription == nil else { return }
+                self.startSnapshotSubscription()
+                if self.snapshotSubscription != nil {
                     self.syncFromDaemon(metadataOnly: true)
+                } else {
+                    self.scheduleSnapshotResubscribe()
                 }
             }
         }
     }
 
+    private func startSafetyPoll() {
+        safetyPollTimer?.invalidate()
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.syncFromDaemon(metadataOnly: true) }
+        }
+        timer.tolerance = 5
+        RunLoop.main.add(timer, forMode: .common)
+        safetyPollTimer = timer
+    }
+
+    private func observeAppActivation() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidResignActive),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+    }
+
+    @objc private func appDidBecomeActive() {
+        // Any number of external `git` operations may have happened while the watchers
+        // were paused — resume re-resolves and re-reads everything.
+        gitBranchMonitor.resume()
+        startSafetyPoll()
+    }
+
+    @objc private func appDidResignActive() {
+        gitBranchMonitor.pause()
+        safetyPollTimer?.invalidate()
+        safetyPollTimer = nil
+    }
+
     private var lastDaemonErrorNotice: Date?
+
+    // MARK: OSC 1337 user variables (coalesced daemon push)
+
+    /// Pending `SetUserVar` pushes, coalesced per (surface, name): a flood of sequences
+    /// becomes at most one synchronous daemon `setOption` per name per flush window,
+    /// instead of one main-thread IPC round trip (plus a snapshot-subscriber broadcast)
+    /// per escape sequence.
+    private var pendingUserVariables: [SurfaceID: [String: String]] = [:]
+    /// Names already pushed to the daemon per surface — the per-surface population cap
+    /// (mirroring the engine's per-epoch cap) and the set a RIS must reset.
+    private var pushedUserVariableNames: [SurfaceID: Set<String>] = [:]
+    private var userVariableFlushScheduled = false
+    private static let maxUserVariablesPerSurface = 64
 
     @discardableResult
     func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
@@ -1588,6 +1810,53 @@ extension SessionCoordinator: TerminalHostDelegate {
         syncFromDaemon(metadataOnly: true)
     }
 
+    /// OSC 1337 `SetUserVar=` → a pane-scoped `@name` user option, so `#{@name}` format
+    /// tokens (status line, pane borders, hooks) read it like any other user option. The
+    /// engine already validated and bounded the name/value; `@`-options always pass the
+    /// daemon's key validation. Pushes are coalesced (see `pendingUserVariables`) — the
+    /// engine dedupes same-value rewrites, this bounds genuinely-changing floods.
+    func terminalHostDidSetUserVariable(_ name: String, value: String, surfaceID: SurfaceID) {
+        var names = pushedUserVariableNames[surfaceID, default: []]
+        if !names.contains(name) {
+            // Per-surface name cap, mirroring the engine's: defense in depth so a hostile
+            // stream can't grow options.json even if the engine's own bound regresses.
+            guard names.count < Self.maxUserVariablesPerSurface else { return }
+            names.insert(name)
+            pushedUserVariableNames[surfaceID] = names
+        }
+        pendingUserVariables[surfaceID, default: [:]][name] = value
+        scheduleUserVariableFlush()
+    }
+
+    /// RIS dropped the engine's user variables — reset the daemon mirror so `#{@name}`
+    /// stops serving pre-reset values. There is no unset IPC, so each pushed name is set
+    /// to "" (renders as empty in formats) via the same coalesced path; the bookkeeping
+    /// is forgotten so the name cap re-arms for the post-reset epoch.
+    func terminalHostDidClearUserVariables(surfaceID: SurfaceID) {
+        guard let names = pushedUserVariableNames.removeValue(forKey: surfaceID), !names.isEmpty else { return }
+        for name in names { pendingUserVariables[surfaceID, default: [:]][name] = "" }
+        scheduleUserVariableFlush()
+    }
+
+    /// One short debounce window shared by all surfaces: `SetUserVar` can arrive in bursts
+    /// (a status updater in a shell loop) and each daemon round trip is synchronous on main.
+    private func scheduleUserVariableFlush() {
+        guard !userVariableFlushScheduled else { return }
+        userVariableFlushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.userVariableFlushScheduled = false
+            let pending = self.pendingUserVariables
+            self.pendingUserVariables = [:]
+            for (surfaceID, variables) in pending {
+                for (name, value) in variables {
+                    self.requestDaemon(.setOption(
+                        scope: "pane", target: surfaceID.uuidString, key: "@\(name)", rawValue: value))
+                }
+            }
+        }
+    }
+
     /// Called by `SurfaceShellTracker` when a polled cwd changes (the OSC 7
     /// fallback for shells that don't emit it).
     func surfaceShellTrackerDidUpdateCwd(_ surfaceID: SurfaceID, cwd: String) {
@@ -1622,6 +1891,17 @@ extension SessionCoordinator: TerminalHostDelegate {
     }
 
     func terminalHostDidRingBell(surfaceID: SurfaceID) {
+        // In-app feedback for the ringing surface, honored on every BEL regardless of focus
+        // (a focused bell was previously silent). The GUI `bellMode` setting decides, with the
+        // tmux `visual-bell`/`bell-action` options bridging in via the shared resolver.
+        let visualBell = HarnessOptions.shared.get("visual-bell", scope: .global)?.stringValue
+        let bellAction = HarnessOptions.shared.get("bell-action", scope: .global)?.stringValue
+        let effect = BellFeedback.resolve(mode: settings.bellMode, visualBell: visualBell, bellAction: bellAction)
+        if effect.audible { NSSound.beep() }
+        if effect.visual { terminalHosts.host(for: surfaceID)?.flashBell() }
+        // tmux `bell-action off`/`none` silences the alert path too; otherwise keep the existing
+        // tab bell-flag + (unfocused) OS-banner notification.
+        if bellAction == "off" || bellAction == "none" { return }
         handleNotification(for: surfaceID, event: .bell, title: "Terminal", body: "Bell")
     }
 
@@ -1682,7 +1962,11 @@ enum DesktopNotifier {
 
     static func show(title: String, body: String, withSound: Bool = true) {
         let center = UNUserNotificationCenter.current()
-        center.delegate = ForegroundPresenter.shared
+        // The delegate is set once in `requestAuthorizationIfNeeded` (called at app launch
+        // before any notification can fire) and in `requestOrOpenSettings` / `sendTest`.
+        // Re-setting it here on every banner delivery was redundant and slightly wasteful
+        // (UNUserNotificationCenter retains the delegate strongly per Apple docs, so it can
+        // never be nil'd between those bootstrap calls and this point).
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:

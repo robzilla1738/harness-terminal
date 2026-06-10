@@ -15,6 +15,13 @@ public struct KittyGraphicsCommand: Equatable {
     public var moreChunks: Bool { keys["m"] == "1" }
     /// `i` — image id (for transmit-once / place-many + chunk reassembly).
     public var imageID: Int { keys["i"].flatMap { Int($0) } ?? 0 }
+    /// `I` — image number, an alternative client-assigned handle echoed back in the ack.
+    public var imageNumber: Int { keys["I"].flatMap { Int($0) } ?? 0 }
+    /// `q` — quietness: 0 = report OK + errors, 1 = suppress OK (errors only), 2 = suppress both.
+    public var quietness: Int { keys["q"].flatMap { Int($0) } ?? 0 }
+    /// `d` — for `a=d`: which images to delete. `a`/`A` = all, `i`/`I` = by image id (`i=`).
+    /// Defaults to `a` (delete all) per the Kitty spec when `a=d` carries no `d` key.
+    public var deleteTarget: Character { keys["d"].flatMap(\.first) ?? "a" }
     /// `s` / `v` — pixel width/height for raw RGB/RGBA payloads.
     public var pixelWidth: Int { keys["s"].flatMap { Int($0) } ?? 0 }
     public var pixelHeight: Int { keys["v"].flatMap { Int($0) } ?? 0 }

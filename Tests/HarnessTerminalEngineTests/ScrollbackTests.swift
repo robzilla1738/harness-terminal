@@ -105,6 +105,20 @@ final class ScrollbackTests: XCTestCase {
         XCTAssertTrue(term.promptRows.isEmpty, "the trimmed prompt's mark is gone")
     }
 
+    /// `maxScrollbackLines == 0` is unlimited: history grows past the former default cap and the
+    /// oldest line is never trimmed (contrast `testHistoryCapDropsOldest`).
+    func testUnlimitedScrollbackNeverTrims() {
+        let term = TerminalEmulator(cols: 6, rows: 2)
+        term.maxScrollbackLines = 0 // unlimited
+        let n = 12_000 // well past the former 10_000 default cap
+        for i in 0 ..< n { term.feed("\(i)\r\n") }
+        XCTAssertGreaterThan(term.historyCount, 10_000,
+                             "unlimited scrollback must retain more than the former default cap")
+        // The very first line is still present at the oldest end — nothing was dropped.
+        let oldest = term.readGrid(scrollbackOffset: term.historyCount)
+        XCTAssertEqual(char(oldest, 0, 0), "0", "oldest line survives under unlimited scrollback")
+    }
+
     func testAlternateScreenRecordsNoHistory() {
         let term = TerminalEmulator(cols: 8, rows: 2)
         term.feed("\u{1b}[?1049h") // enter alternate screen

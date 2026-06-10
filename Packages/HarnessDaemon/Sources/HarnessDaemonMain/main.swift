@@ -15,12 +15,27 @@ import HarnessDaemonCore
 /// writes. No reentrancy: `daemonLog` never calls itself, so `.sync` can't deadlock.
 private let daemonLogQueue = DispatchQueue(label: "com.robert.harness.daemonLog")
 
+/// Shared ISO 8601 formatter for log timestamps. Hoisted to file scope so we pay the
+/// allocation and calendar-setup cost once, not on every log call.
+///
+/// `nonisolated(unsafe)` is correct here: ISO8601DateFormatter is documented thread-safe
+/// on macOS 10.12+ (it was made Sendable in the SDK as of the concurrency annotations
+/// sweep). We never mutate this after initialisation, so all concurrent reads are safe.
+/// The formatter is write-once (no calendar/locale changes after init), which is the
+/// documented precondition for thread-safety.
+private nonisolated(unsafe) let daemonLogFormatter: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    // Keep the default options (fractional seconds off, timezone Z suffix) — these
+    // match what the previous per-call formatter produced, so log format is unchanged.
+    return f
+}()
+
 /// Append a line to `~/Library/Application Support/Harness/logs/daemon.log` and
 /// (best-effort) duplicate to stderr so `launchctl print` shows recent output.
 /// The log file is bounded — rotated to `daemon.log.1` when it crosses 4 MiB.
 @Sendable
 func daemonLog(_ message: String) {
-    let line = "[\(ISO8601DateFormatter().string(from: Date())) pid=\(getpid())] \(message)\n"
+    let line = "[\(daemonLogFormatter.string(from: Date())) pid=\(getpid())] \(message)\n"
     fputs(line, harnessStderr)
     daemonLogQueue.sync {
         let url = HarnessPaths.daemonLogURL

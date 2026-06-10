@@ -100,9 +100,17 @@ public final class RemoteHostStore: @unchecked Sendable {
         let lockPath = HarnessPaths.remoteHostsLockURL.path
         // O_CLOEXEC so a forked child (e.g. ssh) never inherits the lock fd; 0o600 keeps it owner-only.
         let fd = open(lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { return body() }
+        guard fd >= 0 else {
+            fputs("RemoteHostStore: could not open lock file (errno \(errno)) — running without cross-process lock\n", harnessStderr)
+            return body()
+        }
         defer { close(fd) }  // closing the fd releases the flock
-        guard flock(fd, LOCK_EX) == 0 else { return body() }
+        guard flock(fd, LOCK_EX) == 0 else {
+            // Warn when flock fails: the caller proceeds unlocked, which is safe for the in-process
+            // NSLock case but means concurrent `harness-cli remote add` invocations could race.
+            fputs("RemoteHostStore: flock failed (errno \(errno)) — running without cross-process lock\n", harnessStderr)
+            return body()
+        }
         defer { flock(fd, LOCK_UN) }
         return body()
     }

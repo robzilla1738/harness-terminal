@@ -29,8 +29,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let coordinator = SessionCoordinator.shared
-        // Pull the latest daemon truth so the menu is correct even if the app was idle.
-        coordinator.syncFromDaemon(metadataOnly: true)
+        // Build from the snapshot that is already in memory.  The coordinator's snapshot is
+        // kept current by the daemon's snapshot-push subscription (plus the 30 s safety
+        // poll), so this will always reflect recent state without a blocking socket
+        // round-trip on the menu-delegate path.
+        //
+        // We also kick a deferred refresh so the *next* open gets fresher data if the app
+        // was idle past the refresh cadence. NOTE: syncFromDaemon is main-actor-bound, so
+        // this Task only moves the IPC round-trip OFF the menu-open critical path (the menu
+        // renders first; the sync runs on a later main-queue drain) — it does not move the
+        // work off the main thread. Making the sync truly backgroundable means restructuring
+        // SessionCoordinator's IPC, tracked as a follow-up; this removes the user-visible
+        // menu-open stall, which was the bug.
+        Task { @MainActor [weak coordinator] in
+            coordinator?.syncFromDaemon(metadataOnly: true)
+        }
         rebuild(menu, snapshot: coordinator.snapshot)
     }
 

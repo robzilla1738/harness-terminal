@@ -308,7 +308,6 @@ public final class DaemonSubscription: @unchecked Sendable {
     /// error (so `sendInput` can fall back). `detachSurface`/`resize` ignore the result.
     @discardableResult
     private func writeFrame(_ payload: Data) -> Bool {
-        let bytes = [UInt8](payload)
         writeLock.lock()
         defer { writeLock.unlock() }
         // The read loop sets `finished` and closes `fd` under `writeLock` on teardown. Holding it
@@ -318,14 +317,19 @@ public final class DaemonSubscription: @unchecked Sendable {
         // close raced an in-flight write into a stale descriptor.
         lock.lock(); let dead = cancelled || finished; lock.unlock()
         guard !dead else { return false }
-        var off = 0
-        while off < bytes.count {
-            let n = bytes.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: off), bytes.count - off) }
-            if n > 0 { off += n }
-            else if n < 0, errno == EINTR || errno == EAGAIN { continue }
-            else { return false } // hard error (EPIPE / peer gone) before the frame fully flushed
+        // Write straight from the Data's storage (`writeAll`'s pattern) — this is the per-keystroke
+        // path, and the old `[UInt8](payload)` round-trip copied every input byte before each write.
+        return payload.withUnsafeBytes { raw -> Bool in
+            guard let base = raw.baseAddress else { return true } // empty frame: nothing to flush
+            var off = 0
+            while off < raw.count {
+                let n = write(fd, base.advanced(by: off), raw.count - off)
+                if n > 0 { off += n }
+                else if n < 0, errno == EINTR || errno == EAGAIN { continue }
+                else { return false } // hard error (EPIPE / peer gone) before the frame fully flushed
+            }
+            return true
         }
-        return true
     }
 
     public func cancel() {
@@ -460,12 +464,15 @@ public final class DaemonSubscription: @unchecked Sendable {
         onEnd: (@Sendable () -> Void)?
     ) {
         queue.async { [weak self, fd] in
-            var buffer = Data()
+            // `IPCReadBuffer`, not `Data`: this loop runs for the life of the subscription and a
+            // busy PTY delivers thousands of ~1 KiB frames/s — `Data.removeFirst` per frame is an
+            // O(remaining) shift (quadratic under flood); the offset buffer consumes in O(1).
+            var buffer = IPCReadBuffer()
             var temp = [UInt8](repeating: 0, count: 65_536)
             outer: while true {
                 let count = read(fd, &temp, temp.count)
                 if count <= 0 { break }
-                buffer.append(contentsOf: temp.prefix(count))
+                buffer.append(temp, count: count)
                 while true {
                     let decoded: IPCCodec.DecodedReplyFrame?
                     do { decoded = try IPCCodec.decodeReplyOrData(from: &buffer) }

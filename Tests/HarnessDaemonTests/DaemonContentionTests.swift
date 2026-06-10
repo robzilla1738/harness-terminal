@@ -52,11 +52,11 @@ final class DaemonContentionTests: XCTestCase {
 
     private func waitForDaemonReady() throws {
         let client = DaemonClient()
-        for _ in 0 ..< 50 {
-            if case .pong = (try? client.request(.ping, timeout: 0.4)) { return }
-            usleep(100_000)
+        let ready = waitUntil(timeout: 10) {
+            if case .pong = (try? client.request(.ping, timeout: 0.4)) { return true }
+            return false
         }
-        XCTFail("daemon did not become ready")
+        if !ready { XCTFail("daemon did not become ready") }
     }
 
     private func firstSurfaceID(_ client: DaemonClient) throws -> String {

@@ -33,6 +33,13 @@ public enum HookEvent: String, Codable, Sendable, CaseIterable {
     case windowLinked = "window-linked"
     case windowUnlinked = "window-unlinked"
     case windowLayoutChanged = "window-layout-changed"
+    // `command-error` fires when a command fails loudly (an `.error` from the command path).
+    // `pane-focus-in`/`-out` fire when the active pane gains/loses focus; `window-pane-changed`
+    // fires when a tab's active pane changes (select-pane / directional nav / split focus).
+    case commandError = "command-error"
+    case paneFocusIn = "pane-focus-in"
+    case paneFocusOut = "pane-focus-out"
+    case windowPaneChanged = "window-pane-changed"
 }
 
 /// One binding: event → command (with an optional `if` condition format).
@@ -51,6 +58,9 @@ public struct Hook: Codable, Sendable, Equatable {
 
 /// Holds bound hooks and fires them when the daemon emits events. Reads/writes
 /// `hooks.json` so user-defined hooks survive restart.
+///
+/// @unchecked Sendable: mutable state is protected by `lock`; disk writes and the debounce
+/// timer are confined to `saveQueue` — the same two-layer pattern as `SessionStore`.
 public final class HookRegistry: @unchecked Sendable {
     public typealias Executor = @Sendable (Command, FormatContext) -> Void
 
@@ -58,6 +68,11 @@ public final class HookRegistry: @unchecked Sendable {
     private let url: URL
     private let lock = NSLock()
     private var executor: Executor?
+    // Debounced write — mirrors SessionStore/OptionStore. A user binding/unbinding hooks rapidly
+    // (e.g. sourcing a config file) produces one disk write at the end of the burst.
+    private let saveQueue = DispatchQueue(label: "com.robert.harness.hook-registry-save")
+    private var pendingSave: DispatchWorkItem?
+    private let debounceInterval: TimeInterval = 0.15
 
     public init(url: URL? = nil) {
         self.url = url ?? HarnessPaths.applicationSupport.appendingPathComponent("hooks.json")
@@ -115,10 +130,38 @@ public final class HookRegistry: @unchecked Sendable {
     private func save() {
         // Snapshot under the lock — encoding `hooks` while another thread mutates it (bind/unbind
         // release the lock before save()) is a torn read of the array (mirrors OptionStore /
-        // EnvironmentStore; the registry is `@unchecked Sendable` and saves can overlap mutations).
+        // EnvironmentStore). The snapshot is captured here so the debounced write on `saveQueue`
+        // reflects the state at the time of the last mutation in the burst.
         lock.lock()
         let snapshot = hooks
         lock.unlock()
+        saveQueue.async { [weak self] in
+            self?.scheduleSave(snapshot)
+        }
+    }
+
+    /// Synchronously write the current hooks to disk, bypassing the debounce. Called on daemon
+    /// shutdown so the last hook change in the debounce window is never lost.
+    public func flush() {
+        saveQueue.sync { [weak self] in
+            guard let self else { return }
+            pendingSave?.cancel()
+            pendingSave = nil
+            lock.lock()
+            let snapshot = hooks
+            lock.unlock()
+            writeToDisk(snapshot)
+        }
+    }
+
+    private func scheduleSave(_ snapshot: [Hook]) {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.writeToDisk(snapshot) }
+        pendingSave = work
+        saveQueue.asyncAfter(deadline: .now() + debounceInterval, execute: work)
+    }
+
+    private func writeToDisk(_ snapshot: [Hook]) {
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

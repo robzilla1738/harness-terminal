@@ -67,7 +67,7 @@ public enum IPCRequest: Codable, Sendable {
     /// synchronization. `wait`/`lock` may defer the reply (block the client) until a
     /// `signal`/`unlock`. Intercepted at the `DaemonServer` socket layer, never under the
     /// registry lock.
-    case waitFor(channel: String, mode: String)
+    case waitFor(channel: String, mode: WaitForMode)
     /// `link-window`: make `tabID`'s panes appear as a new linked tab in another
     /// session (shared surfaces). `unlinkWindow` removes the linked copy.
     case linkWindow(tabID: UUID, targetSessionID: UUID)
@@ -126,6 +126,8 @@ public enum IPCRequest: Codable, Sendable {
     case breakPane(paneID: UUID)
     case joinPane(sourcePaneID: UUID, destPaneID: UUID, direction: SplitDirection)
     case respawnPane(surfaceID: String, keepHistory: Bool)
+    /// tmux `clear-history`: drop the surface's scrollback without respawning the process.
+    case clearHistory(surfaceID: String)
     // Phase 6: options + hooks + display
     case setOption(scope: String, target: String?, key: String, rawValue: String)
     case showOptions(scope: String?)
@@ -135,9 +137,23 @@ public enum IPCRequest: Codable, Sendable {
     case bindHook(event: String, source: String, condition: String?)
     case unbindHook(id: UUID)
     case listHooks(event: String?)
-    case displayMessage(format: String)
+    /// Render `format` with the daemon's context. `print: true` (CLI `display-message -p`) returns
+    /// the rendered text as `.text(...)` for stdout and does NOT flash the transient message;
+    /// `print: false` posts the transient message (and replies `.ok`).
+    case displayMessage(format: String, print: Bool)
     /// tmux `show-messages`: the daemon's recent display-message log (most recent last).
     case showMessages
+}
+
+/// The mode argument for `wait-for`. `String` raw values are wire-identical to the previous
+/// plain-`String` associated value — a `String`-raw enum encodes/decodes as its raw string, so
+/// existing daemons and clients that already speak `"wait"/"signal"/"lock"/"unlock"` continue to
+/// interoperate without change. (This is the same codec contract as `SplitDirection`.)
+public enum WaitForMode: String, Codable, Sendable {
+    case wait
+    case signal
+    case lock
+    case unlock
 }
 
 public enum DirectionalAxis: String, Codable, Sendable {

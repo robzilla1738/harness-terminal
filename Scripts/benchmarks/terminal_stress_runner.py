@@ -29,12 +29,27 @@ def write_all(payload: bytes) -> int:
     return total
 
 
-def run_case(name: str, chunks, result_path: str, terminal: str) -> None:
+def run_case(name: str, chunks, result_path: str, terminal: str) -> bool:
+    """Run one benchmark case, appending a JSON record to result_path.
+
+    Returns True on success, False when the PTY write loop encounters an I/O
+    error (EPIPE / EIO — the controlling terminal closed while we were writing).
+    On failure an error record is appended to result_path so the harness can
+    detect early termination rather than receiving a silently truncated file.
+    """
     started = time.perf_counter_ns()
     byte_count = 0
-    for chunk in chunks:
-        byte_count += write_all(chunk)
-    sys.stdout.flush()
+    error_detail = None
+    try:
+        for chunk in chunks:
+            byte_count += write_all(chunk)
+        sys.stdout.flush()
+    except (OSError, BrokenPipeError) as exc:
+        # The terminal closed the PTY slave while we were writing (e.g. the
+        # host app crashed, the window was closed, or the process was killed).
+        # Record the error in the output file so callers can distinguish an
+        # early-exit result from a complete one.
+        error_detail = f"{type(exc).__name__}: {exc}"
     ended = time.perf_counter_ns()
     nanos = ended - started
     row = {
@@ -45,8 +60,11 @@ def run_case(name: str, chunks, result_path: str, terminal: str) -> None:
         "bytes": byte_count,
         "mbps": round((byte_count / 1_000_000) / (nanos / 1_000_000_000), 3) if nanos else None,
     }
+    if error_detail is not None:
+        row["error"] = error_detail
     with open(result_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
+    return error_detail is None
 
 
 def repeated_chunk(chunk: bytes, target_bytes: int):
@@ -116,15 +134,35 @@ def main() -> int:
     terminal, result_path, done_path = sys.argv[1:]
     open(result_path, "w", encoding="utf-8").close()
 
-    write_all(b"\x1b[2J\x1b[H")
-    run_case("plain_ascii_16mib", repeated_chunk(b"the quick brown fox jumps over the lazy dog 0123456789\r\n", 16 * 1024 * 1024), result_path, terminal)
-    run_case("ansi_sgr_16mib", sgr_lines(16 * 1024 * 1024), result_path, terminal)
-    run_case("unicode_mixed_8mib", unicode_lines(8 * 1024 * 1024), result_path, terminal)
-    run_case("attributes_8mib", attribute_lines(8 * 1024 * 1024), result_path, terminal)
-    run_case("truecolor_gradient_1200_frames", truecolor_gradient(1200), result_path, terminal)
-    run_case("redraw_160x48_600_frames", redraw_frames(600), result_path, terminal)
-    run_case("scrollback_100k_lines", (f"scrollback row {i:06d} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n".encode() for i in range(100_000)), result_path, terminal)
-    write_all(b"\x1b[0m\r\nDONE\r\n")
+    # Each run_case() call returns False when the PTY write loop encountered an
+    # OSError/BrokenPipeError, which means the terminal closed while we were writing.
+    # Stop early in that case — subsequent cases would all fail with EPIPE anyway,
+    # and the harness can identify the truncated run by checking for the "error" field
+    # in the last appended JSON record (or by noticing the done-file was never written).
+    try:
+        write_all(b"\x1b[2J\x1b[H")
+    except (OSError, BrokenPipeError):
+        return 1
+
+    cases = [
+        ("plain_ascii_16mib", repeated_chunk(b"the quick brown fox jumps over the lazy dog 0123456789\r\n", 16 * 1024 * 1024)),
+        ("ansi_sgr_16mib", sgr_lines(16 * 1024 * 1024)),
+        ("unicode_mixed_8mib", unicode_lines(8 * 1024 * 1024)),
+        ("attributes_8mib", attribute_lines(8 * 1024 * 1024)),
+        ("truecolor_gradient_1200_frames", truecolor_gradient(1200)),
+        ("redraw_160x48_600_frames", redraw_frames(600)),
+        ("scrollback_100k_lines", (f"scrollback row {i:06d} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n".encode() for i in range(100_000))),
+    ]
+    for name, chunks in cases:
+        if not run_case(name, chunks, result_path, terminal):
+            # Error record already written by run_case(); stop here.
+            return 1
+
+    try:
+        write_all(b"\x1b[0m\r\nDONE\r\n")
+    except (OSError, BrokenPipeError):
+        return 1
+
     with open(done_path, "w", encoding="utf-8") as f:
         f.write("done\n")
     return 0

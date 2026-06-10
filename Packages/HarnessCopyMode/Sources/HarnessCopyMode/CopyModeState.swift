@@ -1,4 +1,5 @@
 import Foundation
+import HarnessCore
 
 /// A position in virtual line space (`[scrollback ++ viewport]`): a virtual line index and
 /// a grid column. Ordered in reading order so selection endpoints normalize with `min`/`max`.
@@ -62,6 +63,9 @@ public enum CopyModeSideEffect: Equatable, Sendable {
     case cancel
     /// Open the front-end's search input (interactive query entry); `reverse` is the direction.
     case beginSearchEntry(reverse: Bool)
+    /// Capture the next single keystroke as the target of a jump-to-char motion (`f`/`F`/`t`/`T`),
+    /// then re-issue `.jump(kind, "<char>")`. The front-end owns the one-key capture.
+    case beginJumpEntry(CopyModeJumpKind)
 }
 
 /// The full copy-mode model: cursor + selection in virtual coordinates, the visible-window
@@ -76,19 +80,23 @@ public struct CopyModeState: Equatable, Sendable {
     /// Virtual line index shown at the top of the rendered viewport.
     public var viewTop: Int
     public var search: CopyModeSearch
+    /// The last jump-to-char performed, so `jump-again` (`;`) / `jump-reverse` (`,`) can repeat it.
+    public var lastJump: CopyModeJump?
 
     public init(
         cursor: GridPosition,
         anchor: GridPosition? = nil,
         mode: CopyModeSelectionMode = .none,
         viewTop: Int = 0,
-        search: CopyModeSearch = CopyModeSearch()
+        search: CopyModeSearch = CopyModeSearch(),
+        lastJump: CopyModeJump? = nil
     ) {
         self.cursor = cursor
         self.anchor = anchor
         self.mode = mode
         self.viewTop = viewTop
         self.search = search
+        self.lastJump = lastJump
     }
 
     /// tmux-style mode label for the status indicator.

@@ -48,6 +48,12 @@ enum MainMenuBuilder {
         edit.submenu?.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
         edit.submenu?.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
         edit.submenu?.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        edit.submenu?.addItem(.separator())
+        // Secure Keyboard Entry — process-global lock that stops other apps keylogging passphrases.
+        // Checkmark state is driven by `MenuTarget.validateMenuItem`. Placed in Edit, like Terminal.app.
+        let secureInput = NSMenuItem(title: "Secure Keyboard Entry", action: #selector(MenuTarget.toggleSecureKeyboardEntry), keyEquivalent: "")
+        secureInput.target = MenuTarget.shared
+        edit.submenu?.addItem(secureInput)
         main.addItem(edit)
 
         let workspace = NSMenuItem()
@@ -208,6 +214,9 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         case #selector(detachPane): return !SessionCoordinator.shared.activePaneIsDetached
         case #selector(reattachPane): return SessionCoordinator.shared.activePaneIsDetached
         case #selector(reopenClosedTab): return SessionCoordinator.shared.canReopenClosedTab
+        case #selector(toggleSecureKeyboardEntry):
+            menuItem.state = SessionCoordinator.shared.settings.secureKeyboardEntry ? .on : .off
+            return true
         default: return true
         }
     }
@@ -393,6 +402,10 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func zoomReset() {
         SessionCoordinator.shared.resetFontSize()
+    }
+
+    @objc func toggleSecureKeyboardEntry() {
+        SessionCoordinator.shared.setSecureKeyboardEntry(!SessionCoordinator.shared.settings.secureKeyboardEntry)
     }
 
     @objc func installCLI() {

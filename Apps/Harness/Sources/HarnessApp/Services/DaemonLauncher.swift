@@ -137,7 +137,12 @@ final class DaemonLauncher: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if daemonResponds(timeout: 0.3) { return true }
-            usleep(100_000)
+            // Thread.sleep is preferred over usleep here: both park the calling thread for
+            // 100 ms, but Thread.sleep carries clearer intent and integrates better with the
+            // Swift runtime's thread accounting. These polls run exclusively on `queue` — a
+            // private serial DispatchQueue — so blocking its one worker thread for up to ~4 s
+            // is intentional and bounded; no other work is queued behind them.
+            Thread.sleep(forTimeInterval: 0.1)
         }
         return false
     }
@@ -150,7 +155,9 @@ final class DaemonLauncher: @unchecked Sendable {
                !daemonIsStale(stats) {
                 return true
             }
-            usleep(100_000)
+            // Same rationale as pollUntilResponding: Thread.sleep over usleep, serial queue,
+            // bounded duration.
+            Thread.sleep(forTimeInterval: 0.1)
         }
         return false
     }

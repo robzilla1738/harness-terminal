@@ -42,10 +42,12 @@ final class NotchLayoutMetricsTests: XCTestCase {
             auxiliaryTopRightMinX: 856
         ))
 
-        // Peek reads as the notch stretching: wider than closed, far narrower than open,
-        // and just tall enough for one row under the hardware lip.
+        // Peek reads as the notch stretching: wider than closed, far narrower than open. Its
+        // content sits below the notch reserve (a physical notch reserves `closedHeight`), so the
+        // single line clears the camera housing.
         XCTAssertEqual(metrics.peekWidth, metrics.closedWidth + 144)
-        XCTAssertEqual(metrics.peekHeight, metrics.closedHeight + 26)
+        XCTAssertEqual(metrics.peekTopInset, metrics.closedHeight) // physical notch → full reserve
+        XCTAssertEqual(metrics.peekHeight, metrics.peekTopInset + 36)
         XCTAssertLessThan(metrics.peekWidth, metrics.openWidth)
         XCTAssertLessThan(metrics.peekHeight, metrics.openHeight)
         // The panel frame must already be large enough to contain the peek.

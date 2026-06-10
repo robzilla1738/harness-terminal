@@ -26,6 +26,14 @@ public struct AgentNotchRowSummary: Sendable, Equatable, Identifiable {
     /// The tab's git branch, shown next to the cwd in the subtitle.
     public var gitBranch: String?
 
+    /// Working and waiting are mutually exclusive: an agent that needs input is not "working",
+    /// even if a stale progress signal (OSC 9;4) lingers. This is the single precedence rule used
+    /// wherever working is counted, so the header/chips can never show the same agent as both
+    /// "waiting" and "working" — matching the row's own dot/badge precedence and `rank`.
+    public var isWorking: Bool {
+        agentActivity == .working && waitingCount == 0
+    }
+
     public init(
         id: String,
         rowKind: RowKind,
@@ -72,7 +80,7 @@ public struct AgentNotchDashboardProjection: Sendable, Equatable {
     }
 
     public var workingCount: Int {
-        rows.filter { $0.agentActivity == .working }.count
+        rows.filter(\.isWorking).count
     }
 
     public var agentCount: Int {

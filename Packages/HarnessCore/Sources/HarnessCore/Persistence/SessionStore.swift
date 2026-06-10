@@ -35,34 +35,52 @@ public final class SessionStore: @unchecked Sendable {
     }
 
     public func save(_ snapshot: SessionSnapshot) {
+        // Pin the destination NOW — pure path resolution, no disk I/O, so this is cheap to call on
+        // a latency-sensitive path (e.g. under the daemon's registry lock). The debounced write
+        // fires up to `debounceInterval` later; re-resolving `HarnessPaths` at THAT point would
+        // honor a since-changed `HARNESS_HOME` (tests reset it in tearDown) and persist the layout
+        // to the wrong tree. Capturing the URL here keeps the write targeted at the intended home.
+        let url = HarnessPaths.snapshotURL
         queue.async { [weak self] in
-            self?.scheduleSave(snapshot)
+            self?.scheduleSave(snapshot, to: url)
         }
     }
 
     public func saveImmediately(_ snapshot: SessionSnapshot) throws {
         try queue.sync {
-            try writeSnapshot(snapshot)
+            // Synchronous and env-authoritative — used at init (first write) and on graceful
+            // shutdown (flush the last debounce window). `ensureDirectories` materializes the full
+            // owner-only tree (sessions/scrollback/logs); `writeSnapshot` then writes the layout.
+            try HarnessPaths.ensureDirectories()
+            try writeSnapshot(snapshot, to: HarnessPaths.snapshotURL)
         }
     }
 
-    private func scheduleSave(_ snapshot: SessionSnapshot) {
+    private func scheduleSave(_ snapshot: SessionSnapshot, to url: URL) {
         pendingSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            try? self?.writeSnapshot(snapshot)
+            try? self?.writeSnapshot(snapshot, to: url)
         }
         pendingSave = work
         queue.asyncAfter(deadline: .now() + debounceInterval, execute: work)
     }
 
-    private func writeSnapshot(_ snapshot: SessionSnapshot) throws {
-        try HarnessPaths.ensureDirectories()
+    private func writeSnapshot(_ snapshot: SessionSnapshot, to url: URL) throws {
+        // Ensure the destination directory exists from the PINNED url (never re-reading
+        // `HARNESS_HOME`, which a debounced write firing after a test's tearDown would otherwise
+        // resolve to the real home). Owner-only, matching `HarnessPaths.ensureDirectories`.
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
         var copy = snapshot
         copy.savedAt = .now
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Compact (not prettyPrinted) — layout.json is machine-written/read, not hand-edited, and
+        // the encode runs on every mutation. `.sortedKeys` is kept for deterministic output (stable
+        // diffs / reproducible writes).
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(copy)
-        try data.write(to: HarnessPaths.snapshotURL, options: .atomic)
+        try data.write(to: url, options: .atomic)
     }
 }

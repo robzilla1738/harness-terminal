@@ -9,6 +9,20 @@
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "039B4849790BC7786AEC1798"
+               BuildableName = "GridCompositorParityTests.xctest"
+               BlueprintName = "GridCompositorParityTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
             buildForRunning = "YES"
             buildForProfiling = "YES"
             buildForArchiving = "YES"
@@ -18,6 +32,20 @@
                BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
                BuildableName = "Harness.app"
                BlueprintName = "Harness"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A13D27DB2A3EEC75D406D661"
+               BuildableName = "HarnessBenchmarks.xctest"
+               BlueprintName = "HarnessBenchmarks"
                ReferencedContainer = "container:Harness.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -85,9 +113,65 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2298382B45E4A7BB1F957EFA"
+               BuildableName = "HarnessOnboardingTests.xctest"
+               BlueprintName = "HarnessOnboardingTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F30FF05A64C9E46F0DF9316A"
+               BuildableName = "HarnessTerminalEngineTests.xctest"
+               BlueprintName = "HarnessTerminalEngineTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "352C8E0B8D989854A1ABDC85"
                BuildableName = "HarnessTerminalKitTests.xctest"
                BlueprintName = "HarnessTerminalKitTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "03D5DF38C62DBF0C2711CCC0"
+               BuildableName = "HarnessTerminalRendererTests.xctest"
+               BlueprintName = "HarnessTerminalRendererTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2ED9F34163F1927DBEF9DCBD"
+               BuildableName = "HarnessThemeTests.xctest"
+               BlueprintName = "HarnessThemeTests"
                ReferencedContainer = "container:Harness.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -164,6 +248,72 @@
                BlueprintIdentifier = "FDA3CC3703D3BAB2A5CB6F48"
                BuildableName = "HarnessCopyModeTests.xctest"
                BlueprintName = "HarnessCopyModeTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F30FF05A64C9E46F0DF9316A"
+               BuildableName = "HarnessTerminalEngineTests.xctest"
+               BlueprintName = "HarnessTerminalEngineTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2ED9F34163F1927DBEF9DCBD"
+               BuildableName = "HarnessThemeTests.xctest"
+               BlueprintName = "HarnessThemeTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "03D5DF38C62DBF0C2711CCC0"
+               BuildableName = "HarnessTerminalRendererTests.xctest"
+               BlueprintName = "HarnessTerminalRendererTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "2298382B45E4A7BB1F957EFA"
+               BuildableName = "HarnessOnboardingTests.xctest"
+               BlueprintName = "HarnessOnboardingTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "039B4849790BC7786AEC1798"
+               BuildableName = "GridCompositorParityTests.xctest"
+               BlueprintName = "GridCompositorParityTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A13D27DB2A3EEC75D406D661"
+               BuildableName = "HarnessBenchmarks.xctest"
+               BlueprintName = "HarnessBenchmarks"
                ReferencedContainer = "container:Harness.xcodeproj">
             </BuildableReference>
          </TestableReference>

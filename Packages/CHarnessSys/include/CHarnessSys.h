@@ -25,4 +25,14 @@ long harness_peer_uid(int fd);
 // `slave_path` (a caller buffer of `slave_len` bytes). Returns the master fd, or -1 on failure.
 int harness_open_pty_master(char *slave_path, size_t slave_len);
 
+// Close all file descriptors >= lowfd.  On Linux 5.9+ this uses the close_range(2) syscall
+// (atomic, faster than a loop across sysconf(_SC_OPEN_MAX) fds).  On older Linux it falls
+// back to a close(2) loop.  On Darwin/macOS this function is a no-op — callers on that
+// platform use forkpty(3) which never needs post-fork fd cleanup (the master is the only
+// inherited fd; all others are O_CLOEXEC'd in the daemon).
+//
+// POST-FORK SAFETY: this function must be async-signal-safe.  All code paths use only
+// syscall(2), close(2), getdtablesize(2), or a simple integer loop — no malloc, no stdio.
+void harness_close_fds_from(int lowfd);
+
 #endif /* C_HARNESS_SYS_H */

@@ -51,6 +51,33 @@ final class PaneRectSolverTests: XCTestCase {
         XCTAssertEqual(PaneBorderStatus(option: "garbage"), .off)
     }
 
+    func testYOriginShiftsEveryRect() {
+        // A top status band reserves N rows: the pane area starts at `yOrigin` and the
+        // interior + label rows shift down by exactly that, staying absolute for the compositor.
+        let node = PaneNode.branch(direction: .vertical, ratio: 0.5, first: leaf(), second: leaf())
+        let base = PaneRectSolver.solve(node, cols: 80, rows: 23, paneBorderStatus: .top)
+        let shifted = PaneRectSolver.solve(node, cols: 80, rows: 23, paneBorderStatus: .top, yOrigin: 1)
+        XCTAssertEqual(base.count, shifted.count)
+        for (b, s) in zip(base, shifted) {
+            XCTAssertEqual(s.y, b.y + 1, "interior row shifts by yOrigin")
+            XCTAssertEqual(s.labelRow, b.labelRow.map { $0 + 1 }, "label row shifts by yOrigin")
+            XCTAssertEqual([s.x, s.cols, s.rows], [b.x, b.cols, b.rows], "only y shifts")
+        }
+    }
+
+    func testYOriginDefaultsToZero() {
+        let node = leaf() // same node both times so the rects' pane/surface IDs match
+        let withDefault = PaneRectSolver.solve(node, cols: 80, rows: 24)
+        let withZero = PaneRectSolver.solve(node, cols: 80, rows: 24, yOrigin: 0)
+        XCTAssertEqual(withDefault, withZero, "yOrigin 0 is the existing behavior")
+    }
+
+    func testStatusPositionOptionParsing() {
+        XCTAssertEqual(StatusPosition(option: "top"), .top)
+        XCTAssertEqual(StatusPosition(option: "BOTTOM"), .bottom)
+        XCTAssertEqual(StatusPosition(option: "garbage"), .bottom, "unknown → safe default bottom")
+    }
+
     func testHorizontalSplitIsSideBySideWithDivider() {
         // .horizontal => left | right, first = left, ratio = left fraction.
         let node = PaneNode.branch(direction: .horizontal, ratio: 0.5, first: leaf(), second: leaf())

@@ -157,4 +157,47 @@ final class CellColorResolverTests: XCTestCase {
         let r = resolver.resolve(cell)
         XCTAssertEqual(r.foreground, r.background) // conceal still wins (fg == bg)
     }
+
+    // MARK: - DECSCNM reverse video (DECSET 5)
+
+    /// Reverse video swaps the screen's DEFAULT fg/bg (xterm semantics): default-colored
+    /// cells invert; cells with explicit SGR colors keep them.
+    func testReverseVideoSwapsDefaultsOnly() {
+        var resolver = CellColorResolver(palette: ANSIPalette(base16: theme.palette),
+                                         defaultForeground: theme.foreground,
+                                         defaultBackground: theme.background)
+        resolver.reverseVideo = true
+
+        let plain = resolver.resolve(TerminalGridCell(codepoint: 0x41))
+        XCTAssertEqual(plain.foreground, theme.background, "default fg renders as the old bg")
+        XCTAssertEqual(plain.background, theme.foreground, "default bg renders as the old fg")
+
+        let explicit = resolver.resolve(TerminalGridCell(
+            codepoint: 0x41, foreground: .rgb(r: 10, g: 20, b: 30), background: .rgb(r: 40, g: 50, b: 60)
+        ))
+        XCTAssertEqual(explicit.foreground, RGBColor(red: 10, green: 20, blue: 30))
+        XCTAssertEqual(explicit.background, RGBColor(red: 40, green: 50, blue: 60))
+    }
+
+    /// SGR inverse composes on top of the screen swap: an inverse default-colored cell under
+    /// reverse video lands back on the normal default colors (double inversion).
+    func testReverseVideoComposesWithCellInverse() {
+        var resolver = CellColorResolver(palette: ANSIPalette(base16: theme.palette),
+                                         defaultForeground: theme.foreground,
+                                         defaultBackground: theme.background)
+        resolver.reverseVideo = true
+        let r = resolver.resolve(TerminalGridCell(codepoint: 0x41, inverse: true))
+        XCTAssertEqual(r.foreground, theme.foreground)
+        XCTAssertEqual(r.background, theme.background)
+    }
+
+    /// The default (`reverseVideo = false`) stays byte-identical to the pre-DECSCNM resolver.
+    func testReverseVideoOffIsByteIdentical() {
+        let resolver = CellColorResolver(palette: ANSIPalette(base16: theme.palette),
+                                         defaultForeground: theme.foreground,
+                                         defaultBackground: theme.background)
+        let r = resolver.resolve(TerminalGridCell(codepoint: 0x41))
+        XCTAssertEqual(r.foreground, theme.foreground)
+        XCTAssertEqual(r.background, theme.background)
+    }
 }

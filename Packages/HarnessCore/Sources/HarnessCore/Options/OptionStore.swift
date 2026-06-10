@@ -33,6 +33,12 @@ public final class OptionStore: @unchecked Sendable {
     private var values: [String: Value] = [:]
     private let url: URL
     private let lock = NSLock()
+    // Debounced write — mirrors SessionStore.scheduleSave. Mutations mark dirty by enqueuing a
+    // coalesced write; only the last mutation in a burst actually hits the disk. `saveQueue`
+    // serializes disk writes independently of `lock` so the mutation path never blocks on I/O.
+    private let saveQueue = DispatchQueue(label: "com.robert.harness.option-store-save")
+    private var pendingSave: DispatchWorkItem?
+    private let debounceInterval: TimeInterval = 0.15
 
     public init(url: URL? = nil) {
         self.url = url ?? HarnessPaths.applicationSupport.appendingPathComponent("options.json")
@@ -59,6 +65,42 @@ public final class OptionStore: @unchecked Sendable {
         "default-terminal": TerminalIdentity.optionKey,
     ]
     private static func canonical(_ key: String) -> String { keyAliases[key] ?? key }
+
+    /// Recognized option names beyond `builtinDefaults`: options Harness reads but doesn't seed a
+    /// default for (`status-center`, the per-row `status-format-<N>`), plus real tmux options
+    /// Harness accepts for `.tmux.conf` compatibility even when not yet honored (so migrating a
+    /// config doesn't hard-fail). A name that is neither here, in `builtinDefaults`/`keyAliases`,
+    /// nor `@`-prefixed is a typo or an unsupported invention and is rejected by `set-option`.
+    private static let additionalRecognizedKeys: Set<String> = [
+        // Implemented but unseeded (no global default; written per-tab by the sync-panes toggle).
+        "synchronize-panes",
+        // Read but intentionally unseeded (empty default).
+        "status-center",
+        // Common tmux options Harness recognizes but does not yet fully honor — accepted so a
+        // real `.tmux.conf` migrates without a loud failure (tracked on the parity roadmap).
+        "status-interval", "status-justify", "status-keys", "status-style", "status-bg", "status-fg",
+        "message-style", "message-command-style", "mode-style",
+        "window-status-style", "window-status-current-style", "window-status-format",
+        "window-status-current-format", "window-status-separator", "window-status-activity-style",
+        "pane-border-style", "pane-active-border-style", "display-panes-time", "display-panes-colour",
+        "word-separators", "wrap-search", "aggressive-resize", "destroy-unattached",
+        "visual-bell", "visual-activity", "visual-silence", "bell-action", "activity-action",
+        "silence-action", "escape-time", "focus-events", "default-shell", "default-command",
+        "default-size", "set-titles-string", "assume-paste-time", "cursor-style",
+    ]
+
+    /// Whether `key` is a settable option: a known Harness/tmux option name, or a `@`-prefixed user
+    /// option (always allowed — arbitrary user storage). Drives `set-option`'s loud rejection of
+    /// unknown keys, so a typo like `moused` fails instead of being silently stored and never read.
+    public static func isRecognizedOptionKey(_ rawKey: String) -> Bool {
+        if rawKey.hasPrefix("@") { return rawKey.count > 1 } // user option (must name something)
+        let key = canonical(rawKey)
+        if builtinDefaults[key] != nil || keyAliases[rawKey] != nil { return true }
+        if additionalRecognizedKeys.contains(key) { return true }
+        // Per-row status format (`status-format-0`, `status-format-1`, …).
+        if key.hasPrefix("status-format-"), Int(key.dropFirst("status-format-".count)) != nil { return true }
+        return false
+    }
 
     public func get(_ rawKey: String, scope: Scope = .global, target: String? = nil) -> Value? {
         let key = Self.canonical(rawKey)
@@ -90,6 +132,21 @@ public final class OptionStore: @unchecked Sendable {
         values.removeValue(forKey: Self.encodeKey(ScopedKey(scope: scope, target: target, key: key)))
         lock.unlock()
         save()
+    }
+
+    /// Remove every option stored at exactly (`scope`, `target`) — the teardown GC for
+    /// target-scoped values (pane options die with their surface, etc.); without it the
+    /// store grows without bound as targets churn. No-op (no save) when nothing matches.
+    public func removeAll(scope: Scope, target: String?) {
+        lock.lock()
+        let before = values.count
+        values = values.filter { id, _ in
+            guard let key = Self.decodeKey(id) else { return true }
+            return key.scope != scope || key.target != target
+        }
+        let changed = values.count != before
+        lock.unlock()
+        if changed { save() }
     }
 
     public func snapshot(scope: Scope? = nil) -> [(ScopedKey, Value)] {
@@ -154,6 +211,13 @@ public final class OptionStore: @unchecked Sendable {
         // keeps a pane's dead leaf so `respawn-pane` can revive it; off closes the pane (or
         // its tab when last) when the shell exits — read in the daemon's PTY-exit handler.
         "remain-on-exit": .bool(true),
+        // Per-surface secrets-at-rest control: when off, the surface's scrollback is never
+        // written to disk (and anything already written is removed). Pane-scoped reads fall
+        // back to global, so `set-option persist-scrollback off` covers everything.
+        "persist-scrollback": .bool(true),
+        // Auto-injected OSC 133 shell integration at spawn (zsh/bash/fish). Off = panes
+        // spawn untouched; the manual `install-shell-integration` path still works.
+        "shell-integration": .bool(true),
         // `repeat-time` (ms): how long the prefix stays armed after a repeatable binding
         // (`bind -r`) so the key repeats without re-pressing the prefix. Read by `PrefixKeymap`.
         "repeat-time": .int(500),
@@ -229,17 +293,51 @@ public final class OptionStore: @unchecked Sendable {
     // MARK: Persistence
 
     private func save() {
-        // Snapshot under the lock — encoding `values` while another thread mutates it is a
-        // torn read of the dictionary (the store is `@unchecked Sendable` and the daemon both
-        // sets options and serves `show-options` concurrently).
+        // Snapshot under the lock — encoding `values` while another thread mutates it is a torn
+        // read of the dictionary (the store is `@unchecked Sendable`; the daemon sets options and
+        // serves `show-options` concurrently). The snapshot is captured HERE (on the caller's
+        // thread, still under the conceptual mutation context) so the debounced write on `saveQueue`
+        // sees a consistent picture of the state at the time of the last mutation in the burst.
         lock.lock()
         let snapshot = values
         lock.unlock()
+        saveQueue.async { [weak self] in
+            self?.scheduleSave(snapshot)
+        }
+    }
+
+    /// Synchronously write the current values to disk, bypassing the debounce. Called on daemon
+    /// shutdown (via `SurfaceRegistry.flushSnapshot`'s companion) so the last options write in the
+    /// debounce window is never lost.
+    public func flush() {
+        // Cancel any pending debounced write, then persist synchronously on `saveQueue` — the
+        // same serialisation point all debounced writes use, so we never race a concurrent write.
+        saveQueue.sync { [weak self] in
+            guard let self else { return }
+            pendingSave?.cancel()
+            pendingSave = nil
+            lock.lock()
+            let snapshot = values
+            lock.unlock()
+            writeToDisk(snapshot)
+        }
+    }
+
+    private func scheduleSave(_ snapshot: [String: Value]) {
+        // Cancel the previous pending write and replace it, so a burst of mutations coalesces
+        // into one disk write — identical in shape to SessionStore.scheduleSave.
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.writeToDisk(snapshot) }
+        pendingSave = work
+        saveQueue.asyncAfter(deadline: .now() + debounceInterval, execute: work)
+    }
+
+    private func writeToDisk(_ snapshot: [String: Value]) {
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(snapshot) else { return }
-        HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon") // temp + rename, logs on failure
+        HarnessPaths.atomicWrite(data, to: url, label: "HarnessDaemon")
     }
 
     private static func load(url: URL) -> [String: Value] {

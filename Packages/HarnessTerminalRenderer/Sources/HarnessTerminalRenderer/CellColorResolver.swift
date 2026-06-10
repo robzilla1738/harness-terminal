@@ -39,6 +39,15 @@ public struct CellColorResolver: Sendable {
     /// Minimum WCAG contrast ratio (1…21) forced between a cell's foreground and background.
     /// 1 = off (no adjustment, byte-identical output); higher lifts dim text to legibility.
     public let minimumContrast: Double
+    /// DECSCNM (DECSET 5) screen reverse video: the screen's *default* foreground and
+    /// background swap, exactly like xterm — cells with explicit SGR colors keep them.
+    /// `false` (the default) is byte-identical to the pre-DECSCNM resolver.
+    public var reverseVideo: Bool = false
+
+    /// The defaults after the DECSCNM swap — every default-color resolution funnels through
+    /// these so the swap can never half-apply.
+    var effectiveDefaultForeground: RGBColor { reverseVideo ? defaultBackground : defaultForeground }
+    var effectiveDefaultBackground: RGBColor { reverseVideo ? defaultForeground : defaultBackground }
 
     public init(
         palette: ANSIPalette,
@@ -73,9 +82,9 @@ public struct CellColorResolver: Sendable {
         if boldBrightens, cell.bold, case let .palette(i) = cell.foreground, i < 8 {
             fg = palette.color(at: Int(i) + 8)
         } else {
-            fg = rgb(cell.foreground, default: defaultForeground)
+            fg = rgb(cell.foreground, default: effectiveDefaultForeground)
         }
-        var bg = rgb(cell.background, default: defaultBackground)
+        var bg = rgb(cell.background, default: effectiveDefaultBackground)
 
         // 3: faint dims the foreground toward the background.
         if cell.faint {

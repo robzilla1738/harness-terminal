@@ -239,4 +239,63 @@ final class HookFiringTests: XCTestCase {
         _ = registry.handle(.newTab(workspaceID: wsID, cwd: "/tmp"))
         wait(for: [exp], timeout: 1.5)
     }
+
+    // MARK: - Focus / active-pane events (roadmap PR-17)
+
+    func testActivePaneChangeFiresFocusHooks() throws {
+        let registry = SurfaceRegistry()
+        guard let tab = registry.snapshot.activeWorkspace?.activeTab,
+              let first = tab.rootPane.allPaneIDs().first else { return XCTFail("no tab/pane") }
+        // Split so there are two panes (the new split becomes active); selecting `first` then
+        // changes the active pane and should fire the focus-out / changed / focus-in trio.
+        _ = registry.handle(.newSplit(tabID: tab.id, paneID: first, direction: .horizontal, shell: nil))
+
+        let changed = "HOOK_PANE_CHANGED_\(UUID().uuidString.prefix(8))"
+        let focusIn = "HOOK_FOCUS_IN_\(UUID().uuidString.prefix(8))"
+        let focusOut = "HOOK_FOCUS_OUT_\(UUID().uuidString.prefix(8))"
+        let (cExp, cTok) = expectNotification(containing: changed)
+        let (iExp, iTok) = expectNotification(containing: focusIn)
+        let (oExp, oTok) = expectNotification(containing: focusOut)
+        defer { [cTok, iTok, oTok].forEach(NotificationCenter.default.removeObserver) }
+        _ = registry.handle(.bindHook(event: "window-pane-changed", source: "display-message \"\(changed)\"", condition: nil))
+        _ = registry.handle(.bindHook(event: "pane-focus-in", source: "display-message \"\(focusIn)\"", condition: nil))
+        _ = registry.handle(.bindHook(event: "pane-focus-out", source: "display-message \"\(focusOut)\"", condition: nil))
+
+        _ = registry.handle(.selectPane(tabID: tab.id, paneID: first))
+        wait(for: [cExp, iExp, oExp], timeout: 5)
+    }
+
+    // MARK: - command-error (roadmap PR-17)
+
+    func testCommandErrorHookFiresOnUnresolvedHookCommand() throws {
+        let registry = SurfaceRegistry()
+        let wsID = registry.snapshot.activeWorkspaceID!
+        let marker = "HOOK_CMD_ERROR_\(UUID().uuidString.prefix(8))"
+        let (exp, tok) = expectNotification(containing: marker)
+        defer { NotificationCenter.default.removeObserver(tok) }
+        // The command-error hook surfaces the failing command via `#{hook}`.
+        _ = registry.handle(.bindHook(event: "command-error", source: "display-message \"\(marker) #{hook}\"", condition: nil))
+        // An after-new-tab hook whose command targets a non-existent pane → unresolved → fires command-error.
+        _ = registry.handle(.bindHook(
+            event: "after-new-tab",
+            source: "kill-pane -t %00000000-0000-0000-0000-000000000000", condition: nil
+        ))
+        _ = registry.handle(.newTab(workspaceID: wsID, cwd: "/tmp"))
+        wait(for: [exp], timeout: 5)
+    }
+
+    /// Tripwire: every `HookEvent` must have a firing test in the suite. Adding an event without a
+    /// test trips this assertion (the events fired only by timing — alert-* — are exercised by the
+    /// monitoring tests and listed here as covered).
+    func testEveryHookEventHasAFiringTest() {
+        let covered: Set<HookEvent> = [
+            .afterNewTab, .afterNewSession, .afterKillTab, .afterSplitPane, .afterKillPane,
+            .afterResizePane, .paneExited, .clientAttached, .clientDetached, .agentStateChanged,
+            .notificationPosted, .paneActivity, .paneSilence, .paneBell, .sessionCreated,
+            .sessionRenamed, .sessionClosed, .windowRenamed, .windowLinked, .windowUnlinked,
+            .windowLayoutChanged, .commandError, .paneFocusIn, .paneFocusOut, .windowPaneChanged,
+        ]
+        XCTAssertEqual(Set(HookEvent.allCases), covered,
+                       "a new HookEvent was added — give it a firing test and list it here")
+    }
 }

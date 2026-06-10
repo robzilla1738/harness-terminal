@@ -411,7 +411,8 @@ final class EngineConformanceTests: XCTestCase {
         var response = Data()
         emu.onResponse = { response.append($0) }
         emu.feed("\u{1b}[c")
-        XCTAssertEqual(String(data: response, encoding: .utf8), "\u{1b}[?1;2c")
+        // VT220 class (62) advertising Sixel (4) and ANSI color (22).
+        XCTAssertEqual(String(data: response, encoding: .utf8), "\u{1b}[?62;4;22c")
     }
 
     func testSecondaryDeviceAttributesResponse() {

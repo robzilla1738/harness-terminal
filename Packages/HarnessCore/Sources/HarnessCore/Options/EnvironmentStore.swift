@@ -11,6 +11,11 @@ public final class EnvironmentStore: @unchecked Sendable {
     private var perSession: [String: [String: String]] = [:]  // sessionID → key → value
     private let url: URL
     private let lock = NSLock()
+    // Debounced write — mirrors SessionStore/OptionStore/HookRegistry. Session-env mutations
+    // (set-environment) are rare but can burst during config sourcing; one write per burst.
+    private let saveQueue = DispatchQueue(label: "com.robert.harness.environment-store-save")
+    private var pendingSave: DispatchWorkItem?
+    private let debounceInterval: TimeInterval = 0.15
 
     private struct Persisted: Codable {
         var global: [String: String]
@@ -76,9 +81,38 @@ public final class EnvironmentStore: @unchecked Sendable {
     }
 
     private func save() {
+        // Snapshot under the lock so the debounced write on `saveQueue` sees a consistent
+        // picture — same pattern as OptionStore/HookRegistry.
         lock.lock()
         let snapshot = Persisted(global: global, perSession: perSession)
         lock.unlock()
+        saveQueue.async { [weak self] in
+            self?.scheduleSave(snapshot)
+        }
+    }
+
+    /// Synchronously write the current environment to disk, bypassing the debounce. Called on
+    /// daemon shutdown so the last set-environment in the debounce window is never lost.
+    public func flush() {
+        saveQueue.sync { [weak self] in
+            guard let self else { return }
+            pendingSave?.cancel()
+            pendingSave = nil
+            lock.lock()
+            let snapshot = Persisted(global: global, perSession: perSession)
+            lock.unlock()
+            writeToDisk(snapshot)
+        }
+    }
+
+    private func scheduleSave(_ snapshot: Persisted) {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.writeToDisk(snapshot) }
+        pendingSave = work
+        saveQueue.asyncAfter(deadline: .now() + debounceInterval, execute: work)
+    }
+
+    private func writeToDisk(_ snapshot: Persisted) {
         try? HarnessPaths.ensureDirectories()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

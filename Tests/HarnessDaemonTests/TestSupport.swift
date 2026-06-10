@@ -21,6 +21,26 @@ func skipUnlessLiveDaemonTests() throws {
     )
 }
 
+/// Deadline-poll `condition` — the event-driven replacement for fixed settle sleeps and
+/// hand-rolled `for _ in 0..<N { usleep }` loops (whose effective timeouts were opaque
+/// iteration×interval products, sometimes too short on a loaded CI runner). Returns as
+/// soon as the condition holds; on deadline it returns the condition's final value so the
+/// caller's assertion fails with ITS message instead of a generic timeout. Generous
+/// default: waiting longer never slows a passing test (it returns on the first true).
+@discardableResult
+func waitUntil(
+    timeout: TimeInterval = 10,
+    pollIntervalMicros: useconds_t = 20_000,
+    _ condition: () -> Bool
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() { return true }
+        usleep(pollIntervalMicros)
+    }
+    return condition()
+}
+
 /// Thread-safe text accumulator for asserting on streamed PTY output. The subscription
 /// callbacks run off the test thread (and may be `@Sendable`), so the shared buffer
 /// can't be a captured `var` — this reference type guards it with a lock instead.

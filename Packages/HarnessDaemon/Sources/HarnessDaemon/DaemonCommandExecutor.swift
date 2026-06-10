@@ -28,9 +28,11 @@ final class DaemonCommandExecutor: @unchecked Sendable {
         case let .sequence(commands):
             for sub in commands { execute(sub, context: context) }
 
-        case let .displayMessage(format):
+        case let .displayMessage(format), let .displayMessagePrint(format):
             // Render with the HOOK's context — the event's subject (the renamed tab,
             // the closed session), not the active chain the IPC handler would rebuild.
+            // `-p`'s stdout-print has no meaning for a server-side hook reaction, so both
+            // surface the rendered message the same way.
             registry.postDisplayMessage(FormatString.evaluate(format, context: context))
 
         case let .runShell(shellCommand, captureToBuffer):
@@ -56,6 +58,10 @@ final class DaemonCommandExecutor: @unchecked Sendable {
                 fputs("HarnessDaemon: hook command has no server-side action: \(command.shortDescription)\n", harnessStderr)
             case .unresolved:
                 fputs("HarnessDaemon: hook command had no resolvable target: \(command.shortDescription)\n", harnessStderr)
+                // The executor's error path: a command that couldn't resolve fires `command-error`
+                // (the failing command text is the hook's `#{hook}` subject). NOTE: binding
+                // `command-error` to a command that itself can't resolve will loop — a user footgun.
+                registry.fireCommandError(failedCommand: command.shortDescription)
             }
         }
     }

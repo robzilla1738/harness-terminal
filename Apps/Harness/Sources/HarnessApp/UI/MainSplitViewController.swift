@@ -17,6 +17,13 @@ final class MainSplitViewController: NSViewController {
     /// Owned (not a singleton) so collapse state is per-window. Carries the
     /// `allowFullCollapse` flag the divider min-coordinate reads.
     private let splitDelegate = SplitChromeDelegate()
+    /// The vertical chain that places the status footer below the split (tmux
+    /// `status-position bottom`, the default).
+    private var statusBottomConstraints: [NSLayoutConstraint] = []
+    /// The vertical chain that places the status footer above the split (`status-position top`).
+    private var statusTopConstraints: [NSLayoutConstraint] = []
+    /// Last applied position, so a metadata-only snapshot nudge only re-lays-out on a real change.
+    private var appliedStatusPosition: StatusPosition?
 
     override func loadView() {
         // The root contentView must stay a plain, NON-layer-backed NSView. A plain NSView
@@ -68,21 +75,33 @@ final class MainSplitViewController: NSViewController {
         view.addSubview(split)
         view.addSubview(statusLine)
         view.addSubview(edgeDivider)
+        // Horizontal edges + the full-height divider are position-independent; the
+        // split↔statusLine vertical chain is swapped by `applyStatusPosition()`.
         NSLayoutConstraint.activate([
-            split.topAnchor.constraint(equalTo: view.topAnchor),
             split.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            split.bottomAnchor.constraint(equalTo: statusLine.topAnchor),
 
             statusLine.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             statusLine.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            statusLine.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             edgeDivider.topAnchor.constraint(equalTo: view.topAnchor),
             edgeDivider.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             edgeDivider.leadingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
             edgeDivider.widthAnchor.constraint(equalToConstant: 1),
         ])
+        // Footer at the bottom (default): split fills down to the footer's top.
+        statusBottomConstraints = [
+            split.topAnchor.constraint(equalTo: view.topAnchor),
+            split.bottomAnchor.constraint(equalTo: statusLine.topAnchor),
+            statusLine.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ]
+        // Footer at the top: footer pins to the top, split fills below it.
+        statusTopConstraints = [
+            statusLine.topAnchor.constraint(equalTo: view.topAnchor),
+            split.topAnchor.constraint(equalTo: statusLine.bottomAnchor),
+            split.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ]
+        applyStatusPosition()
 
         edgeDivider.layer?.backgroundColor = resolvedDividerColor().cgColor
 
@@ -121,12 +140,12 @@ final class MainSplitViewController: NSViewController {
             HarnessDesign.makeClear(sidebarContainer)
         }
         edgeDivider.layer?.backgroundColor = resolvedDividerColor().cgColor
-        // Tell the window controller to repaint the window bg with the (possibly
-        // new) chrome color × opacity.
-        (view.window?.windowController as? MainWindowController)?.applyTransparency()
         sidebar.applyChromeColors()
         content.applyChrome()
         statusLine.applyChrome()
+        // Tell the window controller to repaint the window bg with the (possibly new)
+        // chrome color × opacity.  Called once, after all child views have adopted the
+        // new palette, so the window compositor sees the final resolved colors in one pass.
         (view.window?.windowController as? MainWindowController)?.applyTransparency()
     }
 
@@ -148,7 +167,27 @@ final class MainSplitViewController: NSViewController {
             sidebar.reload()
             content.reloadTabBar()
         }
+        applyStatusPosition()
         updateWindowTitle()
+    }
+
+    /// Anchor the status footer to the bottom (default) or top per the daemon-owned
+    /// `status-position` option, and tell the footer which way to stack its rows so the
+    /// main line sits against the terminal. No-ops when the position is unchanged so a
+    /// metadata snapshot doesn't thrash autolayout.
+    private func applyStatusPosition() {
+        let position = StatusPosition(option: HarnessOptions.shared.get("status-position", scope: .global)?.stringValue ?? "bottom")
+        guard position != appliedStatusPosition else { return }
+        appliedStatusPosition = position
+        switch position {
+        case .bottom:
+            NSLayoutConstraint.deactivate(statusTopConstraints)
+            NSLayoutConstraint.activate(statusBottomConstraints)
+        case .top:
+            NSLayoutConstraint.deactivate(statusBottomConstraints)
+            NSLayoutConstraint.activate(statusTopConstraints)
+        }
+        statusLine.position = position
     }
 
     private func updateWindowTitle() {

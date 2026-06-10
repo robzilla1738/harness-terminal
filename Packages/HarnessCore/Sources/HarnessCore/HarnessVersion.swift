@@ -12,8 +12,8 @@ import Foundation
 /// build when the two disagree (v1.3.0/v1.3.1 shipped daemons that reported 1.2.0).
 public enum HarnessVersion {
     /// Marketing version, matches `CFBundleShortVersionString`.
-    public static let short = "1.8.0"
+    public static let short = "1.9.0"
     /// Build number, matches `CFBundleVersion`. Used as the secondary-DA firmware field
     /// and as the daemon↔app/CLI staleness handshake in `daemonStats`.
-    public static let build = 122
+    public static let build = 123
 }

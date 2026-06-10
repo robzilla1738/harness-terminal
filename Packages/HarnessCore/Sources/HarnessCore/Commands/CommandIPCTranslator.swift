@@ -266,6 +266,9 @@ public enum CommandIPCTranslator {
         case let .respawnPane(keepHistory):
             guard let pane = target.paneID, let surface = target.surfaceID(of: pane) else { return .unresolved }
             return .requests([.respawnPane(surfaceID: surface, keepHistory: keepHistory)])
+        case .clearHistory:
+            guard let pane = target.paneID, let surface = target.surfaceID(of: pane) else { return .unresolved }
+            return .requests([.clearHistory(surfaceID: surface)])
 
         case let .resizePane(direction, amount):
             guard let pane = target.paneID else { return .unresolved }
@@ -401,6 +404,18 @@ public enum CommandIPCTranslator {
         case let .sendKeys(keys):
             guard let pane = target.paneID, let surface = target.surfaceID(of: pane) else { return .unresolved }
             return .requests([.sendKeys(surfaceID: surface, keys: keys)])
+        case let .sendKeysLiteral(text):
+            // Literal text is sent verbatim — no key-token interpretation — via the raw byte path.
+            guard let pane = target.paneID, let surface = target.surfaceID(of: pane) else { return .unresolved }
+            return .requests([.sendData(surfaceID: surface, data: Data(text.utf8))])
+        case let .sendKeysHex(hex):
+            // Hex tokens (`1b`, `0x5b`, `41`) → raw bytes. Non-hex tokens are skipped.
+            guard let pane = target.paneID, let surface = target.surfaceID(of: pane) else { return .unresolved }
+            let bytes = hex.compactMap { tok -> UInt8? in
+                let t = tok.hasPrefix("0x") || tok.hasPrefix("0X") ? String(tok.dropFirst(2)) : tok
+                return UInt8(t, radix: 16)
+            }
+            return .requests([.sendData(surfaceID: surface, data: Data(bytes))])
 
         // MARK: Phase 6/7 — verbs that resolve to IPC
         case .lastWindow:
@@ -429,7 +444,7 @@ public enum CommandIPCTranslator {
         // MARK: Client-local (UI overlays, modes, file/shell, composition)
         case .markPane, .synchronizePanes, .displayPanes, .copyMode, .copyModeCommand, .detachClient,
              .reattachSurface, .jumpToPreviousPrompt, .jumpToNextPrompt,
-             .displayMessage, .runShell, .ifShell, .bindKey, .unbindKey, .listKeys,
+             .displayMessage, .displayMessagePrint, .runShell, .ifShell, .bindKey, .unbindKey, .listKeys,
              .sourceConfig, .reloadKeybindings, .showCheatsheet, .sequence,
              .sendPrefix, .sourceFile, .commandPrompt, .confirmBefore, .choose,
              .lockClient, .clockMode, .switchClientTable, .displayPopup, .displayMenu:

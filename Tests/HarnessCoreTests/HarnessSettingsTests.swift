@@ -4,6 +4,154 @@ import XCTest
 final class HarnessSettingsTests: XCTestCase {
     private let colorMigrationKey = "HarnessColorFidelityMigrationV1"
 
+    // MARK: - Decoder guard (roadmap PR-11)
+
+    // The 60+ -property `init(from:)` is hand-written — every field needs its own
+    // `decodeIfPresent` line. A field that encodes but is never decoded (a forgotten line) would
+    // silently revert to the fallback on every load. The guard below sets a non-default value on
+    // a field of every stored type and asserts each survives a coding round-trip — a missing decode
+    // line reverts that field and trips its assertion.
+    //
+    // Why per-field (not whole-struct `==`): the absent-key fallback is intentionally
+    // environment-derived (`makeDefaults(imported:)` seeds from any imported terminal config), and
+    // hex values are normalized to uppercase on decode — so `decode(encode(x)) == x` is not a
+    // machine-independent invariant. Asserting the explicitly-set fields (present in the JSON, hex
+    // uppercased) is immune to both and still proves each decode line carries its value.
+    /// `scrollMultiplier` is documented as "clamped to a sane range on read" — the `init(from:)`
+    /// decoder must apply `clampedScrollMultiplier` (like `minimumContrast` does), so a hand-edited
+    /// settings.json with an out-of-range value can't reach the renderer and freeze/invert scrolling.
+    func testScrollMultiplierIsClampedOnDecode() throws {
+        func decoded(_ raw: Double) throws -> Double {
+            var s = HarnessSettings()
+            s.scrollMultiplier = raw
+            let data = try JSONEncoder().encode(s)
+            return try JSONDecoder().decode(HarnessSettings.self, from: data).scrollMultiplier
+        }
+        XCTAssertEqual(try decoded(999), 10, accuracy: 1e-9, "a huge hand-edited value clamps to the max on read")
+        XCTAssertEqual(try decoded(-5), 0.1, accuracy: 1e-9, "a negative value clamps to the min")
+        XCTAssertEqual(try decoded(0), 0.1, accuracy: 1e-9, "zero clamps to the min")
+        XCTAssertEqual(try decoded(2.5), 2.5, accuracy: 1e-9, "an in-range value is preserved")
+    }
+
+    func testEveryFieldTypeSurvivesACodingRoundTrip() throws {
+        var s = HarnessSettings()
+        s.fontSize = 19.5
+        s.fontFamily = "Berkeley Mono"
+        s.defaultShell = "/usr/local/bin/fish"
+        s.defaultCWD = "/tmp/work"
+        s.transparentTitlebar = false
+        s.sidebarVisible = false
+        s.restoreWindowSize = true
+        s.backgroundOpacity = 0.42
+        s.backgroundBlur = 7
+        s.windowPaddingX = 9
+        s.windowPaddingY = 11
+        s.customBackgroundHex = "#101010"
+        s.customForegroundHex = "#E0E0E0"
+        s.customCursorHex = "#FF8800"
+        s.prefixKey = "ctrl-b"
+        s.scrollbackLines = 99_999
+        s.cursorStyle = "block"
+        s.cursorBlink = false
+        s.copyOnSelect = false
+        s.dividerHex = "#222222"
+        s.statusLineHex = "#ABCDEF"
+        s.windowBorderHex = "#333333"
+        s.windowBorderOpacity = 0.9
+        s.minimumContrast = 4.5
+        s.vividColors = true
+        s.linearBlending = true
+        s.applyThemeToTerminalOutput = true
+        s.ligatures = false
+        s.boldIsBright = false
+        s.pasteProtection = false
+        s.secureKeyboardEntry = true
+        s.commandFinishedThresholdSeconds = 30
+        s.paletteHex[0] = "#000001"
+        s.paletteHex[15] = "#FFFFFE"
+        s.agentColorOverrides["claude-code"] = "#7C3AED"
+        s.setEventEnabled(.bell, false)
+        s.setEventEnabled(.commandFinished, true)
+        s.colorRendering = .vivid
+        s.experienceMode = .full
+        s.notchVisibilityMode = .on
+        s.resizeOverlay = .always
+        s.bellMode = .both
+        s.scrollMultiplier = 2.5
+        s.mouseHideWhileTyping = true
+        s.quickTerminalEnabled = true
+        s.quickTerminalHotkey = "ctrl-opt-k"
+
+        let d = try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(s))
+
+        XCTAssertEqual(d.fontSize, 19.5)
+        XCTAssertEqual(d.fontFamily, "Berkeley Mono")
+        XCTAssertEqual(d.defaultShell, "/usr/local/bin/fish")
+        XCTAssertEqual(d.defaultCWD, "/tmp/work")
+        XCTAssertEqual(d.transparentTitlebar, false)
+        XCTAssertEqual(d.sidebarVisible, false)
+        XCTAssertEqual(d.restoreWindowSize, true)
+        XCTAssertEqual(d.backgroundOpacity, 0.42)
+        XCTAssertEqual(d.backgroundBlur, 7)
+        XCTAssertEqual(d.windowPaddingX, 9)
+        XCTAssertEqual(d.windowPaddingY, 11)
+        XCTAssertEqual(d.customBackgroundHex, "#101010")
+        XCTAssertEqual(d.customForegroundHex, "#E0E0E0")
+        XCTAssertEqual(d.customCursorHex, "#FF8800")
+        XCTAssertEqual(d.prefixKey, "ctrl-b")
+        XCTAssertEqual(d.scrollbackLines, 99_999)
+        XCTAssertEqual(d.cursorStyle, "block")
+        XCTAssertEqual(d.cursorBlink, false)
+        XCTAssertEqual(d.copyOnSelect, false)
+        XCTAssertEqual(d.dividerHex, "#222222")
+        XCTAssertEqual(d.statusLineHex, "#ABCDEF")
+        XCTAssertEqual(d.windowBorderHex, "#333333")
+        XCTAssertEqual(d.windowBorderOpacity, 0.9)
+        XCTAssertEqual(d.minimumContrast, 4.5)
+        XCTAssertEqual(d.vividColors, true)
+        XCTAssertEqual(d.linearBlending, true)
+        XCTAssertEqual(d.applyThemeToTerminalOutput, true)
+        XCTAssertEqual(d.ligatures, false)
+        XCTAssertEqual(d.boldIsBright, false)
+        XCTAssertEqual(d.pasteProtection, false)
+        XCTAssertEqual(d.secureKeyboardEntry, true)
+        XCTAssertEqual(d.commandFinishedThresholdSeconds, 30)
+        XCTAssertEqual(d.paletteHex[0], "#000001")
+        XCTAssertEqual(d.paletteHex[15], "#FFFFFE")
+        XCTAssertEqual(d.agentColorOverrides["claude-code"], "#7C3AED")
+        XCTAssertFalse(d.isEventEnabled(.bell))
+        XCTAssertTrue(d.isEventEnabled(.commandFinished))
+        XCTAssertEqual(d.colorRendering, .vivid)
+        XCTAssertEqual(d.experienceMode, .full)
+        XCTAssertEqual(d.notchVisibilityMode, .on)
+        XCTAssertEqual(d.resizeOverlay, .always)
+        XCTAssertEqual(d.bellMode, .both)
+        XCTAssertEqual(d.scrollMultiplier, 2.5)
+        XCTAssertEqual(d.mouseHideWhileTyping, true)
+        XCTAssertEqual(d.quickTerminalEnabled, true)
+        XCTAssertEqual(d.quickTerminalHotkey, "ctrl-opt-k")
+    }
+
+    func testScrollMultiplierAndMouseHideDefaults() {
+        let s = HarnessSettings()
+        XCTAssertEqual(s.scrollMultiplier, 1, "native scroll speed by default")
+        XCTAssertFalse(s.mouseHideWhileTyping, "off by default (matching Ghostty)")
+    }
+
+    func testScrollMultiplierClampsToSaneRange() {
+        XCTAssertEqual(HarnessSettings.clampedScrollMultiplier(0), 0.1, "0 would freeze scrolling")
+        XCTAssertEqual(HarnessSettings.clampedScrollMultiplier(-3), 0.1)
+        XCTAssertEqual(HarnessSettings.clampedScrollMultiplier(999), 10, "cap pages-per-notch")
+        XCTAssertEqual(HarnessSettings.clampedScrollMultiplier(2.5), 2.5, "in-range passes through")
+    }
+
+    /// An empty object must decode without throwing — guards against a field decoded with the
+    /// throwing `decode` (a required key) instead of `decodeIfPresent`, which would break every
+    /// older/partial settings file.
+    func testEmptyObjectDecodesWithoutThrowing() {
+        XCTAssertNoThrow(try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8)))
+    }
+
     func testOldSettingsWithCustomHexDoNotSilentlyOverrideThemes() throws {
         let data = Data("""
         {
@@ -177,6 +325,23 @@ final class HarnessSettingsTests: XCTestCase {
         let encoded = try JSONEncoder().encode(settings)
         let decoded = try JSONDecoder().decode(HarnessSettings.self, from: encoded)
         XCTAssertFalse(decoded.notificationSoundEnabled)
+    }
+
+    func testSecureKeyboardEntryDefaultsOffAndRoundTrips() throws {
+        // Opt-in security feature: a fresh install and any settings file predating it must decode
+        // to off (never silently force the global secure-input lock on for existing users).
+        XCTAssertFalse(HarnessSettings().secureKeyboardEntry)
+        let legacy = Data("""
+        { "fontSize": 14, "customBackgroundHex": "#000000" }
+        """.utf8)
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+        XCTAssertFalse(migrated.secureKeyboardEntry)
+
+        // An explicit on value survives a save/load round-trip.
+        var settings = HarnessSettings()
+        settings.secureKeyboardEntry = true
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: try JSONEncoder().encode(settings))
+        XCTAssertTrue(decoded.secureKeyboardEntry)
     }
 
     func testNotchSettingsDefaultAndLegacyDecode() throws {
@@ -490,5 +655,47 @@ final class HarnessSettingsTests: XCTestCase {
             }
         }
         try body()
+    }
+
+    // MARK: - Forward-compat decode (the FieldDecoder seam, PR-31)
+
+    /// Unknown keys in a NEWER settings file must be ignored — a downgrade (or a file
+    /// shared from a newer build) decodes cleanly instead of failing the whole load.
+    func testUnknownKeysAreIgnoredOnDecode() throws {
+        let futuristic = Data("""
+        { "fontSize": 17, "someFieldFromTheFuture": { "nested": [1, 2, 3] }, "anotherUnknown": "x" }
+        """.utf8)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: futuristic)
+        XCTAssertEqual(decoded.fontSize, 17)
+        let fallback = HarnessSettings.makeDefaults(imported: TerminalConfigImporter.load())
+        XCTAssertEqual(decoded.fontFamily, fallback.fontFamily, "absent keys fall back to defaults")
+    }
+
+    /// Every key absent → every field equals the fallback instance the decoder funnels
+    /// through. That fallback is `makeDefaults(imported:)`, NOT `HarnessSettings()`: on a
+    /// machine with an importable terminal config (Ghostty/iTerm2) the defaults are
+    /// import-aware (shell, opacity, font), so comparing against the plain initializer
+    /// only passes on machines with nothing to import (like CI). Spot-checks a
+    /// representative spread of field types.
+    func testMissingKeysDecodeToDefaultInstanceValues() throws {
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8))
+        let defaults = HarnessSettings.makeDefaults(imported: TerminalConfigImporter.load())
+        XCTAssertEqual(decoded.defaultShell, defaults.defaultShell)
+        XCTAssertEqual(decoded.backgroundOpacity, defaults.backgroundOpacity)
+        XCTAssertEqual(decoded.scrollbackLines, defaults.scrollbackLines)
+        XCTAssertEqual(decoded.bellMode, defaults.bellMode)
+        XCTAssertEqual(decoded.quickTerminalHotkey, defaults.quickTerminalHotkey)
+        XCTAssertEqual(decoded.agentColorOverrides, defaults.agentColorOverrides)
+        XCTAssertEqual(decoded.boldIsBright, defaults.boldIsBright)
+        XCTAssertEqual(decoded.resizeOverlayPosition, defaults.resizeOverlayPosition)
+    }
+
+    func testWindowInheritCWDDefaultsOnAndDecodesExplicitOff() throws {
+        XCTAssertTrue(HarnessSettings().windowInheritCWD, "inherit is the shipped behavior — default on")
+        let legacy = try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8))
+        XCTAssertTrue(legacy.windowInheritCWD, "older settings files keep inheriting")
+        let off = try JSONDecoder().decode(
+            HarnessSettings.self, from: Data(#"{ "windowInheritCWD": false }"#.utf8))
+        XCTAssertFalse(off.windowInheritCWD)
     }
 }

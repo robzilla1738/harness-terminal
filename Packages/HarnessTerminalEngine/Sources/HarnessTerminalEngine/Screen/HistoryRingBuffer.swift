@@ -18,6 +18,11 @@ struct HistoryRingBuffer<Element> {
     private var head: Int
     /// Number of retained elements.
     private(set) var count: Int
+    /// Most recently appended element, kept as the release-build fallback for an
+    /// out-of-contract read on an EMPTY buffer (see the subscript getter). One element's
+    /// memory (a single history row); deliberately NOT cleared by `removeAll`, so a stale
+    /// read straight after a scrollback clear is also non-fatal.
+    private var releaseFallback: Element?
 
     init() {
         storage = []
@@ -33,6 +38,7 @@ struct HistoryRingBuffer<Element> {
         storage = slots
         head = 0
         count = slots.count
+        releaseFallback = slots.last ?? nil
     }
 
     var isEmpty: Bool { count == 0 }
@@ -44,19 +50,27 @@ struct HistoryRingBuffer<Element> {
         }
         storage[backingIndex(count)] = element
         count += 1
+        releaseFallback = element
     }
 
     /// Random access by logical index (0 = oldest). The setter lets callers mutate an element in
     /// place (e.g. `buffer[i].field = x`), which a plain array's element subscript also allows.
     subscript(index: Int) -> Element {
         get {
-            // An out-of-range index is a logic bug: trap loudly in development (`assert`, stripped in
-            // release) but DON'T crash a shipping build over scrollback indexing. Clamp into range and
-            // return the nearest retained element. The buffer keeps every slot in [head, head+count)
-            // non-nil, so the clamped read never force-unwraps nil. (`count > 0` always holds at the
-            // call sites, which all guard `index < count`; the empty case is genuinely unreachable.)
+            // An out-of-range index is a logic bug: trap loudly in development (`assert`, stripped
+            // in release) but DON'T crash a shipping build over scrollback indexing. Clamp into
+            // range and return the nearest retained element; the buffer keeps every slot in
+            // [head, head+count) non-nil, so the clamped read never force-unwraps nil. The empty
+            // case (genuinely unreachable: every call site guards `index < count`) falls back to
+            // the most recently appended element rather than trapping — the one remaining trap is
+            // a read from a buffer that NEVER held an element, which no stale index can produce.
             assert(index >= 0 && index < count, "HistoryRingBuffer index out of range")
-            precondition(count > 0, "HistoryRingBuffer subscript on empty buffer")
+            guard count > 0 else {
+                guard let fallback = releaseFallback else {
+                    preconditionFailure("HistoryRingBuffer subscript on never-filled buffer")
+                }
+                return fallback
+            }
             let clamped = Swift.max(0, Swift.min(index, count - 1))
             return storage[backingIndex(clamped)]!
         }

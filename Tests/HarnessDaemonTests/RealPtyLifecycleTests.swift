@@ -86,7 +86,9 @@ final class RealPtyLifecycleTests: XCTestCase {
         let exits = AtomicCounter()
         pty.onExit = { _ in exits.increment() }
 
-        Thread.sleep(forTimeInterval: 0.3) // let the first shell come up
+        // Shell-start: wait for the live child to answer a cwd probe rather than assuming
+        // a fixed startup delay (too short on a loaded runner, dead time otherwise).
+        waitUntil { pty.probeWorkingDirectory() != nil }
         pty.respawn(clearHistory: true)
 
         let marker = "RESPAWN_OK_MARKER"
@@ -105,8 +107,9 @@ final class RealPtyLifecycleTests: XCTestCase {
         XCTAssertEqual(exits.value, 0, "respawn must not fire onExit for the replaced shell")
     }
 
-    /// A child that traps (ignores) SIGTERM+SIGHUP would leave `watchForExit`'s blocking
-    /// `waitpid(pid, …, 0)` stuck forever, leaking that thread for the daemon's lifetime.
+    /// A child that traps (ignores) SIGTERM+SIGHUP never exits on its own — its exit event
+    /// would never arrive (Darwin: the kqueue process source never fires; Linux: the blocking
+    /// `waitpid(pid, …, 0)` stays stuck, leaking its thread for the daemon's lifetime).
     /// `close()` must escalate to SIGKILL after its grace and the child must be reaped.
     func testCloseEscalatesToSIGKILLForTermIgnoringChild() throws {
         let pty = try makePty()
@@ -119,8 +122,13 @@ final class RealPtyLifecycleTests: XCTestCase {
                 armed.fulfill()
             }
         }
-        Thread.sleep(forTimeInterval: 0.3) // let the shell come up
-        pty.write("trap '' TERM HUP; echo TRAP_ARMED; while true; do sleep 1; done\n")
+        // Shell-start: probe-based wait instead of a fixed delay; the TRAP_ARMED
+        // expectation below is the authoritative readiness signal. The marker is SPLIT in
+        // the typed text ('AR''MED') so the kernel's PTY echo of the command line cannot
+        // fulfill the expectation before the shell has actually executed `trap` — the echo
+        // race the old fixed sleep happened to mask.
+        waitUntil { pty.probeWorkingDirectory() != nil }
+        pty.write("trap '' TERM HUP; echo TRAP_'AR'MED; while true; do sleep 1; done\n")
         wait(for: [armed], timeout: 8)
 
         let childPID = pty.childPIDForTesting
@@ -133,12 +141,7 @@ final class RealPtyLifecycleTests: XCTestCase {
         pty.close() // sends SIGTERM (ignored) then schedules SIGKILL after the ~2.5s grace
 
         // Within grace + epsilon the escalation must have killed and reaped the child.
-        let deadline = Date().addingTimeInterval(5.0)
-        var gone = false
-        while Date() < deadline {
-            if kill(childPID, 0) != 0 { gone = true; break }
-            Thread.sleep(forTimeInterval: 0.1)
-        }
+        let gone = waitUntil(timeout: 5) { kill(childPID, 0) != 0 }
         XCTAssertTrue(gone, "SIGKILL escalation must reap a TERM-ignoring child within the grace window")
     }
 
@@ -155,8 +158,9 @@ final class RealPtyLifecycleTests: XCTestCase {
                 armed.fulfill()
             }
         }
-        Thread.sleep(forTimeInterval: 0.3)
-        pty.write("trap '' TERM HUP; echo TRAP_ARMED; while true; do sleep 1; done\n")
+        // Shell-start probe wait + echo-proof split marker (see the close-escalation test).
+        waitUntil { pty.probeWorkingDirectory() != nil }
+        pty.write("trap '' TERM HUP; echo TRAP_'AR'MED; while true; do sleep 1; done\n")
         wait(for: [armed], timeout: 8)
 
         let oldPID = pty.childPIDForTesting
@@ -179,12 +183,7 @@ final class RealPtyLifecycleTests: XCTestCase {
         wait(for: [received], timeout: 8)
 
         // The old, TERM-ignoring shell must be reaped by the SIGKILL escalation.
-        let deadline = Date().addingTimeInterval(5.0)
-        var gone = false
-        while Date() < deadline {
-            if kill(oldPID, 0) != 0 { gone = true; break }
-            Thread.sleep(forTimeInterval: 0.1)
-        }
+        let gone = waitUntil(timeout: 5) { kill(oldPID, 0) != 0 }
         XCTAssertTrue(gone, "respawn's SIGKILL escalation must reap the TERM-ignoring old shell")
     }
 
@@ -196,7 +195,8 @@ final class RealPtyLifecycleTests: XCTestCase {
     func testProbedPIDGoesStaleAcrossRespawn() throws {
         let pty = try makePty()
         defer { pty.close() }
-        Thread.sleep(forTimeInterval: 0.3) // let the first shell come up
+        // Shell-start: wait for the probe itself to answer instead of a fixed delay.
+        waitUntil { pty.probeWorkingDirectory() != nil }
 
         let probe = try XCTUnwrap(pty.probeWorkingDirectory(), "live shell must report a cwd + PID")
         XCTAssertGreaterThan(probe.pid, 0)
@@ -205,12 +205,8 @@ final class RealPtyLifecycleTests: XCTestCase {
         pty.respawn(clearHistory: true) // swaps childPID to the freshly spawned shell
 
         // Wait for the new child to be installed (respawn is async w.r.t. the spawn completing).
-        let deadline = Date().addingTimeInterval(5.0)
-        var newPID = pty.currentChildPID
-        while (newPID <= 0 || newPID == probe.pid), Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-            newPID = pty.currentChildPID
-        }
+        waitUntil(timeout: 5) { pty.currentChildPID > 0 && pty.currentChildPID != probe.pid }
+        let newPID = pty.currentChildPID
         XCTAssertGreaterThan(newPID, 0, "respawn must install a new child")
         XCTAssertNotEqual(newPID, probe.pid,
                           "the pre-respawn probe PID must no longer match the live child — the registry's "
