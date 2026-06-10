@@ -300,7 +300,12 @@ public final class GlyphRasterizer {
         ctx.textPosition = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTLineDraw(line, ctx)
 
-        let coverage = readCoverage(ctx, width: pxW, height: pxH)
+        // Thicken composed clusters the same way single glyphs are thickened, so crisp-mode
+        // Thai/combining-mark text doesn't render visibly thinner than its neighbors.
+        let rawCoverage = readCoverage(ctx, width: pxW, height: pxH)
+        let coverage = fontThicken
+            ? thickenCoverage(rawCoverage, width: pxW, height: pxH, strength: fontThickenStrength)
+            : rawCoverage
         return RasterizedGlyph(
             width: pxW, height: pxH, bearingX: leftPx - pad, bearingY: topPx + pad, coverage: coverage
         )

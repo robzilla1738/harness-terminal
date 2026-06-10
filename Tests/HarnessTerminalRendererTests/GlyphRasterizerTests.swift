@@ -210,6 +210,27 @@ final class GlyphRasterizerTests: XCTestCase {
         XCTAssertEqual(thickened.rasterize(codepoint: box), normal.rasterize(codepoint: box))
     }
 
+    func testFontThickenAppliesToComposedClusters() throws {
+        // Multi-scalar grapheme clusters (Thai base + vowel + tone) go through the CTLineDraw
+        // composition path, not the single-glyph path — crisp-mode thickening must cover both or
+        // composed text renders visibly thinner than its neighbors.
+        let normal = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2)
+        let thickened = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2, fontThicken: true, fontThickenStrength: 255)
+        let cluster = "ที่"
+        XCTAssertGreaterThan(cluster.unicodeScalars.count, 1, "must exercise the composed-cluster path")
+
+        let normalGlyph = try XCTUnwrap(normal.rasterize(cluster: cluster))
+        let thickenedGlyph = try XCTUnwrap(thickened.rasterize(cluster: cluster))
+
+        XCTAssertEqual(thickenedGlyph.width, normalGlyph.width)
+        XCTAssertEqual(thickenedGlyph.height, normalGlyph.height)
+        XCTAssertGreaterThan(coverageSum(thickenedGlyph), coverageSum(normalGlyph))
+
+        // Thicken OFF stays byte-identical through the cluster path.
+        let off = GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2, fontThicken: false)
+        XCTAssertEqual(off.rasterize(cluster: cluster), normalGlyph)
+    }
+
     func testSpaceHasNoInk() {
         XCTAssertNil(rasterizer.rasterize(codepoint: UInt32(UnicodeScalar(" ").value)))
     }
