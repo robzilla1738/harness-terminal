@@ -2,138 +2,138 @@
   "build_frame_160x48": {
     "benchmark": "build_frame_160x48",
     "cells": 7680,
-    "nanos": 234625
+    "nanos": 270542
   },
   "build_frame_240x80": {
     "benchmark": "build_frame_240x80",
     "cells": 19200,
-    "nanos": 481208
+    "nanos": 523209
   },
   "build_frame_80x24": {
     "benchmark": "build_frame_80x24",
     "cells": 1920,
-    "nanos": 49375
+    "nanos": 63583
   },
   "build_frame_combining_heavy_160x48": {
     "benchmark": "build_frame_combining_heavy_160x48",
     "cells": 7680,
-    "nanos": 236709
+    "nanos": 268708
   },
   "build_frame_search_highlights_160x48": {
     "benchmark": "build_frame_search_highlights_160x48",
     "cells": 7680,
     "hits": 216,
-    "nanos": 253167
+    "nanos": 362917
   },
   "cell_scroll_region_160x48": {
     "benchmark": "cell_scroll_region_160x48",
     "lines": 5000,
-    "nanos": 41833458
+    "nanos": 40076833
   },
   "compositor_frame_build_four_panes": {
     "benchmark": "compositor_frame_build_four_panes",
     "frames": 40,
-    "nanos": 42686375,
+    "nanos": 41882125,
     "panes": 4
   },
   "consume_latency_under_load_4096": {
     "benchmark": "consume_latency_under_load_4096",
     "bytes": 4194382,
     "chunks": 1025,
-    "mainGapMaxNanos": 2375,
+    "mainGapMaxNanos": 3417,
     "mainGapP50Nanos": 250,
-    "mainGapP95Nanos": 583,
+    "mainGapP95Nanos": 792,
     "mainHops": 1025,
-    "mbps": 8.407,
-    "nanos": 494575834
+    "mbps": 9.173,
+    "nanos": 457254500
   },
   "consume_latency_under_load_65536": {
     "benchmark": "consume_latency_under_load_65536",
     "bytes": 4194382,
     "chunks": 65,
-    "mainGapMaxNanos": 1041,
+    "mainGapMaxNanos": 3208,
     "mainGapP50Nanos": 208,
-    "mainGapP95Nanos": 625,
+    "mainGapP95Nanos": 708,
     "mainHops": 65,
-    "mbps": 8.711,
-    "nanos": 487237917
+    "mbps": 9.207,
+    "nanos": 455571250
   },
   "consumer_ansi_sgr": {
     "benchmark": "consumer_ansi_sgr",
     "bytes": 1048626,
-    "feedNanos": 115417250,
-    "frameBuildNanos": 180667,
-    "mbps": 9.071,
-    "nanos": 114774000
+    "feedNanos": 107341917,
+    "frameBuildNanos": 175792,
+    "mbps": 9.753,
+    "nanos": 107518042
   },
   "consumer_attributes": {
     "benchmark": "consumer_attributes",
     "bytes": 1048618,
-    "feedNanos": 122373708,
-    "frameBuildNanos": 238166,
-    "mbps": 8.552,
-    "nanos": 121589834
+    "feedNanos": 113875875,
+    "frameBuildNanos": 189375,
+    "mbps": 9.193,
+    "nanos": 114065375
   },
   "consumer_plain_ascii": {
     "benchmark": "consumer_plain_ascii",
     "bytes": 1048600,
-    "feedNanos": 157209583,
-    "frameBuildNanos": 176042,
-    "mbps": 6.663,
-    "nanos": 157386167
+    "feedNanos": 149761000,
+    "frameBuildNanos": 199042,
+    "mbps": 6.992,
+    "nanos": 149960708
   },
   "consumer_redraw": {
     "benchmark": "consumer_redraw",
     "bytes": 2463300,
-    "feedNanos": 16100167,
-    "frameBuildNanos": 194917,
-    "mbps": 151.166,
-    "nanos": 16301458
+    "feedNanos": 15551833,
+    "frameBuildNanos": 178542,
+    "mbps": 156.593,
+    "nanos": 15730625
   },
   "consumer_scrollback": {
     "benchmark": "consumer_scrollback",
     "bytes": 1280000,
-    "feedNanos": 170214291,
-    "frameBuildNanos": 174250,
-    "mbps": 7.512,
-    "nanos": 170388541
+    "feedNanos": 161133792,
+    "frameBuildNanos": 177833,
+    "mbps": 7.935,
+    "nanos": 161312167
   },
   "consumer_truecolor_gradient": {
     "benchmark": "consumer_truecolor_gradient",
     "bytes": 899700,
-    "feedNanos": 12344708,
-    "frameBuildNanos": 190667,
-    "mbps": 71.769,
-    "nanos": 12533125
+    "feedNanos": 12050416,
+    "frameBuildNanos": 166125,
+    "mbps": 73.646,
+    "nanos": 12216541
   },
   "consumer_unicode_mixed": {
     "benchmark": "consumer_unicode_mixed",
     "bytes": 1048619,
-    "feedNanos": 71909458,
-    "frameBuildNanos": 176750,
-    "mbps": 14.547,
-    "nanos": 72086583
+    "feedNanos": 67317458,
+    "frameBuildNanos": 175708,
+    "mbps": 15.537,
+    "nanos": 67493500
   },
   "data_frame_json_base64": {
     "benchmark": "data_frame_json_base64",
-    "nanos": 1605792,
+    "nanos": 1490500,
     "payload": 65536,
     "wire": 88806
   },
   "echo_latency_local_p50": {
     "benchmark": "echo_latency_local_p50",
-    "nanos": 17625
+    "nanos": 17375
   },
   "echo_latency_local_p95": {
     "benchmark": "echo_latency_local_p95",
-    "nanos": 19375
+    "nanos": 18167
   },
   "glyph_atlas_ascii_warm_path": {
     "benchmark": "glyph_atlas_ascii_warm_path",
     "entries": 94,
     "hits": 18800,
     "misses": 0,
-    "nanos": 825792,
+    "nanos": 681209,
     "pages": 1
   },
   "glyph_atlas_mixed_unicode_path": {
@@ -141,148 +141,148 @@
     "entries": 8,
     "hits": 8,
     "misses": 8,
-    "nanos": 6735375,
+    "nanos": 9034083,
     "pages": 1
   },
   "ipc_codec_round_trip_4mib": {
     "benchmark": "ipc_codec_round_trip_4mib",
     "bytes": 4194304,
-    "nanos": 25015166
+    "nanos": 33598250
   },
   "ipc_consumer_ansi_sgr_4096": {
     "benchmark": "ipc_consumer_ansi_sgr_4096",
     "bytes": 1048626,
     "chunkBytes": 4096,
-    "mbps": 9.123,
-    "nanos": 114942167
+    "mbps": 9.754,
+    "nanos": 107507875
   },
   "ipc_consumer_ansi_sgr_65536": {
     "benchmark": "ipc_consumer_ansi_sgr_65536",
     "bytes": 1048626,
     "chunkBytes": 65536,
-    "mbps": 8.986,
-    "nanos": 115263166
+    "mbps": 9.647,
+    "nanos": 108703333
   },
   "ipc_consumer_attributes_4096": {
     "benchmark": "ipc_consumer_attributes_4096",
     "bytes": 1048618,
     "chunkBytes": 4096,
-    "mbps": 8.382,
-    "nanos": 124657292
+    "mbps": 9.158,
+    "nanos": 114499125
   },
   "ipc_consumer_attributes_65536": {
     "benchmark": "ipc_consumer_attributes_65536",
     "bytes": 1048618,
     "chunkBytes": 65536,
-    "mbps": 8.404,
-    "nanos": 124033333
+    "mbps": 9.093,
+    "nanos": 115327500
   },
   "ipc_consumer_plain_ascii_4096": {
     "benchmark": "ipc_consumer_plain_ascii_4096",
     "bytes": 1048600,
     "chunkBytes": 4096,
-    "mbps": 6.534,
-    "nanos": 159340166
+    "mbps": 7.042,
+    "nanos": 148911458
   },
   "ipc_consumer_plain_ascii_65536": {
     "benchmark": "ipc_consumer_plain_ascii_65536",
     "bytes": 1048600,
     "chunkBytes": 65536,
-    "mbps": 6.57,
-    "nanos": 159109458
+    "mbps": 6.963,
+    "nanos": 150603958
   },
   "ipc_consumer_redraw_4096": {
     "benchmark": "ipc_consumer_redraw_4096",
     "bytes": 2463300,
     "chunkBytes": 4096,
-    "mbps": 146.528,
-    "nanos": 17342208
+    "mbps": 149.143,
+    "nanos": 16516416
   },
   "ipc_consumer_redraw_65536": {
     "benchmark": "ipc_consumer_redraw_65536",
     "bytes": 2463300,
     "chunkBytes": 65536,
-    "mbps": 151.943,
-    "nanos": 16212000
+    "mbps": 157.556,
+    "nanos": 15634459
   },
   "ipc_consumer_scrollback_4096": {
     "benchmark": "ipc_consumer_scrollback_4096",
     "bytes": 1280000,
     "chunkBytes": 4096,
-    "mbps": 7.546,
-    "nanos": 170172666
+    "mbps": 8.056,
+    "nanos": 158896958
   },
   "ipc_consumer_scrollback_65536": {
     "benchmark": "ipc_consumer_scrollback_65536",
     "bytes": 1280000,
     "chunkBytes": 65536,
-    "mbps": 7.345,
-    "nanos": 172291375
+    "mbps": 8.017,
+    "nanos": 159654208
   },
   "ipc_consumer_truecolor_gradient_4096": {
     "benchmark": "ipc_consumer_truecolor_gradient_4096",
     "bytes": 899700,
     "chunkBytes": 4096,
-    "mbps": 69.863,
-    "nanos": 12795583
+    "mbps": 73.066,
+    "nanos": 12313583
   },
   "ipc_consumer_truecolor_gradient_65536": {
     "benchmark": "ipc_consumer_truecolor_gradient_65536",
     "bytes": 899700,
     "chunkBytes": 65536,
-    "mbps": 71.874,
-    "nanos": 12517709
+    "mbps": 74.495,
+    "nanos": 12077333
   },
   "ipc_consumer_unicode_mixed_4096": {
     "benchmark": "ipc_consumer_unicode_mixed_4096",
     "bytes": 1048619,
     "chunkBytes": 4096,
-    "mbps": 14.818,
-    "nanos": 71089083
+    "mbps": 15.324,
+    "nanos": 68431500
   },
   "ipc_consumer_unicode_mixed_65536": {
     "benchmark": "ipc_consumer_unicode_mixed_65536",
     "bytes": 1048619,
     "chunkBytes": 65536,
-    "mbps": 14.56,
-    "nanos": 72328958
+    "mbps": 15.519,
+    "nanos": 67568334
   },
   "output_scroll_full_resolve": {
     "benchmark": "output_scroll_full_resolve",
-    "nanos": 61729958,
+    "nanos": 57204875,
     "ticks": 200
   },
   "preview_reflow_10k_prose": {
     "benchmark": "preview_reflow_10k_prose",
     "iterations": 50,
     "lines": 10000,
-    "nanos": 54468
+    "nanos": 52755
   },
   "preview_reflow_cost": {
     "benchmark": "preview_reflow_cost",
     "fromCols": 200,
     "historyLines": 50000,
-    "nanos": 57667,
+    "nanos": 57875,
     "toCols": 80
   },
   "read_grid_snapshot_full_screen": {
     "benchmark": "read_grid_snapshot_full_screen",
     "cells": 480000,
-    "nanos": 6958
+    "nanos": 6167
   },
   "reflow_cost_height": {
     "benchmark": "reflow_cost_height",
     "cols": 120,
     "fromRows": 24,
     "historyLines": 50000,
-    "nanos": 39416,
+    "nanos": 35959,
     "toRows": 60
   },
   "reflow_cost_width": {
     "benchmark": "reflow_cost_width",
     "fromCols": 200,
     "historyLines": 50000,
-    "nanos": 75660209,
+    "nanos": 73307875,
     "toCols": 80
   },
   "render_encode_incremental_damage_160x48": {
@@ -292,7 +292,7 @@
     "encodedRows": 1,
     "glyphInstances": 7680,
     "instanceUploadBytes": 493056,
-    "nanos": 154917,
+    "nanos": 139000,
     "reusedRows": 47
   },
   "render_encode_stable_damage_160x48": {
@@ -302,7 +302,7 @@
     "encodedRows": 0,
     "glyphInstances": 7680,
     "instanceUploadBytes": 0,
-    "nanos": 30250,
+    "nanos": 17625,
     "reusedRows": 48
   },
   "render_encode_stats_160x48": {
@@ -317,91 +317,91 @@
     "glyphInstances": 7680,
     "imageInstances": 0,
     "instanceUploadBytes": 493056,
-    "nanos": 1186250,
+    "nanos": 808958,
     "reusedRows": 0
   },
   "scroll_tick_full_rebuild": {
     "benchmark": "scroll_tick_full_rebuild",
-    "nanos": 52887584,
+    "nanos": 51275291,
     "ticks": 200
   },
   "scrollback_steady_state_at_cap": {
     "benchmark": "scrollback_steady_state_at_cap",
     "bytes": 286890,
-    "nanos": 11720750
+    "nanos": 14926250
   },
   "selection_drag_baked_rebuild": {
     "benchmark": "selection_drag_baked_rebuild",
-    "nanos": 54293125,
+    "nanos": 52812917,
     "ticks": 200
   },
   "surface_main_thread_stall_4mib": {
     "benchmark": "surface_main_thread_stall_4mib",
     "bytes": 4194334,
     "cells": 7680,
-    "feedNanos": 89763584,
-    "frameBuildNanos": 183375,
+    "feedNanos": 85156292,
+    "frameBuildNanos": 180125,
     "historyLines": 0,
-    "nanos": 89392292
+    "nanos": 85336875
   },
   "surface_off_main_thread_stall_4mib": {
     "benchmark": "surface_off_main_thread_stall_4mib",
     "bytes": 4194334,
     "cells": 7680,
-    "nanos": 3042,
-    "workerDrainNanos": 87541041
+    "nanos": 3250,
+    "workerDrainNanos": 85148708
   },
   "transport_output_frame_encode": {
     "benchmark": "transport_output_frame_encode",
     "bytes": 16777216,
     "frames": 256,
-    "nanos": 473209
+    "nanos": 473333
   },
   "vt_parse_ansi_colored_ascii_256kib": {
     "benchmark": "vt_parse_ansi_colored_ascii_256kib",
     "bytes": 262148,
-    "nanos": 30397916
+    "nanos": 32550000
   },
   "vt_parse_plain_ascii_256kib": {
     "benchmark": "vt_parse_plain_ascii_256kib",
     "bytes": 262200,
-    "nanos": 21624291
+    "nanos": 21049583
   },
   "vt_parse_run_path_print_heavy_ascii": {
     "benchmark": "vt_parse_run_path_print_heavy_ascii",
     "bytes": 1048630,
-    "nanos": 14213417
+    "nanos": 12699458
   },
   "vt_parse_scalar_baseline_print_heavy_ascii": {
     "benchmark": "vt_parse_scalar_baseline_print_heavy_ascii",
     "bytes": 1048630,
-    "nanos": 103367083
+    "nanos": 100220917
   },
   "vt_parse_sgr_attribute_storm_512kib": {
     "benchmark": "vt_parse_sgr_attribute_storm_512kib",
     "bytes": 524348,
-    "nanos": 42066709
+    "nanos": 40719167
   },
   "vt_parse_throughput_256kib": {
     "benchmark": "vt_parse_throughput_256kib",
     "bytes": 262150,
-    "nanos": 4972667
+    "nanos": 4692000
   },
   "vt_parse_unicode_mixed_512kib": {
     "benchmark": "vt_parse_unicode_mixed_512kib",
     "bytes": 524290,
-    "nanos": 26555750
+    "nanos": 24687791
   },
   "width_reflow_10k_cjk": {
     "benchmark": "width_reflow_10k_cjk",
     "iterations": 10,
     "lines": 10000,
-    "nanos": 20050395
+    "nanos": 19247116
   },
   "width_reflow_10k_prose": {
     "benchmark": "width_reflow_10k_prose",
     "iterations": 10,
     "lines": 10000,
-    "nanos": 8738220
+    "nanos": 8499845
   }
 }

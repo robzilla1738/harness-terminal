@@ -136,6 +136,12 @@ cold_start() {
             echo "run$i	MISSING	startup.log never appeared" >> "$result"
         fi
         quit_app "$app"
+        # True cold start per iteration: debug builds spawn the daemon as a child process
+        # under the same bundle path — quit_app's pkill catches it, but a respawn-in-flight
+        # or an orphan from an earlier session would keep daemonConnected/firstSnapshot warm.
+        # Kill any straggler and drop its socket/pid so the next launch boots a fresh daemon.
+        pkill -f "$app/Contents/MacOS/HarnessDaemon" 2>/dev/null || true
+        rm -f "$(home_for_app "$app")/harness.sock" "$(home_for_app "$app")/daemon.pid"
         sleep 1
     done
     note "harness cold-start phases -> $result"

@@ -1,3 +1,22 @@
+# Benchmarks
+
+## Baseline gate methodology (`make bench-check` / `bench-record`)
+
+The gate numbers are **single-shot** timings: sensitive to CPU frequency ramp, cold caches, and
+background load. Field-measured on the gating machine: the same bench reads 1.5–2× its
+steady-state on a first run after idle, and back-to-back `bench-check` runs under background
+load produce **non-overlapping** "regression" sets — that's machine variance, not code. Protocol:
+
+- **Judge nothing from one run.** Run `bench-check` twice back-to-back (the first run heats the
+  machine); judge the second. A real regression reproduces across consecutive runs — a flapping
+  set is noise.
+- Conditions: AC power, `caffeinate -i`, no builds/agents/benchmarks running concurrently.
+- **Record** = median of three back-to-back warm runs (capture three `make bench` outputs, take
+  the per-bench median, feed that through `--record`). Re-record only deliberately, in the same
+  PR as an intentional performance or methodology change, on the hardware class you gate on.
+- CI's "Benchmarks" job is **non-blocking** by design — runner hardware differs; the local gate
+  on owner hardware is the one that counts.
+
 # Cross-terminal output-stress benchmark
 
 `terminal_stress_runner.py` measures how fast a terminal **drains the PTY** — it runs *inside* any

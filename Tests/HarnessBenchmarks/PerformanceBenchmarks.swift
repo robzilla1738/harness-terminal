@@ -74,6 +74,24 @@ final class PerformanceBenchmarks: XCTestCase {
         FrameBuilder(theme: theme).build(filledSnapshot(cols: cols, rows: rows))
     }
 
+    /// Same glyph alphabet as `filledSnapshot`, different per-row content (rotated text, default
+    /// colors): encoding this first warms the glyph atlas WITHOUT seeding the row-instance cache
+    /// for the frame under measurement — the timed encode still re-encodes every row.
+    private func warmupSnapshot(cols: Int, rows: Int) -> TerminalGridSnapshot {
+        let term = HarnessGridTerminal(cols: cols, rows: rows)!
+        let chunk = "abcdefghijklmnopqrstuvwxyz0123456789"
+        var stream = "\u{1b}[?25l"
+        for row in 0 ..< rows {
+            let shift = (row + 1) % chunk.count
+            let rotated = String(chunk.dropFirst(shift)) + String(chunk.prefix(shift))
+            var line = ""
+            while line.count < cols { line += rotated }
+            stream += "\u{1b}[\(row + 1);1H\u{1b}[0m\(String(line.prefix(cols)))"
+        }
+        term.feed(stream)
+        return term.readGrid()!
+    }
+
     private func makeAtlas(device: MTLDevice, rasterizer: GlyphRasterizer? = nil) throws -> GlyphAtlas {
         let rasterizer = rasterizer ?? GlyphRasterizer(fontFamily: "Menlo", size: 14, scale: 2)
         return try XCTUnwrap(GlyphAtlas(device: device, rasterizer: rasterizer), "GlyphAtlas failed to build")
@@ -1173,6 +1191,14 @@ final class PerformanceBenchmarks: XCTestCase {
         let frame = frame(cols: 160, rows: 48)
         let size = renderer.surfacePixelSize(columns: 160, rows: 48)
         let target = try XCTUnwrap(makeTarget(device, width: size.width, height: size.height), "no texture")
+
+        // Warm the glyph atlas with a content-shifted frame first: the gated number measures the
+        // warm full encode (all 48 rows still re-encode — different content keys — but no
+        // first-touch rasterization). Cold-atlas cost is a rasterizer property with its own
+        // glyph_atlas_* benches; letting it dominate this gate made the number bimodal and
+        // machine-state-sensitive, and amplified any rasterizer change into an encode "regression".
+        let warmup = FrameBuilder(theme: theme).build(warmupSnapshot(cols: 160, rows: 48))
+        _ = encodeAndWait(renderer: renderer, frame: warmup, target: target)
 
         let stats = encodeAndWait(renderer: renderer, frame: frame, target: target)
         printBenchmark(
