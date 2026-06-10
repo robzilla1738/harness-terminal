@@ -36,47 +36,80 @@ PREVIEW_SIGNPOSTS=1 make preview && Scripts/scorecard.sh input-latency
 Scripts/scorecard.sh report             # markdown to paste below
 ```
 
-## Results
+## Results — 2026-06-10, Apple M1 Pro (v1.10.0 tip `bbe1e44`)
 
-> **SAMPLE / PLACEHOLDER — not yet measured.** The table below shows the report's shape.
-> Replace it with `Scripts/scorecard.sh report` output from owner hardware (the v1.10
-> release runbook includes this step), after the Phase A perf PRs land so the startup and
-> idle numbers reflect the new code.
+> Conditions, stated plainly: Harness numbers come from the **Debug preview build**
+> (`.harness-preview/HarnessPreview.app` — the release runbook's smoke artifact) vs the
+> **release** Ghostty from /Applications — conservative in Ghostty's favor. The machine ran
+> a resident background agent workload (~half a core); AC power, `caffeinate`, no builds.
+> N=10 launches for cold start; one stress-runner pass per terminal for throughput
+> (medians-of-5 remain the gold standard — treat single-pass deltas under ~10% as noise).
 
-### Cold start *(sample shape)*
+### Cold start
 
 | terminal | metric | median |
 |---|---|---|
-| Harness | launchStart → firstWindow | _TBD_ |
-| Harness | launchStart → firstDrawablePresented | _TBD_ |
-| Harness | launchStart → daemonConnected | _TBD_ |
-| Ghostty | open → first window (wall clock — coarser probe) | _TBD_ |
+| Harness | launchStart → firstWindow | **127.2 ms** |
+| Harness | launchStart → firstDrawablePresented | **117.3 ms** |
+| Harness | launchStart → daemonConnected | 249.4 ms |
+| Harness | launchStart → firstSnapshot | 250.6 ms |
+| Ghostty | open → first window (wall clock — coarser probe) | 288.5 ms |
 
-### Sustained throughput *(sample shape — includes the issue #27 re-measure set)*
+A debug-build Harness puts a drawn window on screen in well under half Ghostty's
+wall-to-window time; the daemon handshake (the two-process architecture's cost) lands
+~125 ms later and is reported separately, never hidden.
+
+### Sustained throughput (PTY drain, MB/s — higher is better)
 
 | workload | Harness MB/s | Ghostty MB/s |
 |---|---|---|
-| ansi_sgr | _TBD_ | _TBD_ |
-| attributes | _TBD_ | _TBD_ |
-| unicode | _TBD_ | _TBD_ |
-| plain_ascii | _TBD_ | _TBD_ |
+| plain_ascii_16mib | **45.5** | 40.4 |
+| ansi_sgr_16mib | 48.4 | 50.2 |
+| attributes_8mib | 47.0 | 48.7 |
+| unicode_mixed_8mib | 75.5 | 77.3 |
+| truecolor_gradient_1200_frames | **31.0** | 14.0 |
+| redraw_160x48_600_frames | **91.6** | 51.0 |
+| scrollback_100k_lines | **44.6** | 41.4 |
 
-### Idle power (60 s, 4 panes, one window unfocused) *(sample shape)*
+**Issue #27 re-measure verdict:** the historical ansi_sgr / attributes / unicode losses are
+gone — all three now sit within single-digit percent of Ghostty (a debug Harness vs release
+Ghostty, at that), confirming the #31 parse speedups + #139 UCD width tables closed the gap.
+Where the engines genuinely differ, Harness leads: full-screen redraw **+80%** and truecolor
+frame streams **+121%** (frame coalescing), plus scroll-with-eviction ahead.
+
+### Idle power (60 s, 4 panes, one window unfocused)
 
 | process | CPU ms/s | wakeups/s |
 |---|---|---|
-| Harness + HarnessDaemon (summed) | _TBD_ | _TBD_ |
-| Ghostty | _TBD_ | _TBD_ |
+| Harness + HarnessDaemon (summed) | _pending — requires sudo powermetrics_ | _pending_ |
+| Ghostty | _pending_ | _pending_ |
 
-### Long-session memory (1 M lines) *(sample shape)*
+Re-run `Scripts/scorecard.sh idle-power` with sudo available and paste here; the PR-26 idle
+work (display link parked, occlusion gating, blink timers content-gated) is covered by
+structural tests either way.
+
+### Long-session memory (1 M lines)
 
 | terminal | footprint after |
 |---|---|
-| Harness (app + daemon) | _TBD_ |
-| Ghostty | _TBD_ |
+| Harness app | 428 MB (`footprint(1)` phys, debug allocator) |
+| HarnessDaemon (preview) | 74 MB dirty, 87 MB reclaimable |
+| Ghostty | 161 MB RSS (`ps` fallback) |
 
-### Input-to-photon (Harness-only signposter percentiles) *(sample shape)*
+**Not like-for-like retention:** Harness's GUI emulator kept *all* 1 M lines (unbounded
+history is the product design; the daemon ring stays ~1 MiB), while Ghostty's default
+scrollback cap retains only the tail. Comparable-retention numbers need matched scrollback
+settings — re-measure with both capped before quoting these against each other.
+
+### Input-to-photon (Harness-only FrameSignposter percentiles, µs)
 
 | phase | p50 | p95 | p99 |
 |---|---|---|---|
-| present | _TBD_ | _TBD_ | _TBD_ |
+| present | 1,203 | 11,622 | 13,418 |
+| drawableWait (inside present) | 344 | 7,711 | 12,553 |
+| instanceBuild | 23 | 4,606 | — |
+| upload | 29 | 57 | — |
+
+Captured during a live 4 s resize drag + 4 s scroll fling: **zero dropped frames** in every
+120-frame window; p95 is drawable-wait (vsync pacing) dominated, CPU-side build/upload stays
+in the tens-of-µs band.
