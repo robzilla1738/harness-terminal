@@ -9,7 +9,11 @@ import Foundation
 ///
 /// `onChange` is debounced so a burst of writes (or a rename immediately followed by the watcher
 /// re-arming and seeing the new file) collapses into one callback.
-final class FileWatcher {
+///
+/// `@unchecked Sendable`: all mutable state (`source`, `pendingChange`) is confined to `queue` —
+/// every touch happens inside a `queue.async`/`asyncAfter` block — and the pieces deinit touches
+/// (`DispatchSource.cancel`, `DispatchWorkItem.cancel`) are themselves thread-safe.
+final class FileWatcher: @unchecked Sendable {
     private let url: URL
     private let debounce: DispatchTimeInterval
     private let onChange: @Sendable () -> Void

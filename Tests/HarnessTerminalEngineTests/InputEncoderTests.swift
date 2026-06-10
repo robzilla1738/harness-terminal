@@ -257,6 +257,21 @@ final class InputEncoderTests: XCTestCase {
         XCTAssertFalse(term.modes.keypadApplication)
     }
 
+    /// kitty spec: KP keys carry functional codepoints (57399–57425) and report their
+    /// modifiers in the params — a modified KP key must not degrade to the plain text byte.
+    func testModifiedKeypadUnderKittyReportsFunctionalCodepointWithModifiers() {
+        var m = TerminalModes()
+        m.kittyKeyboardStack = [0b1000]
+        XCTAssertEqual(
+            encoder.encode(.keypad5, modifiers: [.shift], modes: m),
+            bytes("\u{1b}[57404;2u")
+        )
+        XCTAssertEqual(
+            encoder.encode(.keypadPlus, modifiers: [.control], modes: m),
+            bytes("\u{1b}[57413;5u")
+        )
+    }
+
     /// Kitty active: keypad keys report their functional codepoints (`CSI <cp> u`).
     func testKeypadUnderKittyReportsFunctionalCodepoints() {
         var m = TerminalModes()

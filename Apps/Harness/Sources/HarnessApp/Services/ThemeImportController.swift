@@ -61,7 +61,7 @@ enum ThemeImportController {
     /// Persist the document into the user's themes folder so it survives relaunch and can be
     /// re-exported/shared. A write failure is non-fatal — the theme can still be applied in-memory.
     private static func install(_ document: ThemeDocument) {
-        try? fileService.install(document, into: HarnessPaths.themesDirectory)
+        _ = try? fileService.install(document, into: HarnessPaths.themesDirectory)
     }
 
     private static func presentInstallChoice(for document: ThemeDocument) -> InstallChoice {

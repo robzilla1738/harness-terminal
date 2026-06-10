@@ -970,6 +970,32 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.fontSize, 18, "the rest of the file still decodes")
     }
 
+    func testUnknownEnumRawValuesFallBackPerFieldInsteadOfFailingDecode() throws {
+        // The forward-compat contract for EVERY String-raw enum key: garbage (a newer
+        // Harness's value, a hand-edit) falls back per-field; the file keeps decoding.
+        let json = #"""
+        {
+          "appearanceMode": "??", "notchVisibilityMode": "??", "colorRendering": "??",
+          "textRendering": "??", "experienceMode": "??", "resizeOverlay": "??",
+          "resizeOverlayPosition": "??", "bellMode": "??", "colorGamut": "??",
+          "optionAsMeta": "??", "fontSize": 18
+        }
+        """#
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: Data(json.utf8))
+        let defaults = HarnessSettings.makeDefaults(imported: TerminalConfigImporter.load())
+        XCTAssertEqual(decoded.fontSize, 18, "the rest of the file still decodes")
+        XCTAssertEqual(decoded.appearanceMode, HarnessSettings().appearanceMode)
+        XCTAssertEqual(decoded.notchVisibilityMode, .automatic)
+        XCTAssertEqual(decoded.experienceMode, .full, "unknown keeps the upgrade semantic, like absent")
+        XCTAssertEqual(decoded.resizeOverlay, defaults.resizeOverlay)
+        XCTAssertEqual(decoded.resizeOverlayPosition, defaults.resizeOverlayPosition)
+        XCTAssertEqual(decoded.bellMode, defaults.bellMode)
+        XCTAssertEqual(decoded.colorGamut, defaults.colorGamut)
+        XCTAssertEqual(decoded.optionAsMeta, defaults.optionAsMeta)
+        XCTAssertEqual(decoded.colorRendering, defaults.colorRendering)
+        XCTAssertEqual(decoded.textRendering, defaults.textRendering)
+    }
+
     func testWindowInheritCWDDefaultsOnAndDecodesExplicitOff() throws {
         XCTAssertTrue(HarnessSettings().windowInheritCWD, "inherit is the shipped behavior — default on")
         let legacy = try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8))

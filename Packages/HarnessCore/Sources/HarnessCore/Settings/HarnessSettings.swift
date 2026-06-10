@@ -667,7 +667,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // the import-influenced `fallback`: an existing settings.json must never flip modes
         // because the *source terminal's* config changed — imports only land via the consented
         // backfill in `load()`.
-        let decodedAppearanceMode = try container.decodeIfPresent(HarnessAppearanceMode.self, forKey: .appearanceMode)
+        // Enum keys decode leniently end-to-end (see `decodeEnum`): unknown raw values fall
+        // back per-field instead of failing the whole file into the corrupt-backup path.
+        // The hand-written ones below keep their bespoke fallbacks (migration semantics).
+        let decodedAppearanceMode = (try container.decodeIfPresent(String.self, forKey: .appearanceMode))
+            .flatMap(HarnessAppearanceMode.init(rawValue:))
         let legacyLightThemeName = try legacyContainer.decodeIfPresent(String.self, forKey: .lightThemeName)
         let legacyDarkThemeName = try legacyContainer.decodeIfPresent(String.self, forKey: .darkThemeName)
         let defaultSettings = HarnessSettings()
@@ -707,17 +711,20 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowBorderOpacity = max(0, min(1, try fields.decode(.windowBorderOpacity, \.windowBorderOpacity)))
         systemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? true
         notificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationSoundEnabled) ?? true
-        notchVisibilityMode = try container.decodeIfPresent(NotchVisibilityMode.self, forKey: .notchVisibilityMode) ?? .automatic
+        notchVisibilityMode = (try container.decodeIfPresent(String.self, forKey: .notchVisibilityMode))
+            .flatMap(NotchVisibilityMode.init(rawValue:)) ?? .automatic
         notchOpenOnHover = try container.decodeIfPresent(Bool.self, forKey: .notchOpenOnHover) ?? true
         let legacyVivid = try container.decodeIfPresent(Bool.self, forKey: .vividColors)
-        let decodedColorRendering = try container.decodeIfPresent(TerminalColorRenderingMode.self, forKey: .colorRendering)
+        let decodedColorRendering = (try container.decodeIfPresent(String.self, forKey: .colorRendering))
+            .flatMap(TerminalColorRenderingMode.init(rawValue:))
         let resolvedColorRendering = decodedColorRendering
             ?? ((legacyVivid ?? fallback.vividColors) ? .vivid : fallback.colorRendering)
         colorRendering = resolvedColorRendering
-        colorGamut = try fields.decode(.colorGamut, \.colorGamut)
+        colorGamut = try fields.decodeEnum(.colorGamut, \.colorGamut)
 
         let legacyLinear = try container.decodeIfPresent(Bool.self, forKey: .linearBlending)
-        let decodedTextRendering = try container.decodeIfPresent(TerminalTextRenderingMode.self, forKey: .textRendering)
+        let decodedTextRendering = (try container.decodeIfPresent(String.self, forKey: .textRendering))
+            .flatMap(TerminalTextRenderingMode.init(rawValue:))
         let resolvedTextRendering = decodedTextRendering
             ?? ((legacyLinear ?? fallback.linearBlending) ? .crisp : fallback.textRendering)
         textRendering = resolvedTextRendering
@@ -737,7 +744,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // user who already had the prefix + status line, i.e. the full Harness experience.
         // Default the absent key to `.full` (NOT the fresh-install `.plain`) so upgrading never
         // silently strips features. New installs get `.plain` via `makeDefaults`.
-        experienceMode = try container.decodeIfPresent(ExperienceMode.self, forKey: .experienceMode) ?? .full
+        experienceMode = (try container.decodeIfPresent(String.self, forKey: .experienceMode))
+            .flatMap(ExperienceMode.init(rawValue:)) ?? .full
         harnessControlsEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .harnessControlsEnabled)
             ?? legacyContainer.decodeIfPresent(Bool.self, forKey: .tmuxControlsEnabled)
@@ -747,9 +755,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // exactly as before until the user touches a finer toggle.
         prefixKeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .prefixKeyEnabled)
         statusLineEnabled = try container.decodeIfPresent(Bool.self, forKey: .statusLineEnabled)
-        resizeOverlay = try fields.decode(.resizeOverlay, \.resizeOverlay)
-        resizeOverlayPosition = try fields.decode(.resizeOverlayPosition, \.resizeOverlayPosition)
-        bellMode = try fields.decode(.bellMode, \.bellMode)
+        resizeOverlay = try fields.decodeEnum(.resizeOverlay, \.resizeOverlay)
+        resizeOverlayPosition = try fields.decodeEnum(.resizeOverlayPosition, \.resizeOverlayPosition)
+        bellMode = try fields.decodeEnum(.bellMode, \.bellMode)
         scrollMultiplier = HarnessSettings.clampedScrollMultiplier(try fields.decode(.scrollMultiplier, \.scrollMultiplier))
         mouseHideWhileTyping = try fields.decode(.mouseHideWhileTyping, \.mouseHideWhileTyping)
         optionAsMeta = try fields.decodeEnum(.optionAsMeta, \.optionAsMeta)

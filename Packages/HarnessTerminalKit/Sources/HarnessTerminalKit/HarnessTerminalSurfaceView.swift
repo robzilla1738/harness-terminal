@@ -1033,6 +1033,11 @@ public final class HarnessTerminalSurfaceView: NSView {
         renderGeneration &+= 1
         emulatorState.resetPlainFrame()
         lastPresentedResultIsRendererCoherent = false
+        // The blink-scan cache describes the last PRESENTED frame; invalidation makes that
+        // frame garbage (theme/font change, window detach), so the occlusion path must not
+        // re-arm the text-blink timer from it. Conservative false — every invalidating site
+        // schedules a render, and that present recomputes the truth.
+        lastFrameHadBlink = false
     }
 
     private func configureLayer() {
