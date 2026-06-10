@@ -47,6 +47,13 @@ final class KeyTableTests: XCTestCase {
         XCTAssertEqual(prefix?.lookup(KeySpec(key: "%"))?.command, .splitWindow(direction: .vertical))
         XCTAssertEqual(prefix?.lookup(KeySpec(key: "["))?.command, .copyMode)
         XCTAssertEqual(prefix?.lookup(KeySpec(key: "d"))?.command, .detachClient)
+        XCTAssertEqual(prefix?.lookup(KeySpec(key: "n"))?.command, .nextWindow)
+        XCTAssertEqual(prefix?.lookup(KeySpec(key: "p"))?.command, .previousWindow)
+        XCTAssertEqual(prefix?.lookup(KeySpec(key: "("))?.command, .previousSession)
+        XCTAssertEqual(prefix?.lookup(KeySpec(key: ")"))?.command, .nextSession)
+        for index in 0 ... 9 {
+            XCTAssertEqual(prefix?.lookup(KeySpec(key: String(index)))?.command, .selectWorkspace(index: index))
+        }
     }
 
     func testCopyModePromptJumpBindings() {

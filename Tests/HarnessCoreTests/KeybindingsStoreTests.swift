@@ -92,4 +92,39 @@ final class KeybindingsStoreTests: XCTestCase {
             XCTAssertFalse(FileManager.default.fileExists(atPath: backup.path))
         }
     }
+
+    func testStoredPrefixDefaultsKeepTabWorkspaceBindingsAndMergeSessionKeys() throws {
+        try withTemporaryHarnessHome { _ in
+            var prefix = KeyTable(id: .prefix, bindings: [
+                Binding(spec: KeySpec(key: "n"), command: .nextWindow, note: "Next tab"),
+                Binding(spec: KeySpec(key: "p"), command: .previousWindow, note: "Previous tab"),
+            ])
+            for index in 0 ... 9 {
+                prefix.set(Binding(spec: KeySpec(key: String(index)), command: .selectWorkspace(index: index), note: "Workspace \(index)"))
+            }
+            try KeybindingsStore.save(KeyTableSet(tables: [prefix]))
+
+            let loaded = KeybindingsStore.load()
+            let loadedPrefix = try XCTUnwrap(loaded.table(.prefix))
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: "n"))?.command, .nextWindow)
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: "p"))?.command, .previousWindow)
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: "("))?.command, .previousSession)
+            XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: ")"))?.command, .nextSession)
+            for index in 0 ... 9 {
+                XCTAssertEqual(loadedPrefix.lookup(KeySpec(key: String(index)))?.command, .selectWorkspace(index: index))
+            }
+        }
+    }
+
+    func testCustomPrefixBindingsAreNotMigrated() throws {
+        try withTemporaryHarnessHome { _ in
+            var stored = KeyTableSet.defaults
+            stored.setBinding(table: .prefix, binding: Binding(spec: KeySpec(key: "n"), command: .nextWindow, note: "Custom next tab"))
+            try KeybindingsStore.save(stored)
+
+            let loaded = KeybindingsStore.load()
+            XCTAssertEqual(loaded.table(.prefix)?.lookup(KeySpec(key: "n"))?.command, .nextWindow)
+            XCTAssertEqual(loaded.table(.prefix)?.lookup(KeySpec(key: "n"))?.note, "Custom next tab")
+        }
+    }
 }

@@ -179,11 +179,11 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "Right"), command: .selectPane(target: .right), note: "Pane right"),
             Binding(spec: KeySpec(key: "Up"), command: .selectPane(target: .up), note: "Pane up"),
             Binding(spec: KeySpec(key: "Down"), command: .selectPane(target: .down), note: "Pane down"),
-            // Tabs
             Binding(spec: KeySpec(key: "n"), command: .nextWindow, note: "Next tab"),
             Binding(spec: KeySpec(key: "p"), command: .previousWindow, note: "Previous tab"),
+            Binding(spec: KeySpec(key: "("), command: .previousSession, note: "Previous session"),
+            Binding(spec: KeySpec(key: ")"), command: .nextSession, note: "Next session"),
             Binding(spec: KeySpec(key: ","), command: .renameWindow(newName: nil), note: "Rename tab"),
-            // Workspaces
             Binding(spec: KeySpec(key: "0"), command: .selectWorkspace(index: 0), note: "Workspace 0"),
             Binding(spec: KeySpec(key: "1"), command: .selectWorkspace(index: 1), note: "Workspace 1"),
             Binding(spec: KeySpec(key: "2"), command: .selectWorkspace(index: 2), note: "Workspace 2"),

@@ -113,11 +113,11 @@ public enum CommandParser {
         "kill-pane", "kill-session", "kill-window",
         "last-pane", "last-window", "link-window", "list-keys", "lock-client", "move-pane",
         "reattach-surface",
-        "move-window", "new-session", "new-window", "next-layout", "next-pane", "next-window",
-        "next-workspace", "pipe-pane", "previous-layout", "previous-pane", "previous-window",
+        "move-window", "new-session", "new-window", "next-layout", "next-pane", "next-session", "next-window",
+        "next-workspace", "pipe-pane", "previous-layout", "previous-pane", "previous-session", "previous-window",
         "previous-workspace", "reload-keybindings", "rename-session", "rename-window",
         "renumber-windows", "respawn-pane", "clear-history", "rotate-window", "select-layout", "select-pane",
-        "select-window", "select-workspace", "send-keys", "send-prefix", "show-cheatsheet",
+        "select-session", "select-window", "select-workspace", "send-keys", "send-prefix", "show-cheatsheet",
         "source-config", "source-file", "swap-pane", "swap-window", "switch-client",
         "synchronize-panes", "unbind-key", "unlink-window", "zoom-pane",
         // Config / buffer / hook verbs (bindable forms of the CLI subcommands).
@@ -240,6 +240,13 @@ public enum CommandParser {
         case "rename-session":
             let name = tokens.first { !$0.hasPrefix("-") }
             return .renameSession(newName: name)
+        case "next-session": return .nextSession
+        case "previous-session": return .previousSession
+        case "select-session":
+            guard let raw = tokens.first(where: { $0.first?.isNumber ?? false }),
+                  let index = Int(raw)
+            else { throw CommandParseError.missingFlag("select-session requires an index") }
+            return .selectSession(index: index)
         case "select-workspace", "select-workspace-index":
             guard let raw = tokens.first(where: { $0.first?.isNumber ?? false }),
                   let index = Int(raw)
