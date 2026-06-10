@@ -2,6 +2,10 @@ import XCTest
 @testable import HarnessCore
 @testable import HarnessDaemonCore
 
+/// Bounded absence window for "never reaches disk" assertions — long enough for a stray async
+/// write to land, short enough to keep the suite fast.
+private let absenceWindowMicros: UInt32 = 700_000
+
 /// End-to-end persistence: a real `forkpty` shell writes output, the surface persists its
 /// scrollback to disk, and a *fresh* `RealPty` over the same file replays that history — the
 /// "daemon restart isn't a blank session" path. Live (spawns a shell), so gated like the other
@@ -226,7 +230,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staleURL.path),
                        "spawn with persistence off removes a stale log")
         _ = registry.handle(.sendData(surfaceID: newSurface, data: Data("echo NEVER_ON_DISK\n".utf8)))
-        usleep(700_000) // bounded absence window: give a (buggy) write time to land
+        usleep(absenceWindowMicros)
         XCTAssertFalse(FileManager.default.fileExists(atPath: staleURL.path),
                        "a persistence-off surface never writes scrollback to disk")
     }
@@ -268,7 +272,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: seededURL.path),
                        "a PaneID-targeted opt-out must wipe the live surface's log")
         _ = registry.handle(.sendData(surfaceID: seeded.surfaceID, data: Data("echo PANEID_AFTER\n".utf8)))
-        usleep(700_000) // bounded absence window
+        usleep(absenceWindowMicros)
         XCTAssertFalse(FileManager.default.fileExists(atPath: seededURL.path),
                        "output after a PaneID-targeted opt-out must never reach disk")
 
@@ -283,7 +287,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: seededURL.path),
                        "respawn must resolve the PaneID-keyed opt-out at spawn and drop the stale log")
         _ = revived.handle(.sendData(surfaceID: seeded.surfaceID, data: Data("echo PANEID_REVIVED\n".utf8)))
-        usleep(700_000) // bounded absence window
+        usleep(absenceWindowMicros)
         XCTAssertFalse(FileManager.default.fileExists(atPath: seededURL.path),
                        "a revived opted-out surface never writes scrollback to disk")
     }
@@ -328,7 +332,7 @@ final class ScrollbackPersistenceTests: XCTestCase {
             surfaceID: surfaceID, cwd: NSTemporaryDirectory(), shell: nil, rows: 24, cols: 80, scrollbackBytes: nil
         )) else { return XCTFail("ensureSurface failed") }
         _ = registry.handle(.sendData(surfaceID: surfaceID, data: Data("echo SPAWNED_OFF\n".utf8)))
-        usleep(700_000) // bounded absence window
+        usleep(absenceWindowMicros)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path),
                        "a surface spawned with persistence off stays off disk")
 

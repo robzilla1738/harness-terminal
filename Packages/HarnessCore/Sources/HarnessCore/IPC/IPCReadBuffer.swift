@@ -57,6 +57,8 @@ public struct IPCReadBuffer: Sendable {
     func payloadData(at offset: Int, count: Int) -> Data {
         guard count > 0 else { return Data() }
         return storage.withUnsafeBufferPointer { buf in
+            // Non-nil: count > 0 here and the caller bounds offset + count within the
+            // unconsumed region, so storage is non-empty (an empty array is the only nil case).
             Data(bytes: buf.baseAddress! + start + offset, count: count)
         }
     }
