@@ -14,12 +14,20 @@ public struct ITerm2InlineImage: Equatable {
     public var preserveAspectRatio: Bool { keys["preserveAspectRatio"] != "0" }
 
     public static func parse(_ payload: [UInt8]) -> ITerm2InlineImage? {
-        guard let text = String(bytes: payload, encoding: .utf8), text.hasPrefix("File=") else { return nil }
+        parse(payload[...])
+    }
+
+    /// Bytewise: the base64 body is the overwhelming bulk of the payload (megabytes for a real
+    /// image) and goes straight into `Data(base64Encoded:)` — only the short `key=value` args
+    /// segment is ever materialized as a String.
+    public static func parse(_ payload: ArraySlice<UInt8>) -> ITerm2InlineImage? {
+        let filePrefix: [UInt8] = Array("File=".utf8)
+        guard payload.starts(with: filePrefix) else { return nil }
         // Split args (before the first ':') from the base64 image data (after it).
-        guard let colon = text.firstIndex(of: ":") else { return nil }
-        let argsPart = text[text.index(text.startIndex, offsetBy: 5) ..< colon] // after "File="
-        let base64 = String(text[text.index(after: colon)...])
-        guard let raw = Data(base64Encoded: base64, options: [.ignoreUnknownCharacters]),
+        guard let colon = payload.firstIndex(of: UInt8(ascii: ":")) else { return nil }
+        guard let argsPart = String(bytes: payload[(payload.startIndex + filePrefix.count) ..< colon],
+                                    encoding: .utf8) else { return nil }
+        guard let raw = Data(base64Encoded: Data(payload[(colon + 1)...]), options: [.ignoreUnknownCharacters]),
               let image = ImageDecoder.decode(raw) else { return nil }
         var keys: [String: String] = [:]
         for pair in argsPart.split(separator: ";") {

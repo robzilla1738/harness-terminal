@@ -632,6 +632,8 @@ public final class TerminalEmulator: VTParserHandler {
     /// the inherited cwd), and `SetUserVar=name=<base64>` stores a per-surface user variable
     /// (surfaced to format strings by the host as a pane-scoped `@name` option). Anything
     /// else falls through to the image handler, which ignores what it can't parse.
+    /// Only ever called with a `CurrentDir=` / `SetUserVar=` payload — `parserOSC` routes the
+    /// rest of the 1337 family (inline images) straight to `handleITerm2Image` as raw bytes.
     private func handleITerm2OSC(_ payload: String) {
         if payload.hasPrefix("CurrentDir=") {
             let path = String(payload.dropFirst("CurrentDir=".count))
@@ -664,11 +666,10 @@ public final class TerminalEmulator: VTParserHandler {
             onUserVariableChange?(name, value)
             return
         }
-        handleITerm2Image(payload)
     }
 
-    private func handleITerm2Image(_ payload: String) {
-        guard let parsed = ITerm2InlineImage.parse(Array(payload.utf8)) else { return }
+    private func handleITerm2Image(_ payload: ArraySlice<UInt8>) {
+        guard let parsed = ITerm2InlineImage.parse(payload) else { return }
         func cells(_ s: String?) -> Int {
             guard let s, !s.hasSuffix("px"), !s.hasSuffix("%"), let n = Int(s) else { return 0 }
             return n
@@ -677,29 +678,61 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     func parserOSC(_ data: [UInt8]) {
-        guard let text = String(bytes: data, encoding: .utf8) else { return }
-        guard let semi = text.firstIndex(of: ";") else { return }
-        let code = String(text[text.startIndex ..< semi])
-        let payload = String(text[text.index(after: semi)...])
+        // Route by code BYTEWISE before any String materialization: an OSC 1337 inline image
+        // (or OSC 52 clipboard set) carries a multi-megabyte base64 body, and decoding it to
+        // a String here — only for the handler to re-encode it back to bytes — costs two full
+        // copies plus a UTF-8 validation pass of the whole payload. Bulk codes stay byte
+        // slices end to end; the small-payload codes materialize a String exactly as before
+        // (including the drop-on-invalid-UTF-8 behavior).
+        guard let semi = data.firstIndex(of: 0x3B) else { return }
+        // Codes are short ASCII digit runs ("0"…"1337"). Anything non-digit, empty, or with a
+        // leading zero ("08") matched no case in the old string switch — preserve that exactly.
+        let codeBytes = data[..<semi]
+        guard !codeBytes.isEmpty, codeBytes.count <= 4,
+              !(codeBytes.count > 1 && codeBytes.first == 0x30) else { return }
+        var code = 0
+        for byte in codeBytes {
+            guard (0x30 ... 0x39).contains(byte) else { return }
+            code = code * 10 + Int(byte - 0x30)
+        }
+        let body = data[(semi + 1)...]
+        // Bulk codes first — never built into a String.
         switch code {
-        case "0", "2": // icon+title / title (tracked so XTWINOPS 22/23 can push/pop it)
+        case 52: handleClipboardOSC(body); return          // clipboard set (OSC 52)
+        case 1337:                                         // iTerm2 family
+            // `CurrentDir=` / `SetUserVar=` are small and string-shaped; everything else falls
+            // through to the inline-image parser on the raw bytes (matching handleITerm2OSC's
+            // old fall-through).
+            if body.starts(with: Self.currentDirPrefix) || body.starts(with: Self.setUserVarPrefix) {
+                guard let payload = String(bytes: body, encoding: .utf8) else { return }
+                handleITerm2OSC(payload)
+            } else {
+                handleITerm2Image(body)
+            }
+            return
+        default: break
+        }
+        guard let payload = String(bytes: body, encoding: .utf8) else { return }
+        switch code {
+        case 0, 2: // icon+title / title (tracked so XTWINOPS 22/23 can push/pop it)
             currentTitle = payload
             onTitleChange?(payload)
-        case "7": handleWorkingDirectoryOSC(payload)       // cwd as file:// URL
-        case "8": handleHyperlinkOSC(payload)              // OSC 8 hyperlinks
-        case "10": handleColorQuery(code: "10", role: .foreground, payload: payload)
-        case "11": handleColorQuery(code: "11", role: .background, payload: payload)
-        case "12": handleColorQuery(code: "12", role: .cursor, payload: payload)
-        case "4": handlePaletteColorQuery(payload)         // OSC 4 ; index ; ?
-        case "52": handleClipboardOSC(payload)             // clipboard set (OSC 52)
-        case "9": handleOSC9(payload)                      // notification, or ConEmu progress (9;4)
-        case "777": handleNotify777(payload)               // OSC 777 ; notify ; <title> ; <body>
-        case "22": setPointerShape(payload)                // OSC 22 ; <shape> — mouse cursor shape
-        case "133": handleSemanticPrompt(payload)          // OSC 133 ; A/B/C/D — shell integration
-        case "1337": handleITerm2OSC(payload)              // iTerm2 family (File=/CurrentDir=/SetUserVar=)
+        case 7: handleWorkingDirectoryOSC(payload)         // cwd as file:// URL
+        case 8: handleHyperlinkOSC(payload)                // OSC 8 hyperlinks
+        case 10: handleColorQuery(code: "10", role: .foreground, payload: payload)
+        case 11: handleColorQuery(code: "11", role: .background, payload: payload)
+        case 12: handleColorQuery(code: "12", role: .cursor, payload: payload)
+        case 4: handlePaletteColorQuery(payload)           // OSC 4 ; index ; ?
+        case 9: handleOSC9(payload)                        // notification, or ConEmu progress (9;4)
+        case 777: handleNotify777(payload)                 // OSC 777 ; notify ; <title> ; <body>
+        case 22: setPointerShape(payload)                  // OSC 22 ; <shape> — mouse cursor shape
+        case 133: handleSemanticPrompt(payload)            // OSC 133 ; A/B/C/D — shell integration
         default: break
         }
     }
+
+    private static let currentDirPrefix = Array("CurrentDir=".utf8)
+    private static let setUserVarPrefix = Array("SetUserVar=".utf8)
 
     /// OSC 9 carries two protocols: `9;4;<state>[;<value>]` is a ConEmu progress report;
     /// anything else is an iTerm2-style desktop notification with the payload as body.
@@ -821,11 +854,13 @@ public final class TerminalEmulator: VTParserHandler {
     /// OSC 52: `Pc ; Pd` where `Pd` is base64 text to copy (or `?` to query). We
     /// support *setting* the clipboard; a query is ignored (the engine never blocks
     /// on a pasteboard read). The consumer honors the `set-clipboard` option.
-    private func handleClipboardOSC(_ payload: String) {
-        guard let semi = payload.firstIndex(of: ";") else { return }
-        let encoded = String(payload[payload.index(after: semi)...])
-        guard encoded != "?", !encoded.isEmpty,
-              let data = Data(base64Encoded: encoded),
+    /// Byte-routed: the base64 body can be megabytes, so it goes straight into
+    /// `Data(base64Encoded:)` without ever being built into a String.
+    private func handleClipboardOSC(_ payload: ArraySlice<UInt8>) {
+        guard let semi = payload.firstIndex(of: 0x3B) else { return }
+        let encoded = payload[(semi + 1)...]
+        guard !encoded.isEmpty, !encoded.elementsEqual([UInt8(ascii: "?")]),
+              let data = Data(base64Encoded: Data(encoded)),
               let text = String(data: data, encoding: .utf8)
         else { return }
         onSetClipboard?(text)

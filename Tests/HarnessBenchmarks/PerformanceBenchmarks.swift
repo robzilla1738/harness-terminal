@@ -811,6 +811,38 @@ final class PerformanceBenchmarks: XCTestCase {
         ])
     }
 
+    // MARK: - Bulk OSC payloads (byte-routed dispatch)
+
+    /// A multi-megabyte OSC payload (1337 inline image / 52 clipboard set) must be routed as
+    /// bytes: the old dispatcher decoded the whole payload to a String (full UTF-8 validation +
+    /// copy), and the image handler re-encoded it back to bytes — two full passes over megabytes
+    /// before the base64 decode even started. This times feed() end to end for both codes.
+    func testBulkOSCPayloadFeed() throws {
+        try skipUnlessEnabled()
+        // ~4 MiB of base64 (3 MiB decoded) for the image; the OSC 52 body stays under the
+        // parser's deliberate 1 MiB clipboard DoS bound so it round-trips. The 1337 body is
+        // junk to ImageDecoder (parse cost is the routing + base64, which is what's under test).
+        var raw = Data(capacity: 3 * 1024 * 1024)
+        for i in 0 ..< 3 * 1024 * 1024 { raw.append(UInt8(0x20 + (i % 0x5F))) } // printable ASCII
+        let base64 = raw.base64EncodedString()
+
+        let imageOSC = Array("\u{1b}]1337;File=inline=1:\(base64)\u{07}".utf8)
+        let term1 = TerminalEmulator(cols: 80, rows: 24)
+        let imageNanos = timedNanos { term1.feed(imageOSC) }
+        printBenchmark("osc_1337_inline_image_feed", nanos: imageNanos,
+                       fields: [("payloadBytes", "\(imageOSC.count)")])
+
+        let clipBody = raw.prefix(600 * 1024) // 800 KiB base64 < the 1 MiB OSC cap
+        let clipboardOSC = Array("\u{1b}]52;c;\(clipBody.base64EncodedString())\u{07}".utf8)
+        let term2 = TerminalEmulator(cols: 80, rows: 24)
+        var copied = 0
+        term2.onSetClipboard = { copied = $0.utf8.count }
+        let clipNanos = timedNanos { term2.feed(clipboardOSC) }
+        XCTAssertEqual(copied, clipBody.count, "OSC 52 body must round-trip")
+        printBenchmark("osc_52_clipboard_feed", nanos: clipNanos,
+                       fields: [("payloadBytes", "\(clipboardOSC.count)")])
+    }
+
     // MARK: - Scrollback append + replay (steady state, at the cap)
 
     func testScrollbackSteadyStateAtCap() throws {

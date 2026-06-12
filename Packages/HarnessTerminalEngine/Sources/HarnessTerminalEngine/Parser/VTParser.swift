@@ -281,10 +281,67 @@ final class VTParser {
                     feed(buf[i])
                     i += 1
                 }
+            } else if state == .oscString, !sawESCInString, !isOSCDelimiter(buf[i]) {
+                // Bulk-consume an OSC payload run. Inside an OSC string only BEL (terminate),
+                // ESC (possible ST), and CAN/SUB (the anywhere-rule aborts) can change parser
+                // state — every other byte is appended verbatim. Scanning to the next such
+                // delimiter and appending the run in one go amortizes the per-byte dispatch
+                // that made multi-megabyte OSC 1337 image payloads O(bytes × state-machine).
+                let j = oscRunEnd(buf, from: i + 1, end: n)
+                appendOSCRun(buf, from: i, to: j)
+                i = j
             } else {
                 feed(buf[i])
                 i += 1
             }
+        }
+    }
+
+    /// The only bytes that can affect parsing while inside an OSC string: BEL terminates,
+    /// ESC opens a potential ST, CAN/SUB abort via the VT500 anywhere rule.
+    @inline(__always)
+    private func isOSCDelimiter(_ b: UInt8) -> Bool {
+        b == 0x07 || b == 0x18 || b == 0x1A || b == 0x1B
+    }
+
+    /// Index of the first OSC delimiter at or after `start` (bounded by `end`) — the end of a
+    /// clean payload run. SIMD16 chunks check all four delimiter lanes at once; the tail falls
+    /// back to the scalar predicate. Never reads past the buffer (`j + 16 <= end` gate).
+    @inline(__always)
+    private func oscRunEnd(_ buf: UnsafeBufferPointer<UInt8>, from start: Int, end: Int) -> Int {
+        guard let base = buf.baseAddress else { return start }
+        var j = start
+        let bel = SIMD16<UInt8>(repeating: 0x07)
+        let can = SIMD16<UInt8>(repeating: 0x18)
+        let sub = SIMD16<UInt8>(repeating: 0x1A)
+        let esc = SIMD16<UInt8>(repeating: 0x1B)
+        while j + 16 <= end {
+            let v = UnsafeRawPointer(base + j).loadUnaligned(as: SIMD16<UInt8>.self)
+            let stop = (v .== bel) .| (v .== can) .| (v .== sub) .| (v .== esc)
+            if any(stop) {
+                for lane in 0 ..< 16 where stop[lane] { return j + lane }
+            }
+            j += 16
+        }
+        while j < end, !isOSCDelimiter(buf[j]) { j += 1 }
+        return j
+    }
+
+    /// Append a clean OSC payload run, byte-identical to per-byte `oscString` appends: the
+    /// first 5 bytes go one at a time (the `oscCap` selector sniffs a `1337;` prefix and needs
+    /// them settled), then the rest lands in one bulk append clamped to the cap — bytes past
+    /// the cap are dropped exactly as the per-byte guard drops them.
+    private func appendOSCRun(_ buf: UnsafeBufferPointer<UInt8>, from start: Int, to end: Int) {
+        var i = start
+        while i < end, oscBuffer.count < 5 {
+            if oscBuffer.count < oscCap { oscBuffer.append(buf[i]) }
+            i += 1
+        }
+        guard i < end else { return }
+        let room = oscCap - oscBuffer.count
+        if room > 0 {
+            let take = min(room, end - i)
+            oscBuffer.append(contentsOf: UnsafeBufferPointer(rebasing: buf[i ..< i + take]))
         }
     }
 
