@@ -15,6 +15,12 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
   commands: `jump-previous-prompt`, `jump-next-prompt`, `select-last-output`.
 - **`#{command_duration}` format token.** The last finished command's runtime (OSC 133
   timing — `850ms`, `12s`, `3m 5s`) for `display-message`, hooks, and pane-border formats.
+- **End-to-end typing latency is now measurable.** With `HARNESS_FRAME_SIGNPOSTS=1`, the
+  frame log gains `echo µs p50/p95/p99` lines measuring keystroke → presented frame (one
+  sample per keystroke, blink ticks excluded), and a new gated `echo_rtt_daemon` benchmark
+  measures the daemon round trip (input frame → PTY → kernel echo → output frame): p50
+  437µs, p99 3.1ms on an M-series. Median end-to-end typing latency lands around 1.6–2ms —
+  under a 120Hz frame. SCORECARD records the methodology.
 
 ### Fixed
 - **Reopening the app no longer types stray characters at the prompt.** (#168) On reattach,

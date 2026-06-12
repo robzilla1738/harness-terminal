@@ -113,3 +113,21 @@ settings — re-measure with both capped before quoting these against each other
 Captured during a live 4 s resize drag + 4 s scroll fling: **zero dropped frames** in every
 120-frame window; p95 is drawable-wait (vsync pacing) dominated, CPU-side build/upload stays
 in the tens-of-µs band.
+
+### Daemon echo RTT (`echo_rtt_daemon`, µs) — measured 2026-06-12
+
+The IPC + PTY half of typing latency: client input frame → daemon → PTY write → kernel tty
+echo → daemon read → output frame → client. In-process `DaemonServer` + `/bin/cat` surface,
+100 probes after 10 warm-ups (`HARNESS_BENCHMARKS=1 HARNESS_LIVE_DAEMON_TESTS=1 swift test
+--filter EchoRTTBenchmark`; the 200µs receive-poll inflates every figure slightly).
+
+| metric | value |
+|---|---|
+| p50 | 437 |
+| p95 | 1,886 |
+| p99 | 3,058 |
+
+With the present path's p50 of ~1.2ms above, median end-to-end typing latency lands around
+**~1.6–2ms** — well under a 120Hz frame. The live in-app number is now measurable directly:
+run with `HARNESS_FRAME_SIGNPOSTS=1` and read the `echo µs p50/p95/p99` lines (keyDown →
+present completion, one sample per keystroke) from the unified log.

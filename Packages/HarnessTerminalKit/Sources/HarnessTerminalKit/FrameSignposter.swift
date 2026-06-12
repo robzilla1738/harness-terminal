@@ -52,6 +52,18 @@ final class FrameSignposter: @unchecked Sendable {
     private var droppedNilDrawable = 0
     private var droppedEncodeFailure = 0
     private let presentLogEvery = 120
+    /// End-to-end echo latency: keyDown → the next present's completion (the CPU-side proxy for
+    /// photon; scanout is at most one refresh later). One sample per keystroke — the pending
+    /// timestamp is consumed by the first present after it; a present arriving more than
+    /// `echoAttributionWindowNanos` later is unrelated (no echo came back — e.g. a blink tick or
+    /// a dead key) and drops the pending sample instead of mis-attributing it. Main-thread only,
+    /// like the present samples, and blended across surfaces the same way — attribute with a
+    /// single visible surface. This is the number the SCORECARD's "input-to-photon" row was
+    /// missing: `present` measures the pipeline's tail, this measures from the keystroke.
+    private var pendingKeystrokeNanos: UInt64?
+    private var echoSamples: [UInt64] = []
+    private let echoAttributionWindowNanos: UInt64 = 500_000_000
+    private let echoLogEvery = 60
 
     /// Why a present was skipped: `nilDrawable` = `nextDrawable()` returned nothing (pool
     /// exhausted / layer hidden), `encodeFailure` = the renderer bailed after acquiring one.
@@ -59,14 +71,16 @@ final class FrameSignposter: @unchecked Sendable {
         case nilDrawable, encodeFailure
     }
 
-    init() {
+    /// `enabled: nil` (production singleton) reads the environment; tests pass it explicitly.
+    init(enabled: Bool? = nil) {
         // `open` (Finder, `make preview`) does not forward the calling shell's environment to a
         // GUI app, so the env var alone is unreachable in practice. Also accept the argument
         // domain — `open -n Harness.app --args -HARNESS_FRAME_SIGNPOSTS 1` lands in
         // `UserDefaults.standard` via NSArgumentDomain. One read at init; the hot path still
         // branches on the stored `enabled`.
-        enabled = ProcessInfo.processInfo.environment["HARNESS_FRAME_SIGNPOSTS"] == "1"
-            || UserDefaults.standard.bool(forKey: "HARNESS_FRAME_SIGNPOSTS")
+        self.enabled = enabled
+            ?? (ProcessInfo.processInfo.environment["HARNESS_FRAME_SIGNPOSTS"] == "1"
+                || UserDefaults.standard.bool(forKey: "HARNESS_FRAME_SIGNPOSTS"))
         #if canImport(os)
         signposter = OSSignposter(subsystem: "com.robert.harness", category: "frame")
         logger = Logger(subsystem: "com.robert.harness", category: "frame")
@@ -77,11 +91,43 @@ final class FrameSignposter: @unchecked Sendable {
     /// log p50/p95/max per component to the unified log — so the drawable/vsync stall is readable
     /// with `log stream --predicate 'subsystem == "com.robert.harness"'` (no Instruments needed).
     /// Main-thread only; a no-op when disabled (so the hot path stays a single branch).
+    /// A keystroke headed for the PTY just left the input encoder. Arms the echo-latency sample
+    /// the next present consumes. Main-thread only; a single branch when disabled.
+    func noteKeystroke(at nanos: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+        guard enabled else { return }
+        pendingKeystrokeNanos = nanos
+    }
+
+    /// Test seam: the echo samples accumulated since the last flush (µs percentiles math is
+    /// covered separately; this pins arm/consume/window semantics).
+    var testingEchoSampleCount: Int { echoSamples.count }
+    var testingHasPendingKeystroke: Bool { pendingKeystrokeNanos != nil }
+
     func recordPresent(
         nanos: UInt64, drawableWait: UInt64 = 0, semaphoreWait: UInt64 = 0, schedule: UInt64 = 0,
-        instanceBuild: UInt64 = 0, upload: UInt64 = 0
+        instanceBuild: UInt64 = 0, upload: UInt64 = 0,
+        at now: UInt64 = DispatchTime.now().uptimeNanoseconds
     ) {
         guard enabled else { return }
+        // Echo sample: this present is the first since the armed keystroke — charge it.
+        if let pending = pendingKeystrokeNanos {
+            pendingKeystrokeNanos = nil
+            let elapsed = now &- pending
+            if elapsed <= echoAttributionWindowNanos {
+                echoSamples.append(elapsed)
+                if echoSamples.count >= echoLogEvery {
+                    let echo = Self.percentilesMicros(echoSamples)
+                    let count = echoSamples.count
+                    echoSamples.removeAll(keepingCapacity: true)
+                    #if canImport(os)
+                    logger.log("""
+                    echo µs p50=\(echo.p50) p95=\(echo.p95) p99=\(echo.p99) max=\(echo.max) \
+                    over \(count) keystrokes
+                    """)
+                    #endif
+                }
+            }
+        }
         presentSamples.append(nanos)
         drawableWaitSamples.append(drawableWait)
         semaphoreWaitSamples.append(semaphoreWait)

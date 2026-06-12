@@ -3888,6 +3888,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let eventType: KeyEventType = event.isARepeat ? .repeat : .press
 
         if let special = Self.specialKey(for: event) {
+            FrameSignposter.shared.noteKeystroke()
             emit(inputEncoder.encode(special, modifiers: mods, event: eventType, modes: modes))
             return
         }
@@ -3911,6 +3912,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 from: rawUnshifted,
                 controlPressed: mods.contains(.control)
             )
+            FrameSignposter.shared.noteKeystroke()
             emit(inputEncoder.encode(
                 text: unshifted,
                 shifted: event.characters,
@@ -4384,6 +4386,8 @@ extension HarnessTerminalSurfaceView: @preconcurrency NSTextInputClient {
         markedText = ""
         let text = plainString(string)
         guard !text.isEmpty else { scheduleRender(); return }
+        // Plain typing reaches the PTY here (via interpretKeyEvents), not in keyDown.
+        FrameSignposter.shared.noteKeystroke()
         emit(inputEncoder.encode(text: text))
         scheduleRender()
     }
