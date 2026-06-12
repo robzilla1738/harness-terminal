@@ -9,6 +9,10 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
+- **Hover-reveal pane close.** (#168) Split panes now show a small × in the top-right corner —
+  but only while the pointer is hovering there, and only when the tab has more than one pane.
+  Invisible at rest (panes stay chrome-free), click-through except on the × itself, and the
+  click routes the exact same kill-pane command as `prefix x`.
 - **Prompt navigation.** With shell integration installed, ⌘↑ / ⌘↓ jump the viewport between
   shell prompts (View ▸ Previous/Next Prompt — the Terminal.app convention), and ⇧⌘A selects
   the last finished command's output, scrolling to reveal it. All three are also bindable

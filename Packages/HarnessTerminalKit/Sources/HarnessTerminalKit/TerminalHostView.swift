@@ -119,6 +119,25 @@ public final class TerminalHostView: NSView {
     /// position constraints are toggled from settings and it auto-hides on its own.
     private let resizeHUD = ResizeHUDView()
     private let scrollbar = TerminalScrollbarView()
+    /// Hover-reveal × in the top-right corner (#168). Gated by `showsPaneCloseAffordance`
+    /// (multi-pane tabs only) and revealed only while the pointer is in the corner region.
+    private let paneCloseOverlay = PaneCloseOverlay()
+    private var paneCloseHoverArea: NSTrackingArea?
+
+    /// Fired when the user clicks the hover × — the app resolves this pane's `PaneID` and
+    /// issues the regular kill-pane command, so behavior matches `prefix x` exactly.
+    public var onPaneCloseRequested: (() -> Void)?
+
+    /// Whether the hover × is armed. The app sets it on (re)mount: true only when the pane's
+    /// tab has more than one pane — a single-pane tab already has the tab close button, and
+    /// the pane stays chrome-free at rest either way.
+    public var showsPaneCloseAffordance = false {
+        didSet {
+            guard showsPaneCloseAffordance != oldValue else { return }
+            if !showsPaneCloseAffordance { paneCloseOverlay.setRevealed(false, animated: false) }
+            updateTrackingAreas()
+        }
+    }
     private var resizeHUDConstraints: [ResizeOverlayPosition: [NSLayoutConstraint]] = [:]
     private var resizeHUDPosition: ResizeOverlayPosition?
     /// The terminal's initial sizing isn't a resize — `after-first` skips the overlay for it.
@@ -349,7 +368,62 @@ public final class TerminalHostView: NSView {
             self?.scrollbar.show(topLine: topLine, totalLines: totalLines, visibleRows: visibleRows)
         }
 
+        // Hover-reveal pane close — topmost overlay, pinned over the top-right corner. The
+        // overlay is invisible (and click-through) except while the corner is hovered with the
+        // affordance armed.
+        addSubview(paneCloseOverlay)
+        NSLayoutConstraint.activate([
+            paneCloseOverlay.topAnchor.constraint(equalTo: topAnchor),
+            paneCloseOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            paneCloseOverlay.widthAnchor.constraint(equalToConstant: PaneCloseOverlay.hoverRegionSize.width),
+            paneCloseOverlay.heightAnchor.constraint(equalToConstant: PaneCloseOverlay.hoverRegionSize.height),
+        ])
+        paneCloseOverlay.onClose = { [weak self] in self?.onPaneCloseRequested?() }
+
         applyNativeAppearance()
+    }
+
+    /// Track the top-right corner region for the hover × (only while the affordance is armed —
+    /// no tracking churn on single-pane tabs). AppKit re-invokes this on geometry changes.
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area = paneCloseHoverArea {
+            removeTrackingArea(area)
+            paneCloseHoverArea = nil
+        }
+        guard showsPaneCloseAffordance else { return }
+        let size = PaneCloseOverlay.hoverRegionSize
+        let corner = NSRect(
+            x: max(0, bounds.maxX - size.width),
+            y: isFlipped ? 0 : max(0, bounds.maxY - size.height),
+            width: min(size.width, bounds.width),
+            height: min(size.height, bounds.height)
+        )
+        let area = NSTrackingArea(
+            rect: corner,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow],
+            owner: self,
+            userInfo: ["paneClose": true]
+        )
+        addTrackingArea(area)
+        paneCloseHoverArea = area
+    }
+
+    public override func mouseEntered(with event: NSEvent) {
+        guard event.trackingArea === paneCloseHoverArea else {
+            super.mouseEntered(with: event)
+            return
+        }
+        guard showsPaneCloseAffordance else { return }
+        paneCloseOverlay.setRevealed(true)
+    }
+
+    public override func mouseExited(with event: NSEvent) {
+        guard event.trackingArea === paneCloseHoverArea else {
+            super.mouseExited(with: event)
+            return
+        }
+        paneCloseOverlay.setRevealed(false)
     }
 
     /// Push the full appearance to the surface, computed from the cached settings + theme.
@@ -414,6 +488,7 @@ public final class TerminalHostView: NSView {
             fill: Self.nsColor(hex: canvasFg, fallback: .labelColor)
         )
         scrollbar.applyColor(Self.nsColor(hex: canvasFg, fallback: .labelColor))
+        paneCloseOverlay.applyColor(Self.nsColor(hex: canvasFg, fallback: .labelColor))
         applyResizeHUDPosition(settings.resizeOverlayPosition)
     }
 

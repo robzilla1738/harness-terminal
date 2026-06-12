@@ -258,6 +258,13 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         // Re-assert the focused-pane border after the (re)mount — reused hosts keep
         // their flag, but a freshly shown tab needs its active pane established.
         coordinator.ensureActivePane(for: tab)
+        // Arm the hover × (#168) only on multi-pane tabs — a single-pane tab already has the
+        // tab close button, and the pane stays chrome-free at rest either way. Re-armed on
+        // every structural (re)mount, so closing down to one pane disarms the survivor.
+        let multiPane = tab.rootPane.allPaneIDs().count > 1
+        for surfaceID in tab.rootPane.allSurfaceIDs() {
+            coordinator.terminalHostIfExists(for: surfaceID)?.showsPaneCloseAffordance = multiPane
+        }
     }
 
     private func paneKey(_ node: PaneNode) -> String {

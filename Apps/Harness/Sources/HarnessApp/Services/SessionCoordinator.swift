@@ -1451,8 +1451,27 @@ final class SessionCoordinator: NSObject {
         host.applySettings(settings)
         applyTerminalIdentity(to: host)
         pushBorderColors(to: host)
+        // Hover × (#168): same kill-pane path as `prefix x`. The affordance itself is armed
+        // per mount (multi-pane tabs only) by ContentAreaViewController.
+        host.onPaneCloseRequested = { [weak self] in self?.killPane(surfaceID: surfaceID) }
         terminalHosts.register(host)
         return host
+    }
+
+    /// Kill the pane hosting `surfaceID` — the hover-close affordance's target is the pane
+    /// under the pointer, not necessarily the active one, and (multi-window) not necessarily
+    /// in the active tab. Routes the same daemon command as `kill-pane`.
+    func killPane(surfaceID: SurfaceID) {
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    guard let paneID = paneID(for: surfaceID, in: tab.rootPane) else { continue }
+                    requestDaemon(.killPane(paneID: paneID))
+                    syncFromDaemon()
+                    return
+                }
+            }
+        }
     }
 
     func jumpToLatestNotification() {
