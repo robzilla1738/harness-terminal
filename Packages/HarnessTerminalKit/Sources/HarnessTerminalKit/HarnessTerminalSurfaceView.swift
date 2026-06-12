@@ -156,6 +156,50 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
         return token == latestPreviewToken
     }
 
+    /// Post-parse state one main hop applies to the main-thread mirrors (see `receiveOffMain`).
+    /// `addedHistory` accumulates across coalesced chunks (the scroll anchor must advance by the
+    /// TOTAL lines pushed into history, not the last chunk's delta); the rest are latest-wins —
+    /// chunks merge in FIFO order on the emulator queue, so "latest" is the emulator's current
+    /// state, which is exactly what the old one-hop-per-chunk delivery converged on.
+    struct PendingMainHop {
+        var addedHistory: Int
+        var historyCount: Int
+        var modes: TerminalModes
+        var altScreen: Bool
+    }
+
+    /// Staged hop state + the "a main hop is in flight" flag, guarded by `tokenLock` (written on
+    /// the worker, consumed on main). Invariant: whenever `pendingHop != nil`, exactly one
+    /// `applyPendingMainHop` is queued or executing on main — `stageMainHop` returns true only
+    /// to the chunk that transitions nil → non-nil, and that caller dispatches the hop.
+    private var pendingHop: PendingMainHop?
+
+    /// Merge this chunk's post-parse state into the staged hop. Returns true when the caller
+    /// must dispatch a main hop (none is in flight); false when an already-queued hop will
+    /// observe this state.
+    func stageMainHop(addedHistory: Int, historyCount: Int, modes: TerminalModes, altScreen: Bool) -> Bool {
+        tokenLock.lock(); defer { tokenLock.unlock() }
+        if var hop = pendingHop {
+            hop.addedHistory += addedHistory
+            hop.historyCount = historyCount
+            hop.modes = modes
+            hop.altScreen = altScreen
+            pendingHop = hop
+            return false
+        }
+        pendingHop = PendingMainHop(
+            addedHistory: addedHistory, historyCount: historyCount, modes: modes, altScreen: altScreen
+        )
+        return true
+    }
+
+    /// Consume the staged hop (main side). A chunk that lands after this re-arms a new hop.
+    func takePendingMainHop() -> PendingMainHop? {
+        tokenLock.lock(); defer { tokenLock.unlock() }
+        defer { pendingHop = nil }
+        return pendingHop
+    }
+
     /// The latest grid size a resize commit requested, applied-and-cleared by the NEXT output/commit
     /// build to run on the queue (`applyPendingResize` at the top of `renderNowOffMain`'s build).
     /// Decoupling "which size to materialize" from "which build wins the latest-wins token" is what
@@ -654,39 +698,59 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func receiveOffMain(_ data: Data) {
         emulatorState.async { [weak self] emulator in
+            guard let self else { return }
             let beforeHistory = emulator.historyCount
             FrameSignposter.shared.interval("parse") { emulator.feed(data) }
             let afterHistory = emulator.historyCount
-            let modesAfterFeed = emulator.modes
-            let altScreenAfterFeed = emulator.isAlternateScreenActive
-            let synchronized = modesAfterFeed.synchronizedOutput
+            // Coalesce the main hop: under a flood, per-chunk main.async was tens of thousands
+            // of dispatches/sec of pure scheduling tax on the main thread. Each chunk merges its
+            // post-parse state into the staged hop; only the chunk that finds no hop in flight
+            // dispatches one, and the hop reads the LATEST staged state when it runs — so the
+            // mirrors converge exactly as the old one-hop-per-chunk delivery did, in (at most)
+            // one main dispatch per main-thread turn instead of one per chunk. A lone keystroke
+            // echo on an idle surface still gets its immediate hop + presentNow.
+            // Only positive history deltas advance the scroll anchor (matching the old per-chunk
+            // `added > 0` guard); shrinks (clear/alt-screen) are clamped by `historyCount`.
+            let needsHop = self.emulatorState.stageMainHop(
+                addedHistory: max(0, afterHistory - beforeHistory),
+                historyCount: afterHistory,
+                modes: emulator.modes,
+                altScreen: emulator.isAlternateScreenActive
+            )
+            guard needsHop else { return }
             FrameSignposter.shared.event("mainHop")
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.testingMainHopCount &+= 1
-                // Refresh the input-side mirror (see `inputModes()`); chunks hop in FIFO order, so
-                // the mirror always converges on the emulator's latest state.
-                self.inputModesMirror = modesAfterFeed
-                self.altScreenMirror = altScreenAfterFeed
-                self.historyCountMirror = afterHistory
-                if self.scrollOffset > 0 {
-                    let added = afterHistory - beforeHistory
-                    if added > 0 { self.scrollOffset = min(afterHistory, self.scrollOffset + added) }
-                }
-                self.wakeCursor()
-                if synchronized {
-                    self.scheduler.setSynchronized(true)
-                    self.armSyncTimeout()
-                } else {
-                    self.syncTimeout?.cancel(); self.syncTimeout = nil
-                    self.scheduler.setSynchronized(false)
-                    self.wakeDisplayLink()
-                    // Low-latency echo (off-main): kick the frame build now rather than at the next
-                    // tick. renderNowOffMain builds on the emulator queue and presents on main; the
-                    // renderGeneration guard drops any stale build so there's no double present.
-                    self.scheduler.presentNow()
-                }
+                self?.applyPendingMainHop()
             }
+        }
+    }
+
+    /// Apply the staged post-parse state to the main-thread mirrors and the render scheduler.
+    /// Runs on main; no-op when a concurrent flush (`testingWaitForEmulatorIdle`) already
+    /// consumed the hop.
+    private func applyPendingMainHop() {
+        guard let hop = emulatorState.takePendingMainHop() else { return }
+        testingMainHopCount &+= 1
+        // Refresh the input-side mirror (see `inputModes()`); chunks merge in FIFO order on the
+        // emulator queue, so the staged state is always the emulator's latest.
+        inputModesMirror = hop.modes
+        altScreenMirror = hop.altScreen
+        historyCountMirror = hop.historyCount
+        if scrollOffset > 0, hop.addedHistory > 0 {
+            scrollOffset = min(hop.historyCount, scrollOffset + hop.addedHistory)
+        }
+        wakeCursor()
+        if hop.modes.synchronizedOutput {
+            scheduler.setSynchronized(true)
+            armSyncTimeout()
+        } else {
+            syncTimeout?.cancel(); syncTimeout = nil
+            scheduler.setSynchronized(false)
+            wakeDisplayLink()
+            // Low-latency echo (off-main): kick the frame build now rather than at the next
+            // tick. renderNowOffMain builds on the emulator queue and presents on main; the
+            // renderGeneration guard drops any stale build so there's no double present.
+            scheduler.presentNow()
         }
     }
 
@@ -709,10 +773,12 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     func testingWaitForEmulatorIdle() {
-        // Drain the parse queue AND refresh the main-thread mirrors the parse hop would have
-        // refreshed — tests call this in place of spinning the runloop, so the mirrors must not
-        // lag the drained state (smooth scrolling clamps against `historyCountMirror`).
+        // Drain the parse queue AND apply any staged main hop — tests call this in place of
+        // spinning the runloop, so the mirrors (incl. modes/alt-screen, smooth scrolling clamps
+        // against `historyCountMirror`) must not lag the drained state. The already-queued
+        // main.async hop then no-ops (the hop was consumed here).
         let history = emulatorState.sync { $0.historyCount }
+        applyPendingMainHop()
         historyCountMirror = history
     }
 

@@ -136,6 +136,60 @@ final class HarnessTerminalSurfaceWorkerTests: XCTestCase {
         XCTAssertEqual(view.testingInputModes().kittyKeyboardFlags, 0)
     }
 
+    func testOffMainBurstCoalescesMainHopsAndConvergesMirrors() async {
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        view.testingMainHopCount = 0
+        // 200 chunks fed back-to-back while main never yields: every post-parse state merges
+        // into the staged hop, so the executed hop count must collapse far below the chunk
+        // count while the mirrors still converge on the emulator's final state. The last chunk
+        // flips DECCKM on so latest-wins is observable.
+        let chunks = 200
+        for i in 0 ..< chunks {
+            view.receive("line \(i)\r\n")
+        }
+        view.receive("\u{1b}[?1h")
+        view.testingWaitForEmulatorIdle()
+        await drainMainQueue()
+        XCTAssertTrue(view.testingInputModes().cursorKeysApplication,
+                      "mirror converged on the latest chunk's mode flip")
+        XCTAssertLessThan(view.testingMainHopCount, chunks / 2,
+                          "burst hops must coalesce, not dispatch per chunk")
+        XCTAssertGreaterThan(view.testingMainHopCount, 0, "the staged state was applied")
+    }
+
+    func testOffMainScrolledUpAnchorAdvancesByTotalAddedHistory() async {
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        // Seed history and let the mirror converge so the scroll clamp sees it.
+        view.receive(String(repeating: "seed\r\n", count: 100))
+        view.testingWaitForEmulatorIdle()
+        await drainMainQueue()
+        view.testingScrollBy(lines: 5)
+        XCTAssertEqual(view.testingScrollPosition.offset, 5)
+
+        // Three history-pushing chunks merge into one hop; the anchor must advance by the TOTAL
+        // lines added (accumulated delta), not just the last chunk's.
+        for _ in 0 ..< 3 {
+            view.receive(String(repeating: "more\r\n", count: 10))
+        }
+        view.testingWaitForEmulatorIdle()
+        await drainMainQueue()
+        XCTAssertEqual(view.testingScrollPosition.offset, 35,
+                       "anchor advanced by all 30 added lines across the coalesced hop")
+    }
+
+    func testOffMainSynchronizedFlipWithinBurstAppliesFinalState() async {
+        let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
+        // 2026 opens and closes within one coalesced window: only the FINAL state matters —
+        // the display must not be left held.
+        view.receive("\u{1b}[?2026h")
+        view.receive("mid-batch")
+        view.receive("\u{1b}[?2026l")
+        view.testingWaitForEmulatorIdle()
+        await drainMainQueue()
+        XCTAssertFalse(view.testingRenderSynchronized, "batch closed → hold released")
+        XCTAssertTrue(view.testingRenderPending, "released batch presents")
+    }
+
     func testOffMainPipelineCanBeDisabledWithoutRacingQueuedWork() {
         let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
         view.frame = CGRect(x: 0, y: 0, width: 800, height: 400)
