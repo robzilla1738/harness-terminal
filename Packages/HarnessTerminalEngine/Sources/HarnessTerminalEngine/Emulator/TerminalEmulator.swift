@@ -38,6 +38,14 @@ public final class TerminalEmulator: VTParserHandler {
     public var onTitleChange: ((String) -> Void)?
     /// Reported working directory (OSC 7).
     public var onWorkingDirectoryChange: ((String) -> Void)?
+    /// The hostname component of an OSC 7 report, when it CHANGES — `file://host/path`
+    /// carries the reporting shell's host, so an ssh session's integration flips it to the
+    /// remote and the local shell flips it back on exit (drives per-host profiles). nil = the
+    /// report carried no authority, or a full reset dropped the state. Lowercased.
+    public var onRemoteHostChange: ((String?) -> Void)?
+    /// Last host reported through `onRemoteHostChange` (dedupe: OSC 7 fires on every prompt).
+    private var reportedRemoteHost: String?
+    private var hasReportedRemoteHost = false
     /// Terminal bell (BEL / `\a`).
     public var onBell: (() -> Void)?
     /// A shell command finished (OSC 133 `D`), with how long it ran (since the `C`/`B` mark) and
@@ -1152,17 +1160,28 @@ public final class TerminalEmulator: VTParserHandler {
         // attacker-chosen value. No existence check — the path may live on a remote host (cwd
         // reported over ssh), and the engine is filesystem-agnostic by design.
         let path: String
+        let host: String?
         if let url = URL(string: payload), url.isFileURL {
             path = url.path
+            host = url.host?.lowercased()
         } else if payload.hasPrefix("file://") {
             // Fallback: strip scheme + authority manually (URL() rejects some unencoded paths).
             let withoutScheme = String(payload.dropFirst("file://".count))
             guard let slash = withoutScheme.firstIndex(of: "/") else { return }
             path = String(withoutScheme[slash...])
+            let authority = String(withoutScheme[..<slash])
+            host = authority.isEmpty ? nil : authority.lowercased()
         } else {
             return
         }
         guard path.hasPrefix("/") else { return }
+        // Emit host on CHANGE only (OSC 7 re-reports every prompt), including the first
+        // report — even a nil one, so consumers learn "the shell reports no host" explicitly.
+        if !hasReportedRemoteHost || reportedRemoteHost != host {
+            hasReportedRemoteHost = true
+            reportedRemoteHost = host
+            onRemoteHostChange?(host)
+        }
         onWorkingDirectoryChange?(path)
     }
 
@@ -1191,6 +1210,13 @@ public final class TerminalEmulator: VTParserHandler {
         if !userVariables.isEmpty {
             userVariables.removeAll()
             onUserVariablesCleared?()
+        }
+        // A full reset drops the reported-host state too (a respawned shell re-reports via
+        // OSC 7); consumers holding a per-host override hear the nil and revert.
+        if hasReportedRemoteHost {
+            hasReportedRemoteHost = false
+            reportedRemoteHost = nil
+            onRemoteHostChange?(nil)
         }
         hyperlinks.removeAll()
         hyperlinkKeys.removeAll()

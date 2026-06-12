@@ -8,6 +8,8 @@ import HarnessTheme
 public protocol TerminalHostDelegate: AnyObject {
     func terminalHostDidChangeTitle(_ title: String, surfaceID: SurfaceID)
     func terminalHostDidChangeWorkingDirectory(_ path: String, surfaceID: SurfaceID)
+    /// The pane's OSC 7 hostname changed (nil = no authority / reset) — drives per-host profiles.
+    func terminalHostDidChangeRemoteHost(_ host: String?, surfaceID: SurfaceID)
     /// OSC 1337 `SetUserVar=` — optional: hosts that don't surface user variables ignore it.
     func terminalHostDidSetUserVariable(_ name: String, value: String, surfaceID: SurfaceID)
     /// RIS dropped the engine's user variables — optional: hosts that mirrored them clear their copies.
@@ -32,6 +34,8 @@ extension TerminalHostDelegate {
     public func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID) {}
     /// Default no-op — only the GUI tab strip renders progress.
     public func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID) {}
+    /// Default no-op — only the GUI evaluates per-host profiles.
+    public func terminalHostDidChangeRemoteHost(_ host: String?, surfaceID: SurfaceID) {}
 }
 
 struct TerminalHostResolvedAppearance: Equatable {
@@ -98,6 +102,18 @@ public final class TerminalHostView: NSView {
     /// `window-style`/`pane-style` base colors (dim inactive panes). The active pane uses the
     /// `*-active-style` base; others the general one. Empty = no override.
     private var paneStyles = PaneStyleSet()
+
+    /// Per-surface theme override (profiles): while set, this pane's CANVAS resolves through
+    /// the named theme instead of the global one — window chrome keeps the global theme, and
+    /// nothing is ever written back to settings (the audit roadmap's sanctioned per-surface
+    /// override layer). nil = global theme. Pushed by the app when a `ProfileRule` matches
+    /// or stops matching.
+    public var profileThemeOverride: String? {
+        didSet {
+            guard profileThemeOverride != oldValue else { return }
+            applyNativeAppearance()
+        }
+    }
 
     /// Push the resolved pane-style options (from the app's `OptionStore`). Re-applies the
     /// appearance so a `set-option -g window-style …` takes effect on the next refresh.
@@ -253,6 +269,10 @@ public final class TerminalHostView: NSView {
         native.onPwd = { [weak self] path in
             guard let self else { return }
             self.hostDelegate?.terminalHostDidChangeWorkingDirectory(path, surfaceID: self.surfaceID)
+        }
+        native.onRemoteHost = { [weak self] host in
+            guard let self else { return }
+            self.hostDelegate?.terminalHostDidChangeRemoteHost(host, surfaceID: self.surfaceID)
         }
         native.onUserVar = { [weak self] name, value in
             guard let self else { return }
@@ -434,9 +454,25 @@ public final class TerminalHostView: NSView {
     /// backgrounds stay opaque.
     private func applyNativeAppearance() {
         guard let settings = cachedSettings else { return }
+        var effectiveSettings = settings
+        if profileThemeOverride != nil {
+            // A matched profile's theme must render FAITHFULLY: the global custom canvas /
+            // palette / selection overrides (and the macOS-system light/dark resolution)
+            // describe the global theme, not this one — masked colors would defeat the
+            // point of a "red over production ssh" profile.
+            effectiveSettings.appearanceMode = .theme
+            effectiveSettings.customBackgroundHex = nil
+            effectiveSettings.customForegroundHex = nil
+            effectiveSettings.customCursorHex = nil
+            effectiveSettings.selectionBackgroundHex = nil
+            effectiveSettings.selectionForegroundHex = nil
+            effectiveSettings.cursorTextHex = nil
+            effectiveSettings.boldColorHex = nil
+            effectiveSettings.paletteHex = Array(repeating: nil, count: settings.paletteHex.count)
+        }
         let resolved = Self.resolvedNativeAppearance(
-            themeName: cachedThemeName,
-            settings: settings,
+            themeName: profileThemeOverride ?? cachedThemeName,
+            settings: effectiveSettings,
             systemAppearance: Self.systemAppearance(for: effectiveAppearance)
         )
         // `window-style`/`pane-style`: a parsed base color overrides the canvas default for

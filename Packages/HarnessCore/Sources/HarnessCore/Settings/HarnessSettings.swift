@@ -332,6 +332,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// `window-inherit-working-directory`, default on — the shipped Harness behavior).
     /// Off pins new tabs to `defaultCWD`.
     public var windowInheritCWD: Bool
+    /// Per-host/per-command theme profiles (see `ProfileRule`). Empty = no profile matching.
+    public var profiles: [ProfileRule]
 
     /// Whether the *umbrella* Harness controls are on (prefix or status line). Kept for onboarding
     /// copy and tests; the prefix and status line each resolve independently via the effective
@@ -438,7 +440,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         notificationEvents: [String: Bool] = [:],
         boldIsBright: Bool = true,
         secureKeyboardEntry: Bool = false,
-        windowInheritCWD: Bool = true
+        windowInheritCWD: Bool = true,
+        profiles: [ProfileRule] = []
     ) {
         self.fontSize = HarnessSettings.clampedFontSize(fontSize)
         self.fontFamily = fontFamily
@@ -510,6 +513,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.boldIsBright = boldIsBright
         self.secureKeyboardEntry = secureKeyboardEntry
         self.windowInheritCWD = windowInheritCWD
+        self.profiles = profiles
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -790,6 +794,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         boldIsBright = try fields.decode(.boldIsBright, \.boldIsBright)
         secureKeyboardEntry = try fields.decode(.secureKeyboardEntry, \.secureKeyboardEntry)
         windowInheritCWD = try fields.decode(.windowInheritCWD, \.windowInheritCWD)
+        // Absent in older files → no profiles. Per-rule decode is tolerant (ProfileRule).
+        profiles = try container.decodeIfPresent([ProfileRule].self, forKey: .profiles) ?? []
     }
 
     /// Thread-unsafe scratch slot used exclusively within `load()` to pass the already-computed

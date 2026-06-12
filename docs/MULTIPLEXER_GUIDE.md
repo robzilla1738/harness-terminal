@@ -317,6 +317,26 @@ Restart your shell (or open a new pane). The snippet is a no-op outside a Harnes
 on `$HARNESS` (exported by the daemon into every pane). Details:
 [shell-integration/README.md](shell-integration/README.md).
 
+### Per-host / per-command profiles
+
+Re-theme a pane while it's somewhere dangerous — e.g. a red canvas over ssh to production.
+Configure under `"profiles"` in `settings.json` (first matching rule wins; saved changes apply
+live):
+
+```json
+"profiles": [
+  {"host": "*.prod.example.com", "theme": "Red Alert"},
+  {"command": "ssh", "theme": "Dracula"}
+]
+```
+
+- `host` is a glob over the pane's **OSC 7 hostname** — reliable switching needs shell
+  integration on both ends (the local shell's OSC 7 reverts the override when `ssh` exits).
+- `command` is a glob over the pane's **foreground process name** (tracked automatically —
+  no integration needed).
+- The override re-themes the terminal **canvas only**, per pane; window chrome keeps the
+  global theme, and nothing is ever written back to your settings.
+
 ---
 
 ## 13. Agent hooks (notifications)

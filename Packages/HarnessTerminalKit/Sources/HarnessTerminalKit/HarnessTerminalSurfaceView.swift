@@ -332,6 +332,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onProgress: ((TerminalProgressReport) -> Void)?
     /// Reported working directory (OSC 7) — the host forwards this to its delegate.
     public var onPwd: ((String) -> Void)?
+    /// OSC 7 hostname changes (nil = no authority / reset) — drives per-host profiles.
+    public var onRemoteHost: ((String?) -> Void)?
     /// OSC 1337 `SetUserVar=` (decoded + validated by the engine) — the host surfaces these
     /// as pane-scoped `@name` user options so format strings can read them.
     public var onUserVar: ((_ name: String, _ value: String) -> Void)?
@@ -1235,6 +1237,13 @@ public final class HarnessTerminalSurfaceView: NSView {
                 self?.onPwd?(path)
             } else {
                 DispatchQueue.main.async { [weak self] in self?.onPwd?(path) }
+            }
+        }
+        emulator.onRemoteHostChange = { [weak self] host in
+            if Thread.isMainThread {
+                self?.onRemoteHost?(host)
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.onRemoteHost?(host) }
             }
         }
         emulator.onUserVariableChange = { [weak self] name, value in

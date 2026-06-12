@@ -321,6 +321,64 @@ final class SessionCoordinator: NSObject {
         adoptSynchronizeOptions()
         refreshSyncSiblings()
         reassertMarkedPane()
+        // Foreground-command changes ride snapshot syncs, so profile matches re-evaluate here
+        // too (host changes have their own delegate path). Cheap no-op without profiles.
+        applyProfileOverridesToAllHosts()
+    }
+
+    // MARK: - Per-host/per-command profiles
+
+    /// Last OSC 7-reported hostname per surface (nil entries are removed — "no host known").
+    private var surfaceRemoteHosts: [SurfaceID: String] = [:]
+
+    func terminalHostDidChangeRemoteHost(_ host: String?, surfaceID: SurfaceID) {
+        if let host {
+            surfaceRemoteHosts[surfaceID] = host
+        } else {
+            surfaceRemoteHosts.removeValue(forKey: surfaceID)
+        }
+        applyProfileOverride(for: surfaceID)
+    }
+
+    /// Re-evaluate the profile match for one surface and push (or clear) its canvas theme
+    /// override. First matching rule wins; no match reverts to the global theme.
+    private func applyProfileOverride(for surfaceID: SurfaceID) {
+        guard let host = terminalHostIfExists(for: surfaceID) else { return }
+        let profiles = settings.profiles
+        guard !profiles.isEmpty else {
+            host.profileThemeOverride = nil
+            return
+        }
+        let remoteHost = surfaceRemoteHosts[surfaceID]
+        let command = owningTab(forSurface: surfaceID)?.currentCommand
+        host.profileThemeOverride = profiles
+            .first { $0.matches(host: remoteHost, command: command) }?
+            .theme
+    }
+
+    private func applyProfileOverridesToAllHosts() {
+        // With no profiles configured, still clear any leftovers (rules were just deleted).
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    for surfaceID in tab.rootPane.allSurfaceIDs() {
+                        applyProfileOverride(for: surfaceID)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The tab whose split tree carries `surfaceID`, for per-pane profile context.
+    private func owningTab(forSurface surfaceID: SurfaceID) -> Tab? {
+        for workspace in snapshot.workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs where tab.rootPane.allSurfaceIDs().contains(surfaceID) {
+                    return tab
+                }
+            }
+        }
+        return nil
     }
 
     private func refreshChromePalette(systemAppearance: HarnessSystemAppearance? = nil) {

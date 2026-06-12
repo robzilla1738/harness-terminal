@@ -9,6 +9,13 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
+- **Per-host and per-command theme profiles.** A pane re-themes itself while it's somewhere
+  dangerous — `{"host": "*.prod.example.com", "theme": "Red Alert"}` under `"profiles"` in
+  settings.json turns the canvas red over ssh to production, and reverts when you exit.
+  Matching is a glob over the pane's OSC 7 hostname (shell integration on both ends) or its
+  foreground process name (tracked automatically). The override re-themes the terminal canvas
+  only, per pane — window chrome keeps the global theme, and nothing is ever written back to
+  settings.
 - **Hover-reveal pane close.** (#168) Split panes now show a small × in the top-right corner —
   but only while the pointer is hovering there, and only when the tab has more than one pane.
   Invisible at rest (panes stay chrome-free), click-through except on the × itself, and the
