@@ -787,8 +787,12 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     // OSC 8 hyperlink registry: cell `hyperlinkID` → URL. Global across both screens.
+    private struct HyperlinkKey: Hashable {
+        let explicitID: String?
+        let uri: String
+    }
     private var hyperlinks: [UInt32: String] = [:]
-    private var hyperlinkKeys: [String: UInt32] = [:]
+    private var hyperlinkKeys: [HyperlinkKey: UInt32] = [:]
     private var nextHyperlinkID: UInt32 = 1
 
     /// Resolve a cell's `hyperlinkID` to its URL (nil for 0 / unknown).
@@ -803,13 +807,15 @@ public final class TerminalEmulator: VTParserHandler {
         let uri = String(payload[payload.index(after: semi)...])
         guard !uri.isEmpty else { current.setHyperlink(0); return }
         let explicitID = params.split(separator: ":").first { $0.hasPrefix("id=") }.map { String($0.dropFirst(3)) }
-        let key = explicitID.map { "id=\($0)\u{1}\(uri)" } ?? "uri=\(uri)"
+        let key = HyperlinkKey(explicitID: explicitID, uri: uri)
         let id: UInt32
         if let existing = hyperlinkKeys[key] {
             id = existing
         } else {
-            // Bound the registry against hostile floods of unique links.
-            if hyperlinks.count >= 16_384 { hyperlinks.removeAll(); hyperlinkKeys.removeAll(); nextHyperlinkID = 1 }
+            // Bound the registry against hostile floods of unique links. The ID counter is NOT
+            // reset: cells still carrying pre-purge IDs must resolve to nil (dead link), never
+            // alias a fresh URL that happened to land on a recycled ID.
+            if hyperlinks.count >= 16_384 { hyperlinks.removeAll(); hyperlinkKeys.removeAll() }
             id = nextHyperlinkID
             nextHyperlinkID &+= 1
             hyperlinks[id] = uri
