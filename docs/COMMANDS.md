@@ -116,8 +116,9 @@ These CLI commands are pure local output and do not require the daemon.
 
 | Command | Effect |
 |---|---|
-| `jump-previous-prompt` | Scroll the active pane up to the previous OSC 133 shell prompt mark. Requires shell integration. |
-| `jump-next-prompt` | Scroll the active pane down to the next OSC 133 shell prompt mark. Requires shell integration. |
+| `jump-previous-prompt` | Scroll the active pane up to the previous OSC 133 shell prompt mark. Requires shell integration. In the GUI also View ▸ Previous Prompt (⌘↑). |
+| `jump-next-prompt` | Scroll the active pane down to the next OSC 133 shell prompt mark. Requires shell integration. In the GUI also View ▸ Next Prompt (⌘↓). |
+| `select-last-output` | Select the last finished command's output — the lines between the last two OSC 133 prompt marks — scrolling to reveal it. In the GUI also View ▸ Select Last Command Output (⇧⌘A). |
 | `copy-mode` | Open the vim-style copy-mode viewer for the active pane. |
 | `copy-mode -X <action> [arg]` | Run an in-mode copy command: `cursor-left/right/up/down`, `next-word`/`previous-word`, `start-of-line`/`end-of-line`, `history-top`/`history-bottom`, `page-up`/`page-down`/`halfpage-up`/`halfpage-down`, `begin-selection`/`select-line`/`rectangle-toggle`/`clear-selection`, `search-forward`/`search-backward`/`search-again`/`search-reverse`, `copy-selection`/`copy-selection-and-cancel`/`copy-pipe "<cmd>"`, `paste`, `cancel`. Also `send-keys -X <action>`. Rebind with `bind-key -T copy-mode <key> <command>`. |
 | `detach-client` | Detach the calling client (CLI attach) or fire SIGTERM-like handling. |

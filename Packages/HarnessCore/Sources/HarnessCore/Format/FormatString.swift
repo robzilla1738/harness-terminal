@@ -447,6 +447,17 @@ public enum FormatString {
         return result
     }
 
+    /// Compact human duration for `#{command_duration}`: sub-second in ms, then s / m s / h m.
+    private static func formatCommandDuration(_ seconds: Double) -> String {
+        if seconds < 1 { return "\(Int((seconds * 1000).rounded()))ms" }
+        let total = Int(seconds.rounded())
+        if total < 60 { return "\(total)s" }
+        let minutes = total / 60, secs = total % 60
+        if minutes < 60 { return secs == 0 ? "\(minutes)m" : "\(minutes)m \(secs)s" }
+        let hours = minutes / 60, mins = minutes % 60
+        return mins == 0 ? "\(hours)h" : "\(hours)h \(mins)m"
+    }
+
     private static func resolve(token: String, context: FormatContext) -> String {
         // User options (`#{@name}`): resolved by the builder into `userOptions`. Unset → empty.
         if token.hasPrefix("@") { return context.userOptions[token] ?? "" }
@@ -488,6 +499,9 @@ public enum FormatString {
         case "workspace_name": return context.workspaceName ?? ""
         case "agent_kind": return context.agentKind ?? ""
         case "agent_activity": return context.agentActivity ?? ""
+        // Last finished command's runtime in the pane (OSC 133 C→D), compact-human form
+        // ("850ms", "12s", "3m 5s"). GUI vantage only — daemon/CLI contexts render empty.
+        case "command_duration": return context.commandDurationSeconds.map(formatCommandDuration) ?? ""
         case "git_branch": return context.gitBranch ?? ""
         case "client_name": return context.clientName ?? ""
         case "client_width": return context.clientWidth.map(String.init) ?? ""
@@ -570,6 +584,10 @@ public struct FormatContext: Sendable {
     /// Keyed by the full option name *including* the `@`, matching `#{@name}` and the OptionStore
     /// key. The builder fills it from the OptionStore; `#{@unset}` renders empty.
     public var userOptions: [String: String] = [:]
+
+    /// Last finished command's duration in seconds (`#{command_duration}`). Filled by the GUI
+    /// (OSC 133 timing arrives via the host delegate); daemon/CLI contexts leave it nil.
+    public var commandDurationSeconds: Double? = nil
 
     /// Recursion guard for `#{T:…}` (expand-twice): bounds re-expansion of produced output so a
     /// self-referential user option (`@v = "#{T:#{@v}}"`) can't recurse until the daemon's stack

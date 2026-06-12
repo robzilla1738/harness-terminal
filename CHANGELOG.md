@@ -8,6 +8,14 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
+### Added
+- **Prompt navigation.** With shell integration installed, ⌘↑ / ⌘↓ jump the viewport between
+  shell prompts (View ▸ Previous/Next Prompt — the Terminal.app convention), and ⇧⌘A selects
+  the last finished command's output, scrolling to reveal it. All three are also bindable
+  commands: `jump-previous-prompt`, `jump-next-prompt`, `select-last-output`.
+- **`#{command_duration}` format token.** The last finished command's runtime (OSC 133
+  timing — `850ms`, `12s`, `3m 5s`) for `display-message`, hooks, and pane-border formats.
+
 ### Fixed
 - **Reopening the app no longer types stray characters at the prompt.** (#168) On reattach,
   persisted scrollback was replayed through the emulator, which re-answered the queries

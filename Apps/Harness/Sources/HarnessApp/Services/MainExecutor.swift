@@ -140,6 +140,8 @@ final class MainExecutor: CommandExecutor {
             coordinator.jumpToPreviousPrompt()
         case .jumpToNextPrompt:
             coordinator.jumpToNextPrompt()
+        case .selectLastCommandOutput:
+            coordinator.selectLastCommandOutput()
         case .sendKeys(let keys):
             guard let surfaceID = coordinator.activeSurfaceID else {
                 throw CommandExecutionError.noActiveSurface

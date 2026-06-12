@@ -719,6 +719,8 @@ public final class TerminalHostView: NSView {
     /// integration marks).
     public func jumpToPreviousPrompt() { nativeView.jumpToPreviousPrompt() }
     public func jumpToNextPrompt() { nativeView.jumpToNextPrompt() }
+    /// Select the last finished command's output (OSC 133 marks; no-op without them).
+    public func selectLastCommandOutput() { nativeView.selectLastCommandOutput() }
 
     /// `synchronize-panes`: the surface-id strings (excluding this pane) that this
     /// pane's input should also be mirrored to. Empty = normal single-pane input.

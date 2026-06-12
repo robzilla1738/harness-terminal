@@ -56,6 +56,9 @@ final class SessionCoordinator: NSObject {
     private var suppressActivePaneSync = false
     /// The marked pane (`select-pane -m`) — implicit source for `join-pane`.
     private(set) var markedSurfaceID: SurfaceID?
+    /// Last finished command's duration per pane (OSC 133 C→D, via the host delegate) — feeds
+    /// `#{command_duration}`. GUI vantage only; entries die with the process (never persisted).
+    private var lastCommandDurations: [SurfaceID: TimeInterval] = [:]
     /// Tabs with `synchronize-panes` on — input typed in any pane mirrors to all.
     private var synchronizedTabIDs: Set<TabID> = []
     var structureRevision = 0
@@ -578,6 +581,8 @@ final class SessionCoordinator: NSObject {
         // Same expression as the daemon's builder so `#{window_flags}` agrees between
         // GUI display-message and CLI/hook output.
         context.windowFlags = tab.map { ($0.zoomedPaneID != nil ? "Z" : "") + $0.alertFlags }
+        // GUI vantage: OSC 133 command timing arrives via the host delegate, not the snapshot.
+        context.commandDurationSeconds = activeSurfaceID.flatMap { lastCommandDurations[$0] }
         return context
     }
 
@@ -1069,7 +1074,7 @@ final class SessionCoordinator: NSObject {
                 }
             }
         }
-        return FormatContext(
+        var context = FormatContext(
             paneID: surfaceID.uuidString,
             paneTitle: owningTab?.title,
             paneCwd: owningTab?.cwd,
@@ -1081,6 +1086,8 @@ final class SessionCoordinator: NSObject {
             gitBranch: owningTab?.gitBranch,
             clientName: "Harness.app"
         )
+        context.commandDurationSeconds = lastCommandDurations[surfaceID]
+        return context
     }
 
     /// Resolve the owning tab + pane IDs for a surface, for daemon focus sync.
@@ -1369,6 +1376,13 @@ final class SessionCoordinator: NSObject {
         guard let surfaceID = activeSurfaceID,
               let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
         host.jumpToNextPrompt()
+    }
+
+    /// Select the active pane's last finished command output (OSC 133 marks; no-op without them).
+    func selectLastCommandOutput() {
+        guard let surfaceID = activeSurfaceID,
+              let host = TerminalPaneRegistryAccess.host(for: surfaceID) else { return }
+        host.selectLastCommandOutput()
     }
 
     func selectWorkspace(byIndex index: Int) {
@@ -1915,6 +1929,9 @@ extension SessionCoordinator: TerminalHostDelegate {
     }
 
     func terminalHostDidFinishCommand(duration: TimeInterval, exitCode: Int?, surfaceID: SurfaceID) {
+        // Every finished command updates `#{command_duration}` — the notification below stays
+        // gated on the event toggle + threshold.
+        lastCommandDurations[surfaceID] = duration
         guard settings.isEventEnabled(.commandFinished),
               duration >= Double(max(0, settings.commandFinishedThresholdSeconds)) else { return }
         // Only notify when this pane isn't the one being actively watched.

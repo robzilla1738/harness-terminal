@@ -129,6 +129,32 @@ enum MainMenuBuilder {
         findItem.keyEquivalentModifierMask = [.command]
         findItem.target = MenuTarget.shared
         view.submenu?.addItem(findItem)
+        view.submenu?.addItem(.separator())
+        // Prompt navigation (OSC 133 shell-integration marks) — the Terminal.app/iTerm2
+        // ⌘↑/⌘↓ convention. App-level key equivalents, so the tmux-default-empty `root`
+        // key table stays empty (users can still rebind via `bind-key -T root`).
+        let prevPrompt = NSMenuItem(
+            title: "Previous Prompt", action: #selector(MenuTarget.previousPrompt),
+            keyEquivalent: String(UnicodeScalar(UInt32(NSUpArrowFunctionKey))!)
+        )
+        prevPrompt.keyEquivalentModifierMask = [.command]
+        prevPrompt.target = MenuTarget.shared
+        view.submenu?.addItem(prevPrompt)
+        let nextPrompt = NSMenuItem(
+            title: "Next Prompt", action: #selector(MenuTarget.nextPrompt),
+            keyEquivalent: String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!)
+        )
+        nextPrompt.keyEquivalentModifierMask = [.command]
+        nextPrompt.target = MenuTarget.shared
+        view.submenu?.addItem(nextPrompt)
+        let selectLastOutput = NSMenuItem(
+            title: "Select Last Command Output",
+            action: #selector(MenuTarget.selectLastCommandOutput), keyEquivalent: "a"
+        )
+        selectLastOutput.keyEquivalentModifierMask = [.command, .shift]
+        selectLastOutput.target = MenuTarget.shared
+        view.submenu?.addItem(selectLastOutput)
+        view.submenu?.addItem(.separator())
         let sidebarItem = NSMenuItem(title: "Toggle Sidebar", action: #selector(MenuTarget.toggleSidebar), keyEquivalent: "\\")
         sidebarItem.keyEquivalentModifierMask = [.command]
         sidebarItem.target = MenuTarget.shared
@@ -362,6 +388,18 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func jumpNotification() {
         SessionCoordinator.shared.jumpToLatestNotification()
+    }
+
+    @objc func previousPrompt() {
+        SessionCoordinator.shared.jumpToPreviousPrompt()
+    }
+
+    @objc func nextPrompt() {
+        SessionCoordinator.shared.jumpToNextPrompt()
+    }
+
+    @objc func selectLastCommandOutput() {
+        SessionCoordinator.shared.selectLastCommandOutput()
     }
 
     @objc func showOnboarding() {

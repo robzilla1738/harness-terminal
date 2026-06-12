@@ -296,8 +296,14 @@ each command's exit status is recorded, which powers:
 
 - A **left-margin gutter stripe** per prompt: **green** = exit 0, **red** = non-zero, neutral =
   command still running / unknown.
-- **Jump-to-prompt** navigation: `[` / `]` in copy mode, and the live-view `jump-previous-prompt`
-  / `jump-next-prompt` commands (bind them or run from the `:` prompt).
+- **Jump-to-prompt** navigation: ⌘↑ / ⌘↓ in the GUI (View ▸ Previous/Next Prompt), `[` / `]` in
+  copy mode, and the live-view `jump-previous-prompt` / `jump-next-prompt` commands (bind them
+  or run from the `:` prompt).
+- **Select last command output**: ⇧⌘A (View ▸ Select Last Command Output) or the
+  `select-last-output` command — selects the lines between the last two prompt marks and
+  scrolls to reveal them.
+- **`#{command_duration}`**: the last finished command's runtime, as a format token for
+  `display-message`, hooks, and pane-border formats (GUI contexts).
 
 Turn it on with one command (it writes the script under the Harness home and wires a guarded,
 idempotent, backed-up `source` line into your rc):

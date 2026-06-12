@@ -409,4 +409,19 @@ final class FormatStringExtendedVariableTests: XCTestCase {
         ctx.sessionGroup = editor.snapshot.groupName(of: member)
         XCTAssertEqual(FormatString.evaluate("#{session_group}", context: ctx), "main")
     }
+
+    /// `#{command_duration}` renders the GUI-filled OSC 133 timing compactly, and empty
+    /// where no builder filled it (daemon/CLI vantage).
+    func testCommandDurationTokenFormatsCompactly() {
+        var ctx = context()
+        XCTAssertEqual(FormatString.evaluate("#{command_duration}", context: ctx), "")
+        ctx.commandDurationSeconds = 0.85
+        XCTAssertEqual(FormatString.evaluate("#{command_duration}", context: ctx), "850ms")
+        ctx.commandDurationSeconds = 12.4
+        XCTAssertEqual(FormatString.evaluate("#{command_duration}", context: ctx), "12s")
+        ctx.commandDurationSeconds = 185
+        XCTAssertEqual(FormatString.evaluate("#{command_duration}", context: ctx), "3m 5s")
+        ctx.commandDurationSeconds = 3720
+        XCTAssertEqual(FormatString.evaluate("#{command_duration}", context: ctx), "1h 2m")
+    }
 }

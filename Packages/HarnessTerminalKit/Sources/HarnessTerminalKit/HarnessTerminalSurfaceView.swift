@@ -2711,6 +2711,27 @@ public final class HarnessTerminalSurfaceView: NSView {
         scrollToBufferLine(target)
     }
 
+    /// Select the output of the most recently finished command: the lines strictly between
+    /// the last two OSC 133 prompt marks (full-width rows; the prompt rows themselves are
+    /// excluded). Scrolls to reveal the output when it's outside the viewport. No-op without
+    /// two prompt marks, or when the command printed nothing.
+    public func selectLastCommandOutput() {
+        let (prompts, historyCount) = emulatorSync { ($0.promptRows, $0.historyCount) }
+        guard prompts.count >= 2 else { return }
+        let lastPrompt = prompts[prompts.count - 1]
+        let previousPrompt = prompts[prompts.count - 2]
+        let start = previousPrompt + 1
+        let end = lastPrompt - 1
+        guard start <= end else { return } // the command printed nothing
+        selectionGranularity = .character
+        selectionRectangular = false
+        selectionAnchor = (line: start, column: 0)
+        selectionHead = (line: end, column: max(0, columns - 1))
+        let top = historyCount - scrollOffset
+        if start < top || end >= top + rows { scrollToBufferLine(start) }
+        scheduleRender()
+    }
+
     /// Set the scrollback offset so virtual buffer line `index` is the top viewport row.
     private func scrollToBufferLine(_ index: Int) {
         let historyCount = emulatorSync { $0.historyCount }

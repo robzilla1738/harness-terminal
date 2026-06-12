@@ -110,6 +110,7 @@ public enum CommandParser {
         "choose-tree", "choose-window", "clock-mode", "command-prompt", "confirm-before",
         "copy-mode", "detach", "display-menu", "display-message", "display-panes",
         "display-popup", "if-shell", "join-pane", "jump-next-prompt", "jump-previous-prompt",
+        "select-last-output",
         "kill-pane", "kill-session", "kill-window",
         "last-pane", "last-window", "link-window", "list-keys", "lock-client", "move-pane",
         "reattach-surface",
@@ -269,6 +270,7 @@ public enum CommandParser {
         case "reattach-surface": return .reattachSurface
         case "jump-previous-prompt": return .jumpToPreviousPrompt
         case "jump-next-prompt": return .jumpToNextPrompt
+        case "select-last-output": return .selectLastCommandOutput
         case "send-keys":
             // `send-keys -X <action> [arg]` dispatches a copy-mode command.
             if let xi = tokens.firstIndex(of: "-X"), xi + 1 < tokens.count {

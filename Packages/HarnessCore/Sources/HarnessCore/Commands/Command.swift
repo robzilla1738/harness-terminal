@@ -53,6 +53,7 @@ public indirect enum Command: Codable, Sendable, Equatable {
     case reattachSurface                           // re-grab a surface released to headless
     case jumpToPreviousPrompt                      // scroll to the previous OSC 133 shell prompt
     case jumpToNextPrompt                          // scroll to the next OSC 133 shell prompt
+    case selectLastCommandOutput                   // select the last finished command's output (OSC 133)
 
     // MARK: Scripting
     case sendKeys(keys: [String])
@@ -216,6 +217,7 @@ extension Command {
         case .reattachSurface: return "reattach-surface"
         case .jumpToPreviousPrompt: return "jump-previous-prompt"
         case .jumpToNextPrompt: return "jump-next-prompt"
+        case .selectLastCommandOutput: return "select-last-output"
         case let .sendKeys(keys): return "send-keys \(keys.joined(separator: " "))"
         case let .sendKeysLiteral(text): return "send-keys -l \(text)"
         case let .sendKeysHex(hex): return "send-keys -H \(hex.joined(separator: " "))"
