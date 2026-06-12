@@ -811,6 +811,49 @@ final class PerformanceBenchmarks: XCTestCase {
         ])
     }
 
+    // MARK: - Find-bar search (one keystroke = a full buffer scan)
+
+    /// `updateFind` re-runs the search over the whole buffer (history + viewport) on every
+    /// find-bar keystroke, on main, inside `emulatorSync` — so the per-cell unit derivation IS
+    /// the keystroke latency. Seeds ~20k lines of mixed scrollback and times one substring and
+    /// one regex pass.
+    func testBufferSearchKeystroke() throws {
+        try skipUnlessEnabled()
+        let term = TerminalEmulator(cols: 120, rows: 40)
+        term.maxScrollbackLines = 20_000
+        var stream = ""
+        for i in 0 ..< 20_000 {
+            stream += "[2026-06-11T10:0\(i % 10):00] worker-\(i % 17) processed batch \(i) "
+                + "status=ok latency=\(i % 250)ms █▓▒░ path=/var/data/chunk-\(i).bin\r\n"
+        }
+        term.feed(stream)
+        let lineCount = term.bufferLineCount
+
+        var substringHits = 0
+        let substringNanos = timedNanos {
+            substringHits = TerminalBufferSearch.matches(
+                query: "latency", lineCount: lineCount, line: term.bufferLine
+            ).count
+        }
+        XCTAssertGreaterThan(substringHits, 0)
+        printBenchmark("buffer_search_keystroke_substring", nanos: substringNanos, fields: [
+            ("lines", "\(lineCount)"), ("hits", "\(substringHits)"),
+        ])
+
+        var regexHits = 0
+        let regexNanos = timedNanos {
+            regexHits = TerminalBufferSearch.matches(
+                query: #"latency=\d+ms"#,
+                options: TerminalBufferSearchOptions(isRegex: true, caseSensitive: false),
+                lineCount: lineCount, line: term.bufferLine
+            ).count
+        }
+        XCTAssertGreaterThan(regexHits, 0)
+        printBenchmark("buffer_search_keystroke_regex", nanos: regexNanos, fields: [
+            ("lines", "\(lineCount)"), ("hits", "\(regexHits)"),
+        ])
+    }
+
     // MARK: - Scrollback append + replay (steady state, at the cap)
 
     func testScrollbackSteadyStateAtCap() throws {

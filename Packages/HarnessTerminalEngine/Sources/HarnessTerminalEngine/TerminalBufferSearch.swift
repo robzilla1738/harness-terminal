@@ -96,19 +96,18 @@ public enum TerminalBufferSearch {
         let needle = needleUnits.map { fold($0.precomposedStringWithCanonicalMapping) }
         guard !needle.isEmpty, lineCount > 0 else { return [] }
         var out: [TerminalBufferMatch] = []
+        // One normalized, lowercased cluster per cell, preserving column alignment. This runs
+        // over every cell of every line on each keystroke in the find bar, so the per-cell unit
+        // comes from `UnitResolver` (ASCII table + codepoint memo — no per-cell String builds)
+        // and the hay array is reused across lines instead of reallocated per line.
+        var resolver = UnitResolver(caseSensitive: caseSensitive)
+        var hay: [String] = []
         for i in 0 ..< lineCount {
             let cells = line(i)
             guard cells.count >= needle.count else { continue }
-            // One normalized, lowercased cluster per cell, preserving column alignment. NFC only
-            // matters for cells carrying combining marks; a no-mark cell is already one composed
-            // scalar, so skip the normalization cost there (this runs over every cell of every line
-            // on each keystroke in the find bar).
-            let hay: [String] = cells.map { cell in
-                if cell.width == .spacerTail || cell.codepoint == 0 { return " " }
-                return cell.combining0 == 0
-                    ? fold(cell.cluster)
-                    : fold(cell.cluster.precomposedStringWithCanonicalMapping)
-            }
+            hay.removeAll(keepingCapacity: true)
+            hay.reserveCapacity(cells.count)
+            for cell in cells { hay.append(resolver.unit(for: cell)) }
             var c = 0
             let last = hay.count - needle.count
             while c <= last {
@@ -125,6 +124,43 @@ public enum TerminalBufferSearch {
         return out
     }
 
+    /// Resolves a cell to its search unit (normalized, optionally case-folded cluster; spacer
+    /// tails and blanks become a space) without building a String per cell:
+    /// - printable ASCII (the overwhelming majority) indexes a static 128-entry table,
+    /// - other no-mark cells memoize by codepoint (box-drawing walls, CJK fills repeat heavily),
+    /// - only mark-carrying cells pay the cluster build + NFC normalization, exactly as before.
+    private struct UnitResolver {
+        let caseSensitive: Bool
+        private var memo: [UInt32: String] = [:]
+
+        init(caseSensitive: Bool) { self.caseSensitive = caseSensitive }
+
+        /// One single-character String per printable ASCII byte, exact and folded.
+        private static let asciiUnits: [String] = (0 ..< 128).map {
+            String(Unicode.Scalar(UInt8($0)))
+        }
+        private static let asciiFoldedUnits: [String] = asciiUnits.map { $0.lowercased() }
+
+        mutating func unit(for cell: TerminalGridCell) -> String {
+            if cell.width == .spacerTail || cell.codepoint == 0 { return " " }
+            if cell.combining0 == 0 {
+                if cell.codepoint < 0x80 {
+                    let i = Int(cell.codepoint)
+                    return caseSensitive ? Self.asciiUnits[i] : Self.asciiFoldedUnits[i]
+                }
+                if let cached = memo[cell.codepoint] { return cached }
+                // No combining marks → already one composed scalar; NFC would be the identity.
+                let unit = fold(cell.cluster)
+                memo[cell.codepoint] = unit
+                return unit
+            }
+            let unit = fold(cell.cluster.precomposedStringWithCanonicalMapping)
+            return unit.isEmpty ? " " : unit
+        }
+
+        private func fold(_ s: String) -> String { caseSensitive ? s : s.lowercased() }
+    }
+
     /// Regex search via `NSRegularExpression`. Each line is rendered to a string where every cell
     /// contributes exactly one non-empty unit (its cluster; spacer tails / blanks become a space),
     /// so a UTF-16 match range maps cleanly back to a half-open *column* range. Matches are
@@ -135,26 +171,24 @@ public enum TerminalBufferSearch {
         if !caseSensitive { regexOptions.insert(.caseInsensitive) }
         guard let regex = try? NSRegularExpression(pattern: pattern, options: regexOptions) else { return [] }
         var out: [TerminalBufferMatch] = []
+        // Case folding is handled by the regex's `.caseInsensitive` option, so the resolver runs
+        // case-sensitive (exact units). Reused across lines: the resolver's memo, and the
+        // cellStarts buffer.
+        var resolver = UnitResolver(caseSensitive: true)
+        var cellStarts: [String.Index] = []
         for i in 0 ..< lineCount {
             let cells = line(i)
             guard !cells.isEmpty else { continue }
             // Build the line text and remember where each cell starts, so a character range maps back
             // to columns. Units are NFC-normalized (only when a cell carries combining marks) so the
-            // pattern sees the same composed form the substring path does; case folding is handled by
-            // the regex's `.caseInsensitive` option rather than here.
+            // pattern sees the same composed form the substring path does.
             var hay = ""
-            var cellStarts: [String.Index] = []
+            hay.reserveCapacity(cells.count)
+            cellStarts.removeAll(keepingCapacity: true)
             cellStarts.reserveCapacity(cells.count)
             for cell in cells {
                 cellStarts.append(hay.endIndex)
-                let unit: String
-                if cell.width == .spacerTail || cell.codepoint == 0 {
-                    unit = " "
-                } else {
-                    let cluster = cell.combining0 == 0 ? cell.cluster : cell.cluster.precomposedStringWithCanonicalMapping
-                    unit = cluster.isEmpty ? " " : cluster
-                }
-                hay += unit
+                hay += resolver.unit(for: cell)
             }
             let fullRange = NSRange(hay.startIndex ..< hay.endIndex, in: hay)
             regex.enumerateMatches(in: hay, options: [], range: fullRange) { result, _, _ in
