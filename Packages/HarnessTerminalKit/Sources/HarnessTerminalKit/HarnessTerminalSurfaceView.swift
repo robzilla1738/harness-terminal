@@ -454,10 +454,14 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// transitions never double-report the same state.
     private var lastReportedFocus: Bool?
     private var effectivelyFocused: Bool { focused && windowIsKey }
-    /// Mouse selection endpoints (anchor = where the drag started, head = current). A
-    /// `SelectionRegion` is derived from these (expanded by granularity) for highlight + extraction.
-    private var selectionAnchor: (row: Int, column: Int)?
-    private var selectionHead: (row: Int, column: Int)?
+    /// Mouse selection endpoints (anchor = where the drag started, head = current), in ABSOLUTE
+    /// buffer coordinates: `line` is the virtual buffer line (copy mode's space — history first,
+    /// then viewport; viewport row 0 = `historyCount - scrollOffset`). Content-anchored, not
+    /// viewport-anchored, so the selection survives scrolling and new output (#161). A
+    /// `SelectionRegion` is derived (expanded by granularity, rebased to viewport rows) for
+    /// highlight + extraction.
+    private var selectionAnchor: (line: Int, column: Int)?
+    private var selectionHead: (line: Int, column: Int)?
     /// Selection unit set by click count: 1 = character, 2 = word, 3 = line. A drag extends by
     /// the unit; word/line ranges reuse copy-mode's word definition.
     private enum SelectionGranularity { case character, word, line }
@@ -885,16 +889,22 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
     // Scroll-reuse seams: drive a synchronous build+present and a scrollback scroll headlessly.
     func testingForceRender() { scheduler.forceRender() }
-    /// Programmatic selection for the cell-overlay tests (a mouse drag's end state).
+    /// Programmatic selection for the cell-overlay tests (a mouse drag's end state). Takes
+    /// VIEWPORT rows like a real drag and converts to the absolute buffer anchors `mouseDown`
+    /// would store.
     func testingSetSelection(
         anchor: (row: Int, column: Int)?, head: (row: Int, column: Int)?, rectangular: Bool = false
     ) {
-        selectionAnchor = anchor
-        selectionHead = head
+        let top = viewportTopBufferLine
+        selectionAnchor = anchor.map { (line: top + $0.row, column: $0.column) }
+        selectionHead = head.map { (line: top + $0.row, column: $0.column) }
         selectionRectangular = rectangular
         selectionGranularity = .character
         scheduleRender()
     }
+    /// The active selection's extracted text (nil when nothing is selected) — the #161 seam:
+    /// content-anchored selections must extract the same text before and after scrolling.
+    func testingSelectionText() -> String? { selectionTextIfAny() }
     func testingSetSelectionColors(
         background: HarnessTheme.RGBColor?, foreground: HarnessTheme.RGBColor?
     ) {
@@ -2462,7 +2472,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         // Only on the off-main pipeline (the emulator lives on its serial queue; when the flag is
         // off it is main-confined and the async hop below would touch it off its confinement domain).
         guard offMainParserFramePipelineEnabled else { return }
-        guard scrollOffset == 0, copyMode == nil, currentSelectionRegion == nil,
+        guard scrollOffset == 0, copyMode == nil, selectionAnchor == nil,
               markedText.isEmpty, !findActive else { return }
         let config = frameBuildConfiguration
         let bg = canvasBackground
@@ -2652,7 +2662,8 @@ public final class HarnessTerminalSurfaceView: NSView {
         let offsetChanged = newOffset != scrollOffset
         scrollOffset = newOffset
         scrollFraction = newFraction
-        clearSelection()
+        // Selection is content-anchored (absolute buffer lines) — scrolling moves the viewport
+        // over it, never clears it (#161).
         notifyScrollChanged(historyCount: historyCount)
         if offsetChanged {
             scheduleRender()
@@ -2707,7 +2718,6 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard target != scrollOffset || scrollFraction != 0 else { return }
         scrollOffset = target
         scrollFraction = 0 // prompt jumps anchor on a whole line
-        clearSelection()
         notifyScrollChanged(historyCount: historyCount)
         scheduleRender()
     }
@@ -2721,90 +2731,96 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// output feed on every build while the word selection is held (the stall the off-main pipeline
     /// exists to avoid). `Sendable` so the `@Sendable` build closure can capture it.
     private struct RawSelection: Sendable {
-        let anchorRow: Int, anchorColumn: Int
-        let headRow: Int, headColumn: Int
+        let anchorLine: Int, anchorColumn: Int
+        let headLine: Int, headColumn: Int
         let granularity: SelectionGranularity
         let rectangular: Bool
     }
 
     private var currentRawSelection: RawSelection? {
         guard let a = selectionAnchor, let h = selectionHead else { return nil }
-        return RawSelection(anchorRow: a.row, anchorColumn: a.column,
-                            headRow: h.row, headColumn: h.column,
+        return RawSelection(anchorLine: a.line, anchorColumn: a.column,
+                            headLine: h.line, headColumn: h.column,
                             granularity: selectionGranularity, rectangular: selectionRectangular)
     }
 
-    /// Resolve a raw selection into a render region. PURE — call it ON the emulator queue (inside
-    /// the build) so the `.word` expansion reads `wordColumnRange` directly instead of through a
-    /// main-stalling `emulatorSync`. Mirrors `currentSelectionRegion`'s expansion exactly.
+    /// Buffer line index of viewport row 0 — the rebase term between the absolute selection
+    /// coordinates and viewport rows. Mirror read on the off-main pipeline (same discipline as
+    /// `scrollByContinuous`): mouse handlers must never `queue.sync` behind a busy parse.
+    private var viewportTopBufferLine: Int {
+        (offMainParserFramePipelineEnabled ? historyCountMirror : emulatorState.emulator.historyCount)
+            - scrollOffset
+    }
+
+    /// Resolve a raw selection into a render region in VIEWPORT rows. PURE — call it ON the
+    /// emulator queue (inside the build) so the `.word` expansion reads `wordColumnRange`
+    /// directly instead of through a main-stalling `emulatorSync`. Anchors are absolute buffer
+    /// lines; rows that rebase outside the viewport simply don't shade (the overlay pass
+    /// ignores out-of-range rows), so a partially scrolled-away selection renders its visible
+    /// band and nothing else.
     private nonisolated static func resolveSelectionRegion(_ sel: RawSelection?, emulator: TerminalEmulator,
                                                            scrollOffset: Int, columns: Int) -> SelectionRegion? {
         guard let sel else { return nil }
+        guard let absolute = resolveAbsoluteSelectionRegion(sel, emulator: emulator, columns: columns) else {
+            return nil
+        }
+        let top = emulator.historyCount - scrollOffset
+        switch absolute {
+        case let .linear(s):
+            return .linear(TerminalSelection((s.startRow - top, s.startColumn),
+                                             (s.endRow - top, s.endColumn)))
+        case let .block(b):
+            return .block(BlockSelection((b.startRow - top, b.startColumn),
+                                         (b.endRow - top, b.endColumn)))
+        }
+    }
+
+    /// The selection region in ABSOLUTE buffer-line space: endpoints ordered, granularity
+    /// expansion applied, lines clamped to the retained buffer (a clamped endpoint after
+    /// scrollback eviction selects the oldest retained line — copy mode's convention). Shared
+    /// by rendering (rebased to viewport rows above) and extraction (read via `bufferLine`).
+    private nonisolated static func resolveAbsoluteSelectionRegion(
+        _ sel: RawSelection, emulator: TerminalEmulator, columns: Int
+    ) -> SelectionRegion? {
+        let maxLine = max(0, emulator.bufferLineCount - 1)
+        let a = (line: min(max(0, sel.anchorLine), maxLine), column: sel.anchorColumn)
+        let h = (line: min(max(0, sel.headLine), maxLine), column: sel.headColumn)
         if sel.rectangular {
-            return .block(BlockSelection((sel.anchorRow, sel.anchorColumn), (sel.headRow, sel.headColumn)))
+            return .block(BlockSelection((a.line, a.column), (h.line, h.column)))
         }
         if sel.granularity == .character {
-            return .linear(TerminalSelection((sel.anchorRow, sel.anchorColumn), (sel.headRow, sel.headColumn)))
+            return .linear(TerminalSelection((a.line, a.column), (h.line, h.column)))
         }
-        func unitRange(row: Int, column: Int) -> ClosedRange<Int> {
+        // Per-line column extent: the whole row for `.line` (triple-click's LOGICAL-line span
+        // across soft wraps is handled at mouse-down by anchoring across the wrapped lines —
+        // see `logicalLineBufferRowSpan`), the whitespace-delimited word for `.word` (shared
+        // with copy mode), else the single column.
+        func unitRange(line: Int, column: Int) -> ClosedRange<Int> {
             switch sel.granularity {
             case .character: return column ... column
             case .line: return 0 ... max(0, columns - 1)
-            case .word:
-                let virtualLine = emulator.historyCount - scrollOffset + row
-                return emulator.wordColumnRange(line: virtualLine, column: column)
+            case .word: return emulator.wordColumnRange(line: line, column: column)
             }
         }
-        let lo: (row: Int, column: Int), hi: (row: Int, column: Int)
-        if (sel.anchorRow, sel.anchorColumn) <= (sel.headRow, sel.headColumn) {
-            lo = (sel.anchorRow, sel.anchorColumn); hi = (sel.headRow, sel.headColumn)
-        } else {
-            lo = (sel.headRow, sel.headColumn); hi = (sel.anchorRow, sel.anchorColumn)
+        let lo: (line: Int, column: Int), hi: (line: Int, column: Int)
+        if (a.line, a.column) <= (h.line, h.column) { lo = a; hi = h } else { lo = h; hi = a }
+        let loRange = unitRange(line: lo.line, column: lo.column)
+        let hiRange = unitRange(line: hi.line, column: hi.column)
+        if lo.line == hi.line {
+            return .linear(TerminalSelection((lo.line, min(loRange.lowerBound, hiRange.lowerBound)),
+                                             (lo.line, max(loRange.upperBound, hiRange.upperBound))))
         }
-        let loRange = unitRange(row: lo.row, column: lo.column)
-        let hiRange = unitRange(row: hi.row, column: hi.column)
-        if lo.row == hi.row {
-            return .linear(TerminalSelection((lo.row, min(loRange.lowerBound, hiRange.lowerBound)),
-                                             (lo.row, max(loRange.upperBound, hiRange.upperBound))))
-        }
-        return .linear(TerminalSelection((lo.row, loRange.lowerBound), (hi.row, hiRange.upperBound)))
+        return .linear(TerminalSelection((lo.line, loRange.lowerBound), (hi.line, hiRange.upperBound)))
     }
 
-    /// The active selection region (nil when nothing is selected): rectangular for an Option-drag,
-    /// else linear with the endpoints expanded by the current granularity (word / line).
+    /// The active selection region in viewport rows (nil when nothing is selected), resolved
+    /// through the same pure resolver as the off-main build. Only the legacy (main-confined)
+    /// render path and copy actions read this; guards that just need "is something selected"
+    /// must check `selectionAnchor` instead — this getter can `emulatorSync`.
     private var currentSelectionRegion: SelectionRegion? {
-        guard let a = selectionAnchor, let h = selectionHead else { return nil }
-        if selectionRectangular { return .block(BlockSelection((a.row, a.column), (h.row, h.column))) }
-        guard selectionGranularity != .character else {
-            return .linear(TerminalSelection((a.row, a.column), (h.row, h.column)))
-        }
-        // Order the endpoints, then expand the lower one to the start of its unit and the higher
-        // one to the end of its unit (unioning when both are on the same row).
-        let (lo, hi) = (a.row, a.column) <= (h.row, h.column) ? (a, h) : (h, a)
-        let loRange = unitColumnRange(viewportRow: lo.row, column: lo.column)
-        let hiRange = unitColumnRange(viewportRow: hi.row, column: hi.column)
-        if lo.row == hi.row {
-            return .linear(TerminalSelection((lo.row, min(loRange.lowerBound, hiRange.lowerBound)),
-                                             (lo.row, max(loRange.upperBound, hiRange.upperBound))))
-        }
-        return .linear(TerminalSelection((lo.row, loRange.lowerBound), (hi.row, hiRange.upperBound)))
-    }
-
-    /// Columns spanned by the current granularity at a viewport cell: the whole row for `.line`,
-    /// the whitespace-delimited word for `.word` (shared with copy mode), else the single column.
-    private func unitColumnRange(viewportRow row: Int, column: Int) -> ClosedRange<Int> {
-        switch selectionGranularity {
-        case .character: return column ... column
-        // Per-row column extent for `.line` granularity is the full display row. Triple-click's
-        // LOGICAL-line span (across soft wraps, Ghostty/iTerm2/kitty) is handled at mouse-down by
-        // anchoring the selection across the wrapped viewport rows (see `logicalLineViewportRowSpan`);
-        // the multi-row linear region then fills each row to full width here.
-        case .line: return 0 ... max(0, columns - 1)
-        case .word:
-            return emulatorSync { emu in
-                let virtualLine = emu.historyCount - scrollOffset + row
-                return emu.wordColumnRange(line: virtualLine, column: column)
-            }
+        guard let raw = currentRawSelection else { return nil }
+        return emulatorSync {
+            Self.resolveSelectionRegion(raw, emulator: $0, scrollOffset: scrollOffset, columns: columns)
         }
     }
 
@@ -2908,28 +2924,26 @@ public final class HarnessTerminalSurfaceView: NSView {
         selectionRectangular = event.modifierFlags.contains(.option)
         if event.clickCount >= 3, !selectionRectangular {
             // Triple-click selects the whole LOGICAL line across soft wraps (Ghostty/iTerm2/kitty),
-            // not just the display row. Span the wrapped viewport rows; `.line` granularity then
-            // fills each to full width and the multi-row linear region covers the logical line.
-            let span = logicalLineViewportRowSpan(at: pos.row)
-            selectionAnchor = (row: span.lowerBound, column: 0)
-            selectionHead = (row: span.upperBound, column: max(0, columns - 1))
+            // not just the display row. Anchor across the wrapped buffer lines; `.line` granularity
+            // then fills each to full width and the multi-row linear region covers the logical line.
+            let span = logicalLineBufferRowSpan(at: pos.row)
+            selectionAnchor = (line: span.lowerBound, column: 0)
+            selectionHead = (line: span.upperBound, column: max(0, columns - 1))
         } else {
-            selectionAnchor = pos
-            selectionHead = pos
+            let line = viewportTopBufferLine + pos.row
+            selectionAnchor = (line: line, column: pos.column)
+            selectionHead = (line: line, column: pos.column)
         }
         scheduleRender()
     }
 
-    /// The viewport-row span of the logical (soft-wrapped) line at viewport `row`, clamped to the
-    /// visible viewport — the rows a triple-click selects. Maps the viewport row into virtual-line
-    /// space (history + scroll offset), asks the emulator for the wrapped-line span, and maps back.
-    private func logicalLineViewportRowSpan(at row: Int) -> ClosedRange<Int> {
+    /// The buffer-line span of the logical (soft-wrapped) line at viewport `row` — the lines a
+    /// triple-click selects. Absolute (content-anchored), and no longer clamped to the viewport:
+    /// the off-screen tail of a wrapped line is part of the selection too.
+    private func logicalLineBufferRowSpan(at row: Int) -> ClosedRange<Int> {
         emulatorSync { emu in
-            let base = emu.historyCount - scrollOffset // virtual-line index of viewport row 0
-            let span = emu.logicalLineRowSpan(virtualLine: base + row)
-            let first = max(0, span.lowerBound - base)
-            let last = min(rows - 1, span.upperBound - base)
-            return first ... Swift.max(first, last)
+            let base = emu.historyCount - scrollOffset // buffer-line index of viewport row 0
+            return emu.logicalLineRowSpan(virtualLine: base + row)
         }
     }
 
@@ -2983,7 +2997,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
         guard selectionAnchor != nil, let pos = cell(at: event.locationInWindow) else { return }
-        selectionHead = pos
+        selectionHead = (line: viewportTopBufferLine + pos.row, column: pos.column)
         scheduleRender()
     }
 
@@ -3516,8 +3530,9 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard rows > 0, columns > 0 else { return }
         selectionGranularity = .character
         selectionRectangular = false
-        selectionAnchor = (row: 0, column: 0)
-        selectionHead = (row: rows - 1, column: columns - 1)
+        let top = viewportTopBufferLine
+        selectionAnchor = (line: top, column: 0)
+        selectionHead = (line: top + rows - 1, column: columns - 1)
         scheduleRender()
     }
 
@@ -3548,46 +3563,53 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     /// The current selection's text, or nil when there is no selection (or it's empty).
+    /// Extracted in ABSOLUTE buffer-line space via `bufferLine` — after scrolling (or new
+    /// output) the selection can extend beyond the current viewport, where the old
+    /// viewport-snapshot read would have come back blank (#161).
     private func selectionTextIfAny() -> String? {
-        guard let region = currentSelectionRegion else { return nil }
+        guard let raw = currentRawSelection else { return nil }
         let text = emulatorSync { emu -> String in
-            let snapshot = scrollOffset > 0 ? emu.readGrid(scrollbackOffset: scrollOffset) : emu.readGrid()
+            guard let region = Self.resolveAbsoluteSelectionRegion(raw, emulator: emu, columns: columns)
+            else { return "" }
             switch region {
-            case let .linear(sel): return selectedText(sel, snapshot)
-            case let .block(blk): return blockSelectedText(blk, snapshot)
+            case let .linear(sel): return Self.selectedText(sel, emulator: emu)
+            case let .block(blk): return Self.blockSelectedText(blk, emulator: emu)
             }
         }
         return text.isEmpty ? nil : text
     }
 
-    /// Extract the selected text from the grid: per row, the in-range columns, skipping the
-    /// trailing spacer of wide chars, with trailing whitespace trimmed and rows joined by \n.
-    private func selectedText(_ sel: TerminalSelection, _ snapshot: TerminalGridSnapshot) -> String {
+    /// Extract the selected text (region rows = absolute buffer lines): per line, the in-range
+    /// columns, skipping the trailing spacer of wide chars, trailing whitespace trimmed, rows
+    /// joined by \n.
+    private nonisolated static func selectedText(_ sel: TerminalSelection, emulator: TerminalEmulator) -> String {
         var lines: [String] = []
         for row in sel.startRow ... sel.endRow {
+            let cells = emulator.bufferLine(row)
             let startCol = (row == sel.startRow) ? sel.startColumn : 0
-            let endCol = (row == sel.endRow) ? sel.endColumn : snapshot.cols - 1
-            lines.append(rowText(row: row, startCol: startCol, endCol: endCol, snapshot: snapshot))
+            let endCol = (row == sel.endRow) ? sel.endColumn : cells.count - 1
+            lines.append(rowText(cells: cells, startCol: startCol, endCol: endCol))
         }
         return lines.joined(separator: "\n")
     }
 
-    /// Extract a rectangular (block) selection: the same column span on every row, rows joined by \n.
-    private func blockSelectedText(_ blk: BlockSelection, _ snapshot: TerminalGridSnapshot) -> String {
+    /// Extract a rectangular (block) selection: the same column span on every line, joined by \n.
+    private nonisolated static func blockSelectedText(_ blk: BlockSelection, emulator: TerminalEmulator) -> String {
         (blk.startRow ... blk.endRow)
-            .map { rowText(row: $0, startCol: blk.startColumn, endCol: blk.endColumn, snapshot: snapshot) }
+            .map { rowText(cells: emulator.bufferLine($0), startCol: blk.startColumn, endCol: blk.endColumn) }
             .joined(separator: "\n")
     }
 
-    /// One row's text over `[startCol, endCol]`: drop wide-char spacer tails, blanks → space,
-    /// trailing whitespace trimmed.
-    private func rowText(row: Int, startCol: Int, endCol: Int, snapshot: TerminalGridSnapshot) -> String {
+    /// One buffer line's text over `[startCol, endCol]` (clamped to the line): drop wide-char
+    /// spacer tails, blanks → space, trailing whitespace trimmed.
+    private nonisolated static func rowText(cells: [TerminalGridCell], startCol: Int, endCol: Int) -> String {
         var line = ""
-        var col = startCol
-        while col <= endCol {
-            let cell = snapshot.cell(row: row, col: col)
-            if cell?.width == .spacerTail { col += 1; continue }
-            if let cell, cell.codepoint != 0 {
+        var col = max(0, startCol)
+        let last = min(endCol, cells.count - 1)
+        while col <= last {
+            let cell = cells[col]
+            if cell.width == .spacerTail { col += 1; continue }
+            if cell.codepoint != 0 {
                 line += cell.cluster // base + combining marks
             } else {
                 line += " "
@@ -3801,7 +3823,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "c", "x":
                 // Copy/cut the selection; with no selection, let the app handle ⌘C/⌘X.
-                if currentSelectionRegion != nil { copySelection(); return }
+                // Anchor check, not the region getter — the getter can `emulatorSync`.
+                if selectionAnchor != nil { copySelection(); return }
                 super.keyDown(with: event)
                 return
             case "v":

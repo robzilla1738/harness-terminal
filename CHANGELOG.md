@@ -18,6 +18,13 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
   and command-finished reports stay quiet on replay too, instead of re-firing on every
   reopen. A query split across the replay→live boundary (a program actively waiting while
   you attach) still gets its answer.
+- **Selections survive scrolling.** (#161) Selecting text and then scrolling — even a grazing
+  trackpad flick — cleared the selection. Selections are now anchored to the content
+  (absolute buffer lines, the same space copy mode uses) instead of the viewport: the
+  highlight rides the text as you scroll or as new output pushes it into history, ⌘C copies
+  the selected lines even after they've scrolled out of view, and a triple-click's logical
+  line keeps its off-screen wrapped tail. Typing, pasting, and resizing still clear the
+  selection, as before.
 
 ## [1.11.0] - 2026-06-11
 
