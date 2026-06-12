@@ -353,6 +353,26 @@ It deep-merges into the agent's own config (e.g. `~/.claude/settings.json`), bac
 — never clobbering. Agents without a hook mechanism (aider, gemini, goose, opencode) are detected
 automatically and notify via Harness's activity path, so there's nothing to install for them.
 
+### Output triggers
+
+Watch terminal output for patterns and react — highlight the match in the scrollback or post a
+notification. Configure under `"triggers"` in `settings.json` (saved changes apply live):
+
+```json
+"triggers": [
+  {"pattern": "ERROR", "action": "highlight"},
+  {"pattern": "Tests? failed", "match": "regex", "action": "notify"}
+]
+```
+
+- `match`: `literal` (default) or `regex`; `action`: `highlight` (default) or `notify`;
+  `enabled: false` parks a rule without deleting it.
+- Lines are scanned as they **complete** (the cursor moves past them) — never mid-write, never
+  on the alternate screen (full-screen TUIs), and never from replayed history on reopen.
+- `notify` has a 10s per-rule cooldown so repeating output can't storm notifications.
+- Bounded by design: at most 32 rules, and scanning is rate-budgeted (~2% of the output
+  pipeline) — a flood degrades to sampling recent lines instead of slowing the terminal.
+
 ---
 
 ## 14. macOS shortcuts (no prefix)

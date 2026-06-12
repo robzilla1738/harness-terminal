@@ -334,6 +334,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var windowInheritCWD: Bool
     /// Per-host/per-command theme profiles (see `ProfileRule`). Empty = no profile matching.
     public var profiles: [ProfileRule]
+    /// Output triggers: patterns matched against each line as it completes, firing
+    /// highlight/notify actions (see `TriggerRule`). Empty = scanning fully disabled.
+    public var triggers: [TriggerRule]
 
     /// Whether the *umbrella* Harness controls are on (prefix or status line). Kept for onboarding
     /// copy and tests; the prefix and status line each resolve independently via the effective
@@ -441,7 +444,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         boldIsBright: Bool = true,
         secureKeyboardEntry: Bool = false,
         windowInheritCWD: Bool = true,
-        profiles: [ProfileRule] = []
+        profiles: [ProfileRule] = [],
+        triggers: [TriggerRule] = []
     ) {
         self.fontSize = HarnessSettings.clampedFontSize(fontSize)
         self.fontFamily = fontFamily
@@ -514,6 +518,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.secureKeyboardEntry = secureKeyboardEntry
         self.windowInheritCWD = windowInheritCWD
         self.profiles = profiles
+        self.triggers = triggers
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -796,6 +801,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowInheritCWD = try fields.decode(.windowInheritCWD, \.windowInheritCWD)
         // Absent in older files → no profiles. Per-rule decode is tolerant (ProfileRule).
         profiles = try container.decodeIfPresent([ProfileRule].self, forKey: .profiles) ?? []
+        // Absent in older files → no triggers. Per-rule decode is tolerant (TriggerRule), so a
+        // malformed hand-edited rule degrades to defaults instead of corrupt-backing-up the file.
+        triggers = try container.decodeIfPresent([TriggerRule].self, forKey: .triggers) ?? []
     }
 
     /// Thread-unsafe scratch slot used exclusively within `load()` to pass the already-computed

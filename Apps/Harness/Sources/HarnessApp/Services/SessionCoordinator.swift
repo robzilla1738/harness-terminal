@@ -2031,6 +2031,16 @@ extension SessionCoordinator: TerminalHostDelegate {
         handleNotification(for: surfaceID, event: .agentWaiting, title: title, body: body)
     }
 
+    /// A `notify`-action output trigger matched (the surface already applied the per-rule
+    /// cooldown). Routes through the same notification path as a program's OSC 9 — the rule
+    /// itself is the opt-in, so there is no separate per-event toggle to trip over.
+    func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID) {
+        handleNotification(
+            for: surfaceID, event: .agentWaiting,
+            title: "Trigger: \(rule.pattern)", body: lineText
+        )
+    }
+
     func terminalHostDidClose(surfaceID: SurfaceID) {
         terminalHosts.removeHost(for: surfaceID)
         SurfaceProgressTracker.shared.forget(surfaceID)

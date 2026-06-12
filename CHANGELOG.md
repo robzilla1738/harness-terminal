@@ -9,6 +9,13 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
+- **Output triggers.** Watch terminal output for patterns and react: `highlight` shades the
+  match in the scrollback, `notify` posts a notification (10s per-rule cooldown). Configured
+  as a `"triggers"` array in settings.json — literal or regex patterns, applied live on save.
+  Lines are scanned as they complete; never mid-write, never on the alternate screen, never
+  from replayed history. Bounded by design: 32 rules max and a ~2% rate budget on the output
+  pipeline, so even a full-speed flood with the maximum rule set costs single-digit percent
+  (measured: 122% unbudgeted → 2–11%).
 - **Per-host and per-command theme profiles.** A pane re-themes itself while it's somewhere
   dangerous — `{"host": "*.prod.example.com", "theme": "Red Alert"}` under `"profiles"` in
   settings.json turns the canvas red over ssh to production, and reverts when you exit.

@@ -578,6 +578,47 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var findMatches: [TerminalBufferMatch] = []
     /// Index of the "current" match within `findMatches` (the one we scrolled to).
     private var findCurrentIndex = 0
+
+    // MARK: - Output triggers
+    //
+    // Patterns matched against each line as it COMPLETES (the cursor moved past it) —
+    // `highlight` spans ride the find-highlight overlay machinery; `notify` surfaces via
+    // `onTriggerMatched` with a per-rule cooldown. Scanning runs on the emulator's
+    // confinement domain right after a feed, budgeted per batch, and costs nothing when no
+    // rules are configured (`triggerScanner == nil` is the only check on the output path).
+
+    /// Compiled rules; nil = scanning disabled. Set on main; immutable, so capturing it
+    /// into the emulator-queue feed path is safe.
+    private var triggerScanner: TriggerScanner?
+    /// Scan bookkeeping confined to the emulator's domain (the serial queue when off-main,
+    /// main otherwise — the same confinement the emulator itself has): the buffer line up to
+    /// which lines were already scanned, and per-rule notify cooldown stamps.
+    private final class TriggerScanState: @unchecked Sendable {
+        var nextLine = 0
+        var lastNotifyNanos: [Int: UInt64] = [:]
+        /// Rate-budget bookkeeping: emulator-queue time spent scanning in the current window.
+        var windowStartNanos: UInt64 = 0
+        var spentNanos: UInt64 = 0
+    }
+    private let triggerScanState = TriggerScanState()
+    /// Highlight matches (absolute buffer lines, find-match shape) — main-thread render
+    /// state merged into the find highlights at build. Bounded FIFO.
+    private var triggerHighlightMatches: [TerminalBufferMatch] = []
+    private static let maxTriggerHighlights = 512
+    /// A `notify` rule matched (rule + the matched line's text). Fired on main, cooled down
+    /// per rule (`triggerNotifyCooldownNanos`) so repeating output can't storm notifications.
+    public var onTriggerMatched: ((TriggerRule, String) -> Void)?
+    private nonisolated static let triggerNotifyCooldownNanos: UInt64 = 10_000_000_000
+    /// At most this many of the NEWEST completed lines scan per output batch — a flood skips
+    /// the backlog (triggers watch recent output; an unbounded scan would tax the drain path).
+    private nonisolated static let triggerScanBatchLimit = 256
+    /// Rate budget: scanning may consume at most this much of each window of emulator-queue
+    /// time (~2%). Typical use never hits it; a sustained flood degrades to SAMPLING recent
+    /// lines (the high-water keeps advancing past skipped output) instead of collapsing the
+    /// drain rate — per-line scan cost is ~10µs, so unbudgeted scanning of a 500k-line/s
+    /// flood would saturate the queue.
+    private nonisolated static let triggerScanWindowNanos: UInt64 = 100_000_000
+    private nonisolated static let triggerScanBudgetNanos: UInt64 = 2_000_000
     /// Reports `(current, total)` to the host so the find bar can show "n of m" (0,0 = none).
     public var onFindResultsChanged: ((_ current: Int, _ total: Int) -> Void)?
 
@@ -685,6 +726,15 @@ public final class HarnessTerminalSurfaceView: NSView {
         if replay { emulatorState.emulator.isReplaying = true }
         emulatorState.emulator.feed(data)
         if replay { emulatorState.emulator.isReplaying = false }
+        // Trigger scan on the just-completed lines (emulator is main-confined here). On replay
+        // the scan only advances its high-water (no notifications/highlights for restored output).
+        if let scanner = triggerScanner {
+            let results = Self.scanTriggers(
+                emulator: emulatorState.emulator, scanner: scanner,
+                state: triggerScanState, replay: replay
+            )
+            consumeTriggerResults(results, scanner: scanner)
+        }
         // If the user is scrolled up, stay anchored on the same content as new lines push
         // into history; at the bottom (offset 0) we naturally follow new output.
         if scrollOffset > 0 {
@@ -711,6 +761,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func receiveOffMain(_ data: Data, replay: Bool = false) {
+        // Captured on main at enqueue (immutable class) — the queue must not read the var.
+        let scanner = triggerScanner
+        let scanState = triggerScanState
         emulatorState.async { [weak self] emulator in
             guard let self else { return }
             let beforeHistory = emulator.historyCount
@@ -718,6 +771,19 @@ public final class HarnessTerminalSurfaceView: NSView {
             FrameSignposter.shared.interval("parse") { emulator.feed(data) }
             if replay { emulator.isReplaying = false }
             let afterHistory = emulator.historyCount
+            // Trigger scan on the just-completed lines, here on the emulator queue — results
+            // hop to main only when something matched (rare), never per chunk. On replay the
+            // scan only advances its high-water (no notifications/highlights for restored output).
+            if let scanner {
+                let results = Self.scanTriggers(
+                    emulator: emulator, scanner: scanner, state: scanState, replay: replay
+                )
+                if !results.highlights.isEmpty || !results.notifications.isEmpty {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.consumeTriggerResults(results, scanner: scanner)
+                    }
+                }
+            }
             // Coalesce the main hop: under a flood, per-chunk main.async was tens of thousands
             // of dispatches/sec of pure scheduling tax on the main thread. Each chunk merges its
             // post-parse state into the staged hop; only the chunk that finds no hop in flight
@@ -1920,9 +1986,14 @@ public final class HarnessTerminalSurfaceView: NSView {
         // selection, and IME preedit all rebuild every row (they aren't tracked by damage), so
         // they take the full path and reset the reuse cache.
         let damage = emulator.consumeDamage()
-        let findHits = findActive
+        // Trigger highlights ride the find-highlight machinery (same shape, same shading);
+        // both filter to the viewport, so `findHits.isEmpty` — and with it the plain fast
+        // path — still holds whenever neither is on screen.
+        let findHits = (findActive
             ? Self.viewportFindHighlights(findMatches, scrollOffset: scrollOffset, historyCount: emulator.historyCount, rows: rows)
-            : []
+            : [])
+            + Self.viewportFindHighlights(triggerHighlightMatches, scrollOffset: scrollOffset,
+                                          historyCount: emulator.historyCount, rows: rows)
         let selectionRegion = currentSelectionRegion
         let plain = scrollOffset == 0 && selectionRegion == nil && markedText.isEmpty && findHits.isEmpty
         // DECSCNM: a flip arrives with full-screen damage (the engine dirties on real change),
@@ -2037,6 +2108,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let opacity = canvasOpacity
         let findIsActive = findActive
         let findMatchesSnapshot = findMatches
+        let triggerMatchesSnapshot = triggerHighlightMatches
 
         // The frame build, identical for the async (coalesced) and synchronous (forced) paths. Pure
         // over the captured value snapshot + the emulator; the only mutation is `state`'s plain-frame
@@ -2108,9 +2180,11 @@ public final class HarnessTerminalSurfaceView: NSView {
                         : emulator.readGrid()
                     return (grid, emulator.consumeDamage())
                 }
-                let findHits = findIsActive
+                let findHits = (findIsActive
                     ? Self.viewportFindHighlights(findMatchesSnapshot, scrollOffset: requestedScrollOffset, historyCount: emulator.historyCount, rows: viewRows)
-                    : []
+                    : [])
+                    + Self.viewportFindHighlights(triggerMatchesSnapshot, scrollOffset: requestedScrollOffset,
+                                                  historyCount: emulator.historyCount, rows: viewRows)
                 // Resolve the selection HERE, on the emulator queue: a `.word` selection reads
                 // `wordColumnRange` directly (free) instead of stalling main via `emulatorSync`, and
                 // it resolves against the same emulator state this frame renders.
@@ -2739,6 +2813,96 @@ public final class HarnessTerminalSurfaceView: NSView {
         let top = historyCount - scrollOffset
         if start < top || end >= top + rows { scrollToBufferLine(start) }
         scheduleRender()
+    }
+
+    // MARK: - Output trigger scanning
+
+    /// Apply trigger rules (from settings; reload-on-save re-pushes). Existing highlights are
+    /// kept (they describe past output); the scan high-water stays put so rule changes apply
+    /// to new output without rescanning history.
+    public func applyTriggerRules(_ rules: [TriggerRule]) {
+        triggerScanner = TriggerScanner(rules: rules)
+    }
+
+    func testingTriggerHighlightMatches() -> [TerminalBufferMatch] { triggerHighlightMatches }
+
+    /// Scan the lines completed since the last batch (the cursor moved past them). Runs on
+    /// the emulator's confinement domain right after `feed`. Replay batches never scan — a
+    /// reopen must not re-fire notifications for historical output (#168's lesson) — but they
+    /// advance the high-water so the restored content isn't backfilled later. Alt-screen
+    /// content is skipped the same way (full-screen TUIs redraw in place; no stable lines).
+    private nonisolated static func scanTriggers(
+        emulator: TerminalEmulator, scanner: TriggerScanner, state: TriggerScanState,
+        replay: Bool, now: UInt64 = DispatchTime.now().uptimeNanoseconds
+    ) -> (highlights: [TerminalBufferMatch], notifications: [(ruleIndex: Int, lineText: String)]) {
+        let cursorLine = emulator.historyCount + emulator.cursorRow
+        if replay || emulator.isAlternateScreenActive {
+            state.nextLine = cursorLine
+            return ([], [])
+        }
+        guard cursorLine > state.nextLine else {
+            // Clear/RIS/alt-screen exit can shrink the buffer — clamp so the next batch
+            // scans from the live position instead of waiting to re-reach the old line.
+            state.nextLine = min(state.nextLine, cursorLine)
+            return ([], [])
+        }
+        // Rate budget: out of budget for this window → skip (advance the high-water so the
+        // skipped flood is never backfilled), resume when the window rolls.
+        if now &- state.windowStartNanos > triggerScanWindowNanos {
+            state.windowStartNanos = now
+            state.spentNanos = 0
+        }
+        guard state.spentNanos < triggerScanBudgetNanos else {
+            state.nextLine = cursorLine
+            return ([], [])
+        }
+        // Batch budget: only the NEWEST `triggerScanBatchLimit` completed lines scan; a
+        // flood's backlog is skipped deliberately (triggers watch recent output — an
+        // unbounded scan would tax the drain path exactly when it's busiest).
+        let to = cursorLine // exclusive: the cursor's line is still being written
+        let from = max(state.nextLine, to - triggerScanBatchLimit)
+        state.nextLine = to
+        var highlights: [TerminalBufferMatch] = []
+        var notifications: [(ruleIndex: Int, lineText: String)] = []
+        for line in from ..< to {
+            let text = TriggerScanner.scanText(cells: emulator.bufferLine(line))
+            guard !text.isEmpty else { continue }
+            for match in scanner.scan(text) {
+                switch scanner.rules[match.ruleIndex].action {
+                case .highlight:
+                    highlights.append(TerminalBufferMatch(
+                        bufferLine: line,
+                        columns: match.columns.lowerBound ..< (match.columns.upperBound + 1)
+                    ))
+                case .notify:
+                    let last = state.lastNotifyNanos[match.ruleIndex]
+                    if last == nil || now &- last! >= triggerNotifyCooldownNanos {
+                        state.lastNotifyNanos[match.ruleIndex] = now
+                        notifications.append((match.ruleIndex, text))
+                    }
+                }
+            }
+        }
+        state.spentNanos &+= DispatchTime.now().uptimeNanoseconds &- now
+        return (highlights, notifications)
+    }
+
+    /// Land a batch's scan results on main: bounded-FIFO the highlight spans (repaint), fire
+    /// the notify callback per cooled-down rule.
+    private func consumeTriggerResults(
+        _ results: (highlights: [TerminalBufferMatch], notifications: [(ruleIndex: Int, lineText: String)]),
+        scanner: TriggerScanner
+    ) {
+        if !results.highlights.isEmpty {
+            triggerHighlightMatches.append(contentsOf: results.highlights)
+            if triggerHighlightMatches.count > Self.maxTriggerHighlights {
+                triggerHighlightMatches.removeFirst(triggerHighlightMatches.count - Self.maxTriggerHighlights)
+            }
+            scheduleRender()
+        }
+        for n in results.notifications {
+            onTriggerMatched?(scanner.rules[n.ruleIndex], n.lineText)
+        }
     }
 
     /// Set the scrollback offset so virtual buffer line `index` is the top viewport row.

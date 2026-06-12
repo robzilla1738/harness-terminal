@@ -22,6 +22,9 @@ public protocol TerminalHostDelegate: AnyObject {
     /// ConEmu progress report (OSC 9;4) from the program in this pane — drives the tab's
     /// working indicator (Claude Code 2.0+ keep-alives one across each turn).
     func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID)
+    /// A `notify`-action output trigger matched `lineText` in this pane (already cooled down
+    /// per rule by the surface).
+    func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID)
     func terminalHostDidClose(surfaceID: SurfaceID)
 }
 
@@ -36,6 +39,8 @@ extension TerminalHostDelegate {
     public func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID) {}
     /// Default no-op — only the GUI evaluates per-host profiles.
     public func terminalHostDidChangeRemoteHost(_ host: String?, surfaceID: SurfaceID) {}
+    /// Default no-op — only the GUI routes trigger notifications.
+    public func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID) {}
 }
 
 struct TerminalHostResolvedAppearance: Equatable {
@@ -265,6 +270,10 @@ public final class TerminalHostView: NSView {
         native.onProgress = { [weak self] report in
             guard let self else { return }
             self.hostDelegate?.terminalHostDidUpdateProgress(report, surfaceID: self.surfaceID)
+        }
+        native.onTriggerMatched = { [weak self] rule, lineText in
+            guard let self else { return }
+            self.hostDelegate?.terminalHostDidMatchTrigger(rule, lineText: lineText, surfaceID: self.surfaceID)
         }
         native.onPwd = { [weak self] path in
             guard let self else { return }
@@ -623,6 +632,8 @@ public final class TerminalHostView: NSView {
     public func applySettings(_ settings: HarnessSettings) {
         cachedSettings = settings
         applyNativeAppearance()
+        // Output triggers: recompiled per settings push (reload-on-save applies them live).
+        nativeView.applyTriggerRules(settings.triggers)
     }
 
     public override func viewDidChangeEffectiveAppearance() {

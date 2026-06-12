@@ -31,6 +31,9 @@ public final class TerminalEmulator: VTParserHandler {
 
     public var cols: Int { current.cols }
     public var rows: Int { current.rows }
+    /// Current cursor row (viewport-relative) without snapshotting the grid — cheap enough
+    /// for per-batch bookkeeping (e.g. the trigger scanner's completed-line high-water mark).
+    public var cursorRow: Int { current.cursorRow }
 
     // MARK: Host callbacks
 
