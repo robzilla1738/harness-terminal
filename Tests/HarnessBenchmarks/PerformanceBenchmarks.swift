@@ -1,5 +1,6 @@
 import Foundation
 import HarnessCore
+@testable import HarnessDaemonCore
 import HarnessTerminalEngine
 @testable import HarnessTerminalRenderer
 @testable import HarnessTerminalKit
@@ -834,6 +835,40 @@ final class PerformanceBenchmarks: XCTestCase {
             term.feed(bytes)
             _ = term.readGrid(scrollbackOffset: 500)
         }
+    }
+
+    // MARK: - Scrollback on-disk compaction (streamed tail rewrite)
+
+    /// Compaction trims an over-high-water log back to its retention cap on the same serial
+    /// queue appends ride, so its cost directly stalls persistence under a sustained flood.
+    /// The streamed tail copy must be O(retentionCap) reads with bounded resident memory —
+    /// a regression to whole-file `Data(contentsOf:)` doubles the I/O (the cap can be 512 MiB)
+    /// and parks up to 1 GiB in the daemon. Exercised via init-path compaction over a
+    /// pre-seeded 64 MiB log with a 16 MiB cap, which shares `compactToTail` with the
+    /// flush-path compaction.
+    func testScrollbackCompaction64MiB() throws {
+        try skipUnlessEnabled()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("harness-bench-scrollback-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let log = dir.appendingPathComponent("surface.scroll")
+        let total = 64 * 1024 * 1024
+        let cap = 16 * 1024 * 1024
+        var seed = Data(capacity: total)
+        var pattern = Data(capacity: 4096)
+        for i in 0 ..< 4096 { pattern.append(UInt8(i % 251)) }
+        while seed.count < total { seed.append(pattern) }
+        try seed.prefix(total).write(to: log)
+
+        let nanos = timedNanos {
+            _ = ScrollbackFile(url: log, retentionCap: cap)
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: log.path)[.size] as? Int) ?? 0
+        XCTAssertEqual(size, cap, "compaction must trim exactly to the retention cap")
+        printBenchmark("scrollback_compaction_64mib", nanos: nanos, fields: [
+            ("fileBytes", "\(total)"), ("retentionCap", "\(cap)"),
+        ])
     }
 
     // MARK: - Input-to-photon (CPU-side echo latency)

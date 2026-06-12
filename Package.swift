@@ -124,6 +124,7 @@ let platformTestTargets: [Target] = [
         name: "HarnessBenchmarks",
         dependencies: [
             "HarnessCore",
+            "HarnessDaemonCore",
             "HarnessTerminalEngine",
             "HarnessTerminalKit",
             "HarnessTerminalRenderer",
