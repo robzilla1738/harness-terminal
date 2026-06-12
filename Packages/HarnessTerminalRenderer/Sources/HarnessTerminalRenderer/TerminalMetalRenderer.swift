@@ -733,14 +733,29 @@ public final class TerminalMetalRenderer {
         }
     }
 
+    /// Memoized sorted form of the last-seen prompt gutter: the map + sort ran on EVERY encode
+    /// (it feeds the upload cache key), but the gutter itself changes only when a prompt line
+    /// appears/scrolls — so rebuild the sorted array only when the dictionary differs. The key
+    /// stays value-identical to the unmemoized form (the stable-frame cache equality depends
+    /// on it).
+    private var promptGutterKeyCache: (gutter: [Int: RenderColor], keys: [PromptGutterUploadKey])?
+
     private func instanceUploadCacheKey(
         frame: TerminalFrame,
         origin: (x: Int, y: Int),
         ligatures: Bool
     ) -> InstanceUploadCacheKey {
-        let gutter = frame.promptGutter
-            .map { PromptGutterUploadKey(row: $0.key, color: $0.value) }
-            .sorted { $0.row < $1.row }
+        let gutter: [PromptGutterUploadKey]
+        if frame.promptGutter.isEmpty {
+            gutter = []
+        } else if let cached = promptGutterKeyCache, cached.gutter == frame.promptGutter {
+            gutter = cached.keys
+        } else {
+            gutter = frame.promptGutter
+                .map { PromptGutterUploadKey(row: $0.key, color: $0.value) }
+                .sorted { $0.row < $1.row }
+            promptGutterKeyCache = (frame.promptGutter, gutter)
+        }
         return InstanceUploadCacheKey(
             columns: frame.columns,
             rows: frame.rows,
@@ -797,6 +812,8 @@ public final class TerminalMetalRenderer {
             )
         }
 
+        // Per-build memo: only a salvage pass in THIS build may populate it.
+        salvageRowKeys = nil
         let cursorKey = CursorCacheKey(
             row: frame.cursor.row,
             column: frame.cursor.column,
@@ -846,9 +863,10 @@ public final class TerminalMetalRenderer {
                 textBlinkHidden: textBlinkHidden
             )
             if let salvaged {
-                dirtyRows = IndexSet(
-                    (0 ..< frame.rows).filter { salvaged[$0] == nil }
-                )
+                dirtyRows = IndexSet()
+                for row in 0 ..< frame.rows where salvaged[row] == nil {
+                    dirtyRows.insert(row)
+                }
             } else {
                 dirtyRows = IndexSet(integersIn: 0 ..< frame.rows)
             }
@@ -898,7 +916,8 @@ public final class TerminalMetalRenderer {
                 )
                 fresh.contentKey = (cursorKey.invertsGlyph && cursorKey.row == row)
                     ? 0
-                    : Self.rowContentKey(frame, row: row, blinkHidden: textBlinkHidden)
+                    : (salvageRowKeys?[row]
+                        ?? Self.rowContentKey(frame, row: row, blinkHidden: textBlinkHidden))
                 let old = rowSeg[row]
                 let oldStats = rowInstanceCache.rowInstances[row]
                 flatBgSpans += fresh.bgSpans - (oldStats?.bgSpans ?? 0)
@@ -926,9 +945,9 @@ public final class TerminalMetalRenderer {
                         )
                     }
                 }
-                bgSpansDirty.append(rowSeg[row].bg)
-                glSpansDirty.append(rowSeg[row].glyph)
-                deSpansDirty.append(rowSeg[row].deco)
+                if !rowSeg[row].bg.isEmpty { bgSpansDirty.append(rowSeg[row].bg) }
+                if !rowSeg[row].glyph.isEmpty { glSpansDirty.append(rowSeg[row].glyph) }
+                if !rowSeg[row].deco.isEmpty { deSpansDirty.append(rowSeg[row].deco) }
                 if bgDelta != 0 { bgShifted = min(bgShifted, rowSeg[row].bg.lowerBound) }
                 if glDelta != 0 { glShifted = min(glShifted, rowSeg[row].glyph.lowerBound) }
                 if deDelta != 0 { deShifted = min(deShifted, rowSeg[row].deco.lowerBound) }
@@ -939,12 +958,14 @@ public final class TerminalMetalRenderer {
             // A count change moved every later byte in that stream — those bytes must upload
             // too, so the moved suffix joins the dirty list (count-preserving scattered damage
             // keeps its separate row-sized spans; this is the win over the single-union range).
-            if bgShifted != Int.max { bgSpansDirty.append(bgShifted ..< flatBg.count) }
-            if glShifted != Int.max { glSpansDirty.append(glShifted ..< flatGlyph.count) }
-            if deShifted != Int.max { deSpansDirty.append(deShifted ..< flatDeco.count) }
-            encoded.bgDirty = DynamicInstanceBuffer.merge([], adding: bgSpansDirty.filter { !$0.isEmpty })
-            encoded.glyphDirty = DynamicInstanceBuffer.merge([], adding: glSpansDirty.filter { !$0.isEmpty })
-            encoded.decoDirty = DynamicInstanceBuffer.merge([], adding: deSpansDirty.filter { !$0.isEmpty })
+            // Spans are appended non-empty above, so no filter pass (and its intermediate
+            // arrays) is needed before the merge.
+            if bgShifted != Int.max, bgShifted < flatBg.count { bgSpansDirty.append(bgShifted ..< flatBg.count) }
+            if glShifted != Int.max, glShifted < flatGlyph.count { glSpansDirty.append(glShifted ..< flatGlyph.count) }
+            if deShifted != Int.max, deShifted < flatDeco.count { deSpansDirty.append(deShifted ..< flatDeco.count) }
+            encoded.bgDirty = DynamicInstanceBuffer.merge([], adding: bgSpansDirty)
+            encoded.glyphDirty = DynamicInstanceBuffer.merge([], adding: glSpansDirty)
+            encoded.decoDirty = DynamicInstanceBuffer.merge([], adding: deSpansDirty)
         } else {
             // Full rebuild: clear the flats and lay every row back down (cached rows are still
             // REUSED — only their flat-array copy is redone, not their encode). This is the
@@ -968,10 +989,13 @@ public final class TerminalMetalRenderer {
                     )
                     // Stamp the content key so a later column-count change can salvage this row.
                     // Skipped for a glyph-inverting cursor row: its instances bake the cursor-text
-                    // color, so they are NOT a pure function of the row content alone.
+                    // color, so they are NOT a pure function of the row content alone. A salvage
+                    // pass in this build already hashed the row — reuse its key instead of
+                    // re-walking the columns.
                     fresh.contentKey = (cursorKey.invertsGlyph && cursorKey.row == row)
                         ? 0
-                        : Self.rowContentKey(frame, row: row, blinkHidden: textBlinkHidden)
+                        : (salvageRowKeys?[row]
+                            ?? Self.rowContentKey(frame, row: row, blinkHidden: textBlinkHidden))
                     rowInstances = fresh
                     rowInstanceCache.rowInstances[row] = rowInstances
                     encoded.encodedRows += 1
@@ -1189,6 +1213,12 @@ public final class TerminalMetalRenderer {
     /// cache isn't geometry-compatible (everything except `columns` must match — origin, rows,
     /// ligatures, atlas epoch, cell metrics) or when fewer than half the rows match (a near-total
     /// change isn't worth the bookkeeping — fall back to the plain full reset).
+    /// Row content keys computed for the CURRENT frame by `salvageRowInstances`, so the encode
+    /// pass that follows in the same build stamps salvage-missed rows without re-hashing them
+    /// (the key is O(columns) per row). Reset at the top of every build; entries exist only for
+    /// rows whose key salvage actually computed against this frame.
+    private var salvageRowKeys: [UInt64?]?
+
     private func salvageRowInstances(
         _ frame: TerminalFrame, origin: (x: Int, y: Int), ligatures: Bool, cursorKey: CursorCacheKey
     ) -> [EncodedRowInstances?]? {
@@ -1202,6 +1232,7 @@ public final class TerminalMetalRenderer {
               cache.rowInstances.count == frame.rows
         else { return nil }
         var salvaged: [EncodedRowInstances?] = Array(repeating: nil, count: frame.rows)
+        var frameKeys: [UInt64?] = Array(repeating: nil, count: frame.rows)
         var hits = 0
         for row in 0 ..< frame.rows {
             // Cursor-affected rows never salvage: cached instances baked the OLD cursor's glyph
@@ -1209,12 +1240,16 @@ public final class TerminalMetalRenderer {
             // cursor-row dirtying on the incremental path.)
             if let previous = cache.previousCursor, previous.invertsGlyph, previous.row == row { continue }
             if cursorKey.invertsGlyph, cursorKey.row == row { continue }
-            guard let cached = cache.rowInstances[row], cached.contentKey != 0,
-                  cached.contentKey == Self.rowContentKey(frame, row: row, blinkHidden: textBlinkHidden)
-            else { continue }
+            guard let cached = cache.rowInstances[row], cached.contentKey != 0 else { continue }
+            let frameKey = Self.rowContentKey(frame, row: row, blinkHidden: textBlinkHidden)
+            frameKeys[row] = frameKey
+            guard cached.contentKey == frameKey else { continue }
             salvaged[row] = cached
             hits += 1
         }
+        // The keys were hashed against THIS frame, so the encode pass can reuse them whether or
+        // not salvage clears the hit-rate floor (missed rows re-encode + stamp either way).
+        salvageRowKeys = frameKeys
         guard hits * 2 >= frame.rows else { return nil }
         return salvaged
     }
@@ -1534,6 +1569,12 @@ public final class TerminalMetalRenderer {
     /// Ligature path: shape each maximal same-style/same-color run with CoreText, then place
     /// every shaped glyph on its *source* cell so the monospace grid stays aligned (a
     /// ligature spanning N cells lands on its first cell). The cursor cell is shaped alone.
+    /// Scratch for `emitLigatedGlyphs`'s run accumulation, reused across runs/rows/frames
+    /// (`removeAll(keepingCapacity:)` per run) — encoding is single-threaded per renderer, and
+    /// a fresh String + Int array per run was a per-dirty-row-per-frame allocation pair.
+    private var ligatureRunText = ""
+    private var ligatureUTF16ToColumn: [Int] = []
+
     private func emitLigatedGlyphs(
         row: Int, frame: TerminalFrame, ox: Float, oy: Float,
         cursorCell: (row: Int, column: Int)?, cursorTextColor: RenderColor,
@@ -1590,8 +1631,8 @@ public final class TerminalMetalRenderer {
                 continue
             }
             // Accumulate a run of contiguous, same-style, same-color glyph cells.
-            var runText = ""
-            var utf16ToColumn: [Int] = []
+            ligatureRunText.removeAll(keepingCapacity: true)
+            ligatureUTF16ToColumn.removeAll(keepingCapacity: true)
             let bold = cell.bold, italic = cell.italic, fg = cell.foreground
             var c = col
             while c < cols, let rc = frame.cell(row: row, column: c) {
@@ -1604,17 +1645,17 @@ public final class TerminalMetalRenderer {
                 if let cur = cursorCell, cur.row == row, cur.column == c { break }
                 if rc.bold != bold || rc.italic != italic || rc.foreground != fg { break }
                 let scalar = Unicode.Scalar(rc.codepoint) ?? " "
-                let before = runText.utf16.count
-                runText.unicodeScalars.append(scalar)
-                for _ in before ..< runText.utf16.count { utf16ToColumn.append(c) }
+                let before = ligatureRunText.utf16.count
+                ligatureRunText.unicodeScalars.append(scalar)
+                for _ in before ..< ligatureRunText.utf16.count { ligatureUTF16ToColumn.append(c) }
                 c += 1
             }
-            if utf16ToColumn.isEmpty { col += 1; continue }
+            if ligatureUTF16ToColumn.isEmpty { col += 1; continue }
             let color = vector(fg)
-            for shaped in atlas.shape(runText, bold: bold, italic: italic) {
+            for shaped in atlas.shape(ligatureRunText, bold: bold, italic: italic) {
                 guard let entry = atlas.entry(forShaped: shaped.glyph, font: shaped.font) else { continue }
-                let idx = min(max(0, shaped.utf16Index), utf16ToColumn.count - 1)
-                let cellColumn = utf16ToColumn[idx]
+                let idx = min(max(0, shaped.utf16Index), ligatureUTF16ToColumn.count - 1)
+                let cellColumn = ligatureUTF16ToColumn[idx]
                 glyphs.append(glyphInstance(
                     entry,
                     originX: ox + Float(cellColumn * cellPixelWidth),
