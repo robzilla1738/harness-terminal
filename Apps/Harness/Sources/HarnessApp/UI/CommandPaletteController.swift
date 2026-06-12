@@ -7,7 +7,7 @@ import HarnessTerminalKit
 @MainActor
 struct PaletteAction: Identifiable {
     enum Section: Int, CaseIterable {
-        case recent, actions, navigation, tabs, themes
+        case recent, actions, navigation, tabs, commands, themes
 
         var title: String {
             switch self {
@@ -15,6 +15,7 @@ struct PaletteAction: Identifiable {
             case .actions: return "Actions"
             case .navigation: return "Navigation"
             case .tabs: return "Tabs"
+            case .commands: return "Commands"
             case .themes: return "Themes"
             }
         }
@@ -26,6 +27,9 @@ struct PaletteAction: Identifiable {
     let symbol: String
     let shortcut: String
     let section: Section
+    /// Surfaced only while the user is searching (e.g. the 490-theme catalog) — listing it in
+    /// the unfiltered browse view would bury everything else.
+    var searchOnly: Bool = false
     let handler: () -> Void
 }
 
@@ -296,15 +300,49 @@ enum CommandPaletteController {
             }
         }
 
-        // MARK: - Themes (featured first)
-        for theme in ThemeManager.featuredThemes {
+        // MARK: - Full command vocabulary. Derived from the same catalog as `bind-key` /
+        // `list-commands`, so every bindable verb is reachable here: argument-less verbs run
+        // directly; the rest open the `:` prompt pre-filled. Shortcuts reflect the LIVE key
+        // tables (palette opens re-read keybindings.json via `present()` → `buildActions()`).
+        let bindingDisplay = CommandPaletteCatalog.bindingDisplayMap(tables: KeybindingsStore.load())
+        for entry in CommandPaletteCatalog.entries(bindings: bindingDisplay) {
+            switch entry.kind {
+            case let .direct(command):
+                actions.append(PaletteAction(
+                    id: "cmd.\(entry.verb)",
+                    title: entry.verb,
+                    subtitle: "Run command",
+                    symbol: "command",
+                    shortcut: entry.shortcut,
+                    section: .commands
+                ) {
+                    MainExecutor.shared.executeSurfacingErrors(command)
+                })
+            case .prompt:
+                actions.append(PaletteAction(
+                    id: "cmd.\(entry.verb)",
+                    title: "\(entry.verb)…",
+                    subtitle: "Open the command prompt with arguments",
+                    symbol: "command",
+                    shortcut: "",
+                    section: .commands
+                ) {
+                    CommandPromptController.shared.presentTemplate(prompts: [], template: "\(entry.verb) ")
+                })
+            }
+        }
+
+        // MARK: - Themes: featured browsable, the full 490-theme catalog reachable by search.
+        let featured = Set(ThemeManager.featuredThemes)
+        for theme in ThemeManager.allThemeNames() {
             actions.append(PaletteAction(
                 id: "theme.\(theme)",
                 title: theme,
                 subtitle: "Apply theme",
                 symbol: "paintpalette",
                 shortcut: "",
-                section: .themes
+                section: .themes,
+                searchOnly: !featured.contains(theme)
             ) {
                 coordinator.setTheme(theme)
             })
@@ -609,7 +647,8 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
                 ), score: 0))
             }
             let recentIDSet = Set(recents.map(\.id))
-            for action in allActions where !recentIDSet.contains(action.id) {
+            // Browse view: search-only rows (the full theme catalog) stay out until a query.
+            for action in allActions where !recentIDSet.contains(action.id) && !action.searchOnly {
                 matches.append((action, 0))
             }
         } else {
@@ -632,7 +671,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         var selectable: [Int] = []
         if query.isEmpty {
             // Empty: keep section order natural — recent first, then everything else.
-            let sectionsInOrder: [PaletteAction.Section] = [.recent, .actions, .navigation, .tabs, .themes]
+            let sectionsInOrder: [PaletteAction.Section] = [.recent, .actions, .navigation, .tabs, .commands, .themes]
             for section in sectionsInOrder {
                 let entries = matches.filter { $0.action.section == section }
                 if entries.isEmpty { continue }

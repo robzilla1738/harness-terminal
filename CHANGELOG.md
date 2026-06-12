@@ -26,6 +26,14 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
   437µs, p99 3.1ms on an M-series. Median end-to-end typing latency lands around 1.6–2ms —
   under a 120Hz frame. SCORECARD records the methodology.
 
+### Changed
+- **The command palette now covers the full command vocabulary.** ⌘K previously listed a
+  curated handful of actions; it now also derives a row for every bindable verb from the
+  same catalog that backs `bind-key` and `list-commands` — argument-less commands run
+  directly, the rest open the `:` prompt pre-filled. Rows show their live key bindings
+  (re-read from `keybindings.json` on every open), and all 490 themes are now reachable by
+  search (featured themes stay in the browse view).
+
 ### Fixed
 - **Reopening the app no longer types stray characters at the prompt.** (#168) On reattach,
   persisted scrollback was replayed through the emulator, which re-answered the queries
