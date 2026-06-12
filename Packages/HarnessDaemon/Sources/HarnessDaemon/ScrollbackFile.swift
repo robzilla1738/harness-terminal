@@ -90,21 +90,69 @@ final class ScrollbackFile: @unchecked Sendable {
     /// Read the persisted tail (at most `maxBytes`) for seeding `RealPty`'s in-memory ring on
     /// startup. Returns the most recent bytes — the oldest are what the ring would have evicted.
     static func loadTail(url: URL, maxBytes: Int) -> Data {
-        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return Data() }
-        guard data.count > maxBytes else { return data }
-        // `suffix` yields a slice whose indices are offset from the parent; wrap in `Data` so the
-        // result is 0-indexed and safe to `subdata(in:)` against.
-        return Data(data.suffix(maxBytes))
+        readTail(url: url, maxBytes: maxBytes)
+    }
+
+    /// Seek-read at most the last `maxBytes` of the file — never the whole log. The retention
+    /// cap can be 512 MiB ("unlimited"), so a full `Data(contentsOf:)` of an at-high-water log
+    /// would pull up to 1 GiB into the daemon just to keep its tail.
+    private static func readTail(url: URL, maxBytes: Int) -> Data {
+        guard maxBytes > 0, let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), size > 0 else { return Data() }
+        let start = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+        guard (try? handle.seek(toOffset: start)) != nil else { return Data() }
+        return (try? handle.readToEnd()) ?? Data()
     }
 
     private static func compactExistingLogIfNeeded(url: URL, retentionCap: Int) -> Int {
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-        guard size > retentionCap, let data = try? Data(contentsOf: url) else { return size }
-        let tail = Data(data.suffix(retentionCap))
-        guard HarnessPaths.atomicWrite(tail, to: url, label: "HarnessDaemon scrollback") else {
-            return size
+        guard size > retentionCap else { return size }
+        return compactToTail(url: url, retentionCap: retentionCap) ?? size
+    }
+
+    /// Rewrite the log down to its last `retentionCap` bytes by *streaming* the tail through a
+    /// bounded buffer — the file is never resident in memory. Atomic (temp + fsync + rename(2))
+    /// so a crash mid-compaction leaves the previous complete log intact: if the rename didn't
+    /// complete the old log survives, and if it did the new file is fully durable. Returns the
+    /// new on-disk size, or nil if compaction failed (the old log is left untouched).
+    private static func compactToTail(url: URL, retentionCap: Int) -> Int? {
+        let tmp = url.appendingPathExtension("compact-tmp")
+        do {
+            guard let reader = try? FileHandle(forReadingFrom: url) else { return nil }
+            defer { try? reader.close() }
+            let size = try reader.seekToEnd()
+            guard size > UInt64(retentionCap) else { return nil }
+            try reader.seek(toOffset: size - UInt64(retentionCap))
+            // Create the temp owner-only BEFORE any content lands in it, so the log's bytes are
+            // never visible with loose perms (atomic writes mint fresh inodes with 0644).
+            guard FileManager.default.createFile(atPath: tmp.path, contents: nil,
+                                                 attributes: [.posixPermissions: 0o600]),
+                  let writer = try? FileHandle(forWritingTo: tmp)
+            else { return nil }
+            defer { try? writer.close() }
+            // Stream in bounded chunks: peak RAM is one chunk, not the whole retention cap.
+            let chunkSize = 4 * 1024 * 1024
+            var written = 0
+            while let chunk = try reader.read(upToCount: chunkSize), !chunk.isEmpty {
+                try writer.write(contentsOf: chunk)
+                written += chunk.count
+            }
+            // fsync the temp file so its content is durable before we replace the log.
+            // See the comment in appendToDisk for the fsync vs F_FULLFSYNC choice.
+            _ = fsync(writer.fileDescriptor)
+            // POSIX rename(2), not FileManager's replace APIs: it atomically replaces the
+            // destination on both Darwin and Linux, while corelibs-foundation's replaceItemAt
+            // can leave the original missing when it fails partway.
+            guard rename(tmp.path, url.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            return written
+        } catch {
+            fputs("HarnessDaemon scrollback: compaction failed for \(url.lastPathComponent): \(error)\n", harnessStderr)
+            try? FileManager.default.removeItem(at: tmp)
+            return nil
         }
-        return tail.count
     }
 
     /// Queue a chunk of output for persistence. Cheap on the caller (the PTY read loop): append
@@ -250,39 +298,11 @@ final class ScrollbackFile: @unchecked Sendable {
         }
     }
 
-    /// Trim the log back to the retention cap by rewriting just its tail. Atomic (temp + rename)
-    /// so a crash mid-compaction leaves the previous complete log intact. The temp file is
-    /// fsynced before the rename so a crash during or immediately after compaction never leaves
-    /// a zero-length or partial new file — if the rename didn't complete the old log survives,
-    /// and if it did the new file is fully durable.
+    /// Trim the log back to the retention cap by rewriting just its tail (see `compactToTail`
+    /// for the atomicity/durability dance). On failure the old log survives untouched.
     private func compact() {
-        guard let data = try? Data(contentsOf: url), data.count > retentionCap else { return }
-        let tail = Data(data.suffix(retentionCap))
-        // Write to a temp file alongside the log, fsync it, then rename atomically.
-        // `HarnessPaths.atomicWrite` (Data.write(options: .atomic)) does the temp+rename
-        // but does not fsync the temp before renaming, so a crash in the write window
-        // could leave a renamed-in file with no durable content. Do it manually here.
-        let tmp = url.appendingPathExtension("compact-tmp")
-        do {
-            try tail.write(to: tmp)
-            // Owner-only BEFORE the rename, so the log is never visible with loose perms.
-            Self.restrictToOwner(tmp)
-            // fsync the temp file so its content is durable before we replace the log.
-            // See the comment in appendToDisk for the fsync vs F_FULLFSYNC choice.
-            if let tmpHandle = try? FileHandle(forReadingFrom: tmp) {
-                _ = fsync(tmpHandle.fileDescriptor)
-                try? tmpHandle.close()
-            }
-            // POSIX rename(2), not FileManager's replace APIs: it atomically replaces the
-            // destination on both Darwin and Linux, while corelibs-foundation's replaceItemAt
-            // can leave the original missing when it fails partway.
-            guard rename(tmp.path, url.path) == 0 else {
-                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-            }
-            fileBytes = tail.count
-        } catch {
-            fputs("HarnessDaemon scrollback: compaction failed for \(url.lastPathComponent): \(error)\n", harnessStderr)
-            try? FileManager.default.removeItem(at: tmp)
+        if let newSize = Self.compactToTail(url: url, retentionCap: retentionCap) {
+            fileBytes = newSize
         }
     }
 }

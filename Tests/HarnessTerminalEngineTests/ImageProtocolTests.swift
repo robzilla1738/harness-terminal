@@ -108,7 +108,34 @@ final class ImageProtocolTests: XCTestCase {
         term.feed("\u{1b}]1337;File=inline=1:\(redPixelPNGBase64)\u{07}")
         XCTAssertEqual(placements(term).count, 1)
     }
+
+    /// Behavior pin for the byte-routed OSC dispatcher: a 1337 image payload whose base64 body
+    /// contains an invalid-UTF-8 byte still decodes (base64 is ASCII in real streams; the byte
+    /// is skipped via `.ignoreUnknownCharacters` like any other junk byte). The old dispatcher
+    /// decoded the whole payload to a String first and dropped it wholesale.
+    func testITerm2InlineImageToleratesNonUTF8ByteInBase64Body() {
+        let term = TerminalEmulator(cols: 20, rows: 10)
+        var osc = Array("\u{1b}]1337;File=inline=1:".utf8)
+        let body = Array(redPixelPNGBase64.utf8)
+        osc += body.prefix(10)
+        osc.append(0xFF) // invalid UTF-8 in isolation; base64-junk to the decoder
+        osc += body.dropFirst(10)
+        osc += Array("\u{07}".utf8)
+        term.feed(osc)
+        XCTAssertEqual(placements(term).count, 1)
+    }
     #endif
+
+    /// String-routed OSC codes (title here) must keep dropping payloads that aren't valid UTF-8.
+    func testStringRoutedOSCStillDropsInvalidUTF8() {
+        let term = TerminalEmulator(cols: 20, rows: 10)
+        var title: String?
+        term.onTitleChange = { title = $0 }
+        term.feed(Array("\u{1b}]0;ok".utf8) + [0xFF, 0xFE] + Array("\u{07}".utf8))
+        XCTAssertNil(title, "invalid UTF-8 title payload is dropped")
+        term.feed("\u{1b}]0;fine\u{07}")
+        XCTAssertEqual(title, "fine")
+    }
 
     func testImageScrollsIntoScrollbackAndPersists() {
         let term = TerminalEmulator(cols: 20, rows: 6)

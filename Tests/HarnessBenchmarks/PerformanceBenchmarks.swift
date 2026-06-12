@@ -1,5 +1,6 @@
 import Foundation
 import HarnessCore
+@testable import HarnessDaemonCore
 import HarnessTerminalEngine
 @testable import HarnessTerminalRenderer
 @testable import HarnessTerminalKit
@@ -854,6 +855,38 @@ final class PerformanceBenchmarks: XCTestCase {
         ])
     }
 
+    // MARK: - Bulk OSC payloads (byte-routed dispatch)
+
+    /// A multi-megabyte OSC payload (1337 inline image / 52 clipboard set) must be routed as
+    /// bytes: the old dispatcher decoded the whole payload to a String (full UTF-8 validation +
+    /// copy), and the image handler re-encoded it back to bytes — two full passes over megabytes
+    /// before the base64 decode even started. This times feed() end to end for both codes.
+    func testBulkOSCPayloadFeed() throws {
+        try skipUnlessEnabled()
+        // ~4 MiB of base64 (3 MiB decoded) for the image; the OSC 52 body stays under the
+        // parser's deliberate 1 MiB clipboard DoS bound so it round-trips. The 1337 body is
+        // junk to ImageDecoder (parse cost is the routing + base64, which is what's under test).
+        var raw = Data(capacity: 3 * 1024 * 1024)
+        for i in 0 ..< 3 * 1024 * 1024 { raw.append(UInt8(0x20 + (i % 0x5F))) } // printable ASCII
+        let base64 = raw.base64EncodedString()
+
+        let imageOSC = Array("\u{1b}]1337;File=inline=1:\(base64)\u{07}".utf8)
+        let term1 = TerminalEmulator(cols: 80, rows: 24)
+        let imageNanos = timedNanos { term1.feed(imageOSC) }
+        printBenchmark("osc_1337_inline_image_feed", nanos: imageNanos,
+                       fields: [("payloadBytes", "\(imageOSC.count)")])
+
+        let clipBody = raw.prefix(600 * 1024) // 800 KiB base64 < the 1 MiB OSC cap
+        let clipboardOSC = Array("\u{1b}]52;c;\(clipBody.base64EncodedString())\u{07}".utf8)
+        let term2 = TerminalEmulator(cols: 80, rows: 24)
+        var copied = 0
+        term2.onSetClipboard = { copied = $0.utf8.count }
+        let clipNanos = timedNanos { term2.feed(clipboardOSC) }
+        XCTAssertEqual(copied, clipBody.count, "OSC 52 body must round-trip")
+        printBenchmark("osc_52_clipboard_feed", nanos: clipNanos,
+                       fields: [("payloadBytes", "\(clipboardOSC.count)")])
+    }
+
     // MARK: - Scrollback append + replay (steady state, at the cap)
 
     func testScrollbackSteadyStateAtCap() throws {
@@ -877,6 +910,40 @@ final class PerformanceBenchmarks: XCTestCase {
             term.feed(bytes)
             _ = term.readGrid(scrollbackOffset: 500)
         }
+    }
+
+    // MARK: - Scrollback on-disk compaction (streamed tail rewrite)
+
+    /// Compaction trims an over-high-water log back to its retention cap on the same serial
+    /// queue appends ride, so its cost directly stalls persistence under a sustained flood.
+    /// The streamed tail copy must be O(retentionCap) reads with bounded resident memory —
+    /// a regression to whole-file `Data(contentsOf:)` doubles the I/O (the cap can be 512 MiB)
+    /// and parks up to 1 GiB in the daemon. Exercised via init-path compaction over a
+    /// pre-seeded 64 MiB log with a 16 MiB cap, which shares `compactToTail` with the
+    /// flush-path compaction.
+    func testScrollbackCompaction64MiB() throws {
+        try skipUnlessEnabled()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("harness-bench-scrollback-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let log = dir.appendingPathComponent("surface.scroll")
+        let total = 64 * 1024 * 1024
+        let cap = 16 * 1024 * 1024
+        var seed = Data(capacity: total)
+        var pattern = Data(capacity: 4096)
+        for i in 0 ..< 4096 { pattern.append(UInt8(i % 251)) }
+        while seed.count < total { seed.append(pattern) }
+        try seed.prefix(total).write(to: log)
+
+        let nanos = timedNanos {
+            _ = ScrollbackFile(url: log, retentionCap: cap)
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: log.path)[.size] as? Int) ?? 0
+        XCTAssertEqual(size, cap, "compaction must trim exactly to the retention cap")
+        printBenchmark("scrollback_compaction_64mib", nanos: nanos, fields: [
+            ("fileBytes", "\(total)"), ("retentionCap", "\(cap)"),
+        ])
     }
 
     // MARK: - Input-to-photon (CPU-side echo latency)

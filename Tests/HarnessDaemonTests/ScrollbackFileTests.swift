@@ -156,6 +156,46 @@ final class ScrollbackFileTests: XCTestCase {
         XCTAssertEqual(tail.count, total + marker.count)
     }
 
+    /// Compaction must keep the *byte-exact* suffix of everything ever appended — the streamed
+    /// tail copy may not drop, duplicate, or reorder a single byte at chunk boundaries.
+    func testCompactionKeepsByteExactSuffix() throws {
+        let fileURL = url()
+        let cap = ScrollbackFile.minimumRetentionCap
+        let file = ScrollbackFile(url: fileURL, retentionCap: cap)
+        // A non-repeating stream so any offset error shows up: 200 KiB of a 251-byte cycle
+        // (coprime with the chunk sizes in play), appended in odd-sized chunks.
+        var stream = Data(capacity: 200 * 1024)
+        for i in 0 ..< 200 * 1024 { stream.append(UInt8(i % 251)) }
+        var offset = 0
+        var chunkLen = 1
+        while offset < stream.count {
+            let end = min(offset + chunkLen, stream.count)
+            file.append(stream.subdata(in: offset ..< end))
+            offset = end
+            chunkLen = chunkLen * 3 % 9973 + 7
+        }
+        file.flush()
+
+        let onDisk = try Data(contentsOf: fileURL)
+        XCTAssertLessThanOrEqual(onDisk.count, cap, "compaction ran")
+        XCTAssertTrue(onDisk.elementsEqual(stream.suffix(onDisk.count)),
+                      "on-disk log must be the exact suffix of the appended stream")
+    }
+
+    /// The compacted log must stay owner-only — the temp file is created 0600 before any
+    /// content lands in it, so secrets in scrollback are never world-readable, even briefly.
+    func testCompactionPreservesOwnerOnlyPermissions() throws {
+        let fileURL = url()
+        let cap = ScrollbackFile.minimumRetentionCap
+        let file = ScrollbackFile(url: fileURL, retentionCap: cap)
+        file.append(Data(repeating: UInt8(ascii: "x"), count: cap * 3))
+        file.flush()
+
+        let perms = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: fileURL.path)[.posixPermissions] as? Int)
+        XCTAssertEqual(perms & 0o777, 0o600)
+    }
+
     /// A new `ScrollbackFile` over an existing log keeps appending to it (the cross-restart
     /// continuity path), rather than truncating.
     func testReopenAppendsToExistingLog() throws {
