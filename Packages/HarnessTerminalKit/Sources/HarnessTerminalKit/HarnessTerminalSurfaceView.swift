@@ -664,13 +664,21 @@ public final class HarnessTerminalSurfaceView: NSView {
     // MARK: - Public API
 
     /// Feed PTY output bytes into the emulator and schedule a redraw.
-    public func receive(_ data: Data) {
+    public func receive(_ data: Data) { receive(data, replay: false) }
+
+    /// `replay: true` marks persisted-scrollback bytes fed on (re)attach: they restore state but
+    /// must not re-fire world-facing effects (query replies to the PTY, bells, notifications,
+    /// clipboard writes — see `TerminalEmulator.isReplaying`). The flag brackets exactly this
+    /// chunk's `feed` on the emulator's serialized context.
+    public func receive(_ data: Data, replay: Bool) {
         if offMainParserFramePipelineEnabled {
-            receiveOffMain(data)
+            receiveOffMain(data, replay: replay)
             return
         }
         let beforeHistory = emulatorState.emulator.historyCount
+        if replay { emulatorState.emulator.isReplaying = true }
         emulatorState.emulator.feed(data)
+        if replay { emulatorState.emulator.isReplaying = false }
         // If the user is scrolled up, stay anchored on the same content as new lines push
         // into history; at the bottom (offset 0) we naturally follow new output.
         if scrollOffset > 0 {
@@ -696,11 +704,13 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
-    private func receiveOffMain(_ data: Data) {
+    private func receiveOffMain(_ data: Data, replay: Bool = false) {
         emulatorState.async { [weak self] emulator in
             guard let self else { return }
             let beforeHistory = emulator.historyCount
+            if replay { emulator.isReplaying = true }
             FrameSignposter.shared.interval("parse") { emulator.feed(data) }
+            if replay { emulator.isReplaying = false }
             let afterHistory = emulator.historyCount
             // Coalesce the main hop: under a flood, per-chunk main.async was tens of thousands
             // of dispatches/sec of pure scheduling tax on the main thread. Each chunk merges its
@@ -767,6 +777,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public func receive(_ text: String) { receive(Data(text.utf8)) }
+
+    public func receive(_ text: String, replay: Bool) { receive(Data(text.utf8), replay: replay) }
 
     func testingReadGridSnapshot() -> TerminalGridSnapshot {
         emulatorSync { $0.readGrid() }

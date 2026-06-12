@@ -6,6 +6,19 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Fixed
+- **Reopening the app no longer types stray characters at the prompt.** (#168) On reattach,
+  persisted scrollback was replayed through the emulator, which re-answered the queries
+  embedded in it — Powerlevel10k's DECRQM and kitty-keyboard probes came back as
+  `2026;2$y2027;0$y1u1u` typed at the shell, long after anything was waiting for them.
+  Replayed bytes still restore state (grid, title, cwd, modes), but no longer write query
+  replies to the PTY — and historical bells, desktop notifications, OSC 52 clipboard writes,
+  and command-finished reports stay quiet on replay too, instead of re-firing on every
+  reopen. A query split across the replay→live boundary (a program actively waiting while
+  you attach) still gets its answer.
+
 ## [1.11.0] - 2026-06-11
 
 An engine efficiency pass. The theme is paths that did per-item work where one pass would

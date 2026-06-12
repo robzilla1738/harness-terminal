@@ -49,6 +49,15 @@ public final class TerminalEmulator: VTParserHandler {
     public var onSetClipboard: ((String) -> Void)?
     /// Bytes the terminal must write back to the PTY (DSR cursor report, DA, etc.).
     public var onResponse: ((Data) -> Void)?
+    /// True while the host feeds persisted scrollback on (re)attach. Replayed bytes restore
+    /// state (grid, title, cwd, user vars) but must not re-fire world-facing effects: query
+    /// replies would land on the PTY as junk input long after the program stopped waiting
+    /// (#168 — p10k's DECRQM/kitty probes echoing `2026;2$y…1u` at the prompt), and historical
+    /// bells / desktop notifications / OSC 52 clipboard writes / command-finished reports
+    /// would re-fire on every reopen. A query split across the replay→live boundary still
+    /// answers: the parser state carries over and `respond` fires during the live chunk.
+    /// Set/cleared by the host around each replay feed, on the emulator's serialized context.
+    public var isReplaying = false
 
     // MARK: Terminal identity (XTVERSION / secondary DA)
     //
@@ -275,7 +284,7 @@ public final class TerminalEmulator: VTParserHandler {
 
     func parserExecute(_ control: UInt8) {
         switch control {
-        case 0x07: onBell?()                 // BEL
+        case 0x07: if !isReplaying { onBell?() } // BEL — historical bells stay silent on replay
         case 0x08: current.backspace()       // BS
         case 0x09: current.tab()             // HT
         case 0x0A, 0x0B, 0x0C: current.lineFeed() // LF, VT, FF
@@ -739,7 +748,7 @@ public final class TerminalEmulator: VTParserHandler {
     /// Ghostty parity: `9;4` always wins the collision (a notification can't start with "4;").
     private func handleOSC9(_ payload: String) {
         guard payload == "4" || payload.hasPrefix("4;") else {
-            onNotification?(nil, payload)
+            if !isReplaying { onNotification?(nil, payload) }
             return
         }
         let parts = payload.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
@@ -775,7 +784,7 @@ public final class TerminalEmulator: VTParserHandler {
             if let started = commandStartedAt {
                 // Monotonic elapsed seconds — never negative or clock-skewed.
                 let elapsedNanos = DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds
-                onCommandFinished?(Double(elapsedNanos) / 1_000_000_000, exitCode)
+                if !isReplaying { onCommandFinished?(Double(elapsedNanos) / 1_000_000_000, exitCode) }
                 commandStartedAt = nil
             }
         default: break
@@ -788,7 +797,7 @@ public final class TerminalEmulator: VTParserHandler {
         guard parts.first == "notify", parts.count >= 2 else { return }
         let title = parts.count >= 3 ? parts[1] : nil
         let body = parts.count >= 3 ? parts[2] : parts[1]
-        onNotification?(title, body)
+        if !isReplaying { onNotification?(title, body) }
     }
 
     private func setPointerShape(_ shape: String) {
@@ -869,7 +878,7 @@ public final class TerminalEmulator: VTParserHandler {
               let data = Data(base64Encoded: Data(encoded)),
               let text = String(data: data, encoding: .utf8)
         else { return }
-        onSetClipboard?(text)
+        if !isReplaying { onSetClipboard?(text) }
     }
 
     // MARK: - Helpers
@@ -1132,6 +1141,7 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     private func respond(_ s: String) {
+        guard !isReplaying else { return } // replayed queries have no live reader (#168)
         onResponse?(Data(s.utf8))
     }
 

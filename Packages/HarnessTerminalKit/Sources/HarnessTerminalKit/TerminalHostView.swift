@@ -769,8 +769,9 @@ public final class TerminalHostView: NSView {
                     guard let self else { return }
                     // Reconnect/reattach: RIS first so the replay replaces stale pre-restart content
                     // instead of stacking on it. First connect: emulator empty, so RIS is a no-op.
+                    // `replay: true` keeps replayed queries/bells/notifications from re-firing (#168).
                     if reset { self.nativeView.receive("\u{1b}c") }
-                    if !text.isEmpty { self.nativeView.receive(text) }
+                    if !text.isEmpty { self.nativeView.receive(text, replay: true) }
                 }
             }
         }
@@ -864,7 +865,8 @@ public final class TerminalHostView: NSView {
                 MainActor.assumeIsolated {
                     guard let self, !self.intentionallyDetached, self.outputSubscription == nil else { return }
                     self.nativeView.receive("\u{1b}c")
-                    if !text.isEmpty { self.nativeView.receive(text) }
+                    // `replay: true` keeps replayed queries/bells/notifications from re-firing (#168).
+                    if !text.isEmpty { self.nativeView.receive(text, replay: true) }
                 }
             }
         }
