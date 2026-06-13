@@ -1163,7 +1163,10 @@ public final class TerminalEmulator: VTParserHandler {
         let host: String?
         if let url = URL(string: payload), url.isFileURL {
             path = url.path
-            host = url.host?.lowercased()
+            // `URL.host` is nil for an empty authority on Darwin but `""` on
+            // swift-corelibs-foundation (Linux); normalize so `file:///path` reports nil host
+            // identically on both platforms (the authority-less = "locally known" contract).
+            host = url.host.flatMap { $0.isEmpty ? nil : $0.lowercased() }
         } else if payload.hasPrefix("file://") {
             // Fallback: strip scheme + authority manually (URL() rejects some unencoded paths).
             let withoutScheme = String(payload.dropFirst("file://".count))
