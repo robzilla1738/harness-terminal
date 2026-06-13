@@ -81,6 +81,8 @@ final class HarnessSettingsTests: XCTestCase {
         s.mouseHideWhileTyping = true
         s.quickTerminalEnabled = true
         s.quickTerminalHotkey = "ctrl-opt-k"
+        s.profiles = [ProfileRule(host: "*.prod.example.com", theme: "Red Alert")]
+        s.triggers = [TriggerRule(pattern: "ERROR", match: .regex, action: .notify)]
 
         let d = try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(s))
 
@@ -130,6 +132,8 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(d.mouseHideWhileTyping, true)
         XCTAssertEqual(d.quickTerminalEnabled, true)
         XCTAssertEqual(d.quickTerminalHotkey, "ctrl-opt-k")
+        XCTAssertEqual(d.profiles, [ProfileRule(host: "*.prod.example.com", theme: "Red Alert")])
+        XCTAssertEqual(d.triggers, [TriggerRule(pattern: "ERROR", match: .regex, action: .notify)])
     }
 
     func testScrollMultiplierAndMouseHideDefaults() {

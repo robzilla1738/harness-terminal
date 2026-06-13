@@ -1181,6 +1181,13 @@ public final class TerminalEmulator: VTParserHandler {
             return
         }
         guard path.hasPrefix("/") else { return }
+        // DELIBERATELY fires during replay (no `!isReplaying` guard, unlike bells / OSC 9·777
+        // notifications / OSC 52 / command-finished / query replies). Host and cwd are pane
+        // STATE, not world-facing effects: the daemon PTY is the same process across an app
+        // restart, so the replayed final OSC 7 == the current host/cwd, and restoring it is
+        // what gives a reopened pane its correct per-host profile immediately (gating it would
+        // strand the pane on the global theme until the next live prompt). Do NOT "consistently"
+        // add an isReplaying guard here.
         // Emit host on CHANGE only (OSC 7 re-reports every prompt), including the first
         // report — even a nil one, so consumers learn "the shell reports no host" explicitly.
         if !hasReportedRemoteHost || reportedRemoteHost != host {

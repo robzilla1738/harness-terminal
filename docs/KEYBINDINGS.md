@@ -94,6 +94,9 @@ These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefi
 | Split horizontal / vertical | `⌘D` / `⌘⇧D` |
 | Command palette | `⌘K` |
 | Command prompt | `⌘;` |
+| Previous prompt (OSC 133) | `⌘↑` |
+| Next prompt (OSC 133) | `⌘↓` |
+| Select last command output (OSC 133) | `⌘⇧A` |
 | Toggle sidebar | `⌘\` |
 | Jump to notification | `⌘⇧U` |
 | Settings | `⌘,` |

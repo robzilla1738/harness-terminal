@@ -254,6 +254,11 @@ final class SessionCoordinator: NSObject {
                 }
             })
             terminalHosts.prune(keeping: live)
+            // Per-surface bookkeeping leaks one entry per pane ever created otherwise: these
+            // only shrink on explicit callbacks (an OSC 7 nil-host reset / a command finish),
+            // which a killed pane never emits. Prune to the live surfaces alongside the hosts.
+            surfaceRemoteHosts = surfaceRemoteHosts.filter { live.contains($0.key) }
+            lastCommandDurations = lastCommandDurations.filter { live.contains($0.key) }
         }
         pushNewRemoteNotifications(from: remote)
         pushAgentActivityNotifications(from: remote)
@@ -1454,7 +1459,15 @@ final class SessionCoordinator: NSObject {
 
     func reimportTerminalConfig() {
         if let imported = TerminalConfigImporter.load() {
+            // `makeDefaults` baselines to defaults + imported VISUALS, so it would drop
+            // Harness-owned behavioral config. Preserve the user's output triggers and
+            // per-host profiles across the re-import — they describe Harness behavior, not
+            // anything the source terminal config could carry.
+            let savedProfiles = settings.profiles
+            let savedTriggers = settings.triggers
             settings = HarnessSettings.makeDefaults(imported: imported)
+            settings.profiles = savedProfiles
+            settings.triggers = savedTriggers
             try? settings.save()
             // Colors were just seeded from the imported terminal config above;
             // don't let the theme preset overwrite the user's explicit config.

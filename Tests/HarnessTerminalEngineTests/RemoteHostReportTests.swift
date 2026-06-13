@@ -46,4 +46,17 @@ final class RemoteHostReportTests: XCTestCase {
         term.feed("\u{1b}]7;file://host-without-path\u{07}")      // no absolute path: rejected
         XCTAssertTrue(hosts.isEmpty)
     }
+
+    /// Host (like cwd) is pane STATE, so OSC 7 fires onRemoteHostChange even during replay —
+    /// the opposite of bells/notifications/queries, which `isReplaying` suppresses. This is
+    /// what restores a reopened pane's per-host profile; gating it would regress that. Locks
+    /// the intentional asymmetry (see `handleWorkingDirectoryOSC`).
+    func testHostFiresDuringReplay() {
+        var hosts: [String?] = []
+        let term = emulator { hosts.append($0) }
+        term.isReplaying = true
+        term.feed("\u{1b}]7;file://remote.box/home\u{07}")
+        term.isReplaying = false
+        XCTAssertEqual(hosts, ["remote.box"], "replayed OSC 7 must restore the host")
+    }
 }

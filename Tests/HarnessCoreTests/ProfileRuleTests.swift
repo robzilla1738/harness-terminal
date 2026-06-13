@@ -50,4 +50,15 @@ final class ProfileRuleTests: XCTestCase {
         let decoded = try JSONDecoder().decode(HarnessSettings.self, from: data)
         XCTAssertEqual(decoded.profiles, settings.profiles)
     }
+
+    func testSettingsRoundTripCarriesTriggers() throws {
+        var settings = HarnessSettings.makeDefaults(imported: nil)
+        settings.triggers = [
+            TriggerRule(pattern: "ERROR", action: .highlight),
+            TriggerRule(pattern: "^Build failed", match: .regex, action: .notify),
+        ]
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: data)
+        XCTAssertEqual(decoded.triggers, settings.triggers)
+    }
 }
