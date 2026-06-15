@@ -1663,6 +1663,12 @@ public final class HarnessTerminalSurfaceView: NSView {
         if !repaintLastFrame() { scheduleRender() }
     }
 
+    public override func viewWillDraw() {
+        super.viewWillDraw()
+        guard lastPresentedResult != nil, !scheduler.isOccluded, !metalLayer.presentsWithTransaction else { return }
+        if !repaintLastFrame() { scheduleRender() }
+    }
+
     public override func layout() {
         super.layout()
         // Resize the drawable and repaint in the SAME turn, with implicit animations off, so a
