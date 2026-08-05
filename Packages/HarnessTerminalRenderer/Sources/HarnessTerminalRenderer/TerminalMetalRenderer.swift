@@ -587,6 +587,10 @@ public final class TerminalMetalRenderer {
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
             renderEncoder.setVertexBytes(&scrollPx, length: MemoryLayout<Float>.stride, index: 2)
             renderEncoder.setFragmentTexture(atlas.texture, index: 0)
+            // Color page set (emoji). It is allocated lazily, so a pane that has never drawn one
+            // has nothing to bind and the coverage atlas stands in as a type-compatible
+            // placeholder — nothing can sample it, since every instance then has isColor == 0.
+            renderEncoder.setFragmentTexture(atlas.colorTexture ?? atlas.texture, index: 1)
             renderEncoder.setFragmentSamplerState(sampler, index: 0)
             renderEncoder.setFragmentBytes(&glyphGamma, length: MemoryLayout<Float>.stride, index: 0)
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceBuffers.glyphCount)
@@ -1712,6 +1716,7 @@ public final class TerminalMetalRenderer {
             uvOrigin: entry.uvOrigin,
             uvSize: entry.uvSize,
             pageIndex: UInt32(entry.pageIndex),
+            isColor: entry.isColor ? 1 : 0,
             color: color
         )
     }

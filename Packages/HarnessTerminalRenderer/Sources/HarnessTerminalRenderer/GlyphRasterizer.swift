@@ -34,7 +34,31 @@ public struct RasterizedGlyph: Equatable, Sendable {
     /// at `baseline − bearingY`. The baseline is pixel-snapped at rasterization so every glyph
     /// shares the exact same baseline (no per-glyph rounding jitter).
     public let bearingY: Int
+    /// 8-bit alpha coverage (1 byte/px) for a normal glyph, or PREMULTIPLIED RGBA (4 bytes/px,
+    /// memory order R,G,B,A) when `isColor` — see below.
     public let coverage: [UInt8]
+    /// True when this came from a color font (Apple Color Emoji and friends), so `coverage`
+    /// holds premultiplied RGBA instead of alpha. A color font's ink IS its color: rasterizing
+    /// it into a grayscale coverage bitmap throws that away and the renderer then tints the
+    /// leftover mask with the cell's foreground — which is exactly why emoji used to render
+    /// monochrome. Such glyphs live in the atlas's separate RGBA page set.
+    public let isColor: Bool
+
+    public init(
+        width: Int,
+        height: Int,
+        bearingX: Int,
+        bearingY: Int,
+        coverage: [UInt8],
+        isColor: Bool = false
+    ) {
+        self.width = width
+        self.height = height
+        self.bearingX = bearingX
+        self.bearingY = bearingY
+        self.coverage = coverage
+        self.isColor = isColor
+    }
 }
 
 struct ShapedRunCacheStats: Equatable {
@@ -84,6 +108,9 @@ public final class GlyphRasterizer {
     /// `CTFontCreateForString` path unchanged.
     private let symbolFont: CTFont?
     private let grayColorSpace = CGColorSpaceCreateDeviceGray()
+    /// Color-glyph (emoji) rasterization target. Only allocated work touches it — a normal
+    /// glyph never leaves the grayscale path, so the monochrome hot path is unchanged.
+    private let rgbColorSpace = CGColorSpaceCreateDeviceRGB()
     private let shapedRunCacheLimit: Int
     // Stores non-Sendable CTFont-bearing shaped glyphs; this rasterizer is single-surface,
     // single-threaded renderer state, so the cache deliberately remains internal and unlocked.
@@ -286,19 +313,34 @@ public final class GlyphRasterizer {
         let pxH = (topPx - botPx) + 2 * pad
         guard pxW > 0, pxH > 0 else { return nil }
 
-        guard let ctx = CGContext(
-            data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
-            bytesPerRow: 0, space: grayColorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else { return nil }
+        // Emoji reach this path whenever they are a multi-scalar cluster — a variation-selector
+        // sequence (⚠️ = U+26A0 U+FE0F), a ZWJ family, or a flag — so the cluster path needs the
+        // same RGBA treatment as the single-glyph one. CoreText picks the substituted font per
+        // run, so ask the composed line rather than the base font.
+        let color = Self.lineHasColorGlyphs(line)
+        guard let ctx = color
+            ? makeColorContext(width: pxW, height: pxH)
+            : CGContext(
+                data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
+                bytesPerRow: 0, space: grayColorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue
+            )
+        else { return nil }
         ctx.setAllowsAntialiasing(true)
         ctx.setShouldAntialias(true)
         ctx.setShouldSmoothFonts(false)
-        ctx.setFillColor(gray: 1, alpha: 1)
+        if !color { ctx.setFillColor(gray: 1, alpha: 1) }
         ctx.scaleBy(x: scale, y: scale)
         // Pen origin at integer device pixels (CG is y-up from the bitmap bottom); CTLineDraw draws
         // from `textPosition`. Same alignment math as the single-glyph path.
         ctx.textPosition = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTLineDraw(line, ctx)
+
+        if color {
+            return RasterizedGlyph(
+                width: pxW, height: pxH, bearingX: leftPx - pad, bearingY: topPx + pad,
+                coverage: readRGBA(ctx, width: pxW, height: pxH), isColor: true
+            )
+        }
 
         // Thicken composed clusters the same way single glyphs are thickened, so crisp-mode
         // Thai/combining-mark text doesn't render visibly thinner than its neighbors.
@@ -421,8 +463,9 @@ public final class GlyphRasterizer {
         return RasterizedGlyph(width: w, height: h, bearingX: 0, bearingY: ascentPx, coverage: coverage)
     }
 
-    /// Render a resolved glyph id in a font into an alpha-coverage bitmap. Returns nil when
-    /// the glyph has no ink.
+    /// Render a resolved glyph id in a font into an alpha-coverage bitmap — or, for a color
+    /// font, into a premultiplied RGBA one (`RasterizedGlyph.isColor`). Returns nil when the
+    /// glyph has no ink.
     private func render(glyph: CGGlyph, font: CTFont) -> RasterizedGlyph? {
         var g = glyph
         var bounds = CGRect.zero
@@ -442,26 +485,46 @@ public final class GlyphRasterizer {
         let pxH = (topPx - botPx) + 2 * pad
         guard pxW > 0, pxH > 0 else { return nil }
 
-        guard let ctx = CGContext(
-            data: nil,
-            width: pxW,
-            height: pxH,
-            bitsPerComponent: 8,
-            bytesPerRow: 0, // let CoreGraphics choose alignment
-            space: grayColorSpace,
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else { return nil }
+        // A color font (Apple Color Emoji) draws its own RGBA ink, so it needs an RGBA target;
+        // the grayscale context below would keep only the shape and discard every color.
+        let color = Self.isColorFont(font)
+        guard let ctx = color
+            ? makeColorContext(width: pxW, height: pxH)
+            : CGContext(
+                data: nil,
+                width: pxW,
+                height: pxH,
+                bitsPerComponent: 8,
+                bytesPerRow: 0, // let CoreGraphics choose alignment
+                space: grayColorSpace,
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            )
+        else { return nil }
 
         ctx.setAllowsAntialiasing(true)
         ctx.setShouldAntialias(true)
         ctx.setShouldSmoothFonts(false)
-        ctx.setFillColor(gray: 1, alpha: 1) // white ink on the zero-cleared (black) bitmap
+        // Only the coverage path needs an ink color forced on it; a color glyph supplies its own.
+        if !color { ctx.setFillColor(gray: 1, alpha: 1) } // white ink on the zero-cleared bitmap
         ctx.scaleBy(x: scale, y: scale)
 
         // Pen origin at integer device pixels (CG is y-up from the bitmap bottom), so the baseline
         // is pixel-aligned. `position` is in points (pre-scale), hence the /scale.
         var position = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTFontDrawGlyphs(font, &g, &position, 1, ctx)
+
+        if color {
+            // No thickening: that filter dilates an alpha mask, and run over premultiplied RGBA
+            // it would smear color channels across the glyph's edges.
+            return RasterizedGlyph(
+                width: pxW,
+                height: pxH,
+                bearingX: leftPx - pad,
+                bearingY: topPx + pad,
+                coverage: readRGBA(ctx, width: pxW, height: pxH),
+                isColor: true
+            )
+        }
 
         let rawCoverage = readCoverage(ctx, width: pxW, height: pxH)
         let coverage = fontThicken
@@ -486,6 +549,61 @@ public final class GlyphRasterizer {
         let ok = CTFontGetGlyphsForCharacters(font, utf16, &glyphs, utf16.count)
         guard ok, let first = glyphs.first, first != 0 else { return nil }
         return first
+    }
+
+    /// True when the font carries color glyphs (Apple Color Emoji's `sbix` bitmaps, or a
+    /// `COLR`/`SVG` font). CoreText reports this as a symbolic trait, so no table sniffing.
+    static func isColorFont(_ font: CTFont) -> Bool {
+        CTFontGetSymbolicTraits(font).contains(.traitColorGlyphs)
+    }
+
+    /// True when any run in a composed line resolved to a color font. Mirrors the defensive
+    /// attribute handling in `shapeUncached`: CoreText can hand back a run with no usable
+    /// `CTFont` attribute, and a force-cast there would crash on content-controlled output.
+    static func lineHasColorGlyphs(_ line: CTLine) -> Bool {
+        guard let runs = CTLineGetGlyphRuns(line) as? [CTRun] else { return false }
+        for run in runs {
+            let attrs = CTRunGetAttributes(run) as NSDictionary
+            guard let fontAttr = attrs[kCTFontAttributeName as String],
+                  CFGetTypeID(fontAttr as CFTypeRef) == CTFontGetTypeID() else { continue }
+            if isColorFont(fontAttr as! CTFont) { return true } // safe: type-checked above
+        }
+        return false
+    }
+
+    /// PREMULTIPLIED RGBA target for color glyphs. `premultipliedLast | byteOrder32Big` lays the
+    /// bytes out as R,G,B,A in memory, which is exactly `MTLPixelFormat.rgba8Unorm`, so the atlas
+    /// upload is a straight copy with no channel swizzle.
+    private func makeColorContext(width: Int, height: Int) -> CGContext? {
+        CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0, // let CoreGraphics choose alignment
+            space: rgbColorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                | CGBitmapInfo.byteOrder32Big.rawValue
+        )
+    }
+
+    /// Copy an RGBA context's pixels into a tightly-packed `width*height*4` buffer, honoring the
+    /// context's (possibly padded) bytesPerRow — the 4-byte-per-pixel twin of `readCoverage`.
+    private func readRGBA(_ ctx: CGContext, width: Int, height: Int) -> [UInt8] {
+        let count = width * height * 4
+        guard let base = ctx.data else { return [UInt8](repeating: 0, count: count) }
+        let bytesPerRow = ctx.bytesPerRow
+        let src = base.assumingMemoryBound(to: UInt8.self)
+        var out = [UInt8](repeating: 0, count: count)
+        let rowBytes = width * 4
+        for y in 0 ..< height {
+            let srcRow = y * bytesPerRow
+            let dstRow = y * rowBytes
+            for x in 0 ..< rowBytes {
+                out[dstRow + x] = src[srcRow + x]
+            }
+        }
+        return out
     }
 
     /// Copy the grayscale context's pixels into a tightly-packed `width*height` buffer,

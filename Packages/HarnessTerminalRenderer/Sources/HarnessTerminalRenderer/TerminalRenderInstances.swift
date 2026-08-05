@@ -141,6 +141,11 @@ struct GlyphInstance {
     var uvSize: SIMD2<Float>
     /// Must mirror Metal `GlyphInstance.pageIndex` (uint@32, padding to color@48).
     var pageIndex: UInt32
+    /// Non-zero when the glyph lives in the atlas's RGBA color page set (emoji): the fragment
+    /// shader then samples `colorAtlas` and skips foreground tinting. Occupies part of the
+    /// padding float4 alignment already reserved before `color@48`, so the instance stays
+    /// 64 bytes and the upload cost is unchanged.
+    var isColor: UInt32 = 0
     var color: SIMD4<Float>
 }
 

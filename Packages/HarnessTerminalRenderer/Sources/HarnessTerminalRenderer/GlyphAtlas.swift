@@ -80,15 +80,38 @@ struct AtlasEntry {
     let pixelHeight: Int
     let bearingX: Int
     let bearingY: Int
+    /// Entry lives in the RGBA color page set (`colorTexture`), not the coverage atlas. The
+    /// renderer samples a different texture for these and skips foreground tinting; `pageIndex`
+    /// indexes the COLOR page set and is not comparable to a coverage page.
+    var isColor: Bool = false
 }
 
 /// A texture-array glyph atlas (R8Unorm coverage) with a simple shelf packer per page.
 /// Glyphs are rasterized and uploaded on demand and cached by `GlyphKey`. A cached `nil`
 /// means the glyph has no ink (e.g. space) so the renderer skips it.
+///
+/// Color glyphs (emoji) go to a second, lazily-allocated RGBA page set instead — see
+/// `colorTexture`. Entries from either set share these caches and are told apart by
+/// `AtlasEntry.isColor`, which also selects the texture the renderer samples.
 final class GlyphAtlas {
     let texture: MTLTexture
     let size: Int
     let maxPages: Int
+
+    /// RGBA page set for color glyphs (emoji), kept SEPARATE from the coverage atlas above.
+    /// Widening the one atlas to RGBA would have quadrupled texture memory and per-glyph upload
+    /// bandwidth for every glyph on screen just to serve the handful that carry color. Allocated
+    /// lazily — a pane that never shows an emoji never pays for it.
+    private(set) var colorTexture: MTLTexture?
+    private let device: MTLDevice
+    private let colorSize = 1024
+    private let colorMaxPages = 2
+    // Shelf packer cursor for the color page set (mirrors the coverage packer below).
+    private var colorPageIndex = 0
+    private var colorPenX = 0
+    private var colorPenY = 0
+    private var colorShelfHeight = 0
+    private var colorPagesUsed = 1
 
     private let rasterizer: GlyphRasterizer
     private var cache: [GlyphKey: AtlasEntry?] = [:]
@@ -160,7 +183,25 @@ final class GlyphAtlas {
         self.size = size
         self.maxPages = max(1, maxPages)
         self.rasterizer = rasterizer
+        self.device = device
         self.pageLastUse = Array(repeating: 0, count: self.maxPages)
+    }
+
+    /// Allocate the color page set on first use. Same storage-mode rule as the coverage atlas.
+    private func ensureColorTexture() -> MTLTexture? {
+        if let colorTexture { return colorTexture }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm,
+            width: colorSize,
+            height: colorSize,
+            mipmapped: false
+        )
+        descriptor.textureType = .type2DArray
+        descriptor.arrayLength = colorMaxPages
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
+        colorTexture = device.makeTexture(descriptor: descriptor)
+        return colorTexture
     }
 
     /// Atlas entry for a glyph variant, rasterizing + packing on first use. Returns nil if
@@ -218,12 +259,23 @@ final class GlyphAtlas {
         if cache.count + shapedCache.count + clusterCache.count > maxCacheEntries { resetPacker() }
     }
 
+    /// Whether a cached entry occupies the given COVERAGE page. A cached no-ink entry (nil)
+    /// lives on no page, and a color entry's `pageIndex` addresses the separate RGBA page set —
+    /// neither may be matched against a coverage page index, or eviction would drop live
+    /// entries that the victim page never held.
+    private static func livesOnCoveragePage(_ page: Int, _ entry: AtlasEntry?) -> Bool {
+        guard let entry, !entry.isColor else { return false }
+        return entry.pageIndex == page
+    }
+
     /// Record a cache hit as a use of the entry's page for the LRU clock. Cached no-ink
     /// entries (nil) live on no page and never count as a use.
     private func touchPage(of entry: AtlasEntry?) {
-        guard let page = entry?.pageIndex else { return }
+        // A color entry's `pageIndex` addresses the RGBA page set, which runs no LRU clock;
+        // feeding it to `pageLastUse` would corrupt the coverage atlas's eviction ordering.
+        guard let entry, !entry.isColor else { return }
         useTick &+= 1
-        pageLastUse[page] = useTick
+        pageLastUse[entry.pageIndex] = useTick
     }
 
     /// Shape a run for ligatures (delegates to the rasterizer's CoreText shaper).
@@ -236,6 +288,7 @@ final class GlyphAtlas {
     /// fresh page instead of resetting. At `maxPages`, the atlas keeps the old self-healing full
     /// reset fallback; LRU per-page eviction is a later refinement.
     private func place(_ glyph: RasterizedGlyph) -> AtlasEntry? {
+        if glyph.isColor { return placeColor(glyph) }
         guard glyph.width > 0, glyph.height > 0, glyph.width <= size, glyph.height <= size else {
             return nil
         }
@@ -251,6 +304,81 @@ final class GlyphAtlas {
         if let entry = pack(glyph) { return entry }
         resetPacker()
         return pack(glyph) // should succeed for any glyph that fits one empty page
+    }
+
+    /// Pack a color glyph into the RGBA page set. Emoji working sets are tiny next to the text
+    /// glyph set, so this keeps the simple reset-on-full policy rather than a second LRU: the
+    /// reset purges only the color entries and re-rasterizing a few emoji is cheap.
+    private func placeColor(_ glyph: RasterizedGlyph) -> AtlasEntry? {
+        guard glyph.width > 0, glyph.height > 0,
+              glyph.width <= colorSize, glyph.height <= colorSize,
+              let texture = ensureColorTexture()
+        else { return nil }
+        if let entry = packColor(glyph, into: texture) { return entry }
+        resetColorPacker()
+        return packColor(glyph, into: texture)
+    }
+
+    /// Shelf-pack one color glyph, uploading its premultiplied RGBA. Returns nil when every
+    /// color page is full.
+    private func packColor(_ glyph: RasterizedGlyph, into texture: MTLTexture) -> AtlasEntry? {
+        if colorPenX + glyph.width > colorSize {
+            colorPenX = 0
+            colorPenY += colorShelfHeight + 1
+            colorShelfHeight = 0
+        }
+        if colorPenY + glyph.height > colorSize {
+            guard colorPagesUsed < colorMaxPages else { return nil }
+            colorPageIndex = colorPagesUsed
+            colorPagesUsed += 1
+            colorPenX = 0
+            colorPenY = 0
+            colorShelfHeight = 0
+        }
+
+        let originX = colorPenX
+        let originY = colorPenY
+
+        glyph.coverage.withUnsafeBytes { raw in
+            texture.replace(
+                region: MTLRegionMake2D(originX, originY, glyph.width, glyph.height),
+                mipmapLevel: 0,
+                slice: colorPageIndex,
+                withBytes: raw.baseAddress!,
+                bytesPerRow: glyph.width * 4,
+                bytesPerImage: glyph.width * glyph.height * 4
+            )
+        }
+
+        colorPenX += glyph.width + 1
+        colorShelfHeight = max(colorShelfHeight, glyph.height)
+
+        let inv = Float(colorSize)
+        return AtlasEntry(
+            pageIndex: colorPageIndex,
+            uvOrigin: SIMD2(Float(originX) / inv, Float(originY) / inv),
+            uvSize: SIMD2(Float(glyph.width) / inv, Float(glyph.height) / inv),
+            pixelWidth: glyph.width,
+            pixelHeight: glyph.height,
+            bearingX: glyph.bearingX,
+            bearingY: glyph.bearingY,
+            isColor: true
+        )
+    }
+
+    /// Rewind the color page set and drop every cached COLOR entry — the color twin of
+    /// `resetPacker`. Purging the entries is what stops a cached UV from pointing into a page
+    /// that is about to be overwritten; coverage entries are untouched.
+    private func resetColorPacker() {
+        resets += 1 // epoch bump — renderer-side baked UVs must re-encode (see `resetPacker`)
+        colorPageIndex = 0
+        colorPagesUsed = 1
+        colorPenX = 0
+        colorPenY = 0
+        colorShelfHeight = 0
+        cache = cache.filter { $0.value?.isColor != true }
+        shapedCache = shapedCache.filter { $0.value?.isColor != true }
+        clusterCache = clusterCache.filter { $0.value?.isColor != true }
     }
 
     /// Evict the least-recently-used populated page: drop every cached entry living on it and
@@ -277,9 +405,9 @@ final class GlyphAtlas {
         pageEvictions += 1
         // Drop only the victim page's entries. A cached `nil` (no-ink glyph) lives on no page
         // (`$0.value?.pageIndex` is nil) and deliberately survives every eviction.
-        cache = cache.filter { $0.value?.pageIndex != victim }
-        shapedCache = shapedCache.filter { $0.value?.pageIndex != victim }
-        clusterCache = clusterCache.filter { $0.value?.pageIndex != victim }
+        cache = cache.filter { !Self.livesOnCoveragePage(victim, $0.value) }
+        shapedCache = shapedCache.filter { !Self.livesOnCoveragePage(victim, $0.value) }
+        clusterCache = clusterCache.filter { !Self.livesOnCoveragePage(victim, $0.value) }
         pageIndex = victim
         penX = 0
         penY = 0
@@ -303,6 +431,13 @@ final class GlyphAtlas {
         useTick &+= 1
         pageLastUse = Array(repeating: 0, count: maxPages)
         pageLastUse[0] = useTick
+        // This clears the COLOR entries too, so the color packer has to rewind with them or its
+        // pages would keep filling with space nothing can reference any more.
+        colorPageIndex = 0
+        colorPagesUsed = 1
+        colorPenX = 0
+        colorPenY = 0
+        colorShelfHeight = 0
         cache.removeAll(keepingCapacity: true)
         shapedCache.removeAll(keepingCapacity: true)
         clusterCache.removeAll(keepingCapacity: true)
