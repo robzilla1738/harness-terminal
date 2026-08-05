@@ -17,12 +17,15 @@ enum MetalShaders {
         float4 color;
     };
 
+    // `isColor` rides in the padding that float4 alignment already reserved between
+    // `pageIndex` (@32) and `color` (@48), so the instance is still 64 bytes.
     struct GlyphInstance {
         float2 origin;
         float2 size;
         float2 uvOrigin;
         float2 uvSize;
         uint pageIndex;
+        uint isColor;
         float4 color;
     };
 
@@ -41,6 +44,7 @@ enum MetalShaders {
         float4 color;
         float2 uv;
         uint pageIndex [[flat]];
+        uint isColor [[flat]];
     };
 
     struct DecoOut {
@@ -77,6 +81,7 @@ enum MetalShaders {
         out.color = inst.color;
         out.uv = float2(0.0, 0.0);
         out.pageIndex = 0u;
+        out.isColor = 0u;
         return out;
     }
 
@@ -98,13 +103,26 @@ enum MetalShaders {
         out.color = inst.color;
         out.uv = inst.uvOrigin + corner * inst.uvSize;
         out.pageIndex = inst.pageIndex;
+        out.isColor = inst.isColor;
         return out;
     }
 
     fragment float4 glyph_fragment(VOut in [[stage_in]],
                                    texture2d_array<float> atlas [[texture(0)]],
+                                   texture2d_array<float> colorAtlas [[texture(1)]],
                                    sampler samp [[sampler(0)]],
                                    constant float &gamma [[buffer(0)]]) {
+        if (in.isColor != 0u) {
+            // A color glyph (emoji) carries its own finished ink, so it must NOT be tinted with
+            // the cell foreground the way a coverage mask is. The atlas holds it premultiplied;
+            // this pipeline blends with straight alpha (sourceAlpha/oneMinusSourceAlpha), so
+            // undo the premultiply here rather than add a second pipeline and draw call just
+            // for emoji. `color.a` still applies, so dimmed/faded cells keep working.
+            float4 texel = colorAtlas.sample(samp, in.uv, in.pageIndex);
+            float alpha = texel.a;
+            float3 rgb = alpha > 0.0 ? texel.rgb / alpha : float3(0.0);
+            return float4(rgb, alpha * in.color.a);
+        }
         float coverage = atlas.sample(samp, in.uv, in.pageIndex).r;
         // Gamma-correct ("linear-corrected") coverage thickens light-on-dark antialiasing.
         // gamma == 1 is native (no change).
@@ -125,6 +143,7 @@ enum MetalShaders {
         out.color = float4(1.0, 1.0, 1.0, 1.0);
         out.uv = corner; // (0,0) top-left → texture row 0 (top); y-flip is in pixelToNDC
         out.pageIndex = 0u;
+        out.isColor = 0u;
         return out;
     }
 
