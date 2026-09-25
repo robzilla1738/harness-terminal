@@ -129,24 +129,8 @@ final class MainWindowController: NSWindowController {
     func applyTransparency() {
         guard let window else { return }
         let settings = SessionCoordinator.shared.settings
-        let opacity = max(0, min(1, settings.backgroundOpacity))
-        let isOpaque = opacity >= 0.999
 
         window.titlebarAppearsTransparent = settings.transparentTitlebar
-        window.isOpaque = isOpaque
-        window.backgroundColor = isOpaque ? HarnessChrome.current.terminalBackground : .clear
-
-        // Drop the window shadow while translucent. macOS computes the drop shadow from the
-        // window's content alpha (a rectangle), so on a translucent window it renders as a
-        // dark band hugging the rounded frame. With blur high the blurred backdrop hides it;
-        // as blur drops it sharpens into the "hard dark edge at the corners that won't go
-        // away." A translucent canvas already reads as glass (and the one window-wide blur
-        // gives separation), so no shadow is the clean look; opaque windows keep theirs.
-        // `invalidateShadow` forces an immediate recompute (toggling blur via the private CGS
-        // API doesn't notify AppKit, which is why a stale shadow lingered).
-        window.hasShadow = isOpaque
-        window.invalidateShadow()
-
         // Do NOT force the window's `contentView` to be a layer-backed, clear rectangle.
         // Forcing `wantsLayer` on the contentView makes the whole window layer-backed, and a
         // layer-backed window clips the private CGS background blur to the contentView's
@@ -173,6 +157,11 @@ final class MainWindowController: NSWindowController {
         // chrome hides its vibrancy material when translucent, so terminal and chrome
         // share exactly one blurred backdrop. (the renderer's own `background-blur` is a
         // no-op in embedded mode since it doesn't own this NSWindow.) Opaque → no blur.
-        WindowBlur.apply(radius: isOpaque ? 0 : settings.backgroundBlur, to: window)
+        WindowAppearance.applyTransparency(
+            opacity: settings.backgroundOpacity,
+            blur: settings.backgroundBlur,
+            opaqueBackground: HarnessChrome.current.terminalBackground,
+            to: window
+        )
     }
 }

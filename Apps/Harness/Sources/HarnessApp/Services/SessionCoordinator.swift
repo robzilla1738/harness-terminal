@@ -599,6 +599,7 @@ final class SessionCoordinator: NSObject {
     /// `refreshChromePalette()` so `.macOSSystem` resolution applies on every path.
     private func updateChromeAndHosts(systemAppearance: HarnessSystemAppearance? = nil) {
         refreshChromePalette(systemAppearance: systemAppearance)
+        QuickTerminalController.shared.applyTransparency()
         let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
         for host in terminalHosts.allHosts() {
             host.applyTheme(named: snapshot.themeName)
