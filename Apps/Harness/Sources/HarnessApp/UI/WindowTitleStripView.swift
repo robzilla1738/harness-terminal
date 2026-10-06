@@ -67,15 +67,15 @@ final class WindowTitleStripView: NSView {
         stackLeading?.constant = basePadding + inset
     }
 
-    /// Show the active tab's directory as `· basename`, Ghostty-style. Empty cwd hides the readout
-    /// (the strip stays as a drag handle).
-    func setPath(_ cwd: String) {
-        let name = HarnessDesign.pathDisplayName(cwd)
-        let hasPath = !name.isEmpty
-        folderIcon.isHidden = !hasPath
-        label.isHidden = !hasPath
-        label.stringValue = hasPath ? "·  \(name)" : ""
-        toolTip = hasPath ? HarnessDesign.shortenPath(cwd) : nil
+    /// Show the shared surface identity (directory, then the foreground program). An empty
+    /// label hides the readout; the strip stays a drag handle.
+    func setIdentity(_ identity: String) {
+        let hasIdentity = !identity.isEmpty
+        folderIcon.isHidden = !hasIdentity
+        label.isHidden = !hasIdentity
+        label.stringValue = identity
+        label.textColor = HarnessChrome.current.textPrimary
+        toolTip = hasIdentity ? identity : nil
     }
 
     func applyColors() {

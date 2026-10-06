@@ -25,11 +25,9 @@ import HarnessCore
 final class ScrollbackFile: @unchecked Sendable {
     static let minimumRetentionCap = 64 * 1024
     /// On-disk safety ceiling for "unlimited" scrollback (`scrollbackLines == 0`, surfaced as a
-    /// `retentionCap` of `0`). The GUI emulator keeps a truly-unbounded line history, but the
-    /// persisted log — and the daemon's in-memory replay ring sized from it — stays bounded here so
-    /// a runaway producer can never fill the disk or OOM the session-authority daemon. 512 MiB of
-    /// raw PTY output is far more replay history than any reattach needs.
-    static let unlimitedSafetyCap = 512 * 1024 * 1024
+    /// `retentionCap` of `0`). The GUI line history uses the same ceiling, so neither side grows
+    /// without a bound. A runaway producer cannot fill the disk or OOM the session-authority daemon.
+    static let unlimitedSafetyCap = ScrollbackBudget.unlimitedSafetyCapBytes
 
     private let url: URL
     /// Retain roughly this many bytes on disk — sized to the surface's in-memory ring cap so

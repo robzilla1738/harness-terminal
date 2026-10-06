@@ -26,6 +26,12 @@ int harness_pty_set_winsize(int fd, unsigned short rows, unsigned short cols) {
     return ioctl(fd, TIOCSWINSZ, &ws);
 }
 
+int harness_fd_available(int fd) {
+    int available = 0;
+    if (ioctl(fd, FIONREAD, &available) != 0) return -1;
+    return available;
+}
+
 int harness_pty_get_winsize(int fd, unsigned short *rows, unsigned short *cols) {
     struct winsize ws;
     int r = ioctl(fd, TIOCGWINSZ, &ws);

@@ -149,6 +149,33 @@ final class TerminalConfigImporterTests: XCTestCase {
     }
 
 
+    func testUserThemeFileSuppliesColorsAndConfigOverrideWins() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("harness-theme-file-\(UUID().uuidString)", isDirectory: true)
+        let themes = root.appendingPathComponent("themes", isDirectory: true)
+        try FileManager.default.createDirectory(at: themes, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let theme = themes.appendingPathComponent("ef-bio")
+        try """
+        palette = 2=#3fb83f
+        foreground = #cfdfd5
+        cursor-color = #35f038
+        background = #111111
+        """.write(to: theme, atomically: true, encoding: .utf8)
+        let config = root.appendingPathComponent("config")
+        try """
+        theme = \(theme.path)
+        background = #000000
+        """.write(to: config, atomically: true, encoding: .utf8)
+
+        let imported = try XCTUnwrap(TerminalConfigImporter.load(from: [config.path]))
+        XCTAssertEqual(imported.themeName, theme.path)
+        XCTAssertEqual(imported.backgroundHex, "#000000")
+        XCTAssertEqual(imported.foregroundHex, "#CFDFD5")
+        XCTAssertEqual(imported.cursorColorHex, "#35F038")
+        XCTAssertEqual(imported.paletteHex[2], "#3FB83F")
+    }
+
     func testKeepsSingleGhosttyThemeAsThemeName() {
         let imported = TerminalConfigImporter.parse("""
         theme = Dracula

@@ -101,6 +101,14 @@ These query the current Harness state and do not change your layout.
 | `has-session --session <name\|uuid>` | Scripting verb: exit `0` if it exists, `1` if not; prints nothing. |
 | `list-commands` | Print the bindable command vocabulary. |
 | `list-agents [--waiting]` | List all running agents with state, age, and surface ID. `--waiting` filters to agents that need a response. |
+| `events` | Print session, pane, and agent events as JSON lines. |
+| `process [--surface <id>]` | Print a surface's foreground process as JSON. Defaults to the first surface. |
+| `size-mode <smallest\|owner>` | Set multi-client PTY sizing. `smallest` is the default (every attached client votes). `owner` follows the client that took the surface. |
+| `take-surface --surface <id> [--client <uuid>]` | Make one attached client the size owner of a surface. |
+| `save-layout --name <name>` | Save the active tab's layout under that name. |
+| `restore-layout --name <name>` | Restore a saved layout. |
+| `find-files` | Find paths locally or on a configured remote host. Does not need the daemon. |
+| `copy-file` | Copy a file locally or over the SSH remote connection. Does not need the daemon. |
 
 ### Local diagnostics
 

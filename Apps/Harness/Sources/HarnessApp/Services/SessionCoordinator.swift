@@ -574,6 +574,24 @@ final class SessionCoordinator: NSObject {
         syncFromDaemon()
     }
 
+    /// Switch appearance and repaint. Light uses the configured light theme even when the
+    /// Mac is dark. Stored opacity and blur stay put.
+    func setAppearanceMode(_ mode: HarnessAppearanceMode) {
+        guard settings.appearanceMode != mode else { return }
+        settings.appearanceMode = mode
+        settings.clearThemeColorOverrides()
+        if mode == .light || mode == .macOSSystem {
+            if settings.systemLightThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                settings.systemLightThemeName = ThemeManager.defaultSystemLightThemeName
+            }
+            if settings.systemDarkThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                settings.systemDarkThemeName = ThemeManager.defaultSystemDarkThemeName
+            }
+        }
+        try? settings.save()
+        applySettingsToHosts()
+    }
+
     /// Push the current `settings` to every live terminal host and refresh chrome.
     func applySettingsToHosts() {
         updateChromeAndHosts()

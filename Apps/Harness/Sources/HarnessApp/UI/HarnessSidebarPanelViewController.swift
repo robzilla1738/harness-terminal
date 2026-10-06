@@ -95,7 +95,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
         HarnessDesign.makeClear(workspaceBar)
         HarnessDesign.makeClear(sectionHeader)
         HarnessDesign.makeClear(footer)
-        sectionLabel.textColor = HarnessDesign.chrome.textTertiary
+        sectionLabel.textColor = HarnessDesign.chrome.textSecondary
+        HarnessDesign.applyChromeLabelAppearance([sectionLabel], isDark: HarnessDesign.chrome.isDark)
         workspacePill.applyChrome()
         sidebarToggleButton.applyChrome()
         dismissWorkspaceDropdown()
@@ -136,7 +137,10 @@ final class HarnessSidebarPanelViewController: NSViewController {
         sidebarToggleButton.action = #selector(sidebarToggleClicked)
         sidebarToggleButton.translatesAutoresizingMaskIntoConstraints = false
 
-        workspaceBar.addSubview(notificationBell)
+        sidebarToggleButton.isHidden = true
+        // The bell shares the traffic-light row with the tabs, so it doesn't open
+        // a second empty band under them.
+        chromeHeader.addSubview(notificationBell)
         workspaceBar.addSubview(sidebarToggleButton)
         view.addSubview(workspaceBar)
 
@@ -144,16 +148,15 @@ final class HarnessSidebarPanelViewController: NSViewController {
             workspaceBar.topAnchor.constraint(equalTo: chromeHeader.bottomAnchor),
             workspaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             workspaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            workspaceBar.heightAnchor.constraint(equalToConstant: HarnessDesign.workspaceBarHeight),
-            // Toggle pinned to the trailing edge (against the divider); 30×30 like the bell.
+            workspaceBar.heightAnchor.constraint(equalToConstant: 0),
             sidebarToggleButton.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -HarnessDesign.horizontalInset),
             sidebarToggleButton.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
-            sidebarToggleButton.widthAnchor.constraint(equalToConstant: 30),
-            sidebarToggleButton.heightAnchor.constraint(equalToConstant: 30),
-            notificationBell.trailingAnchor.constraint(equalTo: sidebarToggleButton.leadingAnchor, constant: -6),
-            notificationBell.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
-            notificationBell.widthAnchor.constraint(equalToConstant: 30),
-            notificationBell.heightAnchor.constraint(equalToConstant: 30),
+            sidebarToggleButton.widthAnchor.constraint(equalToConstant: 28),
+            sidebarToggleButton.heightAnchor.constraint(equalToConstant: 28),
+            notificationBell.trailingAnchor.constraint(equalTo: chromeHeader.trailingAnchor, constant: -HarnessDesign.horizontalInset),
+            notificationBell.centerYAnchor.constraint(equalTo: chromeHeader.centerYAnchor),
+            notificationBell.widthAnchor.constraint(equalToConstant: HarnessDesign.chromeIconButtonSize),
+            notificationBell.heightAnchor.constraint(equalToConstant: HarnessDesign.chromeIconButtonSize),
         ])
     }
 
@@ -316,6 +319,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
         sectionLabel.font = HarnessDesign.Typography.sectionLabel
         sectionLabel.stringValue = "SESSIONS"
+        HarnessDesign.prepareChromeLabel(sectionLabel)
         sectionLabel.translatesAutoresizingMaskIntoConstraints = false
 
         sectionHeader.addSubview(sectionLabel)
@@ -325,7 +329,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             sectionHeader.topAnchor.constraint(equalTo: workspaceBar.bottomAnchor),
             sectionHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sectionHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            sectionHeader.heightAnchor.constraint(equalToConstant: 24),
+            sectionHeader.heightAnchor.constraint(equalToConstant: 28),
             sectionLabel.leadingAnchor.constraint(equalTo: sectionHeader.leadingAnchor, constant: HarnessDesign.horizontalInset),
             sectionLabel.bottomAnchor.constraint(equalTo: sectionHeader.bottomAnchor, constant: -4),
         ])
@@ -369,12 +373,13 @@ final class HarnessSidebarPanelViewController: NSViewController {
         searchContainer.addSubview(searchField)
         // The search field lives in the header row, expanding from the leading edge up to the
         // notification bell + sidebar toggle on the right.
+        searchContainer.isHidden = true
         workspaceBar.addSubview(searchContainer)
         NSLayoutConstraint.activate([
             searchContainer.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.horizontalInset),
             searchContainer.trailingAnchor.constraint(equalTo: notificationBell.leadingAnchor, constant: -8),
             searchContainer.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
-            searchContainer.heightAnchor.constraint(equalToConstant: 30),
+            searchContainer.heightAnchor.constraint(equalToConstant: 0),
 
             searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 8),
             searchIcon.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
@@ -499,11 +504,11 @@ final class HarnessSidebarPanelViewController: NSViewController {
             settings.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: HarnessDesign.horizontalInset),
             settings.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
 
-            palette.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
+            palette.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -HarnessDesign.horizontalInset),
             palette.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            newSession.trailingAnchor.constraint(equalTo: palette.leadingAnchor, constant: -2),
+            newSession.trailingAnchor.constraint(equalTo: palette.leadingAnchor, constant: -6),
             newSession.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            agentsButton.trailingAnchor.constraint(equalTo: newSession.leadingAnchor, constant: -2),
+            agentsButton.trailingAnchor.constraint(equalTo: newSession.leadingAnchor, constant: -6),
             agentsButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
         ])
     }
@@ -515,6 +520,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         activeSessionID = snap.activeWorkspace?.activeSessionID
         sessions = snap.activeWorkspace?.sessions ?? []
         let name = snap.activeWorkspace?.name ?? "Workspace"
+        sectionLabel.stringValue = name.uppercased()
         workspacePill.configure(name: name, count: sessions.count)
         sessionTable.reloadData()
 
@@ -1106,6 +1112,7 @@ private final class WorkspaceSwitcherRow: NSView {
         titleLabel.stringValue = title
         titleLabel.font = HarnessDesign.Typography.sidebarLabel
         titleLabel.lineBreakMode = .byTruncatingTail
+        HarnessDesign.prepareChromeLabel(titleLabel)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         toolTip = title
 
@@ -1179,13 +1186,13 @@ private final class WorkspaceSwitcherRow: NSView {
 
     private func applyChrome() {
         let c = HarnessDesign.chrome
-        let selectedFill = c.accent.withAlphaComponent(c.isDark ? 0.14 : 0.11)
         layer?.backgroundColor = active
-            ? selectedFill.cgColor
-            : (isHovered ? c.textPrimary.withAlphaComponent(0.06).cgColor : NSColor.clear.cgColor)
+            ? c.activePillFill.cgColor
+            : (isHovered ? c.rowHoverFill.cgColor : NSColor.clear.cgColor)
         layer?.borderWidth = 0
         icon.contentTintColor = active ? c.accent : c.textTertiary
-        titleLabel.textColor = active || isHovered ? c.textPrimary : c.textSecondary
+        titleLabel.textColor = active ? c.activePillLabel : (isHovered ? c.textPrimary : c.textSecondary)
+        HarnessDesign.applyChromeLabelAppearance([titleLabel], isDark: c.isDark)
         moreButton.contentTintColor = c.textSecondary
         // Ellipsis is visible on the active row at rest and on any row when hovered.
         // Fade for polish — popping in is jarring next to the count label.
@@ -1227,6 +1234,7 @@ final class WorkspacePillButton: NSButton {
 
         nameLabel.font = HarnessDesign.Typography.sidebarLabel
         nameLabel.lineBreakMode = .byTruncatingTail
+        HarnessDesign.prepareChromeLabel(nameLabel)
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
 
         // All header glyphs share one weight (.medium) so the icon set reads as a
@@ -1322,6 +1330,7 @@ final class WorkspacePillButton: NSButton {
         // Resting color matches the search placeholder (textSecondary); brightens to
         // primary on hover — same resting/active rule used by every other label.
         nameLabel.textColor = isHovered ? c.textPrimary : c.textSecondary
+        HarnessDesign.applyChromeLabelAppearance([nameLabel], isDark: c.isDark)
         icon.contentTintColor = isHovered ? c.textPrimary : c.textSecondary
         chevron.contentTintColor = isHovered ? c.textSecondary : c.textTertiary
         moreButton.contentTintColor = isHovered ? c.textSecondary : c.textTertiary
@@ -1337,8 +1346,11 @@ final class SessionCardRowView: NSView {
     var onContextMenu: (() -> NSMenu?)?
 
     private let fill = NSView()
+    private var glassView: NSView?
     private let titleLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
+    private var titleTop: NSLayoutConstraint?
+    private var titleCenter: NSLayoutConstraint?
     private let agentChip = AgentChipView()
     private var isSelected = false
     private var isHovered = false
@@ -1349,15 +1361,16 @@ final class SessionCardRowView: NSView {
         wantsLayer = true
 
         fill.wantsLayer = true
-        fill.layer?.cornerRadius = HarnessDesign.cornerRadius
         fill.layer?.cornerCurve = .continuous
-        fill.layer?.borderWidth = 1
-        fill.layer?.masksToBounds = false
+        fill.layer?.borderWidth = 0
+        fill.layer?.masksToBounds = true
         fill.translatesAutoresizingMaskIntoConstraints = false
+        installGlass()
 
         titleLabel.font = HarnessDesign.Typography.sidebarLabel
         titleLabel.usesSingleLineMode = true
         titleLabel.lineBreakMode = .byTruncatingTail
+        HarnessDesign.prepareChromeLabel(titleLabel)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         // The agent chip now carries the full tool name; let the title truncate to
         // make room rather than squeezing the chip.
@@ -1367,6 +1380,7 @@ final class SessionCardRowView: NSView {
         metaLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         metaLabel.usesSingleLineMode = true
         metaLabel.lineBreakMode = .byTruncatingTail
+        HarnessDesign.prepareChromeLabel(metaLabel)
         metaLabel.translatesAutoresizingMaskIntoConstraints = false
         metaLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
@@ -1379,13 +1393,12 @@ final class SessionCardRowView: NSView {
         fill.addSubview(agentChip)
 
         NSLayoutConstraint.activate([
-            fill.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            fill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-            fill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.horizontalInset - 4),
-            fill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(HarnessDesign.horizontalInset - 4)),
+            fill.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            fill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            fill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.horizontalInset),
+            fill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.horizontalInset),
 
             titleLabel.leadingAnchor.constraint(equalTo: fill.leadingAnchor, constant: 12),
-            titleLabel.topAnchor.constraint(equalTo: fill.topAnchor, constant: 8),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: agentChip.leadingAnchor, constant: -6),
 
             // No inline controls anymore — the agent chip sits flush to the card's
@@ -1402,10 +1415,32 @@ final class SessionCardRowView: NSView {
             metaLabel.trailingAnchor.constraint(equalTo: fill.trailingAnchor, constant: -10),
             metaLabel.bottomAnchor.constraint(lessThanOrEqualTo: fill.bottomAnchor, constant: -6),
         ])
+        let top = titleLabel.topAnchor.constraint(equalTo: fill.topAnchor, constant: 8)
+        let center = titleLabel.centerYAnchor.constraint(equalTo: fill.centerYAnchor)
+        center.isActive = false
+        top.isActive = true
+        titleTop = top
+        titleCenter = center
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let aligned = backingAlignedRect(fill.frame, options: [.alignAllEdgesNearest])
+        if abs(aligned.origin.x - fill.frame.origin.x) > 0.01 || abs(aligned.origin.y - fill.frame.origin.y) > 0.01 {
+            fill.frame = aligned
+        }
+        let scale = window?.backingScaleFactor ?? 2
+        fill.layer?.contentsScale = scale
+        let radius: CGFloat = 10
+        fill.layer?.cornerRadius = radius
+        if let glassView {
+            HarnessDesign.setLiquidGlassCornerRadius(radius, on: glassView)
+        }
+        HarnessDesign.alignChromeText([titleLabel, metaLabel], in: fill)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -1420,20 +1455,46 @@ final class SessionCardRowView: NSView {
         trackingArea = area
     }
 
+    private func installGlass() {
+        guard glassView == nil, let glass = HarnessDesign.makeLiquidGlass(cornerRadius: 10) else { return }
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        fill.addSubview(glass, positioned: .below, relativeTo: titleLabel)
+        NSLayoutConstraint.activate([
+            glass.topAnchor.constraint(equalTo: fill.topAnchor),
+            glass.leadingAnchor.constraint(equalTo: fill.leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: fill.trailingAnchor),
+            glass.bottomAnchor.constraint(equalTo: fill.bottomAnchor),
+        ])
+        glass.isHidden = true
+        glassView = glass
+    }
+
     func configure(session: SessionGroup, isSelected: Bool) {
         let tab = session.activeTab ?? session.tabs.first ?? Tab()
-        let folder = HarnessDesign.shortenPath(tab.cwd)
-        let folderName = HarnessDesign.pathDisplayName(tab.cwd)
+        let path = HarnessDesign.shortenPath(tab.cwd)
+        let identity = SurfaceIdentity.label(
+            directory: tab.cwd,
+            program: tab.currentCommand,
+            agent: tab.agent?.kind.commandToken
+        )
         let displayedAgentKind = tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)
-        titleLabel.stringValue = session.name.isEmpty ? folderName : session.name
-        toolTip = session.name.isEmpty ? folder : "\(session.name) — \(folder)"
+        titleLabel.stringValue = identity
+        toolTip = path.isEmpty ? identity : "\(identity) — \(path)"
 
         var metaParts: [String] = []
+        if !session.name.isEmpty {
+            metaParts.append(session.name)
+        }
+        if let branch = tab.gitBranch, !branch.isEmpty {
+            metaParts.append(branch)
+        }
         if session.tabs.count > 1 {
             metaParts.append("\(session.tabs.count) tabs")
         }
-        metaParts.append(folder)
-        metaLabel.stringValue = metaParts.joined(separator: "  •  ")
+        metaLabel.stringValue = metaParts.joined(separator: "  ·  ")
+        metaLabel.isHidden = metaParts.isEmpty
+        titleTop?.isActive = !metaParts.isEmpty
+        titleCenter?.isActive = metaParts.isEmpty
 
         if let kind = displayedAgentKind {
             agentChip.configure(kind: kind, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
@@ -1458,26 +1519,37 @@ final class SessionCardRowView: NSView {
         let c = HarnessDesign.chrome
         metaLabel.textColor = c.textTertiary
         if isSelected {
-            // Selected row: theme-tinted fill + accent rim + resting elevation. The
-            // fill is the accent at low alpha (legible on every theme) so the active
-            // session reads instantly even at a glance.
-            let selectedFill = c.accent.withAlphaComponent(c.isDark ? 0.13 : 0.10)
-            fill.layer?.backgroundColor = selectedFill.cgColor
-            fill.layer?.borderColor = c.focusRing.withAlphaComponent(c.isDark ? 0.48 : 0.52).cgColor
-            HarnessDesign.applyShadow(.elevation1, to: fill.layer)
-            titleLabel.textColor = c.textPrimary
+            if let glassView {
+                glassView.isHidden = false
+                let glassTint = HarnessDesign.activeGlassTint(isDark: c.isDark, textPrimary: c.textPrimary)
+                HarnessDesign.setLiquidGlassTint(glassTint, on: glassView)
+                fill.layer?.backgroundColor = NSColor.clear.cgColor
+            } else {
+                fill.layer?.backgroundColor = c.activePillFill.cgColor
+            }
+            fill.layer?.borderWidth = 1
+            fill.layer?.borderColor = c.textPrimary.withAlphaComponent(HarnessDesign.activeGlassBorderAlpha(isDark: c.isDark)).cgColor
+            if c.isDark {
+                HarnessDesign.applyShadow(.elevation1, to: fill.layer)
+            } else {
+                HarnessDesign.applyShadow(.none, to: fill.layer)
+            }
+            titleLabel.textColor = c.activePillLabel
             metaLabel.textColor = c.textSecondary
         } else if isHovered {
+            glassView?.isHidden = true
             fill.layer?.backgroundColor = c.rowHoverFill.cgColor
-            fill.layer?.borderColor = NSColor.clear.cgColor
+            fill.layer?.borderWidth = 0
             HarnessDesign.applyShadow(.none, to: fill.layer)
             titleLabel.textColor = c.textPrimary
         } else {
+            glassView?.isHidden = true
             fill.layer?.backgroundColor = NSColor.clear.cgColor
-            fill.layer?.borderColor = NSColor.clear.cgColor
+            fill.layer?.borderWidth = 0
             HarnessDesign.applyShadow(.none, to: fill.layer)
             titleLabel.textColor = c.textSecondary
         }
+        HarnessDesign.applyChromeLabelAppearance([titleLabel, metaLabel], isDark: c.isDark)
     }
 
     override func mouseEntered(with event: NSEvent) {

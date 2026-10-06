@@ -14,6 +14,9 @@
 
 int harness_pty_set_winsize(int fd, unsigned short rows, unsigned short cols);
 int harness_pty_get_winsize(int fd, unsigned short *rows, unsigned short *cols);
+// Bytes sitting in the kernel buffer (FIONREAD), or -1. Non-blocking; used to copy a
+// short-lived child's last write before the read source is cancelled.
+int harness_fd_available(int fd);
 int harness_pty_make_controlling(int fd);
 int harness_open_rdwr(const char *path);
 int harness_set_nonblocking(int fd);

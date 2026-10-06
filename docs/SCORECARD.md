@@ -21,7 +21,7 @@ padding 0, 160×48 grid, same theme brightness class.
 | Sustained throughput | `Scripts/benchmarks/terminal_stress_runner.py` run **inside** each terminal — first-party byte payloads, MB/s drained end-to-end, 5 runs, compare medians | None — the runner is terminal-agnostic by design. **Re-measure the issue #27 workloads (ansi_sgr / attributes / unicode) first**: that loss predates the #31 parse speedups and #139 UCD width tables. If still behind, the follow-up is measurement-first profiling of the SGR/attr dispatch path — no speculative engine surgery. |
 | Input-to-photon | CGEvent injection + `FrameSignposter` percentiles (`Scripts/measure-fluidity.sh`, p50/p95/p99) | Harness-only: Ghostty has no equivalent probe. Cross-terminal latency needs an external camera/typometer; signposter numbers compare Harness against its own previous releases. |
 | Idle power | `powermetrics --samplers tasks --show-process-energy`, 60 s, 4 panes open, one window unfocused | Harness app + HarnessDaemon are **summed** — the two-process architecture is part of the result, never hidden. |
-| Long-session memory | 1 M lines scrolled through a pane, then `footprint(1)` (fallback `ps` RSS) | Harness's GUI emulator owns unbounded history by design (the daemon ring stays ~1 MiB); compare like-for-like scrollback settings. |
+| Long-session memory | 1 M lines scrolled through a pane, then `footprint(1)` (fallback `ps` RSS) | The GUI history line cap follows the daemon scrollback byte budget (about 160 bytes per line). Compare like-for-like caps. The 2026-06-10 memory row predates that cap. |
 
 ### Running it
 
@@ -37,6 +37,8 @@ Scripts/scorecard.sh report             # markdown to paste below
 ```
 
 ## Results — 2026-06-10, Apple M1 Pro (v1.10.0 tip `bbe1e44`)
+
+Historical debug-preview receipt. It is not the release-vs-release claim. The 2026-10-06 section is.
 
 > Conditions, stated plainly: Harness numbers come from the **Debug preview build**
 > (`.harness-preview/HarnessPreview.app` — the release runbook's smoke artifact) vs the
@@ -96,10 +98,7 @@ structural tests either way.
 | HarnessDaemon (preview) | 74 MB dirty, 87 MB reclaimable |
 | Ghostty | 161 MB RSS (`ps` fallback) |
 
-**Not like-for-like retention:** Harness's GUI emulator kept *all* 1 M lines (unbounded
-history is the product design; the daemon ring stays ~1 MiB), while Ghostty's default
-scrollback cap retains only the tail. Comparable-retention numbers need matched scrollback
-settings — re-measure with both capped before quoting these against each other.
+**Not like-for-like retention:** on this 2026-06-10 run the GUI kept all 1 M lines. That is no longer the design. GUI history now stops at the same byte ceiling as the daemon ring (`ScrollbackBudget.unlimitedSafetyCapBytes` when scrollback is unlimited). Ghostty's default cap retained only the tail. Do not quote the 428 MB figure against a capped Ghostty.
 
 ### Input-to-photon (Harness-only FrameSignposter percentiles, µs)
 
@@ -131,3 +130,68 @@ With the present path's p50 of ~1.2ms above, median end-to-end typing latency la
 **~1.6–2ms** — well under a 120Hz frame. The live in-app number is now measurable directly:
 run with `HARNESS_FRAME_SIGNPOSTS=1` and read the `echo µs p50/p95/p99` lines (keyDown →
 present completion, one sample per keystroke) from the unified log.
+
+## Results — 2026-10-06
+
+Release-vs-release pass. No throughput, power, memory, or keystroke number was measured. The blocks below are the captured logs. Nothing from the 2026-06-10 table is repeated as this run.
+
+### Dry run
+
+`Scripts/scorecard.sh --dry-run` exited 0. `scorecard/dry-run.txt`:
+
+```
+[scorecard] dry run: validating helpers + parsers
+[scorecard] dry run OK
+```
+
+### Sustained throughput (five-run medians)
+
+Not measured. No release `Harness.app`. `scorecard/throughput-harness.txt`:
+
+```
+=== throughput / memory (no release Harness.app) ===
+ls: ./Harness.app: No such file or directory
+ls: /Applications/Harness.app: No such file or directory
+LS_EXIT:1
+```
+
+### Idle power (60 s, app + daemon, four panes, one window unfocused)
+
+Not measured. `sudo` needs a password. `scorecard/idle-power.txt`:
+
+```
+=== sudo powermetrics (noninteractive) ===
+sudo: a password is required
+POWER_EXIT:1
+```
+
+### Long-session memory (1 M lines, matched caps)
+
+Not measured. No release `Harness.app`. `scorecard/memory-harness.txt`:
+
+```
+=== throughput / memory (no release Harness.app) ===
+ls: ./Harness.app: No such file or directory
+ls: /Applications/Harness.app: No such file or directory
+LS_EXIT:1
+```
+
+### Input-to-photon (FrameSignposter)
+
+Not measured. `scorecard/input-latency-harness.txt`:
+
+```
+log: Must be admin to run 'stream' command
+error: no on-screen Harness window found — launch the preview first.
+```
+
+### External keystroke-to-pixel
+
+Not measured. `typometer`, `kst`, and `cliclick` are missing. `scorecard/keystroke-pixel.txt`:
+
+```
+=== external keystroke-to-pixel ===
+typometer: command not found
+kst: command not found
+cliclick: command not found
+```

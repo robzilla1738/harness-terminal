@@ -55,6 +55,8 @@ final class HarnessCLITests: XCTestCase {
         "respawn-pane", "select-pane", "set-option", "show-options", "set-environment",
         "show-environment", "bind-hook", "unbind-hook", "list-hooks", "display-message",
         "kill-server", "start-server", "show-messages",
+        "size-mode", "take-surface", "save-layout", "restore-layout",
+        "events", "process", "find-files", "copy-file",
     ]
 
     /// Catalog verbs that are *intentionally* not dispatch cases (e.g. a completion-only stub for a

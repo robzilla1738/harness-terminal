@@ -214,4 +214,87 @@ final class ThemeManagerTests: XCTestCase {
         XCTAssertEqual(unmasked.canvas.foregroundHex, lightTheme.foregroundHex)
         XCTAssertEqual(unmasked.canvas.cursorHex, lightTheme.cursorHex ?? lightTheme.foregroundHex)
     }
+
+    @MainActor
+    func testFreshSettingsResolveDarkBlackCanvas() {
+        let settings = HarnessSettings()
+        XCTAssertEqual(settings.appearanceMode, .theme)
+        XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
+        XCTAssertEqual(settings.backgroundBlur, 16)
+
+        let canvas = ThemeManager.resolvedCanvas(
+            themeName: "Default",
+            appearanceMode: settings.appearanceMode,
+            systemAppearance: .light,
+            systemLightThemeName: settings.systemLightThemeName,
+            systemDarkThemeName: settings.systemDarkThemeName,
+            customBackgroundHex: settings.customBackgroundHex,
+            customForegroundHex: settings.customForegroundHex,
+            customCursorHex: settings.customCursorHex
+        )
+        XCTAssertEqual(canvas.backgroundHex.lowercased(), "#000000")
+        let palette = ChromePaletteSpec.resolve(backgroundHex: canvas.backgroundHex, foregroundHex: canvas.foregroundHex)
+        XCTAssertTrue(palette.isDark)
+        XCTAssertEqual(palette.surface.hex, "#000000")
+        XCTAssertFalse(palette.surface.perceivedBrightness > 0.5)
+    }
+
+    @MainActor
+    func testExplicitLightAndFollowSystemShareALightCanvasThenDefaultRestoresBlack() throws {
+        let settings = HarnessSettings()
+        let lightTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: settings.systemLightThemeName))
+
+        let explicit = ThemeManager.resolvedAppearance(
+            themeName: "Default",
+            appearanceMode: .light,
+            systemAppearance: .dark,
+            systemLightThemeName: settings.systemLightThemeName,
+            systemDarkThemeName: settings.systemDarkThemeName,
+            customBackgroundHex: "#000000",
+            customForegroundHex: "#ffffff",
+            customCursorHex: "#ffffff"
+        )
+        let follow = ThemeManager.resolvedAppearance(
+            themeName: "Dracula",
+            appearanceMode: .macOSSystem,
+            systemAppearance: .light,
+            systemLightThemeName: settings.systemLightThemeName,
+            systemDarkThemeName: settings.systemDarkThemeName,
+            customBackgroundHex: nil,
+            customForegroundHex: nil,
+            customCursorHex: nil
+        )
+
+        XCTAssertEqual(explicit.canvas.backgroundHex, lightTheme.backgroundHex)
+        XCTAssertEqual(explicit.canvas.foregroundHex, lightTheme.foregroundHex)
+        XCTAssertEqual(follow.canvas.backgroundHex, explicit.canvas.backgroundHex)
+        XCTAssertEqual(follow.canvas.foregroundHex, explicit.canvas.foregroundHex)
+
+        let lightPalette = ChromePaletteSpec.resolve(
+            backgroundHex: explicit.canvas.backgroundHex,
+            foregroundHex: explicit.canvas.foregroundHex
+        )
+        XCTAssertFalse(lightPalette.isDark)
+        XCTAssertLessThan(lightPalette.textPrimary.relativeLuminance, lightPalette.surface.relativeLuminance)
+        XCTAssertTrue(ChromeContrast.meetsText(lightPalette.textPrimary, on: lightPalette.surface))
+        XCTAssertTrue(ChromeContrast.meetsPill(lightPalette.activePillLabel, on: lightPalette.activePillFill))
+
+        let restored = ThemeManager.resolvedCanvas(
+            themeName: "Default",
+            appearanceMode: .theme,
+            systemAppearance: .light,
+            systemLightThemeName: settings.systemLightThemeName,
+            systemDarkThemeName: settings.systemDarkThemeName,
+            customBackgroundHex: nil,
+            customForegroundHex: nil,
+            customCursorHex: nil
+        )
+        let restoredPalette = ChromePaletteSpec.resolve(
+            backgroundHex: restored.backgroundHex,
+            foregroundHex: restored.foregroundHex
+        )
+        XCTAssertEqual(restored.backgroundHex.lowercased(), "#000000")
+        XCTAssertTrue(restoredPalette.isDark)
+        XCTAssertEqual(restoredPalette.surface.hex, "#000000")
+    }
 }

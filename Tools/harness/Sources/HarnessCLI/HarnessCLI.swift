@@ -31,6 +31,12 @@ struct HarnessCLI {
             case "version", "--version", "-v":
                 printVersion(args) // best-effort daemon query; works with the daemon down
                 return
+            case "find-files":
+                try handleFindFiles(args)
+                return
+            case "copy-file":
+                try handleCopyFile(args)
+                return
             default:
                 break
             }
@@ -255,6 +261,18 @@ struct HarnessCLI {
                 try handleListHooks(args, client: client)
             case "display-message":
                 try handleDisplayMessage(args, client: client)
+            case "size-mode":
+                try handleSizeMode(args, client: client)
+            case "take-surface":
+                try handleTakeSurface(args, client: client)
+            case "save-layout":
+                try handleSaveLayout(args, client: client)
+            case "restore-layout":
+                try handleRestoreLayout(args, client: client)
+            case "events":
+                try handleEvents(args, client: client)
+            case "process":
+                try handleProcess(args, client: client)
             default:
                 printUsage()
                 exit(1)

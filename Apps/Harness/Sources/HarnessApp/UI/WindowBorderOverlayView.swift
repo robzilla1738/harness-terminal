@@ -11,17 +11,35 @@ import AppKit
 final class WindowBorderOverlayView: NSView {
     private var color: NSColor = .white
     private var opacity: CGFloat = 0
+    /// The stroke lives on its own layer, inset from the window edge. A border
+    /// centered on the content edge loses its outer half to the window squircle,
+    /// so the corner looks thinner than the straight sides.
+    private let strokeLayer = CALayer()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.cornerCurve = .continuous
+        installStroke()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         wantsLayer = true
         layer?.cornerCurve = .continuous
+        installStroke()
+    }
+
+    private func installStroke() {
+        // Resize must not animate the stroke independently of the window.
+        strokeLayer.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "cornerRadius": NSNull(),
+            "borderWidth": NSNull(),
+            "borderColor": NSNull(),
+        ]
+        layer?.addSublayer(strokeLayer)
     }
 
     func update(color: NSColor, opacity: CGFloat) {
@@ -61,14 +79,22 @@ final class WindowBorderOverlayView: NSView {
     private func applyBorder() {
         guard let layer else { return }
         let scale = window?.backingScaleFactor ?? 2
+        let line = 1 / scale
+        // Sit one device pixel inside the window mask. The stroke is centered on
+        // that inset rect, so none of it is clipped, and the radius shrinks by
+        // the same amount so the curve stays parallel to the window corner.
+        let inset = line
+        let radius = max(0, windowCornerRadius - inset)
         layer.contentsScale = scale
-        layer.cornerCurve = .continuous
-        layer.cornerRadius = windowCornerRadius
-        // One device pixel, hugging the window edge. The CALayer border is drawn inside the
-        // bounds along the rounded path, so with the true radius it sits exactly on the visible
-        // corner instead of being clipped by the window mask.
-        layer.borderWidth = opacity > 0.001 ? 1 / scale : 0
-        layer.borderColor = color.withAlphaComponent(opacity).cgColor
+        layer.borderWidth = 0
+        layer.backgroundColor = nil
+        strokeLayer.contentsScale = scale
+        strokeLayer.cornerCurve = .continuous
+        strokeLayer.frame = bounds.insetBy(dx: inset, dy: inset)
+        strokeLayer.cornerRadius = radius
+        strokeLayer.borderWidth = opacity > 0.001 ? line : 0
+        strokeLayer.borderColor = color.withAlphaComponent(opacity).cgColor
+        strokeLayer.backgroundColor = nil
     }
 
     // Purely decorative — never intercept clicks or hover.

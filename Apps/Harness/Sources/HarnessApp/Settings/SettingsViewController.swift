@@ -99,6 +99,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let mouseHideToggle = HarnessToggle(title: "Hide the mouse cursor while typing")
     private let pasteProtectionToggle = HarnessToggle(title: "Confirm risky pastes (multi-line or control characters)")
     private let boldIsBrightToggle = HarnessToggle(title: "Bold uses bright colors")
+    private let themeFitToggle = HarnessToggle(title: "Fit low-contrast program colors to the theme")
+    private let paneDensitySegment = HarnessSegmented(frame: .zero)
     private let notificationTestButton = NSButton(title: "Send Test Notification", target: nil, action: nil)
     private let notificationPermissionButton = NSButton(title: "Open System Settings…", target: nil, action: nil)
     private let notificationStatusField = NSTextField(labelWithString: "")
@@ -485,6 +487,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
         boldIsBrightToggle.target = self
         boldIsBrightToggle.action = #selector(appearanceTextDidCommit)
+        themeFitToggle.state = settings.themeFit ? .on : .off
+        themeFitToggle.target = self
+        themeFitToggle.action = #selector(appearanceTextDidCommit)
+        paneDensitySegment.setSegments(["Comfortable", "Compact"])
+        paneDensitySegment.selectItem(withTitle: settings.paneDensity == .compact ? "Compact" : "Comfortable")
+        paneDensitySegment.target = self
+        paneDensitySegment.action = #selector(appearanceTextDidCommit)
         // Per-event notification toggles ("which events notify me").
         for (event, toggle) in eventToggles {
             toggle.state = settings.isEventEnabled(event) ? .on : .off
@@ -603,6 +612,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // System-colored text labels track the window's light/dark appearance; updating it
         // re-renders them for free, so only surfaces + custom controls need explicit recolor.
         view.window?.appearance = NSAppearance(named: c.isDark ? .darkAqua : .aqua)
+        view.window?.backgroundColor = c.terminalBackground
         for surface in groupSurfaces {
             surface.layer?.backgroundColor = c.surfaceElevated.cgColor
             surface.layer?.borderColor = c.border.cgColor
@@ -878,6 +888,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsToggleRow("Bold is bright", boldIsBrightToggle,
                               hint: "Bold text in colors 0–7 uses the bright palette (8–15)."),
             settingsToggleRow("Theme program output", themeTerminalOutputToggle),
+            settingsToggleRow("Theme fit", themeFitToggle,
+                              hint: "Nudge unreadable program colors toward the theme. Full recolor stays the toggle above."),
+            settingsRow("Pane density", paneDensitySegment,
+                        hint: "Comfortable separates panes. Compact uses a one-pixel border."),
             settingsToggleRow("Ligatures", ligaturesToggle),
             settingsToggleRow("Prompt gutter", promptGutterToggle),
         ])
@@ -2125,6 +2139,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
         systemLightThemePopup.isEnabled = followsSystem
         systemDarkThemePopup.isEnabled = followsSystem
+        // Explicit Light uses the same light theme as a light Mac, so that picker stays available.
+        if selectedAppearanceMode == .light, let lightRow = systemThemeRows.first {
+            lightRow.isHidden = false
+            systemLightThemePopup.isEnabled = true
+        }
     }
 
     private func syncSystemThemePickersFromSettings() {
@@ -2148,6 +2167,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private static func appearanceModeTitle(_ mode: HarnessAppearanceMode) -> String {
         switch mode {
         case .theme: return "Theme"
+        case .light: return "Light"
         case .macOSSystem: return "Follow macOS Appearance"
         }
     }
@@ -2422,6 +2442,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         quickTerminalToggle.state = settings.quickTerminalEnabled ? .on : .off
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
         boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
+        themeFitToggle.state = settings.themeFit ? .on : .off
+        paneDensitySegment.selectItem(withTitle: settings.paneDensity == .compact ? "Compact" : "Comfortable")
         for (event, toggle) in eventToggles {
             toggle.state = settings.isEventEnabled(event) ? .on : .off
         }
@@ -2531,6 +2553,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             Self.seedUnsetSystemThemeNames(settings: &coordinator.settings, selectedThemeName: coordinator.snapshot.themeName)
             syncSystemThemePickersFromSettings()
         }
+        if previousAppearanceMode != .light && nextAppearanceMode == .light {
+            Self.seedUnsetSystemThemeNames(settings: &coordinator.settings, selectedThemeName: coordinator.snapshot.themeName)
+            syncSystemThemePickersFromSettings()
+        }
         coordinator.settings.fontSize = HarnessSettings.clampedFontSize(Float(fontSizeField.stringValue) ?? 14)
         coordinator.settings.fontFamily = fontFamilyField.stringValue
         coordinator.settings.defaultShell = shellField.stringValue
@@ -2563,6 +2589,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)
         coordinator.settings.pasteProtection = pasteProtectionToggle.state == .on
         coordinator.settings.boldIsBright = boldIsBrightToggle.state == .on
+        coordinator.settings.themeFit = themeFitToggle.state == .on
+        coordinator.settings.paneDensity = paneDensitySegment.titleOfSelectedItem == "Compact" ? .compact : .comfortable
         for (event, toggle) in eventToggles {
             coordinator.settings.setEventEnabled(event, toggle.state == .on)
         }
@@ -2769,8 +2797,9 @@ enum SettingsWindowController {
         let win = NSWindow(contentViewController: controller)
         win.title = "Settings"
         win.styleMask = [.titled, .closable, .resizable]
-        win.titlebarAppearsTransparent = false
+        win.titlebarAppearsTransparent = true
         win.titleVisibility = .visible
+        win.backgroundColor = HarnessChrome.current.terminalBackground
         win.isMovableByWindowBackground = false
         win.isRestorable = false
         win.isReleasedWhenClosed = false

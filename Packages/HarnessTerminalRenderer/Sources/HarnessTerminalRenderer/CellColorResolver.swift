@@ -43,6 +43,12 @@ public struct CellColorResolver: Sendable {
     /// background swap, exactly like xterm — cells with explicit SGR colors keep them.
     /// `false` (the default) is byte-identical to the pre-DECSCNM resolver.
     public var reverseVideo: Bool = false
+    /// When true, a low-contrast foreground is nudged toward `themeFitTarget` in Oklab
+    /// and cached. Off by default, so existing themes stay byte-identical. This is not
+    /// full-theme recolor (`applyThemeToTerminalOutput`), which stays a separate opt-in.
+    public var themeFit: Bool = false
+    public var themeFitTarget: RGBColor?
+    public var themeFitCache: ThemeFitCache = ThemeFitCache()
 
     /// The defaults after the DECSCNM swap — every default-color resolution funnels through
     /// these so the swap can never half-apply.
@@ -55,7 +61,10 @@ public struct CellColorResolver: Sendable {
         defaultBackground: RGBColor,
         boldBrightens: Bool = true,
         faintFraction: Double = 0.5,
-        minimumContrast: Double = 1
+        minimumContrast: Double = 1,
+        themeFit: Bool = false,
+        themeFitTarget: RGBColor? = nil,
+        themeFitCache: ThemeFitCache = ThemeFitCache()
     ) {
         self.palette = palette
         self.defaultForeground = defaultForeground
@@ -63,6 +72,9 @@ public struct CellColorResolver: Sendable {
         self.boldBrightens = boldBrightens
         self.faintFraction = faintFraction
         self.minimumContrast = minimumContrast
+        self.themeFit = themeFit
+        self.themeFitTarget = themeFitTarget
+        self.themeFitCache = themeFitCache
     }
 
     /// Convenience: build a resolver straight from a theme.
@@ -95,6 +107,10 @@ public struct CellColorResolver: Sendable {
         // before inverse — the ratio is symmetric, so it still holds after the swap.
         if minimumContrast > 1, !cell.invisible {
             fg = Self.ensureContrast(foreground: fg, background: bg, ratio: minimumContrast)
+        }
+
+        if themeFit, !cell.invisible, let theme = themeFitTarget {
+            fg = themeFitCache.adjust(foreground: fg, background: bg, toward: theme)
         }
 
         // 4: inverse swaps.

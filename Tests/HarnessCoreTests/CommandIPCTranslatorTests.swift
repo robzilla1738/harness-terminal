@@ -28,7 +28,7 @@ final class CommandIPCTranslatorTests: XCTestCase {
 
         let (target, tabID, paneID) = try makeTarget()
         guard case let .requests(requests) = CommandIPCTranslator.translate(.splitWindow(direction: .vertical), target: target),
-              case let .newSplit(reqTab, reqPane, direction, shell) = requests.first
+              case let .newSplit(reqTab, reqPane, direction, shell, _) = requests.first
         else { return XCTFail("expected a newSplit request") }
         XCTAssertEqual(reqTab, tabID)
         XCTAssertEqual(reqPane, paneID)

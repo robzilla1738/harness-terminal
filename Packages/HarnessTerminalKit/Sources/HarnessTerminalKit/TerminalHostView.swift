@@ -501,7 +501,13 @@ public final class TerminalHostView: NSView {
             cursorHex: resolved.cursorHex,
             outputPaletteHex: resolved.outputPaletteHex,
             oscPaletteHex: resolved.oscPaletteHex,
-            canvasOpacity: HarnessSettings.clampedOpacity(settings.backgroundOpacity),
+            // Same paint opacity the sidebar veil uses, so the terminal and the
+            // rail are one surface instead of a clear hole and a tinted panel.
+            canvasOpacity: ChromeMaterial.paintOpacity(
+                stored: settings.backgroundOpacity,
+                appearanceMode: effectiveSettings.appearanceMode,
+                systemAppearance: Self.systemAppearance(for: effectiveAppearance)
+            ),
             cursorStyle: settings.cursorStyle,
             cursorBlink: settings.cursorBlink,
             paddingX: CGFloat(settings.windowPaddingX),
@@ -517,6 +523,7 @@ public final class TerminalHostView: NSView {
             textRendering: settings.textRendering,
             ligatures: settings.ligatures,
             minimumContrast: HarnessSettings.clampedContrast(settings.minimumContrast),
+            themeFit: settings.themeFit,
             boldIsBright: settings.boldIsBright,
             promptGutter: settings.showPromptGutter,
             offMainParserFramePipeline: settings.offMainParserFramePipeline,
@@ -581,7 +588,11 @@ public final class TerminalHostView: NSView {
             canvasBackgroundHex: appearance.canvas.backgroundHex,
             canvasForegroundHex: appearance.canvas.foregroundHex,
             cursorHex: appearance.canvas.cursorHex,
-            outputPaletteHex: nativeOutputPaletteHex(settings: settings, appearance: appearance),
+            outputPaletteHex: nativeOutputPaletteHex(
+                settings: settings,
+                appearance: appearance,
+                systemAppearance: systemAppearance
+            ),
             oscPaletteHex: nativeOSCPaletteHex(settings: settings, appearance: appearance),
             selectionBackgroundHex: settings.selectionBackgroundHex
                 ?? ThemeManager.selectionBackgroundHex(themeName: themeName),
@@ -603,18 +614,29 @@ public final class TerminalHostView: NSView {
         }
     }
 
-    /// The 16 ANSI colors used for terminal *output*. When `applyThemeToTerminalOutput` is on,
-    /// the theme's palette (seeded into settings, with theme fallback) recolors output;
-    /// otherwise nil slots let the surface fall back to its untouched default palette so
-    /// programs render their true colors.
+    /// The 16 ANSI colors used for terminal *output*. Light canvases, including
+    /// follow-macOS while the system is light, use the light theme palette.
+    /// In theme mode, with "apply theme to output" on, an explicit slot wins and
+    /// empty slots take the named theme. Otherwise empty slots stay nil.
     private static func nativeOutputPaletteHex(
         settings: HarnessSettings,
-        appearance: ThemeManager.ResolvedAppearance
+        appearance: ThemeManager.ResolvedAppearance,
+        systemAppearance: HarnessSystemAppearance
     ) -> [String?] {
-        guard settings.applyThemeToTerminalOutput else {
-            return Array(repeating: nil, count: 16)
+        // Light canvases have their own palette, including follow-macOS while the
+        // system is light. A stored dark palette (ef-bio, imported for Theme mode)
+        // paints light-on-dark inks on that canvas, so program colors collapse to gray.
+        let lightCanvas = settings.appearanceMode == .light
+            || (settings.appearanceMode == .macOSSystem && systemAppearance == .light)
+        if lightCanvas {
+            return appearance.paletteHex
         }
-        return (0 ..< 16).map { settings.paletteHex[$0] ?? appearance.paletteHex[$0] }
+        let explicit = HarnessSettings.normalizedPalette(settings.paletteHex)
+        // An imported palette fills only the empty slots, and only in theme mode.
+        if settings.appearanceMode == .theme, settings.applyThemeToTerminalOutput {
+            return (0 ..< 16).map { explicit[$0] ?? appearance.paletteHex[$0] }
+        }
+        return explicit
     }
 
     private static func nativeOSCPaletteHex(
@@ -622,6 +644,12 @@ public final class TerminalHostView: NSView {
         appearance: ThemeManager.ResolvedAppearance
     ) -> [String?]? {
         settings.appearanceMode == .macOSSystem ? appearance.paletteHex : nil
+    }
+
+    /// Clip this pane's metal surface to the island radius. The mask has to live on
+    /// the `CAMetalLayer`; the AppKit parent's `masksToBounds` does not clip it.
+    public func applyIslandCornerRadius(_ radius: CGFloat) {
+        nativeView.applyIslandCornerRadius(radius)
     }
 
     public func applyTheme(named name: String) {
@@ -852,11 +880,18 @@ public final class TerminalHostView: NSView {
 
     /// Returns true iff the daemon acknowledged the surface (`.ok`). Reconnect gates resubscribe on
     /// this so it never subscribes to a surface the (still-restarting) daemon hasn't recreated yet.
-    /// Convert the line-based `scrollbackLines` setting into the daemon's byte budget. `0`
-    /// (unlimited) is passed through as the sentinel the daemon maps to its on-disk safety ceiling;
-    /// any positive count is sized at ~160 bytes/line.
-    private static func scrollbackBytes(forLines lines: Int) -> Int {
-        lines == 0 ? 0 : lines * 160
+    /// Byte budget the daemon ring uses for a line cap. `0` is the unlimited sentinel
+    /// the daemon maps to `ScrollbackBudget.unlimitedSafetyCapBytes`. Any positive
+    /// count is sized at `ScrollbackBudget.bytesPerLine` bytes per line.
+    static func scrollbackBytes(forLines lines: Int) -> Int {
+        lines == 0 ? 0 : lines * ScrollbackBudget.bytesPerLine
+    }
+
+    /// GUI history lines allowed for a daemon replay ring of `bytes`. `bytes <= 0`
+    /// is the unlimited sentinel and becomes the shared safety ceiling, not an
+    /// unbounded GUI history (`maxHistoryLines == 0` means unlimited in the emulator).
+    public static func historyLineCap(daemonScrollbackBytes bytes: Int) -> Int {
+        ScrollbackBudget.lineCap(daemonScrollbackBytes: bytes)
     }
 
     @discardableResult

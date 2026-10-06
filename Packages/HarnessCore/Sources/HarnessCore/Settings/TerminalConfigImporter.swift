@@ -184,7 +184,44 @@ public enum TerminalConfigImporter {
                 merged = parse(data)
             }
         }
+        guard var merged else { return nil }
+        // `theme = ef-bio` names a Ghostty theme file. Its foreground and ANSI
+        // palette are the colors programs actually draw with. Explicit keys in
+        // the config (a `background = #000000` override) still win.
+        if let themeName = merged.themeName,
+           let theme = loadThemeFile(named: themeName) {
+            merged = theme.merging(merged)
+        }
         return merged
+    }
+
+    /// Ghostty looks up a theme by file name under the user themes directory,
+    /// then the app bundle. A missing file leaves the name as a catalog theme.
+    static func loadThemeFile(named name: String) -> ImportedTerminalConfig? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("\0") else { return nil }
+        for path in themeFileCandidates(named: trimmed) {
+            guard FileManager.default.fileExists(atPath: path),
+                  let text = try? String(contentsOfFile: path, encoding: .utf8)
+            else { continue }
+            var theme = parse(text)
+            // A theme file is colors, not another theme reference.
+            theme.themeName = nil
+            theme.systemLightThemeName = nil
+            theme.systemDarkThemeName = nil
+            return theme
+        }
+        return nil
+    }
+
+    static func themeFileCandidates(named name: String) -> [String] {
+        if name.hasPrefix("/") { return [name] }
+        let home = NSString(string: "~").expandingTildeInPath
+        return [
+            "\(home)/.config/ghostty/themes/\(name)",
+            "\(home)/.config/ghostty/themes/\(name).conf",
+            "/Applications/Ghostty.app/Contents/Resources/ghostty/themes/\(name)",
+        ]
     }
 
     static func parse(_ text: String) -> ImportedTerminalConfig {

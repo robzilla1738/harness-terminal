@@ -64,6 +64,7 @@ final class StatusLineView: NSView {
             label.textColor = HarnessChrome.current.textSecondary
             label.maximumNumberOfLines = 1
             label.lineBreakMode = .byTruncatingTail
+            HarnessDesign.prepareChromeLabel(label)
             addSubview(label)
         }
         rightLabel.alignment = .right
@@ -125,23 +126,26 @@ final class StatusLineView: NSView {
         // status bar opaque (solid) while the sidebar/terminal went translucent.
         HarnessDesign.applySidebarChrome(to: self)
         let color = resolvedTextColor()
+        let labels = [leftLabel, rightLabel, centerLabel] + extraLabels
+        HarnessDesign.applyChromeLabelAppearance(labels, isDark: HarnessChrome.current.isDark)
         for label in [leftLabel, rightLabel, centerLabel] {
             label.textColor = color
         }
         refresh()
     }
 
-    /// User override (`settings.statusLineHex`) wins; otherwise a slightly
-    /// brighter blend than `textSecondary` so the status footer holds its own
-    /// against a translucent window without losing legibility to subpixel
-    /// antialiasing on a non-opaque background.
+    /// User override (`settings.statusLineHex`) wins. Light mode uses the opaque
+    /// secondary ink so the footer doesn't fringe. Dark mode keeps a brighter
+    /// lift of the primary so the line still reads on the black canvas.
     private func resolvedTextColor() -> NSColor {
         if let hex = SessionCoordinator.shared.settings.statusLineHex,
            let color = NSColor.fromHex(hex) {
             return color
         }
         let chrome = HarnessChrome.current
-        return chrome.textPrimary.withAlphaComponent(chrome.isDark ? 0.78 : 0.72)
+        // Light ink is the opaque secondary. Alpha black on the light canvas fringes.
+        if !chrome.isDark { return chrome.textSecondary }
+        return chrome.textPrimary.withAlphaComponent(0.78)
     }
 
     @objc private func snapshotChanged(_ note: Notification) {

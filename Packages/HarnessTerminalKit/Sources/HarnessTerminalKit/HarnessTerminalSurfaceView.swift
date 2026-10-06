@@ -365,6 +365,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private let colorProviderState = SurfaceColorProviderState()
     private let inputEncoder = InputEncoder()
     private let metalLayer = CAMetalLayer()
+    /// Bottom-corner radius applied to the metal layer itself. A parent mask does not
+    /// clip an asynchronously presented `CAMetalLayer`, so the surface stays square
+    /// unless this layer masks its own drawable.
+    private var islandCornerRadius: CGFloat = 0
     private var renderer: TerminalMetalRenderer?
 
     private var frameBuilder: FrameBuilder
@@ -1028,13 +1032,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         textRendering: TerminalTextRenderingMode? = nil,
         ligatures: Bool,
         minimumContrast: Double = 1,
+        themeFit: Bool = false,
         boldIsBright: Bool = true,
         promptGutter: Bool = false,
         offMainParserFramePipeline: Bool = true,
         liveResizeReflow: Bool = true
     ) {
         liveResizeReflowEnabled = liveResizeReflow
-        emulatorSync { $0.maxScrollbackLines = scrollbackLines }
+        // `scrollbackLines == 0` stays the unlimited sentinel on the wire. `historyLineCap`
+        // turns that 0-byte budget into the daemon's finite safety ceiling.
+        let daemonBytes = TerminalHostView.scrollbackBytes(forLines: scrollbackLines)
+        let lineCap = TerminalHostView.historyLineCap(daemonScrollbackBytes: daemonBytes)
+        emulatorSync { $0.maxScrollbackLines = lineCap }
         if offMainParserFramePipelineEnabled && !offMainParserFramePipeline {
             // Drain any queued parser/frame work before direct main-thread emulator access resumes.
             emulatorState.sync { _ in }
@@ -1099,7 +1108,9 @@ public final class HarnessTerminalSurfaceView: NSView {
             defaultForeground: fg,
             defaultBackground: bg,
             boldBrightens: boldIsBright,
-            minimumContrast: minimumContrast
+            minimumContrast: minimumContrast,
+            themeFit: themeFit,
+            themeFitTarget: fg
         )
         self.frameBuildConfiguration = SurfaceFrameBuildConfiguration(
             resolver: resolver,
@@ -1230,6 +1241,21 @@ public final class HarnessTerminalSurfaceView: NSView {
         bellFlashLayer.isHidden = true
         bellFlashLayer.opacity = 0
         metalLayer.addSublayer(bellFlashLayer)
+        installIslandCornerMask()
+    }
+
+    /// Round the bottom corners of the metal drawable so a split island reads as a
+    /// rounded surface. The top edge stays square: it meets the identity header.
+    public func applyIslandCornerRadius(_ radius: CGFloat) {
+        islandCornerRadius = max(0, radius)
+        installIslandCornerMask()
+    }
+
+    private func installIslandCornerMask() {
+        metalLayer.cornerRadius = islandCornerRadius
+        metalLayer.masksToBounds = islandCornerRadius > 0
+        metalLayer.cornerCurve = .continuous
+        metalLayer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
     }
 
     /// Visual bell — a brief theme-foreground flash over the surface (the `visual` channel of the
@@ -1669,6 +1695,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         // resize never shows a stale frame stretched to the new bounds (the flicker).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        installIslandCornerMask()
         let needsFirstPaint = !hasSizedGrid
         updateGridSize()
         if needsFirstPaint {

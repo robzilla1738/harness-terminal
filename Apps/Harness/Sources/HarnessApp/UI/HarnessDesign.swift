@@ -17,11 +17,14 @@ enum HarnessDesign {
 
     static let sidebarWidth: CGFloat = 264
     static let titlebarChromeHeight: CGFloat = 44
-    static let tabBarHeight: CGFloat = 34
+    static let tabBarHeight: CGFloat = 44
+    /// One size for every icon on the tab row, including the sidebar bell.
+    static let chromeIconPointSize: CGFloat = 14
+    static let chromeIconButtonSize: CGFloat = 28
     static let workspaceBarHeight: CGFloat = 42
-    static let sessionRowHeight: CGFloat = 54
+    static let sessionRowHeight: CGFloat = 58
     static let footerHeight: CGFloat = 40
-    static let tabPillHeight: CGFloat = 26
+    static let tabPillHeight: CGFloat = 28
 
     static let horizontalInset: CGFloat = Spacing.lg
     static let rowSpacing: CGFloat = Spacing.xxs
@@ -136,11 +139,9 @@ enum HarnessDesign {
         layer.shadowOffset = NSSize(width: 0, height: shadow.offsetY)
     }
 
-    /// Resting/hover chrome for the small circular icon buttons that live in the chrome
-    /// (notification bell, sidebar toggle, footer gear/＋/palette, tab strip ＋/overflow).
-    /// One source of truth so every icon button reads as the *same* themed disc — the
-    /// same `surfaceElevated` fill + `borderStrong` rim the search field beside them
-    /// uses — instead of an opaque near-black circle that floats above the chrome.
+    /// Resting/hover chrome for the circular icon buttons in the sidebar footer and
+    /// the notification bell. The tab strip does not use this — those controls are
+    /// plain glyphs (`applyGlyphButtonChrome`).
     /// Flat by design (no drop shadow): the whole window is one continuous surface, and
     /// hover is the only state that lifts. Both `SoftIconButton` and `NotificationBellButton`
     /// call this so they can never drift apart.
@@ -157,6 +158,63 @@ enum HarnessDesign {
         let hover = c.textPrimary.withAlphaComponent(c.isDark ? 0.14 : 0.12)
         layer.backgroundColor = (isHovered ? hover : resting).cgColor
         applyShadow(.none, to: layer)
+    }
+
+    /// Tab-strip controls (sidebar toggle, new tab, overflow). No disc and no stroke.
+    /// Hover is a rounded square, never a circle — a square hit target at half its
+    /// height would read as the same ring the tab row just lost.
+    static func applyGlyphButtonChrome(to layer: CALayer?, bounds: CGRect, isHovered: Bool) {
+        guard let layer else { return }
+        let c = chrome
+        layer.cornerCurve = .continuous
+        layer.cornerRadius = 8
+        layer.borderWidth = 0
+        layer.borderColor = nil
+        layer.backgroundColor = (isHovered ? c.iconHoverFill : NSColor.clear).cgColor
+        applyShadow(.none, to: layer)
+    }
+
+    /// Label cell that draws chrome type in grayscale. LCD smoothing assumes an
+    /// opaque system control; on light glass and a translucent window it fringes.
+    static func prepareChromeLabel(_ field: NSTextField) {
+        let cell = ChromeLabelCell(textCell: field.stringValue)
+        cell.isEditable = false
+        cell.isSelectable = false
+        cell.isBordered = false
+        cell.drawsBackground = false
+        cell.backgroundStyle = .normal
+        cell.font = field.font
+        cell.alignment = field.alignment
+        cell.lineBreakMode = field.lineBreakMode
+        cell.usesSingleLineMode = true
+        cell.truncatesLastVisibleLine = true
+        field.cell = cell
+        field.drawsBackground = false
+        field.isBezeled = false
+        field.isBordered = false
+        field.isEditable = false
+        field.isSelectable = false
+        field.maximumNumberOfLines = 1
+        field.backgroundColor = .clear
+    }
+
+    static func applyChromeLabelAppearance(_ fields: [NSTextField], isDark: Bool) {
+        let appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+        for field in fields {
+            field.appearance = appearance
+        }
+    }
+
+    /// Snap label frames onto the backing grid so stems don't bloom on Retina.
+    static func alignChromeText(_ labels: [NSView], in host: NSView) {
+        for label in labels {
+            let aligned = host.backingAlignedRect(label.frame, options: [.alignAllEdgesNearest])
+            let dx = abs(aligned.origin.x - label.frame.origin.x)
+            let dy = abs(aligned.origin.y - label.frame.origin.y)
+            if dx > 0.01 || dy > 0.01 {
+                label.frame = aligned
+            }
+        }
     }
 
     enum ChromeRole {
@@ -190,7 +248,20 @@ enum HarnessDesign {
     }
 
     static func applySidebarChrome(to view: NSView) {
+        // Same canvas color and the same paint opacity as the terminal.
         installChromeBackground(.sidebar, on: view)
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    /// Shared glass tint for the active tab and the selected session card.
+    static func activeGlassTint(isDark: Bool, textPrimary: NSColor) -> NSColor {
+        isDark
+            ? textPrimary.withAlphaComponent(0.14)
+            : NSColor.white.withAlphaComponent(0.22)
+    }
+
+    static func activeGlassBorderAlpha(isDark: Bool) -> CGFloat {
+        isDark ? 0.22 : 0.10
     }
 
     static func applyTabBarChrome(to view: NSView) {
@@ -229,10 +300,11 @@ enum HarnessDesign {
         return last.isEmpty ? shortened : last
     }
 
-    /// Soft icon button with circular hover fill — used in footer / workspace bar.
-    static func softIconButton(symbol: String, tooltip: String, size: CGFloat = 26) -> SoftIconButton {
+    /// Plain glyph button, same weight and hit target as the tab-strip icons.
+    static func softIconButton(symbol: String, tooltip: String, size: CGFloat = chromeIconButtonSize) -> SoftIconButton {
         let button = SoftIconButton(frame: NSRect(x: 0, y: 0, width: size, height: size))
-        button.setSymbol(symbol, accessibilityDescription: tooltip, pointSize: 12, weight: .medium)
+        button.style = .glyph
+        button.setSymbol(symbol, accessibilityDescription: tooltip, pointSize: chromeIconPointSize, weight: .medium)
         button.toolTip = tooltip
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -313,9 +385,32 @@ enum HarnessMotion {
     }
 }
 
-/// Round, hover-tinted icon button. Manages its own tracking area + chrome.
+/// Chrome label that antialiases in grayscale and on whole pixels. LCD subpixel
+/// smoothing against a clear layer is what makes light-mode chrome type look soft.
+final class ChromeLabelCell: NSTextFieldCell {
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        guard let context = NSGraphicsContext.current?.cgContext else {
+            super.drawInterior(withFrame: cellFrame, in: controlView)
+            return
+        }
+        let aligned = controlView.backingAlignedRect(cellFrame, options: [.alignAllEdgesNearest])
+        context.saveGState()
+        context.setShouldSmoothFonts(false)
+        context.setAllowsAntialiasing(true)
+        context.setShouldAntialias(true)
+        super.drawInterior(withFrame: aligned, in: controlView)
+        context.restoreGState()
+    }
+}
+
+/// Icon button. `.disc` is the footer / bell well. `.glyph` is a plain symbol —
+/// the tab strip uses it so the sidebar toggle and new-tab control match the pills.
 @MainActor
 final class SoftIconButton: NSButton {
+    enum Style { case disc, glyph }
+
+    var style: Style = .disc { didSet { applyChrome() } }
+
     private let iconView = NSImageView()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false { didSet { applyChrome() } }
@@ -388,9 +483,18 @@ final class SoftIconButton: NSButton {
     }
 
     func applyChrome() {
-        HarnessDesign.applyIconButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
+        switch style {
+        case .disc:
+            HarnessDesign.applyIconButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
+            iconView.imageScaling = .scaleProportionallyUpOrDown
+        case .glyph:
+            HarnessDesign.applyGlyphButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
+            // Never scale a symbol up into the hit target — that softens the stroke.
+            iconView.imageScaling = .scaleProportionallyDown
+        }
         let c = HarnessDesign.chrome
         iconView.contentTintColor = isHovered ? c.textPrimary : c.textSecondary
+        iconView.appearance = NSAppearance(named: c.isDark ? .darkAqua : .aqua)
     }
 }
 
@@ -491,6 +595,21 @@ final class HarnessPillButton: NSButton {
             layer?.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
             titleLabel.textColor = isHovered ? c.textPrimary : c.textSecondary
         }
+    }
+}
+
+extension HarnessDesign {
+    /// macOS 26 liquid glass. Nil on earlier systems, where the caller keeps a solid pill.
+    static func makeLiquidGlass(cornerRadius: CGFloat) -> NSView? {
+        RuntimeGlassEffectView.make(cornerRadius: cornerRadius)
+    }
+
+    static func setLiquidGlassTint(_ color: NSColor, on view: NSView) {
+        RuntimeGlassEffectView.setTintColor(color, on: view)
+    }
+
+    static func setLiquidGlassCornerRadius(_ radius: CGFloat, on view: NSView) {
+        view.setValue(NSNumber(value: Double(radius)), forKey: "cornerRadius")
     }
 }
 
@@ -597,7 +716,7 @@ final class ChromeBackdrop: NSView {
     func update(role: HarnessDesign.ChromeRole) {
         self.role = role
         let chrome = HarnessDesign.chrome
-        let opacity = HarnessChrome.backgroundOpacity
+        let opacity = HarnessChrome.paintOpacity
 
         if Self.crossfadeNextUpdate {
             HarnessMotion.crossfade(layer, duration: HarnessDesign.Motion.fast)
@@ -609,11 +728,8 @@ final class ChromeBackdrop: NSView {
         case .tabBar: baseColor = chrome.sidebarBackground
         }
 
-        // Unified canvas: when the window is translucent, ONE window-wide CGS blur
-        // (MainWindowController) is the single blur source, so the chrome's own
-        // vibrancy/glass material is hidden — the tint alone (bg × opacity) lets the
-        // shared blurred backdrop show through, matching the terminal exactly. When
-        // opaque, the solid tint covers everything, so the material is moot.
+        // One tint over the window blur. Glass stays hidden while the window is
+        // translucent so the sidebar and the terminal share one opacity.
         let translucent = opacity < 0.999
         if RuntimeGlassEffectView.isGlass(backdrop) {
             backdrop.isHidden = translucent
@@ -707,7 +823,7 @@ final class HarnessOverlayBackground: NSView {
 
     func applyTheme() {
         let c = HarnessDesign.chrome
-        layer?.borderColor = c.borderStrong.cgColor
+        layer?.borderColor = c.border.cgColor
         if RuntimeGlassEffectView.isGlass(backdrop) {
             // Tint the glass so it reads as an elevated dark surface while keeping blur.
             RuntimeGlassEffectView.setTintColor(c.sidebarBackground, on: backdrop)

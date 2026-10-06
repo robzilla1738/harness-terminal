@@ -119,6 +119,14 @@ public enum CLICommandCatalog {
         .init("completions", "Print a shell completion script (zsh|fish|bash)"),
         .init("remote", "Manage remote daemons reached over SSH (list|add|remove)"),
         .init("daemon", "Run the daemon in the foreground (execs HarnessDaemon)"),
+        .init("size-mode", "Set multi-client sizing to smallest or owner"),
+        .init("take-surface", "Take size ownership of a surface"),
+        .init("save-layout", "Save the active tab as a named layout"),
+        .init("restore-layout", "Restore a named layout"),
+        .init("events", "Print session, pane, and agent events as JSON lines", json: true),
+        .init("process", "Print a surface's foreground process as JSON", json: true),
+        .init("find-files", "Find file paths locally or on a remote host"),
+        .init("copy-file", "Copy a file locally or over the SSH remote connection"),
     ]
 
     /// Every name a user might type for a command (canonical names + aliases), in catalog order.

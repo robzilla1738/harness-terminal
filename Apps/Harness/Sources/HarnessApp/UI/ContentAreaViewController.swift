@@ -26,24 +26,23 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func applyChrome() {
-        HarnessDesign.makeClear(view)
+        // One surface with the sidebar. An extra glass plate here made the
+        // terminal a second background inside a frame.
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
         refreshTerminalHostFill()
         titleStrip.applyColors()
         tabBar.applyChrome()
         paneContainer?.applyChrome()
+        // Density lives in the structure key, so a Comfortable/Compact change rebuilds
+        // the islands instead of leaving the previous insets in place.
+        reloadIfNeeded(force: false)
     }
 
-    /// Reflect the active tab's cwd in the title strip's folder/path readout. Hidden while a
-    /// CLI agent (claude, codex, cursor-agent, …) owns the pane: the agent's own UI is the
-    /// context then, and a shell-cwd readout over it is just noise. Returns when the tool exits.
+    /// The title strip is only a window-drag handle. The tab already shows the
+    /// directory, so nothing under the tab repeats it.
     private func updateTitleStripPath() {
-        let snap = SessionCoordinator.shared.snapshot
-        guard let tab = snap.activeWorkspace?.activeTab else {
-            titleStrip.setPath("")
-            return
-        }
-        let agentActive = tab.agent != nil || AgentTitleInference.kind(from: tab.title) != nil
-        titleStrip.setPath(agentActive ? "" : tab.cwd)
+        titleStrip.setIdentity("")
     }
 
     /// Back the terminal host so the canvas reads the same as the rest of the window.
@@ -56,7 +55,12 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     /// blur and make the terminal look solid while the chrome was see-through.
     private func refreshTerminalHostFill() {
         terminalHost.wantsLayer = true
-        let opacity = HarnessSettings.clampedOpacity(SessionCoordinator.shared.settings.backgroundOpacity)
+        let settings = SessionCoordinator.shared.settings
+        let opacity = CGFloat(ChromeMaterial.paintOpacity(
+            stored: settings.backgroundOpacity,
+            appearanceMode: settings.appearanceMode,
+            systemAppearance: HarnessChrome.systemAppearance(from: view.effectiveAppearance)
+        ))
         terminalHost.layer?.backgroundColor = opacity >= 1
             ? HarnessChrome.current.terminalBackground.cgColor
             : NSColor.clear.cgColor
@@ -69,6 +73,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         terminalHost.translatesAutoresizingMaskIntoConstraints = false
         refreshTerminalHostFill()
 
+        titleStrip.isHidden = true
         view.addSubview(titleStrip)
         view.addSubview(tabBar)
         view.addSubview(terminalHost)
@@ -79,9 +84,10 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             titleStrip.topAnchor.constraint(equalTo: view.topAnchor),
             titleStrip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             titleStrip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            titleStrip.heightAnchor.constraint(equalToConstant: WindowTitleStripView.height),
+            // The tab row sits on the traffic-light line. The old strip above it was empty space.
+            titleStrip.heightAnchor.constraint(equalToConstant: 0),
 
-            tabBar.topAnchor.constraint(equalTo: titleStrip.bottomAnchor),
+            tabBar.topAnchor.constraint(equalTo: view.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
@@ -155,8 +161,12 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     /// the sidebar is collapsed. Driven by `MainSplitViewController` during the toggle. The
     /// tab bar itself sits below the lights (the strip pushes it down) and needs no inset.
     func setTabBarLeadingInset(_ inset: CGFloat) {
-        titleStrip.setLeadingInset(inset)
-        tabBar.setLeadingInset(0)
+        tabBar.setLeadingInset(inset)
+        tabBar.setSidebarCollapsed(inset > 1)
+    }
+
+    func tabBarDidRequestToggleSidebar() {
+        (view.window?.contentViewController as? MainSplitViewController)?.toggleSidebar()
     }
 
     func refreshTabBarMetadata() {
@@ -233,7 +243,8 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         else { return }
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
-        let key = "\(coordinator.structureRevision)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
+        let density = coordinator.settings.paneDensity.rawValue
+        let key = "\(coordinator.structureRevision)|\(density)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
         guard force || key != lastStructureKey else {
             // No per-pane chrome work needed on the fast path (structure unchanged).
             return
@@ -244,6 +255,8 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         let container = PaneContainerView(
             node: displayNode,
             cwd: tab.cwd,
+            program: tab.currentCommand,
+            agent: tab.agent?.kind.commandToken,
             themeName: coordinator.snapshot.themeName
         )
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -300,16 +313,20 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 final class PaneContainerView: NSView {
     private let coordinator = SessionCoordinator.shared
     private let tabID: TabID?
+    private var islands: [PaneIslandView] = []
 
-    init(node: PaneNode, cwd: String, themeName: String) {
+    init(node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
         self.tabID = SessionCoordinator.shared.snapshot.activeWorkspace?.activeTab?.id
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
-        build(node: node, cwd: cwd, into: self)
+        build(node: node, cwd: cwd, program: program, agent: agent, into: self, separated: false)
     }
 
     func applyChrome() {
         HarnessDesign.makeClear(self)
+        for island in islands {
+            island.applyChrome()
+        }
     }
 
     @available(*, unavailable)
@@ -322,18 +339,28 @@ final class PaneContainerView: NSView {
     //
     // tabFor(surfaceID:in:) was also removed: it was only used by refreshChrome.
 
-    private func build(node: PaneNode, cwd: String, into parent: NSView) {
+    private func build(node: PaneNode, cwd: String, program: String?, agent: String?, into parent: NSView, separated: Bool) {
         switch node {
         case let .leaf(leaf):
             let host = coordinator.terminalHost(for: leaf.surfaceID, cwd: cwd)
-            host.translatesAutoresizingMaskIntoConstraints = false
-            parent.addSubview(host)
+            let island = PaneIslandView(
+                directory: cwd,
+                program: program,
+                agent: agent,
+                separated: separated,
+                surfaceID: leaf.surfaceID
+            )
+            island.translatesAutoresizingMaskIntoConstraints = false
+            parent.addSubview(island)
+            let insets = ChromeLayout.cardInsets(separated: separated)
             NSLayoutConstraint.activate([
-                host.topAnchor.constraint(equalTo: parent.topAnchor),
-                host.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
-                host.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
-                host.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
+                island.topAnchor.constraint(equalTo: parent.topAnchor, constant: CGFloat(insets.top)),
+                island.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: CGFloat(insets.leading)),
+                island.trailingAnchor.constraint(equalTo: parent.trailingAnchor, constant: -CGFloat(insets.trailing)),
+                island.bottomAnchor.constraint(equalTo: parent.bottomAnchor, constant: -CGFloat(insets.bottom)),
             ])
+            island.embed(host)
+            islands.append(island)
         case let .branch(direction, ratio, firstNode, secondNode):
             let split = HarnessSplitView()
             split.dividerStyle = .thin
@@ -356,8 +383,11 @@ final class PaneContainerView: NSView {
             ])
             // Build the child panes first, then set the divider — so each child lays out once
             // at ~final bounds instead of resizing (and re-sizing its PTY) twice.
-            build(node: firstNode, cwd: cwd, into: first)
-            build(node: secondNode, cwd: cwd, into: second)
+            // Comfortable separates with the island inset. Compact stays flush; its
+            // divider is the 1pt border and does not also inset the island.
+            let separated = SessionCoordinator.shared.settings.paneDensity.separatedIslands
+            build(node: firstNode, cwd: cwd, program: program, agent: agent, into: first, separated: separated)
+            build(node: secondNode, cwd: cwd, program: program, agent: agent, into: second, separated: separated)
             // [weak split]: rapid tab switching can tear down this PaneContainerView before the
             // async fires, leaving `split` pointing at a detached view with stale bounds — a
             // no-op setPosition call that can confuse AppKit's divider accounting on the new
@@ -383,9 +413,66 @@ final class PaneContainerView: NSView {
     }
 }
 
-/// NSSplitView for terminal panes: tints its divider to the theme, widens the grab
-/// (and cursor) area beyond the 1px thin divider, and persists user divider drags to
-/// the daemon so split ratios survive relaunch. Acts as its own delegate.
+/// Rounded terminal island. The path and the split controls both live on the tab row.
+@MainActor
+final class PaneIslandView: NSView {
+    private weak var terminalHost: TerminalHostView?
+    private let separated: Bool
+
+    init(directory: String, program: String?, agent: String? = nil, separated: Bool, surfaceID: SurfaceID? = nil) {
+        self.separated = separated
+        super.init(frame: .zero)
+        wantsLayer = true
+        let chrome = ChromeLayout.island(separated: separated, splitRadius: Double(HarnessDesign.Radius.overlay))
+        layer?.cornerRadius = CGFloat(chrome.cornerRadius)
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = chrome.cornerRadius > 0
+        layer?.borderWidth = 0
+        _ = (directory, program, agent, surfaceID)
+        applyChrome()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func embed(_ host: NSView) {
+        host.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(host)
+        NSLayoutConstraint.activate([
+            host.topAnchor.constraint(equalTo: topAnchor),
+            host.leadingAnchor.constraint(equalTo: leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: trailingAnchor),
+            host.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        if let host = host as? TerminalHostView {
+            terminalHost = host
+            let radius = ChromeLayout.island(separated: separated, splitRadius: Double(HarnessDesign.Radius.overlay)).cornerRadius
+            host.applyIslandCornerRadius(CGFloat(radius))
+        }
+    }
+
+    func applyChrome() {
+        let c = HarnessChrome.current
+        let settings = SessionCoordinator.shared.settings
+        let appearance = HarnessChrome.systemAppearance(from: effectiveAppearance)
+        let backdropAlpha = CGFloat(ChromeMaterial.backdropFillAlpha(
+            stored: settings.backgroundOpacity,
+            appearanceMode: settings.appearanceMode,
+            systemAppearance: appearance
+        ))
+        let hairline = (c.border.usingColorSpace(.sRGB) ?? c.border)
+        layer?.borderColor = hairline.cgColor
+        layer?.backgroundColor = c.terminalBackground.withAlphaComponent(backdropAlpha).cgColor
+        if let host = terminalHost {
+            let radius = ChromeLayout.island(separated: separated, splitRadius: Double(HarnessDesign.Radius.overlay)).cornerRadius
+            host.applyIslandCornerRadius(CGFloat(radius))
+        }
+    }
+}
+
+/// NSSplitView for terminal panes. The divider is a gap, not a hairline: each child is a
+/// rounded island, and the clear divider lets the window material show between them.
+/// Drags still persist so split ratios survive relaunch. Acts as its own delegate.
 @MainActor
 final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
     var tabID: TabID?
@@ -393,7 +480,13 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
     var secondPaneID: PaneID?
     private var ratioDebounce: DispatchWorkItem?
 
-    override var dividerColor: NSColor { HarnessChrome.current.border }
+    override var dividerColor: NSColor { .clear }
+
+    /// Comfortable's gap is the island inset. The divider stays 0 so it does not
+    /// add a second gap. Compact is the 1pt border.
+    override var dividerThickness: CGFloat {
+        CGFloat(SessionCoordinator.shared.settings.paneDensity.splitDividerPoints)
+    }
 
     func splitView(
         _ splitView: NSSplitView,
@@ -404,7 +497,8 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
         // Widen the interactive/cursor zone past the 1px thin divider. NSSplitView
         // shows the resize cursor over the effective rect, so this covers the cursor.
         var rect = proposedEffectiveRect
-        if isVertical { rect.size.width = 8 } else { rect.size.height = 8 }
+        let hit = max(dividerThickness, 8)
+        if isVertical { rect.size.width = hit } else { rect.size.height = hit }
         return rect
     }
 

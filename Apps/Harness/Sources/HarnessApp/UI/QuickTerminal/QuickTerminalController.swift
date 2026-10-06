@@ -79,6 +79,8 @@ final class QuickTerminalController: NSObject {
         let panel = QuickTerminalPanel(contentRect: frame)
         host.translatesAutoresizingMaskIntoConstraints = false
         let container = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = HarnessChrome.current.sidebarBackground.cgColor
         container.addSubview(host)
         NSLayoutConstraint.activate([
             host.leadingAnchor.constraint(equalTo: container.leadingAnchor),

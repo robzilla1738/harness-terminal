@@ -146,49 +146,72 @@ public enum ThemeManager {
                 ),
                 paletteHex: paletteHex(themeName: themeName)
             )
+        case .light:
+            // Explicit light ignores a stored black canvas override. Otherwise an imported
+            // `#000000` would leave light chrome sitting on the dark terminal.
+            base = lightAppearance(systemLightThemeName: systemLightThemeName)
         case .macOSSystem:
-            if let theme = systemTheme(
-                systemAppearance: systemAppearance,
+            if systemAppearance == .light {
+                base = lightAppearance(systemLightThemeName: systemLightThemeName)
+            } else if let theme = systemTheme(
+                systemAppearance: .dark,
                 systemLightThemeName: systemLightThemeName,
                 systemDarkThemeName: systemDarkThemeName
             ) {
-                let foreground = theme.foregroundHex
+                base = appearance(from: theme)
+            } else {
                 base = ResolvedAppearance(
                     canvas: ResolvedCanvas(
-                        backgroundHex: theme.backgroundHex,
-                        foregroundHex: foreground,
-                        cursorHex: theme.cursorHex ?? foreground
+                        backgroundHex: systemDarkBackgroundHex,
+                        foregroundHex: systemDarkForegroundHex,
+                        cursorHex: systemDarkCursorHex
                     ),
-                    paletteHex: theme.paletteHex
-                )
-            } else {
-                let palette = systemPaletteHex(systemAppearance: systemAppearance)
-                let background: String
-                let foreground: String
-                let cursor: String
-                switch systemAppearance {
-                case .light:
-                    background = systemLightBackgroundHex
-                    foreground = systemLightForegroundHex
-                    cursor = systemLightCursorHex
-                case .dark:
-                    background = systemDarkBackgroundHex
-                    foreground = systemDarkForegroundHex
-                    cursor = systemDarkCursorHex
-                }
-                base = ResolvedAppearance(
-                    canvas: ResolvedCanvas(backgroundHex: background, foregroundHex: foreground, cursorHex: cursor),
-                    paletteHex: palette
+                    paletteHex: systemPaletteHex(systemAppearance: .dark)
                 )
             }
         }
-        let foreground = customForegroundHex ?? base.canvas.foregroundHex
+        // `.light` always follows the light theme. Theme mode and follow-system still honor
+        // an explicit canvas override.
+        let honorCustomCanvas = appearanceMode != .light
+        let foreground = (honorCustomCanvas ? customForegroundHex : nil) ?? base.canvas.foregroundHex
         let canvas = ResolvedCanvas(
-            backgroundHex: customBackgroundHex ?? base.canvas.backgroundHex,
+            backgroundHex: (honorCustomCanvas ? customBackgroundHex : nil) ?? base.canvas.backgroundHex,
             foregroundHex: foreground,
-            cursorHex: customCursorHex ?? base.canvas.cursorHex
+            cursorHex: (honorCustomCanvas ? customCursorHex : nil) ?? base.canvas.cursorHex
         )
         return ResolvedAppearance(canvas: canvas, paletteHex: base.paletteHex)
+    }
+
+    /// The existing light theme (the user's light theme, else Zenwritten Light, else the
+    /// documented light baseline). Shared by explicit light and a light Mac.
+    private static func lightAppearance(systemLightThemeName: String?) -> ResolvedAppearance {
+        if let theme = systemTheme(
+            systemAppearance: .light,
+            systemLightThemeName: systemLightThemeName,
+            systemDarkThemeName: nil
+        ) {
+            return appearance(from: theme)
+        }
+        return ResolvedAppearance(
+            canvas: ResolvedCanvas(
+                backgroundHex: systemLightBackgroundHex,
+                foregroundHex: systemLightForegroundHex,
+                cursorHex: systemLightCursorHex
+            ),
+            paletteHex: systemPaletteHex(systemAppearance: .light)
+        )
+    }
+
+    private static func appearance(from theme: HarnessThemeDefinition) -> ResolvedAppearance {
+        let foreground = theme.foregroundHex
+        return ResolvedAppearance(
+            canvas: ResolvedCanvas(
+                backgroundHex: theme.backgroundHex,
+                foregroundHex: foreground,
+                cursorHex: theme.cursorHex ?? foreground
+            ),
+            paletteHex: theme.paletteHex
+        )
     }
 
     public static func systemPaletteHex(systemAppearance: HarnessSystemAppearance) -> [String?] {

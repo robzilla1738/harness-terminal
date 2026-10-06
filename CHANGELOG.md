@@ -6,6 +6,23 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## Unreleased
+
+Not a release. Local `main` carries this work so the next session starts from it.
+
+### Fixed
+- **New shells no longer inherit `NO_COLOR` or a disabled `FORCE_COLOR`.** A spawn strips `NO_COLOR`, and strips `FORCE_COLOR` only when the parent value is `0`, `false`, or `off`. Any other `FORCE_COLOR` value stays. Shells that are already running keep the environment they started with; open a new tab to pick up the strip.
+- **Light canvases use the light palette.** Explicit Light and follow-macOS while the system is light ignore a stored dark palette (for example an imported ef-bio). ANSI 0–15 comes from the light theme. Truecolor is still passed through. An explicit palette fills empty slots only in theme mode, and only when "apply theme to output" is on.
+- **Unlimited scrollback is one ceiling.** `scrollbackLines == 0` is still the unlimited sentinel. The daemon replay ring and the GUI line history both stop at 512 MiB (`ScrollbackBudget.unlimitedSafetyCapBytes`). The GUI does not keep a second unbounded history.
+- **Split gaps no longer stack.** Comfortable density separates panes with the island inset only; the split divider is 0. Compact panes stay flush and use the 1-point divider.
+
+### Changed
+- **One chrome surface.** Sidebar, terminal, and the gutter share the active canvas color and one paint opacity. Light mode raises that opacity to at least 0.94 without rewriting the stored setting. A single pane is flush (inset 0, radius 0, no stroke). The pane has no header row. The active tab and the selected session card share one tint. Session cards stay 58pt tall with a 10pt corner. The window border is an inset one-device-pixel stroke. Light mode does not put a Core Image blur behind the tab-row split icons.
+- **The daemon is the session.** Quitting the app leaves the daemon up. A new attach replays the same grid. A second client can subscribe read-only (`subscribeSurfaceOutputReadOnly`): it sees output and its writes do not reach the child. Surface cwd, foreground command, and hooks survive reconnect.
+
+### Added
+- **Workspace CLI.** `size-mode`, `take-surface`, `save-layout`, `restore-layout`, `events`, `process`, `find-files`, and `copy-file`. See [docs/COMMANDS.md](docs/COMMANDS.md).
+
 ## [1.12.1] - 2026-06-13
 
 A fast follow-up: a fresh-eyes review of the v1.12.0 changes turned up a few rough edges.
@@ -361,9 +378,9 @@ hyperlink registry.
   Search was previously substring-only and always case-insensitive; regex mode runs an
   `NSRegularExpression` over each scrollback line (an invalid pattern simply shows no results).
 - **Unlimited scrollback.** Setting the scrollback line count to **0** (Settings ▸ Terminal ▸
-  Behavior, or `scrollbackLines`) now means *unlimited* — the live history grows unbounded instead
-  of trimming the oldest lines. Persisted (on-disk) scrollback is still capped by a large safety
-  ceiling so a runaway process can't fill the disk.
+  Behavior, or `scrollbackLines`) is the unlimited sentinel. The daemon replay ring and the GUI
+  line history both stop at `ScrollbackBudget.unlimitedSafetyCapBytes` (512 MiB). The GUI does
+  not keep an unbounded copy.
 - **Four Ghostty-style quality-of-life features.**
   - **Scroll speed multiplier** (Settings ▸ Terminal ▸ Behavior, or `scrollMultiplier`): scale
     mouse-wheel / trackpad scroll distance (1× = native). Previously a fixed 3-lines-per-notch.

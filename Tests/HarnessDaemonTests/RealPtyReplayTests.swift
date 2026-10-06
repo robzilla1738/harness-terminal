@@ -3,6 +3,52 @@ import XCTest
 @testable import HarnessDaemonCore
 
 final class RealPtyReplayTests: XCTestCase {
+    func testParkedHistoryComesBackOnSequencedReplayAndTheNextRead() throws {
+        let pty = try RealPty(
+            id: UUID().uuidString,
+            cwd: NSTemporaryDirectory(),
+            shell: "/bin/cat",
+            rows: 24,
+            cols: 80,
+            scrollbackBytes: 64 * 1024
+        )
+        pty.start()
+        defer { pty.close() }
+
+        pty.injectSyntheticOutput(Data("history-line\n".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("history-line") })
+
+        pty.parkIfIdle(now: Date().addingTimeInterval(120))
+        let parked = pty.replayWithEndSequence(fromSequence: nil)
+        XCTAssertTrue(parked.text.contains("history-line"), "sequenced replay includes parked history")
+        XCTAssertFalse(pty.presentsProcessAsRunning)
+
+        pty.injectSyntheticOutput(Data("next-line\n".utf8))
+        XCTAssertTrue(waitUntil {
+            let replay = pty.replayWithEndSequence(fromSequence: nil)
+            return replay.text.contains("history-line") && replay.text.contains("next-line")
+        })
+        XCTAssertFalse(pty.presentsProcessAsRunning)
+    }
+
+    func testForegroundPidIsTheRunningProgramNotTheShell() throws {
+        let pty = try RealPty(
+            id: UUID().uuidString,
+            cwd: NSTemporaryDirectory(),
+            shell: "/bin/sh",
+            rows: 24,
+            cols: 80,
+            scrollbackBytes: 64 * 1024
+        )
+        pty.start()
+        defer { pty.close() }
+        pty.write("sleep 30\n")
+        XCTAssertTrue(waitUntil {
+            guard let probed = pty.probeForegroundProcess() else { return false }
+            return probed.executable == "sleep" && probed.pid != pty.currentChildPID
+        })
+    }
+
     func testReplayFromSequenceSlicesInsideChunk() {
         let segments = [
             RealPty.ScrollbackReplaySegment(sequence: 1, data: Data("abcdef".utf8)),

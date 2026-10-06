@@ -38,13 +38,14 @@ final class IPCCodecTests: XCTestCase {
         let payload = #"{"request":{"newSplit":{"tabID":"\#(tabID.uuidString)","paneID":"\#(paneID.uuidString)","direction":"vertical"}}}"#.data(using: .utf8)!
         let envelope = try JSONDecoder().decode(IPCEnvelope.self, from: payload)
 
-        guard case let .newSplit(decodedTabID, decodedPaneID, direction, shell) = try XCTUnwrap(envelope.request) else {
+        guard case let .newSplit(decodedTabID, decodedPaneID, direction, shell, cwd) = try XCTUnwrap(envelope.request) else {
             return XCTFail("expected newSplit")
         }
         XCTAssertEqual(decodedTabID, tabID)
         XCTAssertEqual(decodedPaneID, paneID)
         XCTAssertEqual(direction, .vertical)
         XCTAssertNil(shell)
+        XCTAssertNil(cwd)
     }
 
     func testResponseRoundTripIsStable() throws {
@@ -475,6 +476,7 @@ final class IPCCodecTests: XCTestCase {
         .renameWorkspace(workspaceID: UUID(), name: "Work"),
         .detectAgent(surfaceID: "surface-1"),
         .subscribeSurfaceOutput(surfaceID: "surface-1", label: "harness-cli attach"),
+        .subscribeSurfaceOutputReadOnly(surfaceID: "surface-1", label: "read-only"),
         .cancelSubscription(surfaceID: "surface-1"),
         .replayScrollback(surfaceID: "surface-1", fromSequence: 100),
         .replayScrollbackSequenced(surfaceID: "surface-1", fromSequence: nil),
@@ -510,6 +512,12 @@ final class IPCCodecTests: XCTestCase {
         .displayMessage(format: "#{session_name}", print: false),
         .displayMessage(format: "#{session_name}", print: true),
         .showMessages,
+        .setSurfaceSizeMode(.owner),
+        .setSurfaceSizeMode(.smallest),
+        .takeSurface(surfaceID: "surface-1", clientID: UUID()),
+        .takeSurface(surfaceID: "surface-1", clientID: nil),
+        .foregroundProcess(surfaceID: "surface-1"),
+        .surfaceContext(surfaceID: "surface-1"),
         // Optional-field variants — exercise both the present and absent branch of the optionals.
         .newTab(workspaceID: UUID(), cwd: nil, shell: nil),
         .subscribeSurfaceOutput(surfaceID: "surface-1", label: nil),
@@ -584,13 +592,13 @@ final class IPCCodecTests: XCTestCase {
              .sendKeys, .capturePane, .capturePaneRange, .pipePane, .waitFor, .linkWindow,
              .unlinkWindow, .killPane, .swapPanes, .resizePane, .resizePaneRatio, .zoomPane,
              .setCopyMode, .renameTab, .renameSession, .renameWorkspace, .detectAgent,
-             .subscribeSurfaceOutput, .cancelSubscription, .replayScrollback,
+             .subscribeSurfaceOutput, .subscribeSurfaceOutputReadOnly, .cancelSubscription, .replayScrollback,
              .replayScrollbackSequenced, .resizeSurface, .detachSurface, .identifyClient,
              .detachClient, .setBuffer, .getBuffer, .deleteBuffer, .pasteBuffer,
              .selectPaneDirectional, .selectPane, .subscribeSnapshot, .applyLayout, .nextLayout,
              .previousLayout, .rotatePanes, .breakPane, .joinPane, .respawnPane, .clearHistory, .setOption,
              .showOptions, .setEnvironment, .showEnvironment, .bindHook, .unbindHook, .listHooks,
-             .displayMessage:
+             .displayMessage, .setSurfaceSizeMode, .takeSurface, .foregroundProcess, .surfaceContext:
             break
         }
     }

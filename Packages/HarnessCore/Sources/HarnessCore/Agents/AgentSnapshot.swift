@@ -17,6 +17,24 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     case goose
     case generic
 
+    /// Short name used in a tab, without the marketing words.
+    public var commandToken: String {
+        switch self {
+        case .codex: return "codex"
+        case .claudeCode: return "claude"
+        case .cursor: return "cursor"
+        case .grok: return "grok"
+        case .pi: return "pi"
+        case .hermes: return "hermes"
+        case .openClaw: return "openclaw"
+        case .openCode: return "opencode"
+        case .aider: return "aider"
+        case .gemini: return "gemini"
+        case .goose: return "goose"
+        case .generic: return "agent"
+        }
+    }
+
     public var displayName: String {
         switch self {
         case .codex: return "Codex"

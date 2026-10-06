@@ -42,10 +42,9 @@ public final class DaemonServer: @unchecked Sendable {
     private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
     /// FDs subscribed to layout-change pushes (`subscribeSnapshot`).
     private var snapshotSubscribers: Set<Int32> = []
-    /// Per-client requested PTY size per surface. Each surface is sized to the
-    /// **smallest** request across attached clients (tmux `window-size smallest`),
-    /// so a small ssh client never truncates a larger one's view and vice versa.
-    private var clientSurfaceSizes: [Int32: [String: (rows: UInt16, cols: UInt16)]] = [:]
+    /// Per-client PTY sizes. `smallest` (the default) is tmux compatibility.
+    /// `owner` lets one client set the size; other clients' votes do not resize.
+    private var sizeArbiter = SurfaceSizeArbiter()
 
     private struct ClientRecord {
         let id: UUID
@@ -53,6 +52,8 @@ public final class DaemonServer: @unchecked Sendable {
         let connectedAt: Date
     }
     private var clients: [Int32: ClientRecord] = [:]
+    /// File descriptors that may receive output but must not write to a child.
+    private var readOnlyClients: Set<Int32> = []
     private var clientFDsByID: [UUID: Int32] = [:]
     /// Lock-guarded mirror of `clients.count` for `#{session_attached}`. The registry's
     /// format builder runs under its own lock on arbitrary threads, so it can't hop onto
@@ -226,6 +227,7 @@ public final class DaemonServer: @unchecked Sendable {
         }
         source.setCancelHandler { [weak self] in
             guard let self else { close(clientFD); return }
+            self.readOnlyClients.remove(clientFD)
             if let removed = self.clients.removeValue(forKey: clientFD) {
                 self.clientFDsByID.removeValue(forKey: removed.id)
                 self.registeredClientCount.update(self.clients.count)
@@ -279,7 +281,9 @@ public final class DaemonServer: @unchecked Sendable {
             // Binary input frame on a persistent (subscription) connection: write straight to the
             // PTY, fire-and-forget — no reply (the echo comes back on the output stream).
             if case let .input(surfaceID, payload) = frame {
-                _ = registry.handle(.sendData(surfaceID: surfaceID, data: payload))
+                if !readOnlyClients.contains(fd) {
+                    _ = registry.handle(.sendData(surfaceID: surfaceID, data: payload))
+                }
                 continue
             }
             guard case let .request(maybeRequest) = frame else { continue }
@@ -292,7 +296,24 @@ public final class DaemonServer: @unchecked Sendable {
                 continue
             }
             if case let .subscribeSurfaceOutput(surfaceID, label) = request {
+                readOnlyClients.remove(fd)
                 handleSubscribe(surfaceID: surfaceID, label: label, fd: fd)
+                continue
+            }
+            if case let .subscribeSurfaceOutputReadOnly(surfaceID, label) = request {
+                readOnlyClients.insert(fd)
+                handleSubscribe(surfaceID: surfaceID, label: label, fd: fd)
+                continue
+            }
+            if case let .sendData(surfaceID, payload) = request, readOnlyClients.contains(fd) {
+                send(.ok, to: fd)
+                _ = surfaceID
+                _ = payload
+                continue
+            }
+            if case let .send(surfaceID, _) = request, readOnlyClients.contains(fd) {
+                send(.ok, to: fd)
+                _ = surfaceID
                 continue
             }
             if case let .subscribeSnapshot(label) = request {
@@ -301,6 +322,35 @@ public final class DaemonServer: @unchecked Sendable {
             }
             if case let .resizeSurface(surfaceID, rows, cols) = request {
                 handleResize(surfaceID: surfaceID, rows: rows, cols: cols, fd: fd)
+                send(.ok, to: fd)
+                continue
+            }
+            if case let .setSurfaceSizeMode(mode) = request {
+                for (surfaceID, size) in sizeArbiter.setMode(mode) {
+                    _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+                }
+                send(.ok, to: fd)
+                continue
+            }
+            if case let .takeSurface(surfaceID, clientID) = request {
+                let targetFD: Int32
+                if let clientID {
+                    guard let resolved = clientFDsByID[clientID] else {
+                        send(.error("take-surface: client \(clientID.uuidString) is not connected"), to: fd)
+                        continue
+                    }
+                    targetFD = resolved
+                } else {
+                    targetFD = fd
+                }
+                let taken = sizeArbiter.take(client: targetFD, surface: surfaceID)
+                guard taken.ownershipChanged else {
+                    send(.error("take-surface did not change ownership"), to: fd)
+                    continue
+                }
+                if let size = taken.size {
+                    _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+                }
                 send(.ok, to: fd)
                 continue
             }
@@ -581,25 +631,12 @@ public final class DaemonServer: @unchecked Sendable {
         send(.ok, to: fd)
     }
 
-    /// Record this client's requested size for a surface and resize the PTY to the
-    /// smallest request across all clients currently sizing it.
+    /// Record this client's requested size. In `smallest` mode the PTY becomes the
+    /// minimum vote. In `owner` mode only the owner's vote changes the PTY; a
+    /// non-owner records an advisory size and this returns without resizing.
     private func handleResize(surfaceID: String, rows: UInt16, cols: UInt16, fd: Int32) {
-        clientSurfaceSizes[fd, default: [:]][surfaceID] = (rows, cols)
-        applyEffectiveSize(surfaceID: surfaceID)
-    }
-
-    private func applyEffectiveSize(surfaceID: String) {
-        var minRows: UInt16 = .max
-        var minCols: UInt16 = .max
-        var found = false
-        for sizes in clientSurfaceSizes.values {
-            guard let size = sizes[surfaceID] else { continue }
-            found = true
-            minRows = min(minRows, size.rows)
-            minCols = min(minCols, size.cols)
-        }
-        guard found, minRows > 0, minCols > 0 else { return }
-        _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: minRows, cols: minCols))
+        guard let size = sizeArbiter.vote(client: fd, surface: surfaceID, rows: rows, cols: cols) else { return }
+        _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
     }
 
     private func handleSubscribeSnapshot(label: String?, fd: Int32) {
@@ -633,9 +670,8 @@ public final class DaemonServer: @unchecked Sendable {
             subs.removeAll { $0.surfaceID == surfaceID }
             if subs.isEmpty { outputSubscriptions.removeValue(forKey: fd) } else { outputSubscriptions[fd] = subs }
         }
-        if clientSurfaceSizes[fd]?.removeValue(forKey: surfaceID) != nil {
-            if clientSurfaceSizes[fd]?.isEmpty == true { clientSurfaceSizes.removeValue(forKey: fd) }
-            applyEffectiveSize(surfaceID: surfaceID)
+        if let size = sizeArbiter.disconnect(client: fd, surface: surfaceID) {
+            _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
         }
     }
 
@@ -645,10 +681,11 @@ public final class DaemonServer: @unchecked Sendable {
             registry.cancelSubscription(surfaceID: subscription.surfaceID, token: subscription.token)
         }
         snapshotSubscribers.remove(fd)
-        // Drop this client's size requests and let the remaining clients' smallest
-        // size take over (a surface can grow back when a small client detaches).
-        let droppedSizes = clientSurfaceSizes.removeValue(forKey: fd) ?? [:]
-        for surfaceID in droppedSizes.keys { applyEffectiveSize(surfaceID: surfaceID) }
+        // Drop this client's votes. `smallest` mode grows back to the remaining
+        // minimum; `owner` mode hands the surface to the most recent other voter.
+        for (surfaceID, size) in sizeArbiter.disconnect(client: fd) {
+            _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+        }
     }
 
     public func runLoop() {

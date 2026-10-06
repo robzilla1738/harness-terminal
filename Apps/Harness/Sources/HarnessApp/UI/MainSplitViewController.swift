@@ -12,7 +12,7 @@ private final class EffectiveAppearanceReportingView: NSView {
 
 @MainActor
 final class MainSplitViewController: NSViewController {
-    private let split = NSSplitView()
+    private let split = SidebarSplitView()
     private let sidebar = HarnessSidebarPanelViewController()
     private let content = ContentAreaViewController()
     private let statusLine = StatusLineView()
@@ -111,7 +111,7 @@ final class MainSplitViewController: NSViewController {
         ]
         applyStatusPosition()
 
-        edgeDivider.layer?.backgroundColor = resolvedDividerColor().cgColor
+        updateEdgeDivider()
 
         DispatchQueue.main.async { [weak self] in
             self?.setSidebarVisible(SessionCoordinator.shared.settings.sidebarVisible)
@@ -125,17 +125,16 @@ final class MainSplitViewController: NSViewController {
         )
     }
 
-    /// Resolve the divider line color: user override (`settings.dividerHex`) wins; otherwise
-    /// a quiet near-background hairline — `#1E1E1E` on dark themes (the default look), and the
-    /// theme's border on light themes (where a near-black line would read as a hard rule).
-    private func resolvedDividerColor() -> NSColor {
+    /// A custom divider color is an overlaid hairline. With no custom color the
+    /// split itself has no thickness, so nothing transparent sits between the
+    /// sidebar and the terminal.
+    private func updateEdgeDivider() {
         if let hex = SessionCoordinator.shared.settings.dividerHex, let color = NSColor.fromHex(hex) {
-            return color
+            edgeDivider.isHidden = false
+            edgeDivider.layer?.backgroundColor = color.cgColor
+        } else {
+            edgeDivider.isHidden = true
         }
-        let c = HarnessChrome.current
-        return c.isDark
-            ? (NSColor.fromHex(HarnessChromePalette.defaultDarkDividerHex) ?? c.border)
-            : c.border.withAlphaComponent(0.65)
     }
 
     func applyChrome() {
@@ -147,7 +146,7 @@ final class MainSplitViewController: NSViewController {
             // child layer-backing island and does not affect the root's backing.
             HarnessDesign.makeClear(sidebarContainer)
         }
-        edgeDivider.layer?.backgroundColor = resolvedDividerColor().cgColor
+        updateEdgeDivider()
         sidebar.applyChromeColors()
         content.applyChrome()
         statusLine.applyChrome()
@@ -301,6 +300,14 @@ final class MainSplitViewController: NSViewController {
         setSidebarVisible(!SessionCoordinator.shared.settings.sidebarVisible, animated: true)
     }
 
+}
+
+/// Sidebar and terminal meet with no reserved divider strip. A 1pt gap on a
+/// translucent window showed the desktop between them.
+@MainActor
+private final class SidebarSplitView: NSSplitView {
+    override var dividerThickness: CGFloat { 0 }
+    override var dividerColor: NSColor { .clear }
 }
 
 @MainActor

@@ -28,12 +28,12 @@ final class NotificationDropdownPanelView: NSView {
         wantsLayer = true
         layer?.cornerRadius = HarnessDesign.Radius.overlay
         layer?.cornerCurve = .continuous
-        layer?.masksToBounds = false
+        layer?.masksToBounds = true
         let c = HarnessDesign.chrome
-        layer?.backgroundColor = (c.terminalBackground.blended(withFraction: c.isDark ? 0.06 : 0.04, of: c.textPrimary) ?? c.sidebarBackground).cgColor
+        layer?.backgroundColor = c.sidebarBackground.cgColor
         layer?.borderWidth = 1
-        layer?.borderColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.14).cgColor
-        HarnessDesign.applyShadow(.overlay, to: layer)
+        layer?.borderColor = c.border.cgColor
+        HarnessDesign.applyShadow(.none, to: layer)
 
         setupContent()
     }

@@ -127,7 +127,7 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
         XCTAssertEqual(resolved.canvasBackgroundHex, lightTheme.backgroundHex)
         XCTAssertEqual(resolved.canvasForegroundHex, lightTheme.foregroundHex)
         XCTAssertEqual(resolved.cursorHex, lightTheme.cursorHex ?? lightTheme.foregroundHex)
-        XCTAssertEqual(resolved.outputPaletteHex, Array(repeating: nil, count: 16))
+        XCTAssertEqual(resolved.outputPaletteHex, lightTheme.paletteHex)
         XCTAssertEqual(resolved.oscPaletteHex, lightTheme.paletteHex)
 
         let (view, responses) = configuredSurface(
@@ -144,7 +144,7 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
             canvasForegroundHex: resolved.canvasForegroundHex,
             TerminalGridCell(codepoint: 0x41, foreground: .palette(1))
         ).foreground
-        XCTAssertEqual(sgrRed, RGBColor(hex: ThemeManager.defaultBaselinePaletteHex[1]))
+        XCTAssertEqual(sgrRed, RGBColor(hex: try XCTUnwrap(lightTheme.paletteHex[1])))
 
         view.receive("\u{1b}]10;?\u{7}")
         view.receive("\u{1b}]11;?\u{7}")

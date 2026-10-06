@@ -26,7 +26,10 @@ public enum TerminalColorGamut: String, Codable, Sendable {
 }
 
 public enum HarnessAppearanceMode: String, Codable, Sendable, CaseIterable {
+    /// The selected theme. Fresh installs stay on this and paint the black canvas.
     case theme
+    /// A designed light canvas and matching light chrome, independent of the Mac appearance.
+    case light
     case macOSSystem = "macos-system"
 }
 
@@ -123,8 +126,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var backgroundBlur: Int
     public var windowPaddingX: Float
     public var windowPaddingY: Float
-    /// Harness appearance policy. `.theme` uses the selected Harness theme; `.macOSSystem`
-    /// resolves Harness-owned light/dark palettes from the current macOS appearance.
+    /// Harness appearance policy. `.theme` uses the selected Harness theme; `.light` uses the
+    /// configured light theme regardless of the Mac appearance; `.macOSSystem` resolves
+    /// Harness-owned light/dark palettes from the current macOS appearance.
     public var appearanceMode: HarnessAppearanceMode
     /// Named themes used only by `.macOSSystem` resolution. `.theme` mode ignores these
     /// fields and continues to render `themeName` exactly as before.
@@ -142,8 +146,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// where mod is `ctrl|cmd|opt|shift`. Set empty string to disable.
     public var prefixKey: String
     /// Number of lines kept in scrollback per pane (passed to the renderer + RealPty). `0` means
-    /// **unlimited**: the emulator's line history grows unbounded while the daemon's persisted
-    /// scrollback stays bounded by a large on-disk safety ceiling.
+    /// **unlimited**, which both the daemon ring and the GUI line history cap at
+    /// `ScrollbackBudget.unlimitedSafetyCapBytes`.
     public var scrollbackLines: Int
     /// Cursor shape: `block`, `bar`, or `underline` (`cursor-style`).
     public var cursorStyle: String
@@ -309,6 +313,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Minimum WCAG contrast ratio (1…21) forced between a cell's foreground and its background.
     /// 1 = off (no adjustment). Imported from a terminal config's `minimum-contrast`.
     public var minimumContrast: Double
+    /// Oklab adjustment of low-contrast program colors toward the theme. Independent
+    /// of `applyThemeToTerminalOutput`, which remains the full-recolor opt-in.
+    public var themeFit: Bool
+    /// Comfortable pane islands or a single-pixel split border.
+    public var paneDensity: PaneDensity
     /// Confirm before pasting text containing newlines / control characters when the program has
     /// not enabled bracketed paste — guards against blind multi-line command execution.
     public var pasteProtection: Bool
@@ -438,6 +447,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         quickTerminalHotkey: String = "cmd-opt-`",
         windowPaddingBalance: Bool = true,
         minimumContrast: Double = 1,
+        themeFit: Bool = false,
+        paneDensity: PaneDensity = .comfortable,
         pasteProtection: Bool = true,
         commandFinishedThresholdSeconds: Int = 10,
         notificationEvents: [String: Bool] = [:],
@@ -511,6 +522,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.quickTerminalHotkey = quickTerminalHotkey
         self.windowPaddingBalance = windowPaddingBalance
         self.minimumContrast = HarnessSettings.clampedContrast(minimumContrast)
+        self.themeFit = themeFit
+        self.paneDensity = paneDensity
         self.pasteProtection = pasteProtection
         self.commandFinishedThresholdSeconds = max(0, commandFinishedThresholdSeconds)
         self.notificationEvents = notificationEvents
@@ -783,6 +796,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         quickTerminalHotkey = try fields.decode(.quickTerminalHotkey, \.quickTerminalHotkey)
         windowPaddingBalance = try fields.decode(.windowPaddingBalance, \.windowPaddingBalance)
         minimumContrast = HarnessSettings.clampedContrast(try fields.decode(.minimumContrast, \.minimumContrast))
+        themeFit = try fields.decode(.themeFit, \.themeFit)
+        paneDensity = try fields.decodeEnum(.paneDensity, \.paneDensity)
         // `lightThemeName`/`darkThemeName` are no longer stored fields — the legacy pair is
         // consumed by the `appearanceMode` migration above (via LegacyHarnessSettingsCodingKeys).
         pasteProtection = try fields.decode(.pasteProtection, \.pasteProtection)

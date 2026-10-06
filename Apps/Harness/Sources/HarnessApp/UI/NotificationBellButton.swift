@@ -28,11 +28,12 @@ final class NotificationBellButton: NSControl {
 
         // Weight matches the rest of the header glyphs (workspace pill, chevron,
         // ellipsis) so the chrome icon set stays one uniform pack.
-        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        let config = NSImage.SymbolConfiguration(pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
         iconView.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "Notifications")?
             .withSymbolConfiguration(config)
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.imageAlignment = .alignCenter
 
         badgeBackground.wantsLayer = true
         badgeBackground.layer?.cornerRadius = 7
@@ -52,8 +53,8 @@ final class NotificationBellButton: NSControl {
         NSLayoutConstraint.activate([
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 16),
-            iconView.heightAnchor.constraint(equalToConstant: 16),
+            iconView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, multiplier: 0.58),
+            iconView.heightAnchor.constraint(lessThanOrEqualTo: heightAnchor, multiplier: 0.58),
 
             badgeBackground.topAnchor.constraint(equalTo: topAnchor, constant: 1),
             badgeBackground.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
@@ -81,7 +82,7 @@ final class NotificationBellButton: NSControl {
 
     override func layout() {
         super.layout()
-        applyChrome() // keep the circular corner radius correct once bounds are known
+        applyChrome()
     }
 
     override func updateTrackingAreas() {
@@ -122,10 +123,8 @@ final class NotificationBellButton: NSControl {
 
     func applyChrome() {
         let c = HarnessDesign.chrome
-        // Shared circular icon-button chrome — identical disc to `SoftIconButton` (the
-        // sidebar toggle, footer gear/＋/palette, tab strip ＋) so the whole icon set
-        // reads as one themed pack that follows the theme like the session cards.
-        HarnessDesign.applyIconButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
+        // Same plain glyph as the tab-strip icons. No disc.
+        HarnessDesign.applyGlyphButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
         // Re-clear clipping every pass: AppKit re-syncs `masksToBounds` from `clipsToBounds`
         // during layout (which calls this), and the circular `cornerRadius` would otherwise
         // shear off the badge's top-right corner where it pokes past the disc. The init-only
@@ -139,7 +138,7 @@ final class NotificationBellButton: NSControl {
         badgeBackground.layer?.backgroundColor = c.danger.cgColor
         // SF Symbol variant: filled when there's an unread notification, outline
         // when idle. Makes the visual state read in a glance.
-        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        let config = NSImage.SymbolConfiguration(pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
         let symbol = hasUnread ? "bell.fill" : "bell"
         iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Notifications")?
             .withSymbolConfiguration(config)

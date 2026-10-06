@@ -48,6 +48,19 @@ public final class SurfaceRegistry: @unchecked Sendable {
     var monitors: [String: SurfaceMonitor] = [:]
     let monitorLock = NSLock()
     var monitorTimer: DispatchSourceTimer?
+    private var lastIdleParkCheck = Date.distantPast
+
+    /// Once a minute, park surfaces whose PTY has been quiet. Called from the
+    /// monitor timer, including the idle early-return that otherwise skips the
+    /// registry lock.
+    func parkIdleSurfacesIfDue(now: Date = Date()) {
+        guard now.timeIntervalSince(lastIdleParkCheck) >= 30 else { return }
+        lastIdleParkCheck = now
+        lock.lock()
+        let ptys = Array(sessions.values)
+        lock.unlock()
+        for pty in ptys { pty.parkIfIdle(now: now) }
+    }
     /// Cached "is silence monitoring armed" (`monitor-silence` > 0), refreshed from the
     /// `setOption` path and at startup. Lets a quiet monitor tick skip the registry lock +
     /// option reads entirely: gating on the *other* option values is useless (`monitor-bell`
@@ -264,7 +277,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             commit()
             fireHookLocked(.afterNewTab)
             return .tabID(tabID)
-        case let .newSplit(tabID, paneID, direction, shell):
+        case let .newSplit(tabID, paneID, direction, shell, requestedCwd):
             guard let workspace = editor.snapshot.workspaces.first(where: { ws in
                 ws.sessions.contains { session in session.tabs.contains { $0.id == tabID } }
             }) else { return .error("Tab not found") }
@@ -281,7 +294,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                   )
             else { return .error("Could not split pane") }
             if let surfaceID = editor.surfaceID(forPaneID: newPaneID) {
-                let cwd = editor.snapshot.workspaces
+                let cwd = requestedCwd ?? editor.snapshot.workspaces
                     .flatMap { workspace in workspace.sessions.flatMap { $0.tabs } }
                     .first(where: { $0.id == tabID })?
                     .cwd
@@ -658,6 +671,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .agentInfo(AgentDetector.snapshot(forSurfaceKey: surfaceID))
         case let .subscribeSurfaceOutput(surfaceID, _):
             return subscribe(surfaceID: surfaceID)
+        case let .subscribeSurfaceOutputReadOnly(surfaceID, _):
+            return subscribe(surfaceID: surfaceID)
         case .subscribeSnapshot:
             // FD-level streaming, owned by DaemonServer (intercepted before reaching
             // the registry); the stub keeps the switch exhaustive.
@@ -945,6 +960,24 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case .showMessages:
             messageLogLock.lock(); defer { messageLogLock.unlock() }
             return .text(messageLog.joined(separator: "\n"))
+        case .setSurfaceSizeMode, .takeSurface:
+            // Votes live on the daemon's connection table. DaemonServer intercepts these.
+            return .error("surface size ownership must be handled by DaemonServer")
+        case let .foregroundProcess(surfaceID):
+            guard let session = sessions[surfaceID], let probed = session.probeForegroundProcess() else {
+                return .text(ControlPlane.processJSON(pid: -1, executable: ""))
+            }
+            return .text(ControlPlane.processJSON(pid: Int(probed.pid), executable: probed.executable))
+        case let .surfaceContext(surfaceID):
+            guard let session = sessions[surfaceID] else {
+                return .error("Surface not found")
+            }
+            let probed = session.probeForegroundProcess()
+            return .text(ControlPlane.contextJSON(
+                pid: Int(probed?.pid ?? -1),
+                executable: probed?.executable ?? "",
+                cwd: session.currentWorkingDirectory() ?? ""
+            ))
         case let .displayMessage(format, print):
             // Render via FormatString using whatever context the daemon can build right now
             // (active workspace/tab from snapshot).

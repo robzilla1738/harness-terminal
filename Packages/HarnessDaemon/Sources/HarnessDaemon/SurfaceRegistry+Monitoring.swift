@@ -132,6 +132,7 @@ extension SurfaceRegistry {
         let hasFreshFlags = monitors.contains { $0.value.sawOutput || $0.value.sawBell }
         if !hasFreshFlags, !silenceArmed.read() {
             monitorLock.unlock()
+            parkIdleSurfacesIfDue()
             return
         }
         monitorFullPasses += 1
@@ -143,6 +144,7 @@ extension SurfaceRegistry {
             monitors[key]?.sawBell = false
         }
         monitorLock.unlock()
+        parkIdleSurfacesIfDue()
         guard !drained.isEmpty else { return }
 
         lock.lock()

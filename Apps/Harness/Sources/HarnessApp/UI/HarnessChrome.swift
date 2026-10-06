@@ -19,6 +19,10 @@ struct HarnessChromePalette {
     let textSecondary: NSColor
     let textTertiary: NSColor
     let rowSelectedFill: NSColor
+    /// Solid active-pill fill. Label contrast against this fill is at least 3:1.
+    let activePillFill: NSColor
+    /// Label color painted on `activePillFill`.
+    let activePillLabel: NSColor
     let rowHoverFill: NSColor
     let iconHoverFill: NSColor
     let waiting: NSColor
@@ -41,8 +45,11 @@ struct HarnessChromePalette {
     /// set `background`/`foreground` in their terminal config — we want to honor
     /// the exact black-and-white look rather than a named theme's tinted palette).
     static func from(backgroundHex: String, foregroundHex: String, cursorHex: String? = nil) -> HarnessChromePalette {
-        let background = color(from: backgroundHex)
-        let foreground = color(from: foregroundHex)
+        // One spec for every chrome surface. Tabs, sidebar, pane headers, and the
+        // switcher read the resulting palette instead of a hardcoded dark fill.
+        let spec = ChromePaletteSpec.resolve(backgroundHex: backgroundHex, foregroundHex: foregroundHex)
+        let background = nsColor(spec.surface)
+        let foreground = nsColor(spec.textPrimary)
         let accent = cursorHex.map { color(from: $0) } ?? blend(foreground, toward: NSColor(srgbRed: 0.55, green: 0.7, blue: 1.0, alpha: 1), fraction: 0.3)
         // A pleasant default ANSI-ish set derived from the bg/fg luminance.
         let waiting = NSColor(srgbRed: 0.51, green: 0.69, blue: 0.96, alpha: 1)
@@ -50,6 +57,7 @@ struct HarnessChromePalette {
         let success = NSColor(srgbRed: 0.59, green: 0.83, blue: 0.55, alpha: 1)
         let idle = blend(foreground, toward: background, fraction: 0.55)
         return build(
+            spec: spec,
             background: background,
             foreground: foreground,
             accent: accent,
@@ -61,6 +69,7 @@ struct HarnessChromePalette {
     }
 
     private static func build(
+        spec: ChromePaletteSpec,
         background: NSColor,
         foreground: NSColor,
         accent: NSColor,
@@ -69,7 +78,7 @@ struct HarnessChromePalette {
         success: NSColor,
         idle: NSColor
     ) -> HarnessChromePalette {
-        let isDark = perceivedBrightness(of: background) < 0.5
+        let isDark = spec.isDark
         // One consistent surface: the chrome (sidebar, tab strip, status line, overlays)
         // paints the *exact* terminal background — no lift — so the whole window reads as
         // a single flat canvas with no seam around the terminal pane. Interaction states
@@ -91,9 +100,15 @@ struct HarnessChromePalette {
             accentSoft: accent.withAlphaComponent(0.16),
             focusRing: accent,
             textPrimary: foreground,
-            textSecondary: foreground.withAlphaComponent(0.66),
-            textTertiary: foreground.withAlphaComponent(0.40),
-            rowSelectedFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.10),
+            // Dark secondary stays a translucent lift — it settles into the black canvas.
+            // Light secondary and tertiary are opaque. Alpha ink on a bright, translucent
+            // surface is what makes light-mode chrome type look fuzzy and washed out:
+            // subpixel antialiasing fringes against clear instead of against the paper.
+            textSecondary: secondaryInk(foreground: foreground, on: background, isDark: isDark),
+            textTertiary: tertiaryInk(foreground: foreground, on: background, isDark: isDark),
+            rowSelectedFill: nsColor(spec.activePillFill),
+            activePillFill: nsColor(spec.activePillFill),
+            activePillLabel: nsColor(spec.activePillLabel),
             rowHoverFill: foreground.withAlphaComponent(isDark ? 0.045 : 0.065),
             iconHoverFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.10),
             waiting: waiting,
@@ -101,6 +116,10 @@ struct HarnessChromePalette {
             success: success,
             idleStatus: idle
         )
+    }
+
+    private static func nsColor(_ color: ChromeColor) -> NSColor {
+        NSColor(srgbRed: color.red, green: color.green, blue: color.blue, alpha: 1)
     }
 
     private static func color(from hex: String) -> NSColor {
@@ -113,6 +132,18 @@ struct HarnessChromePalette {
         let g = CGFloat((value >> 8) & 0xff) / 255
         let b = CGFloat(value & 0xff) / 255
         return NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
+    }
+
+    /// Opaque mix of `foreground` toward the surface. `fraction` is how far the ink
+    /// moves toward the background (0 = full foreground).
+    private static func secondaryInk(foreground: NSColor, on background: NSColor, isDark: Bool) -> NSColor {
+        if isDark { return foreground.withAlphaComponent(0.66) }
+        return blend(foreground, toward: background, fraction: 0.22)
+    }
+
+    private static func tertiaryInk(foreground: NSColor, on background: NSColor, isDark: Bool) -> NSColor {
+        if isDark { return foreground.withAlphaComponent(0.40) }
+        return blend(foreground, toward: background, fraction: 0.40)
     }
 
     private static func blend(_ base: NSColor, toward: NSColor, fraction: CGFloat) -> NSColor {
@@ -128,10 +159,6 @@ struct HarnessChromePalette {
         )
     }
 
-    private static func perceivedBrightness(of color: NSColor) -> CGFloat {
-        guard let rgb = color.usingColorSpace(.sRGB) else { return 0 }
-        return rgb.redComponent * 0.299 + rgb.greenComponent * 0.587 + rgb.blueComponent * 0.114
-    }
 }
 
 @MainActor
@@ -140,6 +167,9 @@ enum HarnessChrome {
     /// Window background opacity (0…1). When < 1, chrome backgrounds gain alpha so
     /// the underlying NSVisualEffectView blur can show through.
     static var backgroundOpacity: CGFloat = 1
+    /// Opacity the window actually paints. Light appearance may raise this above the stored
+    /// setting so type stays readable; `backgroundOpacity` itself stays the stored value.
+    static var paintOpacity: CGFloat = 1
     /// Terminal backdrop blur (0…100) from settings; the renderer applies this on each
     /// terminal surface. Chrome uses this for optional vibrancy tuning only.
     static var backgroundBlur: Int = 0
@@ -182,7 +212,14 @@ enum HarnessChrome {
             foregroundHex: canvas.foregroundHex,
             cursorHex: canvas.cursorHex
         )
-        backgroundOpacity = max(0, min(1, opacity))
+        let storedOpacity = max(0, min(1, opacity))
+        backgroundOpacity = storedOpacity
+        let system = systemAppearance ?? currentSystemAppearance()
+        paintOpacity = CGFloat(ChromeMaterial.paintOpacity(
+            stored: Float(storedOpacity),
+            appearanceMode: appearanceMode,
+            systemAppearance: system
+        ))
         backgroundBlur = max(0, min(100, blur))
     }
 

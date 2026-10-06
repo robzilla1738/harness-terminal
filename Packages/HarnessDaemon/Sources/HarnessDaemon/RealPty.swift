@@ -12,6 +12,17 @@ public enum PtyError: Error {
     case launchFailed
 }
 
+/// The app process can be started with `NO_COLOR` or `FORCE_COLOR=0`. Those tell
+/// programs to drop color and draw in the default foreground, so light and dark
+/// mode only invert that one gray. A terminal session should not inherit them.
+private func stripInheritedColorSuppression(_ environment: inout [String: String]) {
+    environment.removeValue(forKey: "NO_COLOR")
+    let force = environment["FORCE_COLOR"]?.lowercased()
+    if force == "0" || force == "false" || force == "off" {
+        environment.removeValue(forKey: "FORCE_COLOR")
+    }
+}
+
 public struct ShellLaunchProfile: Sendable, Equatable {
     public var executable: String
     public var arguments: [String]
@@ -149,6 +160,14 @@ public final class RealPty: @unchecked Sendable {
         }
     }
     private var scrollback: [ScrollbackEntry] = []
+    /// Last PTY read. Idle parking uses this, not a wall clock in the read loop.
+    private var lastPTYReadAt = Date()
+    private var idleGrid = IdleGrid()
+    /// History kept after the live ring is dropped. Replay reads this (or the
+    /// scrollback file) while parked. Restore puts it back and does not claim
+    /// the old process is still running.
+    private var parkedBlob: Data?
+    private var parkedSequence: UInt64 = 1
     // Index of the first live entry. Eviction advances this (O(1)) instead of `removeFirst()`
     // (O(n) on the PTY read hot path); the dead prefix is physically compacted in one batched
     // shift once it grows large, so steady-state eviction is ≈O(1) amortized.
@@ -240,10 +259,10 @@ public final class RealPty: @unchecked Sendable {
         self.termProgram = termProgram
         self.termProgramVersion = termProgramVersion
         // `scrollbackBytes == 0` requests unlimited scrollback. Bound the daemon's in-memory replay
-        // ring (and the on-disk log it sizes) to a large safety ceiling so a runaway producer can't
-        // OOM the session-authority daemon or fill the disk; the GUI emulator keeps the truly
-        // unbounded line history. Mapping the sentinel here keeps the eviction loop + `loadTail`
-        // (which would otherwise treat a 0 `maxBytes` as "keep nothing") working unchanged.
+        // ring (and the on-disk log it sizes) to the shared safety ceiling so a runaway producer
+        // can't OOM the session-authority daemon or fill the disk. The GUI line cap uses the same
+        // ceiling. Mapping the sentinel here keeps the eviction loop + `loadTail` (which would
+        // otherwise treat a 0 `maxBytes` as "keep nothing") working unchanged.
         let requestedScrollbackBytes = scrollbackBytes == 0 ? ScrollbackFile.unlimitedSafetyCap : scrollbackBytes
         self.maxScrollbackBytes = scrollbackURL == nil
             ? requestedScrollbackBytes
@@ -288,6 +307,7 @@ public final class RealPty: @unchecked Sendable {
         let argv: [UnsafeMutablePointer<CChar>?] = argvStrings.map { strdup($0) } + [nil]
 
         var environment = ProcessInfo.processInfo.environment
+        stripInheritedColorSuppression(&environment)
         environment["TERM"] = "xterm-256color"
         // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
         // downgrading to the muted 256-color cube. The renderer passes truecolor through
@@ -493,6 +513,7 @@ public final class RealPty: @unchecked Sendable {
         let argv: [UnsafeMutablePointer<CChar>?] = argvStrings.map { strdup($0) } + [nil]
 
         var environment = ProcessInfo.processInfo.environment
+        stripInheritedColorSuppression(&environment)
         environment["TERM"] = "xterm-256color"
         // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
         // downgrading to the muted 256-color cube. The renderer passes truecolor through
@@ -714,6 +735,21 @@ public final class RealPty: @unchecked Sendable {
         let foreground = tcgetpgrp(fd)
         guard let name = Self.processName(for: foreground > 0 ? foreground : child) else { return nil }
         return (child, name)
+    }
+
+    /// The foreground process group (`tcgetpgrp`) and its executable name.
+    /// The pid is the process whose name is returned, not the spawned shell,
+    /// unless the shell itself is in the foreground.
+    public func probeForegroundProcess() -> (pid: pid_t, executable: String)? {
+        lifecycleLock.lock()
+        let fd = master
+        let child = childPID
+        lifecycleLock.unlock()
+        guard fd >= 0, child > 0 else { return nil }
+        let foreground = tcgetpgrp(fd)
+        let pid = foreground > 0 ? foreground : child
+        guard let name = Self.processName(for: pid) else { return nil }
+        return (pid, name)
     }
 
     /// Short process name (comm) for a PID, or nil when it can't be read (exited, denied).
@@ -978,10 +1014,62 @@ public final class RealPty: @unchecked Sendable {
         return out
     }
 
+    /// Drop the live ring after `threshold` seconds without a PTY read. History
+    /// stays in `parkedBlob` (and on disk when a scrollback file exists). The
+    /// process that produced it is not presented as running.
+    func parkIfIdle(now: Date = Date(), threshold: TimeInterval = IdleGrid.defaultThreshold) {
+        scrollbackLock.lock()
+        defer { scrollbackLock.unlock() }
+        let idleFor = now.timeIntervalSince(lastPTYReadAt)
+        var model = idleGrid
+        if !model.parked {
+            model.live = scrollbackHead < scrollback.count ? ["live"] : model.live
+        }
+        let wasParked = model.parked
+        model.tick(secondsSincePTYRead: idleFor, threshold: threshold)
+        guard model.parked, !wasParked else {
+            idleGrid = model
+            return
+        }
+        var blob = Data()
+        let firstSequence = scrollbackHead < scrollback.count ? scrollback[scrollbackHead].sequence : nextSequence
+        for entry in scrollback[scrollbackHead...] { blob.append(entry.data) }
+        parkedBlob = blob
+        parkedSequence = firstSequence
+        scrollback.removeAll(keepingCapacity: false)
+        scrollbackHead = 0
+        scrollbackBytes = 0
+        idleGrid = model
+    }
+
+    /// Put parked history back into the live ring. Caller holds `scrollbackLock`.
+    /// `presentsProcessAsRunning` stays false: the restored bytes are history.
+    private func mergeParkedHistoryLocked() {
+        if let blob = parkedBlob, !blob.isEmpty {
+            scrollback.insert(ScrollbackEntry(sequence: parkedSequence, data: blob), at: scrollbackHead)
+            scrollbackBytes += blob.count
+        }
+        parkedBlob = nil
+        idleGrid.restore()
+    }
+
+    /// Put parked history back into the live ring. `presentsProcessAsRunning`
+    /// stays false: the restored bytes are history, not a live process.
+    func restoreParkedGrid() {
+        scrollbackLock.lock()
+        defer { scrollbackLock.unlock() }
+        guard idleGrid.parked else { return }
+        mergeParkedHistoryLocked()
+    }
+
+    var presentsProcessAsRunning: Bool {
+        scrollbackLock.lock(); defer { scrollbackLock.unlock() }
+        return idleGrid.presentsProcessAsRunning
+    }
+
     public func replay(fromSequence: UInt64?) -> String {
         scrollbackLock.lock()
-        let live = scrollback[scrollbackHead...] // skip the evicted dead prefix
-        let segments = live.map { ScrollbackReplaySegment(sequence: $0.sequence, data: $0.data) }
+        let segments = replaySegmentsLocked()
         scrollbackLock.unlock()
         let combined = Self.replayData(from: segments, fromSequence: fromSequence)
         // Lossy decode — a UTF-8 sequence split across the replay boundary (or an evicted entry)
@@ -997,12 +1085,23 @@ public final class RealPty: @unchecked Sendable {
     /// atomically, so `endSequence` always lands on a chunk boundary).
     public func replayWithEndSequence(fromSequence: UInt64?) -> (text: String, endSequence: UInt64) {
         scrollbackLock.lock()
-        let live = scrollback[scrollbackHead...] // skip the evicted dead prefix
-        let segments = live.map { ScrollbackReplaySegment(sequence: $0.sequence, data: $0.data) }
+        let segments = replaySegmentsLocked()
         let endSequence = nextSequence
         scrollbackLock.unlock()
         let combined = Self.replayData(from: segments, fromSequence: fromSequence)
         return (String(decoding: combined, as: UTF8.self), endSequence)
+    }
+
+    /// Live ring plus parked history, in sequence order. Caller holds `scrollbackLock`.
+    private func replaySegmentsLocked() -> [ScrollbackReplaySegment] {
+        var segments: [ScrollbackReplaySegment] = []
+        if let blob = parkedBlob, !blob.isEmpty {
+            segments.append(ScrollbackReplaySegment(sequence: parkedSequence, data: blob))
+        }
+        segments.append(contentsOf: scrollback[scrollbackHead...].map {
+            ScrollbackReplaySegment(sequence: $0.sequence, data: $0.data)
+        })
+        return segments
     }
 
     static func replayData(from segments: [ScrollbackReplaySegment], fromSequence: UInt64?) -> Data {
@@ -1069,7 +1168,11 @@ public final class RealPty: @unchecked Sendable {
             let data = Data(self.readBuffer.prefix(n))
             self.handleOutput(data)
         }
-        source.setCancelHandler {
+        source.setCancelHandler { [weak self] in
+            // The exit watcher can cancel this source before the read handler copies the
+            // child's last write (`sh -c env` exits before the source runs). Pull those
+            // bytes in here, on this queue, before the fd is closed.
+            self?.absorbPendingOutput(fd: fd)
             sysClose(fd)
         }
         // Install only if we're still the current generation; a concurrent
@@ -1088,6 +1191,10 @@ public final class RealPty: @unchecked Sendable {
 
     private func handleOutput(_ data: Data) {
         scrollbackLock.lock()
+        lastPTYReadAt = Date()
+        if idleGrid.parked {
+            mergeParkedHistoryLocked()
+        }
         let sequence = nextSequence
         nextSequence &+= UInt64(data.count)
         scrollback.append(ScrollbackEntry(sequence: sequence, data: data))
@@ -1330,6 +1437,22 @@ public final class RealPty: @unchecked Sendable {
             sysClose(fd)
         }
         onExit?(exitStatus)
+    }
+
+    /// Copy bytes already queued on `fd` into the scrollback. Called from the read source's
+    /// cancel handler, which is serialized with the read loop on `readQueue`, so `readBuffer`
+    /// has a single owner. `FIONREAD` keeps the read from blocking on a master the child has
+    /// already closed.
+    private func absorbPendingOutput(fd: Int32) {
+        while true {
+            let available = harness_fd_available(fd)
+            if available <= 0 { return }
+            let n = readBuffer.withUnsafeMutableBufferPointer { ptr -> Int in
+                sysRead(fd, ptr.baseAddress, min(Int(available), ptr.count))
+            }
+            if n <= 0 { return }
+            handleOutput(Data(readBuffer.prefix(n)))
+        }
     }
 
     private func deepestReadableDescendant(of pid: pid_t) -> pid_t? {

@@ -14,7 +14,7 @@ public enum IPCRequest: Codable, Sendable {
     case newSessionInGroup(targetSessionID: UUID, name: String?)
     case newTab(workspaceID: UUID, cwd: String?, shell: String? = nil)
     case newTabInWorkspace(named: String, cwd: String?, shell: String? = nil)
-    case newSplit(tabID: UUID, paneID: UUID?, direction: SplitDirection, shell: String? = nil)
+    case newSplit(tabID: UUID, paneID: UUID?, direction: SplitDirection, shell: String? = nil, cwd: String? = nil)
     case selectWorkspace(id: UUID)
     case selectWorkspaceByName(name: String)
     case selectSession(workspaceID: UUID, sessionID: UUID)
@@ -86,6 +86,8 @@ public enum IPCRequest: Codable, Sendable {
     case detectAgent(surfaceID: String)
     // Surface output streaming + attach
     case subscribeSurfaceOutput(surfaceID: String, label: String?)
+    /// Same stream as `subscribeSurfaceOutput`, but input from this client is dropped.
+    case subscribeSurfaceOutputReadOnly(surfaceID: String, label: String?)
     case cancelSubscription(surfaceID: String)
     case replayScrollback(surfaceID: String, fromSequence: UInt64?)
     /// Like `replayScrollback`, but the reply also carries the sequence one past the last
@@ -143,6 +145,16 @@ public enum IPCRequest: Codable, Sendable {
     case displayMessage(format: String, print: Bool)
     /// tmux `show-messages`: the daemon's recent display-message log (most recent last).
     case showMessages
+    /// `size-mode smallest|owner`. Intercepted by `DaemonServer` (it owns the votes).
+    case setSurfaceSizeMode(SurfaceSizeMode)
+    /// `take-surface`: `clientID` is a client that already holds a size vote and
+    /// stays connected. Nil means the calling connection, which only works when
+    /// that connection itself voted.
+    case takeSurface(surfaceID: String, clientID: UUID?)
+    /// Foreground process of a surface as a JSON object (`pid`, `executable`).
+    case foregroundProcess(surfaceID: String)
+    /// Foreground process plus working directory, for layout capture.
+    case surfaceContext(surfaceID: String)
 }
 
 /// The mode argument for `wait-for`. `String` raw values are wire-identical to the previous

@@ -61,6 +61,7 @@ public final class DaemonClient: @unchecked Sendable {
         surfaceID: String,
         label: String? = nil,
         fromSequence: UInt64? = nil,
+        readOnly: Bool = false,
         replayTimeout: TimeInterval = 5,
         onReplay: @escaping @Sendable (String) -> Void,
         onData: @escaping @Sendable (Data, UInt64) -> Void,
@@ -68,7 +69,10 @@ public final class DaemonClient: @unchecked Sendable {
     ) throws -> DaemonSubscription {
         // 1. Subscribe first, buffering live frames (do NOT deliver yet).
         let fd = try connectSocket()
-        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSurfaceOutput(surfaceID: surfaceID, label: label)))
+        let subscribe: IPCRequest = readOnly
+            ? .subscribeSurfaceOutputReadOnly(surfaceID: surfaceID, label: label)
+            : .subscribeSurfaceOutput(surfaceID: surfaceID, label: label)
+        let payload = try IPCCodec.encode(IPCEnvelope(request: subscribe))
         do { try writeAll(payload, to: fd) } catch { close(fd); throw error }
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(onData: onData, onEnd: onEnd, buffered: true)

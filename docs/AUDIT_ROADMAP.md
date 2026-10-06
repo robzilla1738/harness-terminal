@@ -154,7 +154,7 @@ Effort: **S** < ~1 day · **M** a few days · **L** larger.
 
 **PR-21 · Quick terminal (global-hotkey dropdown), find-bar regex, unlimited scrollback** · ux · M–L · `[F40,F48,F49]` · ✅ **Shipped (#138)**
 - *Why:* Quick terminal (Quake dropdown) is an explicit backlog item (medium). Find bar is substring-only (no regex/case toggle). Scrollback is a fixed bounded count with no unlimited option.
-- *Approach:* Quick terminal: an `NSPanel` (`.nonactivatingPanel`, `canJoinAllSpaces`, `.floating`) hosting a dedicated daemon-backed surface, summoned by a global hotkey (`RegisterEventHotKey`/CGEvent monitor), behind a setting. Find: optional `NSRegularExpression` mode + case toggle in `TerminalBufferSearch` + two `TerminalFindBar` buttons. Scrollback: treat `scrollbackLines == 0` as unbounded in `OptionStore` + `ScrollbackFile` (verify the file can grow safely / byte-cap).
+- *Approach:* Quick terminal: an `NSPanel` (`.nonactivatingPanel`, `canJoinAllSpaces`, `.floating`) hosting a dedicated daemon-backed surface, summoned by a global hotkey (`RegisterEventHotKey`/CGEvent monitor), behind a setting. Find: optional `NSRegularExpression` mode + case toggle in `TerminalBufferSearch` + two `TerminalFindBar` buttons. Scrollback: `scrollbackLines == 0` is the unlimited sentinel. The daemon file and the GUI line history both stop at `ScrollbackBudget.unlimitedSafetyCapBytes`.
 - *Files:* `HarnessApp` (panel), `TerminalBufferSearch.swift`, `TerminalFindBar.swift`, `HarnessSettings.swift`, `ScrollbackFile.swift`.
 
 ### P5 — Tech debt & polish

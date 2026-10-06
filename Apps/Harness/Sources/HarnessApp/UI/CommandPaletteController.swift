@@ -270,6 +270,47 @@ enum CommandPaletteController {
             },
         ])
 
+        // Titles and shortcuts come from the shipped menu catalog so the panel and the
+        // tests cannot drift.
+        let catalog = Dictionary(uniqueKeysWithValues: ChromeMenus.commandRows().map { ($0.id, $0) })
+        actions = actions.map { action in
+            guard let row = catalog[action.id] else { return action }
+            return PaletteAction(
+                id: action.id,
+                title: row.title,
+                subtitle: action.subtitle,
+                symbol: action.symbol,
+                shortcut: row.shortcut,
+                section: action.section,
+                searchOnly: action.searchOnly,
+                handler: action.handler
+            )
+        }
+        if !actions.contains(where: { $0.id == "action.changeSession" }) {
+            actions.append(PaletteAction(
+                id: "action.changeSession",
+                title: catalog["action.changeSession"]?.title ?? "Change Session",
+                subtitle: "Switch the active session",
+                symbol: "rectangle.stack",
+                shortcut: catalog["action.changeSession"]?.shortcut ?? "",
+                section: .actions
+            ) {
+                SessionSwitcherController.present(relativeTo: NSApp.keyWindow)
+            })
+        }
+        if !actions.contains(where: { $0.id == "action.addRemoteHost" }) {
+            actions.append(PaletteAction(
+                id: "action.addRemoteHost",
+                title: catalog["action.addRemoteHost"]?.title ?? "Add Remote Host...",
+                subtitle: "Connect a daemon over SSH",
+                symbol: "globe",
+                shortcut: "",
+                section: .actions
+            ) {
+                MenuTarget.shared.addRemoteHost()
+            })
+        }
+
         // MARK: - Tabs in active workspace (every session, not just the active one — the
         // palette is the only flat "jump anywhere" surface, so all tabs must be reachable).
         if let workspace = snapshot.activeWorkspace {
@@ -278,8 +319,11 @@ enum CommandPaletteController {
             for session in workspace.sessions {
                 let isActiveSession = session.id == activeSessionID
                 for (idx, tab) in session.tabs.enumerated() {
-                    let folder = HarnessDesign.pathDisplayName(tab.cwd)
-                    let title = !folder.isEmpty ? folder : (tab.title.isEmpty ? "Terminal" : tab.title)
+                    let title = SurfaceIdentity.label(
+                        directory: tab.cwd,
+                        program: tab.currentCommand,
+                        agent: tab.agent?.kind.commandToken
+                    )
                     var subtitle = HarnessDesign.shortenPath(tab.cwd)
                     if multipleSessions, !session.name.isEmpty {
                         subtitle = subtitle.isEmpty ? session.name : "\(session.name) · \(subtitle)"
@@ -452,7 +496,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         guard let content = (view as? HarnessOverlayBackground)?.contentView else { return }
 
         searchField.placeholderAttributedString = NSAttributedString(
-            string: "Search commands, workspaces, themes…",
+            string: "Filter commands and sessions",
             attributes: [
                 .foregroundColor: c.textTertiary,
                 .font: NSFont.systemFont(ofSize: 15),
@@ -466,6 +510,15 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
+        let filterWell = NSView()
+        filterWell.wantsLayer = true
+        filterWell.layer?.cornerRadius = HarnessDesign.Radius.control
+        filterWell.layer?.cornerCurve = .continuous
+        filterWell.layer?.backgroundColor = c.rowHoverFill.cgColor
+        filterWell.layer?.borderWidth = 1
+        filterWell.layer?.borderColor = c.borderStrong.cgColor
+        filterWell.translatesAutoresizingMaskIntoConstraints = false
+
         let separator = NSView()
         separator.wantsLayer = true
         separator.layer?.backgroundColor = c.border.cgColor
@@ -478,7 +531,9 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         tableView.dataSource = self
         tableView.delegate = self
         tableView.intercellSpacing = .zero
-        tableView.selectionHighlightStyle = .none // PaletteRowView draws themed selection
+        // .regular is what calls PaletteRowView.drawSelection. .none skips that
+        // override, so the selected row would never get the shared pill fill.
+        tableView.selectionHighlightStyle = .regular
         // Both single-click and double-click activate. Spotlight/Raycast feel —
         // there's no value in "select but don't run" inside a transient palette.
         tableView.action = #selector(activate)
@@ -510,6 +565,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
             footerHint.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
         ])
 
+        content.addSubview(filterWell)
         content.addSubview(searchField)
         content.addSubview(separator)
         content.addSubview(scrollView)
@@ -517,12 +573,17 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         content.addSubview(footer)
 
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.lg + 2),
-            searchField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.xl),
-            searchField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.xl),
-            searchField.heightAnchor.constraint(equalToConstant: 28),
+            filterWell.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.md),
+            filterWell.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.md),
+            filterWell.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.md),
+            filterWell.heightAnchor.constraint(equalToConstant: 36),
 
-            separator.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: HarnessDesign.Spacing.lg),
+            searchField.leadingAnchor.constraint(equalTo: filterWell.leadingAnchor, constant: HarnessDesign.Spacing.md),
+            searchField.trailingAnchor.constraint(equalTo: filterWell.trailingAnchor, constant: -HarnessDesign.Spacing.md),
+            searchField.centerYAnchor.constraint(equalTo: filterWell.centerYAnchor),
+            searchField.heightAnchor.constraint(equalToConstant: 22),
+
+            separator.topAnchor.constraint(equalTo: filterWell.bottomAnchor, constant: HarnessDesign.Spacing.md),
             separator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             separator.heightAnchor.constraint(equalToConstant: 1),
@@ -773,12 +834,28 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
 /// Table row that draws the themed selection fill instead of the system blue.
 @MainActor
 final class PaletteRowView: NSTableRowView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        // The row asks for a highlight even if the table style is later .none.
+        selectionHighlightStyle = .regular
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if isSelected { paintSelectedPill() }
+        super.draw(dirtyRect)
+    }
+
     override func drawSelection(in dirtyRect: NSRect) {
-        guard isSelected else { return }
+        paintSelectedPill()
+    }
+
+    private func paintSelectedPill() {
         let rect = bounds.insetBy(dx: HarnessDesign.Spacing.md, dy: 3)
         let path = NSBezierPath(roundedRect: rect, xRadius: HarnessDesign.Radius.control, yRadius: HarnessDesign.Radius.control)
-        let c = HarnessChrome.current
-        c.accent.withAlphaComponent(c.isDark ? 0.16 : 0.13).setFill()
+        HarnessChrome.current.activePillFill.setFill()
         path.fill()
     }
 }
@@ -824,7 +901,7 @@ private final class PaletteItemView: NSView {
 
         let title = NSTextField(labelWithString: action.title)
         title.font = HarnessDesign.Typography.paletteTitle
-        title.textColor = c.textPrimary
+        title.textColor = c.activePillLabel
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
         if !query.isEmpty {

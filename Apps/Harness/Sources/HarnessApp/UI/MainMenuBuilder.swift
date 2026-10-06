@@ -99,6 +99,23 @@ enum MainMenuBuilder {
 
         let view = NSMenuItem()
         view.submenu = NSMenu(title: "View")
+        let appearance = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        let appearanceMenu = NSMenu(title: "Appearance")
+        for mode in HarnessAppearanceMode.allCases {
+            let title: String
+            switch mode {
+            case .theme: title = "Theme"
+            case .light: title = "Light"
+            case .macOSSystem: title = "Follow System"
+            }
+            let item = NSMenuItem(title: title, action: #selector(MenuTarget.setAppearanceMode(_:)), keyEquivalent: "")
+            item.target = MenuTarget.shared
+            item.representedObject = mode.rawValue
+            appearanceMenu.addItem(item)
+        }
+        appearance.submenu = appearanceMenu
+        view.submenu?.addItem(appearance)
+        view.submenu?.addItem(.separator())
         let splitHItem = NSMenuItem(title: "Split Horizontal", action: #selector(MenuTarget.splitH), keyEquivalent: "d")
         splitHItem.target = MenuTarget.shared
         view.submenu?.addItem(splitHItem)
@@ -155,6 +172,10 @@ enum MainMenuBuilder {
         selectLastOutput.target = MenuTarget.shared
         view.submenu?.addItem(selectLastOutput)
         view.submenu?.addItem(.separator())
+        let overviewItem = NSMenuItem(title: "Workspace Overview", action: #selector(MenuTarget.toggleOverview), keyEquivalent: "o")
+        overviewItem.keyEquivalentModifierMask = [.command, .shift]
+        overviewItem.target = MenuTarget.shared
+        view.submenu?.addItem(overviewItem)
         let sidebarItem = NSMenuItem(title: "Toggle Sidebar", action: #selector(MenuTarget.toggleSidebar), keyEquivalent: "\\")
         sidebarItem.keyEquivalentModifierMask = [.command]
         sidebarItem.target = MenuTarget.shared
@@ -243,6 +264,12 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         case #selector(toggleSecureKeyboardEntry):
             menuItem.state = SessionCoordinator.shared.settings.secureKeyboardEntry ? .on : .off
             return true
+        case #selector(setAppearanceMode(_:)):
+            if let raw = menuItem.representedObject as? String,
+               let mode = HarnessAppearanceMode(rawValue: raw) {
+                menuItem.state = SessionCoordinator.shared.settings.appearanceMode == mode ? .on : .off
+            }
+            return true
         default: return true
         }
     }
@@ -279,6 +306,12 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         local.target = self
         local.state = (active == nil) ? .on : .off
         menu.addItem(local)
+    }
+
+    @objc func setAppearanceMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = HarnessAppearanceMode(rawValue: raw) else { return }
+        SessionCoordinator.shared.setAppearanceMode(mode)
     }
 
     @objc func addRemoteHost() {
@@ -422,6 +455,10 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func openSettings() {
         SettingsWindowController.show()
+    }
+
+    @objc func toggleOverview() {
+        WorkspaceOverviewController.toggle()
     }
 
     @objc func toggleSidebar() {

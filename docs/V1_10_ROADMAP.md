@@ -16,7 +16,7 @@ Each of these was re-verified against `c73b10f`. They are fixed, false, or measu
 - **`set-environment` dangling `-s` global-write (bughunt BH-003): FIXED** — `flagIsDangling` guard at `Tools/harness/Sources/HarnessCLI/HarnessCLI.swift:1449-1455` (and `show-environment` at `:1470-1475`).
 - **`RealPty.write()` fd-recycle TOCTOU (bughunt BH-005): FIXED** — write takes a private `dup()` of master under `lifecycleLock` (`Packages/HarnessDaemon/Sources/HarnessDaemon/RealPty.swift:359-390`).
 - **"Snapshot deep-copy per keystroke": FALSE** — GUI typing rides the persistent input connection with a coalesced `.sendData` fallback (`TerminalHostView.swift:944-1062`); `requestDaemon` performs no snapshot fetch.
-- **"Daemon holds GiBs of scrollback RAM": FALSE** — the in-memory replay ring defaults to 1 MiB and `scrollbackBytes == 0` (unlimited) maps to `ScrollbackFile.unlimitedSafetyCap` (`RealPty.swift:227, :236-244`). The GUI emulator owns unbounded history by design.
+- **"Daemon holds GiBs of scrollback RAM": FALSE** — the in-memory replay ring defaults to 1 MiB and `scrollbackBytes == 0` (unlimited) maps to `ScrollbackFile.unlimitedSafetyCap`. The GUI line history uses that same ceiling (`ScrollbackBudget`); it does not keep an unbounded second copy.
 - **"Display link fires at 120 Hz when idle": FALSE** — created paused and `isPaused`-managed by pending work (`HarnessTerminalSurfaceView.swift:1321, :1705, :1713`). Do not touch it in PR-26.
 - **Shaped-run cache eviction "O(n) shift": FALSE** — already amortized via `shapedRunCacheOrderStart` + threshold compaction (`GlyphRasterizer.swift:362-381`).
 - **`.bughunt/` report (2026-06-07): fully consumed** — all 20 findings fixed by #112/#139 or verified-fixed above.
