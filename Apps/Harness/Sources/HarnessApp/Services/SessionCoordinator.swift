@@ -197,6 +197,39 @@ final class SessionCoordinator: NSObject {
         }
     }
 
+    /// The window's own tunnel died (sleep, Wi-Fi change, remote reboot). Bring it back
+    /// with backoff instead of leaving the window on a dead socket.
+    func remoteTunnelDropped(_ name: String) {
+        guard RemoteHostsService.shared.activeHostName == name else { return }
+        DisplayMessage.show("Lost the connection to \(name). Reconnecting…")
+        scheduleRemoteReconnect(name, attempt: 0)
+    }
+
+    private func scheduleRemoteReconnect(_ name: String, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + RemoteReconnect.delay(attempt: attempt)) { [weak self] in
+            MainActor.assumeIsolated {
+                // The person may have switched hosts or gone local meanwhile.
+                guard self != nil, RemoteHostsService.shared.activeHostName == name else { return }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let endpoint = try? RemoteHostsService.shared.connect(named: name)
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, RemoteHostsService.shared.activeHostName == name else { return }
+                            if let endpoint {
+                                self.applyEndpointSwitch(endpoint)
+                                DisplayMessage.show("Reconnected to \(name).")
+                            } else if attempt + 1 < RemoteReconnect.maxAttempts {
+                                self.scheduleRemoteReconnect(name, attempt: attempt + 1)
+                            } else {
+                                DisplayMessage.show("Couldn't reach \(name). Use Remote ▸ \(name) ▸ Connect to try again.")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Tear down the remote tunnel and return the GUI to the local daemon.
     func disconnectRemote() {
         if let name = RemoteHostsService.shared.activeHostName {

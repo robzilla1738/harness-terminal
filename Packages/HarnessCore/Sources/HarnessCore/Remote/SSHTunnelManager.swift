@@ -83,9 +83,12 @@ public final class SSHTunnelManager: @unchecked Sendable {
         let localSocket = HarnessPaths.tunnelSocketURL(forHost: host.name)
         let endpoint = Endpoint.unix(path: localSocket.path)
 
-        // Reuse a tunnel that's actually forwarding; otherwise tear down any dead/stale one and
-        // (re)spawn. `stop` is a no-op when there's no existing tunnel.
-        if isConnected(host.name), reachabilityProbe(endpoint) { return endpoint }
+        // Reuse a forward that answers, ours or another Harness process's (the app and the CLI
+        // share one socket path per host). Respawning over a live one would unlink its socket
+        // out from under that process. Otherwise tear down any dead/stale one and (re)spawn.
+        // `stop` is a no-op when there's no existing tunnel.
+        let socketPresent = isConnected(host.name) || FileManager.default.fileExists(atPath: localSocket.path)
+        if socketPresent, reachabilityProbe(endpoint) { return endpoint }
         stop(host: host.name)
         try spawnTunnel(host: host, localSocket: localSocket)
 
@@ -208,7 +211,7 @@ public final class SSHTunnelManager: @unchecked Sendable {
         return args
     }
 
-    private static func validatedUserSSHArgs(_ input: [String]) throws -> [String] {
+    static func validatedUserSSHArgs(_ input: [String]) throws -> [String] {
         var output: [String] = []
         var index = 0
         while index < input.count {
@@ -269,7 +272,7 @@ public final class SSHTunnelManager: @unchecked Sendable {
         return "\(localSocketPath):\(remoteSocketPath)"
     }
 
-    private static func validatedSSHTarget(_ target: String) throws -> String {
+    static func validatedSSHTarget(_ target: String) throws -> String {
         guard isSafeArgumentToken(target),
               !target.hasPrefix("-"),
               target.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
@@ -336,5 +339,15 @@ public final class SSHTunnelManager: @unchecked Sendable {
             return false
         }
         return true
+    }
+}
+
+/// Backoff for bringing a dropped remote tunnel back: 1, 2, 4, 8, 16, 30, 30… seconds,
+/// giving up after `maxAttempts` (about three minutes in all).
+public enum RemoteReconnect {
+    public static let maxAttempts = 9
+
+    public static func delay(attempt: Int) -> TimeInterval {
+        min(30, pow(2, Double(max(0, attempt))))
     }
 }

@@ -17,6 +17,9 @@ final class RemoteHostsService: @unchecked Sendable {
             DispatchQueue.global(qos: .utility).async {
                 _ = try? DaemonClient().request(.noteClientConnection(host: name), timeout: 1)
             }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { SessionCoordinator.shared.remoteTunnelDropped(name) }
+            }
         }
     }
 
@@ -27,7 +30,21 @@ final class RemoteHostsService: @unchecked Sendable {
 
     func hosts() -> [RemoteHost] { store.load() }
 
-    func addHost(_ host: RemoteHost) { store.upsert(host) }
+    /// Saves (or replaces by name). False when the file couldn't be written.
+    @discardableResult
+    func addHost(_ host: RemoteHost) -> Bool { store.upsert(host).saved }
+
+    /// Opens (or reuses) the tunnel for an unsaved or saved host without making it the
+    /// window's host. Blocking — call off the main thread.
+    func probe(_ host: RemoteHost) throws -> Endpoint {
+        try SSHTunnelManager.shared.endpoint(for: host)
+    }
+
+    /// Sessions the daemon at `endpoint` reports, or 0 if it doesn't answer.
+    static func sessionCount(at endpoint: Endpoint) -> Int {
+        guard case let .snapshot(snapshot)? = try? DaemonClient(endpoint: endpoint).request(.getSnapshot, timeout: 3) else { return 0 }
+        return snapshot.workspaces.reduce(0) { $0 + $1.sessions.count }
+    }
 
     func removeHost(named name: String) {
         store.remove(name: name)
