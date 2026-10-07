@@ -180,6 +180,10 @@ enum MainMenuBuilder {
         peekItem.keyEquivalentModifierMask = [.control, .command]
         peekItem.target = MenuTarget.shared
         view.submenu?.addItem(peekItem)
+        let sessionsItem = NSMenuItem(title: "Switch Session…", action: #selector(MenuTarget.switchSession), keyEquivalent: "s")
+        sessionsItem.keyEquivalentModifierMask = [.control, .command]
+        sessionsItem.target = MenuTarget.shared
+        view.submenu?.addItem(sessionsItem)
         let sidebarItem = NSMenuItem(title: "Toggle Sidebar", action: #selector(MenuTarget.toggleSidebar), keyEquivalent: "\\")
         sidebarItem.keyEquivalentModifierMask = [.command]
         sidebarItem.target = MenuTarget.shared
@@ -547,6 +551,14 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func toggleTabPeek() {
         TabPeekController.toggle()
+    }
+
+    @objc func switchSession() {
+        if let split = NSApp.keyWindow?.contentViewController as? MainSplitViewController {
+            split.showSessionSwitcher()
+        } else {
+            SessionSwitcherController.toggle(relativeTo: NSApp.keyWindow)
+        }
     }
 
     @objc func toggleSidebar() {

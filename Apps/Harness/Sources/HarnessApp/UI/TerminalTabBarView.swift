@@ -201,6 +201,9 @@ final class TerminalTabBarView: NSView {
         updateDividers()
     }
 
+    /// The sessions button, for anchoring the switcher from a keyboard shortcut.
+    var sessionsAnchor: NSView { sessionsButton }
+
     @objc private func showSessions() {
         delegate?.tabBarDidRequestSessions(from: sessionsButton)
     }

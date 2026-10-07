@@ -15,6 +15,11 @@ final class MainSplitViewController: NSViewController {
     private let split = SidebarSplitView()
     private let sidebar = HarnessSidebarPanelViewController()
     private let content = ContentAreaViewController()
+
+    /// ⌃⌘S: drop the switcher from the sessions button when the tab row shows it.
+    func showSessionSwitcher() {
+        content.showSessionSwitcher()
+    }
     private let statusLine = StatusLineView()
     /// 1px hairline along the inner edge of the sidebar — adds quiet definition
     /// between sidebar/terminal without resorting to a draggable divider line.
@@ -216,6 +221,8 @@ final class MainSplitViewController: NSViewController {
     func setSidebarVisible(_ visible: Bool, animated: Bool) {
         SessionCoordinator.shared.settings.sidebarVisible = visible
         try? SessionCoordinator.shared.settings.save()
+        // Sidebar mode lists tabs in the sidebar; title-bar mode shows the tab row.
+        content.setTabRowHidden(visible)
         sidebarAnimToken &+= 1
         let target = visible ? HarnessDesign.sidebarWidth : 0
         splitDelegate.allowFullCollapse = true

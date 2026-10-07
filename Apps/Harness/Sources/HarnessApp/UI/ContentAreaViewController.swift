@@ -58,6 +58,23 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             : NSColor.clear.cgColor
     }
 
+    /// Terminal under the tab row (title-bar mode) or at the top (sidebar mode, where the
+    /// sidebar lists the tabs and the pane header sits on the traffic-light row).
+    private lazy var hostBelowTabs = terminalHost.topAnchor.constraint(equalTo: tabBar.bottomAnchor)
+    private lazy var hostAtTop = terminalHost.topAnchor.constraint(equalTo: view.topAnchor)
+
+    private var tabRowHidden = false
+
+    func setTabRowHidden(_ hidden: Bool) {
+        tabRowHidden = hidden
+        guard isViewLoaded else { return }   // viewDidLoad applies it
+        tabBar.isHidden = hidden
+        hostBelowTabs.isActive = !hidden
+        hostAtTop.isActive = hidden
+        // The pane container pads its own top in that case, so its gutter fill covers it.
+        reloadIfNeeded(force: true)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         tabBar.delegate = self
@@ -76,7 +93,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 
             // No divider line under the tab bar: the elevated chrome background now
             // provides the tab-strip/terminal boundary (see HarnessChromePalette).
-            terminalHost.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
+            hostBelowTabs,
             terminalHost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             terminalHost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             terminalHost.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -130,6 +147,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             refreshTabBarMetadata()
             return
         }
+        setTabRowHidden(tabRowHidden)
         reloadTabBar()
         reloadIfNeeded(force: structureChanged)
     }
@@ -146,7 +164,12 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func tabBarDidRequestSessions(from anchor: NSView) {
-        SessionSwitcherController.present(relativeTo: view.window, anchor: anchor)
+        SessionSwitcherController.toggle(relativeTo: view.window, anchor: anchor)
+    }
+
+    func showSessionSwitcher() {
+        let anchor = tabBar.isHidden ? nil : tabBar.sessionsAnchor
+        SessionSwitcherController.toggle(relativeTo: view.window, anchor: anchor)
     }
 
     func tabBarDidRequestToggleSidebar() {
@@ -231,7 +254,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         else { return }
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
-        let density = "\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)"
+        let density = "\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)|\(tabRowHidden)"
         let key = "\(coordinator.structureRevision)|\(density)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
         guard force || key != lastStructureKey else {
             // No per-pane chrome work needed on the fast path (structure unchanged).
@@ -241,6 +264,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 
         paneContainer?.removeFromSuperview()
         let container = PaneContainerView(
+            padsTop: tabRowHidden,
             node: displayNode,
             cwd: tab.cwd,
             program: tab.currentCommand,
@@ -303,7 +327,7 @@ final class PaneContainerView: NSView {
     private let tabID: TabID?
     private var islands: [PaneIslandView] = []
 
-    init(node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
+    init(padsTop: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
         self.tabID = SessionCoordinator.shared.snapshot.activeWorkspace?.activeTab?.id
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
@@ -311,7 +335,7 @@ final class PaneContainerView: NSView {
         let separated = settings.paneDensity.separatedIslands
         showsHeaders = separated && settings.paneHeaders
         // The root pads by half the gap; each island insets by the other half.
-        let pad = ChromeLayout.containerPadding(separated: separated)
+        let pad = ChromeLayout.containerPadding(separated: separated, padsTop: padsTop)
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)

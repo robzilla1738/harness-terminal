@@ -1,17 +1,25 @@
 import AppKit
 import HarnessCore
 
-/// Floating session switcher: filter field, a check on the current session, and the
-/// existing new-session and add-remote actions. Colors come from the shared palette.
+/// The sessions popover: a "Filter or create…" field, sessions (✓ on the current one,
+/// grouped by daemon when there are several), then New Session and Add Remote Host.
+/// Drops down from the title-bar sessions button, or centers on the window from the
+/// palette / ⌃⌘S. ↑↓ move, ↩ opens, Esc or a click outside closes.
 @MainActor
 enum SessionSwitcherController {
-    private static var panel: NSPanel?
+    private static var panel: KeyablePanel?
+
+    static var isShown: Bool { panel?.isVisible == true }
+
+    static func toggle(relativeTo parent: NSWindow?, anchor: NSView? = nil) {
+        if isShown { close() } else { present(relativeTo: parent, anchor: anchor) }
+    }
 
     static func present(relativeTo parent: NSWindow?, anchor: NSView? = nil) {
-        panel?.close()
-        let host = SessionSwitcherView()
+        close()
+        let content = SessionSwitcherView()
         let window = KeyablePanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 280),
+            contentRect: NSRect(origin: .zero, size: content.fittingSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -21,174 +29,427 @@ enum SessionSwitcherController {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = true
-        window.contentView = host
+        window.contentView = content
+        window.setContentSize(content.fittingSize)
         if let anchor, let anchorWindow = anchor.window {
             // Drop down from the button, left edges aligned.
             let rect = anchorWindow.convertToScreen(anchor.convert(anchor.bounds, to: nil))
-            window.setFrameTopLeftPoint(NSPoint(x: rect.minX, y: rect.minY - HarnessDesign.Spacing.xs))
+            window.setFrameTopLeftPoint(NSPoint(x: rect.minX - HarnessDesign.Spacing.xs, y: rect.minY - HarnessDesign.Spacing.xs))
         } else if let parent {
             let frame = parent.frame
-            window.setFrameOrigin(NSPoint(x: frame.midX - 160, y: frame.midY - 40))
+            let size = window.frame.size
+            window.setFrameTopLeftPoint(NSPoint(x: frame.midX - size.width / 2, y: frame.maxY - frame.height / 4))
         }
+        content.onClose = { close() }
+        content.onResize = { [weak window] size in
+            guard let window else { return }
+            let top = window.frame.maxY
+            window.setContentSize(size)
+            window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: top))
+        }
+        window.delegate = content
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(content.filterField)
         panel = window
-        host.onClose = { window.close() }
+    }
+
+    static func close() {
+        panel?.delegate = nil
+        panel?.orderOut(nil)
+        panel = nil
     }
 }
 
 @MainActor
-private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDelegate {
     var onClose: (() -> Void)?
-    private let filter = NSTextField()
-    private let table = NSTableView()
-    private var rows: [ChromeMenuRow] = []
-    private var query = ""
-    private var selectedID: String?
-    private var applyingSelection = false
+    var onResize: ((NSSize) -> Void)?
+    let filterField = NSTextField()
+
+    private let width: CGFloat = 300
+    private let rowHeight: CGFloat = 28
+    private let maxVisibleRows = 12
+    private let background = NSVisualEffectView()
+    private let tint = NSView()
+    private let filterBox = NSView()
+    private let filterIcon = NSImageView()
+    private let list = FlippedView()
+    private let scroll = NSScrollView()
+    private var scrollHeight: NSLayoutConstraint!
+    private var items: [SwitcherItem] = []
+    private var sessions: [SwitcherSession] = []
+    private var currentID: String?
+    private var selectedIndex: Int?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
         let c = HarnessChrome.current
-        layer?.backgroundColor = c.sidebarBackground.cgColor
-        layer?.cornerRadius = HarnessDesign.Radius.overlay
+        wantsLayer = true
+        layer?.cornerRadius = HarnessDesign.Radius.panel
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
         layer?.borderWidth = 1
-        layer?.borderColor = c.border.cgColor
+        layer?.borderColor = c.borderStrong.cgColor
+        appearance = NSAppearance(named: c.isDark ? .darkAqua : .aqua)
 
-        filter.isBezeled = false
-        filter.isBordered = false
-        filter.drawsBackground = false
-        filter.focusRingType = .none
-        filter.font = HarnessDesign.Typography.sidebarLabel
-        filter.textColor = c.textPrimary
-        filter.placeholderString = "Filter or create..."
-        filter.delegate = self
-        filter.translatesAutoresizingMaskIntoConstraints = false
+        background.material = .popover
+        background.blendingMode = .behindWindow
+        background.state = .active
+        background.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(background)
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = c.terminalBackground.withAlphaComponent(0.72).cgColor
+        tint.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tint)
 
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("row"))
-        column.resizingMask = .autoresizingMask
-        table.addTableColumn(column)
-        table.headerView = nil
-        table.backgroundColor = .clear
-        table.rowHeight = 32
-        table.selectionHighlightStyle = .regular
-        table.dataSource = self
-        table.delegate = self
-        table.translatesAutoresizingMaskIntoConstraints = false
+        filterBox.wantsLayer = true
+        filterBox.layer?.cornerRadius = HarnessDesign.Radius.card
+        filterBox.layer?.cornerCurve = .continuous
+        filterBox.layer?.backgroundColor = c.rowHoverFill.cgColor
+        filterBox.layer?.borderWidth = 1
+        filterBox.layer?.borderColor = c.border.cgColor
+        filterBox.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(filterBox)
 
-        let scroll = NSScrollView()
+        filterIcon.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
+        filterIcon.contentTintColor = c.textTertiary
+        filterIcon.translatesAutoresizingMaskIntoConstraints = false
+        filterBox.addSubview(filterIcon)
+
+        filterField.isBezeled = false
+        filterField.isBordered = false
+        filterField.drawsBackground = false
+        filterField.focusRingType = .none
+        filterField.font = HarnessDesign.Typography.sidebarLabel
+        filterField.textColor = c.textPrimary
+        filterField.placeholderAttributedString = NSAttributedString(
+            string: "Filter or create…",
+            attributes: [.foregroundColor: c.textTertiary, .font: HarnessDesign.Typography.sidebarLabel]
+        )
+        filterField.delegate = self
+        filterField.setAccessibilityLabel("Filter sessions, or type a name to create one")
+        filterField.translatesAutoresizingMaskIntoConstraints = false
+        filterBox.addSubview(filterField)
+
         scroll.drawsBackground = false
-        scroll.documentView = table
         scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.documentView = list
         scroll.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(filter)
         addSubview(scroll)
+
+        let pad = HarnessDesign.Spacing.sm
+        scrollHeight = scroll.heightAnchor.constraint(equalToConstant: rowHeight)
         NSLayoutConstraint.activate([
-            filter.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            filter.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            filter.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            filter.heightAnchor.constraint(equalToConstant: 22),
-            scroll.topAnchor.constraint(equalTo: filter.bottomAnchor, constant: 8),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            widthAnchor.constraint(equalToConstant: width),
+            background.topAnchor.constraint(equalTo: topAnchor),
+            background.leadingAnchor.constraint(equalTo: leadingAnchor),
+            background.trailingAnchor.constraint(equalTo: trailingAnchor),
+            background.bottomAnchor.constraint(equalTo: bottomAnchor),
+            tint.topAnchor.constraint(equalTo: topAnchor),
+            tint.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tint.bottomAnchor.constraint(equalTo: bottomAnchor),
+            filterBox.topAnchor.constraint(equalTo: topAnchor, constant: pad),
+            filterBox.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
+            filterBox.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
+            filterBox.heightAnchor.constraint(equalToConstant: 30),
+            filterIcon.leadingAnchor.constraint(equalTo: filterBox.leadingAnchor, constant: HarnessDesign.Spacing.md),
+            filterIcon.centerYAnchor.constraint(equalTo: filterBox.centerYAnchor),
+            filterField.leadingAnchor.constraint(equalTo: filterIcon.trailingAnchor, constant: HarnessDesign.Spacing.sm),
+            filterField.trailingAnchor.constraint(equalTo: filterBox.trailingAnchor, constant: -HarnessDesign.Spacing.md),
+            filterField.centerYAnchor.constraint(equalTo: filterBox.centerYAnchor),
+            scroll.topAnchor.constraint(equalTo: filterBox.bottomAnchor, constant: pad),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -pad),
+            scrollHeight,
         ])
-        reloadRows()
+        loadSessions()
+        reload(resetSelection: true)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func controlTextDidChange(_ obj: Notification) {
-        query = filter.stringValue
-        reloadRows()
-    }
+    // MARK: - Data
 
-    private func reloadRows() {
-        let workspace = SessionCoordinator.shared.snapshot.activeWorkspace
-        let sessions = (workspace?.sessions ?? []).map { session -> (id: String, title: String) in
-            let tab = session.activeTab ?? session.tabs.first
-            let title = tab.map {
-                SurfaceIdentity.label(directory: $0.cwd, program: $0.currentCommand, agent: $0.agent?.kind.commandToken)
-            } ?? (session.name.isEmpty ? "Session" : session.name)
-            return (session.id.uuidString, title)
-        }
-        if selectedID == nil {
-            selectedID = workspace?.activeSessionID?.uuidString
-        }
-        let built = ChromeMenus.sessionRows(
-            sessions: sessions,
-            currentID: workspace?.activeSessionID?.uuidString,
-            selectedID: selectedID
-        )
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        rows = needle.isEmpty ? built : built.filter { $0.title.lowercased().contains(needle) || $0.id.hasPrefix("action.") }
-        if let selectedID, !rows.contains(where: { $0.id == selectedID }) {
-            self.selectedID = rows.first(where: \.current)?.id ?? rows.first?.id
-            reloadRows()
-            return
-        }
-        table.reloadData()
-        if let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }), table.selectedRow != index {
-            applyingSelection = true
-            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-            applyingSelection = false
-        }
-    }
-
-    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
-
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        SessionSwitcherRowView()
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let item = rows[row]
-        let chrome = HarnessChrome.current
-        let label = NSTextField(labelWithString: item.current ? "✓  \(item.title)" : item.title)
-        label.font = HarnessDesign.Typography.sidebarLabel
-        label.textColor = item.selected ? chrome.activePillLabel : chrome.textPrimary
-        if item.shortcut.isEmpty == false {
-            label.stringValue += "    \(item.shortcut)"
-        }
-        return label
-    }
-
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        guard !applyingSelection else { return }
-        let index = table.selectedRow
-        guard rows.indices.contains(index) else { return }
-        selectedID = rows[index].id
-        reloadRows()
-        guard rows.indices.contains(index) else { return }
-        let item = rows[index]
+    private func loadSessions() {
         let coordinator = SessionCoordinator.shared
-        switch item.id {
-        case "action.newSession":
-            if let id = coordinator.snapshot.activeWorkspaceID { coordinator.addSession(to: id) }
-        case "action.addRemoteHost":
-            MenuTarget.shared.addRemoteHost()
-        default:
-            if let uuid = UUID(uuidString: item.id),
-               let workspaceID = coordinator.snapshot.activeWorkspaceID {
-                coordinator.selectSession(workspaceID: workspaceID, sessionID: uuid)
+        let workspace = coordinator.snapshot.activeWorkspace
+        let here = RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID
+        let hereTitle = here == DaemonSidebar.localID ? "This Mac" : here
+        currentID = workspace?.activeSessionID?.uuidString
+        var list = (workspace?.sessions ?? []).map { session in
+            SwitcherSession(id: session.id.uuidString, title: Self.title(of: session), owner: here, ownerTitle: hereTitle)
+        }
+        // Sessions last seen on other daemons, from the sidebar's machine boards.
+        for group in coordinator.sidebarGroups() {
+            for row in group.sessions where row.owner != here {
+                let owner = row.owner == DaemonSidebar.localID ? "This Mac" : row.owner
+                list.append(SwitcherSession(id: row.id, title: row.name, owner: row.owner, ownerTitle: owner))
             }
         }
+        sessions = list
+    }
+
+    /// A named session shows its name; an unnamed one shows what its active tab is doing.
+    static func title(of session: SessionGroup) -> String {
+        if !session.name.isEmpty { return session.name }
+        guard let tab = session.activeTab ?? session.tabs.first else { return "Session" }
+        return SurfaceIdentity.label(directory: tab.cwd, program: tab.currentCommand, agent: tab.agent?.kind.commandToken)
+    }
+
+    private func reload(resetSelection: Bool) {
+        let query = filterField.stringValue
+        items = SessionSwitcherModel.items(sessions: sessions, currentID: currentID, query: query)
+        if resetSelection || selectedIndex.map({ !items.indices.contains($0) || items[$0].row == nil }) ?? true {
+            selectedIndex = SessionSwitcherModel.initialSelection(items, query: query, currentID: currentID)
+        }
+        rebuildRows()
+    }
+
+    private func rebuildRows() {
+        list.subviews.forEach { $0.removeFromSuperview() }
+        var y: CGFloat = 0
+        for (index, item) in items.enumerated() {
+            let height: CGFloat
+            let view: NSView
+            switch item {
+            case let .header(title):
+                height = 22
+                view = SwitcherHeaderView(title: title)
+            case .separator:
+                height = 9
+                view = SwitcherSeparatorView()
+            case let .row(row, owner):
+                height = rowHeight
+                let rowView = SwitcherRowView(row: row, symbol: Self.symbol(for: row.id, isSession: owner != nil), selected: index == selectedIndex)
+                rowView.onHover = { [weak self] in self?.select(index) }
+                rowView.onClick = { [weak self] in self?.activate(index) }
+                view = rowView
+            }
+            view.frame = NSRect(x: 0, y: y, width: width - HarnessDesign.Spacing.sm * 2, height: height)
+            list.addSubview(view)
+            y += height
+        }
+        list.frame = NSRect(x: 0, y: 0, width: width - HarnessDesign.Spacing.sm * 2, height: y)
+        let visible = min(y, rowHeight * CGFloat(maxVisibleRows))
+        scrollHeight.constant = max(visible, rowHeight)
+        layoutSubtreeIfNeeded()
+        onResize?(fittingSize)
+        if let selectedIndex, let view = list.subviews[safe: selectedIndex] {
+            list.scrollToVisible(view.frame)
+        }
+    }
+
+    private static func symbol(for id: String, isSession: Bool) -> String? {
+        if isSession { return nil }
+        switch id {
+        case SessionSwitcherModel.newSessionID: return "square.stack"
+        case SessionSwitcherModel.addRemoteHostID: return "globe"
+        case SessionSwitcherModel.createID: return "plus"
+        default: return nil
+        }
+    }
+
+    // MARK: - Selection
+
+    private func select(_ index: Int) {
+        guard index != selectedIndex, items[safe: index]?.row != nil else { return }
+        selectedIndex = index
+        for (i, view) in list.subviews.enumerated() {
+            (view as? SwitcherRowView)?.setSelected(i == index)
+        }
+    }
+
+    private func move(_ direction: Int) {
+        guard let next = SessionSwitcherModel.step(items, from: selectedIndex, by: direction) else { return }
+        select(next)
+        if let view = list.subviews[safe: next] { list.scrollToVisible(view.frame) }
+    }
+
+    private func activate(_ index: Int?) {
+        guard let index, case let .row(row, owner)? = items[safe: index] else { return }
+        let coordinator = SessionCoordinator.shared
+        let workspaceID = coordinator.snapshot.activeWorkspaceID
+        onClose?()
+        switch row.id {
+        case SessionSwitcherModel.newSessionID:
+            if let workspaceID { coordinator.addSession(to: workspaceID) }
+        case SessionSwitcherModel.createID:
+            let name = filterField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let workspaceID { coordinator.addSession(to: workspaceID, name: name) }
+        case SessionSwitcherModel.addRemoteHostID:
+            MenuTarget.shared.addRemoteHost()
+        default:
+            coordinator.focusSidebar(owner: owner ?? DaemonSidebar.localID, sessionID: row.id)
+        }
+    }
+
+    // MARK: - Keys and dismissal
+
+    func controlTextDidChange(_ obj: Notification) {
+        reload(resetSelection: true)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.moveUp(_:)): move(-1)
+        case #selector(NSResponder.moveDown(_:)): move(1)
+        case #selector(NSResponder.insertNewline(_:)): activate(selectedIndex)
+        case #selector(NSResponder.cancelOperation(_:)): onClose?()
+        default: return false
+        }
+        return true
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
         onClose?()
     }
 }
 
-/// Selected session row. The fill and label come from the shared pill colors,
-/// not the system table highlight.
+/// Top-down coordinates for the row list.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 @MainActor
-private final class SessionSwitcherRowView: NSTableRowView {
-    override func drawSelection(in dirtyRect: NSRect) {
-        guard isSelected else { return }
-        HarnessChrome.current.activePillFill.setFill()
-        let rect = bounds.insetBy(dx: 4, dy: 2)
-        NSBezierPath(roundedRect: rect, xRadius: HarnessDesign.Radius.control, yRadius: HarnessDesign.Radius.control).fill()
+private final class SwitcherRowView: NSView {
+    var onHover: (() -> Void)?
+    var onClick: (() -> Void)?
+    private let check = NSImageView()
+    private let label = NSTextField(labelWithString: "")
+    private let shortcut = NSTextField(labelWithString: "")
+    private let icon = NSImageView()
+    private var selected: Bool
+    private let isCurrent: Bool
+
+    init(row: ChromeMenuRow, symbol: String?, selected: Bool) {
+        self.selected = selected
+        isCurrent = row.current
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = HarnessDesign.Radius.control
+        layer?.cornerCurve = .continuous
+
+        check.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
+        check.isHidden = !row.current
+        icon.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+        icon.isHidden = symbol == nil
+        label.stringValue = row.title
+        label.font = HarnessDesign.Typography.sidebarLabel
+        label.lineBreakMode = .byTruncatingMiddle
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        shortcut.stringValue = row.shortcut
+        shortcut.font = HarnessDesign.Typography.sidebarLabel
+        shortcut.alignment = .right
+        shortcut.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for view in [check, icon, label, shortcut] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        let leading = HarnessDesign.Spacing.md
+        let glyphColumn: CGFloat = 16
+        NSLayoutConstraint.activate([
+            check.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leading),
+            check.centerYAnchor.constraint(equalTo: centerYAnchor),
+            check.widthAnchor.constraint(equalToConstant: glyphColumn),
+            icon.centerXAnchor.constraint(equalTo: check.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: HarnessDesign.Spacing.sm),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: shortcut.leadingAnchor, constant: -HarnessDesign.Spacing.md),
+            shortcut.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -leading),
+            shortcut.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(row.current ? "\(row.title), current session" : row.title)
+        applyColors()
     }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setSelected(_ selected: Bool) {
+        guard selected != self.selected else { return }
+        self.selected = selected
+        applyColors()
+    }
+
+    private func applyColors() {
+        let c = HarnessChrome.current
+        layer?.backgroundColor = selected ? c.accent.cgColor : NSColor.clear.cgColor
+        let ink = selected ? Self.ink(on: c.accent) : c.textPrimary
+        label.textColor = ink
+        check.contentTintColor = ink
+        icon.contentTintColor = selected ? ink : c.textSecondary
+        shortcut.textColor = selected ? ink.withAlphaComponent(0.8) : c.textTertiary
+    }
+
+    /// Dark text on a light accent, white on a dark one.
+    private static func ink(on fill: NSColor) -> NSColor {
+        let rgb = fill.usingColorSpace(.sRGB) ?? fill
+        let luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+        return luminance > 0.6 ? NSColor(white: 0.1, alpha: 1) : .white
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?() }
+    override func mouseMoved(with event: NSEvent) { onHover?() }
+    override func mouseUp(with event: NSEvent) { onClick?() }
+    override func accessibilityPerformPress() -> Bool { onClick?(); return true }
+}
+
+@MainActor
+private final class SwitcherHeaderView: NSView {
+    init(title: String) {
+        super.init(frame: .zero)
+        let label = NSTextField(labelWithString: title)
+        label.font = HarnessDesign.Typography.sectionLabel
+        label.textColor = HarnessChrome.current.textTertiary
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.md),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -HarnessDesign.Spacing.xs),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+@MainActor
+private final class SwitcherSeparatorView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = HarnessChrome.current.border.cgColor
+        line.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(line)
+        NSLayoutConstraint.activate([
+            line.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.sm),
+            line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.sm),
+            line.centerYAnchor.constraint(equalTo: centerYAnchor),
+            line.heightAnchor.constraint(equalToConstant: 1),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }

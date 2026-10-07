@@ -2,7 +2,8 @@ import AppKit
 import HarnessCore
 import HarnessTerminalEngine
 
-/// Left session rail — workspace pill, sessions list, and a quiet footer.
+/// Left rail in sidebar mode: sessions headed by name, each with its tabs beneath, a
+/// toggle and "+" on the traffic-light row, and filter / agents / new / remote below.
 @MainActor
 final class HarnessSidebarPanelViewController: NSViewController {
     private let chromeHeader = NSView()
@@ -40,14 +41,10 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private var workspaceDropdownMonitor: Any?
     /// Live filter text from the search field; empty shows all sessions.
     private var sessionFilter = ""
-    /// Set when two daemons are visible. Headers plus sessions replace the flat list.
-    private var showsMachineGroups = false
-    private var sidebarLines: [SidebarLine] = []
-
-    private enum SidebarLine {
-        case header(DaemonSidebarGroup)
-        case session(SessionGroup, owner: String, sessionID: String, live: Bool)
-    }
+    /// What the list shows, top to bottom (see `SidebarOutline`).
+    private var outline: [SidebarOutlineLine] = []
+    private let newTabButton = SoftIconButton(frame: .zero)
+    private var searchHeight: NSLayoutConstraint!
 
     /// Sessions after applying the search filter. Drag-reorder is disabled while a
     /// filter is active (see the data source), so callers that reorder still use the
@@ -140,33 +137,51 @@ final class HarnessSidebarPanelViewController: NSViewController {
         notificationBell.target = self
         notificationBell.action = #selector(notificationBellClicked)
 
-        sidebarToggleButton.setSymbol("sidebar.left", accessibilityDescription: "Toggle sidebar", pointSize: 13, weight: .medium)
+        sidebarToggleButton.style = .glyph
+        sidebarToggleButton.setSymbol("sidebar.left", accessibilityDescription: "Hide sidebar", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
         sidebarToggleButton.toolTip = "Hide sidebar (⌘\\)"
         sidebarToggleButton.target = self
         sidebarToggleButton.action = #selector(sidebarToggleClicked)
         sidebarToggleButton.translatesAutoresizingMaskIntoConstraints = false
 
-        sidebarToggleButton.isHidden = true
-        // The bell shares the traffic-light row with the tabs, so it doesn't open
-        // a second empty band under them.
+        newTabButton.style = .glyph
+        newTabButton.setSymbol("plus", accessibilityDescription: "New tab", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
+        newTabButton.toolTip = "New tab (⌘T)"
+        newTabButton.target = self
+        newTabButton.action = #selector(addTab)
+        newTabButton.translatesAutoresizingMaskIntoConstraints = false
+
+        // Toggle after the traffic lights, bell and "+" at the trailing edge.
+        chromeHeader.addSubview(sidebarToggleButton)
+        chromeHeader.addSubview(newTabButton)
         chromeHeader.addSubview(notificationBell)
-        workspaceBar.addSubview(sidebarToggleButton)
         view.addSubview(workspaceBar)
 
+        let control = HarnessDesign.chromeIconButtonSize
+        searchHeight = workspaceBar.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             workspaceBar.topAnchor.constraint(equalTo: chromeHeader.bottomAnchor),
             workspaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             workspaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            workspaceBar.heightAnchor.constraint(equalToConstant: 0),
-            sidebarToggleButton.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -HarnessDesign.horizontalInset),
-            sidebarToggleButton.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
-            sidebarToggleButton.widthAnchor.constraint(equalToConstant: 28),
-            sidebarToggleButton.heightAnchor.constraint(equalToConstant: 28),
-            notificationBell.trailingAnchor.constraint(equalTo: chromeHeader.trailingAnchor, constant: -HarnessDesign.horizontalInset),
+            searchHeight,
+            sidebarToggleButton.leadingAnchor.constraint(equalTo: chromeHeader.leadingAnchor, constant: HarnessDesign.trafficLightClearance),
+            sidebarToggleButton.centerYAnchor.constraint(equalTo: chromeHeader.centerYAnchor),
+            sidebarToggleButton.widthAnchor.constraint(equalToConstant: control),
+            sidebarToggleButton.heightAnchor.constraint(equalToConstant: control),
+            newTabButton.trailingAnchor.constraint(equalTo: chromeHeader.trailingAnchor, constant: -HarnessDesign.Spacing.md),
+            newTabButton.centerYAnchor.constraint(equalTo: chromeHeader.centerYAnchor),
+            newTabButton.widthAnchor.constraint(equalToConstant: control),
+            newTabButton.heightAnchor.constraint(equalToConstant: control),
+            notificationBell.trailingAnchor.constraint(equalTo: newTabButton.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
             notificationBell.centerYAnchor.constraint(equalTo: chromeHeader.centerYAnchor),
             notificationBell.widthAnchor.constraint(equalToConstant: HarnessDesign.chromeIconButtonSize),
             notificationBell.heightAnchor.constraint(equalToConstant: HarnessDesign.chromeIconButtonSize),
         ])
+    }
+
+    @objc private func addTab() {
+        guard let activeWorkspaceID else { return }
+        SessionCoordinator.shared.addTab(to: activeWorkspaceID)
     }
 
     @objc private func sidebarToggleClicked() {
@@ -331,6 +346,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         HarnessDesign.prepareChromeLabel(sectionLabel)
         sectionLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        sectionLabel.isHidden = true
         sectionHeader.addSubview(sectionLabel)
         view.addSubview(sectionHeader)
 
@@ -338,7 +354,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
             sectionHeader.topAnchor.constraint(equalTo: workspaceBar.bottomAnchor),
             sectionHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sectionHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            sectionHeader.heightAnchor.constraint(equalToConstant: 28),
+            // Sessions head their own groups now; the old "WORKSPACE" label stays collapsed.
+            sectionHeader.heightAnchor.constraint(equalToConstant: 0),
             sectionLabel.leadingAnchor.constraint(equalTo: sectionHeader.leadingAnchor, constant: HarnessDesign.horizontalInset),
             sectionLabel.bottomAnchor.constraint(equalTo: sectionHeader.bottomAnchor, constant: -4),
         ])
@@ -382,13 +399,14 @@ final class HarnessSidebarPanelViewController: NSViewController {
         searchContainer.addSubview(searchField)
         // The search field lives in the header row, expanding from the leading edge up to the
         // notification bell + sidebar toggle on the right.
+        // Revealed by the footer's filter button.
         searchContainer.isHidden = true
         workspaceBar.addSubview(searchContainer)
         NSLayoutConstraint.activate([
-            searchContainer.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.horizontalInset),
-            searchContainer.trailingAnchor.constraint(equalTo: notificationBell.leadingAnchor, constant: -8),
+            searchContainer.leadingAnchor.constraint(equalTo: workspaceBar.leadingAnchor, constant: HarnessDesign.Spacing.md),
+            searchContainer.trailingAnchor.constraint(equalTo: workspaceBar.trailingAnchor, constant: -HarnessDesign.Spacing.md),
             searchContainer.centerYAnchor.constraint(equalTo: workspaceBar.centerYAnchor),
-            searchContainer.heightAnchor.constraint(equalToConstant: 0),
+            searchContainer.heightAnchor.constraint(equalToConstant: 28),
 
             searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 8),
             searchIcon.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
@@ -412,7 +430,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         searchField.textColor = c.textPrimary
         searchIcon.contentTintColor = c.textSecondary
         searchField.placeholderAttributedString = NSAttributedString(
-            string: "Search sessions…",
+            string: "Filter sessions and tabs…",
             attributes: [
                 .foregroundColor: c.textSecondary,
                 .font: HarnessDesign.Typography.sidebarLabel,
@@ -422,7 +440,23 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
     private func searchChanged() {
         sessionFilter = searchField.stringValue
-        sessionTable.reloadData()
+        reload()
+    }
+
+    @objc private func toggleFilter() {
+        let show = searchContainer.isHidden
+        searchContainer.isHidden = !show
+        searchHeight.constant = show ? 40 : 0
+        if show {
+            view.window?.makeFirstResponder(searchField)
+        } else {
+            searchField.stringValue = ""
+            searchChanged()
+        }
+    }
+
+    @objc private func addRemoteHost() {
+        MenuTarget.shared.addRemoteHost()
     }
 
     private func setupSessionList() {
@@ -433,7 +467,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         sessionTable.headerView = nil
         sessionTable.backgroundColor = .clear
         sessionTable.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        sessionTable.rowHeight = HarnessDesign.sessionRowHeight
+        sessionTable.rowHeight = HarnessDesign.sidebarTabRowHeight
         sessionTable.intercellSpacing = NSSize(width: 0, height: HarnessDesign.rowSpacing)
         sessionTable.selectionHighlightStyle = .none
         sessionTable.focusRingType = .none
@@ -472,52 +506,44 @@ final class HarnessSidebarPanelViewController: NSViewController {
         column.width = clamped
     }
 
-    /// One footer row: "⚙ Settings" (text + icon) on the left, a trimmed set of quick
-    /// icons on the right — all on the same baseline. The redundant settings slider and
-    /// the help icon were removed (Settings is now the labeled button).
+    /// Footer: filter on the left; agents, new session, and add remote host on the right.
+    /// Settings lives on ⌘, and the palette on ⌘K, so neither takes a slot here.
     private func setupFooter() {
         footer.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.makeClear(footer)
 
-        // Settings is now just a gear icon button, identical in style to the +/⌘ buttons.
-        let settings = HarnessDesign.softIconButton(symbol: "gearshape", tooltip: "Settings (⌘,)")
-        settings.target = self
-        settings.action = #selector(openSettings)
+        let filter = HarnessDesign.softIconButton(symbol: "line.3.horizontal.decrease.circle", tooltip: "Filter sessions")
+        filter.target = self
+        filter.action = #selector(toggleFilter)
 
-        let newSession = HarnessDesign.softIconButton(symbol: "plus", tooltip: "New session")
+        let newSession = HarnessDesign.softIconButton(symbol: "square.stack", tooltip: "New session (⇧⌘N)")
         newSession.target = self
         newSession.action = #selector(addSession)
 
-        // No "new workspace" control: the app runs a single workspace for now, and without a
-        // switcher a second workspace would strand the user with no way back.
-        let palette = HarnessDesign.softIconButton(symbol: "command", tooltip: "Command palette (⌘K)")
-        palette.target = self
-        palette.action = #selector(openPalette)
+        let remote = HarnessDesign.softIconButton(symbol: "globe", tooltip: "Add remote host…")
+        remote.target = self
+        remote.action = #selector(addRemoteHost)
 
         agentsButton.target = self
         agentsButton.action = #selector(agentsButtonClicked)
 
-        footer.addSubview(settings)
-        footer.addSubview(agentsButton)
-        footer.addSubview(newSession)
-        footer.addSubview(palette)
+        for button in [filter, agentsButton, newSession, remote] { footer.addSubview(button) }
         view.addSubview(footer)
 
+        let inset = HarnessDesign.Spacing.md
         NSLayoutConstraint.activate([
             footer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            footer.heightAnchor.constraint(equalToConstant: HarnessDesign.footerHeight + 6),
+            footer.heightAnchor.constraint(equalToConstant: HarnessDesign.footerHeight + HarnessDesign.Spacing.sm),
 
-            // Settings on the leading edge; the agents/new-session/palette actions on the trailing.
-            settings.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: HarnessDesign.horizontalInset),
-            settings.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-
-            palette.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -HarnessDesign.horizontalInset),
-            palette.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            newSession.trailingAnchor.constraint(equalTo: palette.leadingAnchor, constant: -6),
+            filter.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: inset),
+            filter.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            remote.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -inset),
+            remote.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            newSession.trailingAnchor.constraint(equalTo: remote.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
             newSession.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            agentsButton.trailingAnchor.constraint(equalTo: newSession.leadingAnchor, constant: -6),
+            agentsButton.trailingAnchor.constraint(equalTo: newSession.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
             agentsButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
         ])
     }
@@ -529,59 +555,31 @@ final class HarnessSidebarPanelViewController: NSViewController {
         activeSessionID = snap.activeWorkspace?.activeSessionID
         sessions = snap.activeWorkspace?.sessions ?? []
         let name = snap.activeWorkspace?.name ?? "Workspace"
-        rebuildMachineLines()
-        sectionLabel.stringValue = showsMachineGroups ? "MACHINES" : name.uppercased()
+        outline = SidebarOutline.lines(
+            groups: SessionCoordinator.shared.sidebarGroups(),
+            liveOwner: RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID,
+            live: sessions,
+            activeSessionID: activeSessionID,
+            query: sessionFilter,
+            sessionTitle: { [weak self] in self?.displayTitle(for: $0) ?? $0.name }
+        )
         workspacePill.configure(name: name, count: sessions.count)
         sessionTable.reloadData()
-
-        if showsMachineGroups,
-           let activeSessionID,
-           let row = sidebarLines.firstIndex(where: { line in
-               if case let .session(session, _, _, live) = line { return live && session.id == activeSessionID }
-               return false
-           })
-        {
-            isProgrammaticSelection = true
-            sessionTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            isProgrammaticSelection = false
-            sessionTable.scrollRowToVisible(row)
-        } else if let activeSessionID,
-           let row = displayedSessions.firstIndex(where: { $0.id == activeSessionID })
-        {
-            isProgrammaticSelection = true
-            sessionTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            isProgrammaticSelection = false
+        if let row = outline.firstIndex(where: { if case .tab(_, _, true) = $0 { return true }; return false }) {
             sessionTable.scrollRowToVisible(row)
         }
     }
 
-    /// Updates session card labels in place (title/cwd/branch/agent) without
-    /// rebuilding the table — preserves selection + scroll position.
+    /// Tab titles, agents, and status change often; the outline is cheap to rebuild.
     func refreshMetadata() {
-        if SessionCoordinator.shared.sidebarGroups().count > 1 {
-            reload()
-            return
-        }
-        let snap = SessionCoordinator.shared.snapshot
-        let newSessions = snap.activeWorkspace?.sessions ?? []
-        let activeID = snap.activeWorkspace?.activeSessionID
-        // Structural changes still take the full reload path.
-        if newSessions.map(\.id) != sessions.map(\.id) {
-            reload()
-            return
-        }
-        sessions = newSessions
-        activeWorkspaceID = snap.activeWorkspaceID
-        activeSessionID = activeID
-        workspaces = snap.workspaces
-        let name = snap.activeWorkspace?.name ?? "Workspace"
-        workspacePill.configure(name: name, count: sessions.count)
-        let displayed = displayedSessions
-        for row in 0 ..< displayed.count {
-            if let cell = sessionTable.view(atColumn: 0, row: row, makeIfNecessary: false) as? SessionCardRowView {
-                cell.configure(session: displayed[row], isSelected: displayed[row].id == activeID)
-            }
-        }
+        reload()
+    }
+
+    /// A named session shows its name; an unnamed one is "Session N" by position.
+    private func displayTitle(for session: SessionGroup) -> String {
+        if !session.name.isEmpty { return session.name }
+        let index = (sessions.firstIndex { $0.id == session.id } ?? 0) + 1
+        return "Session \(index)"
     }
 
     @objc private func addWorkspace() {
@@ -666,7 +664,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
     }
 
     @objc private func sessionDoubleClick() {
-        selectSessionRow()
+        activate(row: sessionTable.clickedRow)
     }
 
     @objc private func showWorkspaceMenu() {
@@ -759,45 +757,23 @@ final class HarnessSidebarPanelViewController: NSViewController {
         SettingsWindowController.show()
     }
 
-    private func rebuildMachineLines() {
-        let groups = SessionCoordinator.shared.sidebarGroups()
-        showsMachineGroups = groups.count > 1
-        guard showsMachineGroups else {
-            sidebarLines = []
+    private func activate(row: Int) {
+        guard outline.indices.contains(row), let activeWorkspaceID else { return }
+        let coordinator = SessionCoordinator.shared
+        switch outline[row] {
+        case .machine:
             return
-        }
-        let activeOwner = RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID
-        sidebarLines = groups.flatMap { group in
-            let header = SidebarLine.header(group)
-            let rows = group.sessions.map { row -> SidebarLine in
-                if row.owner == activeOwner, let live = sessions.first(where: { $0.id.uuidString == row.id }) {
-                    return .session(live, owner: row.owner, sessionID: row.id, live: true)
-                }
-                return .session(SessionGroup(name: row.name), owner: row.owner, sessionID: row.id, live: false)
+        case let .session(id, _, owner, live, _):
+            if live, let uuid = UUID(uuidString: id) {
+                coordinator.selectSession(workspaceID: activeWorkspaceID, sessionID: uuid)
+            } else {
+                coordinator.focusSidebar(owner: owner, sessionID: id)
             }
-            return [header] + rows
+        case let .tab(sessionID, tabID, _):
+            guard let session = UUID(uuidString: sessionID), let tab = UUID(uuidString: tabID) else { return }
+            coordinator.selectSession(workspaceID: activeWorkspaceID, sessionID: session)
+            coordinator.selectTab(workspaceID: activeWorkspaceID, tabID: tab)
         }
-    }
-
-    private func selectSessionRow() {
-        let row = sessionTable.selectedRow
-        if showsMachineGroups {
-            guard row >= 0, row < sidebarLines.count else { return }
-            switch sidebarLines[row] {
-            case .header:
-                return
-            case let .session(session, owner, sessionID, live):
-                if live, let activeWorkspaceID {
-                    SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: session.id)
-                } else {
-                    SessionCoordinator.shared.focusSidebar(owner: owner, sessionID: sessionID)
-                }
-            }
-            return
-        }
-        let displayed = displayedSessions
-        guard row >= 0, row < displayed.count, let activeWorkspaceID else { return }
-        SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: displayed[row].id)
     }
 
     private func confirmCloseSession(_ session: SessionGroup) {
@@ -960,25 +936,31 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
     fileprivate static let sessionRowPasteboardType = NSPasteboard.PasteboardType("com.robert.harness.session-row")
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        showsMachineGroups ? sidebarLines.count : displayedSessions.count
+        outline.count
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        if showsMachineGroups, sidebarLines.indices.contains(row), case .header = sidebarLines[row] {
-            return 28
+        switch outline[row] {
+        case .machine: return 26
+        case .session: return HarnessDesign.sidebarSessionHeaderHeight
+        case .tab: return HarnessDesign.sidebarTabRowHeight
         }
-        return HarnessDesign.sessionRowHeight
     }
 
-    // MARK: - Drag to reorder
+    /// Index in `sessions` of the live session heading `row`, for drag-reorder.
+    private func liveSessionIndex(atRow row: Int) -> Int? {
+        guard outline.indices.contains(row), case let .session(id, _, _, true, _) = outline[row] else { return nil }
+        return sessions.firstIndex { $0.id.uuidString == id }
+    }
+
+    // MARK: - Drag to reorder (session headings only)
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        // Reorder maps to the unfiltered list, so it's only meaningful with no
-        // active filter (displayed rows == sessions then).
-        guard !showsMachineGroups else { return nil }
-        guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let index = liveSessionIndex(atRow: row)
+        else { return nil }
         let item = NSPasteboardItem()
-        item.setString(String(row), forType: Self.sessionRowPasteboardType)
+        item.setString(String(index), forType: Self.sessionRowPasteboardType)
         return item
     }
 
@@ -988,9 +970,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         proposedRow row: Int,
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
-        guard dropOperation == .above else { return [] }
-        guard !showsMachineGroups else { return [] }
-        guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        guard dropOperation == .above, row == outline.count || liveSessionIndex(atRow: row) != nil else { return [] }
         return .move
     }
 
@@ -1004,50 +984,46 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
               let item = info.draggingPasteboard.pasteboardItems?.first,
               let raw = item.string(forType: Self.sessionRowPasteboardType),
               let from = Int(raw),
-              from >= 0, from < sessions.count
+              sessions.indices.contains(from)
         else { return false }
-        // NSTableView reports the *gap* index; adjust so a downward move lands at
-        // the slot just below the gap (drop above row 3 from row 1 → target 2).
-        let target = from < row ? row - 1 : row
+        // Drop gap → index among sessions: the number of session headings above it.
+        let gap = (0 ..< min(row, outline.count)).filter { liveSessionIndex(atRow: $0) != nil }.count
+        let target = from < gap ? gap - 1 : gap
         guard target != from else { return false }
-        SessionCoordinator.shared.reorderSession(
-            workspaceID: workspaceID,
-            sessionID: sessions[from].id,
-            toIndex: target
-        )
+        SessionCoordinator.shared.reorderSession(workspaceID: workspaceID, sessionID: sessions[from].id, toIndex: target)
         return true
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        if showsMachineGroups, sidebarLines.indices.contains(row) {
-            switch sidebarLines[row] {
-            case let .header(group):
-                let header = SidebarGroupHeader()
-                header.configure(group)
-                return header
-            case let .session(session, _, _, _):
-                return sessionCell(session)
+        switch outline[row] {
+        case let .machine(title, detail):
+            let header = SidebarGroupHeader()
+            header.configure(title: title, detail: detail)
+            return header
+        case let .session(id, title, _, live, current):
+            let header = SidebarSessionHeaderView(title: title, current: current)
+            if live, let session = sessions.first(where: { $0.id.uuidString == id }) {
+                header.onContextMenu = { [weak self] in self?.sessionActionsMenu(for: session) }
             }
+            return header
+        case let .tab(sessionID, tabID, selected):
+            guard let tab = sessions.first(where: { $0.id.uuidString == sessionID })?.tabs.first(where: { $0.id.uuidString == tabID })
+            else { return nil }
+            let rowView = SidebarTabRowView()
+            rowView.configure(tab: tab, selected: selected)
+            return rowView
         }
-        let session = displayedSessions[row]
-        return sessionCell(session)
-    }
-
-    private func sessionCell(_ session: SessionGroup) -> NSView {
-        let cell = SessionCardRowView()
-        cell.configure(
-            session: session,
-            isSelected: session.id == SessionCoordinator.shared.snapshot.activeWorkspace?.activeSessionID
-        )
-        cell.onContextMenu = { [weak self] in
-            self?.sessionActionsMenu(for: session)
-        }
-        return cell
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isProgrammaticSelection else { return }
-        selectSessionRow()
+        let row = sessionTable.selectedRow
+        activate(row: row)
+        // Selection is drawn by the rows themselves; clear the table's so a repeat
+        // click on the same row still fires.
+        isProgrammaticSelection = true
+        sessionTable.deselectAll(nil)
+        isProgrammaticSelection = false
     }
 }
 
@@ -1071,9 +1047,9 @@ private final class SidebarGroupHeader: NSTableCellView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ group: DaemonSidebarGroup) {
-        title.stringValue = group.title
-        toolTip = group.detail.isEmpty ? nil : group.detail
+    func configure(title: String, detail: String) {
+        self.title.stringValue = title
+        toolTip = detail.isEmpty ? nil : detail
     }
 }
 
@@ -1447,250 +1423,116 @@ final class WorkspacePillButton: NSButton {
 
 // MARK: - Session card
 
+/// Session heading in the sidebar: the session's name over its tabs. Right-click for
+/// rename, copy, keep-running, and close.
 @MainActor
-final class SessionCardRowView: NSView {
-    /// Builds the right-click actions menu for this row (rename, close, …). Shown
-    /// via `menu(for:)` — the row no longer carries inline ⋮ / × buttons.
+final class SidebarSessionHeaderView: NSView {
     var onContextMenu: (() -> NSMenu?)?
+    private let label = NSTextField(labelWithString: "")
 
-    private let fill = NSView()
-    private var glassView: NSView?
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let metaLabel = NSTextField(labelWithString: "")
-    private var titleTop: NSLayoutConstraint?
-    private var titleCenter: NSLayoutConstraint?
-    private let agentChip = AgentChipView()
-    private var isSelected = false
-    private var isHovered = false
-    private var trackingArea: NSTrackingArea?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-
-        fill.wantsLayer = true
-        fill.layer?.cornerCurve = .continuous
-        fill.layer?.borderWidth = 0
-        fill.layer?.masksToBounds = true
-        fill.translatesAutoresizingMaskIntoConstraints = false
-        installGlass()
-
-        titleLabel.font = HarnessDesign.Typography.sidebarLabel
-        titleLabel.usesSingleLineMode = true
-        titleLabel.lineBreakMode = .byTruncatingTail
-        HarnessDesign.prepareChromeLabel(titleLabel)
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        // The agent chip now carries the full tool name; let the title truncate to
-        // make room rather than squeezing the chip.
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        titleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
-
-        metaLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        metaLabel.usesSingleLineMode = true
-        metaLabel.lineBreakMode = .byTruncatingTail
-        HarnessDesign.prepareChromeLabel(metaLabel)
-        metaLabel.translatesAutoresizingMaskIntoConstraints = false
-        metaLabel.setContentCompressionResistancePriority(.required, for: .vertical)
-
-        agentChip.translatesAutoresizingMaskIntoConstraints = false
-        agentChip.isHidden = true
-
-        addSubview(fill)
-        fill.addSubview(titleLabel)
-        fill.addSubview(metaLabel)
-        fill.addSubview(agentChip)
-
+    init(title: String, current: Bool) {
+        super.init(frame: .zero)
+        let c = HarnessChrome.current
+        label.stringValue = title
+        label.font = HarnessDesign.Typography.sidebarLabel
+        label.textColor = current ? c.textPrimary : c.textSecondary
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
         NSLayoutConstraint.activate([
-            fill.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            fill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
-            fill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.horizontalInset),
-            fill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.horizontalInset),
-
-            titleLabel.leadingAnchor.constraint(equalTo: fill.leadingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: agentChip.leadingAnchor, constant: -6),
-
-            // No inline controls anymore — the agent chip sits flush to the card's
-            // trailing edge (actions moved to the right-click menu).
-            agentChip.trailingAnchor.constraint(equalTo: fill.trailingAnchor, constant: -10),
-            agentChip.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            agentChip.heightAnchor.constraint(equalToConstant: 18),
-            agentChip.widthAnchor.constraint(lessThanOrEqualToConstant: 140),
-
-            metaLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            metaLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
-            // Meta sits on its own line below the title/controls, so it gets the full
-            // card width — the cwd path was being clipped early against the close button.
-            metaLabel.trailingAnchor.constraint(equalTo: fill.trailingAnchor, constant: -10),
-            metaLabel.bottomAnchor.constraint(lessThanOrEqualTo: fill.bottomAnchor, constant: -6),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.xl),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -HarnessDesign.Spacing.md),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -HarnessDesign.Spacing.sm),
         ])
-        let top = titleLabel.topAnchor.constraint(equalTo: fill.topAnchor, constant: 8)
-        let center = titleLabel.centerYAnchor.constraint(equalTo: fill.centerYAnchor)
-        center.isActive = false
-        top.isActive = true
-        titleTop = top
-        titleCenter = center
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(current ? "\(title), current session" : "Session \(title)")
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func layout() {
-        super.layout()
-        let aligned = backingAlignedRect(fill.frame, options: [.alignAllEdgesNearest])
-        if abs(aligned.origin.x - fill.frame.origin.x) > 0.01 || abs(aligned.origin.y - fill.frame.origin.y) > 0.01 {
-            fill.frame = aligned
+    override func menu(for event: NSEvent) -> NSMenu? { onContextMenu?() }
+}
+
+/// A tab under its session heading: app tile, identity, and status, with the selected
+/// tab as a filled pill (the same fill as the active title-bar tab).
+@MainActor
+final class SidebarTabRowView: NSView {
+    private let fill = NSView()
+    private let tile = IconTileView()
+    private let label = NSTextField(labelWithString: "")
+    private let status = TabStatusView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
+    private var selected = false
+    private var hovered = false { didSet { applyColors() } }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        fill.wantsLayer = true
+        fill.layer?.cornerRadius = HarnessDesign.Radius.overlay
+        fill.layer?.cornerCurve = .continuous
+        label.font = HarnessDesign.Typography.sidebarLabel
+        label.lineBreakMode = .byTruncatingMiddle
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for view in [fill, tile, label, status] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
         }
-        let scale = window?.backingScaleFactor ?? 2
-        fill.layer?.contentsScale = scale
-        let radius = HarnessDesign.Radius.overlay
-        fill.layer?.cornerRadius = radius
-        if let glassView {
-            HarnessDesign.setLiquidGlassCornerRadius(radius, on: glassView)
-        }
-        HarnessDesign.alignChromeText([titleLabel, metaLabel], in: fill)
+        let side = HarnessDesign.Spacing.md
+        NSLayoutConstraint.activate([
+            fill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: side),
+            fill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -side),
+            fill.topAnchor.constraint(equalTo: topAnchor, constant: HarnessDesign.Spacing.xxs),
+            fill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -HarnessDesign.Spacing.xxs),
+            tile.leadingAnchor.constraint(equalTo: fill.leadingAnchor, constant: HarnessDesign.Spacing.md),
+            tile.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: tile.trailingAnchor, constant: HarnessDesign.Spacing.md),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: status.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
+            status.trailingAnchor.constraint(equalTo: fill.trailingAnchor, constant: -HarnessDesign.Spacing.md),
+            status.centerYAnchor.constraint(equalTo: centerYAnchor),
+            status.widthAnchor.constraint(equalToConstant: 12),
+            status.heightAnchor.constraint(equalToConstant: 12),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(tab: Tab, selected: Bool) {
+        self.selected = selected
+        let base = SurfaceIdentity.label(directory: tab.cwd, program: tab.currentCommand, agent: tab.agent?.kind.commandToken)
+        label.stringValue = TabChip.title(base: base, app: tab.programMark?.app)
+        tile.apply(IconTileView.content(for: tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)))
+        let activity = TabActivity.of(tab)
+        status.apply(selected && (activity == .working || activity == .done) ? .none : activity, tint: HarnessChrome.current.accent)
+        var parts = [label.stringValue]
+        if let state = TabStatusView.label(activity) { parts.append(state) }
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(parts.joined(separator: ", "))
+        setAccessibilitySelected(selected)
+        applyColors()
+    }
+
+    private func applyColors() {
+        let c = HarnessChrome.current
+        // A translucent lift like the active tab's glass, so it brightens whatever the
+        // sidebar sits over instead of reading as a darker opaque slab.
+        let lift = HarnessDesign.activeGlassTint(isDark: c.isDark, textPrimary: c.textPrimary)
+        fill.layer?.backgroundColor = selected ? lift.cgColor : (hovered ? c.rowHoverFill.cgColor : NSColor.clear.cgColor)
+        fill.layer?.borderWidth = selected ? 1 : 0
+        fill.layer?.borderColor = c.textPrimary.withAlphaComponent(HarnessDesign.activeGlassBorderAlpha(isDark: c.isDark)).cgColor
+        label.textColor = selected ? c.activePillLabel : c.textPrimary
+        tile.applyChrome()
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
     }
 
-    private func installGlass() {
-        guard glassView == nil, let glass = HarnessDesign.makeLiquidGlass(cornerRadius: HarnessDesign.Radius.overlay) else { return }
-        glass.translatesAutoresizingMaskIntoConstraints = false
-        fill.addSubview(glass, positioned: .below, relativeTo: titleLabel)
-        NSLayoutConstraint.activate([
-            glass.topAnchor.constraint(equalTo: fill.topAnchor),
-            glass.leadingAnchor.constraint(equalTo: fill.leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: fill.trailingAnchor),
-            glass.bottomAnchor.constraint(equalTo: fill.bottomAnchor),
-        ])
-        glass.isHidden = true
-        glassView = glass
-    }
-
-    func configure(session: SessionGroup, isSelected: Bool) {
-        let tab = session.activeTab ?? session.tabs.first ?? Tab()
-        let path = HarnessDesign.shortenPath(tab.cwd)
-        let identity = SurfaceIdentity.label(
-            directory: tab.cwd,
-            program: tab.currentCommand,
-            agent: tab.agent?.kind.commandToken
-        )
-        let displayedAgentKind = tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)
-        let marks: [ProgramStatusPresentation.Mark] = session.tabs.compactMap { tab in
-            switch tab.programMark?.attention {
-            case .working: return .working
-            case .blocked: return .blocked
-            case .done: return .done
-            case .error: return .error
-            case nil: return nil
-            }
-        }
-        let sessionMark = ProgramStatusPresenter.sessionMark(marks)
-        let glyph: String
-        switch sessionMark {
-        case .blocked: glyph = "!"
-        case .error: glyph = "✕"
-        case .done: glyph = "✓"
-        case .working, .none: glyph = ""
-        }
-        titleLabel.stringValue = glyph.isEmpty ? identity : "\(glyph) \(identity)"
-        setAccessibilityLabel(glyph.isEmpty ? identity : "\(identity), \(sessionMark.rawValue)")
-        toolTip = path.isEmpty ? identity : "\(identity) — \(path)"
-
-        var metaParts: [String] = []
-        if !session.name.isEmpty {
-            metaParts.append(session.name)
-        }
-        if let branch = tab.gitBranch, !branch.isEmpty {
-            metaParts.append(branch)
-        }
-        if session.tabs.count > 1 {
-            metaParts.append("\(session.tabs.count) tabs")
-        }
-        metaLabel.stringValue = metaParts.joined(separator: "  ·  ")
-        metaLabel.isHidden = metaParts.isEmpty
-        titleTop?.isActive = !metaParts.isEmpty
-        titleCenter?.isActive = metaParts.isEmpty
-
-        if let kind = displayedAgentKind {
-            agentChip.configure(kind: kind, hex: SessionCoordinator.shared.settings.agentColorHex(for: kind))
-            agentChip.isHidden = false
-        } else {
-            agentChip.isHidden = true
-        }
-
-        setSelected(isSelected)
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        onContextMenu?()
-    }
-
-    private func setSelected(_ selected: Bool) {
-        isSelected = selected
-        refresh()
-    }
-
-    private func refresh() {
-        let c = HarnessDesign.chrome
-        metaLabel.textColor = c.textTertiary
-        if isSelected {
-            if let glassView {
-                glassView.isHidden = false
-                let glassTint = HarnessDesign.activeGlassTint(isDark: c.isDark, textPrimary: c.textPrimary)
-                HarnessDesign.setLiquidGlassTint(glassTint, on: glassView)
-                fill.layer?.backgroundColor = NSColor.clear.cgColor
-            } else {
-                fill.layer?.backgroundColor = c.activePillFill.cgColor
-            }
-            fill.layer?.borderWidth = 1
-            fill.layer?.borderColor = c.textPrimary.withAlphaComponent(HarnessDesign.activeGlassBorderAlpha(isDark: c.isDark)).cgColor
-            if c.isDark {
-                HarnessDesign.applyShadow(.elevation1, to: fill.layer)
-            } else {
-                HarnessDesign.applyShadow(.none, to: fill.layer)
-            }
-            titleLabel.textColor = c.activePillLabel
-            metaLabel.textColor = c.textSecondary
-        } else if isHovered {
-            glassView?.isHidden = true
-            fill.layer?.backgroundColor = c.rowHoverFill.cgColor
-            fill.layer?.borderWidth = 0
-            HarnessDesign.applyShadow(.none, to: fill.layer)
-            titleLabel.textColor = c.textPrimary
-        } else {
-            glassView?.isHidden = true
-            fill.layer?.backgroundColor = NSColor.clear.cgColor
-            fill.layer?.borderWidth = 0
-            HarnessDesign.applyShadow(.none, to: fill.layer)
-            titleLabel.textColor = c.textSecondary
-        }
-        HarnessDesign.applyChromeLabelAppearance([titleLabel, metaLabel], isDark: c.isDark)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-        // Cross-fade the hover state so cursor flicks across the list don't strobe.
-        HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
-            refresh()
-        }
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
-        HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
-            refresh()
-        }
-    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
 }
-

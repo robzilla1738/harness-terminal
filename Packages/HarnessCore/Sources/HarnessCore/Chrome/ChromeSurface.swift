@@ -318,11 +318,11 @@ public enum ChromeLayout {
         return CardInsets(top: half, leading: half, bottom: half, trailing: half)
     }
 
-    /// The pane container's own padding. No top padding: the tab row above already
-    /// leaves room, and a full gap there would float the card away from its tab.
-    public static func containerPadding(separated: Bool) -> CardInsets {
+    /// The pane container's own padding. No top padding under the tab row, which already
+    /// leaves room; with no tab row above (sidebar mode) the top matches the other sides.
+    public static func containerPadding(separated: Bool, padsTop: Bool = false) -> CardInsets {
         let half = separated ? islandGap / 2 : 0
-        return CardInsets(top: 0, leading: half, bottom: half, trailing: half)
+        return CardInsets(top: padsTop ? half : 0, leading: half, bottom: half, trailing: half)
     }
 
     /// Space from the window top to the tab pill, and from the pill to the card border.

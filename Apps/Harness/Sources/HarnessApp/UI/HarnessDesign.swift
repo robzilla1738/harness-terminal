@@ -26,6 +26,10 @@ enum HarnessDesign {
     static let tabPillHeight: CGFloat = 28
     /// Leading app tile in tabs, sidebar rows, and pane headers.
     static let iconTileSize: CGFloat = 20
+    static let sidebarTabRowHeight: CGFloat = 34
+    static let sidebarSessionHeaderHeight: CGFloat = 30
+    /// Leading space the traffic lights take on a full-size-content window's top row.
+    static let trafficLightClearance: CGFloat = 76
     static let paneHeaderHeight: CGFloat = 30
     static let paneHeaderButtonSize: CGFloat = 24
 

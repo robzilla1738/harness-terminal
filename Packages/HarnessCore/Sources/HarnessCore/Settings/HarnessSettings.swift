@@ -389,7 +389,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh",
         defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
         transparentTitlebar: Bool = true,
-        sidebarVisible: Bool = true,
+        sidebarVisible: Bool = false,
         restoreWindowSize: Bool = false,
         backgroundOpacity: Float = 0.63,
         backgroundBlur: Int = 16,

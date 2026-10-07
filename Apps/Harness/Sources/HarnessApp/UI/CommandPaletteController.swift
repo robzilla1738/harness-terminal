@@ -310,13 +310,13 @@ enum CommandPaletteController {
                 shortcut: catalog["action.changeSession"]?.shortcut ?? "",
                 section: .actions
             ) {
-                SessionSwitcherController.present(relativeTo: NSApp.keyWindow)
+                MenuTarget.shared.switchSession()
             })
         }
         if !actions.contains(where: { $0.id == "action.addRemoteHost" }) {
             actions.append(PaletteAction(
                 id: "action.addRemoteHost",
-                title: catalog["action.addRemoteHost"]?.title ?? "Add Remote Host...",
+                title: catalog["action.addRemoteHost"]?.title ?? "Add Remote Host…",
                 subtitle: "Connect a daemon over SSH",
                 symbol: "globe",
                 shortcut: "",
