@@ -96,3 +96,13 @@ final class HarnessAPITests: XCTestCase {
         XCTAssertEqual(second[0].surface?.lowercased(), "surface")
     }
 }
+
+final class APIVerbTests: XCTestCase {
+    func testParserAliasesAreCallableMethodsWithArgs() {
+        XCTAssertNotNil(HarnessAPI.method(named: "split-window"), "aliases resolve like listed verbs")
+        XCTAssertNil(HarnessAPI.method(named: "not-a-command"))
+        let planned = HarnessAPI.plan(method: "split-window", arguments: ["args": .string("-h")], catalog: APICatalog(), environment: APIEnvironment())
+        guard case let .verb(source) = planned else { return XCTFail("expected a verb plan, got \(planned)") }
+        XCTAssertEqual(source, "split-window -h")
+    }
+}

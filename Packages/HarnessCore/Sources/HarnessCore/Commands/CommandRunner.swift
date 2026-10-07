@@ -44,6 +44,13 @@ public enum CommandRunner {
                 if case let .error(message) = try client.request(request) { throw Failure.daemon(message) }
             }
         case let .clientLocal(local):
+            // The daemon renders and posts messages itself, like a hook-fired one.
+            if case let .displayMessage(format) = local {
+                if case let .error(message) = try client.request(.displayMessage(format: format, print: false)) {
+                    throw Failure.daemon(message)
+                }
+                return
+            }
             throw Failure.appOnly(local.shortDescription)
         case .unresolved:
             throw Failure.unresolved(command.shortDescription)

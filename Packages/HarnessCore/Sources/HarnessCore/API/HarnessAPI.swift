@@ -365,7 +365,10 @@ public enum HarnessAPI {
             "theme": string("Theme name"),
         ], required: ["theme"]), object(["ok": bool("Applied")])),
         method("pane.reset", "Reset the pane's terminal (RIS)", object(["pane": string("Pane id or label")]), object(["ok": bool("Applied")])),
-    ] + CommandParser.knownVerbs.map { name in
+    ] + CommandParser.knownVerbs.map(verbMethod)
+
+    /// A bindable command as an API method: `{"args": "-h"}` runs `<name> -h`.
+    static func verbMethod(_ name: String) -> APIMethod {
         method(
             name,
             "Run the \(name) command (same as the : prompt and key bindings)",
@@ -374,8 +377,11 @@ public enum HarnessAPI {
         )
     }
 
+    /// A listed method, or any command the parser accepts under another name (an alias
+    /// such as `split-window`), described the same way as the listed verbs.
     public static func method(named name: String) -> APIMethod? {
-        methods.first { $0.name == name }
+        if let listed = methods.first(where: { $0.name == name }) { return listed }
+        return (try? CommandParser.parse(name)) != nil ? verbMethod(name) : nil
     }
 
     public static func document(for name: String) -> APIMethodDocument? {
@@ -661,9 +667,10 @@ public enum HarnessAPI {
                 return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
             }
         default:
-            if CommandParser.knownVerbs.contains(method) {
-                let extra = arguments["args"]?.string.map { " " + $0 } ?? ""
-                return .verb(method + extra)
+            // Any command the parser accepts, aliases included (`split-window`, `new-tab`…).
+            let source = method + (arguments["args"]?.string.map { " " + $0 } ?? "")
+            if (try? CommandParser.parse(source)) != nil {
+                return .verb(source)
             }
             return .failure(code: APIExit.badArguments.rawValue, message: "Unknown method \(method)")
         }
