@@ -23,9 +23,13 @@ enum HarnessDesign {
     static let workspaceBarHeight: CGFloat = 42
     static let sessionRowHeight: CGFloat = 58
     static let footerHeight: CGFloat = 40
-    static let tabPillHeight: CGFloat = 28
-    /// Leading app tile in tabs, sidebar rows, and pane headers.
+    static let tabPillHeight: CGFloat = 30
+    /// Leading app tile in sidebar rows.
     static let iconTileSize: CGFloat = 20
+    /// The tab's app tile is smaller than the pill by the same margin on every side, so it
+    /// sits in the capsule's rounded end with even space above, below, and before it.
+    static let tabIconTileSize: CGFloat = 18
+    static var tabIconTileInset: CGFloat { (tabPillHeight - tabIconTileSize) / 2 }
     static let sidebarTabRowHeight: CGFloat = 34
     static let sidebarSessionHeaderHeight: CGFloat = 30
     /// Leading space the traffic lights take on a full-size-content window's top row.

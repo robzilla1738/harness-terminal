@@ -481,13 +481,17 @@ private final class TabPillView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     /// Leading app tile: `>_` for a shell, the brand tile for an agent.
-    private let iconTile = IconTileView()
+    private let iconTile = IconTileView(side: HarnessDesign.tabIconTileSize)
     /// "Kept alive" flag: a small pin shown at the leading edge when this tab is pinned to
     /// survive a clean quit (`tab.persistent`). The visible counterpart of the context-menu
     /// "Keep Tab Running After Quit" checkmark — a tmux-style window flag for persistence.
     private let persistentIcon = NSImageView()
     /// Working spinner / needs-you / done / error mark before the shortcut hint.
     private let statusView = TabStatusView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
+    /// Collapse the status slot (and its gap) when there's nothing to show.
+    private var statusWidth: NSLayoutConstraint!
+    private var statusGap: NSLayoutConstraint!
+    private static let statusSide: CGFloat = 12
     private var glassView: NSView?
     /// ⌘N hint, shown at the trailing edge for the first 9 tabs and
     /// swapped for the close button on hover. Empty for tabs past position 9.
@@ -587,15 +591,17 @@ private final class TabPillView: NSView {
         // edge inset matches the close button's trailing inset so the title stays
         // optically centered even when both are visible.
         persistentIconWidth = persistentIcon.widthAnchor.constraint(equalToConstant: 0)
+        statusWidth = statusView.widthAnchor.constraint(equalToConstant: 0)
+        statusGap = statusView.trailingAnchor.constraint(equalTo: shortcutLabel.leadingAnchor)
         let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: iconTile.trailingAnchor, constant: HarnessDesign.Spacing.md)
-        let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.xs)
+        let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.md)
         closeWidthConstraint = closeButton.widthAnchor.constraint(equalToConstant: 0)
         let closeHeight = closeButton.heightAnchor.constraint(equalToConstant: 14)
         [closeTrailing, closeHeight].forEach { $0.priority = .defaultHigh }
         NSLayoutConstraint.activate([
             // Leading run: [persistence pin?][agent icon?] — each collapses to zero width when
             // absent, so a plain tab keeps the agent icon flush at the same inset as before.
-            persistentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.xs),
+            persistentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.tabIconTileInset),
             persistentIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             persistentIcon.heightAnchor.constraint(equalToConstant: 12),
             persistentIconWidth,
@@ -603,18 +609,19 @@ private final class TabPillView: NSView {
             iconTile.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLeading,
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: statusView.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: statusView.leadingAnchor, constant: -HarnessDesign.Spacing.md),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
-            shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.sm),
+            // Text needs more room than the tile from the capsule's rounded end.
+            shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.lg),
             shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeTrailing,
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeWidthConstraint,
             closeHeight,
             // Status mark sits on the right of the pill, just before the shortcut.
-            statusView.trailingAnchor.constraint(equalTo: shortcutLabel.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
+            statusGap,
             statusView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            statusView.widthAnchor.constraint(equalToConstant: 12),
+            statusWidth,
             statusView.heightAnchor.constraint(equalToConstant: 12),
         ])
 
@@ -758,17 +765,19 @@ private final class TabPillView: NSView {
         onClose?(tabID)
     }
 
-    /// Width that fits the identity and the shortcut, clamped to the tab bar's limits.
+    /// Width that fits every part laid out above, clamped to the tab bar's limits:
+    /// inset, tile, gap, title, gap, [status, gap], shortcut, trailing inset.
     func preferredWidth(min: CGFloat, max: CGFloat) -> CGFloat {
-        let title = (titleLabel.stringValue as NSString).size(withAttributes: [.font: titleLabel.font as Any]).width
+        let title = ceil((titleLabel.stringValue as NSString).size(withAttributes: [.font: titleLabel.font as Any]).width) + 4
         let shortcut = shortcutLabel.isHidden
             ? 0
-            : (shortcutLabel.stringValue as NSString).size(withAttributes: [.font: shortcutLabel.font as Any]).width + 8
-        let icon = HarnessDesign.iconTileSize + HarnessDesign.Spacing.md
-        let status: CGFloat = activity == .none ? 0 : 12 + HarnessDesign.Spacing.sm
+            : ceil((shortcutLabel.stringValue as NSString).size(withAttributes: [.font: shortcutLabel.font as Any]).width)
+        let leading = HarnessDesign.tabIconTileInset + persistentIconWidth.constant + HarnessDesign.tabIconTileSize + HarnessDesign.Spacing.md
+        let status = statusWidth.constant > 0 ? Self.statusSide + HarnessDesign.Spacing.sm : 0
+        let trailing = HarnessDesign.Spacing.md + status + shortcut + HarnessDesign.Spacing.lg
         return CGFloat(ChromeLayout.huggedPillWidth(
-            labelWidth: Double(title + icon),
-            accessoryWidth: Double(shortcut + status + HarnessDesign.Spacing.xl * 2),
+            labelWidth: Double(leading + title),
+            accessoryWidth: Double(trailing),
             min: Double(min),
             max: Double(max)
         ))
@@ -851,6 +860,8 @@ private final class TabPillView: NSView {
         // The active tab is in front of you; it only flags something that needs you.
         let shown: TabActivity = isActive && (activity == .working || activity == .done) ? .none : activity
         statusView.apply(shown, tint: c.accent)
+        statusWidth.constant = shown == .none ? 0 : Self.statusSide
+        statusGap.constant = shown == .none ? 0 : -HarnessDesign.Spacing.sm
         closeButton.contentTintColor = c.textTertiary
         closeButton.layer?.backgroundColor = NSColor.clear.cgColor
         // Persistence pin reads as an intentional "kept alive" marker, so it carries the
