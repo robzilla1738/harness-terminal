@@ -732,14 +732,14 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
             kbd.backgroundColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.08 : 0.10)
             kbd.isBezeled = false
             kbd.wantsLayer = true
-            kbd.layer?.cornerRadius = 3
+            kbd.layer?.cornerRadius = HarnessDesign.Radius.hairline
             kbd.layer?.cornerCurve = .continuous
             kbd.alignment = .center
             // The bezelless field renders without padding by default; give it a
             // little horizontal breathing room via a wrapping view.
             let wrap = NSView()
             wrap.wantsLayer = true
-            wrap.layer?.cornerRadius = 3
+            wrap.layer?.cornerRadius = HarnessDesign.Radius.hairline
             wrap.layer?.cornerCurve = .continuous
             wrap.layer?.backgroundColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.08 : 0.10).cgColor
             kbd.drawsBackground = false

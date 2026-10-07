@@ -343,7 +343,6 @@
 		D481AA59980D4018EE19451F /* prose_softwrap__40x6__to__16x12.golden in Resources */ = {isa = PBXBuildFile; fileRef = DE08D3EAEB78C8C90A3B5292 /* prose_softwrap__40x6__to__16x12.golden */; };
 		D5157E9EF060499ADB387E23 /* KeyTokenParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DF56CB3249244FDA4E43EFA /* KeyTokenParserTests.swift */; };
 		D5A35A080C113603A8D707A7 /* HarnessControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63791142526EFF43A6EA6B0D /* HarnessControls.swift */; };
-		D601378F01F161B11F1E6563 /* WindowTitleStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5593ED9E6664B5C498C99D5 /* WindowTitleStripView.swift */; };
 		D6B567981F16A54A1F382897 /* erased_gap_wrapped__12x5__to__16x3.golden in Resources */ = {isa = PBXBuildFile; fileRef = D02A526431E3FE7262945F9E /* erased_gap_wrapped__12x5__to__16x3.golden */; };
 		D9D10A2861ADEB91440AD2F4 /* LogicalLineSpanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96206493B04FD08F3E782AEF /* LogicalLineSpanTests.swift */; };
 		DA2D4A06C95D60F7ECE577C1 /* Phase67UI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B6EE4051D1702BE7F6D1AC /* Phase67UI.swift */; };
@@ -744,7 +743,6 @@
 		E180C3DEB64AA7141C4B4728 /* HarnessThemeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HarnessThemeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E43C936FEA07AF65E3E4C948 /* BinaryInstallerVersionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryInstallerVersionTests.swift; sourceTree = "<group>"; };
 		E4CD1D8E0322368E17016B4A /* ScriptKeyConsumerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptKeyConsumerTests.swift; sourceTree = "<group>"; };
-		E5593ED9E6664B5C498C99D5 /* WindowTitleStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowTitleStripView.swift; sourceTree = "<group>"; };
 		E56797EDB88EFC460AFEFABC /* prose_softwrap__40x6__to__5x5.golden */ = {isa = PBXFileReference; path = prose_softwrap__40x6__to__5x5.golden; sourceTree = "<group>"; };
 		E63870191AAAF494B6C86D66 /* DaemonMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonMetrics.swift; sourceTree = "<group>"; };
 		E6EFC5A43978A906EE9B1A77 /* prose_softwrap__40x6__to__7x6.golden */ = {isa = PBXFileReference; path = prose_softwrap__40x6__to__7x6.golden; sourceTree = "<group>"; };
@@ -1008,7 +1006,6 @@
 				AC4C4E4331C8177B281FBD72 /* Toast.swift */,
 				529595B70272EEEC10AF08E4 /* WindowBlur.swift */,
 				4A9927D299A57D58A4F3CFFC /* WindowBorderOverlayView.swift */,
-				E5593ED9E6664B5C498C99D5 /* WindowTitleStripView.swift */,
 				A73A493EC780E0465DB3F6D9 /* WorkspaceOverviewController.swift */,
 				70391D902D250FC43FE9AAC2 /* Notch */,
 				BD8C646C2DF072919393676F /* QuickTerminal */,
@@ -2078,7 +2075,6 @@
 				9766BBA7CF5BF33018C0B13F /* Toast.swift in Sources */,
 				3C7E2A84108B690A43D2E6DB /* WindowBlur.swift in Sources */,
 				99D8B9AC1120BF2E99546FB4 /* WindowBorderOverlayView.swift in Sources */,
-				D601378F01F161B11F1E6563 /* WindowTitleStripView.swift in Sources */,
 				D3485A8B23152940A119F5FA /* WorkspaceOverviewController.swift in Sources */,
 				596F02748B0B7021508AC3EE /* main.swift in Sources */,
 			);

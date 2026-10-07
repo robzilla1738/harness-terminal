@@ -136,7 +136,7 @@ final class StatusLineView: NSView {
 
     /// User override (`settings.statusLineHex`) wins. Light mode uses the opaque
     /// secondary ink so the footer doesn't fringe. Dark mode keeps a brighter
-    /// lift of the primary so the line still reads on the black canvas.
+    /// lift of the primary so the line still reads on a dark canvas.
     private func resolvedTextColor() -> NSColor {
         if let hex = SessionCoordinator.shared.settings.statusLineHex,
            let color = NSColor.fromHex(hex) {

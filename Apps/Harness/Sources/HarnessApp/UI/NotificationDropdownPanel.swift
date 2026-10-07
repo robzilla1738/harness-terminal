@@ -142,7 +142,7 @@ private final class NotificationRowView: NSView {
         self.entry = entry
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = HarnessDesign.Radius.card
         layer?.cornerCurve = .continuous
         translatesAutoresizingMaskIntoConstraints = false
         heightAnchor.constraint(equalToConstant: 50).isActive = true

@@ -121,7 +121,7 @@ private final class AgentInboxRowView: NSView {
         self.agent = agent
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = HarnessDesign.Radius.card
         layer?.cornerCurve = .continuous
         translatesAutoresizingMaskIntoConstraints = false
         heightAnchor.constraint(equalToConstant: 50).isActive = true

@@ -113,7 +113,7 @@ enum TabPeekController {
             panel.setFrameOrigin(start)
             panel.orderFront(nil)
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
+                context.duration = HarnessDesign.Motion.fast
                 panel.animator().setFrameOrigin(destination)
             }
             panel.makeKey()
@@ -151,7 +151,7 @@ private final class TabPeekKeyView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.94).cgColor
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = HarnessDesign.Radius.overlay
         text.translatesAutoresizingMaskIntoConstraints = false
         text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         text.maximumNumberOfLines = 0

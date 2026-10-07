@@ -124,7 +124,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             chromeHeader.topAnchor.constraint(equalTo: view.topAnchor),
             chromeHeader.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             chromeHeader.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            chromeHeader.heightAnchor.constraint(equalToConstant: HarnessDesign.titlebarChromeHeight),
+            chromeHeader.heightAnchor.constraint(equalToConstant: HarnessDesign.tabBarHeight),
         ])
     }
 
@@ -221,7 +221,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         host.addSubview(dropdown)
         notificationsDropdown = dropdown
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
+            ctx.duration = HarnessDesign.Motion.microFast
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             dropdown.animator().alphaValue = 1
         }
@@ -292,7 +292,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         host.addSubview(inbox)
         agentsInbox = inbox
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
+            ctx.duration = HarnessDesign.Motion.microFast
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             inbox.animator().alphaValue = 1
         }
@@ -701,7 +701,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             dropdown.heightAnchor.constraint(equalToConstant: clampedDropdownHeight(dropdown.preferredHeight)),
         ])
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
+            context.duration = HarnessDesign.Motion.microFast
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             dropdown.animator().alphaValue = 1
         }
@@ -742,7 +742,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
     /// ideal height doesn't fit, the dropdown scrolls internally.
     private func clampedDropdownHeight(_ preferred: CGFloat) -> CGFloat {
         let available = view.bounds.height
-            - HarnessDesign.titlebarChromeHeight
+            - HarnessDesign.tabBarHeight
             - HarnessDesign.workspaceBarHeight
             - HarnessDesign.footerHeight
             - 20
@@ -1207,7 +1207,7 @@ private final class WorkspaceSwitcherRow: NSView {
         _ = count
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = HarnessDesign.Radius.card
         layer?.cornerCurve = .continuous
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -1306,7 +1306,7 @@ private final class WorkspaceSwitcherRow: NSView {
         // Fade for polish — popping in is jarring next to the count label.
         let shouldShow = canDelete && (active || isHovered)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.10
+            ctx.duration = HarnessDesign.Motion.microFast
             moreButton.animator().alphaValue = shouldShow ? 1 : 0
         }
     }
@@ -1542,7 +1542,7 @@ final class SessionCardRowView: NSView {
         }
         let scale = window?.backingScaleFactor ?? 2
         fill.layer?.contentsScale = scale
-        let radius: CGFloat = 10
+        let radius = HarnessDesign.Radius.overlay
         fill.layer?.cornerRadius = radius
         if let glassView {
             HarnessDesign.setLiquidGlassCornerRadius(radius, on: glassView)
@@ -1564,7 +1564,7 @@ final class SessionCardRowView: NSView {
     }
 
     private func installGlass() {
-        guard glassView == nil, let glass = HarnessDesign.makeLiquidGlass(cornerRadius: 10) else { return }
+        guard glassView == nil, let glass = HarnessDesign.makeLiquidGlass(cornerRadius: HarnessDesign.Radius.overlay) else { return }
         glass.translatesAutoresizingMaskIntoConstraints = false
         fill.addSubview(glass, positioned: .below, relativeTo: titleLabel)
         NSLayoutConstraint.activate([

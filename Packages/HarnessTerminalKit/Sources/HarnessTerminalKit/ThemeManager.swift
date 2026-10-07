@@ -10,16 +10,19 @@ public enum ThemeManager {
     /// Terminal output no longer consumes named theme palettes; themes are for
     /// Harness chrome only, so tools such as Claude Code keep their native colors.
     public static let defaultDisplayName = "Default"
-    public static let defaultBaselineBackgroundHex = "#000000"
-    public static let defaultBaselineForegroundHex = "#ffffff"
-    /// Muted ANSI-16 defaults. Used for terminal *output* when theme→output
-    /// recoloring is off (the default), so ANSI tools start from the same muted baseline
-    /// instead of the hotter legacy xterm primaries.
+    /// Deep navy canvas. Under the default 0.63 opacity and blur the desktop reads through it.
+    public static let defaultBaselineBackgroundHex = "#121b2d"
+    public static let defaultBaselineForegroundHex = "#d5dceb"
+    /// Soft blue cursor. Chrome takes its accent from the cursor, so selection and focus are blue.
+    public static let defaultBaselineCursorHex = "#6fa8f5"
+    /// Muted ANSI-16 tuned for the navy canvas. Used for terminal *output* when theme→output
+    /// recoloring is off (the default). Bright black clears 4:1 on the canvas so dim text
+    /// (comments, hints) stays legible.
     public static let defaultBaselinePaletteHex = [
-        "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
-        "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
-        "#666666", "#d54e53", "#b9ca4a", "#e7c547",
-        "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
+        "#1c2740", "#e5767f", "#9ccc83", "#e9c47f",
+        "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
+        "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
+        "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
     ]
 
     public static let systemLightBackgroundHex = "#F5F5F7"
@@ -33,13 +36,14 @@ public enum ThemeManager {
     ]
     public static let systemDarkBackgroundHex = defaultBaselineBackgroundHex
     public static let systemDarkForegroundHex = defaultBaselineForegroundHex
-    public static let systemDarkCursorHex = defaultBaselineForegroundHex
+    public static let systemDarkCursorHex = defaultBaselineCursorHex
     public static let systemDarkPaletteHex = defaultBaselinePaletteHex
     public static let defaultSystemLightThemeName = "Zenwritten Light"
     public static let defaultSystemDarkThemeName = HarnessThemeCatalog.defaultThemeName
 
     public static let featuredThemes = [
         HarnessThemeCatalog.defaultThemeName,
+        "Harness Black",
         "Catppuccin Mocha",
         "Dracula",
         "Tokyo Night",
@@ -63,7 +67,7 @@ public enum ThemeManager {
     }
 
     public static func cursorHex(themeName: String) -> String? {
-        if themeName == defaultDisplayName { return defaultBaselineForegroundHex }
+        if themeName == defaultDisplayName { return defaultBaselineCursorHex }
         return themed(themeName)?.cursorHex
             ?? themed(themeName)?.foregroundHex
     }
@@ -83,7 +87,7 @@ public enum ThemeManager {
     }
 
     /// Single source of truth for the canvas colors. Resolution order:
-    /// explicit custom hex > Harness appearance mode palette > black/white baseline.
+    /// explicit custom hex > Harness appearance mode palette > navy baseline.
     public static func resolvedCanvas(
         themeName: String,
         customBackgroundHex: String?,

@@ -680,7 +680,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func buildSidebar() -> NSView {
         // A plain layer-backed view carrying the same themed sidebar chrome (vibrancy +
         // tint) the main window's sidebar uses — never the system `.sidebar` material,
-        // which adds a blue cast that breaks the deep-black look.
+        // which adds the system tint on top of the theme.
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.applySidebarChrome(to: container)
@@ -1426,7 +1426,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func advUnreachableBanner() -> NSView {
         let banner = NSView()
         banner.wantsLayer = true
-        banner.layer?.cornerRadius = 6
+        banner.layer?.cornerRadius = HarnessDesign.Radius.control
         banner.layer?.backgroundColor = HarnessChrome.current.danger.withAlphaComponent(0.12).cgColor
         banner.layer?.borderWidth = 1
         banner.layer?.borderColor = HarnessChrome.current.danger.withAlphaComponent(0.35).cgColor
@@ -2734,7 +2734,7 @@ final class SettingsSidebarButton: NSControl {
         self.buttonTitle = title
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = HarnessDesign.Radius.control
         layer?.cornerCurve = .continuous
         translatesAutoresizingMaskIntoConstraints = false
 

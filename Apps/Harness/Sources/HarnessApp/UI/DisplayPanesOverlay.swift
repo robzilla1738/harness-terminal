@@ -65,7 +65,7 @@ final class DisplayPanesOverlay {
         let chrome = HarnessChrome.current
         let view = NSView()
         view.wantsLayer = true
-        view.layer?.cornerRadius = 14
+        view.layer?.cornerRadius = HarnessDesign.Radius.panel
         view.layer?.cornerCurve = .continuous
         view.layer?.backgroundColor = chrome.accent.withAlphaComponent(0.92).cgColor
         view.layer?.borderWidth = 1

@@ -7,10 +7,10 @@ final class ThemeManagerTests: XCTestCase {
     @MainActor
     func testDefaultBaselinePaletteMatchesMutedANSI16() {
         XCTAssertEqual(ThemeManager.defaultBaselinePaletteHex, [
-            "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
-            "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
-            "#666666", "#d54e53", "#b9ca4a", "#e7c547",
-            "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
+            "#1c2740", "#e5767f", "#9ccc83", "#e9c47f",
+            "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
+            "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
+            "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
         ])
         XCTAssertEqual(
             ThemeManager.paletteHex(themeName: ThemeManager.defaultDisplayName),
@@ -232,15 +232,15 @@ final class ThemeManagerTests: XCTestCase {
             customForegroundHex: settings.customForegroundHex,
             customCursorHex: settings.customCursorHex
         )
-        XCTAssertEqual(canvas.backgroundHex.lowercased(), "#000000")
+        XCTAssertEqual(canvas.backgroundHex.lowercased(), ThemeManager.defaultBaselineBackgroundHex)
         let palette = ChromePaletteSpec.resolve(backgroundHex: canvas.backgroundHex, foregroundHex: canvas.foregroundHex)
         XCTAssertTrue(palette.isDark)
-        XCTAssertEqual(palette.surface.hex, "#000000")
+        XCTAssertEqual(palette.surface.hex, ThemeManager.defaultBaselineBackgroundHex)
         XCTAssertFalse(palette.surface.perceivedBrightness > 0.5)
     }
 
     @MainActor
-    func testExplicitLightAndFollowSystemShareALightCanvasThenDefaultRestoresBlack() throws {
+    func testExplicitLightAndFollowSystemShareALightCanvasThenDefaultRestoresNavy() throws {
         let settings = HarnessSettings()
         let lightTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: settings.systemLightThemeName))
 
@@ -293,8 +293,25 @@ final class ThemeManagerTests: XCTestCase {
             backgroundHex: restored.backgroundHex,
             foregroundHex: restored.foregroundHex
         )
-        XCTAssertEqual(restored.backgroundHex.lowercased(), "#000000")
+        XCTAssertEqual(restored.backgroundHex.lowercased(), ThemeManager.defaultBaselineBackgroundHex)
         XCTAssertTrue(restoredPalette.isDark)
-        XCTAssertEqual(restoredPalette.surface.hex, "#000000")
+        XCTAssertEqual(restoredPalette.surface.hex, ThemeManager.defaultBaselineBackgroundHex)
+    }
+
+    @MainActor
+    func testNavyDefaultIsReadable() throws {
+        let background = try XCTUnwrap(ChromeColor(hex: ThemeManager.defaultBaselineBackgroundHex))
+        let foreground = try XCTUnwrap(ChromeColor(hex: ThemeManager.defaultBaselineForegroundHex))
+        XCTAssertGreaterThanOrEqual(foreground.contrastRatio(against: background), 7, "body text clears WCAG AAA")
+        let cursor = try XCTUnwrap(ChromeColor(hex: ThemeManager.defaultBaselineCursorHex))
+        XCTAssertGreaterThanOrEqual(cursor.contrastRatio(against: background), 4.5)
+        // Every non-black ANSI color reads on the canvas; bright black (dim text) clears 4:1.
+        for (index, hex) in ThemeManager.defaultBaselinePaletteHex.enumerated() where index != 0 {
+            let color = try XCTUnwrap(ChromeColor(hex: hex))
+            XCTAssertGreaterThanOrEqual(color.contrastRatio(against: background), 4, "palette \(index) \(hex)")
+        }
+        let theme = try XCTUnwrap(HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName))
+        XCTAssertEqual(theme.backgroundHex.lowercased(), ThemeManager.defaultBaselineBackgroundHex)
+        XCTAssertNotNil(HarnessThemeCatalog.theme(named: "Harness Black"))
     }
 }

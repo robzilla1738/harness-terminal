@@ -26,7 +26,7 @@ final class KeyRecorderView: NSView {
         self.value = initial
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = HarnessDesign.Radius.control
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
 

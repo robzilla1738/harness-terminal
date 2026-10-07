@@ -26,7 +26,7 @@ public enum TerminalColorGamut: String, Codable, Sendable {
 }
 
 public enum HarnessAppearanceMode: String, Codable, Sendable, CaseIterable {
-    /// The selected theme. Fresh installs stay on this and paint the black canvas.
+    /// The selected theme. Fresh installs stay on this and paint the navy canvas.
     case theme
     /// A designed light canvas and matching light chrome, independent of the Mac appearance.
     case light

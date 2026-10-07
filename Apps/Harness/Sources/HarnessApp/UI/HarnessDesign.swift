@@ -16,7 +16,6 @@ enum HarnessDesign {
     }
 
     static let sidebarWidth: CGFloat = 264
-    static let titlebarChromeHeight: CGFloat = 44
     static let tabBarHeight: CGFloat = 44
     /// One size for every icon on the tab row, including the sidebar bell.
     static let chromeIconPointSize: CGFloat = 14
@@ -28,8 +27,6 @@ enum HarnessDesign {
 
     static let horizontalInset: CGFloat = Spacing.lg
     static let rowSpacing: CGFloat = Spacing.xxs
-    static let cornerRadius: CGFloat = Radius.card
-    static let pillCornerRadius: CGFloat = Radius.pill
 
     static var chrome: HarnessChromePalette { HarnessChrome.current }
 
@@ -51,13 +48,17 @@ enum HarnessDesign {
         static let xxl: CGFloat = 22
     }
 
-    /// Corner-radius vocabulary. Pair every use with `.cornerCurve = .continuous`.
+    /// Corner-radius vocabulary, smallest to largest. Pair every use with
+    /// `.cornerCurve = .continuous`. No literal radii in UI code.
     enum Radius {
-        static let card: CGFloat = 7
-        static let pill: CGFloat = 5
+        static let hairline: CGFloat = 3
         static let badge: CGFloat = 4
+        static let pill: CGFloat = 5
         static let control: CGFloat = 6
+        static let card: CGFloat = 8
+        /// Terminal islands, toasts, and popovers.
         static let overlay: CGFloat = 10
+        static let panel: CGFloat = 14
         static let capsule: CGFloat = 999
     }
 
@@ -167,7 +168,7 @@ enum HarnessDesign {
         guard let layer else { return }
         let c = chrome
         layer.cornerCurve = .continuous
-        layer.cornerRadius = 8
+        layer.cornerRadius = Radius.card
         layer.borderWidth = 0
         layer.borderColor = nil
         layer.backgroundColor = (isHovered ? c.iconHoverFill : NSColor.clear).cgColor
@@ -499,8 +500,8 @@ final class SoftIconButton: NSButton {
 }
 
 /// Theme-aware pill button used for primary/secondary actions across onboarding and
-/// settings. Deliberately monochrome — the app's deep-black chrome reads as one
-/// surface, so we never tint these with the system accent (no macOS blue). `.primary`
+/// settings. Monochrome on purpose: the chrome reads as one surface, and the only accent is
+/// the theme's own (its cursor color), never the system accent. `.primary`
 /// is a filled near-foreground pill with an on-canvas (background-colored) label;
 /// `.secondary` is a quiet outlined pill. Manages its own tracking area + chrome,
 /// mirroring `SoftIconButton`.
@@ -748,10 +749,8 @@ final class ChromeBackdrop: NSView {
     }
 
     private func material(for role: HarnessDesign.ChromeRole) -> NSVisualEffectView.Material {
-        // We deliberately avoid `.sidebar`/`.titlebar` here — those materials
-        // add a noticeable blue tint that breaks the deep-black look.
-        // `.underWindowBackground` gives an honest desktop blur that we then
-        // dim with our own theme tint on top.
+        // Not `.sidebar`/`.titlebar`: those add the system's own tint, which would fight
+        // the theme. `.underWindowBackground` is a plain desktop blur under our theme tint.
         switch role {
         case .sidebar, .tabBar:
             return .underWindowBackground

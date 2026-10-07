@@ -38,7 +38,7 @@ struct HarnessChromePalette {
     static let fallback = HarnessChromePalette.from(
         backgroundHex: ThemeManager.defaultBaselineBackgroundHex,
         foregroundHex: ThemeManager.defaultBaselineForegroundHex,
-        cursorHex: ThemeManager.defaultBaselineForegroundHex
+        cursorHex: ThemeManager.defaultBaselineCursorHex
     )
 
     /// Build a palette directly from explicit hex strings (used when the user has
@@ -100,7 +100,7 @@ struct HarnessChromePalette {
             accentSoft: accent.withAlphaComponent(0.16),
             focusRing: accent,
             textPrimary: foreground,
-            // Dark secondary stays a translucent lift — it settles into the black canvas.
+            // Dark secondary stays a translucent lift — it settles into the dark canvas.
             // Light secondary and tertiary are opaque. Alpha ink on a bright, translucent
             // surface is what makes light-mode chrome type look fuzzy and washed out:
             // subpixel antialiasing fringes against clear instead of against the paper.

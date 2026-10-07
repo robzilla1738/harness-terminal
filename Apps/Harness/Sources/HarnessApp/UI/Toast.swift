@@ -43,7 +43,7 @@ private final class ToastLabel: NSView {
     init(text: String) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = HarnessDesign.Radius.overlay
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
 

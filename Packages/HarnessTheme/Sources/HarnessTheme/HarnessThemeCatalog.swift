@@ -6,13 +6,14 @@ import Foundation
 /// Community themes live in the bundled `themes.json` resource and merge in here without
 /// API changes — `theme(named:)`, `search(_:)`, and `allThemes` are the stable surface.
 public enum HarnessThemeCatalog {
-    /// The default theme used when none is selected. This muted ANSI-16 baseline keeps
-    /// fresh installs from starting with over-saturated primaries.
+    /// The default theme used when none is selected: a deep navy canvas with a soft blue
+    /// accent and a muted ANSI-16, so fresh installs don't start on over-saturated primaries.
     public static let defaultThemeName = "Harness Default"
 
     /// Curated, surfaced-first themes.
     public static let featuredNames = [
         "Harness Default",
+        "Harness Black",
         "Catppuccin Mocha",
         "Dracula",
         "Tokyo Night",
@@ -86,6 +87,18 @@ public enum HarnessThemeCatalog {
     private static let builtins: [HarnessThemeDefinition] = [
         .make(
             "Harness Default",
+            bg: "#121b2d", fg: "#d5dceb", cursor: "#6fa8f5",
+            selectionBackground: "#2b3d5e",
+            palette: [
+                "#1c2740", "#e5767f", "#9ccc83", "#e9c47f",
+                "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
+                "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
+                "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
+            ]
+        ),
+        // The pre-navy default, kept so anyone can go back to pure black.
+        .make(
+            "Harness Black",
             bg: "#000000", fg: "#ffffff", cursor: "#ffffff",
             selectionBackground: "#333333",
             palette: [

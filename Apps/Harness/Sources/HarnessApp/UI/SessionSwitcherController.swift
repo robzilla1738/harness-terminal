@@ -185,6 +185,6 @@ private final class SessionSwitcherRowView: NSTableRowView {
         guard isSelected else { return }
         HarnessChrome.current.activePillFill.setFill()
         let rect = bounds.insetBy(dx: 4, dy: 2)
-        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+        NSBezierPath(roundedRect: rect, xRadius: HarnessDesign.Radius.control, yRadius: HarnessDesign.Radius.control).fill()
     }
 }

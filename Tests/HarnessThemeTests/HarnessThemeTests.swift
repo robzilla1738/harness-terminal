@@ -51,18 +51,22 @@ final class HarnessThemeCatalogTests: XCTestCase {
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName))
     }
 
-    func testDefaultThemeUsesMutedBaselinePalette() {
+    func testDefaultThemeIsNavyAndBlackIsKept() {
         let theme = HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName)
 
         XCTAssertEqual(HarnessThemeCatalog.defaultThemeName, "Harness Default")
-        XCTAssertEqual(theme?.backgroundHex, "#000000")
-        XCTAssertEqual(theme?.foregroundHex, "#ffffff")
+        XCTAssertEqual(theme?.backgroundHex, "#121b2d")
+        XCTAssertEqual(theme?.foregroundHex, "#d5dceb")
+        XCTAssertEqual(theme?.cursorHex, "#6fa8f5")
         XCTAssertEqual(theme?.paletteHex, [
-            "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
-            "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
-            "#666666", "#d54e53", "#b9ca4a", "#e7c547",
-            "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
+            "#1c2740", "#e5767f", "#9ccc83", "#e9c47f",
+            "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
+            "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
+            "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
         ])
+        let black = HarnessThemeCatalog.theme(named: "Harness Black")
+        XCTAssertEqual(black?.backgroundHex, "#000000")
+        XCTAssertEqual(black?.foregroundHex, "#ffffff")
     }
 
     func testLegacyDefaultThemeNameStillResolves() {
@@ -79,7 +83,7 @@ final class HarnessThemeCatalogTests: XCTestCase {
     }
 
     func testCommunityThemesResourceIsBundled() {
-        XCTAssertEqual(HarnessThemeCatalog.allThemes.count, 490)
+        XCTAssertEqual(HarnessThemeCatalog.allThemes.count, 491)
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: "Zenwritten Light"))
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: "0x96f"))
     }

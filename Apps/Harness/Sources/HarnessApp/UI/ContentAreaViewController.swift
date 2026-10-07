@@ -4,7 +4,6 @@ import HarnessTerminalKit
 
 @MainActor
 final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate {
-    private let titleStrip = WindowTitleStripView()
     private let tabBar = TerminalTabBarView()
     private let terminalHost = NSView()
     private var paneContainer: PaneContainerView?
@@ -31,18 +30,11 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.clear.cgColor
         refreshTerminalHostFill()
-        titleStrip.applyColors()
         tabBar.applyChrome()
         paneContainer?.applyChrome()
         // Density lives in the structure key, so a Comfortable/Compact change rebuilds
         // the islands instead of leaving the previous insets in place.
         reloadIfNeeded(force: false)
-    }
-
-    /// The title strip is only a window-drag handle. The tab already shows the
-    /// directory, so nothing under the tab repeats it.
-    private func updateTitleStripPath() {
-        titleStrip.setIdentity("")
     }
 
     /// Back the terminal host so the canvas reads the same as the rest of the window.
@@ -73,20 +65,11 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         terminalHost.translatesAutoresizingMaskIntoConstraints = false
         refreshTerminalHostFill()
 
-        titleStrip.isHidden = true
-        view.addSubview(titleStrip)
         view.addSubview(tabBar)
         view.addSubview(terminalHost)
 
         NSLayoutConstraint.activate([
-            // Draggable title strip above the tabs: window-move grab area + Ghostty-style
-            // folder/path readout. Pushes the tab pills below the traffic-light band.
-            titleStrip.topAnchor.constraint(equalTo: view.topAnchor),
-            titleStrip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            titleStrip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            // The tab row sits on the traffic-light line. The old strip above it was empty space.
-            titleStrip.heightAnchor.constraint(equalToConstant: 0),
-
+            // The tab row sits on the traffic-light line.
             tabBar.topAnchor.constraint(equalTo: view.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -154,12 +137,10 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     func reloadTabBar() {
         let snap = SessionCoordinator.shared.snapshot
         tabBar.reload(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
-        updateTitleStripPath()
     }
 
-    /// Leading inset so the title strip's path readout clears the macOS traffic lights when
-    /// the sidebar is collapsed. Driven by `MainSplitViewController` during the toggle. The
-    /// tab bar itself sits below the lights (the strip pushes it down) and needs no inset.
+    /// Leading inset so the tab row clears the macOS traffic lights when the sidebar is
+    /// collapsed. Driven by `MainSplitViewController` during the toggle.
     func setTabBarLeadingInset(_ inset: CGFloat) {
         tabBar.setLeadingInset(inset)
         tabBar.setSidebarCollapsed(inset > 1)
@@ -176,7 +157,6 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     func refreshTabBarMetadata() {
         let snap = SessionCoordinator.shared.snapshot
         tabBar.refreshMetadata(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
-        updateTitleStripPath()
     }
 
     func tabBarDidSelect(tabID: TabID) {

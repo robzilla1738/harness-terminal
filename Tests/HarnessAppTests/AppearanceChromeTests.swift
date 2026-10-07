@@ -5,7 +5,7 @@ import HarnessTerminalKit
 
 @MainActor
 final class AppearanceChromeTests: XCTestCase {
-    func testChromeFollowsLightThenRestoresTheBlackDefault() {
+    func testChromeFollowsLightThenRestoresTheNavyDefault() {
         let settings = HarnessSettings()
         XCTAssertEqual(settings.appearanceMode, .theme)
         XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
@@ -16,8 +16,9 @@ final class AppearanceChromeTests: XCTestCase {
         XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.63, accuracy: 0.0001)
         XCTAssertEqual(HarnessChrome.backgroundBlur, 16)
         XCTAssertEqual(HarnessChrome.paintOpacity, 0.63, accuracy: 0.0001)
-        assertBlack(HarnessChrome.current.terminalBackground)
-        assertBlack(HarnessChrome.current.sidebarBackground)
+        assertHex(HarnessChrome.current.terminalBackground, ThemeManager.defaultBaselineBackgroundHex)
+        assertHex(HarnessChrome.current.sidebarBackground, ThemeManager.defaultBaselineBackgroundHex)
+        assertHex(HarnessChrome.current.accent, ThemeManager.defaultBaselineCursorHex)
 
         let lightCanvas = ThemeManager.resolvedCanvas(
             themeName: "Default",
@@ -63,8 +64,9 @@ final class AppearanceChromeTests: XCTestCase {
         XCTAssertEqual(HarnessChrome.backgroundOpacity, 0.63, accuracy: 0.0001)
         XCTAssertEqual(HarnessChrome.paintOpacity, 0.63, accuracy: 0.0001)
         XCTAssertEqual(HarnessChrome.backgroundBlur, 16)
-        assertBlack(HarnessChrome.current.terminalBackground)
-        assertBlack(HarnessChrome.current.sidebarBackground)
+        assertHex(HarnessChrome.current.terminalBackground, ThemeManager.defaultBaselineBackgroundHex)
+        assertHex(HarnessChrome.current.sidebarBackground, ThemeManager.defaultBaselineBackgroundHex)
+        assertHex(HarnessChrome.current.accent, ThemeManager.defaultBaselineCursorHex)
     }
 
     private func apply(
@@ -87,13 +89,6 @@ final class AppearanceChromeTests: XCTestCase {
             foregroundHex: foregroundHex,
             cursorHex: nil
         )
-    }
-
-    private func assertBlack(_ color: NSColor) {
-        let rgb = tryUnwrapRGB(color)
-        XCTAssertEqual(rgb.redComponent, 0, accuracy: 0.01)
-        XCTAssertEqual(rgb.greenComponent, 0, accuracy: 0.01)
-        XCTAssertEqual(rgb.blueComponent, 0, accuracy: 0.01)
     }
 
     private func assertHex(_ color: NSColor, _ hex: String) {
