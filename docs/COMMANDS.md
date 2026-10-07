@@ -105,8 +105,8 @@ These query the current Harness state and do not change your layout.
 | `process [--surface <id>]` | Print a surface's foreground process as JSON. Defaults to the first surface. |
 | `size-mode <smallest\|owner>` | Set multi-client PTY sizing. `smallest` is the default (every attached client votes). `owner` follows the client that took the surface. |
 | `take-surface --surface <id> [--client <uuid>]` | Make one attached client the size owner of a surface. |
-| `save-layout --name <name>` | Save the active tab's layout under that name. |
-| `restore-layout --name <name>` | Restore a saved layout. |
+| `save-layout --name <name>` | Save the active tab's split tree, each pane's directory, and the command line running in it (an idle pane saves as a plain shell). |
+| `restore-layout --name <name> [--dry-run]` | Recreate a saved layout as a new session in the active workspace. `--dry-run` prints the steps instead. |
 | `find-files` | Find paths locally or on a configured remote host. Does not need the daemon. |
 | `copy-file` | Copy a file locally or over the SSH remote connection. Does not need the daemon. |
 
@@ -153,14 +153,15 @@ reuses your existing SSH trust (keys/agent/config); no new credentials or crypto
 
 | Command | Effect |
 |---|---|
-| `remote add --name <name> --ssh <user@host> --socket <remote-path> [--ssh-arg <arg> …]` | Register a remote daemon. `--socket` is the daemon's control-socket path on the remote (run `harness-cli doctor` there to print it). Repeat `--ssh-arg` to pass extra ssh options. |
+| `remote add --name <name> --ssh <user@host> --socket <remote-path> [--ssh-arg <arg> …]` | Register a remote daemon. `--socket` is the daemon's control-socket path on the remote (run `harness-cli socket-path` there to print it). Repeat `--ssh-arg` to pass extra ssh options. |
+| `socket-path` | Print this machine's daemon control-socket path (what `remote add --socket` wants). Needs no running daemon. |
 | `remote list` | List registered remotes (`name  ssh-target  socket`). |
 | `remote remove --name <name>` | Forget a remote and tear down its tunnel. |
 | `<command> … --host <name>` | Run any client command against the named remote instead of the local daemon (`ping`, `new-session`, `send-keys`, `capture-pane`, `doctor`, …). Exception: `attach-window` always renders the **local** daemon — run it on the machine whose daemon you want to see (see the multiplexer guide). |
 
 Allowed `--ssh-arg` options are validated: `-p` (port), `-i` (identity file), `-J` (jump
 host), `-l` (login user), and the flag-only `-4 -6 -A -T -q -v`. Example:
-`remote add --name devbox --ssh me@devbox --socket /home/me/.config/harness/harness.sock --ssh-arg -p --ssh-arg 2222`.
+`remote add --name devbox --ssh me@devbox --socket "$(ssh -p 2222 me@devbox harness-cli socket-path)" --ssh-arg -p --ssh-arg 2222`.
 
 ## Buffers (paste store)
 

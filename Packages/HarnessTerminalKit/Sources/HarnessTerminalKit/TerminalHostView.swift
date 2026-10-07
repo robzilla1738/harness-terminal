@@ -26,6 +26,8 @@ public protocol TerminalHostDelegate: AnyObject {
     /// per rule by the surface).
     func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID)
     func terminalHostDidClose(surfaceID: SurfaceID)
+    /// A Lua action bound to a key in this pane exited non-zero.
+    func terminalHostScriptActionDidFail(_ message: String, surfaceID: SurfaceID)
 }
 
 extension TerminalHostDelegate {
@@ -41,6 +43,8 @@ extension TerminalHostDelegate {
     public func terminalHostDidChangeRemoteHost(_ host: String?, surfaceID: SurfaceID) {}
     /// Default no-op — only the GUI routes trigger notifications.
     public func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID) {}
+    /// Default no-op — only the GUI shows action failures.
+    public func terminalHostScriptActionDidFail(_ message: String, surfaceID: SurfaceID) {}
 }
 
 struct TerminalHostResolvedAppearance: Equatable {
@@ -263,7 +267,15 @@ public final class TerminalHostView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         native.translatesAutoresizingMaskIntoConstraints = false
         let keys = scriptKeys ?? ScriptKeyConsumer { [weak self] name in
-            ScriptActionRunner.run(name: name, origin: .key, surface: self?.surfaceID.uuidString)
+            guard let self else { return }
+            let surfaceID = self.surfaceID
+            ScriptActionRunner.run(name: name, origin: .key, surface: surfaceID.uuidString) { message in
+                DispatchQueue.main.async { [weak self] in
+                    MainActor.assumeIsolated {
+                        self?.hostDelegate?.terminalHostScriptActionDidFail(message, surfaceID: surfaceID)
+                    }
+                }
+            }
         }
         scriptKeys = keys
         native.consumeScriptKey = { [weak keys] event in

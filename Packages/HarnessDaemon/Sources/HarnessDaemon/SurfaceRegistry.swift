@@ -1002,11 +1002,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .error("Surface not found")
             }
             let probed = session.probeForegroundProcess()
-            return .text(ControlPlane.contextJSON(
+            let command = session.probeForegroundArguments()
+            return .text(ControlPlane.contextJSON(ControlPlane.SurfaceContext(
                 pid: Int(probed?.pid ?? -1),
                 executable: probed?.executable ?? "",
-                cwd: session.currentWorkingDirectory() ?? ""
-            ))
+                cwd: session.currentWorkingDirectory() ?? "",
+                arguments: command?.arguments ?? [],
+                isShell: command?.isShell ?? false
+            )))
         case let .displayMessage(format, print):
             // Render via FormatString using whatever context the daemon can build right now
             // (active workspace/tab from snapshot).

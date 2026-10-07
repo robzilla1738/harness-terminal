@@ -40,6 +40,7 @@ public enum ScriptActionRunner {
 
     /// Publish `script.json` when `init.lua` is newer. No file watcher: this runs when the palette
     /// or a key needs the map. A missing CLI or a missing config file leaves the last manifest.
+    /// Blocks on a `harness-cli` process; the typing path uses `syncManifestInBackground`.
     public static func syncManifest() {
         let config = ScriptConfigPath.resolve()
         let configURL = URL(fileURLWithPath: config)
@@ -56,8 +57,28 @@ public enum ScriptActionRunner {
         process.waitUntilExit()
     }
 
-    public static func run(name: String, origin: ScriptOrigin, surface: String? = nil) {
-        guard let cli = url() else { return }
+    /// `syncManifest` off the caller's thread. Overlapping requests collapse into the one in flight;
+    /// the next stamp check picks up the published manifest.
+    public static func syncManifestInBackground() {
+        guard syncGate.begin() else { return }
+        DispatchQueue.global(qos: .utility).async {
+            syncManifest()
+            syncGate.end()
+        }
+    }
+
+    /// Runs the action in `harness-cli do` off the caller's thread. `failed` gets the action's
+    /// error text (or its exit status) when the process exits non-zero, on an arbitrary queue.
+    public static func run(
+        name: String,
+        origin: ScriptOrigin,
+        surface: String? = nil,
+        failed: (@Sendable (String) -> Void)? = nil
+    ) {
+        guard let cli = url() else {
+            failed?("harness-cli not found; action \(name) did not run")
+            return
+        }
         let process = Process()
         process.executableURL = cli
         process.arguments = actionArguments(name: name, origin: origin)
@@ -69,13 +90,53 @@ public enum ScriptActionRunner {
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
+        let errors = Pipe()
+        process.standardError = errors
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try process.run()
+            } catch {
+                failed?("action \(name): \(error.localizedDescription)")
+                return
+            }
+            // Drain before waiting: a full pipe would block the child forever.
+            let data = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus != 0 else { return }
+            failed?(failureMessage(name: name, status: process.terminationStatus, stderr: data))
+        }
     }
+
+    /// Last non-empty stderr line, or the exit status when the action printed nothing.
+    public static func failureMessage(name: String, status: Int32, stderr: Data) -> String {
+        let text = String(decoding: stderr, as: UTF8.self)
+        let line = text.split(whereSeparator: \.isNewline).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard let line else { return "action \(name) failed (exit \(status))" }
+        return "action \(name): \(line.trimmingCharacters(in: .whitespaces))"
+    }
+
+    private static let syncGate = InFlightGate()
 
     private static func url() -> URL? { HarnessCLILocator.url() }
 
     private static func modificationDate(_ url: URL) -> Date? {
         try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+}
+
+/// One-at-a-time flag shared across threads.
+private final class InFlightGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = false
+
+    func begin() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if running { return false }
+        running = true
+        return true
+    }
+
+    func end() {
+        lock.lock(); running = false; lock.unlock()
     }
 }

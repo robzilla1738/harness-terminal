@@ -2179,6 +2179,10 @@ extension SessionCoordinator: TerminalHostDelegate {
         )
     }
 
+    func terminalHostScriptActionDidFail(_ message: String, surfaceID: SurfaceID) {
+        DisplayMessage.show(message)
+    }
+
     func terminalHostDidClose(surfaceID: SurfaceID) {
         terminalHosts.removeHost(for: surfaceID)
         SurfaceProgressTracker.shared.forget(surfaceID)

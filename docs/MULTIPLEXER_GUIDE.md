@@ -232,8 +232,8 @@ running on **another machine** — headless, or on Linux — and control it remo
 remote once, then add `--host <name>` to any command:
 
 ```bash
-# On the remote box, the daemon listens on a Unix socket (harness-cli doctor prints its path).
-harness-cli remote add --name devbox --ssh me@devbox --socket "/home/me/.config/harness/harness.sock"
+# On the remote box, the daemon listens on a Unix socket (`harness-cli socket-path` prints it).
+harness-cli remote add --name devbox --ssh me@devbox --socket "$(ssh me@devbox harness-cli socket-path)"
 harness-cli new-session --host devbox --cwd ~/Code
 harness-cli send-keys  --host devbox --surface <id> --keys "make test Enter"
 harness-cli capture-pane --host devbox --surface <id>

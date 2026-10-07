@@ -26,6 +26,7 @@ public enum CLICommandCatalog {
     public static let commands: [CLICommand] = [
         // Query / inspection
         .init("doctor", "Diagnose the daemon, socket, paths, and integrations", json: true),
+        .init("socket-path", "Print this machine's daemon control-socket path"),
         .init("version", "Print CLI and daemon versions", aliases: ["--version", "-v"], json: true),
         .init("color-check", "Print ANSI/256/truecolor diagnostic swatches"),
         .init("theme-preview", "Print deterministic themed sample output"),

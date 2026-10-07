@@ -26,6 +26,10 @@ struct HarnessCLI {
                 return
             case "remote":
                 exit(try handleRemote(args))
+            case "socket-path":
+                // What `remote add --socket` wants for this machine; needs no running daemon.
+                print(HarnessPaths.socketURL.path)
+                return
             case "daemon":
                 runDaemonForeground() // execs HarnessDaemon; never returns
             case "version", "--version", "-v":

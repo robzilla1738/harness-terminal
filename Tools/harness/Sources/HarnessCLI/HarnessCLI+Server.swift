@@ -55,10 +55,10 @@ extension HarnessCLI {
         case "list":
             let hosts = store.load()
             if hosts.isEmpty {
-                print("No remote hosts. Add one with: harness-cli remote add --name <name> --ssh <user@host>")
+                print("No remote hosts. Add one with: harness-cli remote add --name <name> --ssh <user@host> --socket <remote-path>")
             }
             for h in hosts {
-                let live = SSHTunnelManager.shared.isConnected(h.name) ? " [connected]" : ""
+                let live = SSHTunnelManager.isForwarding(h.name) ? " [connected]" : ""
                 print("\(h.name)\t\(h.sshTarget)\t\(h.remoteSocketPath)\(live)")
             }
             return 0
@@ -70,7 +70,7 @@ extension HarnessCLI {
             }
             guard let socketPath = flagValue(args, flag: "--socket") else {
                 fputs("harness-cli remote add: could not infer the remote socket path; pass --socket "
-                    + "<remote-path> (see `harness-cli doctor` on the remote for its value).\n", harnessStderr)
+                    + "<remote-path> (`harness-cli socket-path` on the remote prints it).\n", harnessStderr)
                 return 64
             }
             var sshArgs: [String] = []

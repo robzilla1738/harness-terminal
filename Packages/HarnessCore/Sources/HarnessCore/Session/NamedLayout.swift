@@ -113,6 +113,29 @@ public enum NamedLayoutStore {
         )
     }
 
+    /// What a pane is running, as a command line to type on restore. An idle pane (the
+    /// foreground job is its own shell) is "shell", so restore doesn't start a nested shell.
+    public static func program(for context: ControlPlane.SurfaceContext) -> String {
+        if context.isShell || context.executable.isEmpty || isShellName(context.executable) { return "shell" }
+        guard !context.arguments.isEmpty else { return context.executable }
+        var argv = context.arguments
+        // argv[0] can be an absolute path or a login "-zsh"; the short name types the same.
+        argv[0] = context.executable
+        return argv.map(quoteIfNeeded).joined(separator: " ")
+    }
+
+    static func isShellName(_ name: String) -> Bool {
+        let base = (name.hasPrefix("-") ? String(name.dropFirst()) : name)
+            .split(separator: "/").last.map(String.init) ?? name
+        return ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"].contains(base)
+    }
+
+    private static func quoteIfNeeded(_ word: String) -> String {
+        let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_./=:,+@%"))
+        if !word.isEmpty, word.unicodeScalars.allSatisfy(safe.contains) { return word }
+        return ControlPlane.shellQuote(word)
+    }
+
     public static func save(_ layout: NamedLayout, directory: URL) throws {
         let url = fileURL(name: layout.name, directory: directory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -179,7 +202,7 @@ public enum NamedLayoutStore {
         case let .leaf(leaf):
             let program = programs[leaf.surfaceID.uuidString]
                 ?? programs[leaf.id.uuidString]
-                ?? command
+                ?? command.flatMap { isShellName($0) ? nil : $0 }
                 ?? "shell"
             let directory = cwds[leaf.surfaceID.uuidString]
                 ?? cwds[leaf.id.uuidString]

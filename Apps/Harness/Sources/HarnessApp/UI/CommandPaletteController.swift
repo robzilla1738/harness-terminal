@@ -34,12 +34,6 @@ struct PaletteAction: Identifiable {
     let handler: () -> Void
 }
 
-/// Borderless panel that can still take key focus (needed for the search field).
-@MainActor
-private final class PalettePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-}
-
 @MainActor
 enum CommandPaletteController {
     private static var panel: NSPanel?
@@ -51,7 +45,7 @@ enum CommandPaletteController {
     static func present(relativeTo parent: NSWindow?) {
         panel?.close()
         let controller = PaletteViewController(actions: buildActions(), recentIDs: loadRecents())
-        let panel = PalettePanel(
+        let panel = KeyablePanel(
             contentRect: NSRect(x: 0, y: 0, width: 620, height: 440),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
@@ -428,7 +422,9 @@ enum CommandPaletteController {
                     name: action.name,
                     origin: .palette,
                     surface: coordinator.activeSurfaceID?.uuidString
-                )
+                ) { message in
+                    DispatchQueue.main.async { MainActor.assumeIsolated { DisplayMessage.show(message) } }
+                }
             })
         }
 

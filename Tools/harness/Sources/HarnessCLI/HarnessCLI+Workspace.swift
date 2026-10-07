@@ -67,7 +67,7 @@ extension HarnessCLI {
                   let data = json.data(using: .utf8),
                   let context = try? JSONDecoder().decode(ControlPlane.SurfaceContext.self, from: data)
             else { continue }
-            if !context.executable.isEmpty { programs[id] = context.executable }
+            programs[id] = NamedLayoutStore.program(for: context)
             if !context.cwd.isEmpty { cwds[id] = context.cwd }
         }
         let layout = NamedLayoutStore.capture(name: name, tab: tab, programs: programs, cwds: cwds)
@@ -77,21 +77,25 @@ extension HarnessCLI {
 
     static func handleRestoreLayout(_ args: [String], client: DaemonClient) throws {
         guard let name = flagValue(args, flag: "--name"), !name.isEmpty else {
-            fputs("Usage: harness-cli restore-layout --name <name>\n", harnessStderr)
+            fputs("Usage: harness-cli restore-layout --name <name> [--dry-run]\n", harnessStderr)
             exit(1)
         }
         let layout = try NamedLayoutStore.load(name: name, directory: layoutDirectory())
         let plan = NamedLayoutStore.restorePlan(layout)
-        for action in plan {
-            switch action {
-            case let .session(_, cwd, program):
-                print("session\t\(cwd)\t\(program)")
-            case let .split(target, direction, ratio, cwd, program):
-                print("split\t\(target)\t\(direction.rawValue)\t\(ratio)\t\(cwd)\t\(program)")
+        if args.contains("--dry-run") {
+            for action in plan {
+                switch action {
+                case let .session(_, cwd, program):
+                    print("session\t\(cwd)\t\(program)")
+                case let .split(target, direction, ratio, cwd, program):
+                    print("split\t\(target)\t\(direction.rawValue)\t\(ratio)\t\(cwd)\t\(program)")
+                }
             }
+            return
         }
-        guard case let .workspaces(workspaces) = try checkedRequest(client, .listWorkspaces),
-              let workspace = workspaces.first
+        // Restore where the person is looking, not into whichever workspace sorts first.
+        guard case let .snapshot(snapshot) = try checkedRequest(client, .getSnapshot),
+              let workspace = snapshot.activeWorkspace ?? snapshot.workspaces.first
         else {
             fputs("restore-layout: no workspace\n", harnessStderr)
             exit(1)
@@ -219,30 +223,18 @@ extension HarnessCLI {
     }
 
     static func runSSH(_ arguments: [String], stdin: Data?) throws -> Data {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = Array(arguments.dropFirst())
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        if let stdin {
-            let input = Pipe()
-            process.standardInput = input
-            try process.run()
-            input.fileHandleForWriting.write(stdin)
-            try? input.fileHandleForWriting.close()
-        } else {
-            try process.run()
-        }
-        process.waitUntilExit()
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        if process.terminationStatus != 0 {
-            let message = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            throw NSError(domain: "HarnessCLI", code: Int(process.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: message.isEmpty ? "ssh exited \(process.terminationStatus)" : message,
+        let result = try ProcessCapture.run(
+            URL(fileURLWithPath: "/usr/bin/ssh"),
+            arguments: Array(arguments.dropFirst()),
+            stdin: stdin
+        )
+        if result.status != 0 {
+            let message = String(decoding: result.stderr, as: UTF8.self)
+            throw NSError(domain: "HarnessCLI", code: Int(result.status), userInfo: [
+                NSLocalizedDescriptionKey: SSHTunnelManager.diagnose(message)
+                    ?? (message.isEmpty ? "ssh exited \(result.status)" : message),
             ])
         }
-        return data
+        return result.stdout
     }
 }

@@ -109,9 +109,9 @@ daemon's control socket, so it reuses your existing SSH trust with no new
 credentials.
 
 ```bash
-# On the remote box: run the daemon and note its socket path (harness-cli doctor prints it).
+# On the remote box: run the daemon. `harness-cli socket-path` there prints its socket.
 # On your machine: register the remote, then target it with --host on any command.
-harness-cli remote add --name devbox --ssh me@devbox --socket "/home/me/.config/harness/harness.sock"
+harness-cli remote add --name devbox --ssh me@devbox --socket "$(ssh me@devbox harness-cli socket-path)"
 harness-cli remote list
 harness-cli ping --host devbox
 harness-cli new-session --host devbox --cwd ~/Code

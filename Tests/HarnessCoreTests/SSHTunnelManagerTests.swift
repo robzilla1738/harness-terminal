@@ -84,11 +84,13 @@ final class SSHTunnelManagerTests: XCTestCase {
             localSocket: URL(fileURLWithPath: "/tmp/t.sock"))
 
         // Fixed safety options always lead.
-        XCTAssertEqual(args.prefix(8), [
+        XCTAssertEqual(args.prefix(12), [
             "ssh", "-N",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "StreamLocalBindUnlink=yes",
             "-o", "ServerAliveInterval=15",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
         ])
         // The forward spec and target close it out.
         XCTAssertEqual(args.suffix(3), [
@@ -295,5 +297,21 @@ final class SSHTunnelManagerTests: XCTestCase {
                 return XCTFail("expected .invalidConfiguration, got \(error)")
             }
         }
+    }
+
+    func testDiagnoseNamesTheCauseFromSSHStderr() {
+        XCTAssertEqual(
+            SSHTunnelManager.diagnose("Host key verification failed.\r\n"),
+            "the host key isn't trusted yet. Run `ssh` to it once in a terminal to verify and save it."
+        )
+        XCTAssertNotNil(SSHTunnelManager.diagnose("rob@devbox: Permission denied (publickey,password)."))
+        XCTAssertNotNil(SSHTunnelManager.diagnose("ssh: Could not resolve hostname devbox: nodename nor servname provided"))
+        XCTAssertNotNil(SSHTunnelManager.diagnose("channel 2: open failed: connect failed: No such file or directory"))
+        XCTAssertNil(SSHTunnelManager.diagnose("debug1: something harmless"))
+    }
+
+    func testTunnelLogSitsBesideTheSocket() {
+        let socket = URL(fileURLWithPath: "/tmp/tunnels/devbox-1234abcd.sock")
+        XCTAssertEqual(SSHTunnelManager.logURL(for: socket).path, "/tmp/tunnels/devbox-1234abcd.log")
     }
 }

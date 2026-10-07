@@ -137,7 +137,14 @@ extension HarnessCLI {
             }
             printJSON(SessionListBody(sessions: sessions))
         case let .viewSession(id):
-            printJSON(ViewBody(session: id))
+            guard case let .snapshot(snapshot) = try client.request(.getSnapshot) else {
+                throw DaemonClientError.unexpectedResponse
+            }
+            guard let view = HarnessAPI.sessionView(snapshot: snapshot, sessionID: id) else {
+                fputs("No session \(id)\n", harnessStderr)
+                exit(Int32(APIExit.ambiguous.rawValue))
+            }
+            printJSON(view)
         case let .split(tabID, paneID, direction, command, cwd, layout):
             if let layout {
                 guard let tab = UUID(uuidString: tabID) else { throw DaemonClientError.unexpectedResponse }
@@ -293,7 +300,6 @@ extension HarnessCLI {
     private struct VersionBody: Encodable { var build: Int; var version: String }
     private struct SessionBody: Encodable { var id: String; var label: String }
     private struct SessionListBody: Encodable { var sessions: [SessionBody] }
-    private struct ViewBody: Encodable { var session: String }
     private struct PaneBody: Encodable { var pane: String }
     private struct OKBody: Encodable { var ok: Bool }
     private struct CaptureBody: Encodable { var format: String; var text: String }

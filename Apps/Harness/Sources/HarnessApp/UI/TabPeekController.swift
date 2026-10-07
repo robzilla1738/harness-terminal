@@ -80,7 +80,7 @@ enum TabPeekController {
         let view = keyView ?? TabPeekKeyView()
         keyView = view
         if panel == nil {
-            let panel = NSPanel(
+            let panel = KeyablePanel(
                 contentRect: NSRect(x: 0, y: 0, width: 320, height: 420),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
@@ -117,12 +117,12 @@ enum TabPeekController {
                 panel.animator().setFrameOrigin(destination)
             }
             panel.makeKey()
-            window.makeFirstResponder(view)
+            panel.makeFirstResponder(view)
             return
         }
         panel.orderFront(nil)
         panel.makeKey()
-        window.makeFirstResponder(view)
+        panel.makeFirstResponder(view)
     }
 
     private static func refreshText() {

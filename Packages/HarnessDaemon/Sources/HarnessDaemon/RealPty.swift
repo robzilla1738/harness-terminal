@@ -762,6 +762,52 @@ public final class RealPty: @unchecked Sendable {
         return (pid, name)
     }
 
+    /// The foreground job's argv, and whether that job is the pane's own shell (nothing running).
+    /// `save-layout` records "shell" for an idle pane instead of re-typing the shell's name.
+    public func probeForegroundArguments() -> (executable: String, arguments: [String], isShell: Bool)? {
+        lifecycleLock.lock()
+        let child = childPID
+        lifecycleLock.unlock()
+        guard let probed = probeForegroundProcess() else { return nil }
+        return (probed.executable, Self.processArguments(for: probed.pid), probed.pid == child)
+    }
+
+    /// Full argv of a PID (argv[0] included), or [] when it can't be read.
+    static func processArguments(for pid: pid_t) -> [String] {
+        guard pid > 0 else { return [] }
+        #if canImport(Darwin)
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return [] }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+        return parseProcArgs2(Array(buffer.prefix(size)))
+        #else
+        guard let data = FileManager.default.contents(atPath: "/proc/\(pid)/cmdline") else { return [] }
+        return data.split(separator: 0, omittingEmptySubsequences: false)
+            .dropLast(data.last == 0 ? 1 : 0)
+            .map { String(decoding: $0, as: UTF8.self) }
+        #endif
+    }
+
+    /// `KERN_PROCARGS2` layout: argc (Int32), the exec path, NUL padding, then argc strings.
+    static func parseProcArgs2(_ bytes: [UInt8]) -> [String] {
+        let width = MemoryLayout<Int32>.size
+        guard bytes.count > width else { return [] }
+        let argc = bytes.prefix(width).withUnsafeBytes { Int($0.loadUnaligned(as: Int32.self)) }
+        var index = width
+        while index < bytes.count, bytes[index] != 0 { index += 1 }   // exec path
+        while index < bytes.count, bytes[index] == 0 { index += 1 }   // padding
+        var arguments: [String] = []
+        while arguments.count < argc, index < bytes.count {
+            let start = index
+            while index < bytes.count, bytes[index] != 0 { index += 1 }
+            arguments.append(String(decoding: bytes[start..<index], as: UTF8.self))
+            index += 1
+        }
+        return arguments
+    }
+
     /// Short process name (comm) for a PID, or nil when it can't be read (exited, denied).
     private static func processName(for pid: pid_t) -> String? {
         guard pid > 0 else { return nil }

@@ -24,16 +24,18 @@ CLI="$(swift build -c release --show-bin-path)/harness-cli"
 echo "==> Installing via $CLI install"
 "$CLI" install
 
-cat <<'EOF'
+SOCKET="$("$CLI" socket-path)"
+
+cat <<EOF
 
 Done. The daemon is registered as a systemd --user service (harness-daemon.service).
 
   systemctl --user status harness-daemon      # check it
-  loginctl enable-linger "$USER"              # keep it running after you log out (headless hosts)
+  loginctl enable-linger "\$USER"             # keep it running after you log out (headless hosts)
 
 From your Mac, add this host and attach:
 
-  harness-cli remote add --name <name> --ssh <user@this-host>
+  harness-cli remote add --name <name> --ssh <user@this-host> --socket "$SOCKET"
   harness-cli --host <name> list-sessions
   harness-cli --host <name> attach --surface <id>
 EOF

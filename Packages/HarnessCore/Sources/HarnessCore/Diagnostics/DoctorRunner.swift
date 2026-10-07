@@ -77,7 +77,10 @@ public enum DoctorRunner {
         }
 
         // 2. Control socket: path must fit sun_path, and when present be owner-only (0o600).
-        let socketURL = home.appendingPathComponent("harness.sock")
+        // The live default home uses the real socket path ($XDG_RUNTIME_DIR on Linux).
+        let socketURL = home == HarnessPaths.applicationSupport
+            ? HarnessPaths.socketURL
+            : home.appendingPathComponent("harness.sock")
         if socketURL.path.utf8.count >= HarnessPaths.maxSocketPathLength {
             checks.append(.init("Control socket", .fail,
                 "path is \(socketURL.path.utf8.count) bytes (max \(HarnessPaths.maxSocketPathLength - 1)) — shorten HARNESS_HOME: \(socketURL.path)"))

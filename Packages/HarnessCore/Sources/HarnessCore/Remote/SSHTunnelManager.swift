@@ -8,6 +8,8 @@ public enum SSHTunnelError: Error, CustomStringConvertible {
     /// bad credentials, or a refused forward, NOT a slow remote. Carries the exit status so the
     /// message can point at the real cause instead of looking like a generic timeout.
     case exitedEarly(host: String, status: Int32)
+    /// ssh exited early and its stderr named a cause a person can act on.
+    case rejected(host: String, reason: String)
 
     public var description: String {
         switch self {
@@ -17,6 +19,7 @@ public enum SSHTunnelError: Error, CustomStringConvertible {
         case let .exitedEarly(host, status):
             return "ssh exited with status \(status) before the tunnel to '\(host)' became ready "
                 + "— check the host, credentials, and remote socket path"
+        case let .rejected(host, reason): return "Can't reach '\(host)': \(reason)"
         }
     }
 }
@@ -100,12 +103,24 @@ public final class SSHTunnelManager: @unchecked Sendable {
             lock.unlock()
             if !running {
                 stop(host: host.name)
+                let log = try? String(contentsOf: Self.logURL(for: localSocket), encoding: .utf8)
+                if let reason = log.flatMap(Self.diagnose) {
+                    throw SSHTunnelError.rejected(host: host.name, reason: reason)
+                }
                 throw SSHTunnelError.exitedEarly(host: host.name, status: status ?? -1)
             }
             Thread.sleep(forTimeInterval: 0.15)
         }
         stop(host: host.name)
         throw SSHTunnelError.notReady(host: host.name)
+    }
+
+    /// Whether any process (the GUI, another CLI call) has a working forward for `name` right now.
+    /// `isConnected` only knows this process's own tunnels.
+    public static func isForwarding(_ name: String) -> Bool {
+        let socket = HarnessPaths.tunnelSocketURL(forHost: name)
+        guard FileManager.default.fileExists(atPath: socket.path) else { return false }
+        return defaultReachabilityProbe(.unix(path: socket.path))
     }
 
     /// Whether a host currently has a live tunnel process.
@@ -184,6 +199,8 @@ public final class SSHTunnelManager: @unchecked Sendable {
             "-o", "ExitOnForwardFailure=yes",       // fail fast if the forward can't bind
             "-o", "StreamLocalBindUnlink=yes",      // replace a stale remote-side socket binding
             "-o", "ServerAliveInterval=15",         // keep the tunnel alive / detect drops
+            "-o", "BatchMode=yes",                  // no TTY: fail with a reason instead of prompting
+            "-o", "ConnectTimeout=10",
         ]
         args += try validatedUserSSHArgs(host.sshArgs)
         args += ["-L", try forwardSpec(localSocketPath: localSocket.path, remoteSocketPath: host.remoteSocketPath)]
@@ -276,10 +293,41 @@ public final class SSHTunnelManager: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = try sshArguments(for: host, localSocket: localSocket)
-        // Silence ssh's own chatter; failures surface as the process exiting + the readiness timeout.
+        // stderr goes to a per-host file, not a pipe: nothing drains a pipe for the tunnel's
+        // whole life. `endpoint(for:)` reads it back to explain an early exit.
         process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let log = logURL(for: localSocket)
+        FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        process.standardError = (try? FileHandle(forWritingTo: log)) ?? FileHandle.nullDevice
         return process
+    }
+
+    public static func logURL(for localSocket: URL) -> URL {
+        localSocket.deletingPathExtension().appendingPathExtension("log")
+    }
+
+    /// Turns ssh's stderr into an actionable sentence, or nil when nothing known matched.
+    public static func diagnose(_ stderr: String) -> String? {
+        let text = stderr.lowercased()
+        if text.contains("host key verification failed") || text.contains("no matching host key") {
+            return "the host key isn't trusted yet. Run `ssh` to it once in a terminal to verify and save it."
+        }
+        if text.contains("remote host identification has changed") {
+            return "the host key changed. Check ~/.ssh/known_hosts before trusting it."
+        }
+        if text.contains("permission denied") {
+            return "SSH authentication failed. Harness needs key or agent auth; it can't answer a password prompt."
+        }
+        if text.contains("could not resolve hostname") {
+            return "the host name doesn't resolve."
+        }
+        if text.contains("connection refused") || text.contains("connection timed out") || text.contains("operation timed out") {
+            return "nothing answered on the SSH port."
+        }
+        if text.contains("open failed") || text.contains("no such file") || text.contains("connect failed") {
+            return "the remote daemon socket isn't there. Start HarnessDaemon on the host and check the socket path."
+        }
+        return nil
     }
 
     /// The shipping reachability probe: ask the forwarded socket for a `pong`.

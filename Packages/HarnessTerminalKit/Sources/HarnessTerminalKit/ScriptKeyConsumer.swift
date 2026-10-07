@@ -14,8 +14,10 @@ final class ScriptKeyConsumer {
     private let perform: (String) -> Void
 
     init(
+        // Never publish on the key path: an edited init.lua republishes in the background
+        // and the next key after that sees the new stamp.
         manifest: @escaping () -> ScriptManifest? = {
-            ScriptActionRunner.syncManifest()
+            ScriptActionRunner.syncManifestInBackground()
             return ScriptStore.load()
         },
         modified: @escaping () -> Date? = { ScriptActionRunner.stamp() },

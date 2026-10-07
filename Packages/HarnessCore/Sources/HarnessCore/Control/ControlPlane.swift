@@ -93,25 +93,35 @@ public enum ControlPlane {
         }
     }
 
-    public static func contextJSON(pid: Int, executable: String, cwd: String) -> String {
-        let escapedExec = executable
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let escapedCwd = cwd
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "{\"pid\":\(pid),\"executable\":\"\(escapedExec)\",\"cwd\":\"\(escapedCwd)\"}"
+    public static func contextJSON(_ context: SurfaceContext) -> String {
+        guard let data = try? JSONEncoder().encode(context) else { return "{}" }
+        return String(decoding: data, as: UTF8.self)
     }
 
     public struct SurfaceContext: Codable, Equatable, Sendable {
         public var pid: Int
         public var executable: String
         public var cwd: String
+        /// Foreground job's argv, argv[0] included. Empty from an older daemon.
+        public var arguments: [String]
+        /// The foreground job is the pane's own shell: nothing is running in it.
+        public var isShell: Bool
 
-        public init(pid: Int, executable: String, cwd: String) {
+        public init(pid: Int, executable: String, cwd: String, arguments: [String] = [], isShell: Bool = false) {
             self.pid = pid
             self.executable = executable
             self.cwd = cwd
+            self.arguments = arguments
+            self.isShell = isShell
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            pid = try c.decode(Int.self, forKey: .pid)
+            executable = try c.decode(String.self, forKey: .executable)
+            cwd = try c.decode(String.self, forKey: .cwd)
+            arguments = try c.decodeIfPresent([String].self, forKey: .arguments) ?? []
+            isShell = try c.decodeIfPresent(Bool.self, forKey: .isShell) ?? false
         }
     }
 

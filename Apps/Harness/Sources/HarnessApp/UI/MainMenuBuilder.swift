@@ -351,16 +351,11 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     private static func tailscaleStatusJSON() -> Data? {
         guard !TailscalePeers.joinsTailnet(TailscalePeers.statusArguments) else { return nil }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = TailscalePeers.statusArguments
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
-        guard (try? process.run()) != nil else { return nil }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return output.fileHandleForReading.readDataToEndOfFile()
+        guard let result = try? ProcessCapture.run(
+            URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: TailscalePeers.statusArguments
+        ), result.status == 0 else { return nil }
+        return result.stdout
     }
 
     private func confirmSuggestedPeer(_ peers: [TailscalePeer], commandPresent: Bool) {

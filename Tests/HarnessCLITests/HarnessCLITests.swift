@@ -38,7 +38,7 @@ final class HarnessCLITests: XCTestCase {
     /// `case` is added to or removed from the dispatch in `HarnessCLI.swift`, update this set; the
     /// bidirectional drift guard below then fails until the catalog matches.
     static let dispatchVerbs: Set<String> = [
-        "color-check", "theme-preview", "remote", "daemon", "version",
+        "color-check", "theme-preview", "remote", "socket-path", "daemon", "version",
         "list-workspaces", "list-surfaces", "list-sessions", "list-agents", "doctor",
         "completions", "list-windows", "list-panes", "has-session", "list-commands",
         "get-snapshot", "new-workspace", "new-session", "new-tab", "new-split",

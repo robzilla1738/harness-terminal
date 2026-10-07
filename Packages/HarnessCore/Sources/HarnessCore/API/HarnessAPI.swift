@@ -181,6 +181,34 @@ public struct APIClientRecord: Equatable, Sendable {
     }
 }
 
+public struct APISessionView: Encodable, Equatable, Sendable {
+    public struct PaneView: Encodable, Equatable, Sendable {
+        public var pane: String
+        public var surface: String
+        public var active: Bool
+    }
+
+    public struct TabView: Encodable, Equatable, Sendable {
+        public var id: String
+        public var label: String
+        public var cwd: String
+        public var active: Bool
+        public var agent: String?
+        public var panes: [PaneView]
+    }
+
+    public var session: String
+    public var label: String
+    public var workspace: String
+    public var activeTab: String?
+    public var tabs: [TabView]
+
+    enum CodingKeys: String, CodingKey {
+        case session, label, workspace, tabs
+        case activeTab = "active_tab"
+    }
+}
+
 public struct APICatalog: Equatable, Sendable {
     public var sessions: [APISessionRecord]
     public var tabs: [APITabRecord]
@@ -255,7 +283,13 @@ public enum HarnessAPI {
     public static let methods: [APIMethod] = [
         method("server.version", "Daemon version", object([:]), object(["version": string("Marketing version"), "build": int("Build number")])),
         method("session.list", "List sessions", object([:]), object(["sessions": array("Sessions")])),
-        method("session.view", "One session and its tabs", object(["session": string("Session id or label")]), object(["session": string("Session id")])),
+        method("session.view", "One session and its tabs", object(["session": string("Session id or label")]), object([
+            "session": string("Session id"),
+            "label": string("Session label"),
+            "workspace": string("Workspace id"),
+            "active_tab": string("Active tab id"),
+            "tabs": array("Tabs, each with id, label, cwd, active, agent, and panes (pane, surface, active)"),
+        ])),
         method("pane.split", "Split a pane", object([
             "pane": string("Pane to split. Defaults to the current pane."),
             "tab": string("Tab id. Defaults to the current tab."),
@@ -631,6 +665,35 @@ public enum HarnessAPI {
             }
             return .failure(code: APIExit.badArguments.rawValue, message: "Unknown method \(method)")
         }
+    }
+
+    /// `session.view`: the session and the tabs and panes inside it, or nil when it's gone.
+    public static func sessionView(snapshot: SessionSnapshot, sessionID: String) -> APISessionView? {
+        for workspace in snapshot.workspaces {
+            guard let session = workspace.sessions.first(where: { $0.id.uuidString.caseInsensitiveCompare(sessionID) == .orderedSame })
+            else { continue }
+            let tabs = session.tabs.map { tab in
+                let active = tab.activePaneID ?? tab.rootPane.allLeaves().first?.id
+                return APISessionView.TabView(
+                    id: tab.id.uuidString,
+                    label: tab.title,
+                    cwd: tab.cwd,
+                    active: tab.id == session.activeTabID,
+                    agent: tab.agent?.kind.commandToken,
+                    panes: tab.rootPane.allLeaves().map {
+                        APISessionView.PaneView(pane: $0.id.uuidString, surface: $0.surfaceID.uuidString, active: $0.id == active)
+                    }
+                )
+            }
+            return APISessionView(
+                session: session.id.uuidString,
+                label: session.name.isEmpty ? workspace.name : session.name,
+                workspace: workspace.id.uuidString,
+                activeTab: session.activeTabID?.uuidString,
+                tabs: tabs
+            )
+        }
+        return nil
     }
 
     public static func catalog(snapshot: SessionSnapshot, clients: [ClientSummary] = []) -> APICatalog {

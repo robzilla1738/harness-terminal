@@ -365,7 +365,7 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 
 **Note:** Marked `join-pane -h/-v` is a normal `Command` (prefix `j`). The explicit `harness-cli join-pane --src --dst --direction` form bypasses `CommandParser` and calls IPC directly.
 
-**Remote socket path:** run `harness-cli doctor` on the remote box to print its control-socket path for `remote add --socket`. Full grammar: [docs/COMMANDS.md](docs/COMMANDS.md) (Remote section) and [docs/MULTIPLEXER_GUIDE.md](docs/MULTIPLEXER_GUIDE.md).
+**Remote socket path:** run `harness-cli socket-path` on the remote box to print its control-socket path for `remote add --socket`. Full grammar: [docs/COMMANDS.md](docs/COMMANDS.md) (Remote section) and [docs/MULTIPLEXER_GUIDE.md](docs/MULTIPLEXER_GUIDE.md).
 
 ---
 

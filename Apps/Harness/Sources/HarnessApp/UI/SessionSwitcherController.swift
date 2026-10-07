@@ -10,7 +10,7 @@ enum SessionSwitcherController {
     static func present(relativeTo parent: NSWindow?) {
         panel?.close()
         let host = SessionSwitcherView()
-        let window = NSPanel(
+        let window = KeyablePanel(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 280),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
