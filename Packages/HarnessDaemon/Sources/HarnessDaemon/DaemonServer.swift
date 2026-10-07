@@ -111,6 +111,12 @@ public final class DaemonServer: @unchecked Sendable {
                 self?.finishPaneWaits(surfaceID: surfaceID, until: "child", status: status)
             }
         }
+        registry.onClientDirective = { [weak self] directive in
+            self?.queue.async { [weak self] in
+                guard let self else { return }
+                for fd in self.snapshotSubscribers { self.send(.clientDirective(directive), to: fd) }
+            }
+        }
         registry.attachedClientCountProvider = { [registeredClientCount] in
             registeredClientCount.read()
         }

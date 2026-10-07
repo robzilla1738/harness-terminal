@@ -74,7 +74,7 @@ public enum FollowValue: Equatable, Sendable {
     case int(Int)
     case bool(Bool)
 
-    var display: String {
+    public var display: String {
         switch self {
         case let .string(value): return value
         case let .int(value): return String(value)
@@ -176,15 +176,20 @@ public enum FollowHookBridge {
         case "after-new-tab": type = "tab.created"
         case "after-kill-tab": type = "tab.closed"
         case "window-renamed": type = "tab.renamed"
-        case "window-pane-changed": type = "tab.activated"
+        case "tab-selected": type = "tab.activated"
+        case "window-pane-changed": type = "pane.focused"
         case "after-split-pane": type = "pane.created"
         case "after-kill-pane": type = "pane.closed"
-        case "after-new-session", "session-created": type = "session_created"
+        // `after-new-session` fires alongside `session-created`; mapping only one keeps the
+        // stream to one event per session.
+        case "session-created": type = "session_created"
         case "session-closed": type = "session_destroyed"
         case "session-renamed": type = "session.renamed"
         case "client-attached": type = "client.connected"; server = true
         case "client-detached": type = "client.disconnected"; server = true
-        case "alert-bell": type = "terminal.bell"
+        // Every bell, from the output monitor. `alert-bell` is the gated tmux hook and would
+        // double-report it.
+        case "bell": type = "terminal.bell"
         case "notification-posted": type = "terminal.notification"
         case "agent-state-changed": type = "agent.state"
         case "pane-exited": type = "terminal.child_exited"

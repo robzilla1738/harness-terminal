@@ -17,6 +17,19 @@ public enum HarnessCLILocator {
     }
 }
 
+/// What a Lua action run from the app produced.
+public struct ScriptActionResult: Equatable, Sendable {
+    /// The action's last error line, when it exited non-zero.
+    public var failure: String?
+    /// Commands the action queued with `harness.queue`, for the app to run in order.
+    public var queued: [String]
+
+    public init(failure: String?, queued: [String]) {
+        self.failure = failure
+        self.queued = queued
+    }
+}
+
 public enum ScriptActionRunner {
     public static func actionArguments(name: String, origin: ScriptOrigin) -> [String] {
         ["do", "--action", name, "--origin", origin.rawValue]
@@ -67,44 +80,45 @@ public enum ScriptActionRunner {
         }
     }
 
-    /// Runs the action in `harness-cli do` off the caller's thread. `failed` gets the action's
-    /// error text (or its exit status) when the process exits non-zero, on an arbitrary queue.
+    /// Runs the action in `harness-cli do` off the caller's thread, then reports what happened
+    /// on an arbitrary queue: the failure line if it exited non-zero, and the commands it
+    /// queued with `harness.queue` (one per stdout line) for the app to run.
     public static func run(
         name: String,
         origin: ScriptOrigin,
         surface: String? = nil,
-        failed: (@Sendable (String) -> Void)? = nil
+        finished: (@Sendable (ScriptActionResult) -> Void)? = nil
     ) {
         guard let cli = url() else {
-            failed?("harness-cli not found; action \(name) did not run")
+            finished?(ScriptActionResult(failure: "harness-cli not found; action \(name) did not run", queued: []))
             return
         }
-        let process = Process()
-        process.executableURL = cli
-        process.arguments = actionArguments(name: name, origin: origin)
         var environment = ProcessInfo.processInfo.environment
         environment["HARNESS_ORIGIN"] = origin.rawValue
         if let surface, !surface.isEmpty {
             environment["HARNESS_SURFACE"] = surface
         }
-        process.environment = environment
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        let errors = Pipe()
-        process.standardError = errors
         DispatchQueue.global(qos: .userInitiated).async {
+            let result: ScriptActionResult
             do {
-                try process.run()
+                let output = try ProcessCapture.run(cli, arguments: actionArguments(name: name, origin: origin), environment: environment)
+                result = ScriptActionResult(
+                    failure: output.status == 0 ? nil : failureMessage(name: name, status: output.status, stderr: output.stderr),
+                    queued: queuedCommands(output.stdout)
+                )
             } catch {
-                failed?("action \(name): \(error.localizedDescription)")
-                return
+                result = ScriptActionResult(failure: "action \(name): \(error.localizedDescription)", queued: [])
             }
-            // Drain before waiting: a full pipe would block the child forever.
-            let data = errors.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus != 0 else { return }
-            failed?(failureMessage(name: name, status: process.terminationStatus, stderr: data))
+            finished?(result)
         }
+    }
+
+    /// `harness.queue` output: one command per non-empty stdout line.
+    public static func queuedCommands(_ stdout: Data) -> [String] {
+        String(decoding: stdout, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     /// Last non-empty stderr line, or the exit status when the action printed nothing.

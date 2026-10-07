@@ -79,8 +79,12 @@ final class HarnessAPITests: XCTestCase {
         let server = FollowEvent(type: "client.connected", payload: ["server": .bool(true)])
         XCTAssertFalse(FollowSubscription(sessionID: nil, includeServer: false).accepts(server))
         XCTAssertTrue(FollowSubscription(sessionID: "session", includeServer: true).accepts(server))
-        let created = FollowHookBridge.event(hook: "after-new-session", context: FollowHookContext(sessionID: "session"))
+        let created = FollowHookBridge.event(hook: "session-created", context: FollowHookContext(sessionID: "session"))
         XCTAssertEqual(created?.type, "session_created")
+        XCTAssertNil(FollowHookBridge.event(hook: "after-new-session", context: FollowHookContext()), "one event per session")
+        XCTAssertNil(FollowHookBridge.event(hook: "alert-bell", context: FollowHookContext()), "bells come from the monitor")
+        XCTAssertEqual(FollowHookBridge.event(hook: "tab-selected", context: FollowHookContext())?.type, "tab.activated")
+        XCTAssertEqual(FollowHookBridge.event(hook: "window-pane-changed", context: FollowHookContext())?.type, "pane.focused")
         XCTAssertNil(FollowHookBridge.event(hook: "not-a-hook", context: FollowHookContext()))
     }
 

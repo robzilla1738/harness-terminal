@@ -272,4 +272,16 @@ final class HarnessCLITests: XCTestCase {
         let (emacs, _) = HarnessCLI.parseKeyTableArgs(["list-keys", "-T", "copy-mode-emacs"])
         XCTAssertEqual(emacs, "copy-mode-emacs")
     }
+
+    func testDoTargetsActionsScriptsAndInlineCode() throws {
+        XCTAssertEqual(try HarnessCLI.doTarget(["do", "--action", "build"]), .action("build"))
+        XCTAssertEqual(try HarnessCLI.doTarget(["do", "build", "--args", "{}"]), .action("build"))
+        XCTAssertEqual(try HarnessCLI.doTarget(["do", "--args", "{}", "build"]), .action("build"))
+        XCTAssertEqual(try HarnessCLI.doTarget(["do", "-e", "print(1)"]), .script(source: "print(1)", name: "-e"))
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("do-\(UUID().uuidString).lua")
+        try "harness.stop()".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertEqual(try HarnessCLI.doTarget(["do", file.path]), .script(source: "harness.stop()", name: file.path))
+        XCTAssertNil(try HarnessCLI.doTarget(["do"]))
+    }
 }

@@ -208,6 +208,12 @@ public enum DirectionalAxis: String, Codable, Sendable {
     }
 }
 
+/// A request from the daemon to the attached apps, for verbs that act on app-side state
+/// (`harness-cli copy-mode` enters the app's copy-mode overlay on that pane).
+public enum ClientDirective: Codable, Equatable, Sendable {
+    case copyMode(surfaceID: String, enabled: Bool)
+}
+
 public enum IPCResponse: Codable, Sendable {
     case ok
     case pong
@@ -227,6 +233,8 @@ public enum IPCResponse: Codable, Sendable {
     case replayResult(text: String, endSequence: UInt64)
     /// Pushed on a `subscribeSnapshot` channel when the layout commits at `revision`.
     case snapshotChanged(revision: Int)
+    /// Pushed on a `subscribeSnapshot` channel: something only an attached app can do.
+    case clientDirective(ClientDirective)
     case agentInfo(AgentSnapshot?)
     case clients([ClientSummary])
     case daemonStats(DaemonStats)

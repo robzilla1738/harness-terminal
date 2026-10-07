@@ -258,6 +258,7 @@ public enum APIPlan: Equatable, Sendable {
     case clientList
     case clientDisconnect(id: String)
     /// A bindable verb that `api list` publishes. Calling it does not invent a mutation.
+    /// A bindable command line (`split-window -h`), run through `CommandRunner`.
     case verb(String)
     case zoom(paneID: String)
     case focus(tabID: String, paneID: String)
@@ -367,9 +368,9 @@ public enum HarnessAPI {
     ] + CommandParser.knownVerbs.map { name in
         method(
             name,
-            "Bindable command \(name)",
-            APIJSONSchema(type: "object", additionalProperties: true),
-            object(["listed": bool("The verb is in the bindable catalog")])
+            "Run the \(name) command (same as the : prompt and key bindings)",
+            object(["args": string("The command's arguments, e.g. \"-h\" for split-window")]),
+            object(["ok": bool("Applied")])
         )
     }
 
@@ -661,7 +662,8 @@ public enum HarnessAPI {
             }
         default:
             if CommandParser.knownVerbs.contains(method) {
-                return .verb(method)
+                let extra = arguments["args"]?.string.map { " " + $0 } ?? ""
+                return .verb(method + extra)
             }
             return .failure(code: APIExit.badArguments.rawValue, message: "Unknown method \(method)")
         }

@@ -947,8 +947,10 @@ public final class RealPty: @unchecked Sendable {
 
     /// Permanently delete this surface's persisted scrollback — called when the surface leaves the
     /// layout for good, so the file can't linger or be resurrected by a late flush.
+    /// Everything this surface left on disk: its scrollback log and its idle snapshot.
     public func deletePersistedScrollback() {
         scrollbackFile?.delete()
+        deleteParkFile()
     }
 
     /// The retained PTY output bytes (whole history, or the last ~16 KiB) as raw `Data`.

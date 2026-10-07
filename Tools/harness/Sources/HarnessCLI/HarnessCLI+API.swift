@@ -192,8 +192,15 @@ extension HarnessCLI {
             }
             try requireOK(client.request(.detachClient(clientID: clientID)))
             printJSON(OKBody(ok: true))
-        case let .verb(name):
-            throw FollowStreamError(message: "\(name) is listed as a bindable command")
+        case let .verb(source):
+            do {
+                try CommandRunner.run(source, client: client, focusSurface: ProcessInfo.processInfo.environment["HARNESS_SURFACE"])
+            } catch let failure as CommandRunner.Failure {
+                fputs("\(failure)\n", harnessStderr)
+                if case .unresolved = failure { exit(CLIExit.targetNotFound) }
+                exit(CLIExit.failed)
+            }
+            printJSON(OKBody(ok: true))
         case let .zoom(paneID):
             guard let pane = UUID(uuidString: paneID) else { throw DaemonClientError.unexpectedResponse }
             try requireOK(client.request(.zoomPane(paneID: pane)))

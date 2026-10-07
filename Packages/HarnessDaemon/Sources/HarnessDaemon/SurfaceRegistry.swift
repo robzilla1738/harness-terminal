@@ -50,6 +50,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
     public var onCommandFinished: ((String, Int32) -> Void)?
     /// PTY child exit. Called with the registry lock held, so the sink must hop queues.
     public var onChildExited: ((String, Int32) -> Void)?
+    /// Hands a directive to every attached app (DaemonServer broadcasts it on the snapshot channel).
+    public var onClientDirective: ((ClientDirective) -> Void)?
     private let followLock = NSLock()
     private var followLog: [FollowEvent] = []
 
@@ -272,6 +274,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             editor.propagateNewTabToGroup(tabID)   // grouped sessions share the window list
             commit()
             fireHookLocked(.afterNewTab)
+            emitFirstPaneCreated(tabID: tabID)
             return .tabID(tabID)
         case let .newTabInWorkspace(named, cwd, shell):
             guard let workspaceID = editor.resolveWorkspaceID(nameOrID: named) else {
@@ -342,6 +345,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .error("Tab not found")
             }
             commit()
+            if let event = FollowHookBridge.event(hook: "tab-selected", context: Self.followContext(buildFormatContext())) {
+                emitFollow(event)
+            }
             return .ok
         case let .reorderTab(workspaceID, tabID, toIndex):
             guard editor.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex) else {
@@ -649,7 +655,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             commit()
             return .ok
         case let .setCopyMode(surfaceID, enabled):
-            NotificationBus.shared.postCopyMode(surfaceID: surfaceID, enabled: enabled)
+            // Copy mode is app-side state; the daemon only relays the request to attached apps.
+            onClientDirective?(.copyMode(surfaceID: surfaceID, enabled: enabled))
             return .ok
         case let .renameTab(tabID, name):
             guard editor.renameTab(tabID, name: name) else { return .error("Tab not found") }
@@ -1278,7 +1285,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         hookQueue.async { [weak self] in self?.hookRegistry.fire(event, context: resolved) }
     }
 
-    private static func followContext(_ context: FormatContext) -> FollowHookContext {
+    static func followContext(_ context: FormatContext) -> FollowHookContext {
         FollowHookContext(
             sessionID: context.sessionID,
             sessionName: context.sessionName,
@@ -1311,6 +1318,21 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     func noteTailscaleStatus(peerCount: Int) {
         guard let event = FollowEvent.tailscaleStatusChanged(commandPresent: true, peerCount: peerCount) else { return }
+        emitFollow(event)
+    }
+
+    /// A new tab's first pane is a pane like any split: report it as `pane.created` too.
+    private func emitFirstPaneCreated(tabID: TabID) {
+        guard let surface = editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+            .first(where: { $0.id == tabID })?.rootPane.allSurfaceIDs().first,
+              let event = FollowHookBridge.event(hook: "after-split-pane", context: Self.followContext(buildFormatContext(surfaceKey: surface.uuidString)))
+        else { return }
+        emitFollow(event)
+    }
+
+    /// `terminal.bell` for every bell, whatever `monitor-bell` says (that only gates the tab flag).
+    func emitBell(surfaceKey: String) {
+        guard let event = FollowHookBridge.event(hook: "bell", context: Self.followContext(buildFormatContext(surfaceKey: surfaceKey))) else { return }
         emitFollow(event)
     }
 
@@ -1790,10 +1812,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
         guard let session = allSessions.first(where: { $0.id == sessionID })
         else { return }
         for tab in session.tabs {
-            for surfaceID in tab.rootPane.allSurfaceIDs() {
+            // Each pane reopens in its own directory; the tab's cwd is only its focused pane's.
+            for leaf in tab.rootPane.allLeaves() {
                 _ = createOrEnsureSurface(
-                    surfaceID: surfaceID.uuidString,
-                    cwd: tab.cwd,
+                    surfaceID: leaf.surfaceID.uuidString,
+                    cwd: leaf.cwd ?? tab.cwd,
                     shell: shell,
                     rows: 24,
                     cols: 80,
@@ -1806,10 +1829,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     private func ensureAllSnapshotSurfaces() {
         for tab in editor.snapshot.workspaces.flatMap({ workspace in workspace.sessions.flatMap { $0.tabs } }) {
-            for surfaceID in tab.rootPane.allSurfaceIDs() {
+            // Each pane reopens in its own directory; the tab's cwd is only its focused pane's.
+            for leaf in tab.rootPane.allLeaves() {
                 _ = createOrEnsureSurface(
-                    surfaceID: surfaceID.uuidString,
-                    cwd: tab.cwd,
+                    surfaceID: leaf.surfaceID.uuidString,
+                    cwd: leaf.cwd ?? tab.cwd,
                     shell: nil,
                     rows: 24,
                     cols: 80,
@@ -2077,7 +2101,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil) else { return }
         let live = scrollbackLiveSurfaceKeys()
-        for file in files where file.pathExtension == "scroll" {
+        // `.scroll` logs and `.park` idle snapshots are both named for their surface.
+        for file in files where file.pathExtension == "scroll" || file.pathExtension == "park" {
             let surfaceID = file.deletingPathExtension().lastPathComponent
             // Delete only genuine crash orphans — files neither backing a live PTY nor referenced
             // anywhere in the layout.

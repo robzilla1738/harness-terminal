@@ -316,6 +316,7 @@ extension SurfaceRegistry {
             if let book = st.status {
                 publishProgramStatusLocked(surfaceKey: key, book: book, previous: st.previous, lastNotifiedAt: st.lastNotifiedAt)
             }
+            if st.sawBell { emitBell(surfaceKey: key) }
             guard let match = editor.tab(forSurfaceKey: key) else {
                 // Output for a surface with no tab — an in-flight PTY read raced `closeSurfaces`
                 // and re-created the monitor entry after teardown. Evict it so `monitors` can't

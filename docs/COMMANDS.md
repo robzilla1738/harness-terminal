@@ -285,9 +285,11 @@ From inside a pane the daemon sets `HARNESS_SESSION`, `HARNESS_TAB`, `HARNESS_SU
 
 Targets accept a full id or a case-insensitive label. `session:`, `tab:`, `pane:`, and `client:` must match that kind. More than one label match exits 3.
 
+Every bindable command is also a method: `api call split-window --args '{"args":"-h"}'` runs `split-window -h` against the calling pane (`HARNESS_SURFACE`) or the active one. A command that only means something inside the app (overlays, copy-mode keys) exits 1 and says so.
+
 `events` with no `--follow` is still a one-shot JSON snapshot. `events --follow` is a live stream of `type` plus `payload`. A terminal gets one human line per event; `--json` keeps NDJSON. The default scope is the current session when `HARNESS_SESSION` is set, otherwise every session. `--session` pins one session. `--all` includes server events such as `client.connected`. The stream also emits `keymap.changed`, `hosts.changed`, `client.connection` when an SSH tunnel drops, and `tailscale_status_changed` only when `tailscale status` is installed. Those are server events, so they need `--all`.
 
-Follow types are `tab.created`, `tab.closed`, `tab.renamed`, `tab.activated`, `pane.created`, `pane.closed`, `session.renamed`, `session_created`, `session_destroyed`, `session.view`, `client.connected`, `client.disconnected`, `terminal.title`, `terminal.pwd` (a `file://` URL plus the owner pid and name), `terminal.bell`, `terminal.child_exited`, `terminal.process`, `terminal.notification`, `terminal.progress`, `terminal.clipboard` (a `length`, not the copied text; an OSC 52 read is not an event), `program_status_changed`, `program_status_removed`, and `agent.state`. An unknown name is delivered, not rejected. Extra payload fields are ignored.
+Follow types are `tab.created`, `tab.closed`, `tab.renamed`, `tab.activated` (a tab was selected), `pane.created` (splits and a new tab's first pane), `pane.focused`, `pane.closed`, `session.renamed`, `session_created`, `session_destroyed`, `session.view`, `client.connected`, `client.disconnected`, `terminal.title`, `terminal.pwd` (a `file://` URL plus the owner pid and name), `terminal.bell` (every bell; `monitor-bell` only gates the tab flag), `terminal.child_exited`, `terminal.process`, `terminal.notification`, `terminal.progress`, `terminal.clipboard` (a `length`, not the copied text; an OSC 52 read is not an event), `program_status_changed`, `program_status_removed`, and `agent.state`. An unknown name is delivered, not rejected. Extra payload fields are ignored.
 
 ## Lua config
 
@@ -297,9 +299,18 @@ Follow types are `tab.created`, `tab.closed`, `tab.renamed`, `tab.activated`, `p
 |---|---|
 | `config check [--file path]` | Print the path, whether the file exists, and the binding, removal, mode, and action counts. A syntax error exits 1. |
 | `config reload [--file path]` | Load the file and publish the keymap. A syntax error keeps the previous keymap. `--remote`, or `HARNESS_TUNNEL=1`, exits 1 and does not read the file. |
-| `do --action <name> [--file path] [--args json] [--for a,b] [--all] [--fail-fast] [--origin key\|palette\|cli\|api\|script]` | Run one action. An unknown argument exits 2 and the action does not run. `--all` needs a reachable daemon (exit 4 otherwise). |
+| `do <name> [--file path] [--args json] [--for a,b] [--all] [--fail-fast]` (or `--action <name>`) | Run one action. An unknown argument exits 2 and the action does not run. `--all` needs a reachable daemon (exit 4 otherwise). |
+| `do <file.lua>` / `do -e '<lua>'` / `do -` | Run a script (from a file, inline, or stdin) after loading the config, so its actions are callable. A script that registers `harness.on` handlers keeps running until `harness.stop([code])` or Ctrl-C (exit 130). |
 
-`harness.bind`, `harness.unbind`, `harness.mode`, `harness.action`, `harness.on`, `harness.wait`, `harness.sleep`, `harness.stop`, `harness.host`, `harness.queue`, and `harness.invoke` are the config functions. A bind whose second value is `{ mode = "name" }` enters that mode. `wait` on `terminal.child_exited` returns the child's exit code. A timeout returns `nil, "timeout"`. From the shell the same wait is `harness-cli api call pane.wait --args '{"until":"child","timeout":30}'`.
+`harness.bind`, `harness.unbind`, `harness.mode`, `harness.action`, `harness.host`, `harness.queue`, and `harness.invoke` work in the config file and in scripts. `harness.on`, `harness.wait`, `harness.sleep`, and `harness.stop` are for scripts and actions; a `harness.on` in the config file is a warning and is ignored. A bind whose second value is `{ mode = "name" }` enters that mode.
+
+- `harness.on(type, fn)` calls `fn(event)` for each event of that type (`"*"` for all), with the payload fields on the table (`event.tab`, `event.pane`, …).
+- `harness.wait(filter, { timeout = s })` blocks for the next matching event. The filter is a type name, a function, or a table whose every field must match (`{ type = "terminal.child_exited", pane = id }`). On `terminal.child_exited` it returns the exit code. A timeout returns `nil, "timeout"`.
+- `harness.queue("split-window -h")` queues a command line, in the same language as the `:` prompt and key bindings. From a key or the palette the app runs it; from a shell it goes to the daemon.
+
+```bash
+harness-cli do -e 'harness.on("tab.created", function(e) print("new tab " .. e.tab) harness.stop() end)'
+```
 
 A GUI action from a tunneled client runs only when Remote Control is on. A local client can always run one. See [MULTIPLEXER_GUIDE.md](MULTIPLEXER_GUIDE.md) for a ten-line `init.lua`.
 

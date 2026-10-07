@@ -38,38 +38,111 @@ extension HarnessCLI {
         }
     }
 
+    static let doUsage = """
+    Usage: harness-cli do <action> [--args json] [--for a,b] [--all] [--fail-fast]
+           harness-cli do <file.lua> | -e '<lua>' | -     (run a script; harness.on handlers keep it running)
+    """
+
+    /// What `do` was asked to run: a named action from the config, or a script.
+    enum DoTarget: Equatable {
+        case action(String)
+        case script(source: String, name: String)
+    }
+
+    /// `do --action name`, `do name`, `do file.lua` (ends in .lua or has a slash), `do -e code`,
+    /// or `do -` (script on stdin).
+    static func doTarget(_ args: [String]) throws -> DoTarget? {
+        if let action = flagValue(args, flag: "--action"), !action.isEmpty { return .action(action) }
+        if let code = flagValue(args, flag: "-e") { return .script(source: code, name: "-e") }
+        let valueFlags: Set<String> = ["--action", "--file", "--args", "--for", "--origin", "-e", "--host"]
+        var index = 1
+        while index < args.count {
+            let word = args[index]
+            if valueFlags.contains(word) { index += 2; continue }
+            if word == "-" {
+                return .script(source: String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self), name: "stdin")
+            }
+            if word.hasPrefix("-") { index += 1; continue }
+            if word.hasSuffix(".lua") || word.contains("/") {
+                let path = (word as NSString).expandingTildeInPath
+                return .script(source: try String(contentsOfFile: path, encoding: .utf8), name: path)
+            }
+            return .action(word)
+        }
+        return nil
+    }
+
     static func handleDo(_ args: [String]) throws {
-        guard let action = flagValue(args, flag: "--action"), !action.isEmpty else {
-            fputs("Usage: harness-cli do --action <name> [--file path] [--args json] [--for a,b] [--all] [--fail-fast] [--origin key|palette|cli|api|script]\n", harnessStderr)
-            exit(2)
+        guard let target = try doTarget(args) else {
+            fputs(doUsage + "\n", harnessStderr)
+            exit(CLIExit.usage)
         }
         let path = flagValue(args, flag: "--file") ?? ScriptConfigPath.resolve()
         let engine = try ScriptEngine(hosts: RemoteHostStore())
         engine.tunnel = ProcessInfo.processInfo.environment["HARNESS_TUNNEL"] == "1"
         engine.remoteControlEnabled = HarnessSettings.load().remoteControl
         wireHostNote(engine, args: args)
-        let source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        // Subscribe before anything runs, so an event the script waits for can't slip past.
+        let feed = (try? makeClient(args)).map { EventFeed(client: $0) }
+        engine.poll = { feed?.poll() }
+        // The config always loads first: its actions are callable from scripts.
         if FileManager.default.fileExists(atPath: path) {
+            let source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
             if case let .syntax(message) = engine.load(source, from: path, replacingFileLayer: false) {
                 fputs(message + "\n", harnessStderr)
-                exit(1)
+                exit(CLIExit.failed)
             }
         }
-        let arguments = try actionArguments(args)
-        let targets = try actionTargets(args)
-        let origin = ScriptOrigin(rawValue: Self.flagValue(args, flag: "--origin") ?? "") ?? .cli
-        let outcome = targets.isEmpty
-            ? engine.invoke(name: action, arguments: arguments, origin: origin)
-            : engine.invokeAll(
-                name: action,
-                arguments: arguments,
-                targets: targets,
-                failFast: args.contains("--fail-fast"),
-                origin: origin
-            )
+        let outcome: ScriptInvocation
+        switch target {
+        case let .action(action):
+            let arguments = try actionArguments(args)
+            let targets = try actionTargets(args)
+            let actionOrigin = ScriptOrigin(rawValue: Self.flagValue(args, flag: "--origin") ?? "") ?? .cli
+            outcome = targets.isEmpty
+                ? engine.invoke(name: action, arguments: arguments, origin: actionOrigin)
+                : engine.invokeAll(
+                    name: action,
+                    arguments: arguments,
+                    targets: targets,
+                    failFast: args.contains("--fail-fast"),
+                    origin: actionOrigin
+                )
+        case let .script(source, name):
+            engine.allowsHandlers = true
+            if case let .syntax(message) = engine.load(source, from: name, replacingFileLayer: false) {
+                fputs(message + "\n", harnessStderr)
+                exit(CLIExit.failed)
+            }
+            engine.warnings.forEach { fputs("warning: \($0)\n", harnessStderr) }
+            outcome = ScriptInvocation(ran: true, queued: [], exitCode: 0, message: nil)
+        }
         if let message = outcome.message { fputs(message + "\n", harnessStderr) }
-        for name in outcome.queued { print(name) }
-        exit(Int32(outcome.exitCode))
+        let origin = ScriptOrigin(rawValue: flagValue(args, flag: "--origin") ?? ProcessInfo.processInfo.environment["HARNESS_ORIGIN"] ?? "") ?? .cli
+        let flush = { (commands: [String]) in runQueued(commands, origin: origin, args: args) }
+        flush(outcome.queued + engine.takeQueued())
+        // Handlers keep a script alive until harness.stop() or Ctrl-C.
+        engine.runHandlers(afterEach: { flush(engine.takeQueued()) })
+        exit(engine.isStopped ? Int32(engine.stopCode) : Int32(outcome.exitCode))
+    }
+
+    /// `harness.queue` commands. From a key or the palette the app runs them (one per stdout
+    /// line, see `SessionCoordinator.applyScriptResult`); from a shell they go to the daemon.
+    private static func runQueued(_ commands: [String], origin: ScriptOrigin, args: [String]) {
+        guard !commands.isEmpty else { return }
+        if origin == .key || origin == .palette {
+            commands.forEach { print($0) }
+            fflush(stdout)
+            return
+        }
+        guard let client = try? makeClient(args) else { return }
+        for command in commands {
+            do {
+                try CommandRunner.run(command, client: client, focusSurface: ProcessInfo.processInfo.environment["HARNESS_SURFACE"])
+            } catch {
+                fputs("queued \(command): \(error)\n", harnessStderr)
+            }
+        }
     }
 
     private static func wireHostNote(_ engine: ScriptEngine, args: [String]) {

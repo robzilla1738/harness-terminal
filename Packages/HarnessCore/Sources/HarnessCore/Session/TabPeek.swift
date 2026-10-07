@@ -27,6 +27,13 @@ public struct TabPeek: Equatable, Sendable {
     public private(set) var columns: Int
     public private(set) var tabs: [Tab]
 
+    /// Fill in previews that arrived after opening (they're fetched off the main thread).
+    public mutating func setPreviews(_ previews: [String: String]) {
+        for index in tabs.indices {
+            if let preview = previews[tabs[index].id] { tabs[index].preview = preview }
+        }
+    }
+
     public init(rows: Int, columns: Int, tabs: [Tab] = []) {
         phase = .closed
         selection = 0

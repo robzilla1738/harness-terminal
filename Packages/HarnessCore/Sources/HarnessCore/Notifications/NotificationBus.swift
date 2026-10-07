@@ -7,8 +7,6 @@ public final class NotificationBus: @unchecked Sendable {
     public let notificationPosted = Notification.Name("HarnessNotificationPosted")
     public let tabStatusChanged = Notification.Name("HarnessTabStatusChanged")
     public let snapshotChanged = Notification.Name("HarnessSnapshotChanged")
-    public let sendKeysRequested = Notification.Name("HarnessSendKeysRequested")
-    public let copyModeRequested = Notification.Name("HarnessCopyModeRequested")
     public let captureRequested = Notification.Name("HarnessCaptureRequested")
 
     private var latest: AgentNotification?
@@ -36,32 +34,6 @@ public final class NotificationBus: @unchecked Sendable {
                 name: self.snapshotChanged,
                 object: nil,
                 userInfo: ["revision": revision]
-            )
-        }
-    }
-
-    public func postSendKeys(surfaceID: String, data: Data) {
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(
-                name: self.sendKeysRequested,
-                object: nil,
-                userInfo: [
-                    "surfaceID": surfaceID,
-                    "data": data,
-                ]
-            )
-        }
-    }
-
-    public func postCopyMode(surfaceID: String, enabled: Bool) {
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(
-                name: self.copyModeRequested,
-                object: nil,
-                userInfo: [
-                    "surfaceID": surfaceID,
-                    "enabled": enabled,
-                ]
             )
         }
     }

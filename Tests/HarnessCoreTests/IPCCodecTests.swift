@@ -564,6 +564,7 @@ final class IPCCodecTests: XCTestCase {
         .data(Data([9, 8, 7]), sequence: 42),
         .replayResult(text: "history", endSequence: 99),
         .snapshotChanged(revision: 12),
+        .clientDirective(.copyMode(surfaceID: "s", enabled: true)),
         .agentInfo(AgentSnapshot(kind: .claudeCode, executable: "/usr/bin/claude", pid: 4321)),
         .agentInfo(nil),
         .clients([ClientSummary(
@@ -627,7 +628,7 @@ final class IPCCodecTests: XCTestCase {
         case .ok, .pong:
             break
         case .workspaces, .surfaces, .agents, .workspaceID, .sessionID, .tabID, .paneID,
-             .surfaceID, .snapshot, .text, .data, .replayResult, .snapshotChanged, .agentInfo,
+             .surfaceID, .snapshot, .text, .data, .replayResult, .snapshotChanged, .clientDirective, .agentInfo,
              .clients, .daemonStats, .clientID, .buffer, .buffers, .options, .hookID, .hooks,
              .follow, .error:
             break

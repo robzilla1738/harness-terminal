@@ -37,6 +37,20 @@ public final class ScriptEngine {
     public private(set) var removalCount = 0
     public private(set) var generation = 0
     public var poll: (() -> FollowEvent?)?
+    /// Scripts (`harness-cli do -e …` / a script file) may register `harness.on` handlers.
+    /// The config file may not: it is loaded to publish a keymap, and nothing runs after it.
+    public var allowsHandlers = false
+    /// `harness.stop(code)` was called; `stopCode` is its code (0 when omitted).
+    public var isStopped: Bool { stopped }
+    public private(set) var stopCode = 0
+    public var hasHandlers: Bool { !handlerRefs.isEmpty }
+
+    /// Commands queued with `harness.queue` outside an action (by a script's top level or a
+    /// handler), handed over once.
+    public func takeQueued() -> [String] {
+        defer { guiQueue = [] }
+        return guiQueue
+    }
     public var tunnel = false
     public var remoteControlEnabled = false
     public var onHostsChanged: (() -> Void)?
@@ -186,8 +200,25 @@ public final class ScriptEngine {
         }
     }
 
+    /// Run handlers for events until `harness.stop`, the feed ending, or `deadline`.
+    /// Returns when there is nothing left to wait for.
+    public func runHandlers(
+        until deadline: Date = .distantFuture,
+        afterEach: () -> Void = {},
+        sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    ) {
+        while !stopped, hasHandlers, Date() < deadline {
+            if let event = poll?() {
+                deliver(event)
+                afterEach()
+            } else {
+                sleep(0.02)
+            }
+        }
+    }
+
     public func deliver(_ event: FollowEvent) {
-        for ref in handlerRefs[event.type] ?? [] {
+        for ref in (handlerRefs[event.type] ?? []) + (handlerRefs["*"] ?? []) {
             lua_rawgeti(state, Self.registry, ref)
             push(event)
             if lua_pcall(state, 1, 0, 0) != 0 { _ = popString() }
@@ -254,6 +285,7 @@ public final class ScriptEngine {
         case "sleep": return luaSleep(state)
         case "stop":
             stopped = true
+            stopCode = lua_type(state, 1) == LUA_TNUMBER ? Int(lua_tointeger(state, 1)) : 0
             return 0
         case "host": return luaHost(state)
         case "queue": return luaQueue(state)
@@ -378,6 +410,10 @@ public final class ScriptEngine {
             note("bad on")
             return 0
         }
+        guard allowsHandlers else {
+            note("harness.on is for scripts (harness-cli do -e / a script file), not the config file")
+            return 0
+        }
         lua_pushvalue(state, 2)
         let ref = luaL_ref(state, Self.registry)
         handlerRefs[event, default: []].append(ref)
@@ -463,8 +499,13 @@ public final class ScriptEngine {
             return event.type == Self.luaString(state, 1)
         }
         if kind == LUA_TTABLE {
-            guard let type = stringField(state, 1, "type") else { return false }
-            return event.type == type
+            // Every field in the filter must match: `type` against the event type, the rest
+            // against the payload (`{ type = "terminal.child_exited", pane = id }`).
+            let filter = stringFields(state, 1)
+            guard !filter.isEmpty else { return false }
+            return filter.allSatisfy { key, value in
+                key == "type" ? event.type == value : event.payload[key]?.display == value
+            }
         }
         if kind == LUA_TFUNCTION {
             lua_pushvalue(state, 1)

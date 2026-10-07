@@ -11,6 +11,14 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 Not a release. Local `main` carries this work so the next session starts from it. `HarnessVersion.short` stays 1.12.1. The 1.13–1.17 names are feature slices in this unreleased work, not a version bump.
 
 ### Fixed
+- **Lua events work.** `harness.on` handlers and `harness.wait` now see the daemon's event stream (they were wired to nothing). `harness-cli do` runs scripts too: `do file.lua`, `do -e '…'`, or `do -` on stdin, after loading the config. A script with handlers keeps running until `harness.stop([code])`. `harness.wait` table filters match every field, not just `type`. `harness.on` in the config file is now a warning instead of a silent no-op.
+- **`harness.queue` does something.** Queued command lines (`harness.queue("split-window -h")`) run in the app when the action came from a key or the palette, and against the daemon when it came from a shell. Before, they were printed into a discarded pipe.
+- **`api call <command>` runs the command.** Every bindable verb listed by `api list` used to fail when called. It now takes `{"args": "…"}` and runs through the same parser and translator as key bindings and hooks.
+- **Event stream fixes.** `session_created` arrives once per session. Selecting a tab emits `tab.activated`; pane focus is now `pane.focused`. `terminal.bell` fires for every bell, not only background tabs with `monitor-bell`. A new tab reports its first pane as `pane.created`.
+- **Split panes reopen in their own directory** after a daemon restart, not the focused pane's.
+- **`harness-cli copy-mode` reaches the app.** The daemon relays it to attached apps over the snapshot channel (a new client directive); it used to post an in-process notification nobody heard.
+- **Idle snapshots don't pile up.** Closing a surface and the startup orphan sweep remove its `.park` file along with its scrollback log.
+- **Tab peek doesn't block.** Its previews are fetched off the main thread.
 - **`resize-pane` takes a surface.** `--surface <id>` (or `$HARNESS_SURFACE` inside a pane) works alongside `--pane`, so the Lua example in the multiplexer guide runs as written.
 - **No keychain prompt from the daemon.** The idle-snapshot key is a mode-0600 file next to the control socket on every platform, not a keychain item. The keychain added no protection over the socket and scrollback beside it, and asked for access every time the daemon binary changed.
 - **Card edges are clean.** The cards, their terminal drawables, and the gutter around them now use one corner curve, and the gutter fill runs a point under each card's hairline. Before, mismatched curves left slivers at the corners and the two antialiased edges left a faint see-through seam.

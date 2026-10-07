@@ -26,8 +26,8 @@ public protocol TerminalHostDelegate: AnyObject {
     /// per rule by the surface).
     func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID)
     func terminalHostDidClose(surfaceID: SurfaceID)
-    /// A Lua action bound to a key in this pane exited non-zero.
-    func terminalHostScriptActionDidFail(_ message: String, surfaceID: SurfaceID)
+    /// A Lua action bound to a key in this pane finished: show its failure, run what it queued.
+    func terminalHostScriptActionFinished(_ result: ScriptActionResult, surfaceID: SurfaceID)
 }
 
 extension TerminalHostDelegate {
@@ -43,8 +43,8 @@ extension TerminalHostDelegate {
     public func terminalHostDidChangeRemoteHost(_ host: String?, surfaceID: SurfaceID) {}
     /// Default no-op — only the GUI routes trigger notifications.
     public func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID) {}
-    /// Default no-op — only the GUI shows action failures.
-    public func terminalHostScriptActionDidFail(_ message: String, surfaceID: SurfaceID) {}
+    /// Default no-op — only the GUI shows action failures and runs queued commands.
+    public func terminalHostScriptActionFinished(_ result: ScriptActionResult, surfaceID: SurfaceID) {}
 }
 
 struct TerminalHostResolvedAppearance: Equatable {
@@ -269,10 +269,10 @@ public final class TerminalHostView: NSView {
         let keys = scriptKeys ?? ScriptKeyConsumer { [weak self] name in
             guard let self else { return }
             let surfaceID = self.surfaceID
-            ScriptActionRunner.run(name: name, origin: .key, surface: surfaceID.uuidString) { message in
+            ScriptActionRunner.run(name: name, origin: .key, surface: surfaceID.uuidString) { result in
                 DispatchQueue.main.async { [weak self] in
                     MainActor.assumeIsolated {
-                        self?.hostDelegate?.terminalHostScriptActionDidFail(message, surfaceID: surfaceID)
+                        self?.hostDelegate?.terminalHostScriptActionFinished(result, surfaceID: surfaceID)
                     }
                 }
             }

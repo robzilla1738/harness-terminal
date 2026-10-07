@@ -422,8 +422,8 @@ enum CommandPaletteController {
                     name: action.name,
                     origin: .palette,
                     surface: coordinator.activeSurfaceID?.uuidString
-                ) { message in
-                    DispatchQueue.main.async { MainActor.assumeIsolated { DisplayMessage.show(message) } }
+                ) { result in
+                    DispatchQueue.main.async { MainActor.assumeIsolated { SessionCoordinator.applyScriptResult(result) } }
                 }
             })
         }

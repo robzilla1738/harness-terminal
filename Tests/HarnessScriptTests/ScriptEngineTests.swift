@@ -142,4 +142,55 @@ final class ScriptEngineTests: XCTestCase {
         XCTAssertTrue(noted)
         XCTAssertEqual(engine.hosts.load().map(\.sshTarget), ["me@box"])
     }
+
+    func testScriptHandlersRunUntilStopAndConfigFilesCannotRegisterThem() throws {
+        var events = [
+            FollowEvent(type: "tab.created", payload: ["tab": .string("t1")]),
+            FollowEvent(type: "pane.created", payload: ["pane": .string("p1")]),
+            FollowEvent(type: "tab.created", payload: ["tab": .string("t2")]),
+        ]
+        let engine = try ScriptEngine()
+        engine.poll = { events.isEmpty ? nil : events.removeFirst() }
+        engine.allowsHandlers = true
+        guard case .loaded = engine.load("""
+        seen = ""
+        harness.on("tab.created", function(e)
+          seen = seen .. e.tab
+          if e.tab == "t2" then harness.stop(7) end
+        end)
+        """, from: "script", replacingFileLayer: false) else { return XCTFail("load") }
+        XCTAssertTrue(engine.hasHandlers)
+        engine.runHandlers(until: Date().addingTimeInterval(2), sleep: { _ in })
+        XCTAssertEqual(engine.stringGlobal("seen"), "t1t2")
+        XCTAssertTrue(engine.isStopped)
+        XCTAssertEqual(engine.stopCode, 7)
+
+        let config = try ScriptEngine()
+        guard case .loaded = config.load("harness.on('tab.created', function() end)", from: "/cfg/init.lua", replacingFileLayer: false)
+        else { return XCTFail("config load") }
+        XCTAssertFalse(config.hasHandlers)
+        XCTAssertTrue(config.warnings.contains { $0.contains("harness.on is for scripts") })
+    }
+
+    func testWaitFiltersOnPayloadFields() throws {
+        var events = [
+            FollowEvent(type: "terminal.child_exited", payload: ["pane": .string("other"), "exit": .int(1)]),
+            FollowEvent(type: "terminal.child_exited", payload: ["pane": .string("mine"), "exit": .int(3)]),
+        ]
+        let engine = try ScriptEngine()
+        engine.poll = { events.isEmpty ? nil : events.removeFirst() }
+        guard case .loaded = engine.load("""
+        code = harness.wait({ type = "terminal.child_exited", pane = "mine" }, { timeout = 2 })
+        """, from: "script", replacingFileLayer: false) else { return XCTFail("load") }
+        XCTAssertEqual(engine.numberGlobal("code") ?? -1, 3, accuracy: 0.001)
+    }
+
+    func testQueuedCommandsComeOutOnePerLine() throws {
+        let engine = try ScriptEngine()
+        guard case .loaded = engine.load("harness.queue('split-window -h') harness.queue('next-window')", from: "script", replacingFileLayer: false)
+        else { return XCTFail("load") }
+        XCTAssertEqual(engine.takeQueued(), ["split-window -h", "next-window"])
+        XCTAssertEqual(engine.takeQueued(), [])
+        XCTAssertEqual(ScriptActionRunner.queuedCommands(Data("split-window -h\n\n next-window \n".utf8)), ["split-window -h", "next-window"])
+    }
 }

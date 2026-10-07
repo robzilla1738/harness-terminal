@@ -113,9 +113,10 @@ public final class DaemonSessionService: @unchecked Sendable {
     public func subscribeSnapshot(
         label: String? = nil,
         onRevision: @escaping @Sendable (Int) -> Void,
+        onDirective: (@Sendable (ClientDirective) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
-        try currentClient().subscribeSnapshot(label: label, onRevision: onRevision, onEnd: onEnd)
+        try currentClient().subscribeSnapshot(label: label, onRevision: onRevision, onDirective: onDirective, onEnd: onEnd)
     }
 
     public func fetchSnapshot() throws -> SessionSnapshot {

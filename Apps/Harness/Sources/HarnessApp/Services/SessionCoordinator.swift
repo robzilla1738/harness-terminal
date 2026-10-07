@@ -1556,6 +1556,22 @@ final class SessionCoordinator: NSObject {
         }
     }
 
+    /// A daemon-relayed request from the CLI (`harness-cli copy-mode`).
+    func handleDirective(_ directive: ClientDirective) {
+        switch directive {
+        case let .copyMode(surfaceID, enabled):
+            guard let id = UUID(uuidString: surfaceID),
+                  let host = TerminalPaneRegistryAccess.host(for: id),
+                  host.isInCopyMode != enabled
+            else { return }
+            if enabled {
+                host.enterCopyMode(modeKeys: HarnessOptions.shared.get("mode-keys", scope: .global)?.stringValue ?? "vi")
+            } else {
+                host.exitCopyMode()
+            }
+        }
+    }
+
     /// Toggle the in-pane copy-mode overlay on the active pane. The native surface owns the
     /// scrollback and drives the shared `CopyModeReducer`, so no daemon text capture is needed.
     func toggleCopyMode() {
@@ -1947,6 +1963,11 @@ final class SessionCoordinator: NSObject {
                     }
                 }
             },
+            onDirective: { [weak self] directive in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.handleDirective(directive) }
+                }
+            },
             onEnd: { [weak self] in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
@@ -2228,8 +2249,22 @@ extension SessionCoordinator: TerminalHostDelegate {
         )
     }
 
-    func terminalHostScriptActionDidFail(_ message: String, surfaceID: SurfaceID) {
-        DisplayMessage.show(message)
+    func terminalHostScriptActionFinished(_ result: ScriptActionResult, surfaceID: SurfaceID) {
+        Self.applyScriptResult(result)
+    }
+
+    /// Show a Lua action's failure and run the commands it queued with `harness.queue`,
+    /// through the same executor as the `:` prompt and key bindings.
+    static func applyScriptResult(_ result: ScriptActionResult) {
+        if let failure = result.failure { DisplayMessage.show(failure) }
+        for command in result.queued {
+            do {
+                try MainExecutor.shared.executeSource(command)
+            } catch {
+                DisplayMessage.show("queued command failed: \(command): \(error)")
+                return
+            }
+        }
     }
 
     func terminalHostDidClose(surfaceID: SurfaceID) {

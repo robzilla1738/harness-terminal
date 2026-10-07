@@ -14,6 +14,7 @@ enum TabPeekController {
         if model.phase == .closed {
             let size = liveGridSize()
             model = TabPeek(rows: size.rows, columns: size.columns, tabs: loadTabs())
+            fetchPreviews()
         }
         model.toggle(reduceMotion: reduceMotion)
         if model.phase == .closed {
@@ -61,18 +62,38 @@ enum TabPeekController {
                 program: tab.currentCommand,
                 agent: tab.agent?.kind.commandToken
             )
-            let preview = tab.rootPane.allSurfaceIDs().compactMap { surfaceID -> String? in
-                guard case let .text(text)? = coordinator.requestDaemon(
-                    .capturePaneRange(surfaceID: surfaceID.uuidString, start: nil, end: nil, escapeSequences: false, joinWrapped: false)
-                ) else { return nil }
-                return text.split(separator: "\n", omittingEmptySubsequences: false).suffix(6).joined(separator: "\n")
-            }.joined(separator: "\n")
             return TabPeek.Tab(
                 id: tab.id.uuidString,
                 title: TabChip.title(base: base, app: tab.programMark?.app),
-                preview: preview,
+                preview: "",
                 mark: tab.programMark
             )
+        }
+    }
+
+    /// Each tab's last screen lines, from the daemon, off the main thread (a remote daemon
+    /// over SSH would otherwise stall the peek for every pane).
+    private static func fetchPreviews() {
+        let coordinator = SessionCoordinator.shared
+        let surfaces = (coordinator.snapshot.activeWorkspace?.tabs ?? []).map { ($0.id.uuidString, $0.rootPane.allSurfaceIDs()) }
+        let endpoint = coordinator.activeEndpoint
+        DispatchQueue.global(qos: .userInitiated).async {
+            let client = DaemonClient(endpoint: endpoint)
+            var previews: [String: String] = [:]
+            for (tabID, tabSurfaces) in surfaces {
+                previews[tabID] = tabSurfaces.compactMap { surfaceID -> String? in
+                    let request = IPCRequest.capturePaneRange(surfaceID: surfaceID.uuidString, start: nil, end: nil, escapeSequences: false, joinWrapped: false)
+                    guard case let .text(text)? = try? client.request(request, timeout: 1) else { return nil }
+                    return text.split(separator: "\n", omittingEmptySubsequences: false).suffix(6).joined(separator: "\n")
+                }.joined(separator: "\n")
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard model.phase != .closed else { return }
+                    model.setPreviews(previews)
+                    refreshText()
+                }
+            }
         }
     }
 
