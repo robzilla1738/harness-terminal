@@ -93,12 +93,14 @@ public enum ScriptArgs {
     }
 }
 
-/// One action or blocked binding the GUI can replay. Function bindings stay in the CLI.
+/// One binding the GUI can replay. A Lua function binding is recorded by spec only; the app
+/// runs it through `harness-cli do --binding <spec>`, so Lua never loads in the app.
 public struct ScriptBindingRecord: Equatable, Sendable, Codable {
     public var spec: String
     public var action: String?
     public var blocked: Bool
     public var enter: String?
+    public var function: Bool
     public var layer: Int
     public var source: String
 
@@ -107,6 +109,7 @@ public struct ScriptBindingRecord: Equatable, Sendable, Codable {
         action: String? = nil,
         blocked: Bool = false,
         enter: String? = nil,
+        function: Bool = false,
         layer: Int,
         source: String
     ) {
@@ -114,8 +117,23 @@ public struct ScriptBindingRecord: Equatable, Sendable, Codable {
         self.action = action
         self.blocked = blocked
         self.enter = enter
+        self.function = function
         self.layer = layer
         self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey { case spec, action, blocked, enter, function, layer, source }
+
+    // Manifests written before function bindings were exported have no `function` key.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        spec = try container.decode(String.self, forKey: .spec)
+        action = try container.decodeIfPresent(String.self, forKey: .action)
+        blocked = try container.decode(Bool.self, forKey: .blocked)
+        enter = try container.decodeIfPresent(String.self, forKey: .enter)
+        function = try container.decodeIfPresent(Bool.self, forKey: .function) ?? false
+        layer = try container.decode(Int.self, forKey: .layer)
+        source = try container.decode(String.self, forKey: .source)
     }
 }
 

@@ -51,6 +51,11 @@ public final class ScriptEngine {
         defer { guiQueue = [] }
         return guiQueue
     }
+    /// `harness.call` and the generated `harness.pane.*` / `harness.tab.*` / … functions.
+    /// The CLI runs them through `APIExecutor`; without it they return `nil, err, 4`.
+    public var call: ((String, [String: APIArgument]) -> APIResult)?
+    /// `harness.log(level, message)`. Defaults to stderr.
+    public var log: ((String, String) -> Void)?
     public var tunnel = false
     public var remoteControlEnabled = false
     public var onHostsChanged: (() -> Void)?
@@ -76,6 +81,7 @@ public final class ScriptEngine {
         pointer = Unmanaged.passUnretained(self).toOpaque()
         luaL_openlibs(state)
         installHarness()
+        installGenerated()
     }
 
     deinit { lua_close(state) }
@@ -258,13 +264,65 @@ public final class ScriptEngine {
     private func installHarness() {
         lua_createtable(state, 0, 12)
         let table = lua_gettop(state)
-        for name in ["bind", "unbind", "mode", "action", "on", "wait", "sleep", "stop", "host", "queue", "invoke"] {
+        for name in ["bind", "unbind", "mode", "action", "on", "wait", "sleep", "stop", "host", "queue", "invoke", "call", "log"] {
             lua_pushlightuserdata(state, pointer)
             name.withCString { lua_pushstring(state, $0) }
             lua_pushcclosure(state, Self.trampoline, 2)
             lua_setfield(state, table, name)
         }
+        lua_createtable(state, 0, 0)
+        lua_setfield(state, table, "args")
         lua_setfield(state, Self.globals, "harness")
+    }
+
+    /// One function per API method (`harness.pane.split{…}` is `harness.call("pane.split", {…})`),
+    /// generated from `HarnessAPI.methods` so Lua can't drift from the API, and the layout
+    /// builders for `session.create` / `pane.split`. `horizontal` is side by side.
+    private func installGenerated() {
+        let names = HarnessAPI.methods.map(\.name).filter { $0.contains(".") }
+        let list = names.map { "\"\($0)\"" }.joined(separator: ", ")
+        let prelude = """
+        local h = harness
+        for _, name in ipairs({ \(list) }) do
+          local domain, verb = name:match("^(%a+)%.([%w_]+)$")
+          h[domain] = h[domain] or {}
+          h[domain][verb] = function(args) return h.call(name, args) end
+        end
+        local function split(direction)
+          return function(ratio, ...)
+            local children = { ... }
+            if type(ratio) ~= "number" then table.insert(children, 1, ratio); ratio = 0.5 end
+            return { direction = direction, ratio = ratio, children = children }
+          end
+        end
+        h.layout = {
+          pane = function(options) return options or {} end,
+          horizontal = split("horizontal"),
+          vertical = split("vertical"),
+        }
+        """
+        if let error = runChunk(prelude, name: "harness") { warnings.append(error) }
+    }
+
+    /// `harness.args`: the script's `do --args '{json}'`.
+    public func setArguments(_ arguments: [String: APIArgument]) {
+        lua_getfield(state, Self.globals, "harness")
+        Self.push(.object(arguments), state)
+        lua_setfield(state, -2, "args")
+        lua_settop(state, -2)
+    }
+
+    /// Runs the root Lua function bound to `spec` (`harness-cli do --binding`, from a key in
+    /// the app). False when no function has that spec.
+    public func runBinding(spec: String) -> Bool {
+        guard let parsed = ScriptKey.parse(spec), parsed.mode == nil else { return false }
+        let bound = keymap.root.last { binding in
+            if case .function = binding.target { return binding.sequence == parsed.sequence }
+            return false
+        }
+        guard let bound, case let .function(id) = bound.target else { return false }
+        _ = callFunction(id)
+        return true
     }
 
     private static let trampoline: @convention(c) (OpaquePointer?) -> Int32 = { state in
@@ -290,6 +348,8 @@ public final class ScriptEngine {
         case "host": return luaHost(state)
         case "queue": return luaQueue(state)
         case "invoke": return luaInvoke(state)
+        case "call": return luaCall(state)
+        case "log": return luaLog(state)
         default: return 0
         }
     }
@@ -492,6 +552,140 @@ public final class ScriptEngine {
             lua_pushstring(state, outcome.message ?? "invoke failed")
         }
         return 2
+    }
+
+    /// `harness.call(method, args)`: the result table, or `nil, message, exit code`.
+    private func luaCall(_ state: OpaquePointer) -> Int32 {
+        func failure(_ message: String, _ code: APIExit) -> Int32 {
+            lua_pushnil(state)
+            lua_pushstring(state, message)
+            lua_pushinteger(state, lua_Integer(code.rawValue))
+            return 3
+        }
+        guard let method = Self.luaString(state, 1) else { return failure("harness.call needs a method name", .badArguments) }
+        var arguments: [String: APIArgument] = [:]
+        switch lua_type(state, 2) {
+        case LUA_TNONE, LUA_TNIL: break
+        case LUA_TTABLE:
+            guard case let .object(fields)? = Self.argument(state, 2, depth: 0) else {
+                return failure("\(method) arguments must be a table with named fields", .badArguments)
+            }
+            arguments = fields
+        default:
+            return failure("\(method) arguments must be a table", .badArguments)
+        }
+        guard let call else { return failure("harness.call needs a running daemon (harness-cli do)", .unreachable) }
+        let result = call(method, arguments)
+        guard let json = result.json else {
+            return failure(result.message ?? "\(method) failed", APIExit(rawValue: Int(result.exitCode)) ?? .failed)
+        }
+        if let value = try? JSONSerialization.jsonObject(with: Data(json.utf8), options: [.fragmentsAllowed]) {
+            Self.push(json: value, state)
+        } else {
+            lua_pushstring(state, json)
+        }
+        return 1
+    }
+
+    /// `harness.log([level,] message)`.
+    private func luaLog(_ state: OpaquePointer) -> Int32 {
+        let (level, message) = lua_gettop(state) >= 2
+            ? (Self.luaString(state, 1) ?? "info", Self.luaString(state, 2) ?? "")
+            : ("info", Self.luaString(state, 1) ?? "")
+        if let log {
+            log(level, message)
+        } else {
+            FileHandle.standardError.write(Data("[\(level)] \(message)\n".utf8))
+        }
+        return 0
+    }
+
+    /// A Lua value as an API argument. A table with keys 1…n is an array; any other table is
+    /// an object. Functions and other values have no JSON form and are dropped.
+    private static func argument(_ state: OpaquePointer, _ index: Int32, depth: Int) -> APIArgument? {
+        let index = index > 0 ? index : lua_gettop(state) + index + 1
+        switch lua_type(state, index) {
+        case LUA_TSTRING:
+            return luaString(state, index).map(APIArgument.string)
+        case LUA_TBOOLEAN:
+            return .bool(lua_toboolean(state, index) != 0)
+        case LUA_TNUMBER:
+            let number = lua_tonumber(state, index)
+            return number.rounded() == number && abs(number) < 1e15 ? .int(Int(number)) : .double(number)
+        case LUA_TTABLE:
+            guard depth < 32 else { return nil }
+            var fields: [String: APIArgument] = [:]
+            var items: [Int: APIArgument] = [:]
+            lua_pushnil(state)
+            while lua_next(state, index) != 0 {
+                if let value = argument(state, -1, depth: depth + 1) {
+                    if lua_type(state, -2) == LUA_TNUMBER {
+                        items[Int(lua_tonumber(state, -2))] = value
+                    } else if lua_type(state, -2) == LUA_TSTRING, let key = luaString(state, -2) {
+                        fields[key] = value
+                    }
+                }
+                lua_settop(state, -2)
+            }
+            if fields.isEmpty, !items.isEmpty, items.keys.sorted() == Array(1...items.count) {
+                return .array((1...items.count).compactMap { items[$0] })
+            }
+            for (key, value) in items { fields[String(key)] = value }
+            return .object(fields)
+        default:
+            return nil
+        }
+    }
+
+    private static func push(_ argument: APIArgument, _ state: OpaquePointer) {
+        switch argument {
+        case let .string(text): lua_pushstring(state, text)
+        case let .int(number): lua_pushinteger(state, lua_Integer(number))
+        case let .double(number): lua_pushnumber(state, number)
+        case let .bool(flag): lua_pushboolean(state, flag ? 1 : 0)
+        case let .array(items):
+            lua_createtable(state, Int32(items.count), 0)
+            for (offset, item) in items.enumerated() {
+                push(item, state)
+                lua_rawseti(state, -2, Int32(offset + 1))
+            }
+        case let .object(fields):
+            lua_createtable(state, 0, Int32(fields.count))
+            for (key, value) in fields {
+                push(value, state)
+                lua_setfield(state, -2, key)
+            }
+        }
+    }
+
+    /// A decoded JSON value as Lua. `null` becomes nil (absent from tables).
+    private static func push(json value: Any, _ state: OpaquePointer) {
+        switch value {
+        case let text as String:
+            lua_pushstring(state, text)
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                lua_pushboolean(state, number.boolValue ? 1 : 0)
+            } else {
+                lua_pushnumber(state, number.doubleValue)
+            }
+        case let items as [Any]:
+            lua_createtable(state, Int32(items.count), 0)
+            var slot: Int32 = 0
+            for item in items where !(item is NSNull) {
+                slot += 1
+                push(json: item, state)
+                lua_rawseti(state, -2, slot)
+            }
+        case let fields as [String: Any]:
+            lua_createtable(state, 0, Int32(fields.count))
+            for (key, item) in fields where !(item is NSNull) {
+                push(json: item, state)
+                lua_setfield(state, -2, key)
+            }
+        default:
+            lua_pushnil(state)
+        }
     }
 
     private func accepts(_ event: FollowEvent, kind: Int32, state: OpaquePointer) -> Bool {

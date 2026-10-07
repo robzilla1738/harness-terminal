@@ -266,10 +266,10 @@ public final class TerminalHostView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         native.translatesAutoresizingMaskIntoConstraints = false
-        let keys = scriptKeys ?? ScriptKeyConsumer { [weak self] name in
+        let keys = scriptKeys ?? ScriptKeyConsumer { [weak self] request in
             guard let self else { return }
             let surfaceID = self.surfaceID
-            ScriptActionRunner.run(name: name, origin: .key, surface: surfaceID.uuidString) { result in
+            ScriptActionRunner.run(request, origin: .key, surface: surfaceID.uuidString) { result in
                 DispatchQueue.main.async { [weak self] in
                     MainActor.assumeIsolated {
                         self?.hostDelegate?.terminalHostScriptActionFinished(result, surfaceID: surfaceID)

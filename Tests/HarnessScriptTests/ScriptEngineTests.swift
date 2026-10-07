@@ -3,6 +3,56 @@ import HarnessCore
 @testable import HarnessScript
 
 final class ScriptEngineTests: XCTestCase {
+    func testCallBridgesTablesBothWaysAndReportsFailures() throws {
+        let engine = try ScriptEngine()
+        var seen: [(String, [String: APIArgument])] = []
+        engine.call = { method, arguments in
+            seen.append((method, arguments))
+            if method == "tab.close" { return .failed("no tab logs", code: .ambiguous) }
+            return .ok(#"{"pane":"P1","sizes":[80,24],"ok":true,"none":null}"#)
+        }
+        engine.setArguments(["name": .string("demo")])
+        let loaded = engine.load("""
+        local layout = harness.layout.horizontal(0.3, harness.layout.pane{ command = "vim" }, harness.layout.pane{})
+        local result = harness.pane.split{ pane = 2, layout = layout }
+        assert(result.pane == "P1" and result.sizes[2] == 24 and result.ok == true and result.none == nil)
+        local value, message, code = harness.call("tab.close", { tab = "logs" })
+        assert(value == nil and message == "no tab logs" and code == 3)
+        assert(harness.args.name == "demo")
+        """, from: "script", replacingFileLayer: false)
+        guard case .loaded = loaded else { return XCTFail("\(loaded)") }
+        XCTAssertEqual(seen.map(\.0), ["pane.split", "tab.close"])
+        XCTAssertEqual(seen[0].1["pane"], .int(2))
+        XCTAssertEqual(seen[0].1["layout"], .object([
+            "direction": .string("horizontal"), "ratio": .double(0.3),
+            "children": .array([.object(["command": .string("vim")]), .object([:])]),
+        ]))
+    }
+
+    func testCallWithoutADaemonFailsWithExitFour() throws {
+        let engine = try ScriptEngine()
+        let loaded = engine.load("""
+        local value, message, code = harness.session.list()
+        assert(value == nil and code == 4, message)
+        """, from: "script", replacingFileLayer: false)
+        guard case .loaded = loaded else { return XCTFail("\(loaded)") }
+    }
+
+    func testFunctionBindingsExportAndRunBySpec() throws {
+        let engine = try ScriptEngine()
+        engine.call = { method, _ in
+            XCTAssertEqual(method, "pane.zoom")
+            return .ok(#"{"ok":true}"#)
+        }
+        let loaded = engine.load("""
+        harness.bind("cmd+k", function() harness.pane.zoom() end)
+        """, from: "/cfg/init.lua", replacingFileLayer: false)
+        guard case .loaded = loaded else { return XCTFail("\(loaded)") }
+        XCTAssertEqual(engine.keymap.exportedBindings().first { $0.spec == "cmd+k" }?.function, true)
+        XCTAssertTrue(engine.runBinding(spec: "cmd+k"))
+        XCTAssertFalse(engine.runBinding(spec: "cmd+j"))
+    }
+
     func testModeTableEntersAndAnActionBindStillLoads() throws {
         let engine = try ScriptEngine()
         let loaded = engine.load("""

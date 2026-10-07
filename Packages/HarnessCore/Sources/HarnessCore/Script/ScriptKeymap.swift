@@ -15,6 +15,9 @@ public enum ScriptTarget: Equatable, Sendable {
     case blocked
     /// Enter a mode. A mode binding cannot use this; the root binding can, and it round-trips to the GUI.
     case enter(String)
+    /// A Lua function binding as the app replays it: the key is consumed and the function
+    /// runs in `harness-cli do --binding <spec>`. The CLI keeps the real `.function`.
+    case binding(String)
 }
 
 public struct ScriptBinding: Equatable, Sendable {
@@ -108,6 +111,7 @@ public struct ScriptKeymap: Equatable, Sendable {
         guard let spec = ScriptKey.parse(raw) else { return "bad bind \(raw)" }
         if spec.mode != nil {
             if case .function = target { return "mode binding \(raw) must name an action" }
+            if case .binding = target { return "mode binding \(raw) must name an action" }
             if case .enter = target { return "mode binding \(raw) must name an action" }
         }
         if let mode = spec.mode, modes[mode] == nil {
@@ -172,7 +176,7 @@ public struct ScriptKeymap: Equatable, Sendable {
             let winner: String
             switch best.element.target {
             case let .action(name): winner = name
-            case .function: winner = "function"
+            case .function, .binding: winner = "function"
             case .blocked: winner = "blocked"
             case let .enter(name): winner = "enter \(name)"
             }
@@ -240,6 +244,8 @@ public struct ScriptKeymap: Equatable, Sendable {
             let spec = ScriptSpec(mode: mode, sequence: binding.sequence).spec
             switch binding.target {
             case .function:
+                records.append(ScriptBindingRecord(spec: spec, function: true, layer: binding.layer.rawValue, source: binding.source))
+            case .binding:
                 return
             case let .action(name):
                 records.append(ScriptBindingRecord(spec: spec, action: name, layer: binding.layer.rawValue, source: binding.source))
@@ -274,6 +280,8 @@ public struct ScriptKeymap: Equatable, Sendable {
                 target = .blocked
             } else if let mode = record.enter {
                 target = .enter(mode)
+            } else if record.function {
+                target = .binding(record.spec)
             } else if let action = record.action {
                 target = .action(action)
             } else {
@@ -325,6 +333,8 @@ public struct ScriptKeymap: Equatable, Sendable {
             return .consumed(.action(name))
         case let .enter(name):
             return .consumed(.enter(name))
+        case let .binding(spec):
+            return .consumed(.binding(spec))
         case .function:
             let chain = table.enumerated().filter { item in
                 item.element.sequence == sequence && isFunction(item.element.target)

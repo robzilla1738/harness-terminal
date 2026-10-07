@@ -30,9 +30,25 @@ public struct ScriptActionResult: Equatable, Sendable {
     }
 }
 
+/// What the app asks `harness-cli do` to run: a Lua action, or the Lua function bound to a key.
+public enum ScriptRequest: Equatable, Sendable {
+    case action(String)
+    case binding(String)
+
+    var label: String {
+        switch self {
+        case let .action(name): return "action \(name)"
+        case let .binding(spec): return "binding \(spec)"
+        }
+    }
+}
+
 public enum ScriptActionRunner {
-    public static func actionArguments(name: String, origin: ScriptOrigin) -> [String] {
-        ["do", "--action", name, "--origin", origin.rawValue]
+    public static func arguments(_ request: ScriptRequest, origin: ScriptOrigin) -> [String] {
+        switch request {
+        case let .action(name): return ["do", "--action", name, "--origin", origin.rawValue]
+        case let .binding(spec): return ["do", "--binding", spec, "--origin", origin.rawValue]
+        }
     }
 
     public static func reloadArguments(file: String) -> [String] {
@@ -80,17 +96,19 @@ public enum ScriptActionRunner {
         }
     }
 
-    /// Runs the action in `harness-cli do` off the caller's thread, then reports what happened
+    /// Runs the request in `harness-cli do` off the caller's thread, then reports what happened
     /// on an arbitrary queue: the failure line if it exited non-zero, and the commands it
-    /// queued with `harness.queue` (one per stdout line) for the app to run.
+    /// queued with `harness.queue` (one per stdout line) for the app to run. A function
+    /// binding pays one process launch per press; that is the price of no Lua in the app.
     public static func run(
-        name: String,
+        _ request: ScriptRequest,
         origin: ScriptOrigin,
         surface: String? = nil,
         finished: (@Sendable (ScriptActionResult) -> Void)? = nil
     ) {
+        let name = request.label
         guard let cli = url() else {
-            finished?(ScriptActionResult(failure: "harness-cli not found; action \(name) did not run", queued: []))
+            finished?(ScriptActionResult(failure: "harness-cli not found; \(name) did not run", queued: []))
             return
         }
         var environment = ProcessInfo.processInfo.environment
@@ -101,13 +119,13 @@ public enum ScriptActionRunner {
         DispatchQueue.global(qos: .userInitiated).async {
             let result: ScriptActionResult
             do {
-                let output = try ProcessCapture.run(cli, arguments: actionArguments(name: name, origin: origin), environment: environment)
+                let output = try ProcessCapture.run(cli, arguments: arguments(request, origin: origin), environment: environment)
                 result = ScriptActionResult(
                     failure: output.status == 0 ? nil : failureMessage(name: name, status: output.status, stderr: output.stderr),
                     queued: queuedCommands(output.stdout)
                 )
             } catch {
-                result = ScriptActionResult(failure: "action \(name): \(error.localizedDescription)", queued: [])
+                result = ScriptActionResult(failure: "\(name): \(error.localizedDescription)", queued: [])
             }
             finished?(result)
         }
@@ -122,11 +140,12 @@ public enum ScriptActionRunner {
     }
 
     /// Last non-empty stderr line, or the exit status when the action printed nothing.
+    /// `name` is the request's label (`action build`).
     public static func failureMessage(name: String, status: Int32, stderr: Data) -> String {
         let text = String(decoding: stderr, as: UTF8.self)
         let line = text.split(whereSeparator: \.isNewline).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard let line else { return "action \(name) failed (exit \(status))" }
-        return "action \(name): \(line.trimmingCharacters(in: .whitespaces))"
+        guard let line else { return "\(name) failed (exit \(status))" }
+        return "\(name): \(line.trimmingCharacters(in: .whitespaces))"
     }
 
     private static let syncGate = InFlightGate()

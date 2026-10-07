@@ -332,27 +332,55 @@ on `$HARNESS` (exported by the daemon into every pane). Details:
 
 ### Config file
 
-`~/.config/harness/init.lua` is Lua 5.1. `HARNESS_CONFIG` overrides the path. `harness-cli config reload` loads it, and a syntax error keeps the previous keymap. The same child-exit wait is the shell call and the Lua `wait`. Each attached client still scrolls its own view; the script does not change that.
+`~/.config/harness/init.lua` is Lua 5.1. `HARNESS_CONFIG` overrides the path. `harness-cli config reload` loads it, and a syntax error keeps the previous keymap. Every JSON API method is a Lua function (`harness.pane.split{…}`, `harness.tab.create{…}`, …); see [COMMANDS.md](COMMANDS.md#lua-config). Each attached client still scrolls its own view; scripts don't change that.
 
-```bash
-harness-cli api call pane.split --args '{"direction":"horizontal","command":"false"}'
-harness-cli api call pane.wait --args '{"until":"child","timeout":30}'
+**A tmux preset.** Bind keys to the same commands as the `:` prompt:
+
+```lua
+harness.bind("ctrl+b>%", function() harness.pane.split{ direction = "horizontal" } end)
+harness.bind("ctrl+b>\"", function() harness.pane.split{ direction = "vertical" } end)
+harness.bind("ctrl+b>z", function() harness.pane.zoom() end)
+harness.bind("ctrl+b>x", function() harness.pane.close() end)
+harness.bind("ctrl+b>c", function() harness.tab.create() end)
 ```
+
+A function binding runs in `harness-cli do --binding`, one short process per press. For keys you lean on, an action or a `keybindings.json` command avoids that launch.
+
+**A resize mode.** Ctrl-R enters it, the arrows move the divider, and Escape leaves:
 
 ```lua
 harness.mode("resize", { exclusive = true })
 harness.bind("ctrl+r", { mode = "resize" })
-harness.action({ name = "nudge", title = "Nudge left", run = function() os.execute('harness-cli resize-pane --surface "$HARNESS_SURFACE" --dir L --amount 5') end })
-harness.bind("resize/left", "nudge")
-harness.action({ name = "build", title = "Build", run = function()
-  local code, err = harness.wait({ type = "terminal.child_exited" }, { timeout = 30 })
-  if err ~= nil then return end
-  print(code)
-end })
-harness.bind("ctrl+b", "build")
+for _, dir in ipairs({ "left", "right", "up", "down" }) do
+  harness.action({ name = "resize-" .. dir, title = "Resize " .. dir, run = function()
+    harness.pane.resize{ direction = dir, amount = 5 }
+  end })
+  harness.bind("resize/" .. dir, "resize-" .. dir)
+end
 ```
 
-`{ mode = "resize" }` enters the mode. Left resizes the pane and does not reach the shell. Escape leaves the mode. `config reload` publishes the actions into the command palette and the keymap the window uses. A tunneled client does not run a GUI action until Settings → Remote Control is on. This Mac always can.
+`config reload` publishes the actions to the command palette and the keymap the window uses. Inside an exclusive mode an unbound key doesn't reach the shell.
+
+**Run the tests in a split and wait.** Save as `test.lua` and run `harness-cli do test.lua`. It exits with the tests' status:
+
+```lua
+local split = harness.pane.split{ direction = "vertical" }
+harness.pane.write{ pane = split.pane, text = "make test; exit\n" }
+local result = harness.pane.wait{ pane = split.pane, ["until"] = "child", timeout = 600 }
+harness.log("tests exited " .. result.exit)
+harness.stop(result.exit)
+```
+
+**React to events.** A script with `harness.on` keeps running until `harness.stop()`:
+
+```lua
+harness.on("terminal.child_exited", function(e)
+  if e.exit ~= 0 then harness.log("warn", "pane " .. e.pane .. " exited " .. e.exit) end
+end)
+harness.on("tab.created", function(e) harness.tab.label{ tab = e.tab, title = "new" } end)
+```
+
+A tunneled client doesn't run a GUI action until Settings → Remote Control is on. This Mac always can.
 
 ### Per-host / per-command profiles
 

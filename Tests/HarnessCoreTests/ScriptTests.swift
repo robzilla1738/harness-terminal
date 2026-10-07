@@ -114,8 +114,12 @@ final class ScriptKeymapTests: XCTestCase {
         XCTAssertEqual(legacy?.bindings, [])
         XCTAssertEqual(legacy?.modes, [])
         XCTAssertEqual(
-            ScriptActionRunner.actionArguments(name: "build", origin: .key),
+            ScriptActionRunner.arguments(.action("build"), origin: .key),
             ["do", "--action", "build", "--origin", "key"]
+        )
+        XCTAssertEqual(
+            ScriptActionRunner.arguments(.binding("cmd+k"), origin: .key),
+            ["do", "--binding", "cmd+k", "--origin", "key"]
         )
         let homebrew = URL(fileURLWithPath: "/opt/homebrew/bin/harness-cli")
         let found = HarnessCLILocator.url(

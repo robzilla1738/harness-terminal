@@ -19,7 +19,7 @@ final class ScriptKeyConsumerTests: XCTestCase {
             modes: [ScriptModeRecord(name: "resize", exclusive: true, once: false)]
         )
         let stamp = Date(timeIntervalSince1970: 10)
-        var ran: [String] = []
+        var ran: [ScriptRequest] = []
         let consumer = ScriptKeyConsumer(
             manifest: { manifest },
             modified: { stamp },
@@ -33,7 +33,7 @@ final class ScriptKeyConsumerTests: XCTestCase {
         XCTAssertTrue(ran.isEmpty, "an exclusive mode does not deliver an unbound key")
         let left = key(characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!), flags: [], keyCode: 0x7B)
         XCTAssertTrue(consumer.consume(left))
-        XCTAssertEqual(ran, ["nudge"])
+        XCTAssertEqual(ran, [.action("nudge")])
         XCTAssertTrue(consumer.consume(key(characters: "\u{1B}", flags: [], keyCode: 0x35)))
         XCTAssertFalse(consumer.consume(key(characters: "x", flags: [], keyCode: 0x07)))
     }
@@ -52,10 +52,21 @@ final class ScriptKeyConsumerTests: XCTestCase {
             bindings: [ScriptBindingRecord(spec: "cmd+shift+=", action: "plus", layer: 1, source: "init.lua")],
             modes: []
         )
-        var ran: [String] = []
+        var ran: [ScriptRequest] = []
         let consumer = ScriptKeyConsumer(manifest: { manifest }, modified: { Date(timeIntervalSince1970: 1) }, perform: { ran.append($0) })
         XCTAssertTrue(consumer.consume(event))
-        XCTAssertEqual(ran, ["plus"])
+        XCTAssertEqual(ran, [.action("plus")])
+    }
+
+    func testAFunctionBindingIsConsumedAndRunByTheCLI() {
+        let manifest = ScriptManifest(
+            generation: 1, hash: "h", actions: [], bindingCount: 1,
+            bindings: [ScriptBindingRecord(spec: "cmd+k", function: true, layer: 1, source: "init.lua")]
+        )
+        var ran: [ScriptRequest] = []
+        let consumer = ScriptKeyConsumer(manifest: { manifest }, modified: { Date(timeIntervalSince1970: 1) }, perform: { ran.append($0) })
+        XCTAssertTrue(consumer.consume(key(characters: "k", flags: .command, keyCode: 0x28)))
+        XCTAssertEqual(ran, [.binding("cmd+k")])
     }
 
     func testControlAUsesTheHardwareKey() {

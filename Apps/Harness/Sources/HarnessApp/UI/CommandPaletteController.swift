@@ -419,7 +419,7 @@ enum CommandPaletteController {
                 section: .actions
             ) {
                 ScriptActionRunner.run(
-                    name: action.name,
+                    .action(action.name),
                     origin: .palette,
                     surface: coordinator.activeSurfaceID?.uuidString
                 ) { result in

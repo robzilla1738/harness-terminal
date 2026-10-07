@@ -320,9 +320,18 @@ Follow types are `tab.created`, `tab.closed`, `tab.renamed`, `tab.activated` (a 
 | `config check [--file path]` | Print the path, whether the file exists, and the binding, removal, mode, and action counts. A syntax error exits 1. |
 | `config reload [--file path]` | Load the file and publish the keymap. A syntax error keeps the previous keymap. `--remote`, or `HARNESS_TUNNEL=1`, exits 1 and does not read the file. |
 | `do <name> [--file path] [--args json] [--for a,b] [--all] [--fail-fast]` (or `--action <name>`) | Run one action. An unknown argument exits 2 and the action does not run. `--all` needs a reachable daemon (exit 4 otherwise). |
-| `do <file.lua>` / `do -e '<lua>'` / `do -` | Run a script (from a file, inline, or stdin) after loading the config, so its actions are callable. A script that registers `harness.on` handlers keeps running until `harness.stop([code])` or Ctrl-C (exit 130). |
+| `do <file.lua>` / `do -e '<lua>'` / `do -` `[--args json]` | Run a script (from a file, inline, or stdin) after loading the config, so its actions are callable. `--args` becomes `harness.args`. A script that registers `harness.on` handlers keeps running until `harness.stop([code])` or Ctrl-C (exit 130). |
+| `do --binding <key>` | Run the Lua function the config binds to `<key>`. The app does this when you press it. |
 
 `harness.bind`, `harness.unbind`, `harness.mode`, `harness.action`, `harness.host`, `harness.queue`, and `harness.invoke` work in the config file and in scripts. `harness.on`, `harness.wait`, `harness.sleep`, and `harness.stop` are for scripts and actions; a `harness.on` in the config file is a warning and is ignored. A bind whose second value is `{ mode = "name" }` enters that mode.
+
+**The API from Lua.** Every [JSON API](#json-api) method is a function: `harness.pane.split{ direction = "horizontal" }` is `harness.call("pane.split", { direction = "horizontal" })`. Both run the same executor as `api call`, against the script's daemon (`--host` included). They return the result as a table, or `nil, message, exit code` (3 for a missing or ambiguous target, 4 when the daemon is unreachable). Targets work the same way: ids, labels, positions, prefixes, and the caller's pane by default. The functions are generated from the method list, so `api list` is also the Lua reference.
+
+- `harness.layout.pane{ command = …, cwd = … }`, `.horizontal([ratio,] a, b, …)` (side by side), and `.vertical(…)` build the `layout` that `session.create` and `pane.split` take.
+- `harness.args` is the table from `do … --args '{json}'`.
+- `harness.log([level,] message)` writes to stderr and to `show-messages`.
+
+**Function bindings.** `harness.bind("cmd+k", function() … end)` works from the app, not only from `do`. The app never loads Lua: the key is consumed and `harness-cli do --binding cmd+k` runs the function, so a press costs one process launch (tens of milliseconds) and the function can't decline the key. For a key that must be instant, bind a command or an action instead.
 
 - `harness.on(type, fn)` calls `fn(event)` for each event of that type (`"*"` for all), with the payload fields on the table (`event.tab`, `event.pane`, …).
 - `harness.wait(filter, { timeout = s })` blocks for the next matching event. The filter is a type name, a function, or a table whose every field must match (`{ type = "terminal.child_exited", pane = id }`). On `terminal.child_exited` it returns the exit code. A timeout returns `nil, "timeout"`.
@@ -330,6 +339,7 @@ Follow types are `tab.created`, `tab.closed`, `tab.renamed`, `tab.activated` (a 
 
 ```bash
 harness-cli do -e 'harness.on("tab.created", function(e) print("new tab " .. e.tab) harness.stop() end)'
+harness-cli do -e 'for _, s in ipairs(harness.session.list().sessions) do print(s.label) end'
 ```
 
 A GUI action from a tunneled client runs only when Remote Control is on. A local client can always run one. See [MULTIPLEXER_GUIDE.md](MULTIPLEXER_GUIDE.md) for a ten-line `init.lua`.

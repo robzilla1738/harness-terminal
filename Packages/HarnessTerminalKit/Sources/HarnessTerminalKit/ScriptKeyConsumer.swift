@@ -3,7 +3,7 @@ import HarnessCore
 import HarnessTerminalEngine
 
 /// Turns a key into the config-file chord and swallows it when the published keymap says so.
-/// Lua functions are not in the manifest, so they never run here.
+/// A Lua function binding is consumed here and runs in `harness-cli do --binding`.
 @MainActor
 final class ScriptKeyConsumer {
     private var keymap = ScriptKeymap()
@@ -11,7 +11,7 @@ final class ScriptKeyConsumer {
     private var stamp: Date?
     private let manifest: () -> ScriptManifest?
     private let modified: () -> Date?
-    private let perform: (String) -> Void
+    private let perform: (ScriptRequest) -> Void
 
     init(
         // Never publish on the key path: an edited init.lua republishes in the background
@@ -21,7 +21,7 @@ final class ScriptKeyConsumer {
             return ScriptStore.load()
         },
         modified: @escaping () -> Date? = { ScriptActionRunner.stamp() },
-        perform: @escaping (String) -> Void
+        perform: @escaping (ScriptRequest) -> Void
     ) {
         self.manifest = manifest
         self.modified = modified
@@ -41,8 +41,10 @@ final class ScriptKeyConsumer {
             return false
         }
         let delivery = keymap.press(chord) { _ in false }
-        if case let .consumed(.action(name)) = delivery {
-            perform(name)
+        switch delivery {
+        case let .consumed(.action(name)): perform(.action(name))
+        case let .consumed(.binding(spec)): perform(.binding(spec))
+        default: break
         }
         switch delivery {
         case .forward: return false

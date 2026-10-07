@@ -124,6 +124,8 @@ public struct KeymapRow: Encodable, Equatable, Sendable {
                 (action, args) = ("(blocked)", "")
             } else if let mode = record.enter {
                 (action, args) = ("enter-mode", mode)
+            } else if record.function {
+                (action, args) = ("(lua function)", "")
             } else {
                 (action, args) = (record.action ?? "", "")
             }

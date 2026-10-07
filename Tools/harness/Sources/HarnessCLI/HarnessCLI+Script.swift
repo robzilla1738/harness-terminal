@@ -40,21 +40,24 @@ extension HarnessCLI {
 
     static let doUsage = """
     Usage: harness-cli do <action> [--args json] [--for a,b] [--all] [--fail-fast]
-           harness-cli do <file.lua> | -e '<lua>' | -     (run a script; harness.on handlers keep it running)
+           harness-cli do <file.lua> | -e '<lua>' | -  [--args json]   (a script; harness.args is --args)
+           harness-cli do --binding <key>                              (the Lua function bound to a key)
     """
 
     /// What `do` was asked to run: a named action from the config, or a script.
     enum DoTarget: Equatable {
         case action(String)
         case script(source: String, name: String)
+        case binding(String)
     }
 
     /// `do --action name`, `do name`, `do file.lua` (ends in .lua or has a slash), `do -e code`,
     /// or `do -` (script on stdin).
     static func doTarget(_ args: [String]) throws -> DoTarget? {
         if let action = flagValue(args, flag: "--action"), !action.isEmpty { return .action(action) }
+        if let spec = flagValue(args, flag: "--binding"), !spec.isEmpty { return .binding(spec) }
         if let code = flagValue(args, flag: "-e") { return .script(source: code, name: "-e") }
-        let valueFlags: Set<String> = ["--action", "--file", "--args", "--for", "--origin", "-e", "--host"]
+        let valueFlags: Set<String> = ["--action", "--binding", "--file", "--args", "--for", "--origin", "-e", "--host"]
         var index = 1
         while index < args.count {
             let word = args[index]
@@ -83,8 +86,16 @@ extension HarnessCLI {
         engine.remoteControlEnabled = HarnessSettings.load().remoteControl
         wireHostNote(engine, args: args)
         // Subscribe before anything runs, so an event the script waits for can't slip past.
-        let feed = (try? makeClient(args)).map { EventFeed(client: $0) }
+        let client = try? makeClient(args)
+        let feed = client.map { EventFeed(client: $0) }
         engine.poll = { feed?.poll() }
+        if let client {
+            engine.call = { method, arguments in APIExecutor.call(method: method, arguments: arguments, client: client) }
+            engine.log = { level, message in
+                fputs("[\(level)] \(message)\n", harnessStderr)
+                _ = try? client.request(.displayMessage(format: message, print: false), timeout: 2)
+            }
+        }
         // The config always loads first: its actions are callable from scripts.
         if FileManager.default.fileExists(atPath: path) {
             let source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
@@ -108,7 +119,17 @@ extension HarnessCLI {
                     failFast: args.contains("--fail-fast"),
                     origin: actionOrigin
                 )
+        case let .binding(spec):
+            outcome = engine.runBinding(spec: spec)
+                ? ScriptInvocation(ran: true, queued: [], exitCode: 0, message: nil)
+                : ScriptInvocation(ran: false, queued: [], exitCode: Int(CLIExit.targetNotFound), message: "no Lua function is bound to \(spec)")
         case let .script(source, name):
+            switch HarnessAPI.arguments(from: flagValue(args, flag: "--args") ?? "{}") {
+            case let .success(arguments): engine.setArguments(arguments)
+            case let .failure(error):
+                fputs(error.message + "\n", harnessStderr)
+                exit(CLIExit.usage)
+            }
             engine.allowsHandlers = true
             if case let .syntax(message) = engine.load(source, from: name, replacingFileLayer: false) {
                 fputs(message + "\n", harnessStderr)
