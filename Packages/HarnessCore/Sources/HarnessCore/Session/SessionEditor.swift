@@ -97,6 +97,11 @@ public struct SessionEditor: Sendable {
         if tab.activePaneID == paneID { return true }
         tab.lastActivePaneID = tab.activePaneID
         tab.activePaneID = paneID
+        // The tab's cwd and command follow focus to the pane's last known values.
+        if let leaf = tab.rootPane.allLeaves().first(where: { $0.id == paneID }) {
+            if let cwd = leaf.cwd { tab.cwd = cwd }
+            if let command = leaf.command { tab.currentCommand = command }
+        }
         snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
         bumpRevision()
         return true
@@ -587,7 +592,11 @@ public struct SessionEditor: Sendable {
 
     public mutating func updateTabCwd(surfaceID: SurfaceID, path: String) {
         guard let match = tabIndex(surfaceID: surfaceID) else { return }
-        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].cwd = path
+        var tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        tab.rootPane.updateLeaf(surfaceKey: surfaceID.uuidString) { $0.cwd = path }
+        // The tab's own cwd is its active pane's, so splits don't fight over it.
+        if Self.isActiveSurface(surfaceID, in: tab) { tab.cwd = path }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
         bumpRevision()
     }
 
@@ -595,8 +604,18 @@ public struct SessionEditor: Sendable {
     /// metadata scan alongside cwd — same per-tab granularity as `updateTabCwd`.
     public mutating func updateTabCurrentCommand(surfaceID: SurfaceID, command: String?) {
         guard let match = tabIndex(surfaceID: surfaceID) else { return }
-        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].currentCommand = command
+        var tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+        tab.rootPane.updateLeaf(surfaceKey: surfaceID.uuidString) { $0.command = command }
+        if Self.isActiveSurface(surfaceID, in: tab) { tab.currentCommand = command }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex] = tab
         bumpRevision()
+    }
+
+    /// The tab's active pane shows `surfaceID` (no active pane recorded means the first leaf).
+    static func isActiveSurface(_ surfaceID: SurfaceID, in tab: Tab) -> Bool {
+        let leaves = tab.rootPane.allLeaves()
+        guard let leaf = leaves.first(where: { $0.surfaceID == surfaceID }) else { return false }
+        return leaf.id == (tab.activePaneID ?? leaves.first?.id)
     }
 
     public func tab(for surfaceID: SurfaceID) -> (workspaceID: WorkspaceID, tabID: TabID)? {

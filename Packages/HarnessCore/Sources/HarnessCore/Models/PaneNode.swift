@@ -28,6 +28,24 @@ public enum PaneNode: Codable, Sendable, Equatable {
         }
     }
 
+    /// Applies `change` to the leaf showing `surfaceKey`. Returns whether a leaf matched.
+    @discardableResult
+    public mutating func updateLeaf(surfaceKey: String, _ change: (inout PaneLeaf) -> Void) -> Bool {
+        switch self {
+        case var .leaf(leaf) where leaf.surfaceID.uuidString == surfaceKey:
+            change(&leaf)
+            self = .leaf(leaf)
+            return true
+        case .branch(let direction, let ratio, var first, var second):
+            let found = first.updateLeaf(surfaceKey: surfaceKey, change)
+                || second.updateLeaf(surfaceKey: surfaceKey, change)
+            if found { self = .branch(direction: direction, ratio: ratio, first: first, second: second) }
+            return found
+        default:
+            return false
+        }
+    }
+
     public func allSurfaceIDs() -> [SurfaceID] {
         switch self {
         case let .leaf(leaf):
@@ -62,14 +80,23 @@ public struct PaneLeaf: Codable, Sendable, Equatable {
     public var id: PaneID
     public var surfaceID: SurfaceID
     public var daemonSurfaceID: DaemonSurfaceID?
+    /// This pane's own working directory. The tab's `cwd` follows whichever pane reported
+    /// last, so a split needs its own copy for the pane header. Nil until first reported.
+    public var cwd: String?
+    /// This pane's foreground command (`#{pane_current_command}`), nil until first probed.
+    public var command: String?
 
     public init(
         id: PaneID = UUID(),
         surfaceID: SurfaceID = UUID(),
-        daemonSurfaceID: DaemonSurfaceID? = nil
+        daemonSurfaceID: DaemonSurfaceID? = nil,
+        cwd: String? = nil,
+        command: String? = nil
     ) {
         self.id = id
         self.surfaceID = surfaceID
         self.daemonSurfaceID = daemonSurfaceID
+        self.cwd = cwd
+        self.command = command
     }
 }

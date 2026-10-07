@@ -67,7 +67,7 @@ final class CraftSliceTests: XCTestCase {
             "scrollMultiplier", "mouseHideWhileTyping", "optionAsMeta",
             "quickTerminalEnabled", "quickTerminalHotkey", "windowPaddingBalance",
             "minimumContrast", "pasteProtection", "remoteControl", "boldIsBright",
-            "themeFit", "paneDensity", "commandFinishedThresholdSeconds",
+            "themeFit", "paneDensity", "paneHeaders", "commandFinishedThresholdSeconds",
             "experienceMode", "prefixKeyEnabled", "statusLineEnabled", "prefixKey",
         ]
         for id in required {

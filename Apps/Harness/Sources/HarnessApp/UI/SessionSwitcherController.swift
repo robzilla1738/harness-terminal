@@ -7,7 +7,7 @@ import HarnessCore
 enum SessionSwitcherController {
     private static var panel: NSPanel?
 
-    static func present(relativeTo parent: NSWindow?) {
+    static func present(relativeTo parent: NSWindow?, anchor: NSView? = nil) {
         panel?.close()
         let host = SessionSwitcherView()
         let window = KeyablePanel(
@@ -22,7 +22,11 @@ enum SessionSwitcherController {
         window.isOpaque = false
         window.hasShadow = true
         window.contentView = host
-        if let parent {
+        if let anchor, let anchorWindow = anchor.window {
+            // Drop down from the button, left edges aligned.
+            let rect = anchorWindow.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            window.setFrameTopLeftPoint(NSPoint(x: rect.minX, y: rect.minY - HarnessDesign.Spacing.xs))
+        } else if let parent {
             let frame = parent.frame
             window.setFrameOrigin(NSPoint(x: frame.midX - 160, y: frame.midY - 40))
         }

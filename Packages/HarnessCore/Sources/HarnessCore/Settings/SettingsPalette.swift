@@ -157,6 +157,9 @@ public enum SettingsPalette {
             let next: PaneDensity = settings.paneDensity == .comfortable ? .compact : .comfortable
             SettingsEditor.applyFromPalette(\.paneDensity, next, on: &settings)
         }
+        add("paneHeaders", "Pane headers", detail: { $0.paneHeaders ? "On" : "Off" }) { settings in
+            SettingsEditor.applyFromPalette(\.paneHeaders, !settings.paneHeaders, on: &settings)
+        }
         for event in NotificationEvent.allCases {
             add("notify.\(event.rawValue)", "Notify \(event.rawValue)", detail: { $0.isEventEnabled(event) ? "On" : "Off" }) { settings in
                 SettingsEditor.setEvent(event, !settings.isEventEnabled(event), on: &settings)

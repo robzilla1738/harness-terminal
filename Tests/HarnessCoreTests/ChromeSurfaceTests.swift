@@ -136,32 +136,25 @@ final class ChromeSurfaceTests: XCTestCase {
         )
     }
 
-    func testPillsHugLabelsAndSinglePanesStayFlush() {
+    func testPillsHugLabelsAndComfortablePanesAreEvenlyInsetCards() {
         let hugged = ChromeLayout.huggedPillWidth(labelWidth: 90, accessoryWidth: 28, min: 72, max: 280)
         XCTAssertEqual(hugged, 118, accuracy: 0.001)
         XCTAssertLessThan(hugged, 280)
         let capped = ChromeLayout.huggedPillWidth(labelWidth: 400, accessoryWidth: 20, min: 72, max: 280)
         XCTAssertEqual(capped, 280, accuracy: 0.001)
 
-        let singleInsets = ChromeLayout.cardInsets(separated: false)
-        XCTAssertEqual(singleInsets.leading, 0, accuracy: 0.001)
-        XCTAssertEqual(singleInsets.trailing, 0, accuracy: 0.001)
-        XCTAssertEqual(singleInsets.bottom, 0, accuracy: 0.001)
-        XCTAssertEqual(singleInsets.top, 0, accuracy: 0.001)
-        let gaps = ChromeLayout.gapAroundTab(tabBarHeight: 44, pillHeight: 32, cardTopInset: singleInsets.top)
-        XCTAssertEqual(gaps.above, gaps.below, accuracy: 0.001)
-        XCTAssertEqual(gaps.above, 6, accuracy: 0.001)
-        let single = ChromeLayout.island(separated: false, splitRadius: 10)
-        XCTAssertEqual(single.margin, singleInsets.top, accuracy: 0.001)
-        XCTAssertEqual(single.cornerRadius, 0)
-        let splitInsets = ChromeLayout.cardInsets(separated: true)
-        XCTAssertEqual(splitInsets.leading, splitInsets.trailing, accuracy: 0.001)
-        XCTAssertEqual(splitInsets.leading, splitInsets.bottom, accuracy: 0.001)
-        XCTAssertEqual(splitInsets.top, 0, accuracy: 0.001)
-        XCTAssertGreaterThan(splitInsets.leading, singleInsets.leading)
-        let split = ChromeLayout.island(separated: true, splitRadius: 10)
-        XCTAssertEqual(split.margin, splitInsets.top, accuracy: 0.001)
-        XCTAssertEqual(split.cornerRadius, 10)
+        let flush = ChromeLayout.cardInsets(separated: false)
+        XCTAssertEqual([flush.top, flush.leading, flush.bottom, flush.trailing], [0, 0, 0, 0])
+        XCTAssertEqual(ChromeLayout.island(separated: false, splitRadius: 10).cornerRadius, 0)
+
+        // Comfortable: edge gap == gap between panes == islandGap.
+        let card = ChromeLayout.cardInsets(separated: true)
+        let pad = ChromeLayout.containerPadding(separated: true)
+        XCTAssertEqual(card.leading + pad.leading, ChromeLayout.islandGap, accuracy: 0.001)
+        XCTAssertEqual(card.trailing + card.leading, ChromeLayout.islandGap, accuracy: 0.001)
+        XCTAssertEqual(card.bottom + pad.bottom, ChromeLayout.islandGap, accuracy: 0.001)
+        XCTAssertEqual(pad.top, 0, accuracy: 0.001)
+        XCTAssertEqual(ChromeLayout.island(separated: true, splitRadius: 10).cornerRadius, 10)
 
         let widths = [80.0, 140.0, 100.0]
         XCTAssertEqual(ChromeLayout.slotOrigin(index: 1, widths: widths, spacing: 4), 84, accuracy: 0.001)
@@ -177,5 +170,46 @@ final class ChromeSurfaceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(HarnessSettings.self, from: data)
         XCTAssertEqual(decoded.appearanceMode, .light)
         XCTAssertEqual(HarnessSettings().appearanceMode, .theme)
+    }
+}
+
+final class TabDividerTests: XCTestCase {
+    func testRulesSitOnlyBetweenInactiveUnhoveredNeighbours() {
+        XCTAssertEqual(ChromeLayout.dividerSlots(count: 1, activeIndex: 0, hoveredIndex: nil), [])
+        XCTAssertEqual(ChromeLayout.dividerSlots(count: 3, activeIndex: 2, hoveredIndex: nil), [0])
+        XCTAssertEqual(ChromeLayout.dividerSlots(count: 4, activeIndex: 0, hoveredIndex: nil), [1, 2])
+        XCTAssertEqual(ChromeLayout.dividerSlots(count: 5, activeIndex: 0, hoveredIndex: 3), [1])
+        XCTAssertEqual(ChromeLayout.dividerSlots(count: 3, activeIndex: nil, hoveredIndex: nil), [0, 1])
+    }
+}
+
+final class PaneIdentityTests: XCTestCase {
+    func testSplitPanesKeepTheirOwnDirectoryAndCommand() {
+        let left = PaneLeaf(cwd: "/src", command: "nvim")
+        let right = PaneLeaf(cwd: "/logs", command: "claude")
+        var tab = Tab(title: "t", cwd: "/src", rootPane: .branch(direction: .horizontal, ratio: 0.5, first: .leaf(left), second: .leaf(right)))
+        tab.activePaneID = left.id
+        XCTAssertEqual(PaneIdentity.of(leaf: left, in: tab), PaneIdentity(directory: "/src", program: "nvim", agent: nil))
+        XCTAssertEqual(PaneIdentity.of(leaf: right, in: tab), PaneIdentity(directory: "/logs", program: "claude", agent: .claudeCode))
+    }
+
+    func testTabCwdFollowsTheFocusedPane() {
+        let left = PaneLeaf()
+        let right = PaneLeaf()
+        var tab = Tab(title: "t", cwd: "/", rootPane: .branch(direction: .horizontal, ratio: 0.5, first: .leaf(left), second: .leaf(right)))
+        tab.activePaneID = left.id
+        let session = SessionGroup(tabs: [tab], activeTabID: tab.id)
+        let workspace = Workspace(sessions: [session])
+        var editor = SessionEditor(snapshot: SessionSnapshot(workspaces: [workspace], activeWorkspaceID: workspace.id))
+
+        editor.updateTabCwd(surfaceID: right.surfaceID, path: "/right")
+        XCTAssertEqual(editor.snapshot.workspaces[0].sessions[0].tabs[0].cwd, "/", "an unfocused pane doesn't move the tab")
+        editor.updateTabCwd(surfaceID: left.surfaceID, path: "/left")
+        XCTAssertEqual(editor.snapshot.workspaces[0].sessions[0].tabs[0].cwd, "/left")
+
+        XCTAssertTrue(editor.setActivePane(workspaceID: workspace.id, tabID: tab.id, paneID: right.id))
+        XCTAssertEqual(editor.snapshot.workspaces[0].sessions[0].tabs[0].cwd, "/right", "focus brings the pane's cwd")
+        let leaves = editor.snapshot.workspaces[0].sessions[0].tabs[0].rootPane.allLeaves()
+        XCTAssertEqual(leaves.map(\.cwd), ["/left", "/right"])
     }
 }

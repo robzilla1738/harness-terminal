@@ -25,7 +25,11 @@ struct HarnessChromePalette {
     let activePillLabel: NSColor
     let rowHoverFill: NSColor
     let iconHoverFill: NSColor
+    /// Fill of the plain-shell icon tile: a step darker than the surface on dark themes.
+    let iconTileFill: NSColor
     let waiting: NSColor
+    /// A program blocked on the person (permission, question): warm orange.
+    let attention: NSColor
     let danger: NSColor
     let success: NSColor
     let idleStatus: NSColor
@@ -111,7 +115,11 @@ struct HarnessChromePalette {
             activePillLabel: nsColor(spec.activePillLabel),
             rowHoverFill: foreground.withAlphaComponent(isDark ? 0.045 : 0.065),
             iconHoverFill: foreground.withAlphaComponent(isDark ? 0.08 : 0.10),
+            iconTileFill: isDark
+                ? blend(background, toward: .black, fraction: 0.35)
+                : blend(background, toward: foreground, fraction: 0.85),
             waiting: waiting,
+            attention: NSColor(srgbRed: 0.95, green: 0.62, blue: 0.33, alpha: 1),
             danger: danger,
             success: success,
             idleStatus: idle

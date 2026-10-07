@@ -1,57 +1,6 @@
 import AppKit
 import HarnessCore
 
-/// Blurs what sits behind it and fades that blur out toward the left.
-/// The layer has no fill, so the bar does not pick up a second color.
-@MainActor
-final class HorizontalFadeBlur: NSView {
-    private let fadeMask = CAGradientLayer()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layerUsesCoreImageFilters = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-        fadeMask.startPoint = CGPoint(x: 0, y: 0.5)
-        fadeMask.endPoint = CGPoint(x: 1, y: 0.5)
-        layer?.mask = fadeMask
-        apply(isDark: true)
-    }
-
-    /// Light mode keeps only a whisper of blur. A stronger filter picks up a
-    /// gray edge against the pale bar and reads as a dark patch.
-    func apply(isDark: Bool) {
-        // Light mode adds no Core Image blur. The filter reads as a gray patch
-        // on a pale bar. Dark mode keeps a faint right-edge fade.
-        if isDark {
-            let filter = CIFilter(name: "CIGaussianBlur")
-            filter?.setValue(3, forKey: kCIInputRadiusKey)
-            layer?.backgroundFilters = filter.map { [$0] } ?? []
-            fadeMask.colors = [
-                NSColor.clear.cgColor,
-                NSColor.clear.cgColor,
-                NSColor.black.withAlphaComponent(0.28).cgColor,
-            ]
-        } else {
-            layer?.backgroundFilters = []
-            fadeMask.colors = [
-                NSColor.clear.cgColor,
-                NSColor.clear.cgColor,
-                NSColor.clear.cgColor,
-            ]
-        }
-        fadeMask.locations = [0, 0.55, 1]
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func layout() {
-        super.layout()
-        fadeMask.frame = bounds
-    }
-}
-
 @MainActor
 protocol TerminalTabBarDelegate: AnyObject {
     func tabBarDidSelect(tabID: TabID)
@@ -64,6 +13,7 @@ protocol TerminalTabBarDelegate: AnyObject {
     func tabBarDidRequestTogglePersistent(tabID: TabID)
     func tabBarDidRequestToggleSidebar()
     func tabBarDidRequestPeek()
+    func tabBarDidRequestSessions(from anchor: NSView)
 }
 
 extension TerminalTabBarDelegate {
@@ -75,6 +25,7 @@ extension TerminalTabBarDelegate {
     func tabBarDidRequestTogglePersistent(tabID: TabID) {}
     func tabBarDidRequestToggleSidebar() {}
     func tabBarDidRequestPeek() {}
+    func tabBarDidRequestSessions(from anchor: NSView) {}
 }
 
 enum TabContextCommand {
@@ -95,25 +46,23 @@ final class TerminalTabBarView: NSView {
 
     private let newTabButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private let overflowButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
-    private let splitRight = SoftIconButton(frame: .zero)
-    private let splitDown = SoftIconButton(frame: .zero)
-    /// Colorless blur behind the split icons. It fades out to the left and
-    /// adds no tint of its own, so the bar stays one surface.
-    private let splitBlur = HorizontalFadeBlur()
     private var tabs: [Tab] = []
     private var activeTabID: TabID?
     private var pillsByID: [TabID: TabPillView] = [:]
     private var orderedPills: [TabPillView] = []
 
-    // Layout metrics. Sidebar, new-tab, and overflow share one hit target and one
+    // Layout metrics. Sessions, new-tab, and overflow share one hit target and one
     // glyph size so the row reads as a single control set, not three different buttons.
-    private let edgeInset: CGFloat = 10
+    private let edgeInset = HarnessDesign.Spacing.md
     private let controlSize: CGFloat = HarnessDesign.chromeIconButtonSize
-    private let controlGap: CGFloat = 6
-    private let sidebarToggle = SoftIconButton(frame: .zero)
+    private let controlGap = HarnessDesign.Spacing.sm
+    /// Stacked-squares button that opens the session switcher.
+    private let sessionsButton = SoftIconButton(frame: .zero)
     private let pillSpacing = HarnessDesign.Spacing.xs
-    private let minPillWidth: CGFloat = 200
-    private let maxPillWidth: CGFloat = 320
+    private let minPillWidth: CGFloat = 120
+    private let maxPillWidth: CGFloat = 300
+    /// 1pt rules between neighbouring inactive tabs (none touch the active or hovered tab).
+    private var dividers: [CALayer] = []
 
     /// Extra leading inset so the tab strip clears the macOS traffic lights when the
     /// sidebar is collapsed (content shifts to x=0 under `.fullSizeContentView`). 0
@@ -122,10 +71,9 @@ final class TerminalTabBarView: NSView {
         didSet { guard leadingInset != oldValue else { return }; needsLayout = true }
     }
 
-    /// Leading x of the first pill. The sidebar glyph sits in `controlGap`, then the
-    /// same gap again, so the space from glyph to pill matches the space from pill to plus.
-    private var sidebarButtonX: CGFloat { leadingInset + controlGap }
-    private var contentLeft: CGFloat { sidebarButtonX + controlSize + controlGap }
+    /// Leading x of the first pill: the sessions glyph, then the same gap again.
+    private var sessionsButtonX: CGFloat { leadingInset + controlGap }
+    private var contentLeft: CGFloat { sessionsButtonX + controlSize + controlGap }
 
     // Drag-reorder state.
     private weak var draggingPill: TabPillView?
@@ -179,31 +127,13 @@ final class TerminalTabBarView: NSView {
         overflowButton.isHidden = true
         addSubview(overflowButton)
 
-        sidebarToggle.style = .glyph
-        sidebarToggle.setSymbol("sidebar.left", accessibilityDescription: "Toggle sidebar", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
-        sidebarToggle.toolTip = "Hide sidebar (⌘\\)"
-        sidebarToggle.target = self
-        sidebarToggle.action = #selector(toggleSidebar)
-        sidebarToggle.translatesAutoresizingMaskIntoConstraints = true
-        addSubview(sidebarToggle)
-
-        addSubview(splitBlur)
-
-        splitRight.style = .glyph
-        splitRight.setSymbol("rectangle.split.2x1", accessibilityDescription: "Split right", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
-        splitRight.toolTip = "Split right"
-        splitRight.target = self
-        splitRight.action = #selector(splitRightClicked)
-        splitRight.translatesAutoresizingMaskIntoConstraints = true
-        addSubview(splitRight)
-
-        splitDown.style = .glyph
-        splitDown.setSymbol("rectangle.split.1x2", accessibilityDescription: "Split down", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
-        splitDown.toolTip = "Split down"
-        splitDown.target = self
-        splitDown.action = #selector(splitDownClicked)
-        splitDown.translatesAutoresizingMaskIntoConstraints = true
-        addSubview(splitDown)
+        sessionsButton.style = .glyph
+        sessionsButton.setSymbol("square.stack", accessibilityDescription: "Sessions", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
+        sessionsButton.toolTip = "Sessions (⌃⌘S)"
+        sessionsButton.target = self
+        sessionsButton.action = #selector(showSessions)
+        sessionsButton.translatesAutoresizingMaskIntoConstraints = true
+        addSubview(sessionsButton)
 
         let height = heightAnchor.constraint(equalToConstant: HarnessDesign.tabBarHeight)
         height.priority = .defaultHigh
@@ -233,13 +163,13 @@ final class TerminalTabBarView: NSView {
             pill.onDragChanged = { [weak self] p, loc in self?.handleDragChanged(p, windowLocation: loc) }
             pill.onDragEnded = { [weak self] p in self?.handleDragEnded(p) }
             pill.onContextCommand = { [weak self] cmd in self?.handleContext(cmd, tabID: id) }
+            pill.onHoverChanged = { [weak self] in self?.updateDividers() }
             addSubview(pill)
             orderedPills.append(pill)
             pillsByID[tab.id] = pill
         }
         needsLayout = true
         applyChrome()
-        liftSplitCluster()
     }
 
     /// Update titles/status of existing pills without rebuilding, for live PWD /
@@ -267,38 +197,12 @@ final class TerminalTabBarView: NSView {
         }
         newTabButton.applyChrome()
         overflowButton.applyChrome()
-        sidebarToggle.applyChrome()
-        splitRight.applyChrome()
-        splitDown.applyChrome()
-        splitBlur.apply(isDark: HarnessChrome.current.isDark)
+        sessionsButton.applyChrome()
+        updateDividers()
     }
 
-    /// Split icons stay above the pills. The blur view is between them, so a tab
-    /// that reaches the trailing edge softens instead of colliding with the glyphs.
-    private func liftSplitCluster() {
-        addSubview(splitBlur, positioned: .above, relativeTo: orderedPills.last)
-        addSubview(splitRight, positioned: .above, relativeTo: splitBlur)
-        addSubview(splitDown, positioned: .above, relativeTo: splitRight)
-    }
-
-    @objc private func splitRightClicked() {
-        guard let id = activeTabID else { return }
-        delegate?.tabBarDidRequestSplit(tabID: id, direction: .horizontal)
-    }
-
-    @objc private func splitDownClicked() {
-        guard let id = activeTabID else { return }
-        delegate?.tabBarDidRequestSplit(tabID: id, direction: .vertical)
-    }
-
-    func setSidebarCollapsed(_ collapsed: Bool) {
-        let symbol = collapsed ? "sidebar.right" : "sidebar.left"
-        sidebarToggle.setSymbol(symbol, accessibilityDescription: "Toggle sidebar", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
-        sidebarToggle.toolTip = collapsed ? "Show sidebar (⌘\\)" : "Hide sidebar (⌘\\)"
-    }
-
-    @objc private func toggleSidebar() {
-        delegate?.tabBarDidRequestToggleSidebar()
+    @objc private func showSessions() {
+        delegate?.tabBarDidRequestSessions(from: sessionsButton)
     }
 
     @objc private func addNewTab() {
@@ -317,44 +221,60 @@ final class TerminalTabBarView: NSView {
     override func layout() {
         super.layout()
         let buttonY = (bounds.height - controlSize) / 2
-        sidebarToggle.frame = NSRect(
-            x: sidebarButtonX,
+        sessionsButton.frame = NSRect(
+            x: sessionsButtonX,
             y: buttonY,
             width: controlSize,
             height: controlSize
         )
-        layoutSplitCluster(buttonY: buttonY)
+        // "+" is pinned to the trailing edge, like the reference title bars.
+        newTabButton.frame = NSRect(x: newTabX, y: buttonY, width: controlSize, height: controlSize)
         guard draggingPill == nil else { return } // drag drives its own positioning
         layoutPills()
-        liftSplitCluster()
+        updateDividers()
     }
 
-    /// Width of the two split glyphs plus the gap between them.
-    private var splitClusterWidth: CGFloat { controlSize * 2 + 4 }
+    private var newTabX: CGFloat { bounds.width - edgeInset - controlSize }
 
-    private var splitClusterMinX: CGFloat { bounds.width - edgeInset - splitClusterWidth }
-
-    private func layoutSplitCluster(buttonY: CGFloat) {
-        let x = splitClusterMinX
-        splitRight.frame = NSRect(x: x, y: buttonY, width: controlSize, height: controlSize)
-        splitDown.frame = NSRect(x: x + controlSize + 4, y: buttonY, width: controlSize, height: controlSize)
-        // Wide and faint. The view itself carries no color; the mask only
-        // reveals a little blur at the right edge.
-        let fadeWidth: CGFloat = 150
-        splitBlur.frame = NSRect(x: bounds.width - fadeWidth, y: 0, width: fadeWidth, height: bounds.height)
+    /// Hairlines between neighbouring inactive pills. The active pill has its own border,
+    /// and a hovered pill has a fill, so neither gets a rule beside it.
+    private func updateDividers() {
+        let visible = orderedPills.filter { !$0.isHidden }
+        let slots = ChromeLayout.dividerSlots(
+            count: visible.count,
+            activeIndex: visible.firstIndex { $0.tabID == activeTabID },
+            hoveredIndex: visible.firstIndex { $0.isHovered }
+        )
+        while dividers.count < slots.count {
+            let rule = CALayer()
+            rule.actions = ["position": NSNull(), "bounds": NSNull(), "hidden": NSNull()]
+            layer?.addSublayer(rule)
+            dividers.append(rule)
+        }
+        let color = HarnessChrome.current.borderStrong.cgColor
+        let height = HarnessDesign.tabPillHeight * 0.55
+        for (index, rule) in dividers.enumerated() {
+            guard index < slots.count, draggingPill == nil else {
+                rule.isHidden = true
+                continue
+            }
+            let left = visible[slots[index]].frame
+            rule.isHidden = false
+            rule.backgroundColor = color
+            rule.frame = NSRect(x: left.maxX + pillSpacing / 2 - 0.5, y: left.midY - height / 2, width: 1, height: height)
+        }
     }
 
     private func layoutPills() {
         let count = orderedPills.count
         let buttonY = (bounds.height - controlSize) / 2
         guard count > 0 else {
-            newTabButton.frame = NSRect(x: contentLeft, y: buttonY, width: controlSize, height: controlSize)
             overflowButton.isHidden = true
             return
         }
 
         // Hug each label. Stretching one short title out to the max width leaves a hollow pill.
-        let inlineAvail = bounds.width - contentLeft - edgeInset - controlSize - controlGap
+        let inlineAvail = newTabX - controlGap - contentLeft
         let naturals = orderedPills.map { $0.preferredWidth(min: minPillWidth, max: maxPillWidth) }
         let naturalSum = naturals.reduce(0, +) + pillSpacing * CGFloat(max(count - 1, 0))
 
@@ -365,7 +285,7 @@ final class TerminalTabBarView: NSView {
             let even = (inlineAvail - pillSpacing * CGFloat(count - 1)) / CGFloat(count)
             if even < minPillWidth {
                 needsOverflow = true
-                let avail = bounds.width - contentLeft - edgeInset - controlSize * 2 - controlGap * 2
+                let avail = newTabX - controlGap * 2 - controlSize - contentLeft
                 vCount = min(count, max(1, Int((avail + pillSpacing) / (minPillWidth + pillSpacing))))
                 let shrunk = max(minPillWidth, (avail - pillSpacing * CGFloat(vCount - 1)) / CGFloat(vCount))
                 widths = Array(repeating: shrunk, count: count)
@@ -397,26 +317,10 @@ final class TerminalTabBarView: NSView {
             pill.frame = NSRect(x: x, y: y, width: pillWidth, height: HarnessDesign.tabPillHeight)
             x += pillWidth + pillSpacing
         }
-        // The loop leaves `pillSpacing` after the last pill. Replace it with the
-        // same gap the sidebar glyph uses, so both ends of the row match.
-        newTabButton.frame = NSRect(
-            x: x - pillSpacing + controlGap,
-            y: buttonY,
-            width: controlSize,
-            height: controlSize
-        )
-
-        // The plus stays visible, just left of the split cluster. Tabs may run
-        // underneath that cluster; the blur sits in front of them.
-        let plusLimit = splitClusterMinX - controlGap - controlSize
-        if newTabButton.frame.maxX > plusLimit + controlSize {
-            newTabButton.frame.origin.x = max(contentLeft, plusLimit)
-        }
-
         overflowButton.isHidden = !needsOverflow
         if needsOverflow {
             overflowButton.frame = NSRect(
-                x: splitClusterMinX - controlGap - controlSize,
+                x: newTabX - controlGap - controlSize,
                 y: buttonY,
                 width: controlSize,
                 height: controlSize
@@ -569,34 +473,32 @@ private final class TabPillView: NSView {
     var onDragChanged: ((TabPillView, NSPoint) -> Void)?
     var onDragEnded: ((TabPillView) -> Void)?
     var onContextCommand: ((TabContextCommand) -> Void)?
+    var onHoverChanged: (() -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
-    private let agentIcon = NSImageView()
+    /// Leading app tile: `>_` for a shell, the brand tile for an agent.
+    private let iconTile = IconTileView()
     /// "Kept alive" flag: a small pin shown at the leading edge when this tab is pinned to
     /// survive a clean quit (`tab.persistent`). The visible counterpart of the context-menu
     /// "Keep Tab Running After Quit" checkmark — a tmux-style window flag for persistence.
     private let persistentIcon = NSImageView()
-    /// Ghostty-style "AI is working" indicator: a tiny dot before the title that discretely
-    /// shuttles between two spots while the tab's agent is producing output. Hidden otherwise.
-    private let workingDot = NSView()
+    /// Working spinner / needs-you / done / error mark before the shortcut hint.
+    private let statusView = TabStatusView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
     private var glassView: NSView?
     /// ⌘N hint, shown at the trailing edge for the first 9 tabs and
     /// swapped for the close button on hover. Empty for tabs past position 9.
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let hasShortcut: Bool
-    private var agentIconWidth: NSLayoutConstraint!
     private var persistentIconWidth: NSLayoutConstraint!
     private var closeWidthConstraint: NSLayoutConstraint!
     private var trackingArea: NSTrackingArea?
     private var isActive = false
-    private var isHovered = false
+    private(set) var isHovered = false
     private var status: TabStatus = .idle
     /// Whether this tab is pinned to survive a clean quit — drives the context-menu checkmark.
     private var isPersistent = false
-    /// True when the leading glyph is the generic terminal symbol, so its tint
-    /// follows the title instead of an agent brand color.
-    private var usesGenericIcon = true
+    private var activity: TabActivity = .none
 
     // Drag detection.
     private var mouseDownLocation: NSPoint?
@@ -649,9 +551,7 @@ private final class TabPillView: NSView {
         closeButton.layer?.cornerRadius = HarnessDesign.Radius.badge
         closeButton.layer?.cornerCurve = .continuous
 
-        agentIcon.translatesAutoresizingMaskIntoConstraints = false
-        agentIcon.imageScaling = .scaleProportionallyUpOrDown
-        agentIcon.isHidden = true
+        iconTile.translatesAutoresizingMaskIntoConstraints = false
 
         persistentIcon.translatesAutoresizingMaskIntoConstraints = false
         persistentIcon.imageScaling = .scaleProportionallyUpOrDown
@@ -669,25 +569,22 @@ private final class TabPillView: NSView {
         shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        workingDot.wantsLayer = true
-        workingDot.layer?.cornerRadius = 1
-        workingDot.translatesAutoresizingMaskIntoConstraints = false
-        workingDot.isHidden = true
+        statusView.translatesAutoresizingMaskIntoConstraints = false
+        statusView.isHidden = true
 
         addSubview(persistentIcon)
-        addSubview(agentIcon)
+        addSubview(iconTile)
         addSubview(titleLabel)
         addSubview(shortcutLabel)
         addSubview(closeButton)
-        addSubview(workingDot)
+        addSubview(statusView)
 
         // Title centers inside the pill with the close button floating on the
         // right edge and the agent brand icon (when present) on the left. Leading
         // edge inset matches the close button's trailing inset so the title stays
         // optically centered even when both are visible.
-        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
         persistentIconWidth = persistentIcon.widthAnchor.constraint(equalToConstant: 0)
-        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor, constant: 6)
+        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: iconTile.trailingAnchor, constant: HarnessDesign.Spacing.md)
         let closeTrailing = closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.xs)
         closeWidthConstraint = closeButton.widthAnchor.constraint(equalToConstant: 0)
         let closeHeight = closeButton.heightAnchor.constraint(equalToConstant: 14)
@@ -695,17 +592,15 @@ private final class TabPillView: NSView {
         NSLayoutConstraint.activate([
             // Leading run: [persistence pin?][agent icon?] — each collapses to zero width when
             // absent, so a plain tab keeps the agent icon flush at the same inset as before.
-            persistentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            persistentIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.Spacing.xs),
             persistentIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             persistentIcon.heightAnchor.constraint(equalToConstant: 12),
             persistentIconWidth,
-            agentIcon.leadingAnchor.constraint(equalTo: persistentIcon.trailingAnchor),
-            agentIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            agentIcon.heightAnchor.constraint(equalToConstant: 14),
-            agentIconWidth,
+            iconTile.leadingAnchor.constraint(equalTo: persistentIcon.trailingAnchor),
+            iconTile.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLeading,
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: shortcutLabel.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: statusView.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
             shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.sm),
             shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -713,59 +608,26 @@ private final class TabPillView: NSView {
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeWidthConstraint,
             closeHeight,
-            // Status dot sits on the right of the pill, just before the shortcut.
-            workingDot.trailingAnchor.constraint(equalTo: shortcutLabel.leadingAnchor, constant: -8),
-            workingDot.centerYAnchor.constraint(equalTo: centerYAnchor),
-            workingDot.widthAnchor.constraint(equalToConstant: 2),
-            workingDot.heightAnchor.constraint(equalToConstant: 2),
+            // Status mark sits on the right of the pill, just before the shortcut.
+            statusView.trailingAnchor.constraint(equalTo: shortcutLabel.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
+            statusView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusView.widthAnchor.constraint(equalToConstant: 12),
+            statusView.heightAnchor.constraint(equalToConstant: 12),
         ])
 
-        setAgentIcon(for: tab)
+        iconTile.apply(IconTileView.content(for: tabAgentKind(for: tab)))
         setPersistentIndicator(tab.persistent)
-        setWorkingDotVisible(Self.isAgentWorking(tab))
+        activity = TabActivity.of(tab)
         setAccessibilityLabel(Self.accessibilityLabel(tab))
         applyChrome(isActive: isActive)
-
-        // Re-evaluate the shuttle animation when the user toggles Reduce Motion mid-session,
-        // matching the StatusDotView pattern so the dot follows the live setting immediately.
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(reduceMotionDidChange),
-            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-            object: nil
-        )
     }
 
-    deinit {
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
-    }
-
-    @objc private func reduceMotionDidChange() {
-        // Re-apply the current dot visibility to pick up the new Reduce Motion setting.
-        setWorkingDotVisible(!workingDot.isHidden)
-    }
-
-    /// Primary signal: a live OSC 9;4 progress report — terminal-native, exactly what Ghostty
-    /// renders (Claude Code 2.0+ keep-alives one across each full turn, including thinking).
-    /// Fallback: the process detector's output recency, for agents that don't emit 9;4 (codex).
-    /// `waiting` only vetoes the fallback — an explicit progress report outranks a stale
-    /// waiting status.
     private static func accessibilityLabel(_ tab: Tab) -> String {
         let title = tabDisplayTitle(tab)
-        guard let mark = tab.programMark else { return title }
-        var parts = [title, mark.attention.rawValue]
-        if let message = mark.message, !message.isEmpty { parts.append(message) }
+        var parts = [title]
+        if let state = TabStatusView.label(TabActivity.of(tab)) { parts.append(state) }
+        if let message = tab.programMark?.message, !message.isEmpty { parts.append(message) }
         return parts.joined(separator: ", ")
-    }
-
-    private static func isAgentWorking(_ tab: Tab) -> Bool {
-        if let mark = tab.programMark {
-            return mark.attention == .working
-        }
-        if tab.rootPane.allSurfaceIDs().contains(where: { SurfaceProgressTracker.shared.isActive($0) }) {
-            return true
-        }
-        return tab.agent?.activity == .working && tab.status != .waiting
     }
 
     @available(*, unavailable)
@@ -791,6 +653,7 @@ private final class TabPillView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         isHovered = true
+        onHoverChanged?()
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 1
             self.closeWidthConstraint.constant = 14
@@ -801,6 +664,7 @@ private final class TabPillView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         isHovered = false
+        onHoverChanged?()
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 0
             self.closeWidthConstraint.constant = 0
@@ -897,10 +761,11 @@ private final class TabPillView: NSView {
         let shortcut = shortcutLabel.isHidden
             ? 0
             : (shortcutLabel.stringValue as NSString).size(withAttributes: [.font: shortcutLabel.font as Any]).width + 8
-        let icon: CGFloat = agentIconWidth?.constant ?? 0
+        let icon = HarnessDesign.iconTileSize + HarnessDesign.Spacing.md
+        let status: CGFloat = activity == .none ? 0 : 12 + HarnessDesign.Spacing.sm
         return CGFloat(ChromeLayout.huggedPillWidth(
             labelWidth: Double(title + icon),
-            accessoryWidth: Double(shortcut + 48),
+            accessoryWidth: Double(shortcut + status + HarnessDesign.Spacing.xl * 2),
             min: Double(min),
             max: Double(max)
         ))
@@ -910,9 +775,9 @@ private final class TabPillView: NSView {
         status = tab.status
         isPersistent = tab.persistent
         titleLabel.stringValue = tabDisplayTitle(tab)
-        setAgentIcon(for: tab)
+        iconTile.apply(IconTileView.content(for: tabAgentKind(for: tab)))
         setPersistentIndicator(tab.persistent)
-        setWorkingDotVisible(Self.isAgentWorking(tab))
+        activity = TabActivity.of(tab)
         setAccessibilityLabel(Self.accessibilityLabel(tab))
         applyChrome(isActive: isActive)
     }
@@ -920,54 +785,7 @@ private final class TabPillView: NSView {
     /// Show/hide the leading "kept alive" pin (the visible form of `tab.persistent`).
     private func setPersistentIndicator(_ visible: Bool) {
         persistentIcon.isHidden = !visible
-        persistentIconWidth.constant = visible ? 12 : 0
-    }
-
-    /// Show/hide the working dot and run its shuttle: a gentle glide between two spots —
-    /// Ghostty's indeterminate-progress motion (easeInOut, 1.2s, autoreversing forever).
-    /// Honors Reduce Motion: when enabled, the dot is shown statically without animation.
-    private func setWorkingDotVisible(_ visible: Bool) {
-        workingDot.isHidden = !visible
-        if visible {
-            let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            if reduceMotion {
-                // Static dot — remove any shuttle that may already be running.
-                workingDot.layer?.removeAnimation(forKey: "shuttle")
-            } else {
-                guard workingDot.layer?.animation(forKey: "shuttle") == nil else { return }
-                let anim = CABasicAnimation(keyPath: "transform.translation.x")
-                anim.fromValue = -2.5
-                anim.toValue = 2.5
-                anim.duration = 1.2
-                anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                anim.autoreverses = true
-                anim.repeatCount = .infinity
-                workingDot.layer?.add(anim, forKey: "shuttle")
-            }
-        } else {
-            workingDot.layer?.removeAnimation(forKey: "shuttle")
-        }
-    }
-
-    /// Show the agent's brand glyph as a leading icon (tinted to its brand color)
-    /// when one exists; collapse the slot otherwise.
-    private func setAgentIcon(for tab: Tab) {
-        if let kind = tabAgentKind(for: tab) {
-            usesGenericIcon = false
-            agentIcon.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: 14)
-            agentIcon.contentTintColor = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: kind))
-                ?? HarnessDesign.chrome.textSecondary
-            agentIcon.isHidden = false
-            agentIconWidth.constant = 14
-        } else {
-            usesGenericIcon = true
-            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-            agentIcon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "Terminal")?
-                .withSymbolConfiguration(config)
-            agentIcon.contentTintColor = HarnessDesign.chrome.textSecondary
-            agentIcon.isHidden = false
-            agentIconWidth.constant = 14
-        }
+        persistentIconWidth.constant = visible ? 14 : 0
     }
 
     private func installGlass() {
@@ -1026,17 +844,15 @@ private final class TabPillView: NSView {
         }
 
         HarnessDesign.applyChromeLabelAppearance([titleLabel, shortcutLabel], isDark: c.isDark)
-        if usesGenericIcon {
-            agentIcon.contentTintColor = isActive ? c.textPrimary : c.textSecondary
-            agentIcon.appearance = NSAppearance(named: c.isDark ? .darkAqua : .aqua)
-        }
+        iconTile.applyChrome()
+        // The active tab is in front of you; it only flags something that needs you.
+        let shown: TabActivity = isActive && (activity == .working || activity == .done) ? .none : activity
+        statusView.apply(shown, tint: c.accent)
         closeButton.contentTintColor = c.textTertiary
         closeButton.layer?.backgroundColor = NSColor.clear.cgColor
         // Persistence pin reads as an intentional "kept alive" marker, so it carries the
         // brand accent rather than the neutral title color — visible on active and idle tabs alike.
         persistentIcon.contentTintColor = c.accent
-        // Working dot follows the title color so it reads as part of the label, not a badge.
-        workingDot.layer?.backgroundColor = titleLabel.textColor?.cgColor
         // ⌘N hint: a touch brighter on the active tab, quiet otherwise.
         shortcutLabel.textColor = isActive ? c.textSecondary : c.textTertiary
     }

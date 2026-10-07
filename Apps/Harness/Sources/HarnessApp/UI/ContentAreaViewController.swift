@@ -143,7 +143,10 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     /// collapsed. Driven by `MainSplitViewController` during the toggle.
     func setTabBarLeadingInset(_ inset: CGFloat) {
         tabBar.setLeadingInset(inset)
-        tabBar.setSidebarCollapsed(inset > 1)
+    }
+
+    func tabBarDidRequestSessions(from anchor: NSView) {
+        SessionSwitcherController.present(relativeTo: view.window, anchor: anchor)
     }
 
     func tabBarDidRequestToggleSidebar() {
@@ -157,6 +160,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     func refreshTabBarMetadata() {
         let snap = SessionCoordinator.shared.snapshot
         tabBar.refreshMetadata(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
+        paneContainer?.refreshHeaders()
     }
 
     func tabBarDidSelect(tabID: TabID) {
@@ -227,7 +231,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         else { return }
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
-        let density = coordinator.settings.paneDensity.rawValue
+        let density = "\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)"
         let key = "\(coordinator.structureRevision)|\(density)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
         guard force || key != lastStructureKey else {
             // No per-pane chrome work needed on the fast path (structure unchanged).
@@ -303,7 +307,48 @@ final class PaneContainerView: NSView {
         self.tabID = SessionCoordinator.shared.snapshot.activeWorkspace?.activeTab?.id
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
-        build(node: node, cwd: cwd, program: program, agent: agent, into: self, separated: false)
+        let settings = SessionCoordinator.shared.settings
+        let separated = settings.paneDensity.separatedIslands
+        showsHeaders = separated && settings.paneHeaders
+        // The root pads by half the gap; each island insets by the other half.
+        let pad = ChromeLayout.containerPadding(separated: separated)
+        let content = NSView()
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: topAnchor, constant: CGFloat(pad.top)),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: CGFloat(pad.leading)),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -CGFloat(pad.trailing)),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -CGFloat(pad.bottom)),
+        ])
+        build(node: node, cwd: cwd, program: program, agent: agent, into: content, separated: separated)
+        refreshHeaders()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(activeSurfaceDidChange),
+            name: .harnessActiveSurfaceDidChange, object: nil
+        )
+    }
+
+    @objc private func activeSurfaceDidChange() { refreshHeaders() }
+
+    private var showsHeaders = false
+
+    /// Re-read each pane's identity and focus into its header.
+    func refreshHeaders() {
+        guard showsHeaders, let tab = coordinator.snapshot.activeWorkspace?.activeTab else { return }
+        let leaves = tab.rootPane.allLeaves()
+        let focused = coordinator.activeSurfaceID
+        for island in islands {
+            guard let header = island.header,
+                  let leaf = leaves.first(where: { $0.surfaceID == island.surfaceID })
+            else { continue }
+            let identity = PaneIdentity.of(leaf: leaf, in: tab)
+            header.update(
+                title: SurfaceIdentity.label(directory: identity.directory, program: identity.program, agent: identity.agent?.commandToken),
+                agent: identity.agent,
+                focused: leaves.count == 1 || island.surfaceID == focused
+            )
+        }
     }
 
     /// Paints the gutter around the islands. When the window is translucent nothing else
@@ -362,13 +407,7 @@ final class PaneContainerView: NSView {
         switch node {
         case let .leaf(leaf):
             let host = coordinator.terminalHost(for: leaf.surfaceID, cwd: cwd)
-            let island = PaneIslandView(
-                directory: cwd,
-                program: program,
-                agent: agent,
-                separated: separated,
-                surfaceID: leaf.surfaceID
-            )
+            let island = PaneIslandView(surfaceID: leaf.surfaceID, separated: separated, showsHeader: showsHeaders)
             island.translatesAutoresizingMaskIntoConstraints = false
             parent.addSubview(island)
             let insets = ChromeLayout.cardInsets(separated: separated)
@@ -413,7 +452,6 @@ final class PaneContainerView: NSView {
             // at ~final bounds instead of resizing (and re-sizing its PTY) twice.
             // Comfortable separates with the island inset. Compact stays flush; its
             // divider is the 1pt border and does not also inset the island.
-            let separated = SessionCoordinator.shared.settings.paneDensity.separatedIslands
             build(node: firstNode, cwd: cwd, program: program, agent: agent, into: first, separated: separated)
             build(node: secondNode, cwd: cwd, program: program, agent: agent, into: second, separated: separated)
             // [weak split]: rapid tab switching can tear down this PaneContainerView before the
@@ -441,14 +479,18 @@ final class PaneContainerView: NSView {
     }
 }
 
-/// Rounded terminal island. The path and the split controls both live on the tab row.
+/// Rounded terminal island: an optional title row over the terminal host.
 @MainActor
 final class PaneIslandView: NSView {
     private weak var terminalHost: TerminalHostView?
     private let separated: Bool
+    let surfaceID: SurfaceID
+    /// Title row, present on comfortable panes when pane headers are on.
+    private(set) var header: PaneHeaderView?
 
-    init(directory: String, program: String?, agent: String? = nil, separated: Bool, surfaceID: SurfaceID? = nil) {
+    init(surfaceID: SurfaceID, separated: Bool, showsHeader: Bool) {
         self.separated = separated
+        self.surfaceID = surfaceID
         super.init(frame: .zero)
         wantsLayer = true
         let chrome = ChromeLayout.island(separated: separated, splitRadius: Double(HarnessDesign.Radius.overlay))
@@ -458,7 +500,17 @@ final class PaneIslandView: NSView {
         // A separated island carries a hairline so it reads as a card against the
         // gutter, which is painted in the same chrome color.
         layer?.borderWidth = separated ? 1 : 0
-        _ = (directory, program, agent, surfaceID)
+        if showsHeader {
+            let header = PaneHeaderView(surfaceID: surfaceID)
+            header.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(header)
+            NSLayoutConstraint.activate([
+                header.topAnchor.constraint(equalTo: topAnchor),
+                header.leadingAnchor.constraint(equalTo: leadingAnchor),
+                header.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+            self.header = header
+        }
         applyChrome()
     }
 
@@ -469,7 +521,7 @@ final class PaneIslandView: NSView {
         host.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host)
         NSLayoutConstraint.activate([
-            host.topAnchor.constraint(equalTo: topAnchor),
+            host.topAnchor.constraint(equalTo: header?.bottomAnchor ?? topAnchor),
             host.leadingAnchor.constraint(equalTo: leadingAnchor),
             host.trailingAnchor.constraint(equalTo: trailingAnchor),
             host.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -508,6 +560,15 @@ final class PaneIslandView: NSView {
         let hairline = (c.borderStrong.usingColorSpace(.sRGB) ?? c.borderStrong)
         layer?.borderColor = hairline.cgColor
         layer?.backgroundColor = c.terminalBackground.withAlphaComponent(backdropAlpha).cgColor
+        // The header has no drawable behind it, so it paints the canvas itself at the
+        // same opacity the terminal composites at.
+        let headerAlpha = CGFloat(ChromeMaterial.headerFillAlpha(
+            stored: settings.backgroundOpacity,
+            appearanceMode: settings.appearanceMode,
+            systemAppearance: appearance
+        ))
+        header?.applyChrome()
+        header?.layer?.backgroundColor = c.terminalBackground.withAlphaComponent(headerAlpha).cgColor
         if let host = terminalHost {
             let radius = ChromeLayout.island(separated: separated, splitRadius: Double(HarnessDesign.Radius.overlay)).cornerRadius
             host.applyIslandCornerRadius(CGFloat(radius))

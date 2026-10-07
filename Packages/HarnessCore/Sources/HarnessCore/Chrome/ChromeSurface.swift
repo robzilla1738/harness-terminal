@@ -116,6 +116,35 @@ public struct ChromePaletteSpec: Equatable, Sendable {
     }
 }
 
+/// What a single pane is showing, for its header. A lone pane uses the tab's fields; a
+/// split pane uses its own leaf (the tab's fields follow whichever pane is focused).
+public struct PaneIdentity: Equatable, Sendable {
+    public var directory: String
+    public var program: String?
+    public var agent: AgentKind?
+
+    public static func of(leaf: PaneLeaf, in tab: Tab) -> PaneIdentity {
+        let leaves = tab.rootPane.allLeaves()
+        let isActive = leaf.id == (tab.activePaneID ?? leaves.first?.id)
+        if leaves.count == 1 {
+            return PaneIdentity(
+                directory: leaf.cwd ?? tab.cwd,
+                program: leaf.command ?? tab.currentCommand,
+                agent: tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)
+            )
+        }
+        let program = leaf.command ?? (isActive ? tab.currentCommand : nil)
+        let byCommand = program.flatMap { command in
+            AgentKind.allCases.first { $0 != .generic && $0.commandToken == command }
+        }
+        return PaneIdentity(
+            directory: leaf.cwd ?? tab.cwd,
+            program: program,
+            agent: byCommand ?? (isActive ? tab.agent?.kind : nil)
+        )
+    }
+}
+
 /// One identity line for tabs, sidebar rows, pane headers, and the session switcher.
 public enum SurfaceIdentity {
     public static func label(directory: String, program: String?, agent: String? = nil) -> String {
@@ -277,11 +306,23 @@ public enum ChromeLayout {
         return TiledSplit(first: first, secondOrigin: first + gap, second: available - first)
     }
 
-    /// A single pane is flush with the window. A split keeps a small gap so the
-    /// panes separate, without a framed card around either one.
+    /// Space between two islands, and between an island and the window edge.
+    public static let islandGap = 8.0
+
+    /// Comfortable density makes every pane, a lone one included, an inset card. Each
+    /// island takes half the gap on every side and the container pads by the other half
+    /// (see `containerPadding`), so the edge gap and the gap between panes are the same.
+    /// Compact panes stay flush.
     public static func cardInsets(separated: Bool) -> CardInsets {
-        let side = separated ? 6.0 : 0.0
-        return CardInsets(top: 0, leading: side, bottom: side, trailing: side)
+        let half = separated ? islandGap / 2 : 0
+        return CardInsets(top: half, leading: half, bottom: half, trailing: half)
+    }
+
+    /// The pane container's own padding. No top padding: the tab row above already
+    /// leaves room, and a full gap there would float the card away from its tab.
+    public static func containerPadding(separated: Bool) -> CardInsets {
+        let half = separated ? islandGap / 2 : 0
+        return CardInsets(top: 0, leading: half, bottom: half, trailing: half)
     }
 
     /// Space from the window top to the tab pill, and from the pill to the card border.
@@ -295,6 +336,14 @@ public enum ChromeLayout {
             margin: cardInsets(separated: separated).top,
             cornerRadius: separated ? splitRadius : 0
         )
+    }
+
+    /// Indices `i` that get a rule between visible pill `i` and `i + 1`. No rule touches the
+    /// active pill (it has a border) or the hovered one (it has a fill).
+    public static func dividerSlots(count: Int, activeIndex: Int?, hoveredIndex: Int?) -> [Int] {
+        guard count > 1 else { return [] }
+        let skip = Set([activeIndex, hoveredIndex].compactMap { $0 })
+        return (0 ..< count - 1).filter { !skip.contains($0) && !skip.contains($0 + 1) }
     }
 
     /// Left edge of a variable-width tab slot, before the bar's own leading inset.

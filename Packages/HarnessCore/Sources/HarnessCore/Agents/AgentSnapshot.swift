@@ -74,7 +74,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     public var dotHex: String {
         switch self {
         case .codex: return "10a37f"
-        case .claudeCode: return "c47b58"
+        case .claudeCode: return "d97757"
         case .cursor: return "5cc8ff"
         case .grok: return "1d9bf0"
         case .pi: return "b48cff"

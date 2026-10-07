@@ -1159,11 +1159,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 .sessions
                 .flatMap { $0.tabs }
                 .first(where: { $0.id == match.tabID })
-            if tab?.cwd != entry.cwd {
+            // Compare per pane, not per tab: with a split, the tab's fields hold whichever
+            // pane reported last, so a tab-level check would skip the other pane forever.
+            let leaf = tab?.rootPane.allLeaves().first { $0.surfaceID == entry.uuid }
+            if leaf?.cwd != entry.cwd {
                 editor.updateTabCwd(surfaceID: entry.uuid, path: entry.cwd)
                 changed = true
             }
-            if let command = entry.command, tab?.currentCommand != command {
+            if let command = entry.command, leaf?.command != command {
                 editor.updateTabCurrentCommand(surfaceID: entry.uuid, command: command)
                 changed = true
             }

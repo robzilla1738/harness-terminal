@@ -24,6 +24,10 @@ enum HarnessDesign {
     static let sessionRowHeight: CGFloat = 58
     static let footerHeight: CGFloat = 40
     static let tabPillHeight: CGFloat = 28
+    /// Leading app tile in tabs, sidebar rows, and pane headers.
+    static let iconTileSize: CGFloat = 20
+    static let paneHeaderHeight: CGFloat = 30
+    static let paneHeaderButtonSize: CGFloat = 24
 
     static let horizontalInset: CGFloat = Spacing.lg
     static let rowSpacing: CGFloat = Spacing.xxs
@@ -86,6 +90,7 @@ enum HarnessDesign {
         static var rowTitle: NSFont { sidebarLabel }
         static var rowMeta: NSFont { .monospacedSystemFont(ofSize: 11, weight: .regular) }
         static var tabTitle: NSFont { sidebarLabel }
+        static var paneHeader: NSFont { sidebarLabel }
         static var sectionLabel: NSFont { .systemFont(ofSize: 10.5, weight: .semibold) }
         static var badge: NSFont { .monospacedSystemFont(ofSize: 10.5, weight: .semibold) }
         static var kbd: NSFont { .monospacedSystemFont(ofSize: 12, weight: .semibold) }

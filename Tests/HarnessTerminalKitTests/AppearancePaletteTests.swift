@@ -112,7 +112,7 @@ final class AppearancePaletteTests: XCTestCase {
         XCTAssertNil(resolved.outputPaletteHex[0])
     }
 
-    func testSinglePaneIsFlushAndSplitsKeepAGap() {
+    func testCompactIsFlushAndComfortableIsAnInsetCard() {
         let single = ChromeLayout.cardInsets(separated: false)
         XCTAssertEqual(single.top, 0)
         XCTAssertEqual(single.leading, 0)
@@ -120,8 +120,8 @@ final class AppearancePaletteTests: XCTestCase {
         XCTAssertEqual(single.trailing, 0)
         XCTAssertEqual(ChromeLayout.island(separated: false, splitRadius: 10).cornerRadius, 0)
         let split = ChromeLayout.cardInsets(separated: true)
-        XCTAssertEqual(split.leading, 6)
-        XCTAssertEqual(split.top, 0)
+        XCTAssertEqual(split.leading, ChromeLayout.islandGap / 2)
+        XCTAssertEqual(split.top, ChromeLayout.islandGap / 2)
         XCTAssertEqual(ChromeLayout.island(separated: true, splitRadius: 10).cornerRadius, 10)
     }
 

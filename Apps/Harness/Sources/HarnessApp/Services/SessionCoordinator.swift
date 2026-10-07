@@ -1203,6 +1203,7 @@ final class SessionCoordinator: NSObject {
         }
         // pane-border labels re-evaluate per host (active state just changed above).
         refreshPaneBorders()
+        NotificationCenter.default.post(name: .harnessActiveSurfaceDidChange, object: self)
         // Push focus to the daemon (single source of truth) so other clients —
         // attach-window compositors, target-less CLI commands — agree on the active
         // pane. Suppressed while reflecting a remote change to avoid a feedback loop.
@@ -2346,4 +2347,9 @@ private enum HarnessPathDisplay {
         if !fallback.isEmpty, fallback != "Shell" { return fallback }
         return "Terminal"
     }
+}
+
+extension Notification.Name {
+    /// The focused pane changed (pane headers re-dim on this).
+    static let harnessActiveSurfaceDidChange = Notification.Name("HarnessActiveSurfaceDidChange")
 }

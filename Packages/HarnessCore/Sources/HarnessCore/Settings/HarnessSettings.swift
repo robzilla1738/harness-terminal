@@ -319,6 +319,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var themeFit: Bool?
     /// Comfortable pane islands or a single-pixel split border.
     public var paneDensity: PaneDensity
+    /// A title row (icon, identity, split buttons) atop each comfortable pane.
+    public var paneHeaders: Bool
     /// Confirm before pasting text containing newlines / control characters when the program has
     /// not enabled bracketed paste — guards against blind multi-line command execution.
     public var pasteProtection: Bool
@@ -452,6 +454,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         minimumContrast: Double = 1,
         themeFit: Bool? = nil,
         paneDensity: PaneDensity = .comfortable,
+        paneHeaders: Bool = true,
         pasteProtection: Bool = true,
         commandFinishedThresholdSeconds: Int = 10,
         notificationEvents: [String: Bool] = [:],
@@ -528,6 +531,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.minimumContrast = HarnessSettings.clampedContrast(minimumContrast)
         self.themeFit = themeFit
         self.paneDensity = paneDensity
+        self.paneHeaders = paneHeaders
         self.pasteProtection = pasteProtection
         self.commandFinishedThresholdSeconds = max(0, commandFinishedThresholdSeconds)
         self.notificationEvents = notificationEvents
@@ -808,6 +812,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // Absent key follows appearance (light on, dark off). An explicit bool sticks.
         themeFit = try container.decodeIfPresent(Bool.self, forKey: .themeFit)
         paneDensity = try fields.decodeEnum(.paneDensity, \.paneDensity)
+        paneHeaders = try fields.decode(.paneHeaders, \.paneHeaders)
         // `lightThemeName`/`darkThemeName` are no longer stored fields — the legacy pair is
         // consumed by the `appearanceMode` migration above (via LegacyHarnessSettingsCodingKeys).
         pasteProtection = try fields.decode(.pasteProtection, \.pasteProtection)

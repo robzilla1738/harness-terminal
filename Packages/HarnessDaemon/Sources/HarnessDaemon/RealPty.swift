@@ -300,6 +300,14 @@ public final class RealPty: @unchecked Sendable {
                     seq &+= UInt64(slice.count)
                     offset = end
                 }
+                // The old shell died mid-line (usually at its prompt). Reset attributes and
+                // start a fresh line so the new shell's first output doesn't run on from it.
+                // Written to the log too, so the next restore has the same break.
+                let separator = Data(Self.restoreSeparator.utf8)
+                scrollback.append(ScrollbackEntry(sequence: seq, data: separator))
+                self.scrollbackBytes += separator.count
+                seq &+= UInt64(separator.count)
+                scrollbackFile?.append(separator)
                 nextSequence = seq
             }
         } else {
@@ -771,6 +779,9 @@ public final class RealPty: @unchecked Sendable {
         guard let probed = probeForegroundProcess() else { return nil }
         return (probed.executable, Self.processArguments(for: probed.pid), probed.pid == child)
     }
+
+    /// Between restored history and the new shell: SGR reset, then CR LF.
+    static let restoreSeparator = "\u{1B}[0m\r\n"
 
     /// Full argv of a PID (argv[0] included), or [] when it can't be read.
     static func processArguments(for pid: pid_t) -> [String] {
