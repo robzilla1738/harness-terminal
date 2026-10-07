@@ -16,6 +16,7 @@ struct HarnessCLI {
             printUsage()
             exit(1)
         }
+        args = CLIArguments.normalize(args, command: command)
         do {
             switch command {
             case "color-check":
@@ -47,6 +48,12 @@ struct HarnessCLI {
             case "do":
                 try handleDo(args)
                 return
+            case "keymap":
+                try handleKeymap(args)
+                return
+            case "actions":
+                try handleActions(args)
+                return
             default:
                 break
             }
@@ -56,6 +63,12 @@ struct HarnessCLI {
             switch command {
             case "run":
                 try handleRun(args, client: client)
+            case "ls":
+                try handleLs(args, client: client)
+            case "inspect":
+                try handleInspect(args, client: client)
+            case "new":
+                try handleNew(args, client: client)
             case "list-workspaces":
                 try printWorkspaces(args, client: client)
             case "list-surfaces":
@@ -81,7 +94,7 @@ struct HarnessCLI {
             case "new-workspace":
                 let name = flagValue(args, flag: "--name") ?? "Workspace"
                 let response = try checkedRequest(client, .newWorkspace(name: name))
-                if case let .workspaceID(id) = response { print(id.uuidString) }
+                printCreated(response, args)
             case "new-session":
                 try handleNewSession(args, client: client)
             case "new-tab":
@@ -115,10 +128,14 @@ struct HarnessCLI {
                 // makes it ephemeral again.
                 _ = try checkedRequest(client, .setSessionPersistent(sessionID: sessionID, persistent: command == "promote-session"))
             case "send":
+                // No `--text`: send what's piped in (`make 2>&1 | harness-cli send -b logs`).
+                let piped = isatty(STDIN_FILENO) == 0
+                    ? String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+                    : nil
                 guard let surface = flagValue(args, flag: "--surface"),
-                      let text = flagValue(args, flag: "--text")
+                      let text = flagValue(args, flag: "--text") ?? piped
                 else {
-                    fputs("Usage: harness-cli send --surface <uuid> --text \"...\"\n", harnessStderr)
+                    fputs("Usage: harness-cli send [--surface <id>] (--text \"...\" | < input)\n", harnessStderr)
                     exit(1)
                 }
                 _ = try checkedRequest(client, .send(surfaceID: surface, text: text))
@@ -151,8 +168,10 @@ struct HarnessCLI {
                 try handleCapturePane(args, client: client)
             case "pipe-pane":
                 try handlePipePane(args, client: client)
-            case "wait-for", "wait":
+            case "wait-for":
                 try handleWaitFor(args, client: client)
+            case "wait":
+                try handleWait(args, client: client)
             case "link-window":
                 try handleLinkWindow(args, client: client)
             case "unlink-window":
@@ -318,8 +337,10 @@ struct HarnessCLI {
         ("--surface", .surface), ("--pane", .pane),
     ]
 
-    /// Rewrites target flag values to full IDs. Not found or ambiguous exits 3 with the
-    /// candidates. `has-session` keeps its own tmux contract (exit 1 when missing).
+    /// Rewrites target flag values to full IDs, then adds the pane a pane command needs when
+    /// none was given (`TargetContext`: the caller's pane, else the active one). Not found or
+    /// ambiguous exits 3 with the candidates. `has-session` keeps its own tmux contract (exit 1
+    /// when missing).
     static func resolveTargets(_ args: [String], command: String, client: DaemonClient) throws -> [String] {
         guard command != "has-session" else { return args }
         // Everything after `--` belongs to a child command (`run -- tool --tab 3`).
@@ -330,11 +351,12 @@ struct HarnessCLI {
             else { return nil }
             return (index + 1, entry.kind)
         }
-        guard !pending.isEmpty else { return args }
+        guard !pending.isEmpty || CLIArguments.needsDefaultTarget(command) else { return args }
         guard case let .snapshot(snapshot) = try client.request(.getSnapshot) else { return args }
+        let context = targetContext(snapshot, args)
         var resolved = args
         for (index, kind) in pending {
-            switch TargetResolver.resolve(args[index], kind: kind, in: snapshot) {
+            switch TargetResolver.resolve(args[index], kind: kind, in: snapshot, context: context) {
             case let .resolved(id):
                 resolved[index] = id
             case let outcome:
@@ -342,7 +364,13 @@ struct HarnessCLI {
                 exit(CLIExit.targetNotFound)
             }
         }
-        return resolved
+        return CLIArguments.withDefaultTarget(resolved, command: command, snapshot: snapshot, context: context)
+    }
+
+    /// The caller's `HARNESS_*` context only describes the local daemon, not a `--host`.
+    static func targetContext(_ snapshot: SessionSnapshot, _ args: [String]) -> TargetContext {
+        let local = flagValue(args, flag: "--host") == nil
+        return .current(in: snapshot, environment: local ? ProcessInfo.processInfo.environment : nil)
     }
 
     // MARK: - Remote daemons (over SSH)
@@ -414,6 +442,20 @@ struct HarnessCLI {
             throw DaemonSessionError.daemonError(message)
         }
         return response
+    }
+
+    /// What a creating command prints: the new id, or `{"tab": id}` (etc.) with `--json`.
+    static func printCreated(_ response: IPCResponse, _ args: [String]) {
+        let created: (key: String, id: UUID)
+        switch response {
+        case let .workspaceID(id): created = ("workspace", id)
+        case let .sessionID(id): created = ("session", id)
+        case let .tabID(id): created = ("tab", id)
+        case let .paneID(id): created = ("pane", id)
+        case let .hookID(id): created = ("hook", id)
+        default: return
+        }
+        print(args.contains("--json") ? "{\"\(created.key)\":\"\(created.id.uuidString)\"}" : created.id.uuidString)
     }
 
     /// Shared output branch for list/show commands: emit `payload` as JSON when `--json` is

@@ -10,7 +10,7 @@ extension HarnessCLI {
         if let name = flagValue(args, flag: "--workspace") {
             let cwd = flagValue(args, flag: "--cwd")
             let response = try checkedRequest(client, .newTabInWorkspace(named: name, cwd: cwd))
-            if case let .tabID(id) = response { print(id.uuidString) }
+            printCreated(response, args)
             return
         }
         guard let workspaceID = UUID(uuidString: flagValue(args, flag: "--workspace-id") ?? "") else {
@@ -19,7 +19,7 @@ extension HarnessCLI {
         }
         let cwd = flagValue(args, flag: "--cwd")
         let response = try checkedRequest(client, .newTab(workspaceID: workspaceID, cwd: cwd))
-        if case let .tabID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     static func handleNewSession(_ args: [String], client: DaemonClient) throws {
@@ -35,7 +35,7 @@ extension HarnessCLI {
                 exit(1)
             }
             let response = try checkedRequest(client, .newSessionInGroup(targetSessionID: target.id, name: name))
-            if case let .sessionID(id) = response { print(id.uuidString) }
+            printCreated(response, args)
             return
         }
         guard let workspaceID = try resolveWorkspaceID(args, client: client) else {
@@ -44,7 +44,7 @@ extension HarnessCLI {
         }
         let cwd = flagValue(args, flag: "--cwd")
         let response = try checkedRequest(client, .newSession(workspaceID: workspaceID, cwd: cwd, name: name))
-        if case let .sessionID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     static func handleNewSplit(_ args: [String], client: DaemonClient) throws {
@@ -67,7 +67,7 @@ extension HarnessCLI {
             exit(1)
         }
         let response = try checkedRequest(client, .newSplit(tabID: tabID, paneID: paneID, direction: direction))
-        if case let .paneID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     static func handleSelectWorkspace(_ args: [String], client: DaemonClient) throws {
@@ -192,7 +192,7 @@ extension HarnessCLI {
             }
             tab = snap.workspaces.flatMap(\.sessions).flatMap(\.tabs).first { $0.id == tabID }
         } else {
-            tab = snap.activeWorkspace?.activeTab
+            tab = targetContext(snap, args).tab
         }
         guard let tab else {
             fputs("list-panes: no matching tab\n", harnessStderr)

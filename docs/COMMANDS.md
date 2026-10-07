@@ -13,24 +13,39 @@ grouped sessions (`new-session -t <session>`), and full `-t` targets on
 ## Running commands and targets
 
 ```bash
+harness-cli ls                                       # sessions → tabs → panes, * = active
 harness-cli run --split right --wait -- make test   # exits with make's status
 harness-cli run --label logs -- tail -f app.log      # new tab; prints its surface id
-harness-cli send-keys --surface 2 --keys "q"         # pane 2 of the current tab
-harness-cli list-panes --tab logs                    # tab by its label
+harness-cli send-keys -b 2 --keys "q"                # pane 2 of the current tab
+make 2>&1 | harness-cli send -b logs                 # send reads stdin without --text
+harness-cli wait -b logs --for 10m                   # exits with the pane's status
+harness-cli inspect                                  # everything about this pane
+harness-cli new api -- npm run dev                   # a session running a command
 ```
 
 | Command | Effect |
 |---|---|
+| `ls [--json]` | Every session, its tabs, and their panes, with positions, short ids, status, `*` on the active ones, and `← here` on the caller's pane. |
+| `inspect [<pane>] [-s <session>] [--json]` | One pane (ids, cwd, program, agent, size, program status, process tree) or one session (`api call pane.view` / `session.view`). With no target, the caller's pane. |
+| `new [<name>] [--cwd DIR] [--json] [-- COMMAND…]` | Create a session in the caller's workspace and select it. A command runs in the session's shell, so the session outlives it. Prints the session id, or `{session, surface}`. |
+| `wait (-b <pane>) [--for DURATION] [--until child\|command]` | Wait for the pane's program to exit, or for its prompt to report a finished command, and exit with that status. `--for 90`, `30s`, `10m`, `2h`; running out exits 1. `wait <channel>` is still tmux's `wait-for`. |
+| `keymap [--json]` / `actions [--json]` | Every key binding (KEY, ACTION, ARGS, SOURCE: `keybindings`, or the Lua layer `default`/`config`/`app`); every Lua action and built-in command. |
 | `run [--split right\|below\|left\|above] [--ratio PCT] [--cwd DIR] [--label TEXT] [--surface TARGET] [--no-focus] [--keep-open] [--wait] [--timeout SECS] [--json] -- COMMAND…` | Start a command in a new tab, or in a split of the current (or `--surface`) pane. The pane closes when the command exits unless `--keep-open`. `--wait` blocks and exits with the command's status (with `--keep-open` it waits for the command's shell-integration mark instead). Prints the new surface id, or `{surface, pane, tab}` with `--json`. |
 
 **Targets.** Anywhere `--session`, `--tab`, `--window`, `--surface`, or `--pane` takes an ID, it also takes, in this order:
 
 1. the full ID (any case);
 2. a label: a session's name, a tab's title, or the tab title of a pane that is alone in its tab;
-3. a 1-based position: sessions of the active workspace, tabs of the active session, panes of the active tab;
+3. a 1-based position: sessions of the caller's workspace, tabs of its session, panes of its tab;
 4. a unique ID prefix or suffix of at least 4 characters.
 
 No match, or more than one, exits 3 and names the candidates. `has-session` keeps tmux's contract (exit 1 when missing).
+
+**Short flags.** `-s` is `--session`, `-w` is `--tab`, `-b` is `--pane`, and `-S` is `--host`. A command with its own tmux meaning for the letter keeps it: `set-option -s/-w`, `show-options`, `set-environment`, `capture-pane -S` (start line), and `wait-for -S` (signal).
+
+**The caller's pane.** Inside a pane, the daemon sets `HARNESS_SURFACE`, `HARNESS_PANE`, `HARNESS_TAB`, and `HARNESS_SESSION`. Pane commands (`send`, `send-keys`, `capture-pane`, `pipe-pane`, `respawn-pane`, `clear-history`, `copy-mode`, `process`, `notify`, `inspect`, `kill-pane`, `zoom-pane`, `break-pane`, `select-pane`, `resize-pane`) act on that pane when given no target, and positions count from its session and tab. Outside a pane, or with `--host`, they use what the window is showing. `--surface` and `--pane` are interchangeable: either names the same terminal.
+
+**JSON.** Commands that create something print the new id, or `{"tab": "…"}` (or `session`, `pane`, `workspace`, `hook`) with `--json`. The list and inspect commands print JSON with `--json`, indented with `--pretty`. `remote list --json` prints the saved hosts and whether each tunnel is up.
 
 **Exit statuses.** 0 ok, 1 failed, 2 usage, 3 target not found or ambiguous, 4 daemon unreachable (local, or the SSH tunnel for `--host`), 130 interrupted. `run --wait` and `api call pane.wait` exit with the waited-for program's own status.
 
@@ -329,7 +344,7 @@ A GUI action from a tunneled client runs only when Remote Control is on. A local
 | `command-prompt [-p <prompt1,prompt2,…>] "<template>"` | Open the command prompt pre-filled with a template; `%%` / `%1` are replaced by user-typed values. Multiple `-p` prompts are asked in sequence. |
 | `display-popup [-E <command>]` | Open a floating terminal pane. With `-E <command>`, run `<command>` in the popup and close it on exit. |
 | `display-menu [-T <title>] <name> <key> <command> …` | Show a native popup menu built from `name`/`key`/`command` triples. Key may be empty (`""`). |
-| `wait-for [-S \| -L \| -U] <channel>` | Named-channel synchronisation. No flag: block until the channel is signalled. `-S`: signal the channel (unblocking any waiters). `-L`: lock (exclusive, blocks if held). `-U`: unlock. Alias `wait`. |
+| `wait-for [-S \| -L \| -U] <channel>` | Named-channel synchronisation. No flag: block until the channel is signalled. `-S`: signal the channel (unblocking any waiters). `-L`: lock (exclusive, blocks if held). `-U`: unlock. `wait <channel>` does the same. |
 | `find-window [-N] [-T] [-C] [-t <session>] <pattern>` | Focus the first window matching by name/title (default) or pane content (`-C`). `-t` scopes the search to one session. No match fails loudly in every front-end. |
 | `respawn-window [-k] [-t <target>]` (alias `respawnw`) | Respawn every pane in the window; `-k` clears scrollback. |
 | `refresh-client` (alias `refreshc`) | Re-pull options and snapshot for the calling client. |

@@ -23,35 +23,23 @@ extension HarnessCLI {
             fputs("run: --split must be right, below, left, or above\n", harnessStderr)
             exit(CLIExit.usage)
         }
-        guard case let .snapshot(snapshot) = try checkedRequest(client, .getSnapshot),
-              let workspace = snapshot.activeWorkspace
-        else {
+        let snap = try snapshot(client)
+        let context = flagValue(options, flag: "--surface").flatMap { TargetContext.of(surface: $0, in: snap) }
+            ?? targetContext(snap, args)
+        guard let workspace = context.workspace else {
             fputs("run: no workspace\n", harnessStderr)
             exit(CLIExit.failed)
         }
         let cwd = flagValue(options, flag: "--cwd").map { ($0 as NSString).expandingTildeInPath }
 
-        // The pane to split, or nil for a new tab.
-        let anchor: (tab: Tab, leaf: PaneLeaf)?
+        // The pane to split (`--surface`, else the caller's, else the active one), or nil for a new tab.
+        var anchor: (tab: Tab, leaf: PaneLeaf)?
         if split != nil {
-            let target = flagValue(options, flag: "--surface") ?? ProcessInfo.processInfo.environment["HARNESS_SURFACE"]
-            let tabs = snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
-            if let target, let found = tabs.lazy.compactMap({ tab in
-                tab.rootPane.allLeaves().first { $0.surfaceID.uuidString.caseInsensitiveCompare(target) == .orderedSame }.map { (tab, $0) }
-            }).first {
-                anchor = found
-            } else if let tab = workspace.activeTab {
-                let leaf = tab.rootPane.allLeaves().first { $0.id == tab.activePaneID } ?? tab.rootPane.allLeaves().first
-                anchor = leaf.map { (tab, $0) }
-            } else {
-                anchor = nil
-            }
-            if anchor == nil {
+            guard let tab = context.tab, let leaf = context.pane else {
                 fputs("run: no pane to split\n", harnessStderr)
                 exit(CLIExit.targetNotFound)
             }
-        } else {
-            anchor = nil
+            anchor = (tab, leaf)
         }
 
         let tabID: UUID
@@ -103,19 +91,7 @@ extension HarnessCLI {
             print(surface)
         }
         guard options.contains("--wait") else { return }
-        let timeout = flagValue(options, flag: "--timeout").flatMap(Double.init) ?? 24 * 3600
-        // A waiting client can block for the whole run; give the socket the same budget.
-        let response = try client.request(.paneWait(surfaceID: surface, until: keepOpen ? "command" : "child", timeout: timeout), timeout: timeout + 5)
-        switch response {
-        case let .text(body):
-            struct ExitBody: Decodable { var exit: Int32 }
-            let status = (try? JSONDecoder().decode(ExitBody.self, from: Data(body.utf8)))?.exit ?? CLIExit.failed
-            exit(status)
-        case let .error(message):
-            fputs("run: \(message)\n", harnessStderr)
-            exit(CLIExit.failed)
-        default:
-            throw DaemonClientError.unexpectedResponse
-        }
+        let timeout = flagValue(options, flag: "--timeout").flatMap(CLIDuration.seconds) ?? 24 * 3600
+        waitForPane(client, surface: surface, until: keepOpen ? "command" : "child", timeout: timeout, verb: "run")
     }
 }

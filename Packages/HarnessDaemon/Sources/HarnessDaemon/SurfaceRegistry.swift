@@ -1355,7 +1355,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
     func storedChildExit(surfaceID: String) -> Int32? {
         lock.lock()
         defer { lock.unlock() }
-        guard let status = tab(forSurfaceKey: surfaceID)?.exitStatus else { return nil }
+        // The status lives on the tab, so a split sibling's exit shows there too. A pane
+        // whose own process still runs has not exited.
+        guard sessions[surfaceID] == nil, let status = tab(forSurfaceKey: surfaceID)?.exitStatus else { return nil }
         return Int32(status)
     }
 

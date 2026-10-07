@@ -195,7 +195,7 @@ extension HarnessCLI {
         }
         let response = try checkedRequest(
             client, .bindHook(event: parsed.event, source: parsed.source, condition: parsed.condition))
-        if case let .hookID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     /// Parse `<event> <command...> [--if <format>]` (the args after the `bind-hook` subcommand).

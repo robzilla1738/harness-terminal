@@ -22,8 +22,9 @@ public enum TargetResolver {
         }
     }
 
-    public static func resolve(_ token: String, kind: Kind, in snapshot: SessionSnapshot) -> Resolution {
-        let (all, positional) = candidates(kind, snapshot)
+    /// Positions count from `context` (the caller's pane, else the active one).
+    public static func resolve(_ token: String, kind: Kind, in snapshot: SessionSnapshot, context: TargetContext? = nil) -> Resolution {
+        let (all, positional) = candidates(kind, snapshot, context: context ?? .current(in: snapshot, environment: nil))
         return resolve(token, kind: kind, candidates: all, positional: positional)
     }
 
@@ -62,11 +63,11 @@ public enum TargetResolver {
     }
 
     /// Everything addressable of `kind`, plus the ones a position counts through: sessions
-    /// of the active workspace, tabs of the active session, panes of the active tab.
-    static func candidates(_ kind: Kind, _ snapshot: SessionSnapshot) -> (all: [TargetCandidate], positional: [String]) {
-        let workspace = snapshot.activeWorkspace
-        let activeSession = workspace?.sessions.first { $0.id == workspace?.activeSessionID } ?? workspace?.sessions.first
-        let activeTab = activeSession?.activeTab ?? activeSession?.tabs.first
+    /// of the context's workspace, tabs of its session, panes of its tab.
+    static func candidates(_ kind: Kind, _ snapshot: SessionSnapshot, context: TargetContext) -> (all: [TargetCandidate], positional: [String]) {
+        let workspace = context.workspace
+        let activeSession = context.session
+        let activeTab = context.tab
         switch kind {
         case .session:
             let all = snapshot.workspaces.flatMap { workspace in

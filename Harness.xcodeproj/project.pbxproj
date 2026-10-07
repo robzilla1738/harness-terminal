@@ -94,6 +94,7 @@
 		3430064804A78854DB6766E5 /* HookFiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5074E518A70BAD1B635A6B0A /* HookFiringTests.swift */; };
 		34906FAAAF8E1053B69CBC77 /* InputEncoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9905FB5F9DBFF60548107D5 /* InputEncoderTests.swift */; };
 		36B1B9227FDAA1F838FA38ED /* HookRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C1D7E421BF0D750A80A52C /* HookRegistryTests.swift */; };
+		3871B2CF223927CB08C95D4E /* HarnessCLI+Inspect.swift in Sources */ = {isa = PBXBuildFile; fileRef = 552140180FFE52E690F97B6E /* HarnessCLI+Inspect.swift */; };
 		38D3D8255A3FB7C775A79419 /* HarnessTerminalEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 7D2095A549D0871055203990 /* HarnessTerminalEngine */; };
 		38ED46EBAF81D35F3E683955 /* SurfaceRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51ECCD77E8E2A9F4EC74E1C /* SurfaceRegistryTests.swift */; };
 		38EDD44FE6326B82CF03CBA5 /* HarnessOnboarding in Frameworks */ = {isa = PBXBuildFile; productRef = B205F6B469F3A1D975E9A44C /* HarnessOnboarding */; };
@@ -545,6 +546,7 @@
 		53207D56DDE8DCA3027F7AA5 /* HarnessCLI+Install.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HarnessCLI+Install.swift"; sourceTree = "<group>"; };
 		53CE0715B313F5152C1D1289 /* OwnershipDaemonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnershipDaemonTests.swift; sourceTree = "<group>"; };
 		5417E8EA74A3B5605412B89D /* AgentHookInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookInstallerTests.swift; sourceTree = "<group>"; };
+		552140180FFE52E690F97B6E /* HarnessCLI+Inspect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HarnessCLI+Inspect.swift"; sourceTree = "<group>"; };
 		55CE1F259011A9E1673BD180 /* StatusLineWidth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusLineWidth.swift; sourceTree = "<group>"; };
 		56641B9C2B1EE4F560E685D8 /* LiveCompositorFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCompositorFixture.swift; sourceTree = "<group>"; };
 		5682C78A6E653E4DD2C915FE /* FrameBuilderCopyModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBuilderCopyModeTests.swift; sourceTree = "<group>"; };
@@ -1107,6 +1109,7 @@
 				6F2E69C777EE2860ACB3E340 /* HarnessCLI+API.swift */,
 				B72A452CFCD254A94561B0F0 /* HarnessCLI+Buffers.swift */,
 				D035893B971CF9C16D4E818C /* HarnessCLI+Config.swift */,
+				552140180FFE52E690F97B6E /* HarnessCLI+Inspect.swift */,
 				53207D56DDE8DCA3027F7AA5 /* HarnessCLI+Install.swift */,
 				DB38DF4410112E47ED141A91 /* HarnessCLI+Panes.swift */,
 				6422111ED1E0C1500D2CA952 /* HarnessCLI+Run.swift */,
@@ -2282,6 +2285,7 @@
 				5F345498F29FC8CA57AFDFCA /* HarnessCLI+API.swift in Sources */,
 				C2D2D1118B4F3342B5ACC807 /* HarnessCLI+Buffers.swift in Sources */,
 				2B46EC62776B1A9C23D57D39 /* HarnessCLI+Config.swift in Sources */,
+				3871B2CF223927CB08C95D4E /* HarnessCLI+Inspect.swift in Sources */,
 				5E84FEEFB6029B8B8FE73B21 /* HarnessCLI+Install.swift in Sources */,
 				7986800EBDC8B77CDD57612E /* HarnessCLI+Panes.swift in Sources */,
 				4FB74898C012DE82320857E6 /* HarnessCLI+Run.swift in Sources */,

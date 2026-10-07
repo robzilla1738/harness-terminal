@@ -54,6 +54,12 @@ extension HarnessCLI {
         switch sub {
         case "list":
             let hosts = store.load()
+            if args.contains("--json") {
+                struct Row: Encodable { var name, ssh, socket: String; var connected: Bool }
+                let rows = hosts.map { Row(name: $0.name, ssh: $0.sshTarget, socket: $0.remoteSocketPath, connected: SSHTunnelManager.isForwarding($0.name)) }
+                print(try JSONOutputFormatter.encode(rows, pretty: args.contains("--pretty")))
+                return 0
+            }
             if hosts.isEmpty {
                 print("No remote hosts. Add one with: harness-cli remote add --name <name> --ssh <user@host> --socket <remote-path>")
             }

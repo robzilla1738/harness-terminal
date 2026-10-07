@@ -143,9 +143,8 @@ extension HarnessCLI {
     }
 
     static func handleProcess(_ args: [String], client: DaemonClient) throws {
-        let surface = try flagValue(args, flag: "--surface") ?? firstSurfaceID(client)
-        guard let surface else {
-            fputs("Usage: harness-cli process --surface <id>\n", harnessStderr)
+        guard let surface = flagValue(args, flag: "--surface") else {
+            fputs("Usage: harness-cli process [--surface <id>]\n", harnessStderr)
             exit(1)
         }
         guard case let .text(json) = try checkedRequest(client, .foregroundProcess(surfaceID: surface)) else {
@@ -207,11 +206,6 @@ extension HarnessCLI {
 
     static func layoutDirectory() -> URL {
         HarnessPaths.sessionsDirectory.appendingPathComponent("layouts", isDirectory: true)
-    }
-
-    private static func firstSurfaceID(_ client: DaemonClient) throws -> String? {
-        guard case let .surfaces(surfaces) = try checkedRequest(client, .listSurfaces) else { return nil }
-        return surfaces.first?.surfaceID
     }
 
     private static func requireHost(_ name: String) throws -> RemoteHost {

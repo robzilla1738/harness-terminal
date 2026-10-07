@@ -10,7 +10,7 @@ extension HarnessCLI {
         guard let surface = flagValue(args, flag: "--surface"),
               let keys = flagValue(args, flag: "--keys")
         else {
-            fputs("Usage: harness-cli send-keys --surface <id> [-l|-H] --keys \"C-c Up Enter ...\"\n", harnessStderr)
+            fputs("Usage: harness-cli send-keys [--surface <id>] [-l|-H] --keys \"C-c Up Enter ...\"\n", harnessStderr)
             exit(1)
         }
         // `-l` (literal): send the keys text verbatim, no key-name interpretation.
@@ -29,8 +29,21 @@ extension HarnessCLI {
 
     static func handleCapturePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli capture-pane --surface <id> [--scrollback] [-S <start>] [-E <end>] [-e] [-J] [-p]\n", harnessStderr)
+            fputs("Usage: harness-cli capture-pane [--surface <id>] [--scrollback] [-S <start>] [-E <end>] [-e] [-J] [-p]\n"
+                + "       harness-cli capture-pane [--surface <id>] --format text|vt|html [--trim] [--unwrap]\n", harnessStderr)
             exit(1)
+        }
+        // `--format`/`--trim`/`--unwrap`: the same capture as `api call pane.capture`.
+        if let format = flagValue(args, flag: "--format") ?? ((args.contains("--trim") || args.contains("--unwrap")) ? "text" : nil) {
+            guard ["text", "vt", "html"].contains(format) else {
+                fputs("capture-pane: --format must be text, vt, or html\n", harnessStderr)
+                exit(CLIExit.usage)
+            }
+            let response = try checkedRequest(client, .captureFormatted(
+                surfaceID: surface, format: format, trim: args.contains("--trim"), unwrap: args.contains("--unwrap")
+            ), timeout: 10)
+            if case let .text(text) = response { print(text) }
+            return
         }
         // -S/-E request a line range (tmux `-p` prints to stdout, the default here);
         // negative numbers count back from the bottom. -e keeps the program's raw escapes;
@@ -50,7 +63,7 @@ extension HarnessCLI {
 
     static func handlePipePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli pipe-pane --surface <id> [<shell-command>]   (omit command to stop)\n", harnessStderr)
+            fputs("Usage: harness-cli pipe-pane [--surface <id>] [<shell-command>]   (omit command to stop)\n", harnessStderr)
             exit(1)
         }
         // Skip the subcommand at index 0; the first remaining non-flag, non-surface
@@ -84,7 +97,7 @@ extension HarnessCLI {
             exit(1)
         }
         let response = try checkedRequest(client, .linkWindow(tabID: tabID, targetSessionID: sessionID))
-        if case let .tabID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     static func handleUnlinkWindow(_ args: [String], client: DaemonClient) throws {
@@ -97,7 +110,7 @@ extension HarnessCLI {
 
     static func handlePaneCommand(_ args: [String], client: DaemonClient, _ make: (UUID) -> IPCRequest) throws {
         guard let paneIDStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneIDStr) else {
-            fputs("Missing or invalid --pane <uuid>\n", harnessStderr)
+            fputs("No pane: pass --pane or --surface, or run inside a pane\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, make(paneID))
@@ -114,27 +127,15 @@ extension HarnessCLI {
     }
 
     static func handleResizePane(_ args: [String], client: DaemonClient) throws {
-        guard let paneID = try paneTarget(args, client: client),
+        guard let paneID = UUID(uuidString: flagValue(args, flag: "--pane") ?? ""),
               let dirStr = flagValue(args, flag: "--dir")?.lowercased(),
               let direction = parseDirection(dirStr)
         else {
-            fputs("Usage: harness-cli resize-pane (--pane <id> | --surface <id>) --dir L|R|U|D [--amount N]\n", harnessStderr)
+            fputs("Usage: harness-cli resize-pane [--pane <id> | --surface <id>] --dir L|R|U|D [--amount N]\n", harnessStderr)
             exit(CLIExit.usage)
         }
         let amount = Int(flagValue(args, flag: "--amount") ?? "1") ?? 1
         _ = try checkedRequest(client, .resizePane(paneID: paneID, direction: direction, amount: amount))
-    }
-
-    /// `--pane`, else the pane showing `--surface` (or `$HARNESS_SURFACE`, the pane the
-    /// command runs in).
-    static func paneTarget(_ args: [String], client: DaemonClient) throws -> UUID? {
-        if let raw = flagValue(args, flag: "--pane") { return UUID(uuidString: raw) }
-        guard let surface = flagValue(args, flag: "--surface") ?? ProcessInfo.processInfo.environment["HARNESS_SURFACE"],
-              case let .snapshot(snapshot) = try checkedRequest(client, .getSnapshot)
-        else { return nil }
-        return snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
-            .flatMap { $0.rootPane.allLeaves() }
-            .first { $0.surfaceID.uuidString.caseInsensitiveCompare(surface) == .orderedSame }?.id
     }
 
     static func parseDirection(_ raw: String) -> ResizeDirection? {
@@ -149,7 +150,7 @@ extension HarnessCLI {
 
     static func handleCopyMode(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli copy-mode --surface <id> [--enter|--exit]\n", harnessStderr)
+            fputs("Usage: harness-cli copy-mode [--surface <id>] [--enter|--exit]\n", harnessStderr)
             exit(1)
         }
         let enabled = !args.contains("--exit")
@@ -196,11 +197,11 @@ extension HarnessCLI {
 
     static func handleBreakPane(_ args: [String], client: DaemonClient) throws {
         guard let paneStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneStr) else {
-            fputs("Usage: harness-cli break-pane --pane <uuid>\n", harnessStderr)
+            fputs("Usage: harness-cli break-pane [--pane <id>]\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .breakPane(paneID: paneID))
-        if case let .tabID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     static func handleJoinPane(_ args: [String], client: DaemonClient) throws {
@@ -213,7 +214,7 @@ extension HarnessCLI {
             exit(1)
         }
         let response = try checkedRequest(client, .joinPane(sourcePaneID: src, destPaneID: dst, direction: direction))
-        if case let .paneID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     /// `move-pane --src <uuid> --dst <uuid> [--direction horizontal|vertical]` —
@@ -238,7 +239,7 @@ extension HarnessCLI {
             direction = .horizontal
         }
         let response = try checkedRequest(client, .joinPane(sourcePaneID: src, destPaneID: dst, direction: direction))
-        if case let .paneID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 
     /// `renumber-windows --session <uuid>` — renumber a session's tab indices.
@@ -252,7 +253,7 @@ extension HarnessCLI {
 
     static func handleRespawnPane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli respawn-pane --surface <id> [--clear-history|-k]\n", harnessStderr)
+            fputs("Usage: harness-cli respawn-pane [--surface <id>] [--clear-history|-k]\n", harnessStderr)
             exit(1)
         }
         let keepHistory = !(args.contains("--clear-history") || args.contains("-k"))
@@ -264,7 +265,7 @@ extension HarnessCLI {
     /// attached clients so their on-screen scrollback clears in step with the server's ring.
     static func handleClearHistory(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli clear-history --surface <id>\n", harnessStderr)
+            fputs("Usage: harness-cli clear-history [--surface <id>]\n", harnessStderr)
             exit(1)
         }
         _ = try checkedRequest(client, .clearHistory(surfaceID: surface))
@@ -272,16 +273,16 @@ extension HarnessCLI {
 
     static func handleSelectPane(_ args: [String], client: DaemonClient) throws {
         guard let paneStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneStr) else {
-            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", harnessStderr)
+            fputs("Usage: harness-cli select-pane [--pane <id>] --dir L|R|U|D\n", harnessStderr)
             exit(1)
         }
         guard let dirStr = flagValue(args, flag: "--dir")?.lowercased(),
               let axis = DirectionalAxis(short: dirStr)
         else {
-            fputs("Usage: harness-cli select-pane --pane <uuid> --dir L|R|U|D\n", harnessStderr)
+            fputs("Usage: harness-cli select-pane [--pane <id>] --dir L|R|U|D\n", harnessStderr)
             exit(1)
         }
         let response = try checkedRequest(client, .selectPaneDirectional(currentPaneID: paneID, direction: axis))
-        if case let .paneID(id) = response { print(id.uuidString) }
+        printCreated(response, args)
     }
 }
