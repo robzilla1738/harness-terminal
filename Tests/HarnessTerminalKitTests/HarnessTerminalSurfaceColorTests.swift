@@ -81,9 +81,9 @@ final class HarnessTerminalSurfaceColorTests: XCTestCase {
         view.receive("\u{1b}]4;4;?\u{7}")
 
         XCTAssertEqual(responses.wrappedValue, [
-            "\u{1b}]10;rgb:1d1d/1d1d/1f1f\u{1b}\\",
-            "\u{1b}]11;rgb:f5f5/f5f5/f7f7\u{1b}\\",
-            "\u{1b}]12;rgb:0000/6666/cccc\u{1b}\\",
+            "\u{1b}]10;rgb:1e1e/2424/3030\u{1b}\\",
+            "\u{1b}]11;rgb:f8f8/f9f9/fcfc\u{1b}\\",
+            "\u{1b}]12;rgb:2424/6363/d1d1\u{1b}\\",
             "\u{1b}]4;4;rgb:0000/0000/b6b6\u{1b}\\",
         ])
     }

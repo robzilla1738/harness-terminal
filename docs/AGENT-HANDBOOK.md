@@ -26,7 +26,7 @@ Harness renders terminals with its **own** self-contained stack — there is **n
 third-party terminal engine dependency** (the entire terminal stack is first-party; the only
 external package is Sparkle, GUI auto-update only). `TerminalHostView`
 hosts `HarnessTerminalSurfaceView` (a `CAMetalLayer` view) driving `HarnessTerminalEngine`
-(VT parser + screen/scrollback), `HarnessTheme` (491-theme catalog + `.harnesstheme`), and
+(VT parser + screen/scrollback), `HarnessTheme` (492-theme catalog + `.harnesstheme`), and
 `HarnessTerminalRenderer` (CoreText atlas + Metal). Features: themed translucent canvas with
 untouched program output (`applyThemeToTerminalOutput` toggles theme-colored output), balanced
 window padding (centered grid) + a live resize HUD, cursor styles + blink (DECSCUSR; `0` / a
@@ -242,7 +242,7 @@ harness/
 │   │                              # ShellIntegration, API, Script, Remote, Session/PaneRectSolver
 │   ├── HarnessTerminalEngine/     # VT parser, screen/scrollback, images, OSC 7501, snapshot capture
 │   ├── HarnessCopyMode/           # Shared copy-mode reducer for GUI + attach-window
-│   ├── HarnessTheme/              # 491-theme catalog + .harnesstheme import/export
+│   ├── HarnessTheme/              # 492-theme catalog + .harnesstheme import/export
 │   ├── HarnessTerminalRenderer/   # FrameBuilder, CoreText glyph atlas, Metal renderer
 │   ├── HarnessTerminalKit/        # TerminalHostView, ThemeManager, GridCompositor,
 │   │                              # HarnessTerminalSurfaceView (native CAMetalLayer view)

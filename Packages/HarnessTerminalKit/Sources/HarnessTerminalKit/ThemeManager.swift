@@ -25,24 +25,26 @@ public enum ThemeManager {
         "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
     ]
 
-    public static let systemLightBackgroundHex = "#F5F5F7"
-    public static let systemLightForegroundHex = "#1D1D1F"
-    public static let systemLightCursorHex = "#0066CC"
+    /// "Harness Light", the fallback when the light theme can't be found.
+    public static let systemLightBackgroundHex = "#f8f9fc"
+    public static let systemLightForegroundHex = "#1e2430"
+    public static let systemLightCursorHex = "#2463d1"
     public static let systemLightPaletteHex = [
-        "#000000", "#C41A16", "#007400", "#886A08",
-        "#0000B6", "#AA0D91", "#0071A1", "#BFBFBF",
-        "#666666", "#FF6E67", "#00A000", "#B8860B",
-        "#0000FF", "#FF00FF", "#00A2B8", "#FFFFFF",
+        "#1f2533", "#c42b3c", "#2e7d32", "#9a6700",
+        "#2463d1", "#8250df", "#12808a", "#d8dce5",
+        "#5f6878", "#d73a49", "#3b8f40", "#a86f00",
+        "#3d7ef0", "#8f5ee8", "#18858f", "#eef1f6",
     ]
     public static let systemDarkBackgroundHex = defaultBaselineBackgroundHex
     public static let systemDarkForegroundHex = defaultBaselineForegroundHex
     public static let systemDarkCursorHex = defaultBaselineCursorHex
     public static let systemDarkPaletteHex = defaultBaselinePaletteHex
-    public static let defaultSystemLightThemeName = "Zenwritten Light"
+    public static let defaultSystemLightThemeName = "Harness Light"
     public static let defaultSystemDarkThemeName = HarnessThemeCatalog.defaultThemeName
 
     public static let featuredThemes = [
         HarnessThemeCatalog.defaultThemeName,
+        "Harness Light",
         "Harness Black",
         "Catppuccin Mocha",
         "Dracula",
@@ -186,7 +188,7 @@ public enum ThemeManager {
         return ResolvedAppearance(canvas: canvas, paletteHex: base.paletteHex)
     }
 
-    /// The existing light theme (the user's light theme, else Zenwritten Light, else the
+    /// The existing light theme (the user's light theme, else Harness Light, else the
     /// documented light baseline). Shared by explicit light and a light Mac.
     private static func lightAppearance(systemLightThemeName: String?) -> ResolvedAppearance {
         if let theme = systemTheme(

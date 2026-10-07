@@ -83,7 +83,7 @@ final class HarnessThemeCatalogTests: XCTestCase {
     }
 
     func testCommunityThemesResourceIsBundled() {
-        XCTAssertEqual(HarnessThemeCatalog.allThemes.count, 491)
+        XCTAssertEqual(HarnessThemeCatalog.allThemes.count, 492)
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: "Zenwritten Light"))
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: "0x96f"))
     }

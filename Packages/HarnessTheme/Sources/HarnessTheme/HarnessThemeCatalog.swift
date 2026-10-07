@@ -13,6 +13,7 @@ public enum HarnessThemeCatalog {
     /// Curated, surfaced-first themes.
     public static let featuredNames = [
         "Harness Default",
+        "Harness Light",
         "Harness Black",
         "Catppuccin Mocha",
         "Dracula",
@@ -94,6 +95,19 @@ public enum HarnessThemeCatalog {
                 "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
                 "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
                 "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
+            ]
+        ),
+        // The light companion to the navy default: near-white with a cool tint, deep ink,
+        // the same blue accent, and ANSI colors that all clear 3.5:1 on the canvas.
+        .make(
+            "Harness Light",
+            bg: "#f8f9fc", fg: "#1e2430", cursor: "#2463d1",
+            selectionBackground: "#cddcf7",
+            palette: [
+                "#1f2533", "#c42b3c", "#2e7d32", "#9a6700",
+                "#2463d1", "#8250df", "#12808a", "#d8dce5",
+                "#5f6878", "#d73a49", "#3b8f40", "#a86f00",
+                "#3d7ef0", "#8f5ee8", "#18858f", "#eef1f6",
             ]
         ),
         // The pre-navy default, kept so anyone can go back to pure black.

@@ -190,7 +190,7 @@ final class HarnessSettingsTests: XCTestCase {
     }
 
     func testSystemThemeNamesDefaultAndRoundTrip() throws {
-        XCTAssertEqual(HarnessSettings().systemLightThemeName, "Zenwritten Light")
+        XCTAssertEqual(HarnessSettings().systemLightThemeName, "Harness Light")
         XCTAssertEqual(HarnessSettings().systemDarkThemeName, "Harness Default")
 
         let settings = HarnessSettings(
@@ -225,7 +225,7 @@ final class HarnessSettingsTests: XCTestCase {
         let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
 
         XCTAssertEqual(migrated.appearanceMode, .theme)
-        XCTAssertEqual(migrated.systemLightThemeName, "Zenwritten Light")
+        XCTAssertEqual(migrated.systemLightThemeName, "Harness Light")
         XCTAssertEqual(migrated.systemDarkThemeName, "Harness Default")
     }
 
@@ -259,7 +259,7 @@ final class HarnessSettingsTests: XCTestCase {
             let settings = HarnessSettings.load(imported: nil)
 
             XCTAssertEqual(settings.appearanceMode, .macOSSystem)
-            XCTAssertEqual(settings.systemLightThemeName, "Zenwritten Light")
+            XCTAssertEqual(settings.systemLightThemeName, "Harness Light")
             XCTAssertEqual(settings.systemDarkThemeName, "Harness Default")
         }
     }
@@ -614,7 +614,7 @@ final class HarnessSettingsTests: XCTestCase {
             let settings = HarnessSettings.load(imported: splitThemeImport)
 
             XCTAssertEqual(settings.appearanceMode, .theme)
-            XCTAssertEqual(settings.systemLightThemeName, "Zenwritten Light")
+            XCTAssertEqual(settings.systemLightThemeName, "Harness Light")
             XCTAssertEqual(settings.systemDarkThemeName, "Harness Default")
             XCTAssertEqual(settings.paletteHex[0], "#ABCDEF")
             XCTAssertEqual(settings.importedConfigSignature, splitThemeImport.signature)
@@ -1029,5 +1029,12 @@ final class HarnessSettingsTests: XCTestCase {
         let off = try JSONDecoder().decode(
             HarnessSettings.self, from: Data(#"{ "windowInheritCWD": false }"#.utf8))
         XCTAssertFalse(off.windowInheritCWD)
+    }
+
+    func testStoredOldLightDefaultMovesToHarnessLightButOtherChoicesStay() throws {
+        let old = try JSONDecoder().decode(HarnessSettings.self, from: Data(#"{"systemLightThemeName":"Zenwritten Light"}"#.utf8))
+        XCTAssertEqual(old.systemLightThemeName, "Harness Light")
+        let chosen = try JSONDecoder().decode(HarnessSettings.self, from: Data(#"{"systemLightThemeName":"GitHub Light"}"#.utf8))
+        XCTAssertEqual(chosen.systemLightThemeName, "GitHub Light")
     }
 }

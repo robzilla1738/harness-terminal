@@ -65,7 +65,7 @@ final class ThemeManagerTests: XCTestCase {
 
     @MainActor
     func testMacOSSystemAppearanceFallsBackToDocumentedDefaultThemes() throws {
-        let lightTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: "Zenwritten Light"))
+        let lightTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: ThemeManager.defaultSystemLightThemeName))
         let darkTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: ThemeManager.defaultThemeName))
 
         let light = ThemeManager.resolvedAppearance(
@@ -142,7 +142,7 @@ final class ThemeManagerTests: XCTestCase {
             customCursorHex: nil
         )
 
-        let lightTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: "Zenwritten Light"))
+        let lightTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: ThemeManager.defaultSystemLightThemeName))
 
         XCTAssertEqual(dracula, zenwritten)
         XCTAssertEqual(dracula.paletteHex, lightTheme.paletteHex)
@@ -313,5 +313,19 @@ final class ThemeManagerTests: XCTestCase {
         let theme = try XCTUnwrap(HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName))
         XCTAssertEqual(theme.backgroundHex.lowercased(), ThemeManager.defaultBaselineBackgroundHex)
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: "Harness Black"))
+    }
+}
+
+final class HarnessLightReadabilityTests: XCTestCase {
+    func testHarnessLightIsCrispAndEveryInkColorReads() throws {
+        let theme = try XCTUnwrap(HarnessThemeCatalog.theme(named: "Harness Light"))
+        let background = try XCTUnwrap(ChromeColor(hex: theme.backgroundHex))
+        let foreground = try XCTUnwrap(ChromeColor(hex: theme.foregroundHex))
+        XCTAssertGreaterThanOrEqual(foreground.contrastRatio(against: background), 12)
+        // 0 is the dark ink; 7 and 15 are the light "white" slots, not text on this canvas.
+        for (index, hex) in theme.paletteHex.enumerated() where ![7, 15].contains(index) {
+            let color = try XCTUnwrap(hex.flatMap(ChromeColor.init(hex:)))
+            XCTAssertGreaterThanOrEqual(color.contrastRatio(against: background), 3.5, "palette \(index)")
+        }
     }
 }

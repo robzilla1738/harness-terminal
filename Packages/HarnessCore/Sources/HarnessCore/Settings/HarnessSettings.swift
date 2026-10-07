@@ -321,6 +321,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var paneDensity: PaneDensity
     /// A title row (icon, identity, split buttons) atop each comfortable pane.
     public var paneHeaders: Bool
+    /// The light theme Harness used to default to; a stored copy migrates to the new default.
+    static let retiredLightDefault = "Zenwritten Light"
     /// Confirm before pasting text containing newlines / control characters when the program has
     /// not enabled bracketed paste — guards against blind multi-line command execution.
     public var pasteProtection: Bool
@@ -396,7 +398,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowPaddingX: Float = 14,
         windowPaddingY: Float = 14,
         appearanceMode: HarnessAppearanceMode = .theme,
-        systemLightThemeName: String = "Zenwritten Light",
+        systemLightThemeName: String = "Harness Light",
         systemDarkThemeName: String = "Harness Default",
         customBackgroundHex: String? = nil,
         customForegroundHex: String? = nil,
@@ -721,7 +723,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             systemDarkThemeName = legacyDarkThemeName
         } else {
             appearanceMode = decodedAppearanceMode ?? defaultSettings.appearanceMode
-            systemLightThemeName = try container.decodeIfPresent(String.self, forKey: .systemLightThemeName) ?? defaultSettings.systemLightThemeName
+            let storedLight = try container.decodeIfPresent(String.self, forKey: .systemLightThemeName)
+            // "Zenwritten Light" was the shipped default, saved whether or not anyone chose it.
+            // It reads washed out next to the navy default, so it moves to Harness Light.
+            systemLightThemeName = storedLight.flatMap { $0 == Self.retiredLightDefault ? nil : $0 }
+                ?? defaultSettings.systemLightThemeName
             systemDarkThemeName = try container.decodeIfPresent(String.self, forKey: .systemDarkThemeName) ?? defaultSettings.systemDarkThemeName
         }
         // Color overrides decode PLAINLY (absent = nil) — never through the import-aware
