@@ -342,7 +342,7 @@ harness-cli api call pane.wait --args '{"until":"child","timeout":30}'
 ```lua
 harness.mode("resize", { exclusive = true })
 harness.bind("ctrl+r", { mode = "resize" })
-harness.action({ name = "nudge", title = "Nudge left", run = function() os.execute('harness-cli resize-pane --pane "$HARNESS_SURFACE" --dir L --amount 5') end })
+harness.action({ name = "nudge", title = "Nudge left", run = function() os.execute('harness-cli resize-pane --surface "$HARNESS_SURFACE" --dir L --amount 5') end })
 harness.bind("resize/left", "nudge")
 harness.action({ name = "build", title = "Build", run = function()
   local code, err = harness.wait({ type = "terminal.child_exited" }, { timeout = 30 })

@@ -43,11 +43,14 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Quick terminal: a Quake-style dropdown on a global hotkey (Settings ▸ Keys), sliding over whatever app is frontmost and persisting like any other session
 - Terminal bell (`\a`): audible and/or visual feedback on the focused surface, a bell badge on background tabs, and tmux `visual-bell`/`bell-action` bridging
 - Find bar (⌘F) with regular-expression and case-sensitivity toggles; matches highlight across scrollback
-- Sidebar sessions, per-session tabs, and horizontal / vertical splits — group sessions with shared window lists
+- Title-bar tabs level with the traffic lights, each with an app tile (`>_` for a shell, the brand tile for an agent) and a live status mark (working, needs you, done, error). `⌘\` switches to sidebar mode, which lists every session by name with its tabs beneath
+- A sessions popover (`⌃⌘S`, or the stacked-squares button): filter or create a session by typing, ✓ on the current one, New Session, Add Remote Host
+- Every pane is an inset card with a header (identity, split-right / split-down; double-click to zoom), horizontal / vertical splits, and grouped sessions with shared window lists
+- Workspace Overview (`⌘⇧O`): every tab as a live tile, the ones waiting on you first; type to filter, arrows and ↩ to jump
 - Session layout persists across quits (daemon-owned, attach from the CLI or over SSH); if the daemon restarts under a pane, a quiet "Reconnecting…" chip rides the ~1-minute automatic backoff before the click-to-re-grab overlay takes over
 - Persistent scrollback: a pane's history is written to disk per surface and restored when the daemon restarts — set the scrollback limit to 0 for unlimited history (disk-capped only)
-- Remote & headless daemon: run `HarnessDaemon` on a headless or remote box (Linux included) and drive it with `harness-cli --host <name>` over an SSH tunnel — register hosts with `harness-cli remote add`
-- `harness-cli` for automation and agent hooks
+- Remote & headless daemon: run `HarnessDaemon` on a headless or remote box (Linux included) and drive it with `harness-cli --host <name>` over your own SSH. Add Remote Host… needs only the SSH destination: it detects the daemon socket and tests the connection, and a dropped tunnel reconnects itself
+- `harness-cli` for automation and agent hooks: `run --wait -- make test` exits with the command's status, targets take names, positions, or ID fragments (`--surface 2`, `--tab logs`), and exit statuses are documented (3 = no such target, 4 = daemon unreachable)
 - Color/theme diagnostics from the CLI: `harness-cli color-check` and `harness-cli theme-preview --theme <name>` print deterministic SGR pages for eyeballing fidelity in Harness itself
 - Command set: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`, `find-window`, `kill-server`, `start-server`, `respawn-window`, `refresh-client`, and more
 - Command prefix keymap (default `Ctrl-A`) with a live cheatsheet (prefix `?`)
@@ -64,7 +67,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Program status (OSC 7501): a pane can report working, blocked, done, or error, and that mark shows on the tab, the session row, and ⌘⇧U. See [docs/PROGRAM-STATUS.md](docs/PROGRAM-STATUS.md)
 - `harness-cli api` for a JSON method list, schemas, and calls, plus `events --follow` for a live event stream
 - Lua 5.1 config at `~/.config/harness/init.lua` (`HARNESS_CONFIG` overrides the path). It runs in the CLI. The daemon does not run it
-- Two pane densities (comfortable islands, or compact 1-point borders) and automatic contrast correction on a light canvas
+- Two pane densities (comfortable cards with headers, or compact 1-point borders) and automatic contrast correction on a light canvas
 - One window can show This Mac and another machine's daemon as separate sidebar groups. The attach is your SSH tunnel to that daemon
 
 ## harness-cli

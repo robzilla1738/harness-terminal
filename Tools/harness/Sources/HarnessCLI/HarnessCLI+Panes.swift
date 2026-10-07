@@ -114,15 +114,27 @@ extension HarnessCLI {
     }
 
     static func handleResizePane(_ args: [String], client: DaemonClient) throws {
-        guard let paneStr = flagValue(args, flag: "--pane"), let paneID = UUID(uuidString: paneStr),
+        guard let paneID = try paneTarget(args, client: client),
               let dirStr = flagValue(args, flag: "--dir")?.lowercased(),
               let direction = parseDirection(dirStr)
         else {
-            fputs("Usage: harness-cli resize-pane --pane <uuid> --dir L|R|U|D [--amount N]\n", harnessStderr)
-            exit(1)
+            fputs("Usage: harness-cli resize-pane (--pane <id> | --surface <id>) --dir L|R|U|D [--amount N]\n", harnessStderr)
+            exit(CLIExit.usage)
         }
         let amount = Int(flagValue(args, flag: "--amount") ?? "1") ?? 1
         _ = try checkedRequest(client, .resizePane(paneID: paneID, direction: direction, amount: amount))
+    }
+
+    /// `--pane`, else the pane showing `--surface` (or `$HARNESS_SURFACE`, the pane the
+    /// command runs in).
+    static func paneTarget(_ args: [String], client: DaemonClient) throws -> UUID? {
+        if let raw = flagValue(args, flag: "--pane") { return UUID(uuidString: raw) }
+        guard let surface = flagValue(args, flag: "--surface") ?? ProcessInfo.processInfo.environment["HARNESS_SURFACE"],
+              case let .snapshot(snapshot) = try checkedRequest(client, .getSnapshot)
+        else { return nil }
+        return snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+            .flatMap { $0.rootPane.allLeaves() }
+            .first { $0.surfaceID.uuidString.caseInsensitiveCompare(surface) == .orderedSame }?.id
     }
 
     static func parseDirection(_ raw: String) -> ResizeDirection? {

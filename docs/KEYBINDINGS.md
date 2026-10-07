@@ -97,7 +97,9 @@ These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefi
 | Previous prompt (OSC 133) | `⌘↑` |
 | Next prompt (OSC 133) | `⌘↓` |
 | Select last command output (OSC 133) | `⌘⇧A` |
-| Toggle sidebar | `⌘\` |
+| Toggle sidebar (title-bar tabs ↔ sidebar mode) | `⌘\` |
+| Switch session (the sessions popover) | `⌃⌘S` |
+| Workspace Overview (live tile grid) | `⌘⇧O` |
 | Jump to notification | `⌘⇧U` |
 | Tab peek | `⌃⌘P` |
 | Settings | `⌘,` |

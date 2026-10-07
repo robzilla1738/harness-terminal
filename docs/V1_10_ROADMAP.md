@@ -68,7 +68,7 @@ Effort: **S** < ~1 day · **M** a few days · **L** larger.
 - *Tests:* one conformance test per reply/mode; blink-rows-only re-encode assertion; daemon partial-frame cap test; `make bench-check` (the row-content-key change is the only perf-risk surface). Update `TMUX_PARITY.md`/handbook where behavior diverges.
 - *Risk:* medium (row-key change). May split engine/renderer halves if review size demands.
 
-**PR-30 · Mechanical decomposition I — TerminalKit + Renderer** · tech-debt · L diff / S semantic *(AUDIT_ROADMAP PR-22a)* · ✅ **Shipped (#153)**
+**PR-30 · Mechanical decomposition I — TerminalKit + Renderer** · tech-debt · L diff / S semantic *(AUDIT_ROADMAP PR-22a)* · ◐ **Partly shipped (#153)**: the renderer instance types moved; the surface-view split (`HarnessTerminalSurfaceView+Selection/+Find/+CopyMode/+Input/+IME/+LinkHover`) never landed, and that file has since grown to ~4.8k lines.
 - *Why:* `HarnessTerminalSurfaceView.swift` is 4053 lines mixing 8+ responsibilities; `TerminalMetalRenderer.swift` is 1822. Merge-conflict magnets; the only structural debt in an otherwise healthy stack.
 - *Approach:* **Strictly mechanical, zero behavior change.** Split the surface view along existing `MARK` seams into same-class extension files (`+Selection`, `+Find`, `+CopyMode`, `+Input`, `+IME`, `+LinkHover`; `+Accessibility` already exists from #118). Extract `TerminalRenderInstances.swift` from the renderer. No signature changes, no logic edits.
 - *Files:* `HarnessTerminalSurfaceView.swift` → 6–7 files; `TerminalMetalRenderer.swift` → +1 file.
@@ -82,7 +82,7 @@ Effort: **S** < ~1 day · **M** a few days · **L** larger.
 - *Tests:* settings round-trip + forward-compat decode test (unknown keys ignored, missing keys → defaults); daemon suite + `HARNESS_LIVE_DAEMON_TESTS=1` run; VersionBanner tests unchanged.
 - *Risk:* low-medium (lock-adjacent moves). **After PR-26** (which edits the monitor code being moved).
 
-**PR-32 · Mechanical decomposition III — App + CLI** · tech-debt · L diff / S semantic · ✅ **Shipped (#152)**
+**PR-32 · Mechanical decomposition III — App + CLI** · tech-debt · L diff / S semantic · ◐ **Partly shipped (#152)**: the CLI split landed; the app halves (SettingsViewController, SessionCoordinator) did not.
 - *Why:* `SettingsViewController.swift` (2712), `SessionCoordinator.swift` (1888), `HarnessCLI.swift` (1877) are the remaining god files; every settings/coordination change pays a whole-file comprehension tax.
 - *Approach:* Same mechanical rules: extension-file splits along existing seams — settings per-tab section files, coordinator concerns (`+Notifications`, `+AgentActivity`, `+Metadata`, `+FocusSync`…), CLI subcommand handler files. No new types unless a move is literally impossible without one; no behavior change.
 - *Files:* the three above → ~12–15 files.

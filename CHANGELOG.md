@@ -11,6 +11,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 Not a release. Local `main` carries this work so the next session starts from it. `HarnessVersion.short` stays 1.12.1. The 1.13–1.17 names are feature slices in this unreleased work, not a version bump.
 
 ### Fixed
+- **`resize-pane` takes a surface.** `--surface <id>` (or `$HARNESS_SURFACE` inside a pane) works alongside `--pane`, so the Lua example in the multiplexer guide runs as written.
 - **No keychain prompt from the daemon.** The idle-snapshot key is a mode-0600 file next to the control socket on every platform, not a keychain item. The keychain added no protection over the socket and scrollback beside it, and asked for access every time the daemon binary changed.
 - **Card edges are clean.** The cards, their terminal drawables, and the gutter around them now use one corner curve, and the gutter fill runs a point under each card's hairline. Before, mismatched curves left slivers at the corners and the two antialiased edges left a faint see-through seam.
 - **`harness-cli --host` no longer breaks the app's tunnel.** The app and the CLI share one forward socket per host. A CLI call used to respawn the forward and unlink the app's live socket; it now reuses any forward that answers.
