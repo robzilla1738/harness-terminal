@@ -341,3 +341,17 @@ final class WorkspacePivotTests: XCTestCase {
         XCTAssertEqual(PaneDensity.compact.splitDividerPoints, 1)
     }
 }
+
+final class OverviewOrderTests: XCTestCase {
+    func testWaitingTabsLeadAndFilterMatchesTitleSessionOrDirectory() {
+        let a = OverviewTab(id: "a", title: "~/api › nvim", panes: [OverviewPane(program: "nvim", cwd: "/api", liveText: "")], sessionName: "Work")
+        let b = OverviewTab(id: "b", title: "~ › claude", panes: [], sessionName: "Demo", agent: .claudeCode, needsYou: true)
+        let c = OverviewTab(id: "c", title: "~/web", panes: [OverviewPane(program: "shell", cwd: "/web", liveText: "")], sessionName: "Work")
+        XCTAssertEqual(WorkspaceOverviewBuilder.ordered([a, b, c]).map(\.id), ["b", "a", "c"])
+        XCTAssertEqual(WorkspaceOverviewBuilder.ordered([a, b, c], query: "work").map(\.id), ["a", "c"])
+        XCTAssertEqual(WorkspaceOverviewBuilder.ordered([a, b, c], query: "/web").map(\.id), ["c"])
+        XCTAssertEqual(WorkspaceOverviewBuilder.move(from: 0, by: 3, count: 5), 3)
+        XCTAssertEqual(WorkspaceOverviewBuilder.move(from: 4, by: 3, count: 5), 4)
+        XCTAssertEqual(WorkspaceOverviewBuilder.move(from: 0, by: -1, count: 5), 0)
+    }
+}

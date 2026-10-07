@@ -63,7 +63,7 @@ enum TabPeekController {
             )
             let preview = tab.rootPane.allSurfaceIDs().compactMap { surfaceID -> String? in
                 guard case let .text(text)? = coordinator.requestDaemon(
-                    .capturePane(surfaceID: surfaceID.uuidString, includeScrollback: false)
+                    .capturePaneRange(surfaceID: surfaceID.uuidString, start: nil, end: nil, escapeSequences: false, joinWrapped: false)
                 ) else { return nil }
                 return text.split(separator: "\n", omittingEmptySubsequences: false).suffix(6).joined(separator: "\n")
             }.joined(separator: "\n")
