@@ -209,11 +209,16 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
     /// the PTY vote went out. Touched ONLY on `queue` (the setters below dispatch there; the
     /// queue's FIFO orders a `setPendingResize` ahead of any build dispatched after it).
     private var pendingResize: (cols: Int, rows: Int)?
+    private var pendingResizeLocalOnly = false
 
     /// Enqueue a resize target from main. The preview pipeline must never call the apply side —
     /// previews are non-mutating reads at an explicit target size.
-    func setPendingResize(_ size: (cols: Int, rows: Int)) {
-        queue.async { [self] in pendingResize = size }
+    /// `localOnly` reflows the primary screen and leaves the alternate screen alone.
+    func setPendingResize(_ size: (cols: Int, rows: Int), localOnly: Bool = false) {
+        queue.async { [self] in
+            pendingResize = size
+            pendingResizeLocalOnly = localOnly
+        }
     }
 
     /// Drop an unapplied target (detach/re-host: a stale size must not apply to a re-hosted view).
@@ -226,7 +231,12 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
     func applyPendingResize() -> Bool {
         dispatchPrecondition(condition: .onQueue(queue))
         guard let size = pendingResize else { return false }
+        let localOnly = pendingResizeLocalOnly
         pendingResize = nil
+        pendingResizeLocalOnly = false
+        if localOnly {
+            return emulator.resizePrimaryLocally(cols: size.cols, rows: size.rows)
+        }
         emulator.resize(cols: size.cols, rows: size.rows)
         return true
     }
@@ -317,6 +327,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onInput: ((Data) -> Void)?
     /// New grid size after a resize (columns, rows) — the host forwards this to the daemon.
     public var onResize: ((Int, Int) -> Void)?
+    /// When false, a resize reflows this client's primary screen and does not vote a PTY size.
+    /// The alternate screen is not reflowed. Default true keeps the single-client ioctl path.
+    public var sizeOwner = true
     /// Fires while the grid size changes during a resize so the host can show a dimensions HUD.
     /// `committed` is false for the live (mid-drag) tick and true once the size settles. Never
     /// fires for the terminal's initial sizing live tick (opening a window isn't a resize).
@@ -486,6 +499,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Hide the cursor while typing until the mouse next moves (Ghostty `mouse-hide-while-typing`).
     var mouseHideWhileTyping = false
     var optionAsMeta: OptionAsMetaMode = .composed
+    /// True swallows the key. Installed by the host for the config-file keymap.
+    public var consumeScriptKey: (@MainActor (NSEvent) -> Bool)?
     /// Scrollback offset in lines (0 = live bottom; >0 = scrolled up into history).
     private var scrollOffset = 0
     /// Smooth-scroll sub-line position. The continuous scrollback position is
@@ -525,6 +540,10 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private var columns: Int = 80
     private var rows: Int = 24
+    /// Live grid size. Peek and overview read this and do not write it, so `stty size` stays put.
+    public var gridCellCount: (rows: Int, columns: Int) { (rows, columns) }
+    /// Copy-mode `w`/`b`/`e` separator set. The app pushes the `word-separators` option.
+    public var copyModeWordSeparators: String = CopyModeWords.tmuxDefault
     /// The last frame built on the plain live path (no scrollback/selection/copy-mode/IME), kept
     /// so the next plain render can reuse unchanged rows via the engine's dirty-row damage. Set to
     /// nil whenever a non-plain frame is drawn or the appearance changes, forcing a full rebuild.
@@ -1845,6 +1864,17 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
         guard cols != columns || newRows != rows else { return }
+        let localOnly: Bool
+        switch ClientResizePolicy.decide(
+            owner: sizeOwner, alternateScreen: inputAltScreenActive(), rows: newRows, cols: cols
+        ) {
+        case .unchanged:
+            return
+        case .localReflow:
+            localOnly = true
+        case .pty:
+            localOnly = false
+        }
         // A text selection can't survive a reflow — its anchors reference the OLD grid extents, so
         // after a shrink the highlight renders at stale/out-of-grid coordinates and a copy yields
         // blank/garbage rows. Clear it like the real-time path (`requestLiveResizeCommit`) does;
@@ -1855,7 +1885,9 @@ public final class HarnessTerminalSurfaceView: NSView {
         rows = newRows
         invalidateRenderGeneration()              // bump generation; drop stale preview / plain-frame cache
         lastSentPTYSize = (cols, newRows)          // keep the live-resize vote coalescer in sync
-        onResize?(cols, newRows)                  // one PTY SIGWINCH (fire-and-forget)
+        if !localOnly {
+            onResize?(cols, newRows)              // one PTY SIGWINCH (fire-and-forget). A non-owner does not ioctl.
+        }
         onGridSizeWillChange?(cols, newRows, true) // settled size for the HUD
         previewCols = 0; previewRows = 0           // force the next drag to rebuild a fresh preview
         if offMainParserFramePipelineEnabled {
@@ -1866,13 +1898,19 @@ public final class HarnessTerminalSurfaceView: NSView {
             // reflow; the live preview / repaintLastFrame covers the interim. A superseding newer
             // resize drops this build's present via the generation guard, and its own build
             // applies the newest staged size.
-            emulatorState.setPendingResize((cols, newRows))
+            emulatorState.setPendingResize((cols, newRows), localOnly: localOnly)
             renderNowOffMain()
         } else {
             // Main-confined pipeline: the emulator lives on the main thread (no serial queue to
             // offload to), so resize + present synchronously — the pre-existing discipline. Going
             // off-main here would be an unsynchronized mutation of the main-confined emulator.
-            emulatorSync { $0.resize(cols: cols, rows: newRows) }
+            emulatorSync { emulator in
+                if localOnly {
+                    _ = emulator.resizePrimaryLocally(cols: cols, rows: newRows)
+                } else {
+                    emulator.resize(cols: cols, rows: newRows)
+                }
+            }
             scheduler.forceRender()
         }
     }
@@ -1906,6 +1944,17 @@ public final class HarnessTerminalSurfaceView: NSView {
             return
         }
         guard cols != columns || newRows != rows else { return }
+        let localOnly: Bool
+        switch ClientResizePolicy.decide(
+            owner: sizeOwner, alternateScreen: inputAltScreenActive(), rows: newRows, cols: cols
+        ) {
+        case .unchanged:
+            return
+        case .localReflow:
+            localOnly = true
+        case .pty:
+            localOnly = false
+        }
         columns = cols
         rows = newRows
         // A text selection can't survive a width reflow (the wrapped rows move under its anchors),
@@ -1924,7 +1973,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         // stretching the cached frame (the same near-free sub-cell repaint), and FIFO queue + main
         // ordering guarantees the latest target's reflow is the one that presents last.
         // PTY SIGWINCH, coalesced caller-side to distinct cell counts (the daemon does not dedupe).
-        if lastSentPTYSize?.cols != cols || lastSentPTYSize?.rows != newRows {
+        if !localOnly, lastSentPTYSize?.cols != cols || lastSentPTYSize?.rows != newRows {
             lastSentPTYSize = (cols, newRows)
             onResize?(cols, newRows)
         }
@@ -1933,7 +1982,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         previewCols = 0; previewRows = 0
         // Stage the reflow target on the queue (whichever build runs next materializes it — see
         // `pendingResize`) and present the result within an explicit CA transaction.
-        emulatorState.setPendingResize((cols, newRows))
+        emulatorState.setPendingResize((cols, newRows), localOnly: localOnly)
         renderNowOffMain(flushTransaction: true)
     }
 
@@ -3490,6 +3539,17 @@ public final class HarnessTerminalSurfaceView: NSView {
         return hits
     }
 
+    /// View rect of the current find match, or nil when it is off the viewport.
+    /// The find bar uses this to move aside. It does not change `rows`.
+    public func currentFindMatchRect() -> CGRect? {
+        guard findMatches.indices.contains(findCurrentIndex) else { return nil }
+        let match = findMatches[findCurrentIndex]
+        let history = emulatorSync { $0.historyCount }
+        let hits = Self.viewportFindHighlights([match], scrollOffset: scrollOffset, historyCount: history, rows: rows)
+        guard let hit = hits.first, hit.endColumn >= hit.startColumn else { return nil }
+        return cellRect(row: hit.startRow, columns: hit.startColumn ..< (hit.endColumn + 1))
+    }
+
     public override func scrollWheel(with event: NSEvent) {
         if event.scrollingDeltaY != 0 { clearLinkHover() }
         // In copy mode, the wheel moves the copy-mode cursor through scrollback.
@@ -3776,11 +3836,14 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func copySelection() {
-        guard let text = selectionTextIfAny() else { return }
+        guard let text = selectionTextIfAny(), !text.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        let accepted = pasteboard.setString(text, forType: .string)
         onCopy?(text)
+        if CopyConfirmation.fadesSelection(pasteboardAccepted: accepted) {
+            fadeSelection(region: currentSelectionRegion)
+        }
     }
 
     /// The current selection's text, or nil when there is no selection (or it's empty).
@@ -4016,6 +4079,14 @@ public final class HarnessTerminalSurfaceView: NSView {
             handleCopyModeKey(event)
             return
         }
+        // IME composition owns non-Command keys. Command shortcuts stay with the keymap and the app.
+        if !event.modifierFlags.contains(.command), hasMarkedText() {
+            interpretKeyEvents([event])
+            return
+        }
+        // Config-file keymap, including exclusive modes and Command chords it binds.
+        // An unbound Command chord falls through. A swallowed key never reaches the PTY.
+        if consumeScriptKey?(event) == true { return }
         // Let the app handle Command shortcuts (menus, palette, etc.).
         if event.modifierFlags.contains(.command) {
             // ⌘ + an editing key drives readline line-editing (⌘ is otherwise reserved for the
@@ -4057,16 +4128,6 @@ public final class HarnessTerminalSurfaceView: NSView {
             }
         }
         wakeCursor()
-        // While an IME composition (preedit) is active, the input method owns every key:
-        // Backspace edits the preedit, arrows/Space/Tab move or pick candidates, Return
-        // commits, Escape cancels. Route the whole event through the input context — updated
-        // or committed text comes back via setMarkedText / insertText — rather than letting
-        // the special-key path below send Backspace, Return, etc. straight to the PTY (which
-        // is why the composition couldn't be edited mid-typing).
-        if hasMarkedText() {
-            interpretKeyEvents([event])
-            return
-        }
         // Shift+PageUp/PageDown page through scrollback instead of going to the app.
         if event.modifierFlags.contains(.shift), let sk = Self.specialKey(for: event),
            sk == .pageUp || sk == .pageDown {
@@ -4161,6 +4222,7 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func emit(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
+        emulatorState.async { emulator in emulator.noteUserKey() }
         onInput?(Data(bytes))
     }
 
@@ -4348,7 +4410,8 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func handleCopyModeAction(_ action: CopyModeAction) {
         guard let state = copyMode else { return }
-        let (next, effect) = emulatorSync { CopyModeReducer.reduce(state, action, grid: $0) }
+        let separators = copyModeWordSeparators
+        let (next, effect) = emulatorSync { CopyModeReducer.reduce(state, action, grid: $0, wordSeparators: separators) }
         copyMode = next
         switch effect {
         case .none:
@@ -4403,10 +4466,82 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func writeCopyModeSelection(_ text: String) {
         guard !text.isEmpty else { return }
+        let region = copyModeSelectionRegion()
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        let accepted = pasteboard.setString(text, forType: .string)
         onCopy?(text) // mirror into the daemon paste buffer
+        if CopyConfirmation.fadesSelection(pasteboardAccepted: accepted) {
+            fadeSelection(region: region)
+        }
+    }
+
+    private func copyModeSelectionRegion() -> SelectionRegion? {
+        guard let cm = copyMode else { return nil }
+        return cm.viewportSelection(rows: rows, columns: columns).map { vs in
+            switch vs.kind {
+            case .linear:
+                return .linear(TerminalSelection((vs.startRow, vs.startColumn), (vs.endRow, vs.endColumn)))
+            case .block:
+                return .block(BlockSelection((vs.startRow, vs.startColumn), (vs.endRow, vs.endColumn)))
+            }
+        }
+    }
+
+    private var selectionFadeView: NSView?
+
+    /// Brief confirmation that the pasteboard accepted the selection. A failed write never gets here.
+    private func fadeSelection(region: SelectionRegion?) {
+        selectionFadeView?.removeFromSuperview()
+        guard let region, let rect = selectionFadeRect(region), rect.width > 0, rect.height > 0 else { return }
+        let overlay = NSView(frame: rect)
+        overlay.wantsLayer = true
+        overlay.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.28).cgColor
+        overlay.layer?.cornerRadius = 2
+        addSubview(overlay)
+        selectionFadeView = overlay
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.22
+            overlay.animator().alphaValue = 0
+        }, completionHandler: { [weak overlay] in
+            overlay?.removeFromSuperview()
+        })
+    }
+
+    private func selectionFadeRect(_ region: SelectionRegion) -> CGRect? {
+        switch region {
+        case let .linear(sel):
+            return unionCellRects(startRow: sel.startRow, endRow: sel.endRow) { row in
+                let columns: Range<Int>
+                if sel.startRow == sel.endRow {
+                    columns = sel.startColumn ..< (sel.endColumn + 1)
+                } else if row == sel.startRow {
+                    columns = sel.startColumn ..< self.columns
+                } else if row == sel.endRow {
+                    columns = 0 ..< (sel.endColumn + 1)
+                } else {
+                    columns = 0 ..< self.columns
+                }
+                return cellRect(row: row, columns: columns)
+            }
+        case let .block(blk):
+            let columns = blk.startColumn ..< (blk.endColumn + 1)
+            return unionCellRects(startRow: blk.startRow, endRow: blk.endRow) { row in
+                cellRect(row: row, columns: columns)
+            }
+        }
+    }
+
+    private func unionCellRects(startRow: Int, endRow: Int, _ rect: (Int) -> CGRect?) -> CGRect? {
+        let lo = max(0, min(startRow, endRow))
+        let hi = min(rows - 1, max(startRow, endRow))
+        guard lo <= hi else { return nil }
+        var union: CGRect?
+        for row in lo ... hi {
+            guard let piece = rect(row) else { continue }
+            union = union?.union(piece) ?? piece
+        }
+        return union
     }
 
     /// `copy-pipe`: feed the selected text to a shell command's stdin (detached), like tmux.

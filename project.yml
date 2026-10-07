@@ -133,6 +133,8 @@ targets:
         product: HarnessTheme
       - package: Harness
         product: CHarnessSys
+      - package: Harness
+        product: HarnessScript
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.cli
       PRODUCT_NAME: harness-cli

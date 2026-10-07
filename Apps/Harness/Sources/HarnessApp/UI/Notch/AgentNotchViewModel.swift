@@ -134,22 +134,24 @@ final class AgentNotchViewModel: ObservableObject {
         // terminal-native signal (OSC 9;4); promote a row to .working when any of its tab's
         // surfaces has an active progress report, so the notch agrees with the tab-bar dot.
         let tracker = SurfaceProgressTracker.shared
-        let tabSurfaces: [UUID: [SurfaceID]] = coordinator.snapshot.workspaces
-            .flatMap(\.sessions)
-            .flatMap(\.tabs)
-            .reduce(into: [:]) { map, tab in
-                map[tab.id] = tab.rootPane.allSurfaceIDs()
-            }
+        let tabs = coordinator.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+        let tabSurfaces: [UUID: [SurfaceID]] = tabs.reduce(into: [:]) { map, tab in
+            map[tab.id] = tab.rootPane.allSurfaceIDs()
+        }
+        let tabMarks: [UUID: ProgramMark] = tabs.reduce(into: [:]) { map, tab in
+            if let mark = tab.programMark { map[tab.id] = mark }
+        }
         var progress: [String: Int] = [:]
         for i in updatedRows.indices {
             guard let tabID = updatedRows[i].tabID, let surfaces = tabSurfaces[tabID] else { continue }
-            // OSC 9;4 promotes an idle/working row to .working, but must never override a waiting
-            // or errored agent: one that needs your input (or has errored) is not "working", even
-            // if a stale progress report lingers. Otherwise the same agent reads as both
-            // "waiting" and "working" at once.
-            if updatedRows[i].waitingCount == 0,
-               updatedRows[i].agentActivity != .errored,
-               surfaces.contains(where: { tracker.isActive($0) }) {
+            // A real program-status mark owns the row. OSC 9;4 still promotes a row that has
+            // no mark, and never overrides a waiting or errored agent.
+            if tabMarks[tabID]?.attention == .working {
+                updatedRows[i].agentActivity = .working
+            } else if tabMarks[tabID] == nil,
+                      updatedRows[i].waitingCount == 0,
+                      updatedRows[i].agentActivity != .errored,
+                      surfaces.contains(where: { tracker.isActive($0) }) {
                 updatedRows[i].agentActivity = .working
             }
             if let percent = surfaces.compactMap({ tracker.progressPercent($0) }).first {

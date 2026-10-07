@@ -1,8 +1,8 @@
 import Foundation
 
 /// Live grid retention. After `threshold` seconds without a PTY read the live
-/// rows are dropped and kept as history. Restoring puts that history back and
-/// does not present the process that produced it as still running.
+/// rows are dropped. Parking does not reap the child: the process is still alive,
+/// and `presentsProcessAsRunning` stays whatever the caller set.
 public struct IdleGrid: Equatable, Sendable {
     public static let defaultThreshold: TimeInterval = 60
 
@@ -28,13 +28,11 @@ public struct IdleGrid: Equatable, Sendable {
         history = live
         live = []
         parked = true
-        presentsProcessAsRunning = false
     }
 
     public mutating func restore() {
         guard parked else { return }
         live = history
         parked = false
-        presentsProcessAsRunning = false
     }
 }

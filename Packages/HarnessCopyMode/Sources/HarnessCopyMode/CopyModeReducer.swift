@@ -31,7 +31,8 @@ public enum CopyModeReducer {
     public static func reduce(
         _ state: CopyModeState,
         _ action: CopyModeAction,
-        grid: CopyModeGridSource
+        grid: CopyModeGridSource,
+        wordSeparators: String = CopyModeWords.tmuxDefault
     ) -> (state: CopyModeState, effect: CopyModeSideEffect) {
         var s = state
         switch action {
@@ -61,9 +62,12 @@ public enum CopyModeReducer {
         case .pageDown: s.cursor.line = min(grid.totalLines - 1, s.cursor.line + grid.viewportRows)
         case .halfPageUp: s.cursor.line = max(0, s.cursor.line - max(1, grid.viewportRows / 2))
         case .halfPageDown: s.cursor.line = min(grid.totalLines - 1, s.cursor.line + max(1, grid.viewportRows / 2))
-        case .nextWord: s.cursor = nextWord(from: s.cursor, grid: grid)
-        case .previousWord: s.cursor = previousWord(from: s.cursor, grid: grid)
-        case .nextWordEnd: s.cursor = nextWordEnd(from: s.cursor, grid: grid)
+        case .nextWord: s.cursor = nextWord(from: s.cursor, grid: grid, separators: wordSeparators)
+        case .previousWord: s.cursor = previousWord(from: s.cursor, grid: grid, separators: wordSeparators)
+        case .nextWordEnd: s.cursor = nextWordEnd(from: s.cursor, grid: grid, separators: wordSeparators)
+        case .nextSpace: s.cursor = nextWord(from: s.cursor, grid: grid, separators: CopyModeWords.whitespace)
+        case .previousSpace: s.cursor = previousWord(from: s.cursor, grid: grid, separators: CopyModeWords.whitespace)
+        case .nextSpaceEnd: s.cursor = nextWordEnd(from: s.cursor, grid: grid, separators: CopyModeWords.whitespace)
 
         case let .jump(kind, target):
             // No target yet (the bindable form): ask the front-end to capture the next keystroke
@@ -178,19 +182,21 @@ public enum CopyModeReducer {
         return s
     }
 
-    private static func isSeparator(_ c: Character) -> Bool { c == " " || c == "\t" }
+    private static func isSeparator(_ c: Character, _ separators: String) -> Bool {
+        separators.contains(c)
+    }
 
     // MARK: - Word motion (crosses line boundaries, vi `w` / `b`)
 
-    private static func nextWord(from pos: GridPosition, grid: CopyModeGridSource) -> GridPosition {
+    private static func nextWord(from pos: GridPosition, grid: CopyModeGridSource, separators: String) -> GridPosition {
         var line = pos.line
         var rl = grid.renderedLine(line)
         var i = rl.charIndex(atOrAfter: pos.column)
         // If sitting on a word, step past it first.
-        while i < rl.chars.count, !isSeparator(rl.chars[i]) { i += 1 }
+        while i < rl.chars.count, !isSeparator(rl.chars[i], separators) { i += 1 }
         // Skip separators, advancing across lines, to land on the next word's first char.
         while true {
-            while i < rl.chars.count, isSeparator(rl.chars[i]) { i += 1 }
+            while i < rl.chars.count, isSeparator(rl.chars[i], separators) { i += 1 }
             if i < rl.chars.count { break }
             if line >= grid.totalLines - 1 {
                 return GridPosition(line: line, column: rl.columnOf.last ?? 0)
@@ -198,20 +204,20 @@ public enum CopyModeReducer {
             line += 1
             rl = grid.renderedLine(line)
             i = 0
-            if i < rl.chars.count, !isSeparator(rl.chars[i]) { break }
+            if i < rl.chars.count, !isSeparator(rl.chars[i], separators) { break }
         }
         return GridPosition(line: line, column: i < rl.columnOf.count ? rl.columnOf[i] : 0)
     }
 
     /// vi `e` — the end (last char) of the next word, crossing line boundaries. Always advances at
     /// least one character so a repeat steps forward off the current word's end.
-    private static func nextWordEnd(from pos: GridPosition, grid: CopyModeGridSource) -> GridPosition {
+    private static func nextWordEnd(from pos: GridPosition, grid: CopyModeGridSource, separators: String) -> GridPosition {
         var line = pos.line
         var rl = grid.renderedLine(line)
         var i = rl.charIndex(atOrAfter: pos.column) + 1 // step at least one char forward
         // Skip separators, advancing across lines, to land inside the next word.
         while true {
-            while i < rl.chars.count, isSeparator(rl.chars[i]) { i += 1 }
+            while i < rl.chars.count, isSeparator(rl.chars[i], separators) { i += 1 }
             if i < rl.chars.count { break }
             if line >= grid.totalLines - 1 {
                 return GridPosition(line: line, column: rl.columnOf.last ?? 0)
@@ -221,7 +227,7 @@ public enum CopyModeReducer {
             i = 0
         }
         // Advance to the last non-separator char of this word.
-        while i + 1 < rl.chars.count, !isSeparator(rl.chars[i + 1]) { i += 1 }
+        while i + 1 < rl.chars.count, !isSeparator(rl.chars[i + 1], separators) { i += 1 }
         return GridPosition(line: line, column: i < rl.columnOf.count ? rl.columnOf[i] : 0)
     }
 
@@ -259,17 +265,17 @@ public enum CopyModeReducer {
     /// Grid column of the first non-blank character on `line` (0 when the line is blank) — vi `^`.
     private static func firstContentColumn(_ line: Int, grid: CopyModeGridSource) -> Int {
         let rl = grid.renderedLine(line)
-        for (i, ch) in rl.chars.enumerated() where !isSeparator(ch) { return rl.columnOf[i] }
+        for (i, ch) in rl.chars.enumerated() where !isSeparator(ch, CopyModeWords.whitespace) { return rl.columnOf[i] }
         return 0
     }
 
-    private static func previousWord(from pos: GridPosition, grid: CopyModeGridSource) -> GridPosition {
+    private static func previousWord(from pos: GridPosition, grid: CopyModeGridSource, separators: String) -> GridPosition {
         var line = pos.line
         var rl = grid.renderedLine(line)
         var i = rl.charIndex(atOrBefore: pos.column) - 1
         // Skip separators (and empty lines) backward to the previous word's last char.
         while true {
-            while i >= 0, i < rl.chars.count, isSeparator(rl.chars[i]) { i -= 1 }
+            while i >= 0, i < rl.chars.count, isSeparator(rl.chars[i], separators) { i -= 1 }
             if i >= 0, i < rl.chars.count { break }
             if line == 0 { return GridPosition(line: 0, column: 0) }
             line -= 1
@@ -277,7 +283,7 @@ public enum CopyModeReducer {
             i = rl.chars.count - 1
         }
         // Back up to the start of this word.
-        while i > 0, !isSeparator(rl.chars[i - 1]) { i -= 1 }
+        while i > 0, !isSeparator(rl.chars[i - 1], separators) { i -= 1 }
         return GridPosition(line: line, column: (i >= 0 && i < rl.columnOf.count) ? rl.columnOf[i] : 0)
     }
 

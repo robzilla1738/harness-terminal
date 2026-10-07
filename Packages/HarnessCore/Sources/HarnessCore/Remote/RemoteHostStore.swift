@@ -31,8 +31,19 @@ public struct RemoteHost: Codable, Sendable, Equatable, Identifiable {
 /// same corruption-preserving pattern as the other JSON stores.
 public final class RemoteHostStore: @unchecked Sendable {
     private let lock = NSLock()
+    /// Nil uses `HarnessPaths.remoteHostsURL`. Tests pass their own file so they do not write the user's list.
+    private let fileURL: URL?
 
-    public init() {}
+    public init(fileURL: URL? = nil) {
+        self.fileURL = fileURL
+    }
+
+    private var storeURL: URL { fileURL ?? HarnessPaths.remoteHostsURL }
+
+    private var lockURL: URL {
+        if let fileURL { return URL(fileURLWithPath: fileURL.path + ".lock") }
+        return HarnessPaths.remoteHostsLockURL
+    }
 
     public func load() -> [RemoteHost] {
         lock.lock()
@@ -97,7 +108,7 @@ public final class RemoteHostStore: @unchecked Sendable {
     /// so a lock failure must not brick `remote add`/`remove`.
     private func withFileLock<T>(_ body: () -> T) -> T {
         try? HarnessPaths.ensureDirectories()
-        let lockPath = HarnessPaths.remoteHostsLockURL.path
+        let lockPath = lockURL.path
         // O_CLOEXEC so a forked child (e.g. ssh) never inherits the lock fd; 0o600 keeps it owner-only.
         let fd = open(lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard fd >= 0 else {
@@ -118,7 +129,7 @@ public final class RemoteHostStore: @unchecked Sendable {
     // MARK: - lock-held internals (caller holds `lock`)
 
     private func loadLocked() -> [RemoteHost] {
-        let url = HarnessPaths.remoteHostsURL
+        let url = storeURL
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url)
         else { return [] }
@@ -134,7 +145,7 @@ public final class RemoteHostStore: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(hosts) else { return false }
-        return HarnessPaths.atomicWrite(data, to: HarnessPaths.remoteHostsURL, label: "RemoteHostStore")
+        return HarnessPaths.atomicWrite(data, to: storeURL, label: "RemoteHostStore")
     }
 
     public func host(named name: String) -> RemoteHost? {

@@ -26,15 +26,25 @@ extension HarnessCLI {
         DaemonClient(endpoint: try resolveEndpoint(args))
     }
 
-    /// Resolve the endpoint for this invocation: the local socket, or — when `--host <name>` is
-    /// given — the local end of an SSH tunnel to the named remote daemon.
+    /// Resolve the endpoint for this invocation. `--host` wins. Otherwise `HARNESS_SERVER`
+    /// is the socket a pane was given at spawn. The default is the local control socket.
     static func resolveEndpoint(_ args: [String]) throws -> Endpoint {
-        guard let hostName = flagValue(args, flag: "--host") else { return .localControlSocket }
-        guard let host = RemoteHostStore().host(named: hostName) else {
-            fputs("harness-cli: unknown --host '\(hostName)'. Add it with `harness-cli remote add`.\n", harnessStderr)
-            exit(64)
+        if let hostName = flagValue(args, flag: "--host") {
+            SSHTunnelManager.shared.onTunnelDropped = { name in
+                DispatchQueue.global(qos: .utility).async {
+                    _ = try? DaemonClient().request(.noteClientConnection(host: name), timeout: 1)
+                }
+            }
+            guard let host = RemoteHostStore().host(named: hostName) else {
+                fputs("harness-cli: unknown --host '\(hostName)'. Add it with `harness-cli remote add`.\n", harnessStderr)
+                exit(64)
+            }
+            return try SSHTunnelManager.shared.endpoint(for: host)
         }
-        return try SSHTunnelManager.shared.endpoint(for: host)
+        if let server = ProcessInfo.processInfo.environment["HARNESS_SERVER"], !server.isEmpty {
+            return .unix(path: server)
+        }
+        return .localControlSocket
     }
 
     /// `remote <list|add|remove>` — manage saved remote daemons reached over SSH.

@@ -136,6 +136,15 @@ public struct SurfaceSizeArbiter: Equatable, Sendable {
 
     public func owner(of surface: String) -> Int32? { owners[surface] }
 
+    /// Whether `client`'s resize may change the PTY. `smallest` lets every voter
+    /// contribute. In `owner` mode an existing owner is the only claim; the first
+    /// voter claims when nobody owns the surface yet.
+    public func claimsPTY(client: Int32, surface: String) -> Bool {
+        if mode != .owner { return true }
+        guard let owner = owners[surface] else { return true }
+        return owner == client
+    }
+
     private func mostRecentClient(_ surface: String) -> Int32? {
         votes[surface]?.max { $0.value.sequence < $1.value.sequence }?.key
     }

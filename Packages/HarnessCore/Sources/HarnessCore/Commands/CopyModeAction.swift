@@ -37,6 +37,9 @@ public enum CopyModeAction: Codable, Sendable, Equatable {
     case cursorLeft, cursorRight, cursorUp, cursorDown
     case nextWord, previousWord
     case nextWordEnd                       // end of the next word (vi `e`)
+    /// Whitespace-delimited motions (vi `W`/`B`/`E`, tmux `next-space` family).
+    /// These ignore `word-separators`. `nextWord` uses that set.
+    case nextSpace, previousSpace, nextSpaceEnd
     /// Jump-to-char (vi `f`/`F`/`t`/`T`). The `String?` is the target character: `nil` is the
     /// bindable command form (the front-end captures the next keystroke and re-issues it filled
     /// in); a one-char string performs the jump on the cursor's line.
@@ -68,6 +71,9 @@ public enum CopyModeAction: Codable, Sendable, Equatable {
         case .nextWord: return "next-word"
         case .previousWord: return "previous-word"
         case .nextWordEnd: return "next-word-end"
+        case .nextSpace: return "next-space"
+        case .previousSpace: return "previous-space"
+        case .nextSpaceEnd: return "next-space-end"
         case let .jump(kind, _):
             switch kind {
             case .forward: return "jump-forward"
@@ -120,12 +126,10 @@ public enum CopyModeAction: Codable, Sendable, Equatable {
         case "next-word": self = .nextWord
         case "previous-word": self = .previousWord
         case "next-word-end": self = .nextWordEnd
-        // Harness's word motions are whitespace-delimited, so tmux's `next-space` family (vi
-        // big-WORD W/B/E) maps onto the same motions; `word-separators`-aware small-word motions
-        // are a deferred refinement.
-        case "next-space": self = .nextWord
-        case "previous-space": self = .previousWord
-        case "next-space-end": self = .nextWordEnd
+        // vi `W`/`B`/`E`: whitespace only. `next-word` honors `word-separators`.
+        case "next-space": self = .nextSpace
+        case "previous-space": self = .previousSpace
+        case "next-space-end": self = .nextSpaceEnd
         // Jump-to-char: the bindable form carries no target (front-end captures the next key);
         // an explicit `argument` (e.g. from a script) fills it in immediately.
         case "jump-forward": self = .jump(.forward, argument)
@@ -165,5 +169,17 @@ public enum CopyModeAction: Codable, Sendable, Equatable {
         case "cancel": self = .cancel
         default: return nil
         }
+    }
+}
+
+/// Separator sets for copy-mode word motion. `w`/`b`/`e` use `word-separators`
+/// (tmux's default when the option is unset). `W`/`B`/`E` stay whitespace.
+public enum CopyModeWords {
+    public static let tmuxDefault = " -_@"
+    public static let whitespace = " \t"
+
+    public static func smallWordSeparators(stored: String?) -> String {
+        guard let stored, !stored.isEmpty else { return tmuxDefault }
+        return stored
     }
 }

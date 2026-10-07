@@ -199,8 +199,107 @@ final class SessionCoordinator: NSObject {
 
     /// Tear down the remote tunnel and return the GUI to the local daemon.
     func disconnectRemote() {
+        if let name = RemoteHostsService.shared.activeHostName {
+            machineBoards.removeValue(forKey: name)
+        }
         RemoteHostsService.shared.disconnect()
         applyEndpointSwitch(.localControlSocket)
+    }
+
+    /// Sessions last seen on each daemon. The sidebar shows every board at once.
+    private var machineBoards: [String: [DaemonSidebarSession]] = [:]
+    private var pendingSidebarSession: String?
+
+    func sidebarGroups() -> [DaemonSidebarGroup] {
+        var sessions: [DaemonSidebarSession] = []
+        var remotes: [String] = []
+        for (owner, rows) in machineBoards {
+            sessions.append(contentsOf: rows)
+            if owner != DaemonSidebar.localID { remotes.append(owner) }
+        }
+        return DaemonSidebar.groups(
+            localTitle: "This Mac",
+            sessions: sessions,
+            remoteHosts: remotes.sorted(),
+            remoteDetail: RemoteAttach.explanation
+        )
+    }
+
+    func focusSidebar(owner: String, sessionID: String) {
+        let current = RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID
+        let target = DaemonSidebar.splitDaemon(owner: owner)
+        if target == current {
+            guard let id = UUID(uuidString: sessionID), let workspace = snapshot.activeWorkspaceID else { return }
+            selectSession(workspaceID: workspace, sessionID: id)
+            return
+        }
+        pendingSidebarSession = sessionID
+        if target == DaemonSidebar.localID {
+            disconnectRemote()
+        } else {
+            connectToRemote(named: target)
+        }
+    }
+
+    private func rememberSidebarBoard() {
+        let owner = RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID
+        let rows = (snapshot.activeWorkspace?.sessions ?? []).map { session in
+            DaemonSidebarSession(
+                id: session.id.uuidString,
+                name: session.name.isEmpty ? "Session" : session.name,
+                owner: owner
+            )
+        }
+        machineBoards[owner] = rows
+    }
+
+    private func applyPendingSidebarFocus() {
+        guard let pending = pendingSidebarSession,
+              let id = UUID(uuidString: pending),
+              let workspace = snapshot.activeWorkspaceID,
+              snapshot.activeWorkspace?.sessions.contains(where: { $0.id == id }) == true
+        else { return }
+        pendingSidebarSession = nil
+        selectSession(workspaceID: workspace, sessionID: id)
+    }
+
+    /// Palette insert-path. The names come from `pane.list_dir` on the owning daemon.
+    func insertListedPath() {
+        presentDirectoryChoice(title: "Insert Path", verb: "Insert") { _, path in
+            self.writeToActivePane(PaneDirectory.insertion([path]))
+        }
+    }
+
+    /// Palette go-to-directory. The `cd` path is shell-quoted.
+    func goToListedDirectory() {
+        presentDirectoryChoice(title: "Go to Directory", verb: "Go") { _, path in
+            self.writeToActivePane(PaneDirectory.goToDirectory(path) + "\r")
+        }
+    }
+
+    private func writeToActivePane(_ text: String) {
+        guard let surface = activeSurfaceID?.uuidString else { return }
+        requestDaemon(.send(surfaceID: surface, text: text))
+    }
+
+    private func presentDirectoryChoice(title: String, verb: String, apply: (PaneDirListing, String) -> Void) {
+        guard let surface = activeSurfaceID?.uuidString,
+              case let .text(body)? = requestDaemon(.listDir(surfaceID: surface, path: nil)),
+              let listing = PaneDirectory.decode(body)
+        else { return }
+        let directories = listing.entries.filter(\.directory)
+        let choices = directories.isEmpty ? [listing.root] : directories.map(\.path)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = RemoteAttach.explanation
+        alert.addButton(withTitle: verb)
+        alert.addButton(withTitle: "Cancel")
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        popup.addItems(withTitles: choices)
+        alert.accessoryView = popup
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let path = choices[popup.indexOfSelectedItem]
+        apply(listing, path)
     }
 
     /// Repoint everything at `endpoint`: the session-service IPC, future panes, and the live view.
@@ -267,6 +366,8 @@ final class SessionCoordinator: NSObject {
         }
         updateDockBadge(from: remote)
         reflectRemoteActivePane()
+        rememberSidebarBoard()
+        applyPendingSidebarFocus()
         NotificationCenter.default.post(
             name: NotificationBus.shared.snapshotChanged,
             object: nil,
@@ -357,7 +458,7 @@ final class SessionCoordinator: NSObject {
         let remoteHost = surfaceRemoteHosts[surfaceID]
         let command = owningTab(forSurface: surfaceID)?.currentCommand
         host.profileThemeOverride = profiles
-            .first { $0.matches(host: remoteHost, command: command) }?
+            .first { $0.matches(host: remoteHost, command: command, surface: surfaceID.uuidString) }?
             .theme
     }
 
@@ -519,6 +620,8 @@ final class SessionCoordinator: NSObject {
                     // The explicit notify path owns `.waiting` tabs (it carries the real
                     // message); don't double-fire.
                     if tab.status == .waiting { continue }
+                    // A real OSC 7501 record owns the banner. The detector must not add another.
+                    if tab.programMark?.fromRealReport == true { continue }
                     // Don't nag for the pane you're already watching.
                     if NSApp.isActive, surfaceID == activeSurfaceID { continue }
                     // Gate on the per-event preference *before* the cooldown, so a disabled
@@ -1121,7 +1224,11 @@ final class SessionCoordinator: NSObject {
             pane: value("pane-style"),
             paneActive: value("pane-active-style")
         )
-        for host in terminalHosts.allHosts() { host.applyPaneStyles(styles) }
+        let separators = CopyModeWords.smallWordSeparators(stored: opts.get("word-separators", scope: .global)?.stringValue)
+        for host in terminalHosts.allHosts() {
+            host.applyPaneStyles(styles)
+            host.copyModeWordSeparators = separators
+        }
     }
 
     /// Evaluate `pane-border-format` per host and push the label (or hide it when

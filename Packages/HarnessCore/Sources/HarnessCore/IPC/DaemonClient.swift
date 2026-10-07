@@ -35,6 +35,7 @@ public final class DaemonClient: @unchecked Sendable {
         do { try writeAll(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(onData: onData, onEnd: onEnd)
+        if RemoteAttach.isTunnel(endpoint) { subscription.presentAsTunnel() }
         return subscription
     }
 
@@ -95,6 +96,7 @@ public final class DaemonClient: @unchecked Sendable {
         //    boundary, flush deduped (gap-free). Without one (old daemon), discard the buffer and
         //    fall back to replay-then-subscribe ordering — the replay already covers the buffered
         //    tail, so flushing it would double-deliver. The caller's sink keeps both in one order.
+        if RemoteAttach.isTunnel(endpoint) { subscription.presentAsTunnel() }
         onReplay(replayText)
         if haveBoundary {
             subscription.flushBuffered(droppingSequencesBelow: endSequence, onData: onData)
@@ -124,6 +126,53 @@ public final class DaemonClient: @unchecked Sendable {
             onEnd: onEnd
         )
         return subscription
+    }
+
+    /// Block until the follow socket closes, delivering each NDJSON event. `.ok` is the
+    /// subscription ack and is not an event. A daemon error ends the call.
+    public func followEvents(
+        sessionID: String?,
+        includeServer: Bool,
+        onEvent: (FollowEvent) -> Void
+    ) throws {
+        let fd = try connectSocket()
+        defer { close(fd) }
+        let payload = try IPCCodec.encode(
+            IPCEnvelope(request: .subscribeEvents(sessionID: sessionID, includeServer: includeServer))
+        )
+        try writeAll(payload, to: fd)
+        var buffer = Data()
+        var temp = [UInt8](repeating: 0, count: 65_536)
+        while true {
+            let count = read(fd, &temp, temp.count)
+            if count == 0 { return }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw DaemonClientError.connectionFailed
+            }
+            buffer.append(contentsOf: temp.prefix(count))
+            while true {
+                let reply: IPCReply?
+                do {
+                    reply = try IPCCodec.decodeReply(from: &buffer)
+                } catch {
+                    throw DaemonClientError.unexpectedResponse
+                }
+                guard let reply else { break }
+                switch reply.response {
+                case let .follow(line):
+                    if let event = try? JSONDecoder().decode(FollowEvent.self, from: Data(line.utf8)) {
+                        onEvent(event)
+                    }
+                case let .error(message):
+                    throw FollowStreamError(message: message)
+                case .ok:
+                    break
+                default:
+                    break
+                }
+            }
+        }
     }
 
     private func performRequest(_ ipcRequest: IPCRequest, timeout: TimeInterval) throws -> IPCResponse {
@@ -282,6 +331,19 @@ public final class DaemonSubscription: @unchecked Sendable {
               let payload = try? IPCCodec.encodeInputFrame(surfaceID: surfaceID, payload: data)
         else { return false }
         return writeFrame(payload)
+    }
+
+    /// Mark this subscription as an SSH-tunneled client so a dropped forward emits
+    /// `client.connection`. The `.ok` is ignored by the output read loop, same as a resize ack.
+    func presentAsTunnel() {
+        let request = IPCRequest.presentClient(
+            kind: "client",
+            version: HarnessVersion.short,
+            uid: UInt32(getuid()),
+            tunnel: true
+        )
+        guard let payload = try? IPCCodec.encode(IPCEnvelope(request: request)) else { return }
+        writeFrame(payload)
     }
 
     /// Record this client's PTY size vote for `surfaceID` over the persistent connection. The
@@ -518,6 +580,12 @@ public final class DaemonSubscription: @unchecked Sendable {
     deinit {
         cancel()
     }
+}
+
+public struct FollowStreamError: Error, CustomStringConvertible {
+    public var message: String
+    public var description: String { message }
+    public init(message: String) { self.message = message }
 }
 
 public enum DaemonClientError: Error, CustomStringConvertible {

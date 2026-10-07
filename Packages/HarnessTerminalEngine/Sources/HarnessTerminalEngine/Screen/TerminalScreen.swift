@@ -548,13 +548,37 @@ final class TerminalScreen {
     /// column is skipped; codepoint 0 reads as a space. When `joinWrapped` (tmux `-J`),
     /// physical rows that ended in a soft autowrap are concatenated with their continuation
     /// into one logical line; otherwise every physical row is one line.
-    func captureLines(joinWrapped: Bool) -> [String] {
+    func physicalRows() -> [(cells: [TerminalGridCell], wrapped: Bool)] {
         var phys: [(cells: [TerminalGridCell], wrapped: Bool)] = []
         phys.reserveCapacity(history.count + rows)
         for h in history { phys.append((h.cells, h.wrapped)) }
         for r in 0 ..< rows {
             phys.append((Array(cells[r * cols ..< (r + 1) * cols]), rowWrapped[r]))
         }
+        return phys
+    }
+
+    /// Logical lines of cells. `joinWrapped` concatenates a soft-wrapped row with its continuation.
+    func captureCellLines(joinWrapped: Bool) -> [[TerminalGridCell]] {
+        let phys = physicalRows()
+        guard joinWrapped else { return phys.map(\.cells) }
+        var out: [[TerminalGridCell]] = []
+        var current: [TerminalGridCell] = []
+        for (idx, row) in phys.enumerated() {
+            let drop = row.wrapped ? wideDeferralGap(row: row.cells, next: idx + 1 < phys.count ? phys[idx + 1].cells : nil) : 0
+            let cells = drop > 0 ? Array(row.cells.dropLast(drop)) : row.cells
+            current.append(contentsOf: cells)
+            if !row.wrapped {
+                out.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { out.append(current) }
+        return out
+    }
+
+    func captureLines(joinWrapped: Bool) -> [String] {
+        let phys = physicalRows()
 
         func text(_ cells: [TerminalGridCell], trimTrailing: Bool) -> String {
             var end = cells.count

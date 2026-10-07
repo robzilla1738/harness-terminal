@@ -37,6 +37,11 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     /// Ghostty `macos-option-as-alt`: false = compose characters, true = Meta, left/right
     /// = only that Option key is Meta.
     public var optionAsMeta: OptionAsMetaMode?
+    /// "Ghostty" when a contributing path is a Ghostty config. Nil for any other file.
+    public var sourceName: String?
+    /// Keys present in the file that Harness did not apply. `font-size` is parsed and still listed,
+    /// because the face imports and the size stays Harness-owned.
+    public var skippedKeys: [String]
 
     public var signature: String {
         var parts: [String] = []
@@ -92,7 +97,9 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         cursorBlink: Bool? = nil,
         copyOnSelect: Bool? = nil,
         boldIsBright: Bool? = nil,
-        optionAsMeta: OptionAsMetaMode? = nil
+        optionAsMeta: OptionAsMetaMode? = nil,
+        sourceName: String? = nil,
+        skippedKeys: [String] = []
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -118,6 +125,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         self.copyOnSelect = copyOnSelect
         self.boldIsBright = boldIsBright
         self.optionAsMeta = optionAsMeta
+        self.sourceName = sourceName
+        self.skippedKeys = skippedKeys
     }
 
     public var hasTerminalColorOverrides: Bool {
@@ -178,10 +187,12 @@ public enum TerminalConfigImporter {
             guard FileManager.default.fileExists(atPath: path),
                   let data = try? String(contentsOfFile: path, encoding: .utf8)
             else { continue }
+            var parsed = parse(data)
+            parsed.sourceName = sourceName(for: [path])
             if let existing = merged {
-                merged = existing.merging(parse(data))
+                merged = existing.merging(parsed)
             } else {
-                merged = parse(data)
+                merged = parsed
             }
         }
         guard var merged else { return nil }
@@ -224,8 +235,32 @@ public enum TerminalConfigImporter {
         ]
     }
 
+    /// Ghostty when the path's parent is `ghostty`, the file is `config.ghostty`,
+    /// or the path contains the Ghostty app-support directory.
+    public static func sourceName(for paths: [String]) -> String? {
+        paths.contains(where: isGhosttyPath) ? "Ghostty" : nil
+    }
+
+    static func isGhosttyPath(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        if url.deletingLastPathComponent().lastPathComponent == "ghostty" { return true }
+        if url.lastPathComponent == "config.ghostty" { return true }
+        return path.contains("com.mitchellh.ghostty")
+    }
+
+    /// Keys `makeDefaults` / `applyImportedDefaults` actually copy. Anything else in the
+    /// file, including `font-size`, is reported as skipped.
+    static let appliedKeys: Set<String> = [
+        "font-family", "command", "background-opacity", "background-blur", "background-blur-radius",
+        "window-padding-x", "window-padding-y", "theme", "background", "foreground", "cursor-color",
+        "selection-background", "selection-foreground", "bold-color", "cursor-text", "minimum-contrast",
+        "palette", "cursor-style", "cursor-style-blink", "copy-on-select", "bold-is-bright",
+        "macos-option-as-alt",
+    ]
+
     static func parse(_ text: String) -> ImportedTerminalConfig {
         var values: [String: String] = [:]
+        var seen: [String] = []
         var paletteHex: [String?] = Array(repeating: nil, count: 16)
         for rawLine in text.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -245,6 +280,7 @@ public enum TerminalConfigImporter {
                 paletteHex[entry.index] = entry.hex
             }
             values[key] = String(value)
+            seen.append(key)
         }
 
         var defaults = ImportedTerminalConfig()
@@ -321,6 +357,7 @@ public enum TerminalConfigImporter {
         if let value = values["macos-option-as-alt"].flatMap(parseOptionAsMeta) {
             defaults.optionAsMeta = value
         }
+        defaults.skippedKeys = Array(Set(seen).subtracting(appliedKeys)).sorted()
         return defaults
     }
 
@@ -404,7 +441,9 @@ private extension ImportedTerminalConfig {
             cursorBlink: newer.cursorBlink ?? cursorBlink,
             copyOnSelect: newer.copyOnSelect ?? copyOnSelect,
             boldIsBright: newer.boldIsBright ?? boldIsBright,
-            optionAsMeta: newer.optionAsMeta ?? optionAsMeta
+            optionAsMeta: newer.optionAsMeta ?? optionAsMeta,
+            sourceName: newer.sourceName ?? sourceName,
+            skippedKeys: Array(Set(skippedKeys).union(newer.skippedKeys)).sorted()
         )
     }
 

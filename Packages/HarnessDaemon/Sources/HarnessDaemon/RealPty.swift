@@ -168,6 +168,13 @@ public final class RealPty: @unchecked Sendable {
     /// the old process is still running.
     private var parkedBlob: Data?
     private var parkedSequence: UInt64 = 1
+    /// Authoritative grid. Touched only under `snapshotLock`, never from the PTY read loop.
+    private let snapshotLock = NSLock()
+    private let authoritative = AuthoritativeParser()
+    private var parkDirectoryOverride: URL?
+    private var parkKeyOverride: Data?
+    private let persistedScrollbackURL: URL?
+    private var scrollbackPersistenceEnabled = false
     // Index of the first live entry. Eviction advances this (O(1)) instead of `removeFirst()`
     // (O(n) on the PTY read hot path); the dead prefix is physically compacted in one batched
     // shift once it grows large, so steady-state eviction is ≈O(1) amortized.
@@ -269,6 +276,8 @@ public final class RealPty: @unchecked Sendable {
             : max(requestedScrollbackBytes, ScrollbackFile.minimumRetentionCap)
         self.extraEnvironment = extraEnvironment
         self.shell = shell
+        self.persistedScrollbackURL = scrollbackURL
+        self.scrollbackPersistenceEnabled = scrollbackURL != nil
 
         // Seed the in-memory ring from any persisted history BEFORE the fresh shell starts
         // writing, so a reattach after a daemon restart replays what was last on screen and
@@ -381,6 +390,7 @@ public final class RealPty: @unchecked Sendable {
         self.extraEnvironment = [:]
         self.shell = "/bin/sh"
         self.scrollbackFile = nil
+        self.persistedScrollbackURL = nil
         self.launchArgumentsOverride = nil
     }
 
@@ -867,7 +877,9 @@ public final class RealPty: @unchecked Sendable {
     /// in-memory replay ring is untouched — the option is about secrets at REST. No-op for a
     /// surface spawned without persistence (nothing on disk to gate).
     public func setScrollbackPersistence(enabled: Bool) {
+        scrollbackPersistenceEnabled = enabled && persistedScrollbackURL != nil
         scrollbackFile?.setSuspended(!enabled)
+        if !enabled { deleteParkFile() }
     }
 
     /// Synchronously persist any buffered scrollback. Called on graceful daemon shutdown so the
@@ -900,6 +912,42 @@ public final class RealPty: @unchecked Sendable {
         return tail
     }
 
+    /// `pane.capture`. Same grid rebuild the unit tests call.
+    public func captureFormatted(format: String, trim: Bool, unwrap: Bool) -> String {
+        withAuthoritative { term in
+            PaneCapture.render(term: term, format: format, trim: trim, unwrap: unwrap)
+        } ?? ""
+    }
+
+    /// Child, foreground process, and up to 16 ancestors. The walk stops at pid 1.
+    public func processTreeJSON() -> String {
+        lifecycleLock.lock()
+        let child = childPID
+        lifecycleLock.unlock()
+        let foreground = probeForegroundProcess()
+        var ancestors: [ControlPlane.ProcessIdentity] = []
+        var cursor = ProcessScan.parentPID(child)
+        var steps = 0
+        while cursor > 1, steps < 16 {
+            ancestors.append(ControlPlane.ProcessIdentity(
+                pid: Int(cursor),
+                executable: Self.processName(for: cursor) ?? ""
+            ))
+            let parent = ProcessScan.parentPID(cursor)
+            if parent == cursor { break }
+            cursor = parent
+            steps += 1
+        }
+        return ControlPlane.ProcessTreeReport(
+            child: ControlPlane.ProcessIdentity(pid: Int(child), executable: Self.processName(for: child) ?? ""),
+            foreground: ControlPlane.ProcessIdentity(
+                pid: Int(foreground?.pid ?? -1),
+                executable: foreground?.executable ?? ""
+            ),
+            ancestors: ancestors
+        ).json()
+    }
+
     public func captureScrollback(includeHistory: Bool) -> String {
         // Lossy decode: scrollback is stored as raw read chunks, and ring eviction can drop a
         // whole entry mid-UTF-8-sequence, so a strict `String(data:encoding:.utf8)` would return
@@ -928,12 +976,9 @@ public final class RealPty: @unchecked Sendable {
     /// clears (the actual screen, like tmux). `joinWrapped` (`-J`) joins soft-wrapped rows
     /// into their logical line. `-S`/`-E` slice the resulting lines (negative = from bottom).
     public func captureGrid(start: Int?, end: Int?, joinWrapped: Bool) -> String {
-        let size = currentWinsize()
-        guard let term = HarnessGridTerminal(cols: size.cols, rows: size.rows) else { return "" }
-        // Retain enough history that even a long scrollback reconstructs fully.
-        term.maxScrollbackLines = 100_000
-        term.feed(scrollbackData(includeHistory: true))
-        var lines = term.captureLines(joinWrapped: joinWrapped)
+        var lines = withAuthoritative { term in
+            term.captureLines(joinWrapped: joinWrapped)
+        } ?? []
         // Drop the empty rows below the last content (tmux trims the blank tail).
         while let last = lines.last, last.isEmpty { lines.removeLast() }
         let count = lines.count
@@ -1014,36 +1059,37 @@ public final class RealPty: @unchecked Sendable {
         return out
     }
 
-    /// Drop the live ring after `threshold` seconds without a PTY read. History
-    /// stays in `parkedBlob` (and on disk when a scrollback file exists). The
-    /// process that produced it is not presented as running.
+    /// After `threshold` seconds without a PTY read, write an encrypted snapshot
+    /// and drop the parsed grid. The byte ring and the child stay. The read loop
+    /// does not call this.
     func parkIfIdle(now: Date = Date(), threshold: TimeInterval = IdleGrid.defaultThreshold) {
         scrollbackLock.lock()
-        defer { scrollbackLock.unlock() }
         let idleFor = now.timeIntervalSince(lastPTYReadAt)
         var model = idleGrid
-        if !model.parked {
-            model.live = scrollbackHead < scrollback.count ? ["live"] : model.live
-        }
         let wasParked = model.parked
         model.tick(secondsSincePTYRead: idleFor, threshold: threshold)
-        guard model.parked, !wasParked else {
-            idleGrid = model
+        idleGrid = model
+        let ring = ringLocked()
+        scrollbackLock.unlock()
+        guard model.parked, !wasParked else { return }
+
+        if !scrollbackPersistenceEnabled {
+            deleteParkFile()
+            releaseAuthoritativeGrid()
             return
         }
-        var blob = Data()
-        let firstSequence = scrollbackHead < scrollback.count ? scrollback[scrollbackHead].sequence : nextSequence
-        for entry in scrollback[scrollbackHead...] { blob.append(entry.data) }
-        parkedBlob = blob
-        parkedSequence = firstSequence
-        scrollback.removeAll(keepingCapacity: false)
-        scrollbackHead = 0
-        scrollbackBytes = 0
-        idleGrid = model
+        let size = currentWinsize()
+        snapshotLock.lock()
+        authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
+        let frame = authoritative.frame()
+        snapshotLock.unlock()
+        if let frame, let plain = frame.encoded(), let sealed = SnapshotCipher.seal(plain: plain, key: parkKey()) {
+            writeParkFile(sealed)
+        }
+        releaseAuthoritativeGrid()
     }
 
-    /// Put parked history back into the live ring. Caller holds `scrollbackLock`.
-    /// `presentsProcessAsRunning` stays false: the restored bytes are history.
+    /// Put a previously extracted blob back into the live ring. Caller holds `scrollbackLock`.
     private func mergeParkedHistoryLocked() {
         if let blob = parkedBlob, !blob.isEmpty {
             scrollback.insert(ScrollbackEntry(sequence: parkedSequence, data: blob), at: scrollbackHead)
@@ -1053,8 +1099,6 @@ public final class RealPty: @unchecked Sendable {
         idleGrid.restore()
     }
 
-    /// Put parked history back into the live ring. `presentsProcessAsRunning`
-    /// stays false: the restored bytes are history, not a live process.
     func restoreParkedGrid() {
         scrollbackLock.lock()
         defer { scrollbackLock.unlock() }
@@ -1065,6 +1109,127 @@ public final class RealPty: @unchecked Sendable {
     var presentsProcessAsRunning: Bool {
         scrollbackLock.lock(); defer { scrollbackLock.unlock() }
         return idleGrid.presentsProcessAsRunning
+    }
+
+    var childIsAlive: Bool {
+        lifecycleLock.lock()
+        let pid = childPID
+        lifecycleLock.unlock()
+        return pid > 0 && kill(pid, 0) == 0
+    }
+
+    var gridIsResident: Bool {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        return authoritative.gridResident
+    }
+
+    var authoritativeBytesFed: Int {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        return authoritative.bytesFed
+    }
+
+    /// The PTY read loop appends to the ring. It does not feed the parser.
+    var readLoopRunsAuthoritativeParser: Bool {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        return authoritative.readLoopFeeds != 0
+    }
+
+    func setParkMaterialForTesting(directory: URL, key: Data) {
+        parkDirectoryOverride = directory
+        parkKeyOverride = key
+        scrollbackPersistenceEnabled = true
+    }
+
+    /// Screen first, then the byte ring newest-first. Painting uses only the first piece.
+    func attachPieces() -> [AttachPiece] {
+        let ring = copyRing()
+        let frame = readyFrameForClient() ?? ReadyFrame(
+            cols: 0, rows: 0, cursorRow: 0, cursorCol: 0, cursorVisible: true,
+            alternateScreen: false, cursorKeysApplication: false, keypadApplication: false,
+            lines: [], sequence: 0
+        )
+        return AttachStream.pieces(frame: frame, historyNewestFirst: ring.reversed().map(\.data))
+    }
+
+    /// The screen a new client paints. A parked pane loads the encrypted snapshot
+    /// and does not put the grid back in the heap.
+    func readyFrameForClient() -> ReadyFrame? {
+        scrollbackLock.lock()
+        let parked = idleGrid.parked
+        scrollbackLock.unlock()
+        if parked, let url = parkFileURL() {
+            let key = parkKey()
+            if let sealed = try? Data(contentsOf: url),
+               let plain = SnapshotCipher.open(sealed: sealed, key: key),
+               let frame = ReadyFrame.decode(plain) {
+                return frame
+            }
+        }
+        let ring = copyRing()
+        let size = currentWinsize()
+        snapshotLock.lock()
+        authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
+        let frame = authoritative.frame()
+        snapshotLock.unlock()
+        return frame
+    }
+
+    private func ringLocked() -> [SnapshotByteSpan] {
+        var spans: [SnapshotByteSpan] = []
+        if let blob = parkedBlob, !blob.isEmpty {
+            spans.append(SnapshotByteSpan(sequence: parkedSequence, data: blob))
+        }
+        for entry in scrollback[scrollbackHead...] {
+            spans.append(SnapshotByteSpan(sequence: entry.sequence, data: entry.data))
+        }
+        return spans
+    }
+
+    private func copyRing() -> [SnapshotByteSpan] {
+        scrollbackLock.lock()
+        defer { scrollbackLock.unlock() }
+        return ringLocked()
+    }
+
+    private func withAuthoritative<T>(_ body: (TerminalEmulator) -> T) -> T? {
+        let ring = copyRing()
+        let size = currentWinsize()
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
+        guard let term = authoritative.terminal else { return nil }
+        return body(term)
+    }
+
+    private func releaseAuthoritativeGrid() {
+        snapshotLock.lock()
+        authoritative.releaseGrid()
+        snapshotLock.unlock()
+    }
+
+    private func parkFileURL() -> URL? {
+        let directory = parkDirectoryOverride ?? persistedScrollbackURL?.deletingLastPathComponent()
+        return directory?.appendingPathComponent("\(id).park")
+    }
+
+    private func parkKey() -> Data {
+        if let parkKeyOverride { return parkKeyOverride }
+        let directory = parkDirectoryOverride
+            ?? persistedScrollbackURL?.deletingLastPathComponent()
+            ?? HarnessPaths.runtimeDirectory
+        return SnapshotKeyStore.loadOrCreate(socketDirectory: directory)
+    }
+
+    private func writeParkFile(_ sealed: Data) {
+        guard let url = parkFileURL() else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? sealed.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    private func deleteParkFile() {
+        guard let url = parkFileURL() else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     public func replay(fromSequence: UInt64?) -> String {
@@ -1192,6 +1357,7 @@ public final class RealPty: @unchecked Sendable {
     private func handleOutput(_ data: Data) {
         scrollbackLock.lock()
         lastPTYReadAt = Date()
+        // Bytes only. The authoritative parser runs in capture and attach, not here.
         if idleGrid.parked {
             mergeParkedHistoryLocked()
         }

@@ -1,3 +1,4 @@
+import CHarnessBase64
 import Foundation
 import XCTest
 @testable import HarnessTerminalEngine
@@ -41,5 +42,87 @@ final class ClipboardOSCTests: XCTestCase {
         term.onSetClipboard = { _ in fired = true }
         term.feed("\u{1b}]52;c;@@not-base64@@\u{07}")
         XCTAssertFalse(fired)
+    }
+
+    /// The payload crosses a feed boundary, so the parser must copy rather than borrow
+    /// a pointer that dies when the first feed returns.
+    func testOSC52SplitAcrossFeedsStillSetsClipboard() {
+        let term = HarnessGridTerminal(cols: 80, rows: 24)!
+        var captured: String?
+        term.onSetClipboard = { captured = $0 }
+        let full = Array("\u{1b}]52;c;\(encoded("hello world"))\u{07}".utf8)
+        let mid = full.count / 2
+        term.feed(Array(full[..<mid]))
+        XCTAssertNil(captured)
+        term.feed(Array(full[mid...]))
+        XCTAssertEqual(captured, "hello world")
+    }
+
+    /// ST's ESC is the last byte of the first feed. The payload has to survive until `\`.
+    func testOSC52StringTerminatorSplitAcrossFeeds() {
+        let term = HarnessGridTerminal(cols: 80, rows: 24)!
+        var captured: String?
+        term.onSetClipboard = { captured = $0 }
+        term.feed(Array("\u{1b}]52;c;\(encoded("via ST"))\u{1b}".utf8))
+        XCTAssertNil(captured)
+        term.feed(Array("\\".utf8))
+        XCTAssertEqual(captured, "via ST")
+    }
+
+    /// Lengths that hit the arm64 chunk loop, the scalar tail, and both padding sizes.
+    /// 600 KiB is the clipboard benchmark body: under the 1 MiB OSC cap, no `=` padding.
+    func testOSC52LengthsRoundTrip() {
+        let lengths = [1, 2, 3, 4, 15, 16, 17, 31, 32, 47, 48, 49, 600 * 1024]
+        for length in lengths {
+            var raw = [UInt8]()
+            raw.reserveCapacity(length)
+            for i in 0 ..< length { raw.append(UInt8(0x20 + (i % 0x5F))) }
+            let term = HarnessGridTerminal(cols: 80, rows: 24)!
+            var captured: String?
+            term.onSetClipboard = { captured = $0 }
+            var osc = Array("\u{1b}]52;c;".utf8)
+            osc.append(contentsOf: Data(raw).base64EncodedString().utf8)
+            osc.append(0x07)
+            term.feed(osc)
+            XCTAssertEqual(captured, String(bytes: raw, encoding: .utf8), "length \(length)")
+        }
+    }
+
+    /// The feed test still passes if this decoder fails open onto Foundation.
+    /// Lock the decoder itself on the benchmark body: 600 KiB of printable ASCII,
+    /// base64 length 819200, no padding, high bit clear.
+    func testStrictDecoderMatchesFoundationOnClipboardBody() {
+        let length = 600 * 1024
+        var raw = [UInt8]()
+        raw.reserveCapacity(length)
+        for i in 0 ..< length { raw.append(UInt8(0x20 + (i % 0x5F))) }
+        let encoded = Data(Data(raw).base64EncodedString().utf8)
+        XCTAssertEqual(Data(base64Encoded: encoded), Data(raw))
+        var decoded = Data(count: length + 16)
+        var nonASCII: Int32 = 1
+        let count: Int = encoded.withUnsafeBytes { src in
+            decoded.withUnsafeMutableBytes { dst in
+                harness_base64_decode(
+                    src.bindMemory(to: UInt8.self).baseAddress!,
+                    encoded.count,
+                    dst.bindMemory(to: UInt8.self).baseAddress!,
+                    &nonASCII
+                )
+            }
+        }
+        XCTAssertEqual(count, length)
+        XCTAssertEqual(nonASCII, 0)
+        XCTAssertEqual(Data(decoded.prefix(count)), Data(raw))
+    }
+
+    func testOSC52RejectsInvalidUTF8() {
+        let payloads = [Data([0xFF, 0xFF]), Data(repeating: 0xFF, count: 32)]
+        for raw in payloads {
+            let term = HarnessGridTerminal(cols: 80, rows: 24)!
+            var captured: String?
+            term.onSetClipboard = { captured = $0 }
+            term.feed("\u{1b}]52;c;\(raw.base64EncodedString())\u{07}")
+            XCTAssertNil(captured, "invalid UTF-8 of \(raw.count) bytes must not set the clipboard")
+        }
     }
 }

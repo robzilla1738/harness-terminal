@@ -16,8 +16,8 @@ let strictFoundationSettings: [SwiftSetting] = [.unsafeFlags(["-warnings-as-erro
 // headless on Linux — which is what lets `HarnessDaemon` run on a remote/headless box.
 #if os(macOS)
 let platformDependencies: [Package.Dependency] = [
-    // Sparkle: macOS auto-update (the only external dependency, and only for the GUI app —
-    // the engine/daemon/CLI stay first-party). Appcast hosted at harnesscli.dev.
+    // Sparkle: macOS auto-update. The only Swift package dependency, and only the GUI links it.
+    // Lua 5.1 is vendored in CLua51 and linked by the CLI only. Appcast hosted at harnesscli.dev.
     // Pinned to the audited 2.9.x line (`Package.resolved` locks 2.9.2): a fresh resolve can't
     // float onto an unaudited future major/minor, while patch-level security fixes still land.
     .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.9.2")),
@@ -36,7 +36,7 @@ let platformProducts: [Product] = [
 // single-pane `attach` — is headless.
 let cliDependencies: [Target.Dependency] = [
     "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTerminalKit", "HarnessTheme",
-    "CHarnessSys",
+    "CHarnessSys", "HarnessScript",
 ]
 let cliExclude: [String] = []
 let platformTargets: [Target] = [
@@ -115,7 +115,14 @@ let platformTestTargets: [Target] = [
     .testTarget(
         name: "HarnessAppTests",
         dependencies: ["HarnessApp"],
-        path: "Tests/HarnessAppTests"
+        path: "Tests/HarnessAppTests",
+        // The bundle sits at Products/<config>/HarnessAppTests.xctest/Contents/MacOS.
+        // Sparkle.framework is copied beside that xctest. Debug links an absolute
+        // PackageFrameworks rpath; Release does not, so `swift test -c release` dies
+        // in dyld before any benchmark runs. Three levels up is the products directory.
+        linkerSettings: [
+            .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@loader_path/../../../"]),
+        ]
     ),
     // Performance baselines for the hot paths (VT parse, IPC codec, scrollback,
     // compositor, renderer stats). Gated behind HARNESS_BENCHMARKS=1 so a normal
@@ -138,6 +145,7 @@ let platformDependencies: [Package.Dependency] = []
 let platformProducts: [Product] = []
 let cliDependencies: [Target.Dependency] = [
     "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTheme", "CHarnessSys",
+    "HarnessScript",
 ]
 let cliExclude: [String] = ["WindowAttachClient.swift"]
 let platformTargets: [Target] = []
@@ -160,6 +168,9 @@ let package = Package(
         // C portability shim exposed as a product so the generated Xcode project can import the
         // same first-party module that SwiftPM targets use internally.
         .library(name: "CHarnessSys", targets: ["CHarnessSys"]),
+        // Lua runner. A product so the Xcode `harness-cli` target can link it.
+        // The daemon does not depend on this. CLua51 stays internal.
+        .library(name: "HarnessScript", targets: ["HarnessScript"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
         .executable(name: "harness-cli", targets: ["HarnessCLI"]),
     ] + platformProducts,
@@ -170,10 +181,16 @@ let package = Package(
             path: "Packages/HarnessCore/Sources/HarnessCore",
             swiftSettings: strictFoundationSettings
         ),
-        // Native terminal engine — pure Swift, no external dependencies. Foundation only
-        // so it links for headless CLI use and unit tests without a GPU.
+        // Strict base64 for the OSC 52 feed path. Internal; not a package product.
+        .target(
+            name: "CHarnessBase64",
+            path: "Packages/CHarnessBase64"
+        ),
+        // Terminal engine. Foundation, plus the private base64 decoder above.
+        // No external packages, so it links for headless CLI use and unit tests without a GPU.
         .target(
             name: "HarnessTerminalEngine",
+            dependencies: ["CHarnessBase64"],
             path: "Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine",
             swiftSettings: strictFoundationSettings
         ),
@@ -200,6 +217,27 @@ let package = Package(
         .target(
             name: "CHarnessSys",
             path: "Packages/CHarnessSys"
+        ),
+        // Lua 5.1.5. The CLI links this. The daemon target does not.
+        .target(
+            name: "CLua51",
+            path: "Packages/CLua51",
+            exclude: ["COPYRIGHT"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("."),
+                .define("LUA_USE_MACOSX", .when(platforms: [.macOS])),
+                .define("LUA_USE_POSIX", .when(platforms: [.linux])),
+                .define("LUA_USE_DLOPEN", .when(platforms: [.linux])),
+            ],
+            linkerSettings: [
+                .linkedLibrary("dl", .when(platforms: [.linux])),
+            ]
+        ),
+        .target(
+            name: "HarnessScript",
+            dependencies: ["CLua51", "HarnessCore"],
+            path: "Packages/HarnessScript/Sources/HarnessScript"
         ),
         // Daemon logic as a library so it is unit-testable; the executable below is a
         // thin `main.swift` wrapper over it.
@@ -228,7 +266,7 @@ let package = Package(
         ),
         .testTarget(
             name: "HarnessTerminalEngineTests",
-            dependencies: ["HarnessTerminalEngine"],
+            dependencies: ["HarnessTerminalEngine", "CHarnessBase64"],
             path: "Tests/HarnessTerminalEngineTests"
         ),
         .testTarget(
@@ -248,6 +286,11 @@ let package = Package(
             name: "HarnessCLITests",
             dependencies: ["HarnessCLI"],
             path: "Tests/HarnessCLITests"
+        ),
+        .testTarget(
+            name: "HarnessScriptTests",
+            dependencies: ["HarnessScript", "HarnessCore"],
+            path: "Tests/HarnessScriptTests"
         ),
         .testTarget(
             name: "HarnessDaemonTests",

@@ -1,5 +1,6 @@
 import AppKit
 import HarnessCore
+import HarnessTerminalEngine
 
 /// Left session rail — workspace pill, sessions list, and a quiet footer.
 @MainActor
@@ -39,6 +40,14 @@ final class HarnessSidebarPanelViewController: NSViewController {
     private var workspaceDropdownMonitor: Any?
     /// Live filter text from the search field; empty shows all sessions.
     private var sessionFilter = ""
+    /// Set when two daemons are visible. Headers plus sessions replace the flat list.
+    private var showsMachineGroups = false
+    private var sidebarLines: [SidebarLine] = []
+
+    private enum SidebarLine {
+        case header(DaemonSidebarGroup)
+        case session(SessionGroup, owner: String, sessionID: String, live: Bool)
+    }
 
     /// Sessions after applying the search filter. Drag-reorder is disabled while a
     /// filter is active (see the data source), so callers that reorder still use the
@@ -520,11 +529,23 @@ final class HarnessSidebarPanelViewController: NSViewController {
         activeSessionID = snap.activeWorkspace?.activeSessionID
         sessions = snap.activeWorkspace?.sessions ?? []
         let name = snap.activeWorkspace?.name ?? "Workspace"
-        sectionLabel.stringValue = name.uppercased()
+        rebuildMachineLines()
+        sectionLabel.stringValue = showsMachineGroups ? "MACHINES" : name.uppercased()
         workspacePill.configure(name: name, count: sessions.count)
         sessionTable.reloadData()
 
-        if let activeSessionID,
+        if showsMachineGroups,
+           let activeSessionID,
+           let row = sidebarLines.firstIndex(where: { line in
+               if case let .session(session, _, _, live) = line { return live && session.id == activeSessionID }
+               return false
+           })
+        {
+            isProgrammaticSelection = true
+            sessionTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            isProgrammaticSelection = false
+            sessionTable.scrollRowToVisible(row)
+        } else if let activeSessionID,
            let row = displayedSessions.firstIndex(where: { $0.id == activeSessionID })
         {
             isProgrammaticSelection = true
@@ -537,6 +558,10 @@ final class HarnessSidebarPanelViewController: NSViewController {
     /// Updates session card labels in place (title/cwd/branch/agent) without
     /// rebuilding the table — preserves selection + scroll position.
     func refreshMetadata() {
+        if SessionCoordinator.shared.sidebarGroups().count > 1 {
+            reload()
+            return
+        }
         let snap = SessionCoordinator.shared.snapshot
         let newSessions = snap.activeWorkspace?.sessions ?? []
         let activeID = snap.activeWorkspace?.activeSessionID
@@ -734,8 +759,42 @@ final class HarnessSidebarPanelViewController: NSViewController {
         SettingsWindowController.show()
     }
 
+    private func rebuildMachineLines() {
+        let groups = SessionCoordinator.shared.sidebarGroups()
+        showsMachineGroups = groups.count > 1
+        guard showsMachineGroups else {
+            sidebarLines = []
+            return
+        }
+        let activeOwner = RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID
+        sidebarLines = groups.flatMap { group in
+            let header = SidebarLine.header(group)
+            let rows = group.sessions.map { row -> SidebarLine in
+                if row.owner == activeOwner, let live = sessions.first(where: { $0.id.uuidString == row.id }) {
+                    return .session(live, owner: row.owner, sessionID: row.id, live: true)
+                }
+                return .session(SessionGroup(name: row.name), owner: row.owner, sessionID: row.id, live: false)
+            }
+            return [header] + rows
+        }
+    }
+
     private func selectSessionRow() {
         let row = sessionTable.selectedRow
+        if showsMachineGroups {
+            guard row >= 0, row < sidebarLines.count else { return }
+            switch sidebarLines[row] {
+            case .header:
+                return
+            case let .session(session, owner, sessionID, live):
+                if live, let activeWorkspaceID {
+                    SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: session.id)
+                } else {
+                    SessionCoordinator.shared.focusSidebar(owner: owner, sessionID: sessionID)
+                }
+            }
+            return
+        }
         let displayed = displayedSessions
         guard row >= 0, row < displayed.count, let activeWorkspaceID else { return }
         SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: displayed[row].id)
@@ -901,7 +960,14 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
     fileprivate static let sessionRowPasteboardType = NSPasteboard.PasteboardType("com.robert.harness.session-row")
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        displayedSessions.count
+        showsMachineGroups ? sidebarLines.count : displayedSessions.count
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if showsMachineGroups, sidebarLines.indices.contains(row), case .header = sidebarLines[row] {
+            return 28
+        }
+        return HarnessDesign.sessionRowHeight
     }
 
     // MARK: - Drag to reorder
@@ -909,6 +975,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         // Reorder maps to the unfiltered list, so it's only meaningful with no
         // active filter (displayed rows == sessions then).
+        guard !showsMachineGroups else { return nil }
         guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let item = NSPasteboardItem()
         item.setString(String(row), forType: Self.sessionRowPasteboardType)
@@ -922,6 +989,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
         guard dropOperation == .above else { return [] }
+        guard !showsMachineGroups else { return [] }
         guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         return .move
     }
@@ -951,7 +1019,21 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if showsMachineGroups, sidebarLines.indices.contains(row) {
+            switch sidebarLines[row] {
+            case let .header(group):
+                let header = SidebarGroupHeader()
+                header.configure(group)
+                return header
+            case let .session(session, _, _, _):
+                return sessionCell(session)
+            }
+        }
         let session = displayedSessions[row]
+        return sessionCell(session)
+    }
+
+    private func sessionCell(_ session: SessionGroup) -> NSView {
         let cell = SessionCardRowView()
         cell.configure(
             session: session,
@@ -966,6 +1048,32 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isProgrammaticSelection else { return }
         selectSessionRow()
+    }
+}
+
+private final class SidebarGroupHeader: NSTableCellView {
+    private let title = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        title.textColor = HarnessDesign.chrome.textSecondary
+        title.lineBreakMode = .byTruncatingTail
+        title.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(title)
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HarnessDesign.horizontalInset),
+            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            title.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ group: DaemonSidebarGroup) {
+        title.stringValue = group.title
+        toolTip = group.detail.isEmpty ? nil : group.detail
     }
 }
 
@@ -1478,7 +1586,25 @@ final class SessionCardRowView: NSView {
             agent: tab.agent?.kind.commandToken
         )
         let displayedAgentKind = tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)
-        titleLabel.stringValue = identity
+        let marks: [ProgramStatusPresentation.Mark] = session.tabs.compactMap { tab in
+            switch tab.programMark?.attention {
+            case .working: return .working
+            case .blocked: return .blocked
+            case .done: return .done
+            case .error: return .error
+            case nil: return nil
+            }
+        }
+        let sessionMark = ProgramStatusPresenter.sessionMark(marks)
+        let glyph: String
+        switch sessionMark {
+        case .blocked: glyph = "!"
+        case .error: glyph = "✕"
+        case .done: glyph = "✓"
+        case .working, .none: glyph = ""
+        }
+        titleLabel.stringValue = glyph.isEmpty ? identity : "\(glyph) \(identity)"
+        setAccessibilityLabel(glyph.isEmpty ? identity : "\(identity), \(sessionMark.rawValue)")
         toolTip = path.isEmpty ? identity : "\(identity) — \(path)"
 
         var metaParts: [String] = []

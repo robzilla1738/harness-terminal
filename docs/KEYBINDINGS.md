@@ -99,6 +99,7 @@ These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefi
 | Select last command output (OSC 133) | `⌘⇧A` |
 | Toggle sidebar | `⌘\` |
 | Jump to notification | `⌘⇧U` |
+| Tab peek | `⌃⌘P` |
 | Settings | `⌘,` |
 | Enter Full Screen (native, macOS Space transition) | `⌃⌘F` |
 | Toggle Fast Full Screen (non-native, instant fill, no Space animation) | `⌃⌘⇧F` |

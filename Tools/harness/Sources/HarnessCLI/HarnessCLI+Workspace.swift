@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import HarnessCore
 
@@ -97,6 +102,10 @@ extension HarnessCLI {
     }
 
     static func handleEvents(_ args: [String], client: DaemonClient) throws {
+        if args.contains("--follow") {
+            try followEvents(args, client: client)
+            return
+        }
         guard case let .snapshot(snapshot) = try checkedRequest(client, .getSnapshot) else {
             fputs("events: snapshot unavailable\n", harnessStderr)
             exit(1)
@@ -110,7 +119,23 @@ extension HarnessCLI {
         for line in try eventLines(snapshot: snapshot, agents: agents) {
             print(line)
         }
-        _ = args
+    }
+
+    /// Live NDJSON. A TTY gets one human line per event unless `--json` is set.
+    /// `HARNESS_SESSION` pins the stream unless `--session` does. `--all` adds server events.
+    static func followEvents(_ args: [String], client: DaemonClient) throws {
+        let fromEnv = ProcessInfo.processInfo.environment["HARNESS_SESSION"]
+        let envSession = (fromEnv?.isEmpty == false) ? fromEnv : nil
+        let pinned = flagValue(args, flag: "--session") ?? envSession
+        let human = isatty(STDOUT_FILENO) != 0 && !args.contains("--json")
+        try client.followEvents(sessionID: pinned, includeServer: args.contains("--all")) { event in
+            if human {
+                print(event.humanLine())
+            } else if let line = try? event.jsonLine() {
+                print(line)
+            }
+            fflush(stdout)
+        }
     }
 
     static func handleProcess(_ args: [String], client: DaemonClient) throws {

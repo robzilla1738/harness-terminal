@@ -243,6 +243,11 @@ harness-cli doctor       --host devbox          # health-check the remote daemon
 (`--host` works on the client commands above; `attach-window` always renders the
 *local* daemon, so run it on the machine whose daemon you want to see.)
 
+The window's sidebar keeps This Mac as one group and puts each other daemon in its own group.
+Sessions sit under the machine that owns them. A split in the other group runs on that daemon.
+The attach is the same framed socket forwarded over your SSH. This remote session is your daemon
+on that machine, over your SSH.
+
 Harness forwards the remote socket over `ssh -N -L`, reusing your existing SSH trust — no new
 credentials. Because the daemon owns scrollback and persists it to disk, a remote session's
 history survives the daemon restarting on that box. See
@@ -291,8 +296,15 @@ would be useful, use `choose-window` instead.
 
 ## 12. Shell integration (prompt marks + the success/failure gutter)
 
-Harness understands **OSC 133** semantic prompts. Once installed, each shell prompt is marked and
-each command's exit status is recorded, which powers:
+Harness understands **OSC 133** semantic prompts. A pane spawned by the daemon gets those marks
+automatically. `shell-integration off` is the opt-out. You do not have to install a snippet by
+hand for a normal new tab. `install-shell-integration` is there when you want the same marks in
+a shell config outside that injection.
+
+Each attached client scrolls and selects on its own. One client's scroll position or selection
+does not move another's, and neither resizes the pane.
+
+The marks power:
 
 - A **left-margin gutter stripe** per prompt: **green** = exit 0, **red** = non-zero, neutral =
   command still running / unknown.
@@ -305,8 +317,9 @@ each command's exit status is recorded, which powers:
 - **`#{command_duration}`**: the last finished command's runtime, as a format token for
   `display-message`, hooks, and pane-border formats (GUI contexts).
 
-Turn it on with one command (it writes the script under the Harness home and wires a guarded,
-idempotent, backed-up `source` line into your rc):
+A new Harness pane already has the marks. The installer is for a shell config you want to source
+yourself. It writes the script under the Harness home and wires a guarded, idempotent, backed-up
+`source` line into your rc:
 
 ```bash
 harness-cli install-shell-integration            # auto-detects $SHELL
@@ -316,6 +329,30 @@ harness-cli install-shell-integration all          # bash + zsh + fish
 Restart your shell (or open a new pane). The snippet is a no-op outside a Harness pane — it gates
 on `$HARNESS` (exported by the daemon into every pane). Details:
 [shell-integration/README.md](shell-integration/README.md).
+
+### Config file
+
+`~/.config/harness/init.lua` is Lua 5.1. `HARNESS_CONFIG` overrides the path. `harness-cli config reload` loads it, and a syntax error keeps the previous keymap. The same child-exit wait is the shell call and the Lua `wait`. Each attached client still scrolls its own view; the script does not change that.
+
+```bash
+harness-cli api call pane.split --args '{"direction":"horizontal","command":"false"}'
+harness-cli api call pane.wait --args '{"until":"child","timeout":30}'
+```
+
+```lua
+harness.mode("resize", { exclusive = true })
+harness.bind("ctrl+r", { mode = "resize" })
+harness.action({ name = "nudge", title = "Nudge left", run = function() os.execute('harness-cli resize-pane --pane "$HARNESS_SURFACE" --dir L --amount 5') end })
+harness.bind("resize/left", "nudge")
+harness.action({ name = "build", title = "Build", run = function()
+  local code, err = harness.wait({ type = "terminal.child_exited" }, { timeout = 30 })
+  if err ~= nil then return end
+  print(code)
+end })
+harness.bind("ctrl+b", "build")
+```
+
+`{ mode = "resize" }` enters the mode. Left resizes the pane and does not reach the shell. Escape leaves the mode. `config reload` publishes the actions into the command palette and the keymap the window uses. A tunneled client does not run a GUI action until Settings → Remote Control is on. This Mac always can.
 
 ### Per-host / per-command profiles
 

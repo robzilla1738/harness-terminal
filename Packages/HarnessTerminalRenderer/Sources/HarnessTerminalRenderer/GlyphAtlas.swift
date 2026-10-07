@@ -94,6 +94,11 @@ final class GlyphAtlas {
     private var cache: [GlyphKey: AtlasEntry?] = [:]
     private var shapedCache: [ShapedGlyphKey: AtlasEntry?] = [:]
     private var clusterCache: [ClusterGlyphKey: AtlasEntry?] = [:]
+    /// Side index for U+0000...U+007F. Four planes (plain, bold, italic, bold+italic) of 128
+    /// slots. `asciiOccupied` distinguishes "not cached" from a cached no-ink glyph. A full
+    /// frame's encode is dominated by the dictionary probe; ASCII terminal text hits this table.
+    private var asciiOccupied = [Bool](repeating: false, count: 512)
+    private var asciiEntry = [AtlasEntry?](repeating: nil, count: 512)
     /// Hard ceiling on cached glyph entries (rasterized + shaped). The texture itself bounds *inked*
     /// glyphs — a full atlas triggers `resetPacker` — but a `nil` (no-ink: space, zero-width
     /// combining mark) entry is cached WITHOUT consuming texture space, so a stream of many distinct
@@ -166,6 +171,12 @@ final class GlyphAtlas {
     /// Atlas entry for a glyph variant, rasterizing + packing on first use. Returns nil if
     /// the glyph has no ink or the atlas is full.
     func entry(for key: GlyphKey) -> AtlasEntry? {
+        if let index = asciiIndex(key), asciiOccupied[index] {
+            hits += 1
+            let found = asciiEntry[index]
+            touchPage(of: found)
+            return found
+        }
         if let cached = cache[key] {
             hits += 1
             touchPage(of: cached)
@@ -175,8 +186,34 @@ final class GlyphAtlas {
         let entry = rasterizer.rasterize(codepoint: key.codepoint, bold: key.bold, italic: key.italic)
             .flatMap(place)
         cache[key] = entry
+        if let index = asciiIndex(key) {
+            asciiOccupied[index] = true
+            asciiEntry[index] = entry
+        }
         capCachesIfNeeded()
         return entry
+    }
+
+    /// Plane layout: plain=0, bold=1, italic=2, bold+italic=3, each 128 codepoints.
+    private func asciiIndex(_ key: GlyphKey) -> Int? {
+        guard key.codepoint < 128 else { return nil }
+        let plane = (key.bold ? 1 : 0) | (key.italic ? 2 : 0)
+        return plane * 128 + Int(key.codepoint)
+    }
+
+    private func clearASCIICache() {
+        for index in asciiOccupied.indices {
+            asciiOccupied[index] = false
+            asciiEntry[index] = nil
+        }
+    }
+
+    private func dropASCIIEntries(onPage victim: Int) {
+        for index in asciiEntry.indices {
+            guard asciiEntry[index]?.pageIndex == victim else { continue }
+            asciiOccupied[index] = false
+            asciiEntry[index] = nil
+        }
     }
 
     /// Atlas entry for a grapheme cluster (base + combining marks), composed by CoreText into one
@@ -280,6 +317,7 @@ final class GlyphAtlas {
         cache = cache.filter { $0.value?.pageIndex != victim }
         shapedCache = shapedCache.filter { $0.value?.pageIndex != victim }
         clusterCache = clusterCache.filter { $0.value?.pageIndex != victim }
+        dropASCIIEntries(onPage: victim)
         pageIndex = victim
         penX = 0
         penY = 0
@@ -306,6 +344,7 @@ final class GlyphAtlas {
         cache.removeAll(keepingCapacity: true)
         shapedCache.removeAll(keepingCapacity: true)
         clusterCache.removeAll(keepingCapacity: true)
+        clearASCIICache()
     }
 
     /// Shelf-pack one inked glyph, uploading its coverage. Returns nil when the atlas is full.

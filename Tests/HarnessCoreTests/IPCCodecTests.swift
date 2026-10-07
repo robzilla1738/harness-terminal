@@ -518,6 +518,21 @@ final class IPCCodecTests: XCTestCase {
         .takeSurface(surfaceID: "surface-1", clientID: nil),
         .foregroundProcess(surfaceID: "surface-1"),
         .surfaceContext(surfaceID: "surface-1"),
+        .captureFormatted(surfaceID: "surface-1", format: "text", trim: true, unwrap: false),
+        .captureFormatted(surfaceID: "surface-1", format: "html", trim: false, unwrap: true),
+        .processTree(surfaceID: "surface-1"),
+        .paneQuery(surfaceID: "surface-1", kind: "pwd"),
+        .listDir(surfaceID: "surface-1", path: nil),
+        .listDir(surfaceID: "surface-1", path: "/var/tmp"),
+        .resetSurface(surfaceID: "surface-1"),
+        .paneWait(surfaceID: "surface-1", until: "child", timeout: 30),
+        .subscribeEvents(sessionID: nil, includeServer: false),
+        .subscribeEvents(sessionID: "session-1", includeServer: true),
+        .publishKeymap(generation: 3, hash: "abc"),
+        .noteHostsChanged,
+        .noteClientConnection(host: "devbox"),
+        .noteTailscaleStatus(peerCount: 2),
+        .presentClient(kind: "cli", version: "1.12.1", uid: 501, tunnel: false),
         // Optional-field variants — exercise both the present and absent branch of the optionals.
         .newTab(workspaceID: UUID(), cwd: nil, shell: nil),
         .subscribeSurfaceOutput(surfaceID: "surface-1", label: nil),
@@ -572,6 +587,7 @@ final class IPCCodecTests: XCTestCase {
         .options([OptionEntry(scope: "global", target: nil, key: "status", value: "on")]),
         .hookID(UUID()),
         .hooks([HookEntry(id: UUID(), event: "pane-exited", commandSource: "display-message done", condition: nil)]),
+        .follow("{\"payload\":{},\"type\":\"tab.created\"}"),
         .error("Tab not found"),
     ]
 
@@ -598,7 +614,9 @@ final class IPCCodecTests: XCTestCase {
              .selectPaneDirectional, .selectPane, .subscribeSnapshot, .applyLayout, .nextLayout,
              .previousLayout, .rotatePanes, .breakPane, .joinPane, .respawnPane, .clearHistory, .setOption,
              .showOptions, .setEnvironment, .showEnvironment, .bindHook, .unbindHook, .listHooks,
-             .displayMessage, .setSurfaceSizeMode, .takeSurface, .foregroundProcess, .surfaceContext:
+             .displayMessage, .setSurfaceSizeMode, .takeSurface, .foregroundProcess, .surfaceContext,
+             .captureFormatted, .processTree, .paneQuery, .listDir, .resetSurface, .paneWait, .subscribeEvents,
+             .publishKeymap, .noteHostsChanged, .noteClientConnection, .noteTailscaleStatus, .presentClient:
             break
         }
     }
@@ -611,7 +629,7 @@ final class IPCCodecTests: XCTestCase {
         case .workspaces, .surfaces, .agents, .workspaceID, .sessionID, .tabID, .paneID,
              .surfaceID, .snapshot, .text, .data, .replayResult, .snapshotChanged, .agentInfo,
              .clients, .daemonStats, .clientID, .buffer, .buffers, .options, .hookID, .hooks,
-             .error:
+             .follow, .error:
             break
         }
     }

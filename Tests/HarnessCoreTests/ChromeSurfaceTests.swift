@@ -38,6 +38,24 @@ final class ChromeSurfaceTests: XCTestCase {
         XCTAssertTrue(nested.contains("nvim"))
     }
 
+    func testTiledSplitFillsTheLengthWithAndWithoutADivider() {
+        let even = ChromeLayout.tiledSplit(length: 800, thickness: 0, ratio: 0.5)
+        XCTAssertEqual(even.first, 400)
+        XCTAssertEqual(even.secondOrigin, 400)
+        XCTAssertEqual(even.second, 400)
+        XCTAssertEqual(even.first + even.second, 800)
+
+        let hairline = ChromeLayout.tiledSplit(length: 800, thickness: 1, ratio: 0.25)
+        XCTAssertEqual(hairline.first, 199.75)
+        XCTAssertEqual(hairline.secondOrigin, 200.75)
+        XCTAssertEqual(hairline.second, 599.25)
+        XCTAssertEqual(hairline.first + 1 + hairline.second, 800)
+
+        let half = ChromeLayout.tiledSplit(length: 640, thickness: 0, ratio: .nan)
+        XCTAssertEqual(half.first, 320)
+        XCTAssertEqual(half.second, 320)
+    }
+
     func testContrastFloorsHoldForDefaultDarkAndLightPalettes() {
         let dark = ChromePaletteSpec.resolve(backgroundHex: "#000000", foregroundHex: "#ffffff")
         XCTAssertTrue(dark.isDark)

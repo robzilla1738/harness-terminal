@@ -10,7 +10,9 @@ import ImageIO
 public enum ImageDecoder {
     public static func decode(_ data: Data) -> DecodedImage? {
         #if canImport(ImageIO)
-        guard !data.isEmpty,
+        // ImageIO's first look at a multi-megabyte non-image loads plugins and scans the
+        // buffer. A terminal feed must not pay that for ASCII that will never be a bitmap.
+        guard looksLikeImage(data),
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
@@ -18,6 +20,30 @@ public enum ImageDecoder {
         #else
         return nil
         #endif
+    }
+
+    /// True when `data` starts with a container ImageIO actually decodes for inline images.
+    /// The check is the header only: PNG, JPEG, GIF, BMP, TIFF, ICO, WebP, JPEG 2000, HEIF/AVIF.
+    static func looksLikeImage(_ data: Data) -> Bool {
+        guard data.count >= 3 else { return false }
+        return data.withUnsafeBytes { raw in
+            let b = raw.bindMemory(to: UInt8.self)
+            if b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF { return true }
+            guard data.count >= 4 else { return false }
+            if b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47 { return true }
+            if b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38 { return true }
+            if b[0] == 0x42 && b[1] == 0x4D { return true }
+            if (b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x2A && b[3] == 0x00)
+                || (b[0] == 0x4D && b[1] == 0x4D && b[2] == 0x00 && b[3] == 0x2A) { return true }
+            if b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] == 0 { return true }
+            guard data.count >= 12 else { return false }
+            if b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46
+                && b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50 { return true }
+            if b[4] == 0x66 && b[5] == 0x74 && b[6] == 0x79 && b[7] == 0x70 { return true }
+            if b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0x0C
+                && b[4] == 0x6A && b[5] == 0x50 { return true }
+            return false
+        }
     }
 
     #if canImport(ImageIO)

@@ -235,11 +235,10 @@ public struct KeyTableSet: Codable, Sendable, Equatable {
             Binding(spec: KeySpec(key: "b"), command: .copyModeCommand(.previousWord), note: "Previous word"),
             Binding(spec: KeySpec(key: "e"), command: .copyModeCommand(.nextWordEnd), note: "End of next word"),
             Binding(spec: KeySpec(key: "^"), command: .copyModeCommand(.backToIndentation), note: "Back to indentation"),
-            // Big-WORD motions (W/B/E): Harness's word motions are whitespace-delimited, so these
-            // share the w/b/e implementation (tmux `next-space`/`previous-space`/`next-space-end`).
-            Binding(spec: KeySpec(key: "W"), command: .copyModeCommand(.nextWord), note: "Next space-delimited word"),
-            Binding(spec: KeySpec(key: "B"), command: .copyModeCommand(.previousWord), note: "Previous space-delimited word"),
-            Binding(spec: KeySpec(key: "E"), command: .copyModeCommand(.nextWordEnd), note: "End of next space-delimited word"),
+            // Big-WORD motions (W/B/E) are whitespace-delimited. Small-word w/b/e use word-separators.
+            Binding(spec: KeySpec(key: "W"), command: .copyModeCommand(.nextSpace), note: "Next space-delimited word"),
+            Binding(spec: KeySpec(key: "B"), command: .copyModeCommand(.previousSpace), note: "Previous space-delimited word"),
+            Binding(spec: KeySpec(key: "E"), command: .copyModeCommand(.nextSpaceEnd), note: "End of next space-delimited word"),
             // Jump-to-char (f/F/t/T) — the front-end captures the next keystroke as the target;
             // `;`/`,` repeat it forward / reversed.
             Binding(spec: KeySpec(key: "f"), command: .copyModeCommand(.jump(.forward, nil)), note: "Jump to char"),

@@ -14,7 +14,9 @@ blink, copy-on-select, the Option-key behavior (`macos-option-as-alt`, including
 `left`/`right` split forms), and the default shell.
 
 **What's not imported:** the font **size** is Harness-owned (default 16) — a terminal's size
-preference doesn't carry over, only the face does.
+preference doesn't carry over, only the face does. A Ghostty config (a parent directory named
+`ghostty`, a file named `config.ghostty`, or the Ghostty bundle id) is labeled Ghostty, and the
+importer lists every key it did not apply, including `font-size`.
 
 Dual light/dark theme declarations import as Harness system appearance defaults: the light theme
 becomes the macOS-light choice, the dark theme becomes the macOS-dark choice, and Harness switches

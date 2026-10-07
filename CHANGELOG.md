@@ -8,20 +8,27 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## Unreleased
 
-Not a release. Local `main` carries this work so the next session starts from it.
+Not a release. Local `main` carries this work so the next session starts from it. `HarnessVersion.short` stays 1.12.1. The 1.13–1.17 names are feature slices in this unreleased work, not a version bump.
 
 ### Fixed
 - **New shells no longer inherit `NO_COLOR` or a disabled `FORCE_COLOR`.** A spawn strips `NO_COLOR`, and strips `FORCE_COLOR` only when the parent value is `0`, `false`, or `off`. Any other `FORCE_COLOR` value stays. Shells that are already running keep the environment they started with; open a new tab to pick up the strip.
 - **Light canvases use the light palette.** Explicit Light and follow-macOS while the system is light ignore a stored dark palette (for example an imported ef-bio). ANSI 0–15 comes from the light theme. Truecolor is still passed through. An explicit palette fills empty slots only in theme mode, and only when "apply theme to output" is on.
 - **Unlimited scrollback is one ceiling.** `scrollbackLines == 0` is still the unlimited sentinel. The daemon replay ring and the GUI line history both stop at 512 MiB (`ScrollbackBudget.unlimitedSafetyCapBytes`). The GUI does not keep a second unbounded history.
-- **Split gaps no longer stack.** Comfortable density separates panes with the island inset only; the split divider is 0. Compact panes stay flush and use the 1-point divider.
+- **Split gaps no longer stack.** Comfortable density separates panes with the island inset only; the split divider is 0. Compact panes stay flush and use the 1-point divider. A split tiles both panes across the full length, so a new pane does not sit at a few lines and leave an empty band.
 
 ### Changed
+- **Fresh installs start in Persistent mode.** A new settings object keeps sessions when the app quits. A settings file that never stored `experienceMode` still decodes as Full, so opening an existing install does not change its mode.
 - **One chrome surface.** Sidebar, terminal, and the gutter share the active canvas color and one paint opacity. Light mode raises that opacity to at least 0.94 without rewriting the stored setting. A single pane is flush (inset 0, radius 0, no stroke). The pane has no header row. The active tab and the selected session card share one tint. Session cards stay 58pt tall with a 10pt corner. The window border is an inset one-device-pixel stroke. Light mode does not put a Core Image blur behind the tab-row split icons.
 - **The daemon is the session.** Quitting the app leaves the daemon up. A new attach replays the same grid. A second client can subscribe read-only (`subscribeSurfaceOutputReadOnly`): it sees output and its writes do not reach the child. Surface cwd, foreground command, and hooks survive reconnect.
 
 ### Added
+- **Program status (OSC 7501 rev 0.2).** A program reports `idle`, `working`, `done`, `blocked`, `error`, or `clear`. The same record feeds the tab, the session row, the notch, and ⌘⇧U. See [docs/PROGRAM-STATUS.md](docs/PROGRAM-STATUS.md). An `id` path may contain `/`. That slash is parent/child for `clear` and for `app` inheritance only.
+- **JSON API.** `harness-cli api list`, `api describe`, and `api call` cover sessions, panes, capture, keys, and program status. `events --follow` is a live stream. New API exits are 0, 1, 2, 3, 4, and 130. Older tmux-style verbs keep their exits. See [docs/COMMANDS.md](docs/COMMANDS.md).
+- **Lua 5.1 config, CLI only.** `~/.config/harness/init.lua` (override `HARNESS_CONFIG`) binds keys, modes, and actions. The daemon does not link Lua. `config check`, `config reload`, and `do` are in [docs/COMMANDS.md](docs/COMMANDS.md). A ten-line example is in [docs/MULTIPLEXER_GUIDE.md](docs/MULTIPLEXER_GUIDE.md).
 - **Workspace CLI.** `size-mode`, `take-surface`, `save-layout`, `restore-layout`, `events`, `process`, `find-files`, and `copy-file`. See [docs/COMMANDS.md](docs/COMMANDS.md).
+- **Craft.** Light appearance turns Oklab contrast correction on; dark leaves it off, and a stored choice wins. Reduce Motion does not disable it. The find bar stays an overlay and moves when it covers the current match. A copy fades the selection only when the pasteboard accepts the text. Tab peek (⌃⌘P, or a horizontal swipe on the tab bar) shows the other tabs from the edge without changing the live grid size; Reduce Motion opens the overview directly. Copy-mode `word-separators` changes `w`/`b`/`e`; `W`/`B`/`E` stay whitespace. A Ghostty config is named Ghostty and lists the keys it skipped, including font size. Every Settings control is also a palette row writing the same store.
+- **Another Mac.** The sidebar groups This Mac and each attached daemon separately. `pane.list_dir` lists the owning daemon's files, rooted at the pane cwd unless a path is given. Insert Path and Go to Directory quote those paths. A non-owner resize reflows that client's primary screen and does not change the owner's PTY size; the alternate screen is not reflowed. Tailscale peers are suggested only when `tailscale status` exists, and a host is stored only after the SSH target and socket are confirmed. A dropped tunnel emits `client.connection`.
+- **Snapshot.** Capture reads an authoritative grid that is caught up off the PTY read loop and resynced from the byte ring when it falls behind. A second client gets that screen (grid, cursor, modes, and size) before scrollback, newest history first. After 60 seconds without PTY reads the grid leaves the daemon heap, an encrypted snapshot is written, and the child stays alive. `persist-scrollback off` keeps both the scrollback log and the parked snapshot off disk. The attach frame is internal.
 
 ## [1.12.1] - 2026-06-13
 

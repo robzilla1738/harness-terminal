@@ -98,9 +98,17 @@ Semantics (pinned by `ScrollbackPersistenceTests`):
   previously-persisted run left behind.
 - Copy-mode copies are independent of this option: an explicit copy persists to
   `buffers.json` (user-initiated, by design) regardless of `persist-scrollback`.
+- An idle pane's parked screen is an encrypted snapshot. The key is in the macOS
+  keychain, or a mode-`0600` file next to the socket directory on Linux. Turning
+  `persist-scrollback` off stores no scrollback bytes and no parked snapshot.
+  The snapshot bytes are an internal attach frame, not a published wire format.
 
-## IME audit (deferred, tracked)
+## IME
 
-The systematic IME-depth pass (dead keys, CJK candidate commit timing, wide marked-text
-width math) is deferred until the surface-view decomposition lands (`+IME` extension file,
-roadmap PR-30) so the fixes have a clean home; tracked in `docs/V1_10_ROADMAP.md` PR-36.
+Dead keys and finished compositions commit through `insertText` on
+`HarnessTerminalSurfaceView`'s `NSTextInputClient` extension. The committed string is
+encoded and sent to the child. In-progress CJK preedit is `setMarkedText` until `insertText`
+commits it or `unmarkText` drops it. Wide marked text uses `CharacterWidth`: a width-2
+glyph occupies the cursor cell and `applyPreedit` writes a spacer cell beside it.
+`CellOverlayTests` covers preedit over a selection, a commit that clears the mark, and
+the wide-glyph spacer.

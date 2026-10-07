@@ -3,9 +3,9 @@
 Harness presents four **experience modes**. A mode changes which controls are visible, the
 default session-persistence policy, and how prominent agent workflows are.
 
-Switch modes any time in **Settings → Terminal → Experience**. New installs start in
-**Plain**; an install that predates modes migrates to **Full Terminal** so nothing you already
-had (prefix key, status line) disappears.
+Switch modes any time in **Settings → Terminal → Experience**. A new install starts in
+**Persistent**. A settings file that never stored `experienceMode` still opens as **Full
+Terminal**, so an upgrade does not hide a prefix key or status line you already had.
 
 | Mode | Prefix key | Status line | Sessions survive a clean quit | Agent workflows |
 |------|:---------:|:-----------:|:-----------------------------:|:---------------:|

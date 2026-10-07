@@ -176,6 +176,10 @@ enum MainMenuBuilder {
         overviewItem.keyEquivalentModifierMask = [.command, .shift]
         overviewItem.target = MenuTarget.shared
         view.submenu?.addItem(overviewItem)
+        let peekItem = NSMenuItem(title: "Tab Peek", action: #selector(MenuTarget.toggleTabPeek), keyEquivalent: "p")
+        peekItem.keyEquivalentModifierMask = [.control, .command]
+        peekItem.target = MenuTarget.shared
+        view.submenu?.addItem(peekItem)
         let sidebarItem = NSMenuItem(title: "Toggle Sidebar", action: #selector(MenuTarget.toggleSidebar), keyEquivalent: "\\")
         sidebarItem.keyEquivalentModifierMask = [.command]
         sidebarItem.target = MenuTarget.shared
@@ -279,6 +283,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu.title == "Remote" else { return }
         menu.removeAllItems()
+        let note = NSMenuItem(title: RemoteAttach.explanation, action: nil, keyEquivalent: "")
+        note.isEnabled = false
+        menu.addItem(note)
+        menu.addItem(.separator())
+        let suggest = NSMenuItem(title: "Suggest Tailscale Peers…", action: #selector(suggestTailscalePeers), keyEquivalent: "")
+        suggest.target = self
+        menu.addItem(suggest)
         let add = NSMenuItem(title: "Add Remote Host…", action: #selector(addRemoteHost), keyEquivalent: "")
         add.target = self
         menu.addItem(add)
@@ -314,11 +325,90 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         SessionCoordinator.shared.setAppearanceMode(mode)
     }
 
+    @objc func suggestTailscalePeers() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let present = Self.tailscaleCommandPresent()
+            let peers = present ? TailscalePeers.parse(Self.tailscaleStatusJSON() ?? Data()) : []
+            DispatchQueue.main.async {
+                if FollowEvent.tailscaleStatusChanged(commandPresent: present, peerCount: peers.count) != nil {
+                    _ = try? DaemonClient().request(.noteTailscaleStatus(peerCount: peers.count), timeout: 1)
+                }
+                self.confirmSuggestedPeer(peers, commandPresent: present)
+            }
+        }
+    }
+
+    private static func tailscaleCommandPresent() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = ["tailscale"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    private static func tailscaleStatusJSON() -> Data? {
+        guard !TailscalePeers.joinsTailnet(TailscalePeers.statusArguments) else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = TailscalePeers.statusArguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        guard (try? process.run()) != nil else { return nil }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return output.fileHandleForReading.readDataToEndOfFile()
+    }
+
+    private func confirmSuggestedPeer(_ peers: [TailscalePeer], commandPresent: Bool) {
+        let alert = NSAlert()
+        alert.messageText = "Tailscale peers"
+        if !commandPresent {
+            alert.informativeText = "tailscale status isn't available, so nothing was suggested. Harness does not join a tailnet."
+            alert.runModal()
+            return
+        }
+        alert.informativeText = RemoteAttach.explanation + " A peer is saved only after you confirm the SSH target and the socket."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let stack = NSStackView(frame: NSRect(x: 0, y: 0, width: 360, height: 78))
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        if peers.isEmpty {
+            popup.addItem(withTitle: "No online peers")
+            popup.isEnabled = false
+        } else {
+            popup.addItems(withTitles: peers.map { $0.hostName.isEmpty ? $0.dnsName : $0.hostName })
+        }
+        let sshField = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 22))
+        sshField.placeholderString = peers.first.map { "SSH target (\($0.suggestedSSH))" } ?? "SSH target (user@host)"
+        let sockField = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 22))
+        sockField.placeholderString = "Remote socket path"
+        stack.addArrangedSubview(popup)
+        stack.addArrangedSubview(sshField)
+        stack.addArrangedSubview(sockField)
+        alert.accessoryView = stack
+        guard alert.runModal() == .alertFirstButtonReturn, !peers.isEmpty else { return }
+        let index = min(max(popup.indexOfSelectedItem, 0), peers.count - 1)
+        let peer = peers[index]
+        let name = peer.hostName.isEmpty ? peer.dnsName : peer.hostName
+        let typedSSH = sshField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ssh = typedSSH.isEmpty ? peer.suggestedSSH : typedSSH
+        guard let host = TailscalePeers.confirmedHost(
+            name: name, sshTarget: ssh, socketPath: sockField.stringValue
+        ) else { return }
+        RemoteHostsService.shared.addHost(host)
+    }
+
     @objc func addRemoteHost() {
         let alert = NSAlert()
         alert.messageText = "Add Remote Host"
-        alert.informativeText = "Run HarnessDaemon on the remote machine (harness-cli install), "
-            + "then connect to it over SSH."
+        alert.informativeText = RemoteAttach.explanation + " Run HarnessDaemon on that machine, then confirm the SSH target and socket."
         alert.addButton(withTitle: "Save & Connect")
         alert.addButton(withTitle: "Cancel")
         let stack = NSStackView(frame: NSRect(x: 0, y: 0, width: 320, height: 92))
@@ -340,18 +430,17 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
         let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let ssh = sshField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !ssh.isEmpty else { return }
         let socketPath = sockField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if socketPath.isEmpty {
+        guard let host = TailscalePeers.confirmedHost(name: name, sshTarget: ssh, socketPath: socketPath) else {
             let warn = NSAlert()
-            warn.messageText = "Remote socket path required"
-            warn.informativeText = "Use the path shown by `harness-cli doctor` on the remote host."
+            warn.messageText = "SSH target and socket required"
+            warn.informativeText = "Confirm both before the host is saved. "
+                + "Use the socket path from `harness-cli doctor` on that machine."
             warn.runModal()
             return
         }
-        RemoteHostsService.shared.addHost(
-            RemoteHost(name: name, sshTarget: ssh, remoteSocketPath: socketPath))
-        SessionCoordinator.shared.connectToRemote(named: name)
+        RemoteHostsService.shared.addHost(host)
+        SessionCoordinator.shared.connectToRemote(named: host.name)
     }
 
     @objc func connectRemoteHost(_ sender: NSMenuItem) {
@@ -459,6 +548,10 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func toggleOverview() {
         WorkspaceOverviewController.toggle()
+    }
+
+    @objc func toggleTabPeek() {
+        TabPeekController.toggle()
     }
 
     @objc func toggleSidebar() {

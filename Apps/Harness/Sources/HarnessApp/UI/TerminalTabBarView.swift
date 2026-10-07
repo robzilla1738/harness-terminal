@@ -63,6 +63,7 @@ protocol TerminalTabBarDelegate: AnyObject {
     func tabBarDidRequestSplit(tabID: TabID, direction: SplitDirection)
     func tabBarDidRequestTogglePersistent(tabID: TabID)
     func tabBarDidRequestToggleSidebar()
+    func tabBarDidRequestPeek()
 }
 
 extension TerminalTabBarDelegate {
@@ -73,6 +74,7 @@ extension TerminalTabBarDelegate {
     func tabBarDidRequestSplit(tabID: TabID, direction: SplitDirection) {}
     func tabBarDidRequestTogglePersistent(tabID: TabID) {}
     func tabBarDidRequestToggleSidebar() {}
+    func tabBarDidRequestPeek() {}
 }
 
 enum TabContextCommand {
@@ -127,6 +129,20 @@ final class TerminalTabBarView: NSView {
 
     // Drag-reorder state.
     private weak var draggingPill: TabPillView?
+    private var lastPeekUptime: TimeInterval = 0
+
+    public override func scrollWheel(with event: NSEvent) {
+        let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) && abs(event.scrollingDeltaX) > 8
+        guard horizontal else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastPeekUptime > 0.45 {
+            lastPeekUptime = now
+            delegate?.tabBarDidRequestPeek()
+        }
+    }
     private var dragGrabOffsetX: CGFloat = 0
     private var dragTargetIndex: Int?
     private var visibleStart = 0
@@ -529,11 +545,12 @@ final class TerminalTabBarView: NSView {
 
 @MainActor
 private func tabDisplayTitle(_ tab: Tab) -> String {
-    SurfaceIdentity.label(
+    let base = SurfaceIdentity.label(
         directory: tab.cwd,
         program: tab.currentCommand,
         agent: tab.agent?.kind.commandToken
     )
+    return TabChip.title(base: base, app: tab.programMark?.app)
 }
 
 /// Effective agent kind for the tab — daemon-detected first, then a permissive
@@ -706,6 +723,7 @@ private final class TabPillView: NSView {
         setAgentIcon(for: tab)
         setPersistentIndicator(tab.persistent)
         setWorkingDotVisible(Self.isAgentWorking(tab))
+        setAccessibilityLabel(Self.accessibilityLabel(tab))
         applyChrome(isActive: isActive)
 
         // Re-evaluate the shuttle animation when the user toggles Reduce Motion mid-session,
@@ -732,7 +750,18 @@ private final class TabPillView: NSView {
     /// Fallback: the process detector's output recency, for agents that don't emit 9;4 (codex).
     /// `waiting` only vetoes the fallback — an explicit progress report outranks a stale
     /// waiting status.
+    private static func accessibilityLabel(_ tab: Tab) -> String {
+        let title = tabDisplayTitle(tab)
+        guard let mark = tab.programMark else { return title }
+        var parts = [title, mark.attention.rawValue]
+        if let message = mark.message, !message.isEmpty { parts.append(message) }
+        return parts.joined(separator: ", ")
+    }
+
     private static func isAgentWorking(_ tab: Tab) -> Bool {
+        if let mark = tab.programMark {
+            return mark.attention == .working
+        }
         if tab.rootPane.allSurfaceIDs().contains(where: { SurfaceProgressTracker.shared.isActive($0) }) {
             return true
         }
@@ -884,6 +913,7 @@ private final class TabPillView: NSView {
         setAgentIcon(for: tab)
         setPersistentIndicator(tab.persistent)
         setWorkingDotVisible(Self.isAgentWorking(tab))
+        setAccessibilityLabel(Self.accessibilityLabel(tab))
         applyChrome(isActive: isActive)
     }
 

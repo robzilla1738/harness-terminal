@@ -62,6 +62,37 @@ public enum ControlPlane {
         return "{\"pid\":\(pid),\"executable\":\"\(escaped)\"}"
     }
 
+    /// One process in `pane.process`: the child the terminal started, the foreground
+    /// group, or a parent walking toward pid 1.
+    public struct ProcessIdentity: Codable, Equatable, Sendable {
+        public var pid: Int
+        public var executable: String
+
+        public init(pid: Int, executable: String) {
+            self.pid = pid
+            self.executable = executable
+        }
+    }
+
+    public struct ProcessTreeReport: Codable, Equatable, Sendable {
+        public var child: ProcessIdentity
+        public var foreground: ProcessIdentity
+        public var ancestors: [ProcessIdentity]
+
+        public init(child: ProcessIdentity, foreground: ProcessIdentity, ancestors: [ProcessIdentity]) {
+            self.child = child
+            self.foreground = foreground
+            self.ancestors = ancestors
+        }
+
+        public func json() -> String {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(self) else { return "{}" }
+            return String(decoding: data, as: UTF8.self)
+        }
+    }
+
     public static func contextJSON(pid: Int, executable: String, cwd: String) -> String {
         let escapedExec = executable
             .replacingOccurrences(of: "\\", with: "\\\\")

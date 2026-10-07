@@ -229,6 +229,20 @@ public struct IslandChrome: Equatable, Sendable {
     public var cornerRadius: Double
 }
 
+/// Lengths along a split. `first + thickness + second` equals the length passed
+/// to `ChromeLayout.tiledSplit` when thickness is non-negative.
+public struct TiledSplit: Equatable, Sendable {
+    public var first: Double
+    public var secondOrigin: Double
+    public var second: Double
+
+    public init(first: Double, secondOrigin: Double, second: Double) {
+        self.first = first
+        self.secondOrigin = secondOrigin
+        self.second = second
+    }
+}
+
 /// The gap around a terminal card. All four edges are the same value, so the
 /// space under the tab matches the left, right, and bottom.
 public struct CardInsets: Equatable, Sendable {
@@ -250,6 +264,17 @@ public enum ChromeLayout {
         let lower = Swift.min(min, max)
         let upper = Swift.max(min, max)
         return Swift.min(upper, Swift.max(lower, natural))
+    }
+
+    /// Two panes that together cover `length`, with `thickness` between them.
+    /// A thickness of 0 still fills the length. The first pane gets `ratio` of
+    /// the free length (0...1). A non-finite ratio is half.
+    public static func tiledSplit(length: Double, thickness: Double, ratio: Double) -> TiledSplit {
+        let gap = max(0, thickness)
+        let available = max(0, length - gap)
+        let share = ratio.isFinite ? min(1, max(0, ratio)) : 0.5
+        let first = available * share
+        return TiledSplit(first: first, secondOrigin: first + gap, second: available - first)
     }
 
     /// A single pane is flush with the window. A split keeps a small gap so the

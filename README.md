@@ -6,7 +6,7 @@ The native macOS terminal that keeps your sessions running and tells you the mom
 
 Every pane renders on Harness's own GPU engine. Your splits and sessions live in a background daemon, so they survive quitting the app — and their scrollback survives a daemon restart. You can drive or attach to them from the command line, including a headless or remote daemon over SSH. And Harness watches the agents you run inside it (Claude Code, Codex, Cursor, and more), so an approval prompt never sits unseen behind another tab.
 
-One self-contained app. The terminal engine, daemon, and CLI are all first-party Swift; the only external dependency is Sparkle (the macOS auto-update framework, GUI-only).
+One self-contained app. The terminal engine, daemon, and CLI are first-party Swift. Sparkle is the only Swift package dependency, and only the GUI links it. Lua 5.1 is vendored and linked by the CLI alone. The daemon does not link Lua.
 
 ## Download
 
@@ -34,7 +34,7 @@ Harness ranges from a plain, get-out-of-your-way terminal to a full session mana
 - **Full Terminal** — everything: command prefix, status line, copy mode, paste buffers, panes, and the full `harness-cli` command set.
 - **Agent Workspace** — persistent project workspaces with agent detection and notifications turned up front.
 
-New installs start in Plain. Moving over from another setup? See [docs/MIGRATION.md](docs/MIGRATION.md) — Harness can import an existing terminal config (colors, font, padding) on first run.
+New installs start in Persistent: the quiet look, and sessions survive quitting. An existing settings file that never stored a mode stays Full, so an upgrade does not hide the prefix or the status line. Moving over from another setup? See [docs/MIGRATION.md](docs/MIGRATION.md) — Harness can import an existing terminal config (colors, font, padding) on first run.
 
 ## Features
 
@@ -61,6 +61,11 @@ New installs start in Plain. Moving over from another setup? See [docs/MIGRATION
 - Drag file-backed folders or images into a pane to insert shell-quoted paths
 - Set Harness as the default terminal for SSH/Telnet/man-page links and `.command` / `.tool` files from Settings > Terminal
 - Automatic, signed background updates (Sparkle + EdDSA)
+- Program status (OSC 7501): a pane can report working, blocked, done, or error, and that mark shows on the tab, the session row, and ⌘⇧U. See [docs/PROGRAM-STATUS.md](docs/PROGRAM-STATUS.md)
+- `harness-cli api` for a JSON method list, schemas, and calls, plus `events --follow` for a live event stream
+- Lua 5.1 config at `~/.config/harness/init.lua` (`HARNESS_CONFIG` overrides the path). It runs in the CLI. The daemon does not run it
+- Two pane densities (comfortable islands, or compact 1-point borders) and automatic contrast correction on a light canvas
+- One window can show This Mac and another machine's daemon as separate sidebar groups. The attach is your SSH tunnel to that daemon
 
 ## harness-cli
 
@@ -140,6 +145,7 @@ Per-agent setup lives in [docs/agent-hooks/README.md](docs/agent-hooks/README.md
 | Switch to tab 1–9 | `Cmd+1` … `Cmd+9` |
 | Previous / next tab | `Cmd+Shift+[` / `Cmd+Shift+]` |
 | Jump to waiting agent | `Cmd+Shift+U` |
+| Tab peek | `Ctrl+Cmd+P` |
 | Command palette | `Cmd+K` |
 | Settings | `Cmd+,` |
 | Toggle sidebar | `Cmd+\` |
@@ -195,7 +201,7 @@ xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug \
 - [tmux-style capabilities PDF](docs/HARNESS_TMUX_CAPABILITIES.pdf) — printable setup, shortcuts, commands, attach, copy mode, and troubleshooting
 - [Release runbook](docs/RELEASE.md) — signed/notarized DMG, GitHub Actions release workflow, and Sparkle appcast publishing
 - [Migration](docs/MIGRATION.md) — bringing your config and habits across
-- [Keybindings](docs/KEYBINDINGS.md) · [Commands](docs/COMMANDS.md) · [Shell integration](docs/shell-integration/README.md) · [Agent hooks](docs/agent-hooks/README.md)
+- [Keybindings](docs/KEYBINDINGS.md) · [Commands](docs/COMMANDS.md) · [Program status](docs/PROGRAM-STATUS.md) · [Shell integration](docs/shell-integration/README.md) · [Agent hooks](docs/agent-hooks/README.md)
 - [Changelog](CHANGELOG.md) — release history
 - [Third-party notices](docs/THIRD-PARTY-NOTICES.md)
 

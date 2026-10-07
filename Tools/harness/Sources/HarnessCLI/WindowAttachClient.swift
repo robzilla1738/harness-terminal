@@ -149,6 +149,7 @@ private final class WindowSession: @unchecked Sendable {
     /// Resolved status options (`status`, `status-left`, `status-right`),
     /// refreshed from the daemon so the status line matches the GUI's.
     private var statusOptions: [String: String] = [:]
+    private var copyModeWordSeparators = CopyModeWords.tmuxDefault
     /// `base-index` / `pane-base-index`, refreshed with the status options so
     /// `-t session:window.pane` indices match the user's configured base.
     private var baseIndex = 0
@@ -654,6 +655,11 @@ private final class WindowSession: @unchecked Sendable {
         for entry in entries where entry.key == "base-index" { baseIndex = Int(entry.value) ?? baseIndex }
         for entry in entries where entry.key == "pane-base-index" { paneBaseIndex = Int(entry.value) ?? paneBaseIndex }
         for entry in entries where entry.key == "mode-keys" { modeKeys = entry.value }
+        var separators = ""
+        for entry in entries where entry.key == "word-separators" {
+            if separators.isEmpty || entry.scope == "global" { separators = entry.value }
+        }
+        copyModeWordSeparators = CopyModeWords.smallWordSeparators(stored: separators.isEmpty ? nil : separators)
         for entry in entries where entry.key == "set-clipboard" { allowClipboard = entry.value != "off" && entry.value != "false" }
         for entry in entries where entry.key == "mouse" {
             let on = entry.value == "on" || entry.value == "true" || entry.value == "1"
@@ -1046,7 +1052,7 @@ private final class WindowSession: @unchecked Sendable {
 
     private func performCopyMode(_ action: CopyModeAction) {
         guard let cm = copyMode, let grid = focusedCopyGrid() else { return }
-        let (next, effect) = CopyModeReducer.reduce(cm, action, grid: grid)
+        let (next, effect) = CopyModeReducer.reduce(cm, action, grid: grid, wordSeparators: copyModeWordSeparators)
         copyMode = next
         switch effect {
         case .none:

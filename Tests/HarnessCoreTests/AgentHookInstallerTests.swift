@@ -26,6 +26,7 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertTrue(AgentHookInstaller.isInstalled(agent: .claudeCode, homeOverride: home))
         let text = try String(contentsOf: result.path, encoding: .utf8)
         XCTAssertTrue(text.contains("harness-cli notify"))
+        XCTAssertTrue(text.contains("]7501;"), "hooks emit OSC 7501 beside notify")
     }
 
     func testInstallPreservesExistingUserConfig() throws {

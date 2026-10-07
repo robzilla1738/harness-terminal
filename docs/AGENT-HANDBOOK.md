@@ -234,10 +234,13 @@ harness/
 │                                  # Notch/ (Agent Notch HUD)
 ├── Packages/
 │   ├── CHarnessSys/               # C ioctl shim (variadic PTY sizing on Linux)
+│   ├── CHarnessBase64/            # Strict OSC 52 base64. Images stay on Foundation
+│   ├── CLua51/                    # Vendored Lua 5.1.5. CLI only. Daemon does not link it
+│   ├── HarnessScript/             # Lua runner, keymap, actions. Depends on CLua51 + Core
 │   ├── HarnessCore/               # Models, IPC, SessionEditor, Commands, Keybindings,
 │   │                              # Options, Events, Format, Layouts, Buffers, Agents,
-│   │                              # ShellIntegration, Session/PaneRectSolver
-│   ├── HarnessTerminalEngine/     # VT parser, screen/scrollback, images, input encoder
+│   │                              # ShellIntegration, API, Script, Remote, Session/PaneRectSolver
+│   ├── HarnessTerminalEngine/     # VT parser, screen/scrollback, images, OSC 7501, snapshot capture
 │   ├── HarnessCopyMode/           # Shared copy-mode reducer for GUI + attach-window
 │   ├── HarnessTheme/              # 490-theme catalog + .harnesstheme import/export
 │   ├── HarnessTerminalRenderer/   # FrameBuilder, CoreText glyph atlas, Metal renderer
@@ -255,6 +258,7 @@ harness/
 │   ├── HarnessCopyModeTests/
 │   ├── HarnessCoreTests/
 │   ├── HarnessDaemonTests/
+│   ├── HarnessScriptTests/
 │   ├── HarnessOnboardingTests/
 │   ├── HarnessTerminalEngineTests/
 │   ├── HarnessTerminalKitTests/
@@ -264,7 +268,8 @@ harness/
 │                                  # create-dmg.sh, sign-and-notarize.sh, generate-appcast.sh,
 │                                  # finalize-release.sh, completions/
 └── docs/
-    ├── COMMANDS.md                # full command grammar
+    ├── COMMANDS.md                # full command grammar, JSON API, Lua
+    ├── PROGRAM-STATUS.md          # OSC 7501 rev 0.2
     ├── KEYBINDINGS.md             # default bindings + FormatString tokens
     ├── MODES.md, MIGRATION.md, MULTIPLEXER_GUIDE.md
     ├── shell-integration/         # OSC 133 bash/zsh/fish snippets
@@ -284,12 +289,15 @@ harness/
 | `HarnessTerminalKit` | `HarnessTerminalKit` | Native terminal surface host + compositor |
 | `HarnessOnboarding` | `HarnessOnboarding` | Embedded first-run wizard |
 | `CHarnessSys` | `CHarnessSys` | C `ioctl` shim for PTY resize (Linux; linked by daemon/engine) |
+| — | `CLua51` | Vendored Lua 5.1.5. Not a product. CLI only |
+| `HarnessScript` | `HarnessScript` | Lua runner. A product so the Xcode CLI target can link it. CLI only |
+| — | `CHarnessBase64` | Strict OSC 52 decoder. Not a product |
 | `Harness` | `HarnessApp` | GUI |
 | `HarnessDaemon` | `HarnessDaemon` | Thin `main` over `HarnessDaemonCore` |
 | — | `HarnessDaemonCore` | Testable daemon logic |
 | `harness-cli` | `HarnessCLI` | CLI client (depends on terminal packages for attach/compositor) |
 
-**One external dependency.** Every library/daemon/CLI product is first-party pure Swift; the GUI app's **only** package dependency is **Sparkle** (macOS auto-update), pinned `.upToNextMinor(from: "2.9.2")` (the audited line; `Package.resolved` locks the exact revision). `Package.swift` lists Sparkle alone, so `git clone && swift build` fetches just that one package and builds on any machine. The terminal engine, theme system, renderer, daemon core, and CLI link nothing external. The whole package builds in the **Swift 6 language mode** (complete strict concurrency everywhere); the two foundational, dependency-free libraries — `HarnessCore` and `HarnessTerminalEngine` — additionally treat **warnings as errors** (`strictFoundationSettings`) so a Sendable/data-race/deprecation warning in the layer everything builds on can't rot.
+**One Swift package dependency.** The GUI app's only package dependency is **Sparkle** (macOS auto-update), pinned `.upToNextMinor(from: "2.9.2")` (`Package.resolved` locks the exact revision). `git clone && swift build` fetches just that package. Lua 5.1.5 is vendored in `CLua51` and linked by `HarnessScript`, which only the CLI links. The daemon target does not depend on it. `CHarnessBase64` is first-party and used by the engine for the OSC 52 path. The whole package builds in the **Swift 6 language mode** (complete strict concurrency everywhere); `HarnessCore` and `HarnessTerminalEngine` treat **warnings as errors** (`strictFoundationSettings`).
 
 ---
 
@@ -420,7 +428,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `offMainParserFramePipeline` | **Default ON**; moves terminal byte ingestion and frame building to a per-surface serial worker while AppKit and Metal presentation stay on the main actor. Race-guarded for production: `nextDrawable` keeps its timeout (a stalled GPU/occluded window can't block the main thread), the `lastPlainFrame` row-reuse cache is **generation-tagged** (a frame built against a superseded grid is dropped, never presented), frame builds coalesce **latest-wins** on the worker, a failed encode/present re-arms `needsRender`, and resize/first-paint render **synchronously** (`RenderScheduler.renderSynchronously`) so they land inside the `CATransaction` with no stretch flicker. An explicit stored `false` opts out (legacy byte-for-byte main-thread path) |
 | `showPromptGutter` | Draws the OSC 133 prompt gutter stripe (green/red success/failure) when shell integration marks are present |
 | `prefixKey` | Prefix binding (`ctrl-a`; empty disables); edited via `KeyRecorderView` in Settings |
-| `experienceMode` | `ExperienceMode` (plain/persistent/tmux/agent). Gates chrome + default persistence on the one daemon core. Fresh installs → `.plain`; pre-modes files migrate → `.tmux`. See [docs/MODES.md](docs/MODES.md) |
+| `experienceMode` | `ExperienceMode` (plain/persistent/tmux/agent). Gates chrome + default persistence on the one daemon core. `HarnessSettings()` and `makeDefaults` start at `.persistent`. A file with no `experienceMode` key still decodes as `.full` (raw value `tmux`). See [docs/MODES.md](docs/MODES.md) |
 | `tmuxControlsEnabled` | `Bool?` override for tmux chrome; nil derives from mode. `showsTmuxChrome` (mode default ⊕ override) is the single gate `PrefixKeymap`/`StatusLineView`/onboarding consult; `effectivePrefixKey` is nil when chrome is hidden or the key is blank |
 | `scrollbackLines` | Scrollback size. **0 = unlimited sentinel**, which both the daemon replay ring and the GUI line history cap at `ScrollbackBudget.unlimitedSafetyCapBytes` (512 MiB). A positive count is `lines * 160` bytes on the daemon and that many lines in the GUI. |
 | `cursorStyle`, `cursorBlink`, `copyOnSelect` | Terminal behavior |
@@ -437,12 +445,12 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `minimumContrast` | WCAG fg/bg contrast floor (1 = off … 21); imported from `minimum-contrast`, enforced by `CellColorResolver` |
 | `appearanceMode`, `systemLightThemeName`, `systemDarkThemeName` | `theme` uses the named theme. `light` uses the light theme and ignores a stored dark canvas. `macos-system` follows `NSApp.effectiveAppearance`. Light appearance (explicit or system-light) firms paint opacity to at least `ChromeMaterial.lightPaintOpacityFloor` (0.94) without writing the stored `backgroundOpacity`. |
 | `paneDensity` | `comfortable` (default): split panes use the island inset and radius, divider thickness 0. `compact`: flush panes, 1pt divider, no island radius. Do not add both the inset and the divider. |
-| `themeFit` | Optional OKLab theme fit on rendered colors (`OklabThemeFit`). Off by default. |
+| `themeFit` | Optional Oklab contrast correction (`ThemeFitCache`). A missing value follows appearance: on for a light canvas, off for a dark one. A stored bool wins. Reduce Motion does not turn it off. `minimumContrast` stays a separate WCAG floor. |
 | `pasteProtection` | Confirm pastes containing newlines / control chars when bracketed paste is off (default on) |
 | `commandFinishedThresholdSeconds` | Minimum runtime (OSC 133 timing) for the `commandFinished` notification to fire in an unfocused pane (default 10s) |
 | `notificationEvents` | Sparse per-event banner gating keyed by `NotificationEvent` (`agentWaiting`, `agentFinished`, `bell`, `commandFinished`); an absent key uses the event's default. Picks *which* events notify; `systemNotificationsEnabled` / `notificationSoundEnabled` pick *how*. Read via `isEventEnabled(_:)`. The old `commandFinishedNotifications` bool migrates into `notificationEvents["commandFinished"]` |
 
-**Terminal config import** (`TerminalConfigImporter`): reads a compatible source terminal config so users migrating in keep their colors/font. The font **face** is imported but the font **size** is not — `fontSize` is Harness-owned (default 16); `makeDefaults`/`applyImportedDefaults`/`resetToImportedConfig` deliberately don't pull `font-size` from the source terminal (a terminal's size preference doesn't carry over). **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is imported into `settings.json` and enforced by the renderer (`CellColorResolver`).
+**Terminal config import** (`TerminalConfigImporter`): reads a compatible source terminal config so users migrating in keep their colors/font. The font **face** is imported but the font **size** is not — `fontSize` is Harness-owned (default 16); `makeDefaults`/`applyImportedDefaults`/`resetToImportedConfig` deliberately don't pull `font-size` from the source terminal (a terminal's size preference doesn't carry over). A Ghostty path (parent directory `ghostty`, file `config.ghostty`, or `com.mitchellh.ghostty`) is named Ghostty, and `skippedKeys` lists every key that was not applied, including `font-size`. **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is imported into `settings.json` and enforced by the renderer (`CellColorResolver`).
 
 **Apply colors (single source of truth):** `ThemeManager.resolvedAppearance` resolves the canvas and the 16-color palette. **Both** `TerminalHostView.resolvedNativeAppearance` (→ `HarnessTerminalSurfaceView.configureAppearance`) and `HarnessChrome.update` consume that canvas, so sidebar, terminal, and gutter paint the same color at `ChromeMaterial.paintOpacity`. There is no `fillsSolid` path and no separate sidebar glass branch. `CellColorResolver.resolved` passes `.rgb` through unchanged. ANSI 0–15 uses the active appearance palette (`nativeOutputPaletteHex`). A newly spawned PTY strips inherited `NO_COLOR` and a `FORCE_COLOR` of `0` / `false` / `off`, then sets `TERM=xterm-256color` and `COLORTERM=truecolor` (`RealPty.stripInheritedColorSuppression`). Already-running shells are not rewritten. Selecting a theme seeds the editable color set into `settings.json`. **Translucency:** the canvas honors the paint opacity; glyphs and explicit program backgrounds stay opaque. Light mode does not set a Core Image background filter on `HorizontalFadeBlur`. The window border is only the inset stroke in `WindowBorderOverlayView`.
 

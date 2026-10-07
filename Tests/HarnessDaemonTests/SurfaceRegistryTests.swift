@@ -1,6 +1,7 @@
 import XCTest
 @testable import HarnessCore
 @testable import HarnessDaemonCore
+@testable import HarnessTerminalEngine
 
 /// Drives `SurfaceRegistry.handle(_:)` directly (no socket). Each test runs against an
 /// isolated `HARNESS_HOME` temp dir so it never touches real session state. Creating a
@@ -25,6 +26,119 @@ final class SurfaceRegistryTests: XCTestCase {
         if let previousHome { setenv("HARNESS_HOME", previousHome, 1) } else { unsetenv("HARNESS_HOME") }
         if let previousShell { setenv("SHELL", previousShell, 1) } else { unsetenv("SHELL") }
         if let root { try? FileManager.default.removeItem(at: root) }
+    }
+
+    func testProgramStatusUpdatesFromTheByteStreamWithNoWindow() {
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(surfaces) = registry.handle(.listSurfaces), let surface = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let message = Data("Apply?".utf8).base64EncodedString()
+        var bytes = Data([0x1B, 0x5D])
+        bytes.append(contentsOf: "7501;state=blocked:kind=permission:app=terraform:msg=\(message)".utf8)
+        bytes.append(contentsOf: [0x1B, 0x5C])
+        registry.noteSurfaceOutputForTesting(surfaceKey: surface.surfaceID, data: bytes)
+        XCTAssertEqual(
+            registry.programStatusForTesting(surfaceKey: surface.surfaceID).records[""]?.state,
+            .blocked
+        )
+        registry.processMonitorsForTesting()
+        let tab = registry.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+            .first { $0.rootPane.allSurfaceIDs().map(\.uuidString).contains(surface.surfaceID) }
+        XCTAssertEqual(tab?.programMark?.attention, .blocked)
+        XCTAssertEqual(tab?.programMark?.app, "terraform")
+        XCTAssertEqual(tab?.status, .waiting)
+        XCTAssertEqual(tab?.programMark?.fromRealReport, true)
+        let followed = registry.followEventsForTesting().map(\.type)
+        XCTAssertTrue(followed.contains("program_status_changed"))
+    }
+
+    func testSendKeyUsesApplicationCursorBytesOnlyAfterDECCKM() {
+        let registry = SurfaceRegistry()
+        let surface = "cursor-mode"
+        let plain = registry.encodedKeys(surfaceID: surface, keys: ["Up"])
+        XCTAssertEqual(plain, Data("\u{1b}[A".utf8))
+        registry.noteSurfaceOutputForTesting(surfaceKey: surface, data: Data("\u{1b}[?1h".utf8))
+        let application = registry.encodedKeys(surfaceID: surface, keys: ["Up"])
+        XCTAssertEqual(application, Data("\u{1b}OA".utf8))
+    }
+
+    func testProgramStatusFollowNamesTheSession() throws {
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(surfaces) = registry.handle(.listSurfaces), let surface = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        var bytes = Data([0x1B, 0x5D])
+        bytes.append(contentsOf: "7501;state=done:app=demo".utf8)
+        bytes.append(contentsOf: [0x1B, 0x5C])
+        registry.noteSurfaceOutputForTesting(surfaceKey: surface.surfaceID, data: bytes)
+        let event = try XCTUnwrap(registry.followEventsForTesting().first { $0.type == "program_status_changed" })
+        XCTAssertEqual(event.payload["state"], .string("done"))
+        XCTAssertEqual(event.payload["pane"], .string(surface.surfaceID))
+        XCTAssertNotNil(event.payload["session"])
+        let line = try event.jsonLine()
+        XCTAssertTrue(line.contains("program_status_changed"))
+    }
+
+    func testFollowSideEventsNameTitleDirectoryClipboardProgressAndProcess() throws {
+        let registry = SurfaceRegistry()
+        guard case let .surfaces(surfaces) = registry.handle(.listSurfaces), let surface = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        let pane = surface.surfaceID
+        func osc(_ body: String) -> Data {
+            var bytes = Data([0x1B, 0x5D])
+            bytes.append(contentsOf: body.utf8)
+            bytes.append(contentsOf: [0x1B, 0x5C])
+            return bytes
+        }
+        registry.processMonitorsForTesting()
+        registry.noteSurfaceOutputForTesting(surfaceKey: pane, data: osc("0;Build"))
+        registry.noteSurfaceOutputForTesting(surfaceKey: pane, data: osc("7;file:///tmp/work"))
+        let clip = Data("hi".utf8).base64EncodedString()
+        registry.noteSurfaceOutputForTesting(surfaceKey: pane, data: osc("52;c;\(clip)"))
+        registry.noteSurfaceOutputForTesting(surfaceKey: pane, data: osc("52;c;?"))
+        registry.noteSurfaceOutputForTesting(surfaceKey: pane, data: osc("7501;state=working:progress=40:app=demo"))
+        let events = registry.followEventsForTesting()
+        let title = try XCTUnwrap(events.first { $0.type == "terminal.title" })
+        XCTAssertEqual(title.payload["title"], .string("Build"))
+        let directory = try XCTUnwrap(events.first { $0.type == "terminal.pwd" })
+        XCTAssertEqual(directory.payload["url"], .string("file:///tmp/work"))
+        XCTAssertNotNil(directory.payload["pid"])
+        XCTAssertNotNil(directory.payload["name"])
+        let clipboard = events.filter { $0.type == "terminal.clipboard" }
+        XCTAssertEqual(clipboard.count, 1, "an OSC 52 read is not an event")
+        XCTAssertEqual(clipboard.first?.payload["length"], .int(2))
+        XCTAssertNil(clipboard.first?.payload["text"])
+        let progress = try XCTUnwrap(events.first { $0.type == "terminal.progress" })
+        XCTAssertEqual(progress.payload["progress"], .int(40))
+        let process = try XCTUnwrap(events.first { $0.type == "terminal.process" })
+        if case let .int(pid) = process.payload["pid"] { XCTAssertGreaterThan(pid, 0) } else { XCTFail("pid") }
+        XCTAssertNotNil(process.payload["name"])
+        let workspace = try XCTUnwrap(registry.snapshot.workspaces.first)
+        let session = try XCTUnwrap(workspace.sessions.first)
+        guard case .ok = registry.handle(.selectSession(workspaceID: workspace.id, sessionID: session.id)) else {
+            return XCTFail("select session")
+        }
+        XCTAssertTrue(registry.followEventsForTesting().contains { $0.type == "session.view" })
+    }
+
+    func testFollowPublishesBlockedThenDoneFromOneChunk() throws {
+        let registry = SurfaceRegistry()
+        let pane = "status-chunk"
+        var bytes = Data()
+        for body in ["7501;state=blocked:kind=question:app=demo", "7501;state=done:app=demo"] {
+            bytes.append(contentsOf: [0x1B, 0x5D])
+            bytes.append(contentsOf: body.utf8)
+            bytes.append(contentsOf: [0x1B, 0x5C])
+        }
+        registry.noteSurfaceOutputForTesting(surfaceKey: pane, data: bytes)
+        let states = registry.followEventsForTesting().compactMap { event -> String? in
+            guard event.type == "program_status_changed" else { return nil }
+            if case let .string(state) = event.payload["state"] { return state }
+            return nil
+        }
+        XCTAssertEqual(states, ["blocked", "done"])
     }
 
     func testPingReturnsPong() {
@@ -749,10 +863,11 @@ final class SurfaceRegistryTests: XCTestCase {
 
     // MARK: - Monitor tick idle precheck (idle efficiency)
 
-    /// A quiet monitor tick (no fresh output/bell, silence disarmed) must skip the full pass —
-    /// no registry lock, no option reads. Ticks are driven by hand after cancelling the real
-    /// timer; counts are compared relatively so an in-flight timer tick can't skew them (it
-    /// would be a quiet tick itself and is skipped identically).
+    /// A quiet monitor tick (no fresh output/bell, silence disarmed) must skip the full alert
+    /// pass: no option reads, and the full-pass counter stays put. The foreground-process poll
+    /// still runs, so a silent command change can emit `terminal.process`. Ticks are driven by
+    /// hand after cancelling the real timer; counts are compared relatively so an in-flight
+    /// timer tick can't skew them (it would be a quiet tick itself and is skipped identically).
     func testQuietMonitorTickSkipsFullPass() throws {
         let registry = SurfaceRegistry()
         registry.stopMonitoring()
@@ -811,5 +926,41 @@ final class SurfaceRegistryTests: XCTestCase {
         registry.processMonitorsForTesting() // fresh flag → full pass → sweep
         XCTAssertFalse(registry.monitorEntryKeysForTesting.contains(deadKey),
                        "the racing-read orphan must be evicted on the next tick")
+    }
+
+    func testKeymapAndHostNotesAreServerFollowEvents() {
+        let registry = SurfaceRegistry()
+        registry.noteKeymap(generation: 4, hash: "abc")
+        registry.noteHostsChanged()
+        let events = registry.followEventsForTesting()
+        XCTAssertEqual(events.map(\.type), ["keymap.changed", "hosts.changed"])
+        XCTAssertEqual(events[0].payload["generation"], .int(4))
+        XCTAssertEqual(events[0].payload["hash"], .string("abc"))
+        XCTAssertEqual(events[0].payload["server"], .bool(true))
+        XCTAssertEqual(events[1].payload["server"], .bool(true))
+        XCTAssertFalse(FollowSubscription(includeServer: false).accepts(events[0]))
+        XCTAssertTrue(FollowSubscription(includeServer: true).accepts(events[1]))
+    }
+
+    func testTunnelDropAndTailscaleStatusAreServerFollowEvents() {
+        let registry = SurfaceRegistry()
+        registry.noteClientConnection(host: "devbox")
+        registry.noteTunnelClientDropped(client: "client-2")
+        registry.noteTailscaleStatus(peerCount: 2)
+        let events = registry.followEventsForTesting().filter {
+            $0.type == "client.connection" || $0.type == "tailscale_status_changed"
+        }
+        XCTAssertEqual(events.map(\.type), ["client.connection", "client.connection", "tailscale_status_changed"])
+        XCTAssertEqual(events[0].payload["state"], .string("dropped"))
+        XCTAssertEqual(events[0].payload["host"], .string("devbox"))
+        XCTAssertEqual(events[0].payload["server"], .bool(true))
+        XCTAssertEqual(events[1].payload["client"], .string("client-2"))
+        XCTAssertEqual(events[1].payload["server"], .bool(true))
+        XCTAssertEqual(events[2].payload["peers"], .int(2))
+        XCTAssertEqual(events[2].payload["server"], .bool(true))
+        for event in events {
+            XCTAssertFalse(FollowSubscription(includeServer: false).accepts(event))
+            XCTAssertTrue(FollowSubscription(includeServer: true).accepts(event))
+        }
     }
 }

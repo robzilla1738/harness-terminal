@@ -104,6 +104,10 @@ public final class TerminalEmulator: VTParserHandler {
     /// `9;4;…` payload is always a progress report, never a notification (the accepted
     /// iTerm2 OSC 9 collision). The host drives its working indicator from this.
     public var onProgress: ((TerminalProgressReport) -> Void)?
+    /// OSC 7501 records changed. The host presents them; the engine only stores the book.
+    public var onProgramStatus: ((ProgramStatusBook) -> Void)?
+    /// Program-status records for this terminal. RIS clears them. DECSTR does not.
+    public private(set) var programStatus = ProgramStatusBook()
     /// Mouse pointer shape requested via OSC 22 (e.g. `text`, `pointer`, `default`); nil clears.
     public var onPointerShapeChange: ((String?) -> Void)?
     /// iTerm2 `OSC 1337 ; SetUserVar=name=<base64>` landed (already decoded + validated).
@@ -193,6 +197,16 @@ public final class TerminalEmulator: VTParserHandler {
         alternate.resize(cols: cols, rows: rows)
     }
 
+    /// Reflow the primary screen for a client that does not own the PTY size.
+    /// The alternate screen is left untouched: a full-screen program redraws on
+    /// the owner's `SIGWINCH`, not on this client's window.
+    @discardableResult
+    public func resizePrimaryLocally(cols: Int, rows: Int) -> Bool {
+        guard !onAlternateScreen else { return false }
+        primary.resize(cols: cols, rows: rows)
+        return true
+    }
+
     /// Test-only seam: resize routing the primary screen through the general reflow path even when
     /// the width is unchanged, so `ReflowFastPathTests` can A/B the width-unchanged fast path
     /// against the authoritative reflow. Not used in production (`resize` picks the fast path).
@@ -248,6 +262,11 @@ public final class TerminalEmulator: VTParserHandler {
     /// The full buffer as plain-text lines for `capture-pane`. `joinWrapped` (tmux `-J`)
     /// joins soft-wrapped physical rows into their logical line.
     public func captureLines(joinWrapped: Bool) -> [String] { current.captureLines(joinWrapped: joinWrapped) }
+
+    /// Cell lines for styled capture (HTML / VT). Same wrap join as `captureLines`.
+    public func captureCellLines(joinWrapped: Bool) -> [[TerminalGridCell]] {
+        current.captureCellLines(joinWrapped: joinWrapped)
+    }
 
     /// Virtual-line span `[first, last]` of the logical (soft-wrapped) line containing virtual
     /// `line` (space: `[history ++ viewport]`, 0 = oldest). Drives triple-click logical-line
@@ -465,6 +484,7 @@ public final class TerminalEmulator: VTParserHandler {
             case "TN": value = terminalName            // terminal name
             case "Co", "colors": value = "256"          // palette size
             case "RGB": value = "8/8/8"                 // 24-bit truecolor (bits per channel)
+            case "Pst": value = ProgramStatusRevision.terminfoValue
             default: value = nil
             }
             if let value {
@@ -688,7 +708,7 @@ public final class TerminalEmulator: VTParserHandler {
         }
     }
 
-    private func handleITerm2Image(_ payload: ArraySlice<UInt8>) {
+    private func handleITerm2Image(_ payload: UnsafeBufferPointer<UInt8>) {
         guard let parsed = ITerm2InlineImage.parse(payload) else { return }
         func cells(_ s: String?) -> Int {
             guard let s, !s.hasSuffix("px"), !s.hasSuffix("%"), let n = Int(s) else { return 0 }
@@ -697,25 +717,33 @@ public final class TerminalEmulator: VTParserHandler {
         placeImage(parsed.image, cols: cells(parsed.widthArg), rows: cells(parsed.heightArg), z: 0)
     }
 
-    func parserOSC(_ data: [UInt8]) {
+    /// Focused pane got a key. `done` and `error` records have been seen.
+    public func noteUserKey() {
+        let before = programStatus
+        programStatus.acknowledgeVisible()
+        if programStatus != before { onProgramStatus?(programStatus) }
+    }
+
+    func parserOSC(_ data: UnsafeBufferPointer<UInt8>, sequenceLength: Int) {
         // Route by code BYTEWISE before any String materialization: an OSC 1337 inline image
         // (or OSC 52 clipboard set) carries a multi-megabyte base64 body, and decoding it to
         // a String here — only for the handler to re-encode it back to bytes — costs two full
-        // copies plus a UTF-8 validation pass of the whole payload. Bulk codes stay byte
-        // slices end to end; the small-payload codes materialize a String exactly as before
-        // (including the drop-on-invalid-UTF-8 behavior).
+        // copies plus a UTF-8 validation pass of the whole payload. Bulk codes stay on the
+        // borrowed pointer; the small-payload codes materialize a String exactly as before
+        // (including the drop-on-invalid-UTF-8 behavior). The pointer dies when this returns.
         guard let semi = data.firstIndex(of: 0x3B) else { return }
         // Codes are short ASCII digit runs ("0"…"1337"). Anything non-digit, empty, or with a
         // leading zero ("08") matched no case in the old string switch — preserve that exactly.
-        let codeBytes = data[..<semi]
-        guard !codeBytes.isEmpty, codeBytes.count <= 4,
-              !(codeBytes.count > 1 && codeBytes.first == 0x30) else { return }
+        let codeCount = semi
+        guard codeCount > 0, codeCount <= 4,
+              !(codeCount > 1 && data[0] == 0x30) else { return }
         var code = 0
-        for byte in codeBytes {
+        for index in 0 ..< codeCount {
+            let byte = data[index]
             guard (0x30 ... 0x39).contains(byte) else { return }
             code = code * 10 + Int(byte - 0x30)
         }
-        let body = data[(semi + 1)...]
+        let body = oscBytes(data, from: semi + 1)
         // Bulk codes first — never built into a String.
         switch code {
         case 52: handleClipboardOSC(body); return          // clipboard set (OSC 52)
@@ -747,8 +775,25 @@ public final class TerminalEmulator: VTParserHandler {
         case 777: handleNotify777(payload)                 // OSC 777 ; notify ; <title> ; <body>
         case 22: setPointerShape(payload)                  // OSC 22 ; <shape> — mouse cursor shape
         case 133: handleSemanticPrompt(payload)            // OSC 133 ; A/B/C/D — shell integration
+        case 7501: handleProgramStatus(payload, sequenceLength: sequenceLength)
         default: break
         }
+    }
+
+    private func handleProgramStatus(_ payload: String, sequenceLength: Int) {
+        let before = programStatus
+        switch programStatus.apply(body: payload, sequenceLength: sequenceLength) {
+        case .query:
+            if !isReplaying { respond(ProgramStatusRevision.queryReply) }
+        case .applied:
+            if programStatus != before { onProgramStatus?(programStatus) }
+        case .discarded, .ignored:
+            break
+        }
+    }
+
+    private func publishProgramStatus(from before: ProgramStatusBook) {
+        if programStatus != before { onProgramStatus?(programStatus) }
     }
 
     private static let currentDirPrefix = Array("CurrentDir=".utf8)
@@ -768,7 +813,11 @@ public final class TerminalEmulator: VTParserHandler {
               let state = TerminalProgressReport.State(rawValue: raw)
         else { return } // unknown state: ignore (don't fall back to a notification)
         let value = parts.count >= 3 ? Int(parts[2]).map { max(0, min(100, $0)) } : nil
-        onProgress?(TerminalProgressReport(state: state, value: value))
+        let report = TerminalProgressReport(state: state, value: value)
+        let before = programStatus
+        programStatus.applyOSC94(report)
+        publishProgramStatus(from: before)
+        onProgress?(report)
     }
 
     /// OSC 133 shell integration. `A` marks a prompt line, `D[;exit]`
@@ -783,6 +832,9 @@ public final class TerminalEmulator: VTParserHandler {
         case "A":
             current.markPromptStart()
             commandStartedAt = nil // new prompt: no command running yet
+            let before = programStatus
+            programStatus.dropEphemeral()
+            publishProgramStatus(from: before)
         case "B", "C":
             // Command execution begins. C (output/exec start) deliberately overwrites B
             // (prompt-end/input start): duration must measure execution (C→D), not the time
@@ -880,16 +932,24 @@ public final class TerminalEmulator: VTParserHandler {
     /// OSC 52: `Pc ; Pd` where `Pd` is base64 text to copy (or `?` to query). We
     /// support *setting* the clipboard; a query is ignored (the engine never blocks
     /// on a pasteboard read). The consumer honors the `set-clipboard` option.
-    /// Byte-routed: the base64 body can be megabytes, so it goes straight into
-    /// `Data(base64Encoded:)` without ever being built into a String.
-    private func handleClipboardOSC(_ payload: ArraySlice<UInt8>) {
+    /// Byte-routed: the base64 body can be megabytes, so it is decoded from the
+    /// borrowed pointer and never built into a String first.
+    private func handleClipboardOSC(_ payload: UnsafeBufferPointer<UInt8>) {
         guard let semi = payload.firstIndex(of: 0x3B) else { return }
-        let encoded = payload[(semi + 1)...]
-        guard !encoded.isEmpty, !encoded.elementsEqual([UInt8(ascii: "?")]),
-              let data = Data(base64Encoded: Data(encoded)),
-              let text = String(data: data, encoding: .utf8)
+        let encoded = oscBytes(payload, from: semi + 1)
+        guard encoded.count > 0, !(encoded.count == 1 && encoded[0] == UInt8(ascii: "?")),
+              let text = Base64Bytes.decodeClipboardText(encoded)
         else { return }
         if !isReplaying { onSetClipboard?(text) }
+    }
+
+    /// Bytes of `data` from `index` to the end. Empty when `index` is past the end.
+    /// The result aliases `data` and must not outlive it.
+    private func oscBytes(_ data: UnsafeBufferPointer<UInt8>, from index: Int) -> UnsafeBufferPointer<UInt8> {
+        guard let base = data.baseAddress, index < data.count else {
+            return UnsafeBufferPointer(start: nil, count: 0)
+        }
+        return UnsafeBufferPointer(start: base + index, count: data.count - index)
     }
 
     // MARK: - Helpers
@@ -1237,6 +1297,9 @@ public final class TerminalEmulator: VTParserHandler {
         // A full reset abandons any in-flight command timing — otherwise a 133;D after
         // ESC c reports a spurious command-finished with a pre-reset start time.
         commandStartedAt = nil
+        let hadStatus = !programStatus.records.isEmpty || programStatus.acceptedRealReport
+        programStatus.reset()
+        if hadStatus { onProgramStatus?(programStatus) }
         parser.reset()
     }
 }

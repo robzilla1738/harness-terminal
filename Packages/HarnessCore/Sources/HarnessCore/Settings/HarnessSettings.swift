@@ -314,8 +314,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// 1 = off (no adjustment). Imported from a terminal config's `minimum-contrast`.
     public var minimumContrast: Double
     /// Oklab adjustment of low-contrast program colors toward the theme. Independent
-    /// of `applyThemeToTerminalOutput`, which remains the full-recolor opt-in.
-    public var themeFit: Bool
+    /// of `minimumContrast` and of `applyThemeToTerminalOutput`. `nil` follows the
+    /// appearance: on for light, off for dark. A stored bool is the user's choice.
+    public var themeFit: Bool?
     /// Comfortable pane islands or a single-pixel split border.
     public var paneDensity: PaneDensity
     /// Confirm before pasting text containing newlines / control characters when the program has
@@ -346,6 +347,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Output triggers: patterns matched against each line as it completes, firing
     /// highlight/notify actions (see `TriggerRule`). Empty = scanning fully disabled.
     public var triggers: [TriggerRule]
+    /// A tunneled client may drive GUI actions only while this is on. Local clients always may.
+    public var remoteControl: Bool
 
     /// Whether the *umbrella* Harness controls are on (prefix or status line). Kept for onboarding
     /// copy and tests; the prefix and status line each resolve independently via the effective
@@ -430,10 +433,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         liveResizeReflow: Bool = true,
         showPromptGutter: Bool = false,
         showStatusLine: Bool = true,
-        // Fresh installs default to the simplest experience — a fast native terminal.
-        // Existing installs migrate to `.full` in `init(from:)` so no
-        // current user loses the prefix/status they already have.
-        experienceMode: ExperienceMode = .plain,
+        // Fresh installs keep sessions alive after the app quits. A file that
+        // never stored a mode still decodes as `.full` in `init(from:)`, so an
+        // upgrade does not flip someone who already has a settings file.
+        experienceMode: ExperienceMode = .persistent,
         harnessControlsEnabled: Bool? = nil,
         prefixKeyEnabled: Bool? = nil,
         statusLineEnabled: Bool? = nil,
@@ -447,7 +450,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         quickTerminalHotkey: String = "cmd-opt-`",
         windowPaddingBalance: Bool = true,
         minimumContrast: Double = 1,
-        themeFit: Bool = false,
+        themeFit: Bool? = nil,
         paneDensity: PaneDensity = .comfortable,
         pasteProtection: Bool = true,
         commandFinishedThresholdSeconds: Int = 10,
@@ -456,7 +459,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         secureKeyboardEntry: Bool = false,
         windowInheritCWD: Bool = true,
         profiles: [ProfileRule] = [],
-        triggers: [TriggerRule] = []
+        triggers: [TriggerRule] = [],
+        remoteControl: Bool = false
     ) {
         self.fontSize = HarnessSettings.clampedFontSize(fontSize)
         self.fontFamily = fontFamily
@@ -532,6 +536,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.windowInheritCWD = windowInheritCWD
         self.profiles = profiles
         self.triggers = triggers
+        self.remoteControl = remoteControl
     }
 
     /// Ensure the palette always has exactly 16 slots so index access is safe even if a
@@ -557,6 +562,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         let cleaned = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
         guard cleaned.count == 6, cleaned.allSatisfy(\.isHexDigit) else { return nil }
         return "#\(cleaned.uppercased())"
+    }
+
+    public func effectiveThemeFit(appearanceIsLight: Bool, reduceMotion: Bool = false) -> Bool {
+        ThemeFitPolicy.enabled(stored: themeFit, appearanceIsLight: appearanceIsLight, reduceMotion: reduceMotion)
     }
 
     public func agentColorHex(for kind: AgentKind) -> String {
@@ -773,8 +782,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         showStatusLine = try fields.decode(.showStatusLine, \.showStatusLine)
         // Behavior-preserving migration: a settings file that predates modes was written by a
         // user who already had the prefix + status line, i.e. the full Harness experience.
-        // Default the absent key to `.full` (NOT the fresh-install `.plain`) so upgrading never
-        // silently strips features. New installs get `.plain` via `makeDefaults`.
+        // Default the absent key to `.full` (not the fresh-install `.persistent`) so upgrading
+        // never strips features. New installs get `.persistent` via `HarnessSettings()` / `makeDefaults`.
         experienceMode = (try container.decodeIfPresent(String.self, forKey: .experienceMode))
             .flatMap(ExperienceMode.init(rawValue:)) ?? .full
         harnessControlsEnabled =
@@ -796,7 +805,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         quickTerminalHotkey = try fields.decode(.quickTerminalHotkey, \.quickTerminalHotkey)
         windowPaddingBalance = try fields.decode(.windowPaddingBalance, \.windowPaddingBalance)
         minimumContrast = HarnessSettings.clampedContrast(try fields.decode(.minimumContrast, \.minimumContrast))
-        themeFit = try fields.decode(.themeFit, \.themeFit)
+        // Absent key follows appearance (light on, dark off). An explicit bool sticks.
+        themeFit = try container.decodeIfPresent(Bool.self, forKey: .themeFit)
         paneDensity = try fields.decodeEnum(.paneDensity, \.paneDensity)
         // `lightThemeName`/`darkThemeName` are no longer stored fields — the legacy pair is
         // consumed by the `appearanceMode` migration above (via LegacyHarnessSettingsCodingKeys).
@@ -819,6 +829,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // Absent in older files → no triggers. Per-rule decode is tolerant (TriggerRule), so a
         // malformed hand-edited rule degrades to defaults instead of corrupt-backing-up the file.
         triggers = try container.decodeIfPresent([TriggerRule].self, forKey: .triggers) ?? []
+        remoteControl = try fields.decode(.remoteControl, \.remoteControl)
     }
 
     /// Thread-unsafe scratch slot used exclusively within `load()` to pass the already-computed

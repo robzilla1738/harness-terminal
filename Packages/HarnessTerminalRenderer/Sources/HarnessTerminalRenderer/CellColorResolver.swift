@@ -48,7 +48,10 @@ public struct CellColorResolver: Sendable {
     /// full-theme recolor (`applyThemeToTerminalOutput`), which stays a separate opt-in.
     public var themeFit: Bool = false
     public var themeFitTarget: RGBColor?
-    public var themeFitCache: ThemeFitCache = ThemeFitCache()
+    /// Nil unless theme fit is on. The default resolver must not allocate a cache
+    /// object: `resolve` runs once per cell, and a class field would be retained
+    /// on every copy of this struct.
+    public var themeFitCache: ThemeFitCache?
 
     /// The defaults after the DECSCNM swap — every default-color resolution funnels through
     /// these so the swap can never half-apply.
@@ -64,7 +67,7 @@ public struct CellColorResolver: Sendable {
         minimumContrast: Double = 1,
         themeFit: Bool = false,
         themeFitTarget: RGBColor? = nil,
-        themeFitCache: ThemeFitCache = ThemeFitCache()
+        themeFitCache: ThemeFitCache? = nil
     ) {
         self.palette = palette
         self.defaultForeground = defaultForeground
@@ -74,7 +77,7 @@ public struct CellColorResolver: Sendable {
         self.minimumContrast = minimumContrast
         self.themeFit = themeFit
         self.themeFitTarget = themeFitTarget
-        self.themeFitCache = themeFitCache
+        self.themeFitCache = themeFitCache ?? (themeFit ? ThemeFitCache() : nil)
     }
 
     /// Convenience: build a resolver straight from a theme.
@@ -109,8 +112,8 @@ public struct CellColorResolver: Sendable {
             fg = Self.ensureContrast(foreground: fg, background: bg, ratio: minimumContrast)
         }
 
-        if themeFit, !cell.invisible, let theme = themeFitTarget {
-            fg = themeFitCache.adjust(foreground: fg, background: bg, toward: theme)
+        if themeFit, !cell.invisible, let theme = themeFitTarget, let cache = themeFitCache {
+            fg = cache.adjust(foreground: fg, background: bg, toward: theme)
         }
 
         // 4: inverse swaps.

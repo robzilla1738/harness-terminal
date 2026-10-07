@@ -195,3 +195,21 @@ typometer: command not found
 kst: command not found
 cliclick: command not found
 ```
+
+## Results — 2026-10-07, Apple M5
+
+Debug preview of the unreleased tree, not a release build. `HarnessVersion.short` is still 1.12.1. The 1.13–1.17 names are feature slices under CHANGELOG Unreleased, not a version bump. No throughput, power, memory, or keystroke number was taken on this pass.
+
+### Cold start
+
+`Scripts/scorecard.sh cold-start`, N=10, `HARNESS_STARTUP_METRICS=1`. App: `.harness-preview/HarnessPreview.app`. Medians are from `Scripts/scorecard.sh report` on that log.
+
+| terminal | metric | median |
+|---|---|---|
+| Harness | launchStart → firstWindow | 81.4 ms |
+| Harness | launchStart → firstDrawablePresented | 67.8 ms |
+| Harness | launchStart → daemonConnected | 205.55 ms |
+| Harness | launchStart → firstSnapshot | 206.75 ms |
+| Ghostty | open → first window (wall clock — coarser probe) | 261 ms |
+
+The installed Ghostty was already running (pid 19398). The script's running-process check did not see it, so it opened ten extra instances and quit those. Pid 19398 was still running after the probe. The Ghostty median is that wall clock only.

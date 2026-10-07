@@ -43,8 +43,12 @@ public final class SSHTunnelManager: @unchecked Sendable {
 
     private let lock = NSLock()
     private var tunnels: [String: Tunnel] = [:]
+    /// Hosts whose `ssh` exit is this manager calling `stop`, not a dropped tunnel.
+    private var intentionalStops: Set<String> = []
     /// Whether the process-exit cleanup hook has been installed (guarded by `lock`).
     private var exitCleanupRegistered = false
+    /// Fired when an `ssh` forward exits on its own. The app publishes `client.connection`.
+    public var onTunnelDropped: (@Sendable (String) -> Void)?
 
     /// Builds the (not-yet-started) `ssh -N -L …` child for a host. Injectable purely so tests can
     /// drive the lifecycle/failure paths with a controllable child instead of a real `ssh`; the
@@ -112,6 +116,7 @@ public final class SSHTunnelManager: @unchecked Sendable {
 
     public func stop(host name: String) {
         lock.lock()
+        intentionalStops.insert(name)
         let tunnel = tunnels.removeValue(forKey: name)
         lock.unlock()
         guard let tunnel else { return }
@@ -122,6 +127,7 @@ public final class SSHTunnelManager: @unchecked Sendable {
     public func stopAll() {
         lock.lock()
         let all = tunnels
+        for name in all.keys { intentionalStops.insert(name) }
         tunnels.removeAll()
         lock.unlock()
         for (_, tunnel) in all {
@@ -140,6 +146,9 @@ public final class SSHTunnelManager: @unchecked Sendable {
         try? FileManager.default.removeItem(at: localSocket)
 
         let process = try makeTunnelProcess(host, localSocket)
+        process.terminationHandler = { [weak self] _ in
+            self?.tunnelExited(host.name)
+        }
 
         do {
             try process.run()
@@ -157,6 +166,15 @@ public final class SSHTunnelManager: @unchecked Sendable {
         if needsCleanupHook {
             atexit { SSHTunnelManager.shared.stopAll() }
         }
+    }
+
+    private func tunnelExited(_ name: String) {
+        lock.lock()
+        let intentional = intentionalStops.remove(name) != nil
+        let handler = onTunnelDropped
+        lock.unlock()
+        if intentional { return }
+        handler?(name)
     }
 
     static func sshArguments(for host: RemoteHost, localSocket: URL) throws -> [String] {

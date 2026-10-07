@@ -98,6 +98,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let scrollMultiplierLabel = NSTextField(labelWithString: "")
     private let mouseHideToggle = HarnessToggle(title: "Hide the mouse cursor while typing")
     private let pasteProtectionToggle = HarnessToggle(title: "Confirm risky pastes (multi-line or control characters)")
+    private let remoteControlToggle = HarnessToggle(title: "Allow a tunneled client to run GUI actions")
     private let boldIsBrightToggle = HarnessToggle(title: "Bold uses bright colors")
     private let themeFitToggle = HarnessToggle(title: "Fit low-contrast program colors to the theme")
     private let paneDensitySegment = HarnessSegmented(frame: .zero)
@@ -484,10 +485,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
         pasteProtectionToggle.target = self
         pasteProtectionToggle.action = #selector(appearanceTextDidCommit)
+        remoteControlToggle.state = settings.remoteControl ? .on : .off
+        remoteControlToggle.target = self
+        remoteControlToggle.action = #selector(appearanceTextDidCommit)
         boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
         boldIsBrightToggle.target = self
         boldIsBrightToggle.action = #selector(appearanceTextDidCommit)
-        themeFitToggle.state = settings.themeFit ? .on : .off
+        themeFitToggle.state = settings.effectiveThemeFit(appearanceIsLight: !HarnessChrome.current.isDark) ? .on : .off
         themeFitToggle.target = self
         themeFitToggle.action = #selector(appearanceTextDidCommit)
         paneDensitySegment.setSegments(["Comfortable", "Compact"])
@@ -511,7 +515,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         keyRecorder.onChange = { value in
             // Empty = disable the prefix entirely (honored via `effectivePrefixKey`); don't
             // silently snap back to Ctrl-A the way the old code did.
-            SessionCoordinator.shared.settings.prefixKey = value
+            SettingsEditor.applyFromWindow(\.prefixKey, value, on: &SessionCoordinator.shared.settings)
             try? SessionCoordinator.shared.settings.save()
             PrefixKeymap.shared.rebuildFromSettings()
         }
@@ -521,7 +525,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         quickTerminalToggle.action = #selector(appearanceTextDidCommit)
         quickTerminalHotkeyRecorder = KeyRecorderView(initial: settings.quickTerminalHotkey)
         quickTerminalHotkeyRecorder.onChange = { value in
-            SessionCoordinator.shared.settings.quickTerminalHotkey = value
+            SettingsEditor.applyFromWindow(\.quickTerminalHotkey, value, on: &SessionCoordinator.shared.settings)
             try? SessionCoordinator.shared.settings.save()
             QuickTerminalController.shared.rebuildFromSettings()
         }
@@ -985,6 +989,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsToggleRow("Blink cursor", cursorBlinkToggle),
             settingsToggleRow("Copy on select", copyOnSelectToggle),
             settingsToggleRow("Paste protection", pasteProtectionToggle),
+            settingsToggleRow("Remote Control", remoteControlToggle,
+                              hint: "This Mac can always run GUI actions. A tunneled client can only while this is on."),
             settingsRow("Scroll speed", scrollMultiplierRow,
                         hint: "Mouse-wheel / trackpad scroll multiplier (1× = native)."),
             settingsToggleRow("Hide cursor while typing", mouseHideToggle),
@@ -1342,6 +1348,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let inputGroup = settingsGroup("Input", [
             settingsToggleRow("Mouse reporting", advToggle("mouse", "")),
             settingsRow("Copy-mode keys", advSegment("mode-keys", ["vi", "emacs"])),
+            settingsRow("Word separators", advField("word-separators", width: 120)),
             settingsToggleRow("OSC 52 clipboard", advToggle("set-clipboard", "")),
         ])
 
@@ -1498,7 +1505,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     }
 
     private func setDaemonOption(key: String, rawValue: String) {
-        SessionCoordinator.shared.requestDaemon(.setOption(scope: "global", target: nil, key: key, rawValue: rawValue))
+        SessionCoordinator.shared.requestDaemon(DaemonSettingsControls.request(key: key, rawValue: rawValue))
         advValues[key] = rawValue
         HarnessOptions.reloadFromDisk()
         // Nudge the status line + chrome to re-read the new option value.
@@ -2235,7 +2242,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// The per-component prefix override re-gates the prefix key independently of the status line
     /// (and of the experience mode). Mirrors the chrome-refresh path of `experienceModeChanged`.
     @objc private func prefixControlChanged() {
-        SessionCoordinator.shared.settings.prefixKeyEnabled = selectedPrefixEnabled
+        SettingsEditor.applyFromWindow(\.prefixKeyEnabled, selectedPrefixEnabled, on: &SessionCoordinator.shared.settings)
         flushAndApply()
         PrefixKeymap.shared.rebuildFromSettings()
     }
@@ -2243,7 +2250,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// The per-component status-line override re-gates the bottom status band independently of the
     /// prefix. `flushAndApply` posts the chrome-changed notification `StatusLineView` reacts to.
     @objc private func statusLineControlChanged() {
-        SessionCoordinator.shared.settings.statusLineEnabled = selectedStatusLineEnabled
+        SettingsEditor.applyFromWindow(\.statusLineEnabled, selectedStatusLineEnabled, on: &SessionCoordinator.shared.settings)
         flushAndApply()
     }
 
@@ -2358,8 +2365,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     @objc private func agentColorWellChanged(_ sender: HarnessSwatchWell) {
         guard let kind = agentColorWells.first(where: { $0.value === sender })?.key else { return }
         let coordinator = SessionCoordinator.shared
-        coordinator.settings.agentColorOverrides[kind.rawValue] = hexString(sender.color)
-        coordinator.settings.agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(coordinator.settings.agentColorOverrides)
+        var overrides = coordinator.settings.agentColorOverrides
+        overrides[kind.rawValue] = hexString(sender.color)
+        SettingsEditor.applyFromWindow(
+            \.agentColorOverrides,
+            HarnessSettings.normalizedAgentColorOverrides(overrides),
+            on: &coordinator.settings
+        )
         retintAgentIcon(kind)
         try? coordinator.settings.save()
         coordinator.applySettingsToHosts()
@@ -2441,8 +2453,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         mouseHideToggle.state = settings.mouseHideWhileTyping ? .on : .off
         quickTerminalToggle.state = settings.quickTerminalEnabled ? .on : .off
         pasteProtectionToggle.state = settings.pasteProtection ? .on : .off
+        remoteControlToggle.state = settings.remoteControl ? .on : .off
         boldIsBrightToggle.state = settings.boldIsBright ? .on : .off
-        themeFitToggle.state = settings.themeFit ? .on : .off
+        themeFitToggle.state = settings.effectiveThemeFit(appearanceIsLight: !HarnessChrome.current.isDark) ? .on : .off
         paneDensitySegment.selectItem(withTitle: settings.paneDensity == .compact ? "Compact" : "Comfortable")
         for (event, toggle) in eventToggles {
             toggle.state = settings.isEventEnabled(event) ? .on : .off
@@ -2513,30 +2526,41 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         try? SessionCoordinator.shared.settings.save()
     }
 
+    /// Settings window path into the shared writer. The palette calls `applyFromPalette`.
+    private func write<T>(_ keyPath: WritableKeyPath<HarnessSettings, T>, _ value: T) {
+        SettingsEditor.applyFromWindow(keyPath, value, on: &SessionCoordinator.shared.settings)
+    }
+
+    /// A palette write landed while this window is open. Pull the store back into the controls
+    /// so the close-flush does not overwrite it with the old control values.
+    func adoptExternalSettingsWrite() {
+        syncAppearanceControlsFromSettings()
+    }
+
     /// Push every field into HarnessSettings and apply it to the live surfaces, but DO NOT persist.
     /// Used on continuous slider drag ticks (60–120 Hz) so scrubbing never triggers a JSON encode +
     /// atomic write per tick; persistence happens once on the gesture's commit (`onCommit`). Every
     /// other control still goes through `flushAndApply`, which saves.
     private func applySettingsLive() {
         let coordinator = SessionCoordinator.shared
-        coordinator.settings.backgroundOpacity = HarnessSettings.clampedOpacity(Float(opacitySlider.doubleValue))
-        coordinator.settings.backgroundBlur = HarnessSettings.clampedBlur(Int(blurSlider.doubleValue.rounded()))
-        coordinator.settings.windowBorderOpacity = max(0, min(1, Float(windowBorderOpacitySlider.doubleValue)))
+        write(\.backgroundOpacity, HarnessSettings.clampedOpacity(Float(opacitySlider.doubleValue)))
+        write(\.backgroundBlur, HarnessSettings.clampedBlur(Int(blurSlider.doubleValue.rounded())))
+        write(\.windowBorderOpacity, max(0, min(1, Float(windowBorderOpacitySlider.doubleValue))))
         // Read every editable color from its control (bg/fg/cursor/cursor-text/
         // selection/bold + divider/status accents). nil = fall back to theme preset.
         for binding in colorBindings {
-            coordinator.settings[keyPath: binding.keyPath] = normalizedHexOrNil(binding.field.stringValue)
+            write(binding.keyPath, normalizedHexOrNil(binding.field.stringValue))
         }
-        coordinator.settings.paletteHex = HarnessSettings.normalizedPalette(paletteHexValues)
-        coordinator.settings.transparentTitlebar = transparentTitlebarToggle.state == .on
-        coordinator.settings.showStatusLine = showStatusLineToggle.state == .on
-        coordinator.settings.sidebarVisible = sidebarVisibleToggle.state == .on
-        coordinator.settings.restoreWindowSize = restoreWindowSizeToggle.state == .on
-        coordinator.settings.windowPaddingX = HarnessSettings.clampedPadding(Float(paddingXField.stringValue) ?? 12)
-        coordinator.settings.windowPaddingY = HarnessSettings.clampedPadding(Float(paddingYField.stringValue) ?? 12)
+        write(\.paletteHex, HarnessSettings.normalizedPalette(paletteHexValues))
+        write(\.transparentTitlebar, transparentTitlebarToggle.state == .on)
+        write(\.showStatusLine, showStatusLineToggle.state == .on)
+        write(\.sidebarVisible, sidebarVisibleToggle.state == .on)
+        write(\.restoreWindowSize, restoreWindowSizeToggle.state == .on)
+        write(\.windowPaddingX, HarnessSettings.clampedPadding(Float(paddingXField.stringValue) ?? 12))
+        write(\.windowPaddingY, HarnessSettings.clampedPadding(Float(paddingYField.stringValue) ?? 12))
         let previousAppearanceMode = coordinator.settings.appearanceMode
         let nextAppearanceMode = selectedAppearanceMode
-        coordinator.settings.appearanceMode = nextAppearanceMode
+        write(\.appearanceMode, nextAppearanceMode)
         if previousAppearanceMode != nextAppearanceMode {
             coordinator.settings.clearThemeColorOverrides()
             paletteHexValues = HarnessSettings.normalizedPalette(coordinator.settings.paletteHex)
@@ -2557,44 +2581,48 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             Self.seedUnsetSystemThemeNames(settings: &coordinator.settings, selectedThemeName: coordinator.snapshot.themeName)
             syncSystemThemePickersFromSettings()
         }
-        coordinator.settings.fontSize = HarnessSettings.clampedFontSize(Float(fontSizeField.stringValue) ?? 14)
-        coordinator.settings.fontFamily = fontFamilyField.stringValue
-        coordinator.settings.defaultShell = shellField.stringValue
-        coordinator.settings.defaultCWD = cwdField.stringValue
+        write(\.fontSize, HarnessSettings.clampedFontSize(Float(fontSizeField.stringValue) ?? 14))
+        write(\.fontFamily, fontFamilyField.stringValue)
+        write(\.defaultShell, shellField.stringValue)
+        write(\.defaultCWD, cwdField.stringValue)
         // `0` is the unlimited sentinel (kept verbatim); any other value is floored at 100 lines.
         let enteredScrollback = Int(scrollbackField.stringValue) ?? 10_000
-        coordinator.settings.scrollbackLines = enteredScrollback == 0 ? 0 : max(100, enteredScrollback)
-        coordinator.settings.cursorStyle = cursorStyleValue(cursorStyleSegment.titleOfSelectedItem)
-        coordinator.settings.cursorBlink = cursorBlinkToggle.state == .on
-        coordinator.settings.copyOnSelect = copyOnSelectToggle.state == .on
-        coordinator.settings.systemNotificationsEnabled = systemNotificationsToggle.state == .on
-        coordinator.settings.notificationSoundEnabled = notificationSoundToggle.state == .on
-        coordinator.settings.notchVisibilityMode = selectedNotchVisibilityMode
-        coordinator.settings.notchOpenOnHover = notchOpenOnHoverToggle.state == .on
-        coordinator.settings.colorRendering = vividColorsToggle.state == .on ? .vivid : .accurate
-        coordinator.settings.textRendering = textRenderingValue(textRenderingSegment.titleOfSelectedItem)
-        coordinator.settings.applyThemeToTerminalOutput = themeTerminalOutputToggle.state == .on
-        coordinator.settings.ligatures = ligaturesToggle.state == .on
-        coordinator.settings.showPromptGutter = promptGutterToggle.state == .on
-        coordinator.settings.offMainParserFramePipeline = offMainPipelineToggle.state == .on
-        coordinator.settings.liveResizeReflow = liveResizeReflowToggle.state == .on
-        coordinator.settings.resizeOverlay = resizeOverlayValue(resizeOverlaySegment.titleOfSelectedItem)
-        coordinator.settings.resizeOverlayPosition = resizeOverlayPositionValue(resizeOverlayPositionSegment.titleOfSelectedItem)
-        coordinator.settings.bellMode = bellModeValue(bellSegment.titleOfSelectedItem)
-        coordinator.settings.scrollMultiplier = HarnessSettings.clampedScrollMultiplier(scrollMultiplierSlider.doubleValue)
-        coordinator.settings.mouseHideWhileTyping = mouseHideToggle.state == .on
-        coordinator.settings.optionAsMeta = optionKeyValue(optionKeySegment.titleOfSelectedItem)
-        coordinator.settings.quickTerminalEnabled = quickTerminalToggle.state == .on
-        coordinator.settings.windowPaddingBalance = paddingBalanceToggle.state == .on
-        coordinator.settings.minimumContrast = HarnessSettings.clampedContrast(minContrastSlider.doubleValue)
-        coordinator.settings.pasteProtection = pasteProtectionToggle.state == .on
-        coordinator.settings.boldIsBright = boldIsBrightToggle.state == .on
-        coordinator.settings.themeFit = themeFitToggle.state == .on
-        coordinator.settings.paneDensity = paneDensitySegment.titleOfSelectedItem == "Compact" ? .compact : .comfortable
+        write(\.scrollbackLines, enteredScrollback == 0 ? 0 : max(100, enteredScrollback))
+        write(\.cursorStyle, cursorStyleValue(cursorStyleSegment.titleOfSelectedItem))
+        write(\.cursorBlink, cursorBlinkToggle.state == .on)
+        write(\.copyOnSelect, copyOnSelectToggle.state == .on)
+        write(\.systemNotificationsEnabled, systemNotificationsToggle.state == .on)
+        write(\.notificationSoundEnabled, notificationSoundToggle.state == .on)
+        write(\.notchVisibilityMode, selectedNotchVisibilityMode)
+        write(\.notchOpenOnHover, notchOpenOnHoverToggle.state == .on)
+        write(\.colorRendering, vividColorsToggle.state == .on ? .vivid : .accurate)
+        write(\.textRendering, textRenderingValue(textRenderingSegment.titleOfSelectedItem))
+        write(\.applyThemeToTerminalOutput, themeTerminalOutputToggle.state == .on)
+        write(\.ligatures, ligaturesToggle.state == .on)
+        write(\.showPromptGutter, promptGutterToggle.state == .on)
+        write(\.offMainParserFramePipeline, offMainPipelineToggle.state == .on)
+        write(\.liveResizeReflow, liveResizeReflowToggle.state == .on)
+        write(\.resizeOverlay, resizeOverlayValue(resizeOverlaySegment.titleOfSelectedItem))
+        write(\.resizeOverlayPosition, resizeOverlayPositionValue(resizeOverlayPositionSegment.titleOfSelectedItem))
+        write(\.bellMode, bellModeValue(bellSegment.titleOfSelectedItem))
+        write(\.scrollMultiplier, HarnessSettings.clampedScrollMultiplier(scrollMultiplierSlider.doubleValue))
+        write(\.mouseHideWhileTyping, mouseHideToggle.state == .on)
+        write(\.optionAsMeta, optionKeyValue(optionKeySegment.titleOfSelectedItem))
+        write(\.quickTerminalEnabled, quickTerminalToggle.state == .on)
+        write(\.windowPaddingBalance, paddingBalanceToggle.state == .on)
+        write(\.minimumContrast, HarnessSettings.clampedContrast(minContrastSlider.doubleValue))
+        write(\.pasteProtection, pasteProtectionToggle.state == .on)
+        write(\.remoteControl, remoteControlToggle.state == .on)
+        write(\.boldIsBright, boldIsBrightToggle.state == .on)
+        write(\.themeFit, ThemeFitPolicy.stored(
+            toggleOn: themeFitToggle.state == .on,
+            appearanceIsLight: !HarnessChrome.current.isDark
+        ))
+        write(\.paneDensity, paneDensitySegment.titleOfSelectedItem == "Compact" ? .compact : .comfortable)
         for (event, toggle) in eventToggles {
-            coordinator.settings.setEventEnabled(event, toggle.state == .on)
+            SettingsEditor.setEvent(event, toggle.state == .on, on: &coordinator.settings)
         }
-        coordinator.settings.commandFinishedThresholdSeconds = max(1, Int(commandFinishedThresholdField.stringValue) ?? 10)
+        write(\.commandFinishedThresholdSeconds, max(1, Int(commandFinishedThresholdField.stringValue) ?? 10))
         // Reflect every clamped numeric field back into the UI so typing an out-of-range value
         // (fontSize "2", threshold "0", …) doesn't leave the field showing one number while the
         // setting — and the live terminals — silently use the clamped one. Non-numeric entries
@@ -2604,9 +2632,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         reflectClamped(paddingXField, String(format: "%.0f", coordinator.settings.windowPaddingX))
         reflectClamped(paddingYField, String(format: "%.0f", coordinator.settings.windowPaddingY))
         reflectClamped(scrollbackField, String(coordinator.settings.scrollbackLines))
-        coordinator.settings.experienceMode = selectedExperienceMode
-        coordinator.settings.prefixKeyEnabled = selectedPrefixEnabled
-        coordinator.settings.statusLineEnabled = selectedStatusLineEnabled
+        write(\.experienceMode, selectedExperienceMode)
+        write(\.prefixKeyEnabled, selectedPrefixEnabled)
+        write(\.statusLineEnabled, selectedStatusLineEnabled)
 
         // Theme switching (and its color seeding) is handled by themeDidChange, so this only ever
         // pushes the current settings to the live surfaces — scrubbing a slider never fires a
@@ -2790,6 +2818,10 @@ enum SettingsWindowController {
     /// Retained for the window's lifetime so its `windowWillClose` flush actually fires (NSWindow
     /// holds the delegate weakly). Closing the prior window drops the old proxy.
     private static var closeProxy: SettingsWindowCloseProxy?
+
+    static func reloadIfOpen() {
+        (window?.contentViewController as? SettingsViewController)?.adoptExternalSettingsWrite()
+    }
 
     static func show() {
         window?.close()

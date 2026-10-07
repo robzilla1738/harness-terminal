@@ -72,7 +72,10 @@ protocol VTParserHandler: AnyObject {
     /// A final ESC byte (non-CSI) with any intermediate bytes (e.g. `ESC ( B`, `ESC M`).
     func parserESC(final: UInt8, intermediates: [UInt8])
     /// A complete OSC string payload (without the introducer or terminator).
-    func parserOSC(_ data: [UInt8])
+    /// `sequenceLength` counts from OSC (`ESC ]`) through the terminator (BEL or ST),
+    /// using the bytes actually kept when the payload was capped.
+    /// The buffer is borrowed: valid only for this call, and it must not escape.
+    func parserOSC(_ data: UnsafeBufferPointer<UInt8>, sequenceLength: Int)
     /// A complete DCS string payload (without the `ESC P` introducer or `ST`), e.g. Sixel.
     func parserDCS(_ data: [UInt8])
     /// A complete APC string payload (without the `ESC _` introducer or `ST`), e.g. the Kitty
@@ -140,8 +143,12 @@ final class VTParser {
     private var csiPrivateMarker: UInt8?
     private var csiOverflow = false
 
-    // OSC / string accumulation
+    // OSC / string accumulation. A payload that starts and ends inside one `feed` is
+    // borrowed from that buffer (`borrowedOSC`) so a multi-megabyte OSC 52/1337 never
+    // copies into `oscBuffer`. A payload split across feeds still copies: the pointer
+    // would be dead on the next `feed`.
     private var oscBuffer: [UInt8] = []
+    private var borrowedOSC: UnsafeBufferPointer<UInt8>?
     /// Set when an ESC is seen inside an OSC/DCS/PM/APC/SOS string, so the next byte can
     /// be tested for the `\` that completes a String Terminator (`ESC \`).
     private var sawESCInString = false
@@ -204,7 +211,7 @@ final class VTParser {
     func reset() {
         state = .ground
         clearCSI()
-        oscBuffer.removeAll(keepingCapacity: true)
+        discardOSCPayload()
         stringBuffer.removeAll(keepingCapacity: true)
         sawESCInString = false
         utf8Remaining = 0
@@ -331,7 +338,15 @@ final class VTParser {
     /// first 5 bytes go one at a time (the `oscCap` selector sniffs a `1337;` prefix and needs
     /// them settled), then the rest lands in one bulk append clamped to the cap — bytes past
     /// the cap are dropped exactly as the per-byte guard drops them.
+    ///
+    /// When the run already contains the whole payload (BEL, or ST with both bytes still in
+    /// `buf`) and nothing was carried over from an earlier feed, keep a pointer instead of
+    /// copying. `finishOSC` dispatches that pointer before `feed` returns.
     private func appendOSCRun(_ buf: UnsafeBufferPointer<UInt8>, from start: Int, to end: Int) {
+        if oscBuffer.isEmpty, borrowedOSC == nil, let borrowed = borrowCompleteOSC(buf, from: start, to: end) {
+            borrowedOSC = borrowed
+            return
+        }
         var i = start
         while i < end, oscBuffer.count < 5 {
             if oscBuffer.count < oscCap { oscBuffer.append(buf[i]) }
@@ -343,6 +358,36 @@ final class VTParser {
             let take = min(room, end - i)
             oscBuffer.append(contentsOf: UnsafeBufferPointer(rebasing: buf[i ..< i + take]))
         }
+    }
+
+    /// The payload of an OSC whose terminator is inside this same feed buffer.
+    /// Nil when the run is incomplete (it must be copied) or aborted (CAN/SUB).
+    private func borrowCompleteOSC(_ buf: UnsafeBufferPointer<UInt8>, from start: Int, to end: Int) -> UnsafeBufferPointer<UInt8>? {
+        guard end < buf.count, let base = buf.baseAddress else { return nil }
+        switch buf[end] {
+        case 0x07:
+            break
+        case 0x1B:
+            // ST is `ESC \`. An ESC at the edge of the buffer is not complete yet.
+            guard end + 1 < buf.count, buf[end + 1] == 0x5C else { return nil }
+        default:
+            return nil
+        }
+        let available = end - start
+        guard available > 0 else { return nil }
+        let count = min(available, oscLimit(base + start, count: available))
+        return UnsafeBufferPointer(start: base + start, count: count)
+    }
+
+    /// Same cap rule as `oscCap`, read from the payload itself so a borrowed OSC does not
+    /// have to land in `oscBuffer` before the `1337;` sniff.
+    private func oscLimit(_ bytes: UnsafePointer<UInt8>, count: Int) -> Int {
+        if count >= 5,
+           bytes[0] == 0x31, bytes[1] == 0x33, bytes[2] == 0x33, bytes[3] == 0x37,
+           bytes[4] == 0x3B { // "1337;"
+            return maxOSCImageBytes
+        }
+        return maxOSCBytes
     }
 
     /// Index of the first byte at or after `start` (bounded by `end`) that is **not** printable
@@ -424,7 +469,7 @@ final class VTParser {
         // unterminated OSC/DCS/APC string state would keep consuming output until
         // the next ESC or BEL arrives.
         if byte == 0x18 || byte == 0x1A, state != .ground {
-            oscBuffer.removeAll(keepingCapacity: true)
+            discardOSCPayload()
             stringBuffer.removeAll(keepingCapacity: true)
             sawESCInString = false
             clearCSI()
@@ -515,7 +560,7 @@ final class VTParser {
         case 0x5B: // '['
             state = .csiEntry
         case 0x5D: // ']'
-            oscBuffer.removeAll(keepingCapacity: true)
+            discardOSCPayload()
             state = .oscString
         case 0x50: // DCS 'P' — capture (Sixel)
             stringKind = .dcs; stringBuffer.removeAll(keepingCapacity: true); state = .stringCapture
@@ -695,27 +740,42 @@ final class VTParser {
         if sawESCInString {
             sawESCInString = false
             if byte == 0x5C { // backslash → ST terminates the string
-                handler.parserOSC(oscBuffer)
-                oscBuffer.removeAll(keepingCapacity: true)
-                state = .ground
+                finishOSC(terminatorBytes: 2)
                 return
             }
             // A lone ESC inside OSC aborts the string and reprocesses from ground.
-            oscBuffer.removeAll(keepingCapacity: true)
+            discardOSCPayload()
             state = .ground
             feedFromGround(byte)
             return
         }
         switch byte {
         case 0x07: // BEL terminates OSC
-            handler.parserOSC(oscBuffer)
-            oscBuffer.removeAll(keepingCapacity: true)
-            state = .ground
+            finishOSC(terminatorBytes: 1)
         case 0x1B:
             sawESCInString = true
         default:
-            if oscBuffer.count < oscCap { oscBuffer.append(byte) }
+            if borrowedOSC == nil, oscBuffer.count < oscCap { oscBuffer.append(byte) }
         }
+    }
+
+    /// Dispatch the finished OSC, then drop it. `sequenceLength` counts the introducer
+    /// (`ESC ]`, 2 bytes), the bytes kept under the cap, and the terminator (BEL = 1, ST = 2).
+    private func finishOSC(terminatorBytes: Int) {
+        let count = borrowedOSC?.count ?? oscBuffer.count
+        let length = 2 + count + terminatorBytes
+        if let borrowed = borrowedOSC {
+            handler.parserOSC(borrowed, sequenceLength: length)
+        } else {
+            oscBuffer.withUnsafeBufferPointer { handler.parserOSC($0, sequenceLength: length) }
+        }
+        discardOSCPayload()
+        state = .ground
+    }
+
+    private func discardOSCPayload() {
+        borrowedOSC = nil
+        oscBuffer.removeAll(keepingCapacity: true)
     }
 
     /// OSC byte budget: the larger image cap once the buffer is recognizably `1337;…` (iTerm2

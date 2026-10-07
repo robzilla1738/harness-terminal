@@ -44,6 +44,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// Invoked after every layout commit with the new revision. `DaemonServer` uses
     /// this to push `snapshotChanged` to snapshot subscribers (the compositor).
     public var onSnapshotCommitted: ((Int) -> Void)?
+    /// Live `events --follow` sink. Callers must not take the registry lock.
+    public var onFollowEvent: ((FollowEvent) -> Void)?
+    /// OSC 133 command-finished. Callers must not take the registry lock.
+    public var onCommandFinished: ((String, Int32) -> Void)?
+    /// PTY child exit. Called with the registry lock held, so the sink must hop queues.
+    public var onChildExited: ((String, Int32) -> Void)?
+    private let followLock = NSLock()
+    private var followLog: [FollowEvent] = []
 
     var monitors: [String: SurfaceMonitor] = [:]
     let monitorLock = NSLock()
@@ -327,6 +335,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .error("Session not found")
             }
             commit()
+            emitFollow(FollowEvent(type: "session.view", payload: ["session": .string(sessionID.uuidString)]))
             return .ok
         case let .selectTab(workspaceID, tabID):
             guard editor.selectTab(workspaceID: workspaceID, tabID: tabID) else {
@@ -476,12 +485,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .error("Surface not found")
             }
             session.write(text)
+            acknowledgeProgramStatusIfCurrentLocked(surfaceID)
             return .ok
         case let .sendData(surfaceID, data):
             guard let session = sessions[surfaceID] else {
                 return .error("Surface not found")
             }
             session.write(data)
+            acknowledgeProgramStatusIfCurrentLocked(surfaceID)
             return .ok
         case let .notify(surfaceID, title, body):
             let notification = AgentNotification(
@@ -492,6 +503,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             )
             NotificationBus.shared.post(notification)
             markWaiting(surfaceKey: surfaceID, text: body)
+            noteProgramStatusNotifiedLocked(surfaceID)
             commit()
             fireHookLocked(.notificationPosted, surfaceKey: surfaceID)
             return .ok
@@ -552,11 +564,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
         case .attachSurface:
             return .ok
         case let .sendKeys(surfaceID, keys):
-            // The daemon is a byte-pipe: it does not run a live per-surface emulator, so it can't
-            // know the target's DECCKM / Kitty state and passes default modes. That yields the
-            // normal-mode encoding (byte-identical to before this unified onto InputEncoder). A
-            // client that DOES emulate could thread real modes for mode-correct injection.
-            let bytes = KeyTokenParser.encode(keys: keys, modes: TerminalModes())
+            // Modes come from the byte-stream mirror (DECCKM, keypad, Kitty), not a live emulator.
+            let bytes = encodedKeys(surfaceID: surfaceID, keys: keys)
             if let session = sessions[surfaceID] {
                 session.write(bytes)
                 return .ok
@@ -968,6 +977,26 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .text(ControlPlane.processJSON(pid: -1, executable: ""))
             }
             return .text(ControlPlane.processJSON(pid: Int(probed.pid), executable: probed.executable))
+        case let .captureFormatted(surfaceID, format, trim, unwrap):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            return .text(session.captureFormatted(format: format, trim: trim, unwrap: unwrap))
+        case let .processTree(surfaceID):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            return .text(session.processTreeJSON())
+        case let .paneQuery(surfaceID, kind):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            return .text(paneQueryJSON(surfaceID: surfaceID, kind: kind, session: session))
+        case let .listDir(surfaceID, path):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            let cwd = session.currentWorkingDirectory() ?? "/"
+            return .text(PaneDirectory.json(cwd: cwd, path: path))
+        case let .resetSurface(surfaceID):
+            guard let session = sessions[surfaceID] else { return .error("Surface not found") }
+            session.injectSyntheticOutput(Data([0x1B, 0x63]))
+            return .ok
+        case .paneWait, .subscribeEvents, .publishKeymap, .noteHostsChanged, .presentClient,
+             .noteClientConnection, .noteTailscaleStatus:
+            return .error("handled by the daemon server")
         case let .surfaceContext(surfaceID):
             guard let session = sessions[surfaceID] else {
                 return .error("Surface not found")
@@ -1237,7 +1266,155 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// by fire time (session-closed captures its context before the mutation).
     func fireHookLocked(_ event: HookEvent, surfaceKey: String? = nil, context: FormatContext? = nil) {
         let resolved = context ?? buildFormatContext(surfaceKey: surfaceKey)
+        if let follow = FollowHookBridge.event(hook: event.rawValue, context: Self.followContext(resolved)) {
+            emitFollow(follow)
+        }
         hookQueue.async { [weak self] in self?.hookRegistry.fire(event, context: resolved) }
+    }
+
+    private static func followContext(_ context: FormatContext) -> FollowHookContext {
+        FollowHookContext(
+            sessionID: context.sessionID,
+            sessionName: context.sessionName,
+            tabID: context.windowID,
+            tabName: context.tabName,
+            paneID: context.paneID,
+            cwd: context.paneCwd,
+            pid: context.panePID,
+            command: context.paneCurrentCommand,
+            client: context.clientName,
+            exitCode: context.paneExitStatus
+        )
+    }
+
+    func noteKeymap(generation: Int, hash: String) {
+        emitFollow(FollowEvent.keymapChanged(generation: generation, hash: hash))
+    }
+
+    func noteHostsChanged() {
+        emitFollow(FollowEvent.hostsChanged())
+    }
+
+    func noteClientConnection(host: String) {
+        emitFollow(FollowEvent.clientConnection(state: "dropped", client: nil, host: host))
+    }
+
+    func noteTunnelClientDropped(client: String) {
+        emitFollow(FollowEvent.clientConnection(state: "dropped", client: client, host: nil))
+    }
+
+    func noteTailscaleStatus(peerCount: Int) {
+        guard let event = FollowEvent.tailscaleStatusChanged(commandPresent: true, peerCount: peerCount) else { return }
+        emitFollow(event)
+    }
+
+    func emitFollow(_ event: FollowEvent) {
+        followLock.lock()
+        followLog.append(event)
+        if followLog.count > 400 { followLog.removeFirst(followLog.count - 400) }
+        let sink = onFollowEvent
+        followLock.unlock()
+        sink?(event)
+    }
+
+    func followEventsForTesting() -> [FollowEvent] {
+        followLock.lock(); defer { followLock.unlock() }
+        return followLog
+    }
+
+    /// Exit status stored for a pane whose child has already ended. `remain-on-exit`
+    /// keeps that status on the tab, so a wait that arrives late can still answer.
+    func storedChildExit(surfaceID: String) -> Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let status = tab(forSurfaceKey: surfaceID)?.exitStatus else { return nil }
+        return Int32(status)
+    }
+
+    private func tab(forSurfaceKey surfaceKey: String) -> Tab? {
+        guard let match = editor.tab(forSurfaceKey: surfaceKey) else { return nil }
+        for workspace in editor.snapshot.workspaces {
+            for session in workspace.sessions {
+                if let tab = session.tabs.first(where: { $0.id == match.tabID }) { return tab }
+            }
+        }
+        return nil
+    }
+
+    private func paneQueryJSON(surfaceID: String, kind: String, session: RealPty) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data: Data?
+        switch kind {
+        case "pwd":
+            let path = session.currentWorkingDirectory() ?? ""
+            let owner = session.probeForegroundProcess()
+            data = try? encoder.encode(PwdQuery(
+                url: HarnessAPI.fileURL(path: path),
+                pid: Int(owner?.pid ?? -1),
+                name: owner?.executable ?? ""
+            ))
+        case "title":
+            data = try? encoder.encode(TitleQuery(title: tab(forSurfaceKey: surfaceID)?.title ?? ""))
+        case "size":
+            let size = session.currentSize()
+            data = try? encoder.encode(SizeQuery(cols: size?.cols ?? 0, rows: size?.rows ?? 0))
+        case "program_status":
+            monitorLock.lock()
+            let records = monitors[surfaceID]?.programStatus.records ?? [:]
+            monitorLock.unlock()
+            let rows = records.keys.sorted().map { id -> StatusQuery.Row in
+                let record = records[id]!
+                return StatusQuery.Row(
+                    id: id,
+                    state: record.state.rawValue,
+                    kind: record.kind?.rawValue,
+                    progress: record.progress,
+                    app: record.app,
+                    title: record.title,
+                    message: record.message
+                )
+            }
+            data = try? encoder.encode(StatusQuery(records: rows))
+        default:
+            data = Data("{}".utf8)
+        }
+        return data.map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+    }
+
+    private struct PwdQuery: Encodable {
+        var url: String
+        var pid: Int
+        var name: String
+    }
+
+    private struct TitleQuery: Encodable { var title: String }
+    private struct SizeQuery: Encodable { var cols: Int; var rows: Int }
+
+    private struct StatusQuery: Encodable {
+        struct Row: Encodable {
+            var id: String
+            var state: String
+            var kind: String?
+            var progress: Int?
+            var app: String?
+            var title: String?
+            var message: String?
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(id, forKey: .id)
+                try c.encode(state, forKey: .state)
+                try c.encodeIfPresent(kind, forKey: .kind)
+                try c.encodeIfPresent(progress, forKey: .progress)
+                try c.encodeIfPresent(app, forKey: .app)
+                try c.encodeIfPresent(title, forKey: .title)
+                try c.encodeIfPresent(message, forKey: .message)
+            }
+
+            enum CodingKeys: String, CodingKey { case id, state, kind, progress, app, title, message }
+        }
+        var records: [Row]
     }
 
     /// Fire the focus/active-pane hooks when the focused pane moves from `previousSurfaceKey` to
@@ -1255,11 +1432,17 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// registry lock — these acquire the lock to build a consistent context.
     public func fireClientAttached(label: String?) {
         lock.lock(); let context = buildFormatContext(clientName: label); lock.unlock()
+        if let follow = FollowHookBridge.event(hook: HookEvent.clientAttached.rawValue, context: Self.followContext(context)) {
+            emitFollow(follow)
+        }
         hookQueue.async { [weak self] in self?.hookRegistry.fire(.clientAttached, context: context) }
     }
 
     public func fireClientDetached(label: String?) {
         lock.lock(); let context = buildFormatContext(clientName: label); lock.unlock()
+        if let follow = FollowHookBridge.event(hook: HookEvent.clientDetached.rawValue, context: Self.followContext(context)) {
+            emitFollow(follow)
+        }
         hookQueue.async { [weak self] in self?.hookRegistry.fire(.clientDetached, context: context) }
     }
 
@@ -1346,6 +1529,34 @@ public final class SurfaceRegistry: @unchecked Sendable {
         } catch {
             return false
         }
+    }
+
+    /// A key reached the focused pane. `done` and `error` have been seen.
+    private func acknowledgeProgramStatusIfCurrentLocked(_ surfaceID: String) {
+        guard let match = editor.tab(forSurfaceKey: surfaceID),
+              editor.tabIsCurrent(workspaceID: match.workspaceID, tabID: match.tabID) else { return }
+        monitorLock.lock()
+        guard monitors[surfaceID] != nil else { monitorLock.unlock(); return }
+        let previous = monitors[surfaceID]?.lastPresentation
+        let lastNotified = monitors[surfaceID]?.lastNotifiedAt
+        monitors[surfaceID]?.programStatus.acknowledgeVisible()
+        let book = monitors[surfaceID]?.programStatus ?? ProgramStatusBook()
+        monitors[surfaceID]?.statusDirty = false
+        monitorLock.unlock()
+        publishProgramStatusLocked(
+            surfaceKey: surfaceID,
+            book: book,
+            previous: previous,
+            lastNotifiedAt: lastNotified
+        )
+    }
+
+    /// `harness-cli notify` already told the user. Suppress a second banner from the
+    /// OSC 7501 the same hook writes beside it.
+    private func noteProgramStatusNotifiedLocked(_ surfaceID: String) {
+        monitorLock.lock()
+        monitors[surfaceID]?.lastNotifiedAt = Date().timeIntervalSinceReferenceDate
+        monitorLock.unlock()
     }
 
     private func markWaiting(surfaceKey: String, text: String) {
@@ -1474,7 +1685,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             // Internal monitor subscription (Phase 5): cheap output/bell/idle tracking, drained
             // by `processMonitors`. Lives for the surface's lifetime (cleared on teardown).
-            _ = session.subscribe { [weak self] data, _ in self?.noteSurfaceOutput(surfaceKey: surfaceID, data: data) }
+            // A program-status query is answered here so a pane with no window still replies.
+            _ = session.subscribe { [weak self, weak session] data, _ in
+                guard let reply = self?.noteSurfaceOutput(surfaceKey: surfaceID, data: data) else { return }
+                session?.write(reply)
+            }
             sessions[surfaceID] = session
             if freshlyCreated { injectVersionBannerIfPending(into: session, columns: Int(cols)) }
             // A dead retained pane (`remain-on-exit`) carries its exit status until revived —
@@ -1486,6 +1701,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // Begin reading/exit-watching only now that `onExit` is wired and the surface is in
             // `sessions` — so a child that dies instantly (e.g. a bad shell) is reaped via
             // `removeSurfaceIfCurrent` instead of firing into a nil handler and leaking.
+            // Stamp the session before the first byte so a status event can name it.
+            rememberMonitorIdentity(surfaceID: surfaceID)
             session.start()
             return surfaceID
         } catch {
@@ -1726,10 +1943,18 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// nested tools detect Harness, the `$TMUX` analog) plus the resolved
     /// `set-environment` map for the surface's owning session.
     private func extraEnvironment(forSurfaceKey surfaceKey: String) -> [String: String] {
+        let socket = HarnessPaths.socketURL.path
         var env: [String: String] = [
-            "HARNESS": HarnessPaths.socketURL.path,
-            "HARNESS_SOCK": HarnessPaths.socketURL.path,
+            "HARNESS": socket,
+            "HARNESS_SOCK": socket,
+            "HARNESS_SERVER": socket,
         ]
+        if let session = sessionID(forSurfaceKey: surfaceKey) {
+            env["HARNESS_SESSION"] = session
+        }
+        if let tab = editor.tab(forSurfaceKey: surfaceKey)?.tabID.uuidString {
+            env["HARNESS_TAB"] = tab
+        }
         if let cli = Self.harnessCLIExecutableURL() {
             env["HARNESS_CLI"] = cli.path
         }
@@ -1739,16 +1964,55 @@ public final class SurfaceRegistry: @unchecked Sendable {
         return env
     }
 
-    private static func harnessCLIExecutableURL() -> URL? {
-        let fm = FileManager.default
-        var candidates: [URL] = []
-        if let executable = Bundle.main.executableURL {
-            candidates.append(executable.deletingLastPathComponent().appendingPathComponent("harness-cli"))
+    /// Foreground-process changes become `terminal.process`. Caller holds the registry lock.
+    /// The probe is one ioctl plus a name lookup. `sessions` is file-private, so this stays here.
+    func noteForegroundProcessesLocked() {
+        var probes: [(key: String, pid: Int, name: String)] = []
+        for (key, session) in sessions {
+            guard let foreground = session.probeForegroundProcess() else { continue }
+            probes.append((key, Int(foreground.pid), foreground.executable))
         }
-        candidates.append(HarnessPaths.applicationSupport.appendingPathComponent("bin").appendingPathComponent("harness-cli"))
-        candidates.append(URL(fileURLWithPath: "/opt/homebrew/bin/harness-cli"))
-        candidates.append(URL(fileURLWithPath: "/usr/local/bin/harness-cli"))
-        return candidates.first { fm.isExecutableFile(atPath: $0.path) }
+        var events: [FollowEvent] = []
+        monitorLock.lock()
+        for probe in probes {
+            guard var monitor = monitors[probe.key] else { continue }
+            let signature = "\(probe.pid)\u{0}\(probe.name)"
+            if monitor.lastProcessSignature == signature { continue }
+            monitor.lastProcessSignature = signature
+            monitor.ownerPID = probe.pid
+            monitor.ownerName = probe.name
+            monitors[probe.key] = monitor
+            var payload: [String: FollowValue] = [
+                "pane": .string(probe.key),
+                "pid": .int(probe.pid),
+                "name": .string(probe.name),
+            ]
+            if let session = monitor.sessionID { payload["session"] = .string(session) }
+            events.append(FollowEvent(type: "terminal.process", payload: payload))
+        }
+        monitorLock.unlock()
+        for event in events { emitFollow(event) }
+    }
+
+    /// Record which session and tab own a surface before its first output byte.
+    private func rememberMonitorIdentity(surfaceID: String) {
+        let session = sessionID(forSurfaceKey: surfaceID)
+        let tab = editor.tab(forSurfaceKey: surfaceID)?.tabID.uuidString
+        let owner = sessions[surfaceID]?.probeForegroundProcess()
+        monitorLock.lock()
+        var monitor = monitors[surfaceID] ?? SurfaceMonitor()
+        monitor.sessionID = session
+        monitor.tabID = tab
+        if let owner {
+            monitor.ownerPID = Int(owner.pid)
+            monitor.ownerName = owner.executable
+        }
+        monitors[surfaceID] = monitor
+        monitorLock.unlock()
+    }
+
+    private static func harnessCLIExecutableURL() -> URL? {
+        HarnessCLILocator.url()
     }
 
     private static func pathWithHarnessTools(_ inheritedPath: String?) -> String {
@@ -1832,7 +2096,19 @@ public final class SurfaceRegistry: @unchecked Sendable {
         lock.lock()
         guard let session, sessions[surfaceID] === session else { lock.unlock(); return }
         sessions.removeValue(forKey: surfaceID)
-        monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
+        monitorLock.lock()
+        var exitedBook = monitors[surfaceID]?.programStatus ?? ProgramStatusBook()
+        let previousMark = monitors[surfaceID]?.lastPresentation
+        let lastNotified = monitors[surfaceID]?.lastNotifiedAt
+        exitedBook.dropEphemeral()
+        monitors.removeValue(forKey: surfaceID)
+        monitorLock.unlock()
+        publishProgramStatusLocked(
+            surfaceKey: surfaceID,
+            book: exitedBook,
+            previous: previousMark,
+            lastNotifiedAt: lastNotified
+        )
         // Natural shell exit must also tear down an active pipe-pane tap, else its `/bin/sh`
         // consumer + write-FD leak (every other close path already calls stopPipe).
         stopPipe(surfaceID: surfaceID)
@@ -1857,6 +2133,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
         }
         let toClose = keep ? nil : editor.paneLocation(forSurfaceKey: surfaceID)
         fireHookLocked(.paneExited, surfaceKey: surfaceID)
+        // The sink must hop off this thread. It runs while the registry lock is held.
+        if let exitStatus { onChildExited?(surfaceID, exitStatus) }
         lock.unlock()
 
         if let toClose {

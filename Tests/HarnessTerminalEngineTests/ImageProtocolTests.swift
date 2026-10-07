@@ -124,7 +124,35 @@ final class ImageProtocolTests: XCTestCase {
         term.feed(osc)
         XCTAssertEqual(placements(term).count, 1)
     }
+
+    /// A newline inside the first 64 base64 characters makes the prefix decode short.
+    /// That must fall through to a full decode, not be treated as a non-image.
+    func testITerm2InlineImageWrappedBase64StillPlaces() {
+        let term = TerminalEmulator(cols: 20, rows: 10)
+        var wrapped = redPixelPNGBase64
+        wrapped.insert("\n", at: wrapped.index(wrapped.startIndex, offsetBy: 10))
+        term.feed("\u{1b}]1337;File=inline=1:\(wrapped)\u{07}")
+        XCTAssertEqual(placements(term).count, 1)
+    }
+
+    func testITerm2InlineImageSplitAcrossFeedsStillPlaces() {
+        let term = TerminalEmulator(cols: 20, rows: 10)
+        let osc = Array("\u{1b}]1337;File=inline=1:\(redPixelPNGBase64)\u{07}".utf8)
+        let mid = osc.count / 2
+        term.feed(Array(osc[..<mid]))
+        XCTAssertTrue(placements(term).isEmpty)
+        term.feed(Array(osc[mid...]))
+        XCTAssertEqual(placements(term).count, 1)
+    }
     #endif
+
+    /// 200 'A' bytes are valid base64 of zeros, not a bitmap. Nothing is placed.
+    func testITerm2InlineImageJunkBase64PlacesNothing() {
+        let term = TerminalEmulator(cols: 20, rows: 10)
+        let body = String(repeating: "A", count: 200)
+        term.feed("\u{1b}]1337;File=inline=1:\(body)\u{07}")
+        XCTAssertTrue(placements(term).isEmpty)
+    }
 
     /// String-routed OSC codes (title here) must keep dropping payloads that aren't valid UTF-8.
     func testStringRoutedOSCStillDropsInvalidUTF8() {

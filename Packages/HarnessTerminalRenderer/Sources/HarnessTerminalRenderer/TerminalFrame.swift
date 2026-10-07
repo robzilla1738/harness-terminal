@@ -623,6 +623,55 @@ public struct FrameBuilder {
         }
     }
 
+    /// Color inputs that `CellColorResolver.resolve` actually reads. A run of cells with the
+    /// same pen (a line of Thai, a line of one SGR color) resolves once.
+    private struct PenKey: Equatable {
+        var foreground: TerminalGridColor
+        var background: TerminalGridColor
+        var underlineColor: TerminalGridColor
+        var bold: Bool
+        var faint: Bool
+        var inverse: Bool
+        var invisible: Bool
+    }
+
+    /// Resolved colors for one pen, already converted to `RenderColor` for the unshaded path.
+    private struct PenPaint {
+        var colors: ResolvedCellColors
+        var foreground: RenderColor
+        var background: RenderColor
+        var underlineColor: RenderColor
+        var drawBackground: Bool
+    }
+
+    @inline(__always)
+    private func paint(for cell: TerminalGridCell, cached: inout (PenKey, PenPaint)?) -> PenPaint {
+        let key = PenKey(
+            foreground: cell.foreground,
+            background: cell.background,
+            underlineColor: cell.underlineColor,
+            bold: cell.bold,
+            faint: cell.faint,
+            inverse: cell.inverse,
+            invisible: cell.invisible
+        )
+        if let cached, cached.0 == key { return cached.1 }
+        let colors = resolver.resolve(cell)
+        let underline = resolver.resolved(cell.underlineColor, default: colors.foreground)
+        let isCanvas = cell.background == .none && !cell.inverse
+        let paint = PenPaint(
+            colors: colors,
+            foreground: renderColor(colors.foreground),
+            background: isCanvas
+                ? renderColor(colors.background, alpha: canvasOpacity)
+                : renderColor(colors.background),
+            underlineColor: renderColor(underline),
+            drawBackground: !isCanvas
+        )
+        cached = (key, paint)
+        return paint
+    }
+
     /// Build the `RenderCell`s for one viewport row (appending in column order). A row's cells
     /// depend only on its snapshot cells plus selection/search shading — the cursor overlay is
     /// applied later by the renderer — so this is the unit of incremental reuse in `build`.
@@ -635,15 +684,12 @@ public struct FrameBuilder {
         // bookkeeping measurably taxes the plain build path (~6ns/cell) if left inline.
         var intervalCursor = 0
         let hasSearchIntervals = !searchIntervals.isEmpty
+        let rowBase = row * snapshot.cols
+        let grid = snapshot.cells
+        var cachedPen: (PenKey, PenPaint)?
         for column in 0 ..< snapshot.cols {
-            let cell = snapshot.cell(row: row, col: column) ?? .blank
-            let colors = resolver.resolve(cell)
-            // Underline color defaults to the resolved foreground when unset.
-            let underline = resolver.resolved(cell.underlineColor, default: colors.foreground)
-            // A cell shows the canvas only when its background is the terminal default
-            // (no explicit SGR bg) and it isn't inverted (which promotes the foreground
-            // into the bg slot). Those — and only those — get the translucent alpha.
-            let isCanvasBackground = cell.background == .none && !cell.inverse
+            let cell = grid[rowBase + column]
+            let paint = paint(for: cell, cached: &cachedPen)
             // Precedence: primary selection (opaque) > search hit > normal.
             let selected = region?.contains(row: row, column: column) ?? false
             let isSearchHit: Bool
@@ -669,21 +715,17 @@ public struct FrameBuilder {
                 // the rendered background here is the selection color, so re-ensure
                 // contrast against what's actually drawn.
                 foreground = selectionForeground.map { renderColor($0) }
-                    ?? renderColor(contrasted(colors.foreground, against: selBg))
+                    ?? renderColor(contrasted(paint.colors.foreground, against: selBg))
                 drawBackground = true
             } else if isSearchHit, let searchBg = searchBackground {
                 background = renderColor(searchBg)
                 foreground = searchForeground.map { renderColor($0) }
-                    ?? renderColor(contrasted(colors.foreground, against: searchBg))
+                    ?? renderColor(contrasted(paint.colors.foreground, against: searchBg))
                 drawBackground = true
             } else {
-                background = isCanvasBackground
-                    ? renderColor(colors.background, alpha: canvasOpacity)
-                    : renderColor(colors.background)
-                foreground = renderColor(colors.foreground)
-                // Default canvas cells match the clear color; everything else (explicit SGR
-                // background, inverse) needs its quad.
-                drawBackground = !isCanvasBackground
+                background = paint.background
+                foreground = paint.foreground
+                drawBackground = paint.drawBackground
             }
             cells.append(RenderCell(
                 row: row,
@@ -693,7 +735,7 @@ public struct FrameBuilder {
                 combining1: cell.combining1,
                 foreground: foreground,
                 background: background,
-                underlineColor: renderColor(underline),
+                underlineColor: paint.underlineColor,
                 bold: cell.bold,
                 italic: cell.italic,
                 underline: cell.underline,

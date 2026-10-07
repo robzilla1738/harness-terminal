@@ -2,17 +2,18 @@ import XCTest
 @testable import HarnessCore
 
 final class ExperienceModeTests: XCTestCase {
-    func testFreshInstallDefaultsToPlain() {
-        // The memberwise init is the fresh-install path (via makeDefaults). New users get the
-        // simplest experience — a fast native terminal.
-        XCTAssertEqual(HarnessSettings().experienceMode, .plain)
+    func testFreshInstallDefaultsToPersistent() {
+        // The memberwise init is the fresh-install path (via makeDefaults). New users keep
+        // sessions when the app quits. A missing key in an older file still decodes as `.full`.
+        XCTAssertEqual(HarnessSettings().experienceMode, .persistent)
         XCTAssertNil(HarnessSettings().harnessControlsEnabled)
     }
 
     func testLegacyFileWithoutModeMigratesToFull() throws {
         // A settings file written before modes existed belongs to a user who already had the
         // prefix + status line. Decoding must default the absent key to `.full` so upgrading
-        // never strips features — NOT to the fresh-install `.plain`.
+        // never strips features — the fresh-install default is `.persistent`, and that must
+        // not apply to a file that already exists.
         let legacy = #"{"fontSize":16,"fontFamily":"Menlo","defaultShell":"/bin/zsh","defaultCWD":"/Users/x","transparentTitlebar":true,"sidebarVisible":true,"backgroundOpacity":0.6,"backgroundBlur":16,"windowPaddingX":14,"windowPaddingY":14,"prefixKey":"ctrl-a","scrollbackLines":10000,"cursorStyle":"block","cursorBlink":true,"copyOnSelect":true,"paletteHex":[null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],"agentColorOverrides":{},"systemNotificationsEnabled":true,"notificationSoundEnabled":true,"vividColors":true,"linearBlending":false,"applyThemeToTerminalOutput":false,"ligatures":true,"showStatusLine":true}"#
         let settings = try JSONDecoder().decode(HarnessSettings.self, from: Data(legacy.utf8))
         XCTAssertEqual(settings.experienceMode, .full)

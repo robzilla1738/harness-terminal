@@ -37,6 +37,12 @@ struct HarnessCLI {
             case "copy-file":
                 try handleCopyFile(args)
                 return
+            case "config":
+                try handleConfig(args)
+                return
+            case "do":
+                try handleDo(args)
+                return
             default:
                 break
             }
@@ -271,6 +277,8 @@ struct HarnessCLI {
                 try handleRestoreLayout(args, client: client)
             case "events":
                 try handleEvents(args, client: client)
+            case "api":
+                handleAPI(args)
             case "process":
                 try handleProcess(args, client: client)
             default:

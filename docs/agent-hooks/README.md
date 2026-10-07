@@ -48,6 +48,8 @@ harness-cli notify --surface "$HARNESS_SURFACE" --title "Claude" --body "Needs a
 
 Harness recognizes standard notification OSC sequences (9, 99, 777) emitted by agents and terminals.
 
+`install-hooks` also writes an OSC 7501 report beside `harness-cli notify`, so the pane's program status updates even when the window is not focused. The report is plain text on the tty (`printf` of `OSC 7501`). See [PROGRAM-STATUS.md](../PROGRAM-STATUS.md).
+
 ## Jump to waiting agent
 
 Press `Cmd+Shift+U` in Harness, or run:

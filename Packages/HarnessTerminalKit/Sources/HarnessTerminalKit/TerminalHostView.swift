@@ -63,6 +63,7 @@ public final class TerminalHostView: NSView {
     public weak var hostDelegate: TerminalHostDelegate?
 
     private let nativeView: HarnessTerminalSurfaceView
+    private var scriptKeys: ScriptKeyConsumer?
     /// Which daemon this pane talks to — the local one by default, or a remote daemon (via an SSH
     /// tunnel) when the pane belongs to a connected remote host.
     private let daemonClient: DaemonClient
@@ -261,6 +262,13 @@ public final class TerminalHostView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         native.translatesAutoresizingMaskIntoConstraints = false
+        let keys = scriptKeys ?? ScriptKeyConsumer { [weak self] name in
+            ScriptActionRunner.run(name: name, origin: .key, surface: self?.surfaceID.uuidString)
+        }
+        scriptKeys = keys
+        native.consumeScriptKey = { [weak keys] event in
+            keys?.consume(event) ?? false
+        }
         native.onInput = { data in inputGate.route(data) }
         native.onResize = { cols, rows in io.resize(rows: UInt16(rows), cols: UInt16(cols)) }
         native.onTitle = { [weak self] title in
@@ -523,7 +531,9 @@ public final class TerminalHostView: NSView {
             textRendering: settings.textRendering,
             ligatures: settings.ligatures,
             minimumContrast: HarnessSettings.clampedContrast(settings.minimumContrast),
-            themeFit: settings.themeFit,
+            themeFit: settings.effectiveThemeFit(
+                appearanceIsLight: RGBColor(hex: canvasBg)?.isDark == false
+            ),
             boldIsBright: settings.boldIsBright,
             promptGutter: settings.showPromptGutter,
             offMainParserFramePipeline: settings.offMainParserFramePipeline,
@@ -736,6 +746,26 @@ public final class TerminalHostView: NSView {
     // MARK: - Find (Cmd+F)
 
     private var findBar: TerminalFindBar?
+    private var findTopConstraint: NSLayoutConstraint?
+    private var findTrailingConstraint: NSLayoutConstraint?
+
+    public var gridCellCount: (rows: Int, columns: Int) { nativeView.gridCellCount }
+
+    public var copyModeWordSeparators: String {
+        get { nativeView.copyModeWordSeparators }
+        set { nativeView.copyModeWordSeparators = newValue }
+    }
+
+    /// False when this view is not the size owner. The surface then reflows locally.
+    public var sizeOwner: Bool {
+        get { nativeView.sizeOwner }
+        set { nativeView.sizeOwner = newValue }
+    }
+
+    public override func layout() {
+        super.layout()
+        nudgeFindBar()
+    }
 
     /// Toggle the in-pane find bar. Opening focuses its field (keystrokes go to the bar, not
     /// the shell); closing clears highlights and returns focus to the terminal.
@@ -753,14 +783,45 @@ public final class TerminalHostView: NSView {
         bar.onPrevious = { [weak self] in self?.nativeView.findPrevious() }
         bar.onClose = { [weak self] in self?.hideFind() }
         addSubview(bar)
+        let top = bar.topAnchor.constraint(equalTo: topAnchor, constant: 8)
+        let trailing = bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10)
         NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            top,
+            trailing,
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 10),
         ])
-        nativeView.onFindResultsChanged = { [weak bar] current, total in bar?.setResults(current: current, total: total) }
+        findTopConstraint = top
+        findTrailingConstraint = trailing
+        nativeView.onFindResultsChanged = { [weak self, weak bar] current, total in
+            bar?.setResults(current: current, total: total)
+            self?.nudgeFindBar()
+        }
         nativeView.beginFind()
         findBar = bar
         bar.focusField()
+        nudgeFindBar()
+    }
+
+    /// Move the overlay when it covers the current match. Row count is not an input.
+    private func nudgeFindBar() {
+        guard let bar = findBar, let top = findTopConstraint, let trailing = findTrailingConstraint else { return }
+        let match = nativeView.currentFindMatchRect().map { convert($0, from: nativeView) }
+        let placed = FindBarNudge.place(
+            viewportWidth: bounds.width,
+            viewportHeight: bounds.height,
+            barWidth: max(bar.fittingSize.width, bar.bounds.width),
+            barHeight: max(bar.fittingSize.height, bar.bounds.height, 1),
+            match: match.map { rect in
+                FindBarNudge.Box(
+                    x: rect.minX,
+                    y: bounds.height - rect.maxY,
+                    width: rect.width,
+                    height: rect.height
+                )
+            }
+        )
+        top.constant = placed.y
+        trailing.constant = -(bounds.width - (placed.x + placed.width))
     }
 
     private func hideFind() {
@@ -769,6 +830,8 @@ public final class TerminalHostView: NSView {
         nativeView.endFind()
         bar.removeFromSuperview()
         findBar = nil
+        findTopConstraint = nil
+        findTrailingConstraint = nil
         focusTerminal()
     }
 

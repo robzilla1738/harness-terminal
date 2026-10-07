@@ -30,18 +30,24 @@ public struct ProfileRule: Codable, Equatable, Sendable {
     /// Theme applied while matched (canvas only — window chrome keeps the global theme).
     public var theme: String
     public var enabled: Bool
+    /// Pane surface id. Set by `pane.theme` so one pane can carry a profile without a host glob.
+    public var surface: String?
 
-    public init(host: String? = nil, command: String? = nil, theme: String, enabled: Bool = true) {
+    public init(host: String? = nil, command: String? = nil, surface: String? = nil, theme: String, enabled: Bool = true) {
         self.host = host
         self.command = command
+        self.surface = surface
         self.theme = theme
         self.enabled = enabled
     }
 
     /// Whether this rule matches the pane's current vantage. A rule with no criteria never
     /// matches (it would silently re-theme everything); set criteria must ALL hold.
-    public func matches(host activeHost: String?, command activeCommand: String?) -> Bool {
-        guard enabled, !theme.isEmpty, host != nil || command != nil else { return false }
+    public func matches(host activeHost: String?, command activeCommand: String?, surface activeSurface: String? = nil) -> Bool {
+        guard enabled, !theme.isEmpty, host != nil || command != nil || surface != nil else { return false }
+        if let surface {
+            guard let activeSurface, surface.caseInsensitiveCompare(activeSurface) == .orderedSame else { return false }
+        }
         if let host {
             guard let activeHost, Self.glob(host, matches: activeHost) else { return false }
         }
@@ -57,13 +63,23 @@ public struct ProfileRule: Codable, Equatable, Sendable {
         fnmatch(pattern.lowercased(), value.lowercased(), 0) == 0
     }
 
-    private enum CodingKeys: String, CodingKey { case host, command, theme, enabled }
+    private enum CodingKeys: String, CodingKey { case host, command, theme, enabled, surface }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         host = (try? c.decodeIfPresent(String.self, forKey: .host)).flatMap { $0 }
         command = (try? c.decodeIfPresent(String.self, forKey: .command)).flatMap { $0 }
+        surface = (try? c.decodeIfPresent(String.self, forKey: .surface)).flatMap { $0 }
         theme = (try? c.decodeIfPresent(String.self, forKey: .theme)).flatMap { $0 } ?? ""
         enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)).flatMap { $0 } ?? true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(host, forKey: .host)
+        try c.encodeIfPresent(command, forKey: .command)
+        try c.encodeIfPresent(surface, forKey: .surface)
+        try c.encode(theme, forKey: .theme)
+        try c.encode(enabled, forKey: .enabled)
     }
 }

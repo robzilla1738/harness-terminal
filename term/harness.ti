@@ -1,0 +1,4 @@
+# Harness terminfo source. Compile with `tic -x term/harness.ti`.
+# Pst is the OSC 7501 program-status report. The body is the only parameter.
+harness|Harness,
+ Pst=\E]7501;%p1%s\E\\,

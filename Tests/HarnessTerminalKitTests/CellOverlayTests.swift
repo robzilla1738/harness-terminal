@@ -267,4 +267,66 @@ final class CellOverlayTests: XCTestCase {
         )
         XCTAssertEqual(presented.cells, baked.cells)
     }
+
+    func testInsertTextCommitsMarkedTextAndClearsIt() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        var emitted = Data()
+        view.onInput = { emitted.append($0) }
+        view.setMarkedText("あ", selectedRange: NSRange(), replacementRange: NSRange())
+        XCTAssertTrue(view.hasMarkedText())
+        view.insertText("é", replacementRange: NSRange())
+        XCTAssertFalse(view.hasMarkedText())
+        XCTAssertEqual(String(decoding: emitted, as: UTF8.self), "é")
+    }
+
+    func testUnmarkTextDropsPreeditWithoutEmitting() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        var emitted = Data()
+        view.onInput = { emitted.append($0) }
+        view.setMarkedText("かん", selectedRange: NSRange(), replacementRange: NSRange())
+        view.unmarkText()
+        XCTAssertFalse(view.hasMarkedText())
+        XCTAssertTrue(emitted.isEmpty)
+    }
+
+    func testWideMarkedTextWritesASpacerCell() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        view.receive("\r\n")
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard let before = view.testingLastPresentedFrame else {
+            throw XCTSkip("no present happened (drawable unavailable)")
+        }
+        let row = before.cursor.row
+        let col = before.cursor.column
+        view.setMarkedText("あ", selectedRange: NSRange(), replacementRange: NSRange())
+        view.testingForceRender()
+        let frame = try XCTUnwrap(view.testingLastPresentedFrame)
+        let cell = try XCTUnwrap(frame.cell(row: row, column: col))
+        XCTAssertEqual(cell.codepoint, UnicodeScalar("あ").value)
+        XCTAssertEqual(cell.width, .wide)
+        let tail = try XCTUnwrap(frame.cell(row: row, column: col + 1))
+        XCTAssertEqual(tail.width, .spacerTail)
+    }
 }

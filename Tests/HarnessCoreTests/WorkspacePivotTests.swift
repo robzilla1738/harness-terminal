@@ -325,11 +325,11 @@ final class WorkspacePivotTests: XCTestCase {
         XCTAssertTrue(grid.parked)
         XCTAssertTrue(grid.live.isEmpty, "the live grid is dropped")
         XCTAssertEqual(grid.history, ["prompt", "ls"])
-        XCTAssertFalse(grid.presentsProcessAsRunning)
+        XCTAssertTrue(grid.presentsProcessAsRunning, "parking does not reap the child")
         grid.restore()
         XCTAssertEqual(grid.live, ["prompt", "ls"])
         XCTAssertFalse(grid.parked)
-        XCTAssertFalse(grid.presentsProcessAsRunning, "restored history is not a live process")
+        XCTAssertTrue(grid.presentsProcessAsRunning)
     }
 
     func testPaneDensityBorder() {

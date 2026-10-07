@@ -169,6 +169,10 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         (view.window?.contentViewController as? MainSplitViewController)?.toggleSidebar()
     }
 
+    func tabBarDidRequestPeek() {
+        TabPeekController.toggle()
+    }
+
     func refreshTabBarMetadata() {
         let snap = SessionCoordinator.shared.snapshot
         tabBar.refreshMetadata(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
@@ -365,12 +369,21 @@ final class PaneContainerView: NSView {
             let split = HarnessSplitView()
             split.dividerStyle = .thin
             split.isVertical = direction == .horizontal
+            split.preferredRatio = CGFloat(ratio)
             split.tabID = tabID
             split.firstPaneID = firstLeafID(firstNode)
             split.secondPaneID = firstLeafID(secondNode)
             split.delegate = split
             let first = NSView()
             let second = NSView()
+            // A new pane's fitting size is a few lines. Low hugging lets the split
+            // give it the rest of the column instead of leaving an empty band.
+            for pane in [first, second] {
+                pane.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+                pane.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .vertical)
+                pane.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                pane.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+            }
             split.addSubview(first)
             split.addSubview(second)
             split.translatesAutoresizingMaskIntoConstraints = false
@@ -478,9 +491,50 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
     var tabID: TabID?
     var firstPaneID: PaneID?
     var secondPaneID: PaneID?
+    /// Share of the free length given to the first pane when AppKit leaves a gap.
+    var preferredRatio: CGFloat = 0.5
     private var ratioDebounce: DispatchWorkItem?
+    private var tiling = false
 
     override var dividerColor: NSColor { .clear }
+
+    /// AppKit can leave a 0-pt divider's panes at their fitting size, which shows
+    /// as an empty band. Tile them so the two panes cover the split.
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        if tiling {
+            super.resizeSubviews(withOldSize: oldSize)
+            return
+        }
+        super.resizeSubviews(withOldSize: oldSize)
+        guard subviews.count == 2, bounds.width > 1, bounds.height > 1 else { return }
+        let across = isVertical
+        let total = across ? bounds.width : bounds.height
+        let thickness = dividerThickness
+        let covered = subviews.reduce(CGFloat(0)) {
+            $0 + (across ? $1.frame.width : $1.frame.height)
+        }
+        if total - covered - thickness <= 1 {
+            if total > 0 {
+                let first = across ? subviews[0].frame.width : subviews[0].frame.height
+                preferredRatio = first / total
+            }
+            return
+        }
+        let tiled = ChromeLayout.tiledSplit(
+            length: Double(total),
+            thickness: Double(thickness),
+            ratio: Double(preferredRatio)
+        )
+        tiling = true
+        if across {
+            subviews[0].frame = NSRect(x: 0, y: 0, width: tiled.first, height: bounds.height)
+            subviews[1].frame = NSRect(x: tiled.secondOrigin, y: 0, width: tiled.second, height: bounds.height)
+        } else {
+            subviews[0].frame = NSRect(x: 0, y: bounds.height - tiled.first, width: bounds.width, height: tiled.first)
+            subviews[1].frame = NSRect(x: 0, y: 0, width: bounds.width, height: tiled.second)
+        }
+        tiling = false
+    }
 
     /// Comfortable's gap is the island inset. The divider stays 0 so it does not
     /// add a second gap. Compact is the 1pt border.

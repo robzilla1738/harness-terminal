@@ -7,7 +7,7 @@ import HarnessTerminalKit
 @MainActor
 struct PaletteAction: Identifiable {
     enum Section: Int, CaseIterable {
-        case recent, actions, navigation, tabs, commands, themes
+        case recent, actions, navigation, tabs, commands, themes, settings
 
         var title: String {
             switch self {
@@ -17,6 +17,7 @@ struct PaletteAction: Identifiable {
             case .tabs: return "Tabs"
             case .commands: return "Commands"
             case .themes: return "Themes"
+            case .settings: return "Settings"
             }
         }
     }
@@ -153,6 +154,26 @@ enum CommandPaletteController {
                 section: .actions
             ) {
                 coordinator.splitActivePane(direction: .vertical)
+            },
+            PaletteAction(
+                id: "action.insertPath",
+                title: "Insert Path",
+                subtitle: "Insert a shell-quoted path from this daemon",
+                symbol: "doc.on.clipboard",
+                shortcut: "",
+                section: .actions
+            ) {
+                coordinator.insertListedPath()
+            },
+            PaletteAction(
+                id: "action.goToDirectory",
+                title: "Go to Directory",
+                subtitle: "cd to a directory on this daemon",
+                symbol: "folder",
+                shortcut: "",
+                section: .actions
+            ) {
+                coordinator.goToListedDirectory()
             },
             PaletteAction(
                 id: "action.zoomPane",
@@ -390,6 +411,94 @@ enum CommandPaletteController {
             ) {
                 coordinator.setTheme(theme)
             })
+        }
+
+        ScriptActionRunner.syncManifest()
+        for action in ScriptStore.load()?.actions ?? [] {
+            let row = ScriptPalette.rows(actions: [action])[0]
+            actions.append(PaletteAction(
+                id: row.id,
+                title: row.title,
+                subtitle: action.detail.isEmpty ? row.category : action.detail,
+                symbol: "bolt.fill",
+                shortcut: "",
+                section: .actions
+            ) {
+                ScriptActionRunner.run(
+                    name: action.name,
+                    origin: .palette,
+                    surface: coordinator.activeSurfaceID?.uuidString
+                )
+            })
+        }
+
+        let light = !HarnessChrome.current.isDark
+        for row in SettingsPalette.rows(appearanceIsLight: light) {
+            actions.append(PaletteAction(
+                id: "settings.\(row.id)",
+                title: row.title,
+                subtitle: row.detail(coordinator.settings),
+                symbol: "slider.horizontal.3",
+                shortcut: "",
+                section: .settings,
+                searchOnly: true
+            ) {
+                var settings = coordinator.settings
+                let previousAppearance = settings.appearanceMode
+                row.apply(&settings)
+                if row.id == "appearanceMode", previousAppearance != settings.appearanceMode {
+                    settings.clearThemeColorOverrides()
+                    if settings.appearanceMode == .light || settings.appearanceMode == .macOSSystem {
+                        SettingsViewController.seedUnsetSystemThemeNames(
+                            settings: &settings,
+                            selectedThemeName: coordinator.snapshot.themeName
+                        )
+                    }
+                }
+                coordinator.settings = settings
+                try? settings.save()
+                coordinator.applySettingsToHosts()
+                SettingsWindowController.reloadIfOpen()
+            })
+        }
+        for daemon in DaemonSettingsControls.rows {
+            let values = daemon.values
+            actions.append(PaletteAction(
+                id: "settings.daemon.\(daemon.id)",
+                title: daemon.title,
+                subtitle: values?.joined(separator: " / ") ?? "Same option as Settings",
+                symbol: "terminal",
+                shortcut: "",
+                section: .settings,
+                searchOnly: true
+            ) {
+                let current = OptionStore().get(daemon.key, scope: .global)?.stringValue ?? ""
+                let next: String
+                if let values, !values.isEmpty {
+                    next = SettingsPalette.next(values, current)
+                } else {
+                    next = current
+                }
+                coordinator.requestDaemon(DaemonSettingsControls.request(key: daemon.key, rawValue: next))
+                HarnessOptions.reloadFromDisk()
+            })
+        }
+        if let imported = TerminalConfigImporter.load(), imported.sourceName == "Ghostty",
+           let index = actions.firstIndex(where: { $0.id == "action.reimport" }) {
+            let existing = actions[index]
+            let skipped = imported.skippedKeys.joined(separator: ", ")
+            actions[index] = PaletteAction(
+                id: existing.id,
+                title: "Re-import Ghostty",
+                subtitle: skipped.isEmpty
+                    ? "Font face imports; font size stays Harness-owned"
+                    : "Skipped: \(skipped)",
+                symbol: existing.symbol,
+                shortcut: existing.shortcut,
+                section: existing.section,
+                searchOnly: existing.searchOnly,
+                handler: existing.handler
+            )
         }
 
         return actions

@@ -155,6 +155,30 @@ public enum IPCRequest: Codable, Sendable {
     case foregroundProcess(surfaceID: String)
     /// Foreground process plus working directory, for layout capture.
     case surfaceContext(surfaceID: String)
+    /// Grid capture through `PaneCapture` (`text`, `html`, or `vt`).
+    case captureFormatted(surfaceID: String, format: String, trim: Bool, unwrap: Bool)
+    /// Child, foreground process, and ancestors as JSON.
+    case processTree(surfaceID: String)
+    /// `pwd`, `title`, `size`, or `program_status` as JSON.
+    case paneQuery(surfaceID: String, kind: String)
+    /// Names in a directory on this daemon. `path` nil lists the pane's reported cwd.
+    case listDir(surfaceID: String, path: String?)
+    /// Inject RIS (`ESC c`) so the byte stream clears program status.
+    case resetSurface(surfaceID: String)
+    /// Block until the child exits or OSC 133 D arrives. `DaemonServer` owns the reply.
+    case paneWait(surfaceID: String, until: String, timeout: Double)
+    /// Live `events --follow` channel. `DaemonServer` keeps the socket open.
+    case subscribeEvents(sessionID: String?, includeServer: Bool)
+    /// CLI keymap generation. The daemon publishes `keymap.changed` and does not store the map.
+    case publishKeymap(generation: Int, hash: String)
+    /// Remote-host store changed. The daemon publishes `hosts.changed`.
+    case noteHostsChanged
+    /// The SSH forward to `host` dropped. The daemon publishes `client.connection`.
+    case noteClientConnection(host: String)
+    /// `tailscale status` was present. The daemon publishes `tailscale_status_changed`.
+    case noteTailscaleStatus(peerCount: Int)
+    /// The calling connection describes itself for `client.list`.
+    case presentClient(kind: String, version: String, uid: UInt32, tunnel: Bool)
 }
 
 /// The mode argument for `wait-for`. `String` raw values are wire-identical to the previous
@@ -212,6 +236,8 @@ public enum IPCResponse: Codable, Sendable {
     case options([OptionEntry])
     case hookID(UUID)
     case hooks([HookEntry])
+    /// One NDJSON line on an `events --follow` subscription.
+    case follow(String)
     case error(String)
 }
 

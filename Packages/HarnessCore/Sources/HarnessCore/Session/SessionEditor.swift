@@ -481,6 +481,16 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    @discardableResult
+    public mutating func setProgramMark(surfaceID: SurfaceID, mark: ProgramMark?) -> Bool {
+        guard let match = tabIndex(surfaceID: surfaceID) else { return false }
+        let tabs = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs
+        if tabs[match.tabIndex].programMark == mark { return false }
+        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].programMark = mark
+        bumpRevision()
+        return true
+    }
+
     public mutating func setTabStatus(
         workspaceID: WorkspaceID,
         tabID: TabID,

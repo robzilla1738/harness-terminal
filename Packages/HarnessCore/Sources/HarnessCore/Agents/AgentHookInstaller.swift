@@ -476,15 +476,34 @@ public enum AgentHookInstaller {
     private static let notifyPrefix = "PATH=\"$HOME/Library/Application Support/Harness/bin:$PATH\" harness-cli notify"
     #endif
 
-    private static func notifyCommand(title: String, body: String) -> String {
-        "\(notifyPrefix) --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --body \"\(body)\""
+    private static func notifyCommand(title: String, body: String, app: String) -> String {
+        let (state, kind) = programStatus(for: body)
+        return "\(notifyPrefix) --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --body \"\(body)\" ; \(programStatusEcho(state: state, app: app, message: body, kind: kind))"
+    }
+
+    /// OSC 7501 beside `harness-cli notify`, written to the tty so the pane lights up in
+    /// Harness and in terminals that only understand the protocol.
+    private static func programStatusEcho(state: String, app: String, message: String, kind: String?) -> String {
+        let encoded = Data(message.utf8).base64EncodedString()
+        var pairs = "state=\(state):app=\(app):msg=\(encoded)"
+        if let kind { pairs += ":kind=\(kind)" }
+        return "printf \"\\033]7501;\(pairs)\\033\\\\\" >/dev/tty 2>/dev/null || true"
+    }
+
+    private static func programStatus(for body: String) -> (String, String?) {
+        switch body {
+        case "Done": return ("done", nil)
+        case "Error": return ("error", nil)
+        case "Awaiting input": return ("blocked", "permission")
+        default: return ("blocked", "question")
+        }
     }
 
     /// A notify command whose body comes from the hook's stdin JSON `message` (`--from-hook`).
     /// Used for agents (Claude Code) that pass the notification text on stdin rather than as a
     /// shell argument — `--body "$HARNESS_NOTIFY_MESSAGE"` would expand to nothing.
-    private static func notifyFromHookCommand(title: String) -> String {
-        "\(notifyPrefix) --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --from-hook"
+    private static func notifyFromHookCommand(title: String, app: String) -> String {
+        "\(notifyPrefix) --surface \"$HARNESS_SURFACE\" --title \"\(title)\" --from-hook ; \(programStatusEcho(state: "blocked", app: app, message: "Needs you", kind: "question"))"
     }
 
     // MARK: - Per-agent payloads
@@ -494,11 +513,11 @@ public enum AgentHookInstaller {
             "hooks": [
                 "Notification": [[
                     "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyFromHookCommand(title: "Claude Code")]],
+                    "hooks": [["type": "command", "command": notifyFromHookCommand(title: "Claude Code", app: "claude-code")]],
                 ]],
                 "Stop": [[
                     "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Claude Code", body: "Done")]],
+                    "hooks": [["type": "command", "command": notifyCommand(title: "Claude Code", body: "Done", app: "claude-code")]],
                 ]],
             ],
         ]
@@ -509,15 +528,15 @@ public enum AgentHookInstaller {
             "hooks": [
                 "PermissionRequest": [[
                     "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Awaiting input")]],
+                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Awaiting input", app: "codex")]],
                 ]],
                 "Notification": [[
                     "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Notification")]],
+                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Notification", app: "codex")]],
                 ]],
                 "Stop": [[
                     "matcher": "*",
-                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Done")]],
+                    "hooks": [["type": "command", "command": notifyCommand(title: "Codex", body: "Done", app: "codex")]],
                 ]],
             ],
         ]
@@ -527,15 +546,15 @@ public enum AgentHookInstaller {
         [
             "version": 1,
             "hooks": [
-                "stop": [["command": notifyCommand(title: "Cursor", body: "Done")]],
+                "stop": [["command": notifyCommand(title: "Cursor", body: "Done", app: "cursor")]],
             ],
         ]
     }
 
     private static var grokPayload: [String: Any] {
         [
-            "on-complete": notifyCommand(title: "Grok", body: "Done"),
-            "on-error": notifyCommand(title: "Grok", body: "Error"),
+            "on-complete": notifyCommand(title: "Grok", body: "Done", app: "grok"),
+            "on-error": notifyCommand(title: "Grok", body: "Error", app: "grok"),
         ]
     }
 
@@ -546,10 +565,10 @@ public enum AgentHookInstaller {
         // harness-managed — surfaces OpenCode session events in Harness. Safe to delete.
         export const HarnessNotify = async ({ $ }) => ({
           "session.idle": async () => {
-            await $`\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body Done`
+            await $`\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body Done ; \(programStatusEcho(state: "done", app: "opencode", message: "Done", kind: nil))`
           },
           "permission.asked": async () => {
-            await $`\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body "Awaiting input"`
+            await $`\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title OpenCode --body "Awaiting input" ; \(programStatusEcho(state: "blocked", app: "opencode", message: "Awaiting input", kind: "permission"))`
           },
         })
         """
@@ -565,7 +584,7 @@ public enum AgentHookInstaller {
         export function activate(api: any) {
           const notify = (body: string) =>
             execSync(
-              `\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title "Pi" --body "${body}"`,
+              `\(notifyPrefix) --surface "${process.env.HARNESS_SURFACE ?? ""}" --title "Pi" --body "${body}" ; \(programStatusEcho(state: "done", app: "pi", message: "Done", kind: nil))`,
               { stdio: "ignore" }
             )
           api.on?.("session_end", () => notify("Done"))
@@ -580,7 +599,7 @@ public enum AgentHookInstaller {
         """
         hooks:
           - event: stop
-            command: '\(notifyCommand(title: "Hermes", body: "Done"))'
+            command: '\(notifyCommand(title: "Hermes", body: "Done", app: "hermes"))'
         """
     }
 
@@ -589,7 +608,7 @@ public enum AgentHookInstaller {
         """
         "hooks": {
           "harness-notify": {
-            "command": "\(escapedForJSON(notifyCommand(title: "OpenClaw", body: "Done")))",
+            "command": "\(escapedForJSON(notifyCommand(title: "OpenClaw", body: "Done", app: "openclaw")))",
           },
         },
         """

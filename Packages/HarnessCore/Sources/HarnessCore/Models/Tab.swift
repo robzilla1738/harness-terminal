@@ -35,6 +35,9 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
     /// persistence control: a tab survives iff `keepSessionsOnQuit || session.persistent ||
     /// tab.persistent`. Defaults to unpinned; older snapshots decode to `false`.
     public var persistent: Bool
+    /// OSC 7501 attention for this tab, published by the daemon when the presented mark
+    /// changes. Nil when the pane is idle. Older snapshots decode this as nil.
+    public var programMark: ProgramMark?
 
     /// The tmux activity/silence/bell portion of `#{window_flags}`.
     public var alertFlags: String {
@@ -60,7 +63,8 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         bell: Bool = false,
         exitStatus: Int? = nil,
         currentCommand: String? = nil,
-        persistent: Bool = false
+        persistent: Bool = false,
+        programMark: ProgramMark? = nil
     ) {
         self.id = id
         self.title = title
@@ -84,6 +88,7 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         self.exitStatus = exitStatus
         self.currentCommand = currentCommand
         self.persistent = persistent
+        self.programMark = programMark
     }
 
     public var displaySubtitle: String {
@@ -122,5 +127,39 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
         currentCommand = try container.decodeIfPresent(String.self, forKey: .currentCommand)
         // Per-tab persistence pin — absent in older layout.json; default to unpinned.
         persistent = try container.decodeIfPresent(Bool.self, forKey: .persistent) ?? false
+        programMark = try container.decodeIfPresent(ProgramMark.self, forKey: .programMark)
+    }
+}
+
+/// The presented program-status mark for a tab. The decision lives in the engine;
+/// this is the value the snapshot carries to the tab, the session row, and the notch.
+public struct ProgramMark: Codable, Equatable, Sendable {
+    public enum Attention: String, Codable, Sendable {
+        case working, blocked, done, error
+    }
+
+    public var attention: Attention
+    public var kind: String?
+    public var message: String?
+    public var app: String?
+    public var progress: Int?
+    /// True when a real OSC 7501 report owns the mark. Detector and OSC 9;4 fills are false.
+    public var fromRealReport: Bool
+
+    public init(attention: Attention, kind: String?, message: String?, app: String?, progress: Int?, fromRealReport: Bool) {
+        self.attention = attention
+        self.kind = kind
+        self.message = message
+        self.app = app
+        self.progress = progress
+        self.fromRealReport = fromRealReport
+    }
+}
+
+/// Tab-chip title. The agent tint is `HarnessSettings.agentColorHex`; the 7501 `app` is appended here.
+public enum TabChip {
+    public static func title(base: String, app: String?) -> String {
+        guard let app, !app.isEmpty else { return base }
+        return "\(base) · \(app)"
     }
 }

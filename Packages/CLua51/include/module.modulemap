@@ -1,0 +1,6 @@
+module CLua51 [system] {
+    header "lua.h"
+    header "lauxlib.h"
+    header "lualib.h"
+    export *
+}

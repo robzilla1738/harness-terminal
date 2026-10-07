@@ -27,10 +27,10 @@ Use this path for a fresh install.
    Open **Settings > Terminal > Experience** and choose **Full Terminal** or
    **Agent Workspace**.
 
-   New installs can start in **Plain Terminal**, which intentionally hides the
-   prefix layer and status line. Plain mode is a normal terminal. Full Terminal
-   turns on the prefix key, status line, copy mode, paste buffers, panes, and
-   command prompt.
+   A new install starts in **Persistent Terminal**: no prefix layer and no
+   status line, and sessions survive quitting. Plain is the same look with
+   ephemeral sessions. Full Terminal turns on the prefix key, status line,
+   copy mode, paste buffers, panes, and command prompt.
 
 3. Install the CLI.
 

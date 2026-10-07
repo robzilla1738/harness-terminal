@@ -42,6 +42,15 @@ public final class DaemonServer: @unchecked Sendable {
     private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
     /// FDs subscribed to layout-change pushes (`subscribeSnapshot`).
     private var snapshotSubscribers: Set<Int32> = []
+    /// FDs subscribed to `events --follow`.
+    private var eventSubscribers: [Int32: FollowSubscription] = [:]
+    /// `pane.wait` callers blocked on this connection. Queue-confined.
+    private struct PaneWait {
+        var fd: Int32
+        var surfaceID: String
+        var until: String
+    }
+    private var paneWaits: [UUID: PaneWait] = [:]
     /// Per-client PTY sizes. `smallest` (the default) is tmux compatibility.
     /// `owner` lets one client set the size; other clients' votes do not resize.
     private var sizeArbiter = SurfaceSizeArbiter()
@@ -50,6 +59,10 @@ public final class DaemonServer: @unchecked Sendable {
         let id: UUID
         var label: String
         let connectedAt: Date
+        var kind: String = "client"
+        var version: String = ""
+        var principalUID: UInt32?
+        var tunnel = false
     }
     private var clients: [Int32: ClientRecord] = [:]
     /// File descriptors that may receive output but must not write to a child.
@@ -80,6 +93,23 @@ public final class DaemonServer: @unchecked Sendable {
         registry.onSnapshotCommitted = { [weak self] revision in
             guard let self else { return }
             self.queue.async { [weak self] in self?.pushSnapshotRevision(revision) }
+        }
+        registry.onFollowEvent = { [weak self] event in
+            guard let self else { return }
+            self.queue.async { [weak self] in self?.pushFollow(event) }
+        }
+        registry.onCommandFinished = { [weak self] surfaceID, status in
+            guard let self else { return }
+            self.queue.async { [weak self] in
+                self?.finishPaneWaits(surfaceID: surfaceID, until: "command", status: status)
+            }
+        }
+        // Called with the registry lock held. Only hop; never take that lock again here.
+        registry.onChildExited = { [weak self] surfaceID, status in
+            guard let self else { return }
+            self.queue.async { [weak self] in
+                self?.finishPaneWaits(surfaceID: surfaceID, until: "child", status: status)
+            }
         }
         registry.attachedClientCountProvider = { [registeredClientCount] in
             registeredClientCount.read()
@@ -232,6 +262,9 @@ public final class DaemonServer: @unchecked Sendable {
                 self.clientFDsByID.removeValue(forKey: removed.id)
                 self.registeredClientCount.update(self.clients.count)
                 self.registry.fireClientDetached(label: removed.label)
+                if removed.tunnel {
+                    self.registry.noteTunnelClientDropped(client: removed.label)
+                }
             }
             self.clientBuffers.removeValue(forKey: clientFD)
             self.clientSources.removeValue(forKey: clientFD)
@@ -374,6 +407,15 @@ public final class DaemonServer: @unchecked Sendable {
                 handleWaitFor(channel: channel, mode: mode, fd: fd)
                 continue
             }
+            if case let .subscribeEvents(sessionID, includeServer) = request {
+                eventSubscribers[fd] = FollowSubscription(sessionID: sessionID, includeServer: includeServer)
+                send(.ok, to: fd)
+                continue
+            }
+            if case let .paneWait(surfaceID, until, timeout) = request {
+                handlePaneWait(surfaceID: surfaceID, until: until, timeout: timeout, fd: fd)
+                continue
+            }
             if let intercepted = handleClientLifecycle(request, fd: fd) {
                 send(intercepted, to: fd)
                 continue
@@ -433,7 +475,8 @@ public final class DaemonServer: @unchecked Sendable {
                 clients[fd] = record
                 return .clientID(record.id)
             }
-            let record = ClientRecord(id: UUID(), label: label, connectedAt: Date())
+            var record = ClientRecord(id: UUID(), label: label, connectedAt: Date())
+            record.principalUID = peerUID(fd)
             clients[fd] = record
             clientFDsByID[record.id] = fd
             registeredClientCount.update(clients.count)
@@ -448,7 +491,12 @@ public final class DaemonServer: @unchecked Sendable {
                         id: entry.value.id,
                         label: entry.value.label,
                         attachedSurfaceIDs: surfaces,
-                        connectedAt: entry.value.connectedAt
+                        connectedAt: entry.value.connectedAt,
+                        kind: entry.value.kind,
+                        version: entry.value.version,
+                        principalUID: entry.value.principalUID ?? peerUID(entry.key),
+                        tunnel: entry.value.tunnel,
+                        age: Date().timeIntervalSince(entry.value.connectedAt)
                     )
                 }
             return .clients(summaries)
@@ -460,6 +508,26 @@ public final class DaemonServer: @unchecked Sendable {
                 return .error("Cannot detach the calling client; close the socket instead")
             }
             clientSources[targetFD]?.cancel()
+            return .ok
+        case let .presentClient(kind, version, uid, tunnel):
+            guard var record = clients[fd] else { return .error("client is not identified") }
+            record.kind = kind
+            record.version = version
+            record.tunnel = tunnel
+            if record.principalUID == nil { record.principalUID = uid }
+            clients[fd] = record
+            return .ok
+        case let .publishKeymap(generation, hash):
+            registry.noteKeymap(generation: generation, hash: hash)
+            return .ok
+        case .noteHostsChanged:
+            registry.noteHostsChanged()
+            return .ok
+        case let .noteClientConnection(host):
+            registry.noteClientConnection(host: host)
+            return .ok
+        case let .noteTailscaleStatus(peerCount):
+            registry.noteTailscaleStatus(peerCount: peerCount)
             return .ok
         case .daemonStats:
             let telemetry = registry.surfaceTelemetry
@@ -479,6 +547,20 @@ public final class DaemonServer: @unchecked Sendable {
         default:
             return nil
         }
+    }
+
+    private func peerUID(_ fd: Int32) -> UInt32? {
+        #if canImport(Darwin)
+        var uid: uid_t = 0
+        var gid: gid_t = 0
+        guard getpeereid(fd, &uid, &gid) == 0 else { return nil }
+        return UInt32(uid)
+        #else
+        var cred = ucred()
+        var length = socklen_t(MemoryLayout<ucred>.size)
+        guard getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &length) == 0 else { return nil }
+        return UInt32(cred.uid)
+        #endif
     }
 
     private enum WriteOutcome { case complete, wouldBlock, failed }
@@ -639,6 +721,45 @@ public final class DaemonServer: @unchecked Sendable {
         _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
     }
 
+    private func pushFollow(_ event: FollowEvent) {
+        guard let line = try? event.jsonLine() else { return }
+        for (fd, subscription) in eventSubscribers where subscription.accepts(event) {
+            send(.follow(line), to: fd)
+        }
+    }
+
+    /// Reply now when the child has already exited. Otherwise hold the socket until the
+    /// exit, the command-finished mark, or the timeout. The client timeout must be longer
+    /// than `timeout` so this error, not the client's own, is what the caller sees.
+    private func handlePaneWait(surfaceID: String, until: String, timeout: Double, fd: Int32) {
+        guard until == "child" || until == "command" else {
+            send(.error("until must be child or command"), to: fd)
+            return
+        }
+        guard timeout > 0 else {
+            send(.error("timeout must be greater than 0"), to: fd)
+            return
+        }
+        if until == "child", let status = registry.storedChildExit(surfaceID: surfaceID) {
+            send(.text("{\"exit\":\(status)}"), to: fd)
+            return
+        }
+        let id = UUID()
+        paneWaits[id] = PaneWait(fd: fd, surfaceID: surfaceID, until: until)
+        queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            guard let self, self.paneWaits.removeValue(forKey: id) != nil else { return }
+            self.send(.error("timeout"), to: fd)
+        }
+    }
+
+    private func finishPaneWaits(surfaceID: String, until: String, status: Int32) {
+        let matches = paneWaits.filter { $0.value.surfaceID == surfaceID && $0.value.until == until }
+        for (id, wait) in matches {
+            paneWaits.removeValue(forKey: id)
+            send(.text("{\"exit\":\(status)}"), to: wait.fd)
+        }
+    }
+
     private func handleSubscribeSnapshot(label: String?, fd: Int32) {
         snapshotSubscribers.insert(fd)
         // Register as a real client (like output subscriptions) so list-clients/stats
@@ -681,6 +802,8 @@ public final class DaemonServer: @unchecked Sendable {
             registry.cancelSubscription(surfaceID: subscription.surfaceID, token: subscription.token)
         }
         snapshotSubscribers.remove(fd)
+        eventSubscribers.removeValue(forKey: fd)
+        paneWaits = paneWaits.filter { $0.value.fd != fd }
         // Drop this client's votes. `smallest` mode grows back to the remaining
         // minimum; `owner` mode hands the surface to the most recent other voter.
         for (surfaceID, size) in sizeArbiter.disconnect(client: fd) {

@@ -21,14 +21,15 @@ final class RealPtyReplayTests: XCTestCase {
         pty.parkIfIdle(now: Date().addingTimeInterval(120))
         let parked = pty.replayWithEndSequence(fromSequence: nil)
         XCTAssertTrue(parked.text.contains("history-line"), "sequenced replay includes parked history")
-        XCTAssertFalse(pty.presentsProcessAsRunning)
+        XCTAssertTrue(pty.childIsAlive)
+        XCTAssertFalse(pty.gridIsResident)
 
         pty.injectSyntheticOutput(Data("next-line\n".utf8))
         XCTAssertTrue(waitUntil {
             let replay = pty.replayWithEndSequence(fromSequence: nil)
             return replay.text.contains("history-line") && replay.text.contains("next-line")
         })
-        XCTAssertFalse(pty.presentsProcessAsRunning)
+        XCTAssertTrue(pty.childIsAlive)
     }
 
     func testForegroundPidIsTheRunningProgramNotTheShell() throws {

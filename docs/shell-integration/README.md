@@ -12,8 +12,13 @@ shell without integration behaves exactly as before.
 
 ## Install
 
-One command — it drops the script under the Harness home and wires a guarded `source` line into
-your shell's rc (idempotent, and your rc is backed up first):
+A pane the daemon spawns already gets these marks for bash, zsh, and fish. You do not have to
+install a snippet for a normal new tab. Opt out with `set-option shell-integration off` (that
+applies to panes spawned after the change).
+
+`install-shell-integration` is for a shell config you want to source yourself, including outside
+a Harness-spawned pane. It drops the script under the Harness home and wires a guarded `source`
+line into your shell's rc (idempotent, and your rc is backed up first):
 
 ```bash
 harness-cli install-shell-integration           # auto-detects $SHELL

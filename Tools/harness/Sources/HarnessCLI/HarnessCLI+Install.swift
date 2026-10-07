@@ -222,92 +222,15 @@ extension HarnessCLI {
     }
 
     static func printUsage() {
-        print("""
-        harness-cli — control Harness terminal sessions
-
-        List/show commands accept [--json] [--pretty] (compact JSON by default; --pretty indents).
-
-        Commands:
-          doctor [--json]                             (diagnose daemon, socket, paths, integrations)
-          version [--json]                            (print CLI and daemon versions; flags build mismatch)
-          color-check                                  (print ANSI/256/truecolor diagnostic swatches)
-          theme-preview [--theme <name>] [--all]       (print deterministic themed sample output)
-          completions <zsh|fish|bash>                 (print a shell completion script to stdout)
-          list-workspaces [--json] [--pretty]
-          list-surfaces [--json] [--pretty]
-          list-sessions [--json] [--pretty]
-          list-windows [--session <name|uuid>] [--json] [--pretty]
-          list-panes [--tab <uuid>] [--json] [--pretty]
-          list-agents [--waiting] [--json] [--pretty] (running agents: state, age, surface)
-          has-session --session <name|uuid>           (exit 0 if it exists, else 1)
-          list-commands
-          get-snapshot
-          new-workspace --name <name>
-          new-session --workspace <name|uuid> [--cwd path] [--name name] [--group-with <session>]
-          new-tab --workspace <name|uuid> [--cwd path]
-          new-split --tab <uuid> --direction horizontal|vertical [--pane <uuid>]
-          select-workspace --workspace <name|uuid>
-          select-session --workspace <name|uuid> --session <uuid>
-          select-tab --workspace <uuid> --tab <uuid>
-          close-tab --tab <uuid>
-          close-session --session <uuid>
-          promote-session --session <uuid>            (pin: survive a clean quit in Plain mode)
-          demote-session --session <uuid>             (unpin: ephemeral again)
-          send --surface <uuid> --text "..."
-          send-keys --surface <uuid> --keys "C-c Up Enter ..."
-          capture-pane --surface <uuid> [--scrollback]
-          kill-pane --pane <uuid>
-          capture-pane --surface <uuid> [--scrollback] [-S <start>] [-E <end>] [-p]
-          pipe-pane --surface <uuid> [<shell-command>]   (omit to stop)
-          link-window --tab <uuid> --target-session <uuid>
-          unlink-window --tab <uuid>
-          control-mode | -CC                             (tmux control protocol over stdio)
-          swap-pane --src <uuid> --dst <uuid>
-          resize-pane --pane <uuid> --dir L|R|U|D [--amount N]
-          zoom-pane --pane <uuid>
-          copy-mode --surface <uuid> [--enter|--exit]
-          rename-tab --tab <uuid> --name "..."
-          rename-session --session <uuid> --name "..."
-          rename-workspace --id <uuid> --name "..."
-          detect-agent --surface <uuid>
-          install-hooks <codex|claude-code|cursor|grok|opencode|pi|hermes|openclaw>
-          install-shell-integration [bash|zsh|fish|all]  (OSC 133 prompt marks + gutter)
-          attach --surface <uuid> [--detach-keys "C-a d"]
-          record --surface <uuid> --output <file> [--display]
-          replay <file> [--speed <n>] [--no-timing]
-          notify --surface <uuid> [--title t] [--body b] [--from-hook]
-          daemon-stats [--json] [--pretty]
-          list-clients [--json] [--pretty]
-          detach-client --client <uuid>
-          bind-key [-T <table>] <spec> <command...>
-          unbind-key [-T <table>] <spec>
-          list-keys [-T <table>]
-          set-buffer (--data <text> | --stdin) [--name <name>]
-          list-buffers [--json] [--pretty]
-          show-buffer [--name <name>]
-          delete-buffer --name <name>
-          paste-buffer --surface <uuid> [--name <name>]
-          select-layout --tab <uuid> --layout even-horizontal|even-vertical|main-horizontal|main-vertical|tiled
-          next-layout --tab <uuid>
-          previous-layout --tab <uuid>
-          rotate-window --tab <uuid> [--reverse]
-          break-pane --pane <uuid>
-          join-pane --src <uuid> --dst <uuid> --direction horizontal|vertical
-          respawn-pane --surface <id> [--clear-history|-k]
-          clear-history --surface <id>
-          select-pane --pane <uuid> --dir L|R|U|D
-          set-option [-g|-w|-s|-t|-p] [-T target] <key> <value>
-          setw <key> <value>   (window option for the calling pane's tab; -T overrides)
-          show-options [-g|-w|-s|-t|-p] [--json] [--pretty]
-          set-environment [-g] [-u] [-s <sessionID>] <key> [value]
-          show-environment [-g] [-s <sessionID>] [--json] [--pretty]
-          bind-hook <event> <command...> [--if <format>]
-          unbind-hook --id <uuid>
-          list-hooks [--event <event>] [--json] [--pretty]
-          display-message <format>
-          install
-          ping
-        """)
+        print("harness-cli — control Harness terminal sessions")
+        print("")
+        print("List/show commands accept [--json] [--pretty] (compact JSON by default; --pretty indents).")
+        print("")
+        print("Commands:")
+        for command in CLICommandCatalog.commands {
+            let aliases = command.aliases.isEmpty ? "" : " (" + command.aliases.joined(separator: ", ") + ")"
+            print("  \(command.name)\(aliases) — \(command.summary)")
+        }
     }
 
 }

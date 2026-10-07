@@ -12,6 +12,14 @@ final class RemoteHostsService: @unchecked Sendable {
     private let lock = NSLock()
     private var _activeHostName: String?
 
+    private init() {
+        SSHTunnelManager.shared.onTunnelDropped = { name in
+            DispatchQueue.global(qos: .utility).async {
+                _ = try? DaemonClient().request(.noteClientConnection(host: name), timeout: 1)
+            }
+        }
+    }
+
     /// The host the GUI is currently pointed at, or nil when on the local daemon.
     var activeHostName: String? {
         lock.lock(); defer { lock.unlock() }; return _activeHostName

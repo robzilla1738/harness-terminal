@@ -116,7 +116,7 @@ final class CopyModeJumpMotionTests: XCTestCase {
         XCTAssertEqual(CopyModeAction(tmuxName: "jump-again"), .jumpAgain)
         XCTAssertEqual(CopyModeAction(tmuxName: "other-end"), .otherEnd)
         XCTAssertEqual(CopyModeAction(tmuxName: "goto-line", argument: "5"), .gotoLine(5))
-        XCTAssertEqual(CopyModeAction(tmuxName: "next-space"), .nextWord) // big-WORD aliases the word motion
+        XCTAssertEqual(CopyModeAction(tmuxName: "next-space"), .nextSpace)
         XCTAssertEqual(CopyModeAction.jump(.forward, nil).tmuxName, "jump-forward")
     }
 }

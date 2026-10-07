@@ -10,6 +10,7 @@ import Foundation
 /// create, drive, resize, and destroy off the main thread (one instance per pane).
 public final class HarnessGridTerminal {
     private let emulator: TerminalEmulator
+    var emulatorForCapture: TerminalEmulator { emulator }
 
     public init?(cols: Int, rows: Int) {
         guard cols > 0, rows > 0 else { return nil }
@@ -81,6 +82,10 @@ public final class HarnessGridTerminal {
     /// The full buffer as plain-text lines for `capture-pane`; `joinWrapped` (tmux `-J`)
     /// joins soft-wrapped physical rows into their logical line.
     public func captureLines(joinWrapped: Bool) -> [String] { emulator.captureLines(joinWrapped: joinWrapped) }
+
+    public func captureCellLines(joinWrapped: Bool) -> [[TerminalGridCell]] {
+        emulator.captureCellLines(joinWrapped: joinWrapped)
+    }
 
     /// Resolve a cell's OSC 8 `hyperlinkID` to its URL (nil for 0 / unknown).
     public func hyperlinkURL(id: UInt32) -> String? { emulator.hyperlinkURL(id: id) }

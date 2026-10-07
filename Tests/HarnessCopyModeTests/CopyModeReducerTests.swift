@@ -108,6 +108,24 @@ final class CopyModeReducerTests: XCTestCase {
         XCTAssertEqual(s.cursor.column, 4) // back to "bar"
     }
 
+    func testSmallWordAndBigWordDivergeOnHyphen() {
+        XCTAssertEqual(CopyModeWords.smallWordSeparators(stored: nil), CopyModeWords.tmuxDefault)
+        XCTAssertEqual(CopyModeWords.smallWordSeparators(stored: ""), CopyModeWords.tmuxDefault)
+        let grid = FakeGrid(["foo-bar baz"], columns: 11)
+        let start = CopyModeReducer.initialState(grid: grid, cursorLine: 0, cursorColumn: 0)
+        let small = CopyModeReducer.reduce(start, .nextWord, grid: grid, wordSeparators: " -_@").state
+        let big = CopyModeReducer.reduce(start, .nextSpace, grid: grid, wordSeparators: " -_@").state
+        let spaceOnly = CopyModeReducer.reduce(start, .nextWord, grid: grid, wordSeparators: " ").state
+        XCTAssertEqual(small.cursor.column, 4, "w treats '-' as a separator and lands on bar")
+        XCTAssertEqual(big.cursor.column, 8, "W stays whitespace-delimited and lands on baz")
+        XCTAssertEqual(spaceOnly.cursor.column, 8, "without hyphen in the set, w agrees with W")
+
+        let indented = FakeGrid(["  -foo"], columns: 6)
+        var caret = CopyModeReducer.initialState(grid: indented, cursorLine: 0, cursorColumn: 0)
+        caret = reduce(caret, .backToIndentation, indented)
+        XCTAssertEqual(caret.cursor.column, 2, "^ stops at the first non-whitespace, hyphen included")
+    }
+
     func testVerticalMotionScrollsView() {
         let grid = FakeGrid((0..<10).map { "line\($0)" }, columns: 8, viewportRows: 4)
         var s = CopyModeReducer.initialState(grid: grid) // cursor line 9, viewTop 6

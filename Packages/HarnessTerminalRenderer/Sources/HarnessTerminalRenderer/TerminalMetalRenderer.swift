@@ -157,6 +157,16 @@ public final class TerminalMetalRenderer {
     /// Immutable instance buffers for an unchanged frame. When damage is empty and the overlay
     /// key still matches, the renderer can bind these without another CPU memcpy.
     private var uploadedInstanceCache: UploadedInstanceBuffers?
+    /// Last encode that drew an image-free unchanged frame into a texture. Repeating that
+    /// draw would clear and repaint identical pixels, so `encode` returns an empty buffer.
+    private struct StableDrawToken: Equatable {
+        var texture: ObjectIdentifier
+        var clear: RenderColor
+        var gamma: Float
+        var width: Int
+        var height: Int
+    }
+    private var lastStableDraw: StableDrawToken?
     /// Caps in-flight frames at `maxFramesInFlight` so we never reuse a ring slot the GPU is
     /// still reading. Signaled from each command buffer's completion handler.
     private let inFlightSemaphore = DispatchSemaphore(value: TerminalMetalRenderer.maxFramesInFlight)
@@ -504,6 +514,24 @@ public final class TerminalMetalRenderer {
         frameStats.reusedRows = encoded.reusedRows
         frameStats.rowCacheCoherent = encoded.cachePopulated
 
+        let stableToken = unchangedDrawToken(
+            frame: frame, target: target, clearColor: clearColor, gamma: gamma,
+            damage: damage, scrollShift: scrollShift, scrollFractionPx: scrollFractionPx,
+            smoothScrollClipRows: smoothScrollClipRows, encoded: encoded,
+            frameShapeIsValid: frameShapeIsValid
+        )
+        if let stableToken,
+           let cached = uploadedInstanceCache,
+           cached.key == instanceUploadCacheKey(frame: frame, origin: origin, ligatures: ligatures),
+           lastStableDraw == stableToken {
+            frameStats.uploadNanos = 0
+            frameStats.instanceUploadBytes = 0
+            frameStats.semaphoreWaitNanos = 0
+            frameStats.encodeNanos = DispatchTime.now().uptimeNanoseconds &- encodeStart
+            stats = frameStats
+            return commandQueue.makeCommandBuffer()
+        }
+
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear
@@ -523,6 +551,7 @@ public final class TerminalMetalRenderer {
               let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass)
         else {
             inFlightSemaphore.signal()  // Nothing was committed; release the reserved slot.
+            lastStableDraw = nil
             return nil
         }
         // Release the slot once the GPU finishes this frame. Capture the semaphore (not `self`)
@@ -611,7 +640,37 @@ public final class TerminalMetalRenderer {
         frameStats.atlasPages = atlas.stats.pages
         frameStats.encodeNanos = DispatchTime.now().uptimeNanoseconds &- encodeStart
         stats = frameStats
+        lastStableDraw = stableToken
         return commandBuffer
+    }
+
+    /// A frame whose pixels are already on `target` from the previous encode: no dirty rows,
+    /// no images, no cursor or gutter quads, no scroll. Nil when this encode must draw.
+    private func unchangedDrawToken(
+        frame: TerminalFrame,
+        target: MTLTexture,
+        clearColor: RenderColor,
+        gamma: Float,
+        damage: TerminalDamage?,
+        scrollShift: Int,
+        scrollFractionPx: Float,
+        smoothScrollClipRows: Int?,
+        encoded: EncodedFrameInstances,
+        frameShapeIsValid: Bool
+    ) -> StableDrawToken? {
+        guard frameShapeIsValid,
+              damage != nil, damage?.full == false,
+              encoded.encodedRows == 0, encoded.reusedRows == frame.rows,
+              frame.images.isEmpty, flatBgExtras == 0,
+              scrollShift == 0, scrollFractionPx == 0, smoothScrollClipRows == nil
+        else { return nil }
+        return StableDrawToken(
+            texture: ObjectIdentifier(target),
+            clear: clearColor,
+            gamma: gamma,
+            width: target.width,
+            height: target.height
+        )
     }
 
     private func bindableInstanceBuffers(

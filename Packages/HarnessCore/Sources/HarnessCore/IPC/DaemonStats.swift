@@ -58,11 +58,31 @@ public struct ClientSummary: Codable, Sendable {
     public var label: String
     public var attachedSurfaceIDs: [String]
     public var connectedAt: Date
+    public var kind: String
+    public var version: String
+    public var principalUID: UInt32?
+    public var tunnel: Bool
+    public var age: TimeInterval
 
-    public init(id: UUID, label: String, attachedSurfaceIDs: [String], connectedAt: Date) {
+    public init(
+        id: UUID,
+        label: String,
+        attachedSurfaceIDs: [String],
+        connectedAt: Date,
+        kind: String = "client",
+        version: String = "",
+        principalUID: UInt32? = nil,
+        tunnel: Bool = false,
+        age: TimeInterval = 0
+    ) {
         self.id = id
         self.label = label
         self.attachedSurfaceIDs = attachedSurfaceIDs
         self.connectedAt = connectedAt
+        self.kind = kind
+        self.version = version
+        self.principalUID = principalUID
+        self.tunnel = tunnel
+        self.age = age
     }
 }

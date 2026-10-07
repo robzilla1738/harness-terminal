@@ -22,7 +22,7 @@ close-out series was PRs #102–#108. User-facing usage lives in
 | Sessions / windows / panes | Full lifecycle: new/kill/rename/select/move/swap/link/unlink/break/join/respawn (pane **and** window), renumber, last-window/pane, rotate, zoom, layouts (incl. main-horizontal/vertical), `synchronize-panes` |
 | **Grouped sessions** | `new-session -t <session>` (CLI: `--group-with`): shared window list, per-member focus (a new member starts on the group's current window); window create/kill propagates group-wide — kill matches by surface overlap, so it still propagates after members' split layouts diverge. Built atop linked windows — see ADAPT below |
 | Targeting | Full `-t` grammar everywhere (`session:window.pane`, `$`/`@`/`%` ids, indexes, `!`, `{last}`, `{top}/{bottom}/{left}/{right}`, `^`/`$`), with `base-index`/`pane-base-index`. STRICT resolution: a named component that doesn't match makes the command `.unresolved` at the one translator choke point, so *every* targeted verb (kill/respawn/send-keys/…) fails loudly in every front-end — never a silent misroute. `swap-pane` takes `-s` too |
-| Copy mode | vi + emacs tables (`copy-mode-vi` accepted as the vi table's name), `-X` action set: motions (char/line, word + **word-end**, **jump-to-char** `f`/`F`/`t`/`T` + `;`/`,`, **big-WORD** W/B/E [whitespace-delimited], **other-end**, **goto-line**, visible-window top/middle/bottom-line, back-to-indentation, page/half-page, history top/bottom, prompt jumps), selection, rectangle, search, copy-pipe; mouse; in GUI **and** the `attach-window` compositor |
+| Copy mode | vi + emacs tables (`copy-mode-vi` accepted as the vi table's name), `-X` action set: motions (char/line, word + **word-end**, **jump-to-char** `f`/`F`/`t`/`T` + `;`/`,`, small-word `w`/`b`/`e` honor `word-separators` (unset or empty uses tmux's ` -_@`), **big-WORD** W/B/E [whitespace-delimited], **other-end**, **goto-line**, visible-window top/middle/bottom-line, back-to-indentation, page/half-page, history top/bottom, prompt jumps), selection, rectangle, search, copy-pipe; mouse; in GUI **and** the `attach-window` compositor |
 | Paste buffers | set/get/list/delete/paste/choose, save/load (CLI), bindable verbs |
 | Options | Scoped store (global/workspace/session/tab/pane + fallback chain), `set`/`setw`/`show` bindable, status-line set (incl. **`status-interval`** — periodic status redraw so `#{time:…}` ticks, in the GUI footer **and** the `attach-window` compositor, default 15s/`0` disables), styles, monitoring, **`visual-bell`/`bell-action`** (bridged to the GUI bell — `bell-action off`/`none` silences it, `visual-bell on/off/both` overrides the audible/visual split), `display-time`, `set-titles(+string)`, `detach-on-destroy`, `remain-on-exit`, `repeat-time`, **`persist-scrollback`** (per-pane secrets-at-rest control — see [SECURITY-POSTURE.md](SECURITY-POSTURE.md)), … **`@`-prefixed user options** (set + read via `#{@name}`). `set-option` **validates the key**: an unknown name errors loudly (no silent persist) — known/recognized options and `@`-options pass |
 | `status-position` | **Honored** (top/bottom) in both the GUI status footer (the split↔footer constraints swap; extra `status 2..5` rows always stack away from the terminal so the main line sits against it) and the `attach-window` compositor (`PaneRectSolver` reserves the band via `yOrigin`; `GridCompositor` paints it at the matching edge). Live-updates from Settings ▸ Advanced |
@@ -31,6 +31,7 @@ close-out series was PRs #102–#108. User-facing usage lives in
 | Key tables | root/prefix/copy-mode(+emacs)/command + `switch-client -T` modal tables, `bind -r` repeat, tombstoned unbinds |
 | Scripting | `send-keys` (incl. bindable `-l` literal / `-H` hex), `capture-pane` (+ ranges/escapes), **`clear-history`** (drop a pane's scrollback without respawning the shell — distinct from `respawn-pane -k`, which replaces the process), `pipe-pane`, `run-shell`, `if-shell`, `wait-for -S/-L/-U`, `display-message` (+ `-p` print-to-stdout) / `show-messages`, `command-prompt`, `confirm-before`, `source-file` (a `.tmux.conf`'s bind/set/setw/setenv lines parse as-is), choose-tree/session/window/buffer/client, `find-window`, control mode (`-CC`) |
 | Misc | display-popup/menu, clock-mode, lock-client, multi-client smallest-size voting, environment tables (global/session), auto-injected OSC 133 shell integration at spawn (`shell-integration` option to opt out; bash needs ≥ 4.4 — stock macOS 3.2 spawns untouched — and injected bash panes report `login_shell` off and skip `~/.bash_logout` on exit, the documented costs of the `--posix`+`$ENV` vehicle) |
+| Command prompt history | The `:` prompt keeps the last 100 lines in `command-history.json` and recalls them with the arrow keys |
 
 ## Adapted (same capability, Harness-shaped)
 
@@ -66,12 +67,11 @@ close-out series was PRs #102–#108. User-facing usage lives in
 
 ## Deferred (tracked, unimplemented)
 
-- `window-size` (smallest/largest/latest vote aggregation) + `resize-window` manual override
+- `window-size` largest/latest and `resize-window`. Harness has `size-mode smallest` (default; every attached client votes the minimum) and `size-mode owner` (one client owns the PTY size; `take-surface` moves ownership). A non-owner in owner mode reflows its own primary screen and does not call `TIOCSWINSZ`
 - `destroy-unattached` enforcement
-- `word-separators`, `wrap-search` (copy-mode engine plumbing)
+- `wrap-search` (copy-mode engine plumbing)
 - `find-window` multi-match picker; `-C` content search from hooks (front-ends only today)
 - `list-*` `-F` format-string output (rows are fixed-shape + `--json`)
-- `show-prompt-history` (command-prompt keeps no input history yet)
 
 ## Invariants this ledger protects
 
