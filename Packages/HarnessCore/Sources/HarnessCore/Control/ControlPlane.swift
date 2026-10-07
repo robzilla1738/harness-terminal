@@ -187,6 +187,14 @@ public enum ControlPlane {
         ["ssh"] + extra + [target, "cat > \(shellQuote(path))"]
     }
 
+    /// argv as one shell command line, quoting only the words that need it.
+    public static func shellJoin(_ argv: [String]) -> String {
+        let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_./=:,+@%"))
+        return argv.map { word in
+            !word.isEmpty && word.unicodeScalars.allSatisfy(safe.contains) ? word : shellQuote(word)
+        }.joined(separator: " ")
+    }
+
     public static func shellQuote(_ path: String) -> String {
         "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }

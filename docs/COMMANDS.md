@@ -10,6 +10,30 @@ grouped sessions (`new-session -t <session>`), and full `-t` targets on
 `select-pane`/`swap-pane`. tmux-parity status, adaptations, and divergences live in
 [TMUX_PARITY.md](TMUX_PARITY.md).
 
+## Running commands and targets
+
+```bash
+harness-cli run --split right --wait -- make test   # exits with make's status
+harness-cli run --label logs -- tail -f app.log      # new tab; prints its surface id
+harness-cli send-keys --surface 2 --keys "q"         # pane 2 of the current tab
+harness-cli list-panes --tab logs                    # tab by its label
+```
+
+| Command | Effect |
+|---|---|
+| `run [--split right\|below\|left\|above] [--ratio PCT] [--cwd DIR] [--label TEXT] [--surface TARGET] [--no-focus] [--keep-open] [--wait] [--timeout SECS] [--json] -- COMMAND…` | Start a command in a new tab, or in a split of the current (or `--surface`) pane. The pane closes when the command exits unless `--keep-open`. `--wait` blocks and exits with the command's status (with `--keep-open` it waits for the command's shell-integration mark instead). Prints the new surface id, or `{surface, pane, tab}` with `--json`. |
+
+**Targets.** Anywhere `--session`, `--tab`, `--window`, `--surface`, or `--pane` takes an ID, it also takes, in this order:
+
+1. the full ID (any case);
+2. a label: a session's name, a tab's title, or the tab title of a pane that is alone in its tab;
+3. a 1-based position: sessions of the active workspace, tabs of the active session, panes of the active tab;
+4. a unique ID prefix or suffix of at least 4 characters.
+
+No match, or more than one, exits 3 and names the candidates. `has-session` keeps tmux's contract (exit 1 when missing).
+
+**Exit statuses.** 0 ok, 1 failed, 2 usage, 3 target not found or ambiguous, 4 daemon unreachable (local, or the SSH tunnel for `--host`), 130 interrupted. `run --wait` and `api call pane.wait` exit with the waited-for program's own status.
+
 ## Pane operations
 
 | Command | What it does |

@@ -27,6 +27,7 @@ public enum CLICommandCatalog {
         // Query / inspection
         .init("doctor", "Diagnose the daemon, socket, paths, and integrations", json: true),
         .init("socket-path", "Print this machine's daemon control-socket path"),
+        .init("run", "Run a command in a new tab or split; --wait exits with its status"),
         .init("version", "Print CLI and daemon versions", aliases: ["--version", "-v"], json: true),
         .init("color-check", "Print ANSI/256/truecolor diagnostic swatches"),
         .init("theme-preview", "Print deterministic themed sample output"),

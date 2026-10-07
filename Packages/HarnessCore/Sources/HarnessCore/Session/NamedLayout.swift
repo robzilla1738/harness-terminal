@@ -121,19 +121,13 @@ public enum NamedLayoutStore {
         var argv = context.arguments
         // argv[0] can be an absolute path or a login "-zsh"; the short name types the same.
         argv[0] = context.executable
-        return argv.map(quoteIfNeeded).joined(separator: " ")
+        return ControlPlane.shellJoin(argv)
     }
 
     static func isShellName(_ name: String) -> Bool {
         let base = (name.hasPrefix("-") ? String(name.dropFirst()) : name)
             .split(separator: "/").last.map(String.init) ?? name
         return ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"].contains(base)
-    }
-
-    private static func quoteIfNeeded(_ word: String) -> String {
-        let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_./=:,+@%"))
-        if !word.isEmpty, word.unicodeScalars.allSatisfy(safe.contains) { return word }
-        return ControlPlane.shellQuote(word)
     }
 
     public static func save(_ layout: NamedLayout, directory: URL) throws {

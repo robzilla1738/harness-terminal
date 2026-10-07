@@ -11,7 +11,7 @@ import HarnessTheme
 @main
 struct HarnessCLI {
     static func main() {
-        let args = Array(CommandLine.arguments.dropFirst())
+        var args = Array(CommandLine.arguments.dropFirst())
         guard let command = args.first else {
             printUsage()
             exit(1)
@@ -52,7 +52,10 @@ struct HarnessCLI {
             }
 
             let client = try makeClient(args)
+            args = try resolveTargets(args, command: command, client: client)
             switch command {
+            case "run":
+                try handleRun(args, client: client)
             case "list-workspaces":
                 try printWorkspaces(args, client: client)
             case "list-surfaces":
@@ -290,9 +293,54 @@ struct HarnessCLI {
                 exit(1)
             }
         } catch {
-            fputs("harness-cli: \(error)\n", harnessStderr)
-            exit(1)
+            fputs("harness-cli: \(unreachableReason(error) ?? "\(error)")\n", harnessStderr)
+            exit(unreachableReason(error) == nil ? CLIExit.failed : CLIExit.unreachable)
         }
+    }
+
+    /// A readable reason when the daemon (local or over SSH) can't be reached, else nil.
+    static func unreachableReason(_ error: Error) -> String? {
+        switch error {
+        case DaemonClientError.connectionFailed, EndpointError.connectionFailed:
+            return "HarnessDaemon isn't reachable. Is Harness running? (`harness-cli doctor` checks.)"
+        case let tunnel as SSHTunnelError:
+            return "\(tunnel)"
+        default:
+            return nil
+        }
+    }
+
+    /// Target flags and what they name. A value that isn't already a full ID is resolved
+    /// (label, position, or ID fragment) before the command sees it.
+    private static let targetFlags: [(flag: String, kind: TargetResolver.Kind)] = [
+        ("--session", .session), ("--target-session", .session),
+        ("--tab", .tab), ("--window", .tab),
+        ("--surface", .surface), ("--pane", .pane),
+    ]
+
+    /// Rewrites target flag values to full IDs. Not found or ambiguous exits 3 with the
+    /// candidates. `has-session` keeps its own tmux contract (exit 1 when missing).
+    static func resolveTargets(_ args: [String], command: String, client: DaemonClient) throws -> [String] {
+        guard command != "has-session" else { return args }
+        let pending = targetFlags.compactMap { entry -> (Int, TargetResolver.Kind)? in
+            guard let index = args.firstIndex(of: entry.flag), index + 1 < args.count,
+                  UUID(uuidString: args[index + 1]) == nil, !args[index + 1].hasPrefix("-")
+            else { return nil }
+            return (index + 1, entry.kind)
+        }
+        guard !pending.isEmpty else { return args }
+        guard case let .snapshot(snapshot) = try client.request(.getSnapshot) else { return args }
+        var resolved = args
+        for (index, kind) in pending {
+            switch TargetResolver.resolve(args[index], kind: kind, in: snapshot) {
+            case let .resolved(id):
+                resolved[index] = id
+            case let outcome:
+                fputs("harness-cli: \(outcome.message)\n", harnessStderr)
+                exit(CLIExit.targetNotFound)
+            }
+        }
+        return resolved
     }
 
     // MARK: - Remote daemons (over SSH)
