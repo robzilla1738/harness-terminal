@@ -82,23 +82,6 @@ final class SnapshotTests: XCTestCase {
         let path = directory.appendingPathComponent("snapshot.key").path
         let perm = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)
         XCTAssertEqual(perm.uint16Value, UInt16(0o600))
-        #if os(macOS)
-        XCTAssertEqual(SnapshotKeyStore.backend, .keychain)
-        #else
-        XCTAssertEqual(SnapshotKeyStore.backend, .file)
-        #endif
-    }
-
-    func testMacOSSnapshotKeyLivesInTheKeychain() throws {
-        #if os(macOS)
-        let account = "test-\(UUID().uuidString)"
-        defer { SnapshotKeyStore.keychainDelete(account: account) }
-        let key = try SnapshotKeyStore.keychainLoadOrCreate(account: account)
-        XCTAssertEqual(key.count, 32)
-        XCTAssertEqual(try SnapshotKeyStore.keychainLoadOrCreate(account: account), key)
-        #else
-        XCTAssertEqual(SnapshotKeyStore.backend, .file)
-        #endif
     }
 
     func testReadLoopDoesNotFeedTheParserAndCaptureDoes() throws {

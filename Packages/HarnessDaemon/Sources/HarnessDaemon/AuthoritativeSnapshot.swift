@@ -118,34 +118,12 @@ enum SnapshotCipher {
     }
 }
 
-enum SnapshotKeyBackend: Equatable {
-    case keychain
-    case file
-}
-
-enum SnapshotKeyError: Error, Equatable {
-    case keychain(Int32)
-    case file
-}
-
-/// macOS keeps the snapshot key in the keychain. Linux keeps a mode-0600 file
-/// next to the socket's directory. Callers that already hold a key skip this.
+/// The snapshot key is a mode-0600 file next to the control socket, on every platform.
+/// That is the same trust boundary as the socket and the scrollback log beside it; a
+/// keychain item added nothing but an access prompt whenever the daemon binary changed.
 enum SnapshotKeyStore {
-    static let service = "com.robert.harness.snapshot-key"
-
-    static var backend: SnapshotKeyBackend {
-        #if os(macOS)
-        return .keychain
-        #else
-        return .file
-        #endif
-    }
-
     static func loadOrCreate(socketDirectory: URL) -> Data {
-        #if os(macOS)
-        if let key = try? keychainLoadOrCreate(account: "snapshot") { return key }
-        #endif
-        return fileLoadOrCreate(directory: socketDirectory)
+        fileLoadOrCreate(directory: socketDirectory)
     }
 
     static func fileLoadOrCreate(directory: URL) -> Data {
@@ -160,55 +138,6 @@ enum SnapshotKeyStore {
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return created
     }
-
-    #if os(macOS)
-    static func keychainLoadOrCreate(account: String) throws -> Data {
-        if let existing = try keychainLoad(account: account) { return existing }
-        let created = randomKey()
-        try keychainSave(created, account: account)
-        return created
-    }
-
-    static func keychainDelete(account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
-
-    private static func keychainLoad(account: String) throws -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data, data.count == 32 else {
-            throw SnapshotKeyError.keychain(Int32(status))
-        }
-        return data
-    }
-
-    private static func keychainSave(_ key: Data, account: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: key,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
-        ]
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else { throw SnapshotKeyError.keychain(Int32(status)) }
-    }
-    #endif
 
     private static func randomKey() -> Data {
         var bytes = Data(count: 32)
