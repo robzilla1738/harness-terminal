@@ -40,6 +40,14 @@ final class MainWindowController: NSWindowController {
         if #available(macOS 11.0, *) {
             window.titlebarSeparatorStyle = .none
         }
+        // An empty unified toolbar gives the title row the standard 52pt band, which lowers
+        // the traffic lights to the height the tab row sits at. Measure where they land
+        // before the chrome is built, so tabs and sidebar controls center on that line.
+        let toolbar = NSToolbar(identifier: "HarnessTitleRow")
+        toolbar.showsBaselineSeparator = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
+        HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
         Self.applyWindowAppearance(window)
         window.contentViewController = MainSplitViewController()
         // Assigning `contentViewController` resizes the window to the split view's
@@ -48,6 +56,8 @@ final class MainWindowController: NSWindowController {
         // the floor exposed it).
         window.setContentSize(NSSize(width: 1280, height: 820))
         self.init(window: window)
+        // A content controller can resize the window; the lights stay put relative to the top.
+        HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
         // Window-edge hairline — topmost subview of the root contentView (added after the
         // split view loads, so it stays above all chrome). Click-through; layer island only.
         if let contentView = window.contentView {
@@ -174,5 +184,13 @@ final class MainWindowController: NSWindowController {
         // share exactly one blurred backdrop. (the renderer's own `background-blur` is a
         // no-op in embedded mode since it doesn't own this NSWindow.) Opaque → no blur.
         WindowBlur.apply(radius: isOpaque ? 0 : settings.backgroundBlur, to: window)
+    }
+
+    /// Distance from the window's top edge to the close button's center.
+    static func trafficLightCenter(in window: NSWindow) -> CGFloat? {
+        guard let button = window.standardWindowButton(.closeButton), let frameView = button.superview else { return nil }
+        let inWindow = frameView.convert(button.frame, to: nil)
+        let center = window.frame.height - inWindow.midY
+        return center > 0 && center < 80 ? center.rounded() : nil
     }
 }

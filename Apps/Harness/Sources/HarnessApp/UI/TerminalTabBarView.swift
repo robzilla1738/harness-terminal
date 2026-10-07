@@ -223,7 +223,7 @@ final class TerminalTabBarView: NSView {
 
     override func layout() {
         super.layout()
-        let buttonY = (bounds.height - controlSize) / 2
+        let buttonY = rowCenterY - controlSize / 2
         sessionsButton.frame = NSRect(
             x: sessionsButtonX,
             y: buttonY,
@@ -238,6 +238,9 @@ final class TerminalTabBarView: NSView {
     }
 
     private var newTabX: CGFloat { bounds.width - edgeInset - controlSize }
+
+    /// The row's centerline in this (unflipped) view: level with the traffic lights.
+    private var rowCenterY: CGFloat { bounds.height - HarnessDesign.titleRowCenter }
 
     /// Hairlines between neighbouring inactive pills. The active pill has its own border,
     /// and a hovered pill has a fill, so neither gets a rule beside it.
@@ -270,7 +273,7 @@ final class TerminalTabBarView: NSView {
 
     private func layoutPills() {
         let count = orderedPills.count
-        let buttonY = (bounds.height - controlSize) / 2
+        let buttonY = rowCenterY - controlSize / 2
         guard count > 0 else {
             overflowButton.isHidden = true
             return
@@ -310,7 +313,7 @@ final class TerminalTabBarView: NSView {
         pillWidths = widths
         currentPillWidth = widths[min(start, widths.count - 1)]
 
-        let y = (bounds.height - HarnessDesign.tabPillHeight) / 2
+        let y = rowCenterY - HarnessDesign.tabPillHeight / 2
         var x = contentLeft
         for (i, pill) in orderedPills.enumerated() {
             let visible = i >= start && i < start + vCount
@@ -379,7 +382,7 @@ final class TerminalTabBarView: NSView {
         )
         dragTargetIndex = visibleStart + target
 
-        let y = (bounds.height - HarnessDesign.tabPillHeight) / 2
+        let y = rowCenterY - HarnessDesign.tabPillHeight / 2
         var oi = 0
         HarnessMotion.animate(HarnessDesign.Motion.fast) { _ in
             for slot in 0..<visible.count where slot != target {

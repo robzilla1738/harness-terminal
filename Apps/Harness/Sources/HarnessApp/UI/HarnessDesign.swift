@@ -16,7 +16,15 @@ enum HarnessDesign {
     }
 
     static let sidebarWidth: CGFloat = 264
-    static let tabBarHeight: CGFloat = 44
+    /// Distance from the window top to the traffic lights' center, measured from the real
+    /// window when it's built (`MainWindowController`). The tab row and the sidebar's top
+    /// controls center on this line so they sit level with the lights.
+    static var titleRowCenter: CGFloat = 26
+    /// Tall enough to center the tabs on the lights and leave the same gap to the card
+    /// below as every other card edge (`ChromeLayout.islandGap`; the card insets half).
+    static var tabBarHeight: CGFloat {
+        titleRowCenter + tabPillHeight / 2 + CGFloat(ChromeLayout.islandGap / 2)
+    }
     /// One size for every icon on the tab row, including the sidebar bell.
     static let chromeIconPointSize: CGFloat = 14
     static let chromeIconButtonSize: CGFloat = 28
