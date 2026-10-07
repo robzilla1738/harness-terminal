@@ -11,6 +11,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 Not a release. Local `main` carries this work so the next session starts from it. `HarnessVersion.short` stays 1.12.1. The 1.13–1.17 names are feature slices in this unreleased work, not a version bump.
 
 ### Fixed
+- **Split gaps are painted.** With a translucent window, the gutter around split islands was a hole straight through to the desktop. It now carries the same chrome fill as the tab row and sidebar, and each split island has a hairline edge.
 - **New shells no longer inherit `NO_COLOR` or a disabled `FORCE_COLOR`.** A spawn strips `NO_COLOR`, and strips `FORCE_COLOR` only when the parent value is `0`, `false`, or `off`. Any other `FORCE_COLOR` value stays. Shells that are already running keep the environment they started with; open a new tab to pick up the strip.
 - **Light canvases use the light palette.** Explicit Light and follow-macOS while the system is light ignore a stored dark palette (for example an imported ef-bio). ANSI 0–15 comes from the light theme. Truecolor is still passed through. An explicit palette fills empty slots only in theme mode, and only when "apply theme to output" is on.
 - **Unlimited scrollback is one ceiling.** `scrollbackLines == 0` is still the unlimited sentinel. The daemon replay ring and the GUI line history both stop at 512 MiB (`ScrollbackBudget.unlimitedSafetyCapBytes`). The GUI does not keep a second unbounded history.

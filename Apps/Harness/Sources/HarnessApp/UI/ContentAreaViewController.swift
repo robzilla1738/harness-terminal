@@ -306,11 +306,46 @@ final class PaneContainerView: NSView {
         build(node: node, cwd: cwd, program: program, agent: agent, into: self, separated: false)
     }
 
+    /// Paints the gutter around the islands. When the window is translucent nothing else
+    /// paints there (the islands' drawables carry their own alpha), so without this the gaps
+    /// were holes straight through to the desktop.
+    private let gapFill = CAShapeLayer()
+
     func applyChrome() {
         HarnessDesign.makeClear(self)
         for island in islands {
             island.applyChrome()
         }
+        updateGapFill()
+    }
+
+    override func layout() {
+        super.layout()
+        updateGapFill()
+    }
+
+    /// Fill = the container minus each island's rounded rect, in the chrome color at the
+    /// window's paint opacity, so the gutter matches the tab row and the sidebar.
+    func updateGapFill() {
+        guard let layer else { return }
+        if gapFill.superlayer !== layer {
+            layer.insertSublayer(gapFill, at: 0)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gapFill.frame = bounds
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        for island in islands where island.superview != nil {
+            let rect = convert(island.bounds, from: island)
+            let radius = min(island.layer?.cornerRadius ?? 0, rect.width / 2, rect.height / 2)
+            path.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
+        }
+        gapFill.path = path
+        gapFill.fillRule = .evenOdd
+        let c = HarnessChrome.current
+        gapFill.fillColor = c.sidebarBackground.withAlphaComponent(HarnessChrome.paintOpacity).cgColor
+        CATransaction.commit()
     }
 
     @available(*, unavailable)
@@ -420,7 +455,9 @@ final class PaneIslandView: NSView {
         layer?.cornerRadius = CGFloat(chrome.cornerRadius)
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = chrome.cornerRadius > 0
-        layer?.borderWidth = 0
+        // A separated island carries a hairline so it reads as a card against the
+        // gutter, which is painted in the same chrome color.
+        layer?.borderWidth = separated ? 1 : 0
         _ = (directory, program, agent, surfaceID)
         applyChrome()
     }
@@ -444,6 +481,21 @@ final class PaneIslandView: NSView {
         }
     }
 
+    override func layout() {
+        super.layout()
+        // A divider drag resizes islands without laying out the container.
+        enclosingContainer?.updateGapFill()
+    }
+
+    private var enclosingContainer: PaneContainerView? {
+        var view = superview
+        while let current = view {
+            if let container = current as? PaneContainerView { return container }
+            view = current.superview
+        }
+        return nil
+    }
+
     func applyChrome() {
         let c = HarnessChrome.current
         let settings = SessionCoordinator.shared.settings
@@ -453,7 +505,7 @@ final class PaneIslandView: NSView {
             appearanceMode: settings.appearanceMode,
             systemAppearance: appearance
         ))
-        let hairline = (c.border.usingColorSpace(.sRGB) ?? c.border)
+        let hairline = (c.borderStrong.usingColorSpace(.sRGB) ?? c.borderStrong)
         layer?.borderColor = hairline.cgColor
         layer?.backgroundColor = c.terminalBackground.withAlphaComponent(backdropAlpha).cgColor
         if let host = terminalHost {
