@@ -266,24 +266,29 @@ Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pan
 
 Exit codes for `api`, distinct from the older tmux-style verbs: `0` ok, `1` the call failed or timed out, `2` unknown method or bad arguments, `3` the target is missing or ambiguous (the message lists the matches, and nothing is changed), `4` the daemon is not reachable, `130` interrupted. `pane.wait` is the exception on success: the process exits with the child's status.
 
-From inside a pane the daemon sets `HARNESS_SESSION`, `HARNESS_TAB`, `HARNESS_SURFACE`, and `HARNESS_SERVER` (the socket path). A script can split, wait, and zoom without hard-coding an id. `HARNESS_SERVER` is the socket `api` and the rest of the CLI use when `--host` is absent.
+From inside a pane the daemon sets `HARNESS_SESSION`, `HARNESS_TAB`, `HARNESS_PANE`, `HARNESS_SURFACE`, and `HARNESS_SERVER` (the socket path). A script can split, wait, and zoom without hard-coding an id. Outside a pane, an omitted target means what the window is showing: the active session, tab, or pane. `HARNESS_SERVER` is the socket `api` and the rest of the CLI use when `--host` is absent.
 
 | Method | What it does |
 |---|---|
 | `server.version` | Daemon version and build. |
 | `session.list` / `session.view` | Sessions, or one session. |
+| `session.create` / `session.label` | Create a session (optionally from a layout tree), or rename one. |
+| `tab.create` / `tab.close` / `tab.label` / `tab.move` / `tab.focus` | Open a tab (`cwd`, `command`), close, rename, move to a 0-based `index`, select. |
 | `pane.split` | Split. `direction` is `horizontal` or `vertical` (default `vertical`). `command` is an executable path. `false` runs `/usr/bin/false`. |
+| `pane.view` | Everything about one pane in one call: ids, cwd, program, agent, size, program status, process tree. |
 | `pane.zoom` / `pane.focus` / `pane.label` / `pane.close` | Zoom, focus, rename the pane's tab, close. |
+| `pane.swap` / `pane.move` / `pane.detach` | Swap with `with`; move next to `to` (or a `direction` neighbour); break out into its own tab. |
+| `pane.resize` / `pane.focus_direction` | Move a divider (`direction`, `amount` cells); focus the neighbour in `direction`. |
 | `pane.write` / `pane.send_key` | Write text, or send key tokens. Cursor keys follow DECCKM. `hex: true` sends raw bytes. |
 | `pane.capture` | `text`, `html`, or `vt`. `trim` drops trailing whitespace. `unwrap` joins soft-wrapped rows. |
-| `pane.process` / `pane.pwd` / `pane.title` / `pane.size` | Process tree, working directory as a `file://` URL plus the owner, tab title, cell size. |
+| `pane.process` / `pane.pwd` / `pane.title` / `pane.size` | Process tree, working directory as a `file://` URL plus the owner, tab title, cell size. `pane.view` returns all of these at once. |
 | `pane.list_dir` | Names in a directory on the daemon that owns the pane. The root is that pane's cwd unless `path` is set. `find-files` stays a separate SSH `find`. |
 | `pane.program_status` | OSC 7501 records. See [PROGRAM-STATUS.md](PROGRAM-STATUS.md). |
 | `pane.wait` | Wait until the child exits (`until: child`) or OSC 133 D (`until: command`). Default timeout is 30 seconds. Timeout exits 1. |
 | `pane.theme` | Set one pane's theme through a profile rule. |
 | `pane.reset` | RIS (`ESC c`). |
 
-Targets accept a full id or a case-insensitive label. `session:`, `tab:`, `pane:`, and `client:` must match that kind. More than one label match exits 3.
+Targets resolve exactly like the CLI's `-t`: a full id, a unique id prefix, a 1-based position, or a case-insensitive label (an unnamed session is `Session N`, as the sidebar shows it). A pane target takes either its pane id or its surface id. `session:`, `tab:`, `pane:`, and `client:` must match that kind. More than one match exits 3 and lists them; nothing is changed.
 
 Every bindable command is also a method: `api call split-window --args '{"args":"-h"}'` runs `split-window -h` against the calling pane (`HARNESS_SURFACE`) or the active one. A command that only means something inside the app (overlays, copy-mode keys) exits 1 and says so.
 

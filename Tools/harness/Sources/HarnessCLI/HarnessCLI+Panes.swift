@@ -21,7 +21,7 @@ extension HarnessCLI {
         }
         let tokens = keys.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         if args.contains("-H") || args.contains("--hex") {
-            _ = try checkedRequest(client, .sendData(surfaceID: surface, data: KeyTokenParser.hexBytes(tokens)))
+            _ = try checkedRequest(client, .sendData(surfaceID: surface, data: HexKeys.bytes(tokens)))
             return
         }
         _ = try checkedRequest(client, .sendKeys(surfaceID: surface, keys: tokens))

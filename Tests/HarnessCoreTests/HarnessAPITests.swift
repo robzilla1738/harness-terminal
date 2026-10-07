@@ -39,7 +39,6 @@ final class HarnessAPITests: XCTestCase {
         XCTAssertTrue(message.contains("surface-a"))
         XCTAssertTrue(message.contains("surface-b"))
         XCTAssertEqual(catalog, before)
-        if case .zoom = plan { XCTFail("ambiguous plan must not zoom") }
     }
 
     func testUnknownMethodAndArgumentExitTwo() {
@@ -98,6 +97,38 @@ final class HarnessAPITests: XCTestCase {
 }
 
 final class APIVerbTests: XCTestCase {
+    func testHexKeysSkipNonHexTokens() {
+        XCTAssertEqual(HexKeys.bytes(["1b", "5b", "41"]), Data([0x1b, 0x5b, 0x41]))
+        XCTAssertEqual(HexKeys.bytes(["0x0d"]), Data([0x0d]))
+        XCTAssertEqual(HexKeys.bytes(["zz", "41"]), Data([0x41]))
+        XCTAssertEqual(HexKeys.bytes([]), Data())
+    }
+
+    func testPaneTargetsAcceptSurfaceIDsAndFallBackToTheActivePane() {
+        let tab = UUID().uuidString, pane = UUID().uuidString, surface = UUID().uuidString
+        let catalog = APICatalog(
+            tabs: [APITabRecord(id: tab, sessionID: "session", label: "main")],
+            panes: [APIPaneRecord(surfaceID: surface, paneID: pane, tabID: tab, sessionID: "session", label: "main")],
+            activeTab: tab,
+            activeSurface: surface
+        )
+        for arguments: [String: APIArgument] in [["pane": .string(surface)], ["pane": .string(pane)], [:]] {
+            let plan = HarnessAPI.plan(method: "pane.zoom", arguments: arguments, catalog: catalog, environment: APIEnvironment(environment: [:]))
+            guard case let .request(.zoomPane(target)) = plan else { return XCTFail("expected a zoom request, got \(plan)") }
+            XCTAssertEqual(target.uuidString, pane)
+        }
+    }
+
+    func testNewTabMethodsPlanTheirRequests() {
+        let tab = UUID().uuidString
+        let catalog = APICatalog(tabs: [APITabRecord(id: tab, sessionID: "session", label: "main")], activeTab: tab)
+        let plan = HarnessAPI.plan(method: "tab.label", arguments: ["title": .string("logs")], catalog: catalog, environment: APIEnvironment(environment: [:]))
+        guard case let .request(.renameTab(id, title)) = plan else { return XCTFail("expected a rename, got \(plan)") }
+        XCTAssertEqual(id.uuidString, tab)
+        XCTAssertEqual(title, "logs")
+    }
+
+
     func testParserAliasesAreCallableMethodsWithArgs() {
         XCTAssertNotNil(HarnessAPI.method(named: "split-window"), "aliases resolve like listed verbs")
         XCTAssertNil(HarnessAPI.method(named: "not-a-command"))

@@ -140,9 +140,11 @@ public enum APITargetKind: String, Equatable, Sendable {
 public struct APISessionRecord: Equatable, Sendable {
     public var id: String
     public var label: String
-    public init(id: String, label: String) {
+    public var workspaceID: String
+    public init(id: String, label: String, workspaceID: String = "") {
         self.id = id
         self.label = label
+        self.workspaceID = workspaceID
     }
 }
 
@@ -150,10 +152,12 @@ public struct APITabRecord: Equatable, Sendable {
     public var id: String
     public var sessionID: String
     public var label: String
-    public init(id: String, sessionID: String, label: String) {
+    public var workspaceID: String
+    public init(id: String, sessionID: String, label: String, workspaceID: String = "") {
         self.id = id
         self.sessionID = sessionID
         self.label = label
+        self.workspaceID = workspaceID
     }
 }
 
@@ -214,17 +218,27 @@ public struct APICatalog: Equatable, Sendable {
     public var tabs: [APITabRecord]
     public var panes: [APIPaneRecord]
     public var clients: [APIClientRecord]
+    /// What the window is showing, the default target when the caller has no `HARNESS_*` context.
+    public var activeSession: String?
+    public var activeTab: String?
+    public var activeSurface: String?
 
     public init(
         sessions: [APISessionRecord] = [],
         tabs: [APITabRecord] = [],
         panes: [APIPaneRecord] = [],
-        clients: [APIClientRecord] = []
+        clients: [APIClientRecord] = [],
+        activeSession: String? = nil,
+        activeTab: String? = nil,
+        activeSurface: String? = nil
     ) {
         self.sessions = sessions
         self.tabs = tabs
         self.panes = panes
         self.clients = clients
+        self.activeSession = activeSession
+        self.activeTab = activeTab
+        self.activeSurface = activeSurface
     }
 }
 
@@ -242,40 +256,28 @@ public struct APIEnvironment: Equatable, Sendable {
     }
 }
 
-public enum APIResolution: Equatable, Sendable {
-    case found(String)
-    case missing(String)
-    case ambiguous(query: String, matches: [String])
-}
-
-public enum APIPlan: Equatable, Sendable {
+/// What `api call` does once its targets are resolved. Single daemon writes and reads go
+/// through `.request` / `.query`; everything else has its own case.
+public enum APIPlan: Sendable {
     case failure(code: Int, message: String)
     case version
     case listSessions
     case viewSession(String)
+    case viewPane(surfaceID: String)
     case split(tabID: String, paneID: String?, direction: String, command: String?, cwd: String?, layout: APILayoutNode?)
     case sessionCreate(name: String?, layout: APILayoutNode?)
     case clientList
     case clientDisconnect(id: String)
-    /// A bindable verb that `api list` publishes. Calling it does not invent a mutation.
     /// A bindable command line (`split-window -h`), run through `CommandRunner`.
     case verb(String)
-    case zoom(paneID: String)
-    case focus(tabID: String, paneID: String)
-    case label(tabID: String, title: String)
-    case close(paneID: String)
-    case write(surfaceID: String, text: String)
+    /// One daemon write. The reply becomes `{"ok":true}`, or `{"tab"|"pane"|"session": id}`.
+    case request(IPCRequest)
+    /// One daemon read whose text reply is already JSON.
+    case query(IPCRequest)
     case sendKey(surfaceID: String, keys: [String], hex: Bool)
     case capture(surfaceID: String, format: String, trim: Bool, unwrap: Bool)
-    case process(surfaceID: String)
-    case pwd(surfaceID: String)
-    case listDir(surfaceID: String, path: String?)
-    case title(surfaceID: String)
-    case size(surfaceID: String)
-    case programStatus(surfaceID: String)
     case wait(surfaceID: String, until: String, timeout: Double)
     case theme(surfaceID: String, theme: String)
-    case reset(surfaceID: String)
 }
 
 public enum HarnessAPI {
@@ -365,6 +367,47 @@ public enum HarnessAPI {
             "theme": string("Theme name"),
         ], required: ["theme"]), object(["ok": bool("Applied")])),
         method("pane.reset", "Reset the pane's terminal (RIS)", object(["pane": string("Pane id or label")]), object(["ok": bool("Applied")])),
+        method("pane.view", "Everything about one pane: ids, cwd, program, size, status, process", object([
+            "pane": string("Pane id or label"),
+        ]), object([
+            "pane": string("Pane id"), "surface": string("Surface id"), "tab": string("Tab id"),
+            "cwd": string("Working directory"), "command": string("Foreground command"),
+            "size": APIJSONSchema(type: "object", description: "rows and cols"),
+            "status": array("OSC 7501 records"), "process": APIJSONSchema(type: "object", description: "Process tree"),
+        ])),
+        method("pane.swap", "Swap two panes (across tabs too)", object([
+            "pane": string("Pane id or label"), "with": string("The other pane"),
+        ], required: ["with"]), object(["ok": bool("Applied")])),
+        method("pane.move", "Move a pane next to another pane", object([
+            "pane": string("Pane to move"), "to": string("Pane to split"),
+            "direction": enumString("horizontal or vertical", ["horizontal", "vertical"]),
+        ], required: ["to"]), object(["ok": bool("Applied")])),
+        method("pane.detach", "Move a pane into its own new tab", object(["pane": string("Pane id or label")]), object(["tab": string("New tab id")])),
+        method("pane.resize", "Move a pane's divider", object([
+            "pane": string("Pane id or label"),
+            "direction": enumString("left, right, up, or down", ["left", "right", "up", "down"]),
+            "amount": int("Cells. Default 1."),
+        ], required: ["direction"]), object(["ok": bool("Applied")])),
+        method("pane.focus_direction", "Focus the neighbouring pane", object([
+            "pane": string("Pane to move from"),
+            "direction": enumString("left, right, up, or down", ["left", "right", "up", "down"]),
+        ], required: ["direction"]), object(["ok": bool("Applied")])),
+        method("tab.create", "Open a tab in the session's workspace", object([
+            "session": string("Session id or label. Defaults to the current session."),
+            "cwd": string("Working directory"),
+            "command": string("Executable to run instead of the shell"),
+        ]), object(["tab": string("New tab id")])),
+        method("tab.close", "Close a tab and its panes", object(["tab": string("Tab id or label")]), object(["ok": bool("Applied")])),
+        method("tab.label", "Rename a tab", object([
+            "tab": string("Tab id or label"), "title": string("New label"),
+        ], required: ["title"]), object(["ok": bool("Applied")])),
+        method("tab.move", "Move a tab to a 0-based index", object([
+            "tab": string("Tab id or label"), "index": int("Destination index"),
+        ], required: ["index"]), object(["ok": bool("Applied")])),
+        method("tab.focus", "Select a tab", object(["tab": string("Tab id or label")]), object(["ok": bool("Applied")])),
+        method("session.label", "Rename a session", object([
+            "session": string("Session id or label"), "name": string("New name"),
+        ], required: ["name"]), object(["ok": bool("Applied")])),
     ] + CommandParser.knownVerbs.map(verbMethod)
 
     /// A bindable command as an API method: `{"args": "-h"}` runs `<name> -h`.
@@ -472,207 +515,149 @@ public enum HarnessAPI {
         for name in spec.parameters.required ?? [] where arguments[name] == nil {
             return .failure(code: APIExit.badArguments.rawValue, message: "Missing argument \(name)")
         }
+        do {
+            return try plan(method, arguments, APITargets(catalog: catalog, environment: environment))
+        } catch let failure as APIPlanError {
+            return .failure(code: failure.code.rawValue, message: failure.message)
+        } catch {
+            return .failure(code: APIExit.failed.rawValue, message: "\(error)")
+        }
+    }
+
+    private static func plan(_ method: String, _ arguments: [String: APIArgument], _ targets: APITargets) throws -> APIPlan {
+        func pane() throws -> APIPaneRecord { try targets.pane(arguments["pane"]?.string) }
+        func text(_ key: String) throws -> String {
+            guard let value = arguments[key]?.string else { throw APIPlanError(code: .badArguments, message: "Missing argument \(key)") }
+            return value
+        }
+        func direction(_ key: String) throws -> DirectionalAxis {
+            guard let value = DirectionalAxis(rawValue: try text(key)) else {
+                throw APIPlanError(code: .badArguments, message: "\(key) must be left, right, up, or down")
+            }
+            return value
+        }
         switch method {
         case "server.version":
             return .version
         case "session.list":
             return .listSessions
         case "session.view":
-            let resolution = resolve(arguments["session"]?.string, kind: .session, catalog: catalog, environment: environment)
-            if case let .found(id) = resolution { return .viewSession(id) }
-            return fail(resolution)
-        case "pane.split":
-            let tab = resolve(arguments["tab"]?.string, kind: .tab, catalog: catalog, environment: environment)
-            let pane = arguments["pane"]?.string == nil && environment.surface == nil
-                ? nil
-                : resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment)
-            guard case let .found(tabID) = tab else { return fail(tab) }
-            if let pane, case .found = pane {} else if let pane { return fail(pane) }
-            let paneID: String? = {
-                if case let .found(id)? = pane { return catalog.panes.first { $0.surfaceID == id || $0.paneID == id }?.paneID }
-                return nil
-            }()
-            let direction = arguments["direction"]?.string ?? "vertical"
-            guard direction == "horizontal" || direction == "vertical" else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "direction must be horizontal or vertical")
-            }
-            let layout: APILayoutNode?
-            if let raw = arguments["layout"] {
-                switch LayoutTree.parse(raw) {
-                case let .success(node): layout = node
-                case let .failure(error):
-                    return .failure(code: APIExit.badArguments.rawValue, message: error.message)
-                }
-            } else {
-                layout = nil
-            }
-            return .split(
-                tabID: tabID, paneID: paneID, direction: direction,
-                command: arguments["command"]?.string, cwd: arguments["cwd"]?.string, layout: layout
-            )
+            return .viewSession(try targets.session(arguments["session"]?.string).id)
+        case "session.label":
+            return .request(.renameSession(sessionID: try uuid(targets.session(arguments["session"]?.string).id), name: try text("name")))
         case "session.create":
-            let layout: APILayoutNode?
-            if let raw = arguments["layout"] {
-                switch LayoutTree.parse(raw) {
-                case let .success(node): layout = node
-                case let .failure(error):
-                    return .failure(code: APIExit.badArguments.rawValue, message: error.message)
-                }
-            } else {
-                layout = nil
-            }
-            return .sessionCreate(name: arguments["name"]?.string, layout: layout)
+            return .sessionCreate(name: arguments["name"]?.string, layout: try layout(arguments["layout"]))
         case "client.list":
             return .clientList
         case "client.disconnect":
-            guard let id = arguments["id"]?.string, !id.isEmpty else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "Missing argument id")
+            return .clientDisconnect(id: try targets.client(arguments["id"]?.string).id)
+        case "tab.create":
+            let session = try targets.session(arguments["session"]?.string)
+            return .request(.newTab(workspaceID: try uuid(session.workspaceID), cwd: arguments["cwd"]?.string, shell: arguments["command"]?.string))
+        case "tab.close":
+            return .request(.closeTab(tabID: try uuid(targets.tab(arguments["tab"]?.string).id)))
+        case "tab.label":
+            return .request(.renameTab(tabID: try uuid(targets.tab(arguments["tab"]?.string).id), name: try text("title")))
+        case "tab.move", "tab.focus":
+            let tab = try targets.tab(arguments["tab"]?.string)
+            let (workspace, id) = (try uuid(tab.workspaceID), try uuid(tab.id))
+            if method == "tab.focus" { return .request(.selectTab(workspaceID: workspace, tabID: id)) }
+            guard case let .int(index)? = arguments["index"], index >= 0 else {
+                throw APIPlanError(code: .badArguments, message: "index must be a non-negative integer")
             }
-            return .clientDisconnect(id: id)
-        case "pane.list_dir":
-            let path = arguments["path"]?.string
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                return .listDir(surfaceID: pane.surfaceID, path: path)
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
+            return .request(.reorderTab(workspaceID: workspace, tabID: id, toIndex: index))
+        case "pane.split":
+            let tab = try targets.tab(arguments["tab"]?.string)
+            // No explicit pane and no calling pane: split the tab's active pane.
+            let anchor = arguments["pane"]?.string == nil && targets.environment.surface == nil ? nil : try pane().paneID
+            let splitDirection = arguments["direction"]?.string ?? "vertical"
+            guard splitDirection == "horizontal" || splitDirection == "vertical" else {
+                throw APIPlanError(code: .badArguments, message: "direction must be horizontal or vertical")
             }
-        case "pane.zoom", "pane.focus", "pane.close", "pane.process", "pane.pwd", "pane.title", "pane.size", "pane.program_status", "pane.reset":
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                switch method {
-                case "pane.zoom": return .zoom(paneID: pane.paneID)
-                case "pane.focus": return .focus(tabID: pane.tabID, paneID: pane.paneID)
-                case "pane.close": return .close(paneID: pane.paneID)
-                case "pane.process": return .process(surfaceID: pane.surfaceID)
-                case "pane.pwd": return .pwd(surfaceID: pane.surfaceID)
-                case "pane.title": return .title(surfaceID: pane.surfaceID)
-                case "pane.size": return .size(surfaceID: pane.surfaceID)
-                case "pane.program_status": return .programStatus(surfaceID: pane.surfaceID)
-                default: return .reset(surfaceID: pane.surfaceID)
-                }
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-            }
+            return .split(
+                tabID: tab.id, paneID: anchor, direction: splitDirection,
+                command: arguments["command"]?.string, cwd: arguments["cwd"]?.string, layout: try layout(arguments["layout"])
+            )
+        case "pane.view":
+            return .viewPane(surfaceID: try pane().surfaceID)
+        case "pane.zoom":
+            return .request(.zoomPane(paneID: try uuid(pane().paneID)))
+        case "pane.focus":
+            let target = try pane()
+            return .request(.selectPane(tabID: try uuid(target.tabID), paneID: try uuid(target.paneID)))
         case "pane.label":
-            guard let title = arguments["title"]?.string else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "Missing argument title")
-            }
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                return .label(tabID: pane.tabID, title: title)
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-            }
+            return .request(.renameTab(tabID: try uuid(pane().tabID), name: try text("title")))
+        case "pane.close":
+            return .request(.killPane(paneID: try uuid(pane().paneID)))
+        case "pane.reset":
+            return .request(.resetSurface(surfaceID: try pane().surfaceID))
         case "pane.write":
-            guard let text = arguments["text"]?.string else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "Missing argument text")
+            return .request(.send(surfaceID: try pane().surfaceID, text: try text("text")))
+        case "pane.swap":
+            let other = try targets.pane(arguments["with"]?.string)
+            return .request(.swapPanes(srcPaneID: try uuid(pane().paneID), dstPaneID: try uuid(other.paneID)))
+        case "pane.move":
+            let destination = try targets.pane(arguments["to"]?.string)
+            let layoutDirection = SplitDirection(rawValue: arguments["direction"]?.string ?? "horizontal") ?? .horizontal
+            return .request(.joinPane(sourcePaneID: try uuid(pane().paneID), destPaneID: try uuid(destination.paneID), direction: layoutDirection))
+        case "pane.detach":
+            return .request(.breakPane(paneID: try uuid(pane().paneID)))
+        case "pane.resize":
+            let amount: Int
+            if case let .int(value)? = arguments["amount"] { amount = value } else { amount = 1 }
+            guard let resize = ResizeDirection(rawValue: try direction("direction").rawValue) else {
+                throw APIPlanError(code: .badArguments, message: "direction must be left, right, up, or down")
             }
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                return .write(surfaceID: pane.surfaceID, text: text)
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-            }
+            return .request(.resizePane(paneID: try uuid(pane().paneID), direction: resize, amount: amount))
+        case "pane.focus_direction":
+            return .request(.selectPaneDirectional(currentPaneID: try uuid(pane().paneID), direction: try direction("direction")))
+        case "pane.process":
+            return .query(.processTree(surfaceID: try pane().surfaceID))
+        case "pane.pwd", "pane.title", "pane.size", "pane.program_status":
+            return .query(.paneQuery(surfaceID: try pane().surfaceID, kind: String(method.dropFirst("pane.".count))))
+        case "pane.list_dir":
+            return .query(.listDir(surfaceID: try pane().surfaceID, path: arguments["path"]?.string))
         case "pane.send_key":
-            guard let keys = arguments["keys"]?.string else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "Missing argument keys")
-            }
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                let tokens = keys.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-                return .sendKey(surfaceID: pane.surfaceID, keys: tokens, hex: arguments["hex"]?.bool ?? false)
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-            }
+            let tokens = try text("keys").split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            return .sendKey(surfaceID: try pane().surfaceID, keys: tokens, hex: arguments["hex"]?.bool ?? false)
         case "pane.capture":
             let format = arguments["format"]?.string ?? "text"
             guard ["text", "html", "vt"].contains(format) else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "format must be text, html, or vt")
+                throw APIPlanError(code: .badArguments, message: "format must be text, html, or vt")
             }
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                return .capture(
-                    surfaceID: pane.surfaceID,
-                    format: format,
-                    trim: arguments["trim"]?.bool ?? false,
-                    unwrap: arguments["unwrap"]?.bool ?? false
-                )
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-            }
+            return .capture(surfaceID: try pane().surfaceID, format: format, trim: arguments["trim"]?.bool ?? false, unwrap: arguments["unwrap"]?.bool ?? false)
         case "pane.wait":
             let until = arguments["until"]?.string ?? "child"
             guard until == "child" || until == "command" else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "until must be child or command")
+                throw APIPlanError(code: .badArguments, message: "until must be child or command")
             }
             let timeout = arguments["timeout"]?.double ?? 30
-            guard timeout > 0 else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "timeout must be greater than 0")
-            }
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                return .wait(surfaceID: pane.surfaceID, until: until, timeout: timeout)
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-            }
+            guard timeout > 0 else { throw APIPlanError(code: .badArguments, message: "timeout must be greater than 0") }
+            return .wait(surfaceID: try pane().surfaceID, until: until, timeout: timeout)
         case "pane.theme":
-            guard let theme = arguments["theme"]?.string, !theme.isEmpty else {
-                return .failure(code: APIExit.badArguments.rawValue, message: "Missing argument theme")
-            }
-            switch resolve(arguments["pane"]?.string, kind: .pane, catalog: catalog, environment: environment) {
-            case let .found(id):
-                guard let pane = paneRecord(id, catalog: catalog) else {
-                    return .failure(code: APIExit.ambiguous.rawValue, message: "No pane \(id)")
-                }
-                return .theme(surfaceID: pane.surfaceID, theme: theme)
-            case let .missing(message):
-                return .failure(code: APIExit.ambiguous.rawValue, message: message)
-            case let .ambiguous(query, matches):
-                return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-            }
+            let theme = try text("theme")
+            guard !theme.isEmpty else { throw APIPlanError(code: .badArguments, message: "Missing argument theme") }
+            return .theme(surfaceID: try pane().surfaceID, theme: theme)
         default:
             // Any command the parser accepts, aliases included (`split-window`, `new-tab`…).
             let source = method + (arguments["args"]?.string.map { " " + $0 } ?? "")
-            if (try? CommandParser.parse(source)) != nil {
-                return .verb(source)
+            guard (try? CommandParser.parse(source)) != nil else {
+                throw APIPlanError(code: .badArguments, message: "Unknown method \(method)")
             }
-            return .failure(code: APIExit.badArguments.rawValue, message: "Unknown method \(method)")
+            return .verb(source)
+        }
+    }
+
+    private static func uuid(_ id: String) throws -> UUID {
+        guard let value = UUID(uuidString: id) else { throw APIPlanError(code: .ambiguous, message: "\(id) is not an id") }
+        return value
+    }
+
+    private static func layout(_ raw: APIArgument?) throws -> APILayoutNode? {
+        guard let raw else { return nil }
+        switch LayoutTree.parse(raw) {
+        case let .success(node): return node
+        case let .failure(error): throw APIPlanError(code: .badArguments, message: error.message)
         }
     }
 
@@ -710,57 +695,36 @@ public enum HarnessAPI {
         var tabs: [APITabRecord] = []
         var panes: [APIPaneRecord] = []
         for workspace in snapshot.workspaces {
+            let workspaceID = workspace.id.uuidString
             for session in workspace.sessions {
-                let label = session.name.isEmpty ? workspace.name : session.name
-                sessions.append(APISessionRecord(id: session.id.uuidString, label: label))
+                let label = SessionDisplayName.title(of: session, in: workspace)
+                sessions.append(APISessionRecord(id: session.id.uuidString, label: label, workspaceID: workspaceID))
                 for tab in session.tabs {
-                    tabs.append(APITabRecord(id: tab.id.uuidString, sessionID: session.id.uuidString, label: tab.title))
-                    for leaf in tab.rootPane.allLeaves() {
+                    tabs.append(APITabRecord(id: tab.id.uuidString, sessionID: session.id.uuidString, label: tab.title, workspaceID: workspaceID))
+                    let leaves = tab.rootPane.allLeaves()
+                    for leaf in leaves {
                         panes.append(APIPaneRecord(
                             surfaceID: leaf.surfaceID.uuidString,
                             paneID: leaf.id.uuidString,
                             tabID: tab.id.uuidString,
                             sessionID: session.id.uuidString,
-                            label: tab.title
+                            // A split pane has no label of its own; only a lone pane answers to the tab title.
+                            label: leaves.count == 1 ? tab.title : ""
                         ))
                     }
                 }
             }
         }
         let clientRows = clients.map { APIClientRecord(id: $0.id.uuidString, label: $0.label) }
-        return APICatalog(sessions: sessions, tabs: tabs, panes: panes, clients: clientRows)
-    }
-
-    public static func resolve(_ token: String?, kind: APITargetKind, catalog: APICatalog, environment: APIEnvironment) -> APIResolution {
-        let raw = token?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let chosen = (raw?.isEmpty == false ? raw : nil) ?? environmentDefault(kind, environment)
-        guard let chosen, !chosen.isEmpty else {
-            return .missing("Missing \(kind.rawValue)")
-        }
-        let (prefix, body) = splitPrefix(chosen)
-        if let prefix, prefix != kind {
-            return .missing("\(chosen) is a \(prefix.rawValue), not a \(kind.rawValue)")
-        }
-        let needle = body
-        switch kind {
-        case .session:
-            return resolveID(needle, ids: catalog.sessions.map(\.id), labels: catalog.sessions.map { ($0.label, $0.id) })
-        case .tab:
-            return resolveID(needle, ids: catalog.tabs.map(\.id), labels: catalog.tabs.map { ($0.label, $0.id) })
-        case .pane:
-            let ids = catalog.panes.flatMap { [$0.surfaceID, $0.paneID] }
-            if let exact = ids.first(where: { $0.caseInsensitiveCompare(needle) == .orderedSame }) {
-                return .found(exact)
-            }
-            let labeled = catalog.panes.filter { $0.label.caseInsensitiveCompare(needle) == .orderedSame }
-            if labeled.count == 1 { return .found(labeled[0].surfaceID) }
-            if labeled.count > 1 {
-                return .ambiguous(query: needle, matches: labeled.map(\.surfaceID))
-            }
-            return .missing("No \(kind.rawValue) \(needle)")
-        case .client:
-            return resolveID(needle, ids: catalog.clients.map(\.id), labels: catalog.clients.map { ($0.label, $0.id) })
-        }
+        let workspace = snapshot.activeWorkspace
+        let session = workspace?.sessions.first { $0.id == workspace?.activeSessionID }
+        let tab = session?.activeTab
+        let leaves = tab?.rootPane.allLeaves() ?? []
+        let surface = (leaves.first { $0.id == tab?.activePaneID } ?? leaves.first)?.surfaceID
+        return APICatalog(
+            sessions: sessions, tabs: tabs, panes: panes, clients: clientRows,
+            activeSession: session?.id.uuidString, activeTab: tab?.id.uuidString, activeSurface: surface?.uuidString
+        )
     }
 
     public static func fileURL(path: String) -> String {
@@ -773,54 +737,6 @@ public enum HarnessAPI {
         var next = profiles.filter { $0.surface?.caseInsensitiveCompare(surfaceID) != .orderedSame }
         next.append(ProfileRule(surface: surfaceID, theme: theme))
         return next
-    }
-
-    public static func ambiguousMessage(query: String, matches: [String]) -> String {
-        (["Ambiguous \(query)"] + matches).joined(separator: "\n")
-    }
-
-    private static func environmentDefault(_ kind: APITargetKind, _ environment: APIEnvironment) -> String? {
-        switch kind {
-        case .session: return environment.session
-        case .tab: return environment.tab
-        case .pane: return environment.surface
-        case .client: return nil
-        }
-    }
-
-    private static func splitPrefix(_ token: String) -> (APITargetKind?, String) {
-        let prefixes: [(String, APITargetKind)] = [
-            ("session:", .session), ("tab:", .tab), ("pane:", .pane), ("client:", .client),
-        ]
-        for (prefix, kind) in prefixes where token.lowercased().hasPrefix(prefix) {
-            return (kind, String(token.dropFirst(prefix.count)))
-        }
-        return (nil, token)
-    }
-
-    private static func resolveID(_ needle: String, ids: [String], labels: [(String, String)]) -> APIResolution {
-        if let exact = ids.first(where: { $0.caseInsensitiveCompare(needle) == .orderedSame }) {
-            return .found(exact)
-        }
-        let labeled = labels.filter { $0.0.caseInsensitiveCompare(needle) == .orderedSame }
-        if labeled.count == 1 { return .found(labeled[0].1) }
-        if labeled.count > 1 { return .ambiguous(query: needle, matches: labeled.map(\.1)) }
-        return .missing("No match \(needle)")
-    }
-
-    private static func paneRecord(_ id: String, catalog: APICatalog) -> APIPaneRecord? {
-        catalog.panes.first { $0.surfaceID.caseInsensitiveCompare(id) == .orderedSame || $0.paneID.caseInsensitiveCompare(id) == .orderedSame }
-    }
-
-    private static func fail(_ resolution: APIResolution) -> APIPlan {
-        switch resolution {
-        case let .missing(message):
-            return .failure(code: APIExit.ambiguous.rawValue, message: message)
-        case let .ambiguous(query, matches):
-            return .failure(code: APIExit.ambiguous.rawValue, message: ambiguousMessage(query: query, matches: matches))
-        case .found:
-            return .failure(code: APIExit.failed.rawValue, message: "Unresolved target")
-        }
     }
 
     private static func method(_ name: String, _ summary: String, _ parameters: APIJSONSchema, _ result: APIJSONSchema) -> APIMethod {
@@ -862,5 +778,80 @@ public struct APIPlanError: Error, Equatable {
     public init(code: APIExit, message: String) {
         self.code = code
         self.message = message
+    }
+}
+
+/// Resolves `api call` targets against a catalog: an explicit token (optionally prefixed
+/// `session:` / `tab:` / `pane:` / `client:`), else the caller's `HARNESS_*` context, with
+/// `TargetResolver`'s rules (id, label, position, id fragment).
+struct APITargets {
+    let catalog: APICatalog
+    let environment: APIEnvironment
+
+    func session(_ token: String?) throws -> APISessionRecord {
+        let id = try resolve(token, kind: .session,
+                             candidates: catalog.sessions.map { TargetCandidate(id: $0.id, labels: [$0.label]) },
+                             positional: catalog.sessions.map(\.id))
+        return catalog.sessions.first { $0.id == id }!
+    }
+
+    func tab(_ token: String?) throws -> APITabRecord {
+        let scope = environment.session.map { session in catalog.tabs.filter { $0.sessionID == session } } ?? catalog.tabs
+        let id = try resolve(token, kind: .tab,
+                             candidates: catalog.tabs.map { TargetCandidate(id: $0.id, labels: [$0.label]) },
+                             positional: scope.map(\.id))
+        return catalog.tabs.first { $0.id == id }!
+    }
+
+    func pane(_ token: String?) throws -> APIPaneRecord {
+        let callerTab = environment.tab ?? catalog.panes.first { $0.surfaceID == environment.surface }?.tabID
+        let scope = callerTab.map { tab in catalog.panes.filter { $0.tabID == tab } } ?? catalog.panes
+        let id = try resolve(token, kind: .pane,
+                             candidates: catalog.panes.map { TargetCandidate(id: $0.surfaceID, otherIDs: [$0.paneID], labels: [$0.label]) },
+                             positional: scope.map(\.surfaceID))
+        return catalog.panes.first { $0.surfaceID == id }!
+    }
+
+    func client(_ token: String?) throws -> APIClientRecord {
+        let id = try resolve(token, kind: .client,
+                             candidates: catalog.clients.map { TargetCandidate(id: $0.id, labels: [$0.label]) },
+                             positional: catalog.clients.map(\.id))
+        return catalog.clients.first { $0.id == id }!
+    }
+
+    private func resolve(_ token: String?, kind: APITargetKind, candidates: [TargetCandidate], positional: [String]) throws -> String {
+        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let chosen = (trimmed?.isEmpty == false ? trimmed : nil) ?? fallback(kind) else {
+            throw APIPlanError(code: .ambiguous, message: "Missing \(kind.rawValue)")
+        }
+        var needle = chosen
+        for prefixed in [APITargetKind.session, .tab, .pane, .client] where chosen.lowercased().hasPrefix(prefixed.rawValue + ":") {
+            guard prefixed == kind else {
+                throw APIPlanError(code: .ambiguous, message: "\(chosen) is a \(prefixed.rawValue), not a \(kind.rawValue)")
+            }
+            needle = String(chosen.dropFirst(prefixed.rawValue.count + 1))
+        }
+        let resolverKind: TargetResolver.Kind = switch kind {
+        case .session: .session
+        case .tab: .tab
+        case .pane, .client: .surface
+        }
+        switch TargetResolver.resolve(needle, kind: resolverKind, candidates: candidates, positional: positional) {
+        case let .resolved(id): return id
+        case let .ambiguous(text, matches):
+            throw APIPlanError(code: .ambiguous, message: (["Ambiguous \(text)"] + matches).joined(separator: "\n"))
+        case let .notFound(text):
+            throw APIPlanError(code: .ambiguous, message: text)
+        }
+    }
+
+    /// The caller's own pane/tab/session (`HARNESS_*`), else what the window is showing.
+    private func fallback(_ kind: APITargetKind) -> String? {
+        switch kind {
+        case .session: return environment.session ?? catalog.activeSession
+        case .tab: return environment.tab ?? catalog.activeTab
+        case .pane: return environment.surface ?? catalog.activeSurface
+        case .client: return nil
+        }
     }
 }

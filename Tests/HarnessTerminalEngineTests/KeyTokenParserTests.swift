@@ -2,13 +2,6 @@ import XCTest
 @testable import HarnessTerminalEngine
 
 final class KeyTokenParserTests: XCTestCase {
-    func testHexBytesEncoding() {
-        XCTAssertEqual(KeyTokenParser.hexBytes(["1b", "5b", "41"]), Data([0x1b, 0x5b, 0x41]))
-        XCTAssertEqual(KeyTokenParser.hexBytes(["0x0d"]), Data([0x0d]))
-        XCTAssertEqual(KeyTokenParser.hexBytes(["zz", "41"]), Data([0x41])) // non-hex skipped
-        XCTAssertEqual(KeyTokenParser.hexBytes([]), Data())
-    }
-
     func testEncodesCommonTokens() {
         XCTAssertEqual(KeyTokenParser.encode(keys: ["C-c"]), Data([0x03]))
         XCTAssertEqual(KeyTokenParser.encode(keys: ["Enter"]), Data([0x0D]))

@@ -577,9 +577,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
     /// A named session shows its name; an unnamed one is "Session N" by position.
     private func displayTitle(for session: SessionGroup) -> String {
-        if !session.name.isEmpty { return session.name }
-        let index = (sessions.firstIndex { $0.id == session.id } ?? 0) + 1
-        return "Session \(index)"
+        SessionDisplayName.title(of: session, among: sessions)
     }
 
     @objc private func addWorkspace() {

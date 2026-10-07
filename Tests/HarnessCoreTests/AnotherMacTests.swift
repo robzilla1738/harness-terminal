@@ -55,7 +55,7 @@ final class AnotherMacTests: XCTestCase {
             catalog: catalog,
             environment: APIEnvironment(environment: [:])
         )
-        guard case let .listDir(surfaceID, path) = plan else {
+        guard case let .query(.listDir(surfaceID, path)) = plan else {
             return XCTFail("expected list_dir, got \(plan)")
         }
         XCTAssertEqual(surfaceID, "surface-a")

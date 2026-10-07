@@ -1982,8 +1982,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
         if let session = sessionID(forSurfaceKey: surfaceKey) {
             env["HARNESS_SESSION"] = session
         }
-        if let tab = editor.tab(forSurfaceKey: surfaceKey)?.tabID.uuidString {
-            env["HARNESS_TAB"] = tab
+        if let tab = tab(forSurfaceKey: surfaceKey) {
+            env["HARNESS_TAB"] = tab.id.uuidString
+            if let pane = tab.rootPane.allLeaves().first(where: { $0.surfaceID.uuidString.caseInsensitiveCompare(surfaceKey) == .orderedSame }) {
+                env["HARNESS_PANE"] = pane.id.uuidString
+            }
         }
         if let cli = Self.harnessCLIExecutableURL() {
             env["HARNESS_CLI"] = cli.path

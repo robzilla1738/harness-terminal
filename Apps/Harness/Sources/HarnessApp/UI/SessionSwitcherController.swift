@@ -187,7 +187,7 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
         let hereTitle = here == DaemonSidebar.localID ? "This Mac" : here
         currentID = workspace?.activeSessionID?.uuidString
         var list = (workspace?.sessions ?? []).map { session in
-            SwitcherSession(id: session.id.uuidString, title: Self.title(of: session), owner: here, ownerTitle: hereTitle)
+            SwitcherSession(id: session.id.uuidString, title: workspace.map { SessionDisplayName.title(of: session, in: $0) } ?? session.name, owner: here, ownerTitle: hereTitle)
         }
         // Sessions last seen on other daemons, from the sidebar's machine boards.
         for group in coordinator.sidebarGroups() {
@@ -200,12 +200,6 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
     }
 
     /// A named session shows its name; an unnamed one shows what its active tab is doing.
-    static func title(of session: SessionGroup) -> String {
-        if !session.name.isEmpty { return session.name }
-        guard let tab = session.activeTab ?? session.tabs.first else { return "Session" }
-        return SurfaceIdentity.label(directory: tab.cwd, program: tab.currentCommand, agent: tab.agent?.kind.commandToken)
-    }
-
     private func reload(resetSelection: Bool) {
         let query = filterField.stringValue
         items = SessionSwitcherModel.items(sessions: sessions, currentID: currentID, query: query)
