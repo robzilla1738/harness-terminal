@@ -322,8 +322,10 @@ struct HarnessCLI {
     /// candidates. `has-session` keeps its own tmux contract (exit 1 when missing).
     static func resolveTargets(_ args: [String], command: String, client: DaemonClient) throws -> [String] {
         guard command != "has-session" else { return args }
+        // Everything after `--` belongs to a child command (`run -- tool --tab 3`).
+        let end = args.firstIndex(of: "--") ?? args.count
         let pending = targetFlags.compactMap { entry -> (Int, TargetResolver.Kind)? in
-            guard let index = args.firstIndex(of: entry.flag), index + 1 < args.count,
+            guard let index = args[..<end].firstIndex(of: entry.flag), index + 1 < end,
                   UUID(uuidString: args[index + 1]) == nil, !args[index + 1].hasPrefix("-")
             else { return nil }
             return (index + 1, entry.kind)

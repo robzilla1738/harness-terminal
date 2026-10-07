@@ -12,8 +12,12 @@ enum SessionSwitcherController {
     static var isShown: Bool { panel?.isVisible == true }
 
     static func toggle(relativeTo parent: NSWindow?, anchor: NSView? = nil) {
-        if isShown { close() } else { present(relativeTo: parent, anchor: anchor) }
+        // Clicking the sessions button to dismiss first resigns the panel (closing it),
+        // then fires the button; don't read that second half as "open again".
+        if isShown || Date().timeIntervalSince(lastClosed) < 0.3 { close() } else { present(relativeTo: parent, anchor: anchor) }
     }
+
+    private static var lastClosed = Date.distantPast
 
     static func present(relativeTo parent: NSWindow?, anchor: NSView? = nil) {
         close()
@@ -54,6 +58,7 @@ enum SessionSwitcherController {
     }
 
     static func close() {
+        if panel != nil { lastClosed = Date() }
         panel?.delegate = nil
         panel?.orderOut(nil)
         panel = nil

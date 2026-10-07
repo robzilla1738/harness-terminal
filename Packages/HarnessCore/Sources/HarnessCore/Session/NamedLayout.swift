@@ -116,11 +116,17 @@ public enum NamedLayoutStore {
     /// What a pane is running, as a command line to type on restore. An idle pane (the
     /// foreground job is its own shell) is "shell", so restore doesn't start a nested shell.
     public static func program(for context: ControlPlane.SurfaceContext) -> String {
-        if context.isShell || context.executable.isEmpty || isShellName(context.executable) { return "shell" }
-        guard !context.arguments.isEmpty else { return context.executable }
+        if context.isShell || context.executable.isEmpty { return "shell" }
+        guard !context.arguments.isEmpty else {
+            return isShellName(context.executable) ? "shell" : context.executable
+        }
         var argv = context.arguments
-        // argv[0] can be an absolute path or a login "-zsh"; the short name types the same.
-        argv[0] = context.executable
+        // argv[0]'s own basename: the probed process name can be truncated (Linux comm is
+        // 15 bytes) or differ from what was typed (macOS framework Python is "Python").
+        let typed = argv[0].split(separator: "/").last.map(String.init) ?? argv[0]
+        argv[0] = typed.hasPrefix("-") ? String(typed.dropFirst()) : typed
+        // A nested interactive shell is idle; a shell running a script (`bash deploy.sh`) is not.
+        if isShellName(argv[0]), argv.dropFirst().allSatisfy({ $0.hasPrefix("-") }) { return "shell" }
         return ControlPlane.shellJoin(argv)
     }
 

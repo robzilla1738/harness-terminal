@@ -119,6 +119,8 @@ enum SnapshotCipher {
 }
 
 /// The snapshot key is a mode-0600 file next to the control socket, on every platform.
+/// (A key from the old keychain backend is not carried over: the sealed park file is only
+/// written today, never read back, so a fresh key loses nothing.)
 /// That is the same trust boundary as the socket and the scrollback log beside it; a
 /// keychain item added nothing but an access prompt whenever the daemon binary changed.
 enum SnapshotKeyStore {
@@ -134,8 +136,12 @@ enum SnapshotKeyStore {
             return existing
         }
         let created = randomKey()
-        try? created.write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        // Created 0600 and renamed into place, so the key is never readable by others,
+        // not even between a write and a chmod.
+        let temporary = directory.appendingPathComponent("snapshot.key.\(UUID().uuidString)")
+        if FileManager.default.createFile(atPath: temporary.path, contents: created, attributes: [.posixPermissions: 0o600]) {
+            if rename(temporary.path, url.path) != 0 { try? FileManager.default.removeItem(at: temporary) }
+        }
         return created
     }
 

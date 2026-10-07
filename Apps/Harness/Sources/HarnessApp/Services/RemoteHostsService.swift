@@ -37,7 +37,15 @@ final class RemoteHostsService: @unchecked Sendable {
     /// Opens (or reuses) the tunnel for an unsaved or saved host without making it the
     /// window's host. Blocking — call off the main thread.
     func probe(_ host: RemoteHost) throws -> Endpoint {
-        try SSHTunnelManager.shared.endpoint(for: host)
+        dropTunnelIfChanged(host)
+        return try SSHTunnelManager.shared.endpoint(for: host)
+    }
+
+    /// A live forward is reused by name. When the saved destination, options, or socket
+    /// differ from `host`, close it so the next connect uses the new settings.
+    func dropTunnelIfChanged(_ host: RemoteHost) {
+        guard let saved = store.host(named: host.name), saved != host else { return }
+        SSHTunnelManager.shared.stop(host: host.name)
     }
 
     /// Sessions the daemon at `endpoint` reports, or 0 if it doesn't answer.

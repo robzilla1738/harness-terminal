@@ -134,11 +134,14 @@ public final class SSHTunnelManager: @unchecked Sendable {
 
     public func stop(host name: String) {
         lock.lock()
-        intentionalStops.insert(name)
         let tunnel = tunnels.removeValue(forKey: name)
+        // Mark the exit as ours only when we're about to cause it. A process that already
+        // exited won't report again, and a stale mark would swallow the next real drop.
+        let running = tunnel?.process.isRunning ?? false
+        if running { intentionalStops.insert(name) }
         lock.unlock()
         guard let tunnel else { return }
-        if tunnel.process.isRunning { tunnel.process.terminate() }
+        if running { tunnel.process.terminate() }
         try? FileManager.default.removeItem(at: tunnel.localSocket)
     }
 

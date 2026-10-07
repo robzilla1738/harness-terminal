@@ -321,8 +321,10 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var paneDensity: PaneDensity
     /// A title row (icon, identity, split buttons) atop each comfortable pane.
     public var paneHeaders: Bool
-    /// The light theme Harness used to default to; a stored copy migrates to the new default.
+    /// The light theme Harness used to default to; a stored copy migrates to the new default once.
     static let retiredLightDefault = "Zenwritten Light"
+    /// Set after the one-time light-default migration, so choosing Zenwritten Light later sticks.
+    public var lightDefaultMigrated: Bool
     /// Confirm before pasting text containing newlines / control characters when the program has
     /// not enabled bracketed paste — guards against blind multi-line command execution.
     public var pasteProtection: Bool
@@ -534,6 +536,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.themeFit = themeFit
         self.paneDensity = paneDensity
         self.paneHeaders = paneHeaders
+        self.lightDefaultMigrated = true
         self.pasteProtection = pasteProtection
         self.commandFinishedThresholdSeconds = max(0, commandFinishedThresholdSeconds)
         self.notificationEvents = notificationEvents
@@ -725,8 +728,9 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             appearanceMode = decodedAppearanceMode ?? defaultSettings.appearanceMode
             let storedLight = try container.decodeIfPresent(String.self, forKey: .systemLightThemeName)
             // "Zenwritten Light" was the shipped default, saved whether or not anyone chose it.
-            // It reads washed out next to the navy default, so it moves to Harness Light.
-            systemLightThemeName = storedLight.flatMap { $0 == Self.retiredLightDefault ? nil : $0 }
+            // It reads washed out next to the navy default, so it moves to Harness Light, once.
+            let migrated = try container.decodeIfPresent(Bool.self, forKey: .lightDefaultMigrated) ?? false
+            systemLightThemeName = storedLight.flatMap { !migrated && $0 == Self.retiredLightDefault ? nil : $0 }
                 ?? defaultSettings.systemLightThemeName
             systemDarkThemeName = try container.decodeIfPresent(String.self, forKey: .systemDarkThemeName) ?? defaultSettings.systemDarkThemeName
         }
@@ -819,6 +823,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         themeFit = try container.decodeIfPresent(Bool.self, forKey: .themeFit)
         paneDensity = try fields.decodeEnum(.paneDensity, \.paneDensity)
         paneHeaders = try fields.decode(.paneHeaders, \.paneHeaders)
+        lightDefaultMigrated = true
         // `lightThemeName`/`darkThemeName` are no longer stored fields — the legacy pair is
         // consumed by the `appearanceMode` migration above (via LegacyHarnessSettingsCodingKeys).
         pasteProtection = try fields.decode(.pasteProtection, \.pasteProtection)

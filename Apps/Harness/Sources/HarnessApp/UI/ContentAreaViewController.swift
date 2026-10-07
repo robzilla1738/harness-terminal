@@ -66,13 +66,18 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     private var tabRowHidden = false
 
     func setTabRowHidden(_ hidden: Bool) {
+        let changed = hidden != tabRowHidden
         tabRowHidden = hidden
         guard isViewLoaded else { return }   // viewDidLoad applies it
-        tabBar.isHidden = hidden
-        hostBelowTabs.isActive = !hidden
-        hostAtTop.isActive = hidden
-        // The pane container pads its own top in that case, so its gutter fill covers it.
-        reloadIfNeeded(force: true)
+        applyTabRowConstraints()
+        // The pane container pads its own top in sidebar mode, so its gutter fill covers it.
+        if changed { reloadIfNeeded(force: true) }
+    }
+
+    private func applyTabRowConstraints() {
+        tabBar.isHidden = tabRowHidden
+        hostBelowTabs.isActive = !tabRowHidden
+        hostAtTop.isActive = tabRowHidden
     }
 
     override func viewDidLoad() {
@@ -98,6 +103,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             terminalHost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             terminalHost.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+        applyTabRowConstraints()
 
         NotificationCenter.default.addObserver(
             self,
@@ -147,7 +153,6 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             refreshTabBarMetadata()
             return
         }
-        setTabRowHidden(tabRowHidden)
         reloadTabBar()
         reloadIfNeeded(force: structureChanged)
     }

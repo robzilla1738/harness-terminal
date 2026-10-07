@@ -274,6 +274,8 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
         if let editing, editing.name != host.name {
             RemoteHostsService.shared.removeHost(named: editing.name)
         }
+        // Edited settings must not ride the old forward.
+        RemoteHostsService.shared.dropTunnelIfChanged(host)
         guard RemoteHostsService.shared.addHost(host) else {
             show("Couldn't write remote-hosts.json. Check disk space and permissions.", tone: .bad)
             return

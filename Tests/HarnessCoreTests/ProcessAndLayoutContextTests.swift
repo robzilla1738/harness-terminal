@@ -82,3 +82,35 @@ final class SessionViewTests: XCTestCase {
         XCTAssertNil(HarnessAPI.sessionView(snapshot: snapshot, sessionID: UUID().uuidString))
     }
 }
+
+final class ReviewFixTests: XCTestCase {
+    func testProgramUsesArgv0AndKeepsShellScripts() {
+        let truncated = ControlPlane.SurfaceContext(pid: 1, executable: "rust-analyzer-p", cwd: "/", arguments: ["/usr/bin/rust-analyzer-proxy", "--stdio"])
+        XCTAssertEqual(NamedLayoutStore.program(for: truncated), "rust-analyzer-proxy --stdio")
+        let script = ControlPlane.SurfaceContext(pid: 1, executable: "bash", cwd: "/", arguments: ["bash", "./deploy.sh"])
+        XCTAssertEqual(NamedLayoutStore.program(for: script), "bash ./deploy.sh")
+        let nested = ControlPlane.SurfaceContext(pid: 1, executable: "zsh", cwd: "/", arguments: ["zsh", "-l"])
+        XCTAssertEqual(NamedLayoutStore.program(for: nested), "shell")
+    }
+
+    func testLightDefaultMigratesOnceThenAChoiceSticks() throws {
+        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: Data(#"{"systemLightThemeName":"Zenwritten Light"}"#.utf8))
+        XCTAssertEqual(migrated.systemLightThemeName, "Harness Light")
+        var chosen = migrated
+        chosen.systemLightThemeName = "Zenwritten Light"
+        let reloaded = try JSONDecoder().decode(HarnessSettings.self, from: try JSONEncoder().encode(chosen))
+        XCTAssertEqual(reloaded.systemLightThemeName, "Zenwritten Light")
+    }
+
+    func testAllDigitFragmentsStillResolve() {
+        let leaf = PaneLeaf(surfaceID: UUID(uuidString: "48213F00-0000-0000-0000-000000000001")!)
+        let tab = Tab(title: "t", rootPane: .leaf(leaf))
+        let session = SessionGroup(tabs: [tab], activeTabID: tab.id)
+        let workspace = Workspace(sessions: [session], activeSessionID: session.id)
+        let snapshot = SessionSnapshot(workspaces: [workspace], activeWorkspaceID: workspace.id)
+        XCTAssertEqual(TargetResolver.resolve("4821", kind: .surface, in: snapshot), .resolved(leaf.surfaceID.uuidString))
+        XCTAssertEqual(TargetResolver.resolve("1", kind: .surface, in: snapshot), .resolved(leaf.surfaceID.uuidString))
+        guard case .notFound = TargetResolver.resolve("7", kind: .surface, in: snapshot) else { return XCTFail() }
+    }
+}
+

@@ -37,10 +37,8 @@ public enum TargetResolver {
         let labeled = unique(all.filter { $0.labels.contains { $0.caseInsensitiveCompare(needle) == .orderedSame } })
         if labeled.count == 1 { return .resolved(labeled[0]) }
         if labeled.count > 1 { return .ambiguous("\(kind.rawValue) '\(needle)'", matches: labeled) }
-        if let position = Int(needle), position >= 1, needle.allSatisfy(\.isNumber) {
-            guard position <= positional.count else {
-                return .notFound("no \(kind.rawValue) at position \(position) (there are \(positional.count))")
-            }
+        let isNumber = needle.allSatisfy(\.isNumber)
+        if isNumber, let position = Int(needle), position >= 1, position <= positional.count {
             return .resolved(positional[position - 1])
         }
         if needle.count >= 4 {
@@ -51,6 +49,9 @@ public enum TargetResolver {
             })
             if fragment.count == 1 { return .resolved(fragment[0]) }
             if fragment.count > 1 { return .ambiguous("\(kind.rawValue) '\(needle)'", matches: fragment) }
+        }
+        if isNumber, needle.count < 4 {
+            return .notFound("no \(kind.rawValue) at position \(needle) (there are \(positional.count))")
         }
         return .notFound("no \(kind.rawValue) matches '\(needle)'")
     }
@@ -93,10 +94,10 @@ public enum TargetResolver {
 
 /// `harness-cli` exit statuses, shared with the JSON API.
 public enum CLIExit {
-    public static let ok: Int32 = 0
-    public static let failed: Int32 = 1
-    public static let usage: Int32 = 2
-    public static let targetNotFound: Int32 = 3
-    public static let unreachable: Int32 = 4
-    public static let interrupted: Int32 = 130
+    public static let ok = Int32(APIExit.ok.rawValue)
+    public static let failed = Int32(APIExit.failed.rawValue)
+    public static let usage = Int32(APIExit.badArguments.rawValue)
+    public static let targetNotFound = Int32(APIExit.ambiguous.rawValue)
+    public static let unreachable = Int32(APIExit.unreachable.rawValue)
+    public static let interrupted = Int32(APIExit.interrupted.rawValue)
 }
