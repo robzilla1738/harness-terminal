@@ -406,8 +406,12 @@ final class PaneContainerView: NSView {
         let path = CGMutablePath()
         path.addRect(bounds)
         for island in islands where island.superview != nil {
-            let rect = convert(island.bounds, from: island)
-            let radius = min(island.layer?.cornerRadius ?? 0, rect.width / 2, rect.height / 2)
+            // The hole stops one point inside the card, under its hairline, so the two
+            // antialiased edges never share a pixel and leave a see-through seam.
+            let overlap = island.layer?.borderWidth ?? 0
+            let rect = convert(island.bounds, from: island).insetBy(dx: overlap, dy: overlap)
+            guard rect.width > 0, rect.height > 0 else { continue }
+            let radius = max(0, min((island.layer?.cornerRadius ?? 0) - overlap, rect.width / 2, rect.height / 2))
             path.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
         }
         gapFill.path = path
@@ -519,7 +523,10 @@ final class PaneIslandView: NSView {
         wantsLayer = true
         let chrome = ChromeLayout.island(separated: separated, splitRadius: Double(HarnessDesign.Radius.overlay))
         layer?.cornerRadius = CGFloat(chrome.cornerRadius)
-        layer?.cornerCurve = .continuous
+        // Circular, not continuous: the gutter fill cuts its holes with CGPath rounded
+        // rects (circular arcs), and the two edges must be the same curve or the corners
+        // show slivers of the desktop.
+        layer?.cornerCurve = .circular
         layer?.masksToBounds = chrome.cornerRadius > 0
         // A separated island carries a hairline so it reads as a card against the
         // gutter, which is painted in the same chrome color.

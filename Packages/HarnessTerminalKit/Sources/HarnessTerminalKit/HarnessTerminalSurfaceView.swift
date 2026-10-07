@@ -1273,7 +1273,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func installIslandCornerMask() {
         metalLayer.cornerRadius = islandCornerRadius
         metalLayer.masksToBounds = islandCornerRadius > 0
-        metalLayer.cornerCurve = .continuous
+        // Circular to match the island and the gutter fill around it.
+        metalLayer.cornerCurve = .circular
         metalLayer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
     }
 

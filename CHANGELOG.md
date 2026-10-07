@@ -11,6 +11,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 Not a release. Local `main` carries this work so the next session starts from it. `HarnessVersion.short` stays 1.12.1. The 1.13–1.17 names are feature slices in this unreleased work, not a version bump.
 
 ### Fixed
+- **Card edges are clean.** The cards, their terminal drawables, and the gutter around them now use one corner curve, and the gutter fill runs a point under each card's hairline. Before, mismatched curves left slivers at the corners and the two antialiased edges left a faint see-through seam.
 - **`harness-cli --host` no longer breaks the app's tunnel.** The app and the CLI share one forward socket per host. A CLI call used to respawn the forward and unlink the app's live socket; it now reuses any forward that answers.
 - **A restored pane starts the new shell on a fresh line.** After a daemon restart, restored history ended mid-prompt and the new shell's greeting ran on from it. A reset-and-newline now sits between them, on screen and in the saved log.
 - **Split gaps are painted.** With a translucent window, the gutter around split islands was a hole straight through to the desktop. It now carries the same chrome fill as the tab row and sidebar, and each split island has a hairline edge.
