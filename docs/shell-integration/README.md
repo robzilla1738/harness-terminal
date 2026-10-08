@@ -40,7 +40,8 @@ yourself instead:
 | zsh | `~/.zshrc` | `source "<…>/shell-integration/harness.zsh"` |
 | fish | `~/.config/fish/config.fish` | `source "<…>/shell-integration/harness.fish"` |
 
-The copies in `docs/shell-integration/` match the scripts installed by Harness.
+The copies in `docs/shell-integration/` carry the same code as the scripts installed by Harness
+(with longer comments).
 
 ## What gets emitted
 

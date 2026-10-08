@@ -24,8 +24,8 @@ Use this path for a fresh install.
 
 2. Pick the Harness controls experience.
 
-   Open **Settings > Terminal > Experience** and choose **Full Terminal** or
-   **Agent Workspace**.
+   Open **Settings > Terminal > Experience** and choose **Full** (Full Terminal) or
+   **Agent** (Agent Workspace).
 
    A new install starts in **Persistent Terminal**: no prefix layer and no
    status line, and sessions survive quitting. Plain is the same look with
@@ -78,15 +78,15 @@ Use this path for a fresh install.
    harness-cli install-hooks codex
    ```
 
-   Use the agent you run: `claude-code`, `codex`, `cursor`, `pi`, `hermes`, or
-   `openclaw`. Harness also detects several agents without hooks.
+   Use the agent you run: `claude-code`, `codex`, `cursor`, `grok`, `opencode`,
+   `pi`, `hermes`, or `openclaw`. Harness also detects several agents without hooks.
 
 ## 2. Mental model
 
 | Harness term | tmux-style idea | What it means |
 | --- | --- | --- |
 | Workspace | Top-level project group | A named group of sessions. |
-| Session | Session | A sidebar row with its own tabs. |
+| Session | Session | A named set of tabs; each window shows one session. |
 | Tab | Window | One terminal tab with a split tree. |
 | Pane | Pane | One PTY-backed terminal inside a tab. |
 | Surface | PTY identity | The daemon-owned terminal behind a pane. |
@@ -111,7 +111,7 @@ When this guide says `prefix %`, press `Ctrl-A`, release it, then press `%`.
 
 Change the prefix in **Settings > Keys**. If the prefix does nothing, check that
 the app is in **Full Terminal** or **Agent Workspace**, or that
-Harness controls are set to On.
+**Command prefix** (Settings > Terminal > Experience) is set to On.
 
 ## 4. Panes and layouts
 
@@ -136,7 +136,8 @@ macOS shortcuts also work:
 | --- | --- |
 | `Cmd-D` | Split side-by-side. |
 | `Cmd-Shift-D` | Split top/bottom. |
-| `Cmd-W` | Close the active tab. |
+| `Cmd-W` | Close the focused pane (the tab when it is the last one). |
+| `Cmd-Option-W` | Close the whole tab. |
 
 Layout commands:
 
@@ -158,8 +159,9 @@ harness-cli zoom-pane --pane <pane-uuid>
 
 ## 5. Tabs, sessions, and workspaces
 
-Harness tabs are tmux-style windows. Sessions live in the sidebar and remain
-visible instead of being hidden behind an attach prompt.
+Harness tabs are tmux-style windows. Sessions stay visible instead of being
+hidden behind an attach prompt: the title-bar sessions button (`Ctrl-Cmd-S`) lists
+them, and sidebar mode (`Cmd-\`) shows each session with its tabs beneath.
 
 | Shortcut | What it does |
 | --- | --- |
@@ -171,7 +173,8 @@ visible instead of being hidden behind an attach prompt.
 | `prefix n` / `prefix p` | Next / previous tab. |
 | `prefix (` / `prefix )` | Previous / next session. |
 | `prefix 0` through `prefix 9` | Jump to workspace 0 through 9. |
-| `Cmd-Shift-N` | New workspace. |
+| `Cmd-Shift-N` | New session. |
+| `Cmd-N` | New session in a new window. |
 
 Useful CLI commands:
 
@@ -262,7 +265,7 @@ Inside `attach-window`:
 | Key | Action |
 | --- | --- |
 | `prefix %` / `prefix "` | Split. |
-| `prefix h/j/k/l` | Select pane. |
+| `prefix Left/Right/Up/Down` | Select pane. |
 | `prefix o` / `prefix ;` | Cycle pane. |
 | `prefix z` | Zoom. |
 | `prefix x` | Kill pane. |
@@ -282,7 +285,11 @@ Single-pane attach is also available:
 
 ```bash
 harness-cli attach --surface <surface-uuid>
+harness-cli attach --surface <surface-uuid> --read-only   # watch without typing or resizing
 ```
+
+It paints the pane's current screen first, the way tmux attaches; `--history`
+replays the whole scrollback into your terminal instead.
 
 ## 8. Command prompt and scripting
 
@@ -303,8 +310,9 @@ key bindings and hooks:
 ```
 
 Hook events cover the full lifecycle (`session-created/renamed/closed`,
-`window-renamed/linked/unlinked/layout-changed`, `alert-*`, `client-attached/detached`,
-`pane-exited`, and the `after-*` command events) — the hook's format tokens describe the
+`window-renamed/linked/unlinked/layout-changed`, `window-pane-changed`, `pane-focus-in/out`,
+`alert-*`, `client-attached/detached`, `pane-exited`, `command-error`, and the `after-*`
+command events) — the hook's format tokens describe the
 event's subject, e.g. `#{session_name}` in a `session-closed` hook names the closed session.
 See [COMMANDS.md](COMMANDS.md#hooks) for the full list.
 
@@ -430,8 +438,10 @@ pane. It supports bash, zsh, and fish.
 ## 12. Agent notifications
 
 Harness watches coding agents in panes and can surface approval or completion
-states through desktop notifications, the sidebar bell, the tab-pill
-working dot, and `Cmd-Shift-U`.
+states through desktop notifications, the notification bell, the mark on each
+tab (a spinner while working, a hand when blocked on you, a check when done, a
+cross on error), and `Cmd-Shift-U`. **Settings > Notifications** has a switch for
+each event, including Failed.
 
 Install hooks where the agent supports hooks:
 
@@ -439,6 +449,8 @@ Install hooks where the agent supports hooks:
 harness-cli install-hooks claude-code
 harness-cli install-hooks codex
 harness-cli install-hooks cursor
+harness-cli install-hooks grok
+harness-cli install-hooks opencode
 harness-cli install-hooks pi
 harness-cli install-hooks hermes
 harness-cli install-hooks openclaw
@@ -452,8 +464,9 @@ harness-cli notify --surface "$HARNESS_SURFACE" --title Agent --body "Needs appr
 
 Then press `Cmd-Shift-U` to jump to the waiting tab.
 
-If macOS banners do not appear, open **System Settings > Notifications > Harness**
-and allow notifications. The in-app waiting state still works even when macOS
+If macOS banners do not appear, check **Settings > Notifications > Delivery**
+(it shows the macOS permission and has a **Send Test** button), or open
+**System Settings > Notifications > Harness** and allow notifications. The in-app waiting state still works even when macOS
 banners are denied.
 
 ## 13. Out-of-box troubleshooting
@@ -462,7 +475,7 @@ banners are denied.
 | --- | --- |
 | `harness-cli: command not found` | Run `harness-cli install`, then add `$HOME/Library/Application Support/Harness/bin` to PATH. |
 | `harness-cli ping` does not print `pong` | Launch Harness once, or run the bundled CLI from `/Applications/Harness.app/Contents/MacOS/harness-cli`. |
-| Prefix does nothing | Choose Full Terminal or Agent Workspace in Settings > Terminal > Experience. |
+| Prefix does nothing | Choose Full or Agent in Settings > Terminal > Experience. |
 | Prompt jumps do nothing | Run `harness-cli install-shell-integration`, then open a new pane. |
 | Agent hook does not notify | Run `harness-cli install-hooks <agent>`, start the agent in a new Harness pane, and verify `$HARNESS_SURFACE` is set. |
 | Desktop banners do not show | Allow Harness in macOS notification settings. |
@@ -472,7 +485,7 @@ banners are denied.
 
 ```text
 Setup
-  1. Settings > Terminal > Experience > Full Terminal or Agent Workspace
+  1. Settings > Terminal > Experience > Full or Agent
   2. harness-cli install
   3. harness-cli ping
   4. harness-cli install-shell-integration

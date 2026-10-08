@@ -27,6 +27,9 @@ your comments and trailing commas survive — never reserialized):
 }
 ```
 
+Each Harness command above also ends with `; printf …` writing an OSC 7501 report to the
+tty, left out here for readability (see [README.md](README.md)).
+
 Re-running `install-hooks openclaw` replaces the managed region in place.
 
 > If your `openclaw.json` already defines a top-level `hooks` object, merge the
@@ -35,4 +38,4 @@ Re-running `install-hooks openclaw` replaces the managed region in place.
 > build, you may prefer wiring `harness-cli notify` into a gateway mapping
 > instead. The command itself (and `$HARNESS_SURFACE`) is the same either way.
 
-The dot color for OpenClaw panes is `#f5a623`.
+The app tile color for OpenClaw panes is `#f5a623`.

@@ -29,7 +29,7 @@ Import happens automatically on first run. When the source config's fingerprint 
 Harness re-applies it only if you have not customized visual settings; otherwise it records the
 new fingerprint and leaves your Harness appearance untouched. Re-import manually any time:
 
-- **Settings → Appearance → Reset to defaults** (re-seeds from the imported config), or
+- **Settings → Appearance → Restore Defaults…** (re-seeds from the imported config), or
 - the `source-config` command (prefix `r` in Full Terminal mode).
 
 Comment lines start with `#`; `#` is **not** stripped from values (so hex colors survive).
@@ -74,7 +74,7 @@ See the [multiplexer guide](MULTIPLEXER_GUIDE.md) for the full command and short
 | `tmux send-keys` | `harness-cli send-keys --surface <id> --keys "…"` |
 | `tmux bind -T copy-mode-vi` | `bind -T copy-mode-vi …` (alias for the vi table; `copy-mode` and `copy-mode-vi` are interchangeable everywhere) |
 | `tmux capture-pane` | `harness-cli capture-pane --surface <id>` (`-S/-E/-e/-J`) |
-| `$TMUX` set inside a pane | `$HARNESS` (and `$HARNESS_SURFACE` for the pane id) |
+| `$TMUX` set inside a pane | `$HARNESS` (and `$HARNESS_PANE` / `$HARNESS_SURFACE` for the pane and its surface) |
 
 The default prefix differs (`Ctrl-A` vs `Ctrl-B`) — change it in Settings if you prefer `Ctrl-B`.
 
@@ -126,5 +126,5 @@ harness-cli set-option -g base-index 1
 ### Deliberate divergences
 
 A few tmux concepts are intentionally *not* reproduced because they conflict with Harness's
-value-typed, session-owned-tabs, always-visible-sessions model — grouped sessions and some
-session-lifecycle options. These are design choices, not gaps.
+value-typed, session-owned-tabs, always-visible-sessions model — some session-lifecycle options
+among them. These are design choices, not gaps; [TMUX_PARITY.md](TMUX_PARITY.md) lists each one.

@@ -37,7 +37,8 @@ requested — the entitlements file contains exactly one key (the sandbox opt-ou
 - Appcast over HTTPS only: `SUFeedURL = https://harnesscli.dev/appcast.xml` (ATS applies;
   no exception domains are declared).
 - Updates are EdDSA-signed: `SUPublicEDKey` is baked into Info.plist; the private key
-  lives only in the release machine's keychain. Sparkle rejects any download whose
+  lives only in the protected `release` environment's secrets (or, for a local release,
+  the release machine's keychain). Sparkle rejects any download whose
   signature doesn't verify, independent of TLS.
 - Sparkle is pinned `upToNextMinor` from an audited release in all three manifests
   (Package.swift / project.yml / project.pbxproj, kept in agreement by the CI
@@ -98,9 +99,13 @@ Semantics (pinned by `ScrollbackPersistenceTests`):
   previously-persisted run left behind.
 - Copy-mode copies are independent of this option: an explicit copy persists to
   `buffers.json` (user-initiated, by design) regardless of `persist-scrollback`.
-- An idle pane's parked screen is an encrypted snapshot. The key is in the macOS
-  keychain, or a mode-`0600` file next to the socket directory on Linux. Turning
-  `persist-scrollback` off stores no scrollback bytes and no parked snapshot.
+- An idle pane's parked screen is an AES-GCM-encrypted snapshot. The key is a mode-`0600`
+  `snapshot.key` file next to the control socket on every platform — the same trust
+  boundary as the socket and the scrollback log beside it (no keychain item, so no access
+  prompt when the daemon binary changes). A daemon built without CryptoKit (Linux) stores
+  the parked screen plain under its `0600` mode, with a header that refuses a park file
+  from another key. Turning `persist-scrollback` off stores no scrollback bytes and no
+  parked snapshot.
   The snapshot bytes are an internal attach frame, not a published wire format.
 
 ## IME

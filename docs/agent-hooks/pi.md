@@ -27,6 +27,9 @@ export function activate(api: any) {
 }
 ```
 
+Each Harness command above also ends with `; printf …` writing an OSC 7501 report to the
+tty, left out here for readability (see [README.md](README.md)).
+
 The extension reads `$HARNESS_SURFACE` (exported by Harness for every pane) so
 the notification lands on the right tab. Re-running `install-hooks pi`
 overwrites this file in place (backing up the previous copy).
@@ -36,4 +39,4 @@ overwrites this file in place (backing up the previous copy).
 > reference and adjust the event names — the `harness-cli notify` command itself
 > is unchanged.
 
-The dot color for Pi panes is `#b48cff`.
+The app tile color for Pi panes is `#b48cff`.

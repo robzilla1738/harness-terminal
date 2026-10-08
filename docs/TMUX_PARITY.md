@@ -3,7 +3,12 @@
 Harness targets **capability parity** with tmux, not byte-for-byte emulation: Harness is a
 native GUI terminal with a daemon-owned session model, so a handful of tmux concepts are
 *adapted* to that architecture and a few are *rejected* with rationale. This document is
-the single honest ledger. Updated last for the v1.10 queue (#140–#154, plus #46): auto-injected
+the single honest ledger. v1.13.0 brought `harness-cli attach` in line with tmux (it paints
+the pane's current screen; `--history` replays scrollback, `--read-only` watches), made
+directional `select-pane` and the `select-layout` templates follow the split tree as drawn,
+made `resize-pane -U/-D/-L/-R N` count cells on the right axis, encoded `send-keys` with the
+target pane's key modes, and named one client per pane to answer terminal queries. Before that,
+the v1.10 queue (#140–#154, plus #46): auto-injected
 OSC 133 shell integration with the `shell-integration` opt-out, the `persist-scrollback`
 option, and prefix `(` / `)` session switching (`switch-client -n/-p` adapted — see ADAPT).
 Before that, v1.9.0 (the #114 roadmap's full run, #115–#138, plus #139): quick terminal, bell
@@ -38,7 +43,7 @@ close-out series was PRs #102–#108. User-facing usage lives in
 | tmux | Harness adaptation | Why |
 |---|---|---|
 | `attach-session` | `harness-cli attach` / `attach-window` (compositor) | The GUI is the primary attached client; terminal attach is the remote/SSH path |
-| `switch-client -n/-p/-t` (session switching) | `next-session` / `previous-session` / `select-session <index>` on the default `prefix (` / `)` keys — cycle/jump the focused sidebar session within the active workspace; bindable verbs shared by the `:` prompt, `keybindings.json`, the compositor, and hooks (no standalone CLI subcommand; `switch-client -T` key tables are at parity above) | Sessions are always-visible sidebar rows grouped in workspaces, not exclusive attachments — "switching the client" means focusing another row, and cycling is workspace-scoped |
+| `switch-client -n/-p/-t` (session switching) | `next-session` / `previous-session` / `select-session <index>` on the default `prefix (` / `)` keys — cycle/jump the focused session within the active workspace; bindable verbs shared by the `:` prompt, `keybindings.json`, the compositor, and hooks (no standalone CLI subcommand; `switch-client -T` key tables are at parity above) | Sessions are always-visible rows (the session switcher, or the sidebar in sidebar mode) grouped in workspaces, not exclusive attachments — "switching the client" means focusing another row, and cycling is workspace-scoped |
 | `start-server` / `kill-server` | `harness-cli start-server` (ensure via launchctl) / `kill-server` (SIGTERM; launchd KeepAlive respawns with sessions restored — `launchctl bootout` for a permanent stop) | launchd supervises the daemon; pretending otherwise would lie |
 | Grouped-session **layout** sharing | Window *create/kill* propagates (overlap-matched, divergence-safe); per-window split layouts may diverge between members. Killing the group's LAST window leaves each member an independent default window (Harness sessions never die from a window kill; tmux would destroy the whole group) | tmux shares one window object; Harness links windows (clones sharing live surfaces) — the model that also powers `link-window` |
 | `default-terminal` | Aliases the `terminal-identity` option | TERM is pinned (`xterm-256color`); identity (TERM_PROGRAM/XTVERSION) is the meaningful adjustable |
@@ -51,7 +56,7 @@ close-out series was PRs #102–#108. User-facing usage lives in
 | `set-option` scopes | Bare `set` defaults to **global** (tmux: the current session); `-s` selects the **session** scope (tmux: server). tmux's server scope ≈ Harness global | One fallback chain (pane→tab→session→workspace→global) instead of two option trees |
 | `session_attached` | Count of registered daemon clients (subscription **or** identify) | Harness has no per-session attach registry; the GUI attaches everything |
 | Option scope flags | `-w` = workspace, `-t` = tab (tmux's window), `-T <target>` for explicit targets | Harness has a workspace level above sessions; documented in COMMANDS.md |
-| `send-keys` named-key encoding | Encoded by the same engine `InputEncoder` as physical keypresses (one encoder), but in **normal cursor-key mode** — the daemon is a byte-pipe with no live per-surface emulator, so it can't consult the target's DECCKM/Kitty state the way tmux does | Normal-mode sequences are what nearly all apps accept; `-H` injects raw bytes when an exact app-mode sequence is required |
+| `send-keys` named-key encoding | Encoded by the same engine `InputEncoder` as physical keypresses (one encoder), with the target pane's DECCKM, keypad, and Kitty modes — read from a mode mirror the daemon keeps on each pane's byte stream rather than a live emulator | Same bytes a keypress would send; `-H` still injects raw bytes when an exact sequence is required |
 
 ## Rejected (with rationale)
 

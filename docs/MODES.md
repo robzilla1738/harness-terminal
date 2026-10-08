@@ -51,19 +51,21 @@ keepSessionsOnQuit (global)  ||  session.persistent (per-session pin)
 ```
 
 - **Global** `keepSessionsOnQuit` keeps its classic "keep everything" meaning and is set by the
-  mode (Plain → off; Persistent/Full/Agent → on). It's the *Settings → Terminal → "Keep
-  sessions running after the window closes"* toggle.
+  mode (Plain → off; Persistent/Full/Agent → on). It's the *Settings → Terminal → Sessions →
+  "Keep sessions running"* toggle.
 - **Per-session** `persistent` pins one session so it survives even when the global switch is
   off (Plain mode). Promote/demote:
-  - GUI: right-click a session in the sidebar → **Keep running after quit** (shown only when the
-    global switch is off, so the checkmark can't lie).
+  - GUI: right-click a session in the sidebar (⌘\ shows it) → **Keep running after quit**
+    (always offered; while the global switch is on it reads *Keep running after quit (all
+    sessions kept)*, since every session survives anyway).
   - CLI: `harness-cli promote-session --session <uuid>` / `demote-session --session <uuid>`.
 
 ## Opting into the prefix + status line without switching modes
 
-The prefix and status line can be overridden independently of the selected mode:
+The prefix and status line can be overridden independently of the selected mode (Settings →
+Terminal → Experience → **Command prefix** / **Status line**):
 
-- Default — derive from the mode.
+- Auto — derive from the mode.
 - On — show the prefix and status line in any mode.
 - Off — hide them even in Full Terminal mode.
 

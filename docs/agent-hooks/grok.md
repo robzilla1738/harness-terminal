@@ -19,6 +19,9 @@ Writes `~/.grok/hooks/harness.json`:
 }
 ```
 
+Each Harness command above also ends with `; printf …` writing an OSC 7501 report to the
+tty, left out here for readability (see [README.md](README.md)).
+
 `$HARNESS_SURFACE` is exported by Harness for every pane, so the hook always
 notifies the right tab. Because this is a dedicated Harness file, re-running
 `install-hooks grok` simply overwrites it — your other `~/.grok/hooks/*.json`
@@ -26,7 +29,7 @@ files are left alone.
 
 ## What you'll see
 
-- The tab pill's dot turns Grok blue when a `grok` / `grok-build` process is
+- The tab's app tile turns Grok blue when a `grok` / `grok-build` process is
   detected in that pane.
 - When Grok finishes (or errors), you get a macOS banner + sidebar entry;
   `Cmd+Shift+U` jumps to the pane.
@@ -37,4 +40,4 @@ files are left alone.
 > notify` command is unchanged. Grok also honors Claude Code / Codex hook
 > conventions, so the event/matcher style works too if your build prefers it.
 
-The dot color for Grok panes is `#1d9bf0`.
+The app tile color for Grok panes is `#1d9bf0`.

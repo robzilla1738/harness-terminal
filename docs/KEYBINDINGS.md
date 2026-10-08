@@ -15,7 +15,7 @@ A `KeySpec` is `[modifier-]…<key>`:
 By default the Option key **types characters** — whatever your macOS keyboard layout
 produces (`@`, `|`, `é`, dead keys like ⌥e e → é), matching Terminal.app, iTerm2, Ghostty,
 and kitty. If you rely on Option as Meta for readline/emacs (`alt-b`, `alt-f` → `ESC b`,
-`ESC f`), switch it in **Settings ▸ Keys ▸ Option Key**: *Meta (Esc+)*, or *Left/Right
+`ESC f`), switch it in **Settings ▸ Keys ▸ Option key**: *Meta* (Esc+key), or *Left Meta* / *Right
 Meta* to keep one Option key for Meta and the other for typing characters (the Ghostty
 `macos-option-as-alt` shape; an imported Ghostty config carries the setting over).
 
@@ -35,17 +35,12 @@ Trigger: the prefix key (default `ctrl-a`, configurable via `settings.prefixKey`
 | `"` | `split-window -v` (top/bottom) |
 | `x` | `kill-pane` |
 | `z` | `zoom-pane` |
+| `Space` | `next-layout` (cycle the tab's layouts) |
 | `&` | `kill-window` |
 | `o` / `;` | `select-pane next` / `previous` |
 | `l` | `select-pane -l` (last / most-recently-active pane) |
 | `Left` / `Right` / `Up` / `Down` | `select-pane -L` / `-R` / `-U` / `-D` |
 | `S-Left` / `S-Right` / `S-Up` / `S-Down` | `resize-pane -L 5` / `-R 5` / `-U 3` / `-D 3` (repeatable — hold under the prefix) |
-
-> **Repeatable bindings (`bind -r`):** a binding created with `bind-key -r` keeps the prefix
-> armed after it fires, so the key repeats without re-pressing the prefix (the resize bindings
-> above ship this way). The window is the `repeat-time` option (ms, default `500`):
-> `:set-option -g repeat-time 750`. Bind your own from the `:` prompt or `keybindings.json`,
-> e.g. `:bind-key -r -T prefix C-j resize-pane -D 5`.
 | `q` | `display-panes` (overlay numbers; press a digit to jump) |
 | `m` / `M` | mark / unmark the active pane (`join-pane` source) |
 | `j` | `join-pane` (join the marked pane into the active one) |
@@ -60,6 +55,12 @@ Trigger: the prefix key (default `ctrl-a`, configurable via `settings.prefixKey`
 | `r` | `source-config` (re-import terminal config) |
 | `:` | open the command prompt |
 
+> **Repeatable bindings (`bind -r`):** a binding created with `bind-key -r` keeps the prefix
+> armed after it fires, so the key repeats without re-pressing the prefix (the resize bindings
+> above ship this way). The window is the `repeat-time` option (ms, default `500`):
+> `:set-option -g repeat-time 750`. Bind your own from the `:` prompt or `keybindings.json`,
+> e.g. `:bind-key -r -T prefix C-j resize-pane -D 5`.
+
 ## Copy-mode key table
 
 Copy mode is fully rebindable via `bind-key -T copy-mode <spec> <command>`. Defaults follow `mode-keys vi`.
@@ -67,19 +68,26 @@ Copy mode is fully rebindable via `bind-key -T copy-mode <spec> <command>`. Defa
 | Key | Action |
 |---|---|
 | `h` / `l` | Cursor left / right |
-| `j` / `k` | Cursor down / up |
+| `j` / `k` | Cursor down / up (the arrow keys work too) |
 | `0` / `$` | Line start / end |
 | `g` / `G` | Top / bottom |
 | `[` / `]` | Jump to previous / next OSC 133 prompt mark (requires shell integration) |
-| `w` / `b` | Next / previous word |
+| `w` / `b` / `e` | Next word / previous word / end of next word (split on `word-separators`) |
+| `W` / `B` / `E` | The same, whitespace-delimited |
+| `^` | Back to indentation |
+| `H` / `M` / `L` | Top / middle / bottom of the window |
+| `f` / `F` / `t` / `T` | Jump to (or before) the next typed character, forward / backward; `;` / `,` repeat / reverse |
 | `PageUp` / `PageDown` | Page up / down |
 | `C-u` / `C-d` | Half page up / down |
 | `v` / `V` / `C-v` | Char / line / rectangle (block) selection |
+| `o` | Other end of the selection |
 | `/` / `?` | Search forward / backward |
 | `n` / `N` | Next / previous match |
 | `y` / `Enter` | Yank selection → clipboard + daemon paste buffer; exit |
 | `p` | Paste most recent buffer into the surface; exit |
 | `q` / `Escape` | Exit copy mode |
+
+With `set-option mode-keys emacs`, copy mode uses an emacs table instead (`C-b`/`C-f`/`C-n`/`C-p`, `C-a`/`C-e`, `M-f`/`M-b`, `M-<`/`M->`, `C-Space` to select, `M-w` to copy), equally rebindable.
 
 Copy-mode is rebindable: `bind-key -T copy-mode <key> <command>` (or `-T copy-mode-vi`, an alias) where `<command>` is `copy-mode -X <action>` (e.g. `copy-pipe "pbcopy"`).
 
@@ -90,9 +98,14 @@ These are `NSMenuItem` bindings defined in `MainMenuBuilder`, not prefix-table e
 | Action | Shortcut |
 |--------|----------|
 | New window (a new session in it) | `⌘N` |
+| New session | `⇧⌘N` |
 | New tab | `⌘T` |
+| Reopen closed tab | `⇧⌘T` |
 | Close the focused pane (the tab when it's the only pane); asks only when a program other than the shell is running | `⌘W` |
 | Close the whole tab | `⌥⌘W` |
+| Close the session | `⇧⌘W` |
+| Switch to tab 1–9 | `⌘1` … `⌘9` |
+| Previous / next tab | `⇧⌘[` / `⇧⌘]` |
 | Select pane left / right / above / below | `⌥⌘←` `⌥⌘→` `⌥⌘↑` `⌥⌘↓` |
 | Previous / next pane | `⌘[` / `⌘]` |
 | Zoom pane | `⇧⌘↩` |
@@ -112,6 +125,7 @@ These are `NSMenuItem` bindings defined in `MainMenuBuilder`, not prefix-table e
 | Tab peek | `⌃⌘P` |
 | Give a palette action its own shortcut | right-click it in the palette ▸ Change Shortcut… |
 | Go to Directory (folder browser on the pane's daemon: ↩ cd, ⌘↩ new tab, ⌥↩ insert path, → open, ← up) | `⌥⌘G` |
+| Increase / decrease / reset font size | `⌘+` (or `⌘=`) / `⌘-` / `⌘0` |
 | Settings | `⌘,` |
 | Enter Full Screen (native, macOS Space transition) | `⌃⌘F` |
 | Toggle Fast Full Screen (non-native, instant fill, no Space animation) | `⌃⌘⇧F` |

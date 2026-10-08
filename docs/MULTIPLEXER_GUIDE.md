@@ -23,7 +23,7 @@ The hierarchy, top to bottom:
 | Term | What it is |
 |---|---|
 | **Workspace** | A named group of sessions (one active workspace at a time). |
-| **Session** | A sidebar entry with its own tab bar. Survives quit if pinned/kept. |
+| **Session** | A named set of tabs; each window shows one session. Survives quit if pinned/kept. |
 | **Tab** | One tab in a session: title, cwd, git branch, agent, and a split tree. |
 | **Pane** | A single terminal (a leaf in the tab's split tree). |
 | **Surface** | The daemon-owned PTY behind a pane (`$HARNESS_SURFACE`). |
@@ -46,8 +46,9 @@ Most multiplexer commands start with a **prefix** keystroke, then a second key.
   entirely (then drive everything from the `:` prompt, the `Cmd-K` palette, and macOS shortcuts).
 - Press **`prefix ?`** any time for a live cheatsheet generated from your current bindings.
 
-> The prefix layer only appears in modes that show Harness controls (Full/Agent modes, or when
-> Harness controls are set to On). In Plain mode you lean on the macOS `Cmd` shortcuts instead.
+> The prefix layer is on by default only in Full Terminal mode; in any other mode set **Command
+> prefix** to On (Settings ▸ Terminal ▸ Experience). Without it you lean on the macOS `Cmd`
+> shortcuts instead.
 
 Everything below that says "`prefix X`" means: tap the prefix, release, then tap `X`.
 
@@ -77,9 +78,10 @@ pane into the current one (Harness's `move-pane`/`join-pane`).
 
 **Type to several panes at once:** `prefix S` toggles `synchronize-panes` for the tab.
 
-> macOS shortcuts work too: `Cmd-D` splits side-by-side, `Cmd-Shift-D` splits top/bottom.
-> In the GUI, directional pane nav is the **arrow keys**; the `attach-window` compositor (§10)
-> uses **`hjkl`** instead.
+> macOS shortcuts work too: `Cmd-D` splits side-by-side, `Cmd-Shift-D` splits top/bottom,
+> `Cmd-Opt-←/→/↑/↓` moves focus, `Cmd-[` / `Cmd-]` cycle panes, `Cmd-Shift-Return` zooms, and
+> `Ctrl-Cmd-=` equalizes splits. In the GUI, directional pane nav under the prefix is the
+> **arrow keys**; the `attach-window` compositor (§10) uses **`hjkl`** instead.
 
 ---
 
@@ -91,7 +93,8 @@ pane into the current one (Harness's `move-pane`/`join-pane`).
 | `prefix ,` | Rename the current tab |
 | `Cmd-1` … `Cmd-9` | Jump straight to tab 1–9 (shown as `⌘N` on the pills) |
 | `Cmd-Shift-[` / `Cmd-Shift-]` | Previous / next tab |
-| `Cmd-T` / `Cmd-W` | New tab / close tab |
+| `Cmd-T` | New tab |
+| `Cmd-W` / `Cmd-Opt-W` | Close the focused pane (the tab with its last pane) / close the whole tab |
 
 Tab titles auto-follow the pane's working directory (or the running agent), so the strip stays
 readable without manual renaming.
@@ -100,18 +103,19 @@ readable without manual renaming.
 
 ## 5. Sessions and workspaces
 
-Sessions are the sidebar rows; each has its own tab strip. **Sessions are always visible** in the
-sidebar rather than something you "attach" to one at a time.
+Each session has its own tab strip, and each window shows one session. The title-bar sessions
+button (`Ctrl-Cmd-S`) lists every session to switch to; in sidebar mode (`Cmd-\`) **sessions are
+always visible** as sidebar rows rather than something you "attach" to one at a time.
 
-- New session / workspace from the sidebar `+`, the palette, or `harness-cli new-session` /
-  `new-workspace`.
+- New session with `Cmd-Shift-N`, the sessions popover, the palette, or `harness-cli new-session`
+  / `new`; a new workspace from the sidebar or `harness-cli new-workspace`. `Cmd-N` opens a new
+  session in a window of its own.
 - `prefix n` / `prefix p` move to the next / previous tab in the active session.
 - `prefix (` / `prefix )` move to the previous / next session in the active workspace.
 - `prefix 0` ... `prefix 9` jump to workspace 0 through 9.
 - **Persistence** (see [MODES.md](MODES.md)): a session survives a *clean* quit if the global
   "keep sessions on quit" is on **or** the session is pinned. Pin/unpin from the sidebar context
   menu or `harness-cli promote-session` / `demote-session`. A crash leaves everything running.
-- `Cmd-Shift-N` makes a new workspace.
 
 **Grouped sessions:** `harness-cli new-session --group-with <session>` creates an independent session
 sharing the target session's window list (linked windows with shared surfaces). Every member sees the
@@ -153,7 +157,7 @@ anything.
 - **`prefix d`** detaches the calling client.
 - In the app: **View ▸ Detach Pane** releases the active pane — it dims with a
   *"Pane released — click to re-grab"* overlay and stops updating while the PTY keeps running.
-  **View ▸ Reattach Pane** (or a click on the overlay) re-grabs it and replays scrollback.
+  **View ▸ Reattach Pane** (or a click on the overlay) re-grabs it: the current screen paints at once and the scrollback fills in behind it.
 - Two windows (or an ssh `attach-window`) can watch the same session; detaching one leaves the
   others live. The PTY only goes away when its tab/pane is actually closed.
 
@@ -243,10 +247,11 @@ harness-cli doctor       --host devbox          # health-check the remote daemon
 (`--host` works on the client commands above; `attach-window` always renders the
 *local* daemon, so run it on the machine whose daemon you want to see.)
 
-The window's sidebar keeps This Mac as one group and puts each other daemon in its own group.
-Sessions sit under the machine that owns them. A split in the other group runs on that daemon.
-The attach is the same framed socket forwarded over your SSH. This remote session is your daemon
-on that machine, over your SSH.
+In the app, **Remote ▸ *host* ▸ Connect** opens that machine in a window of its own, beside your
+local ones. Every window's sidebar keeps This Mac as one group and puts each other daemon in its
+own group. Sessions sit under the machine that owns them. A split in the other group runs on that
+daemon. The attach is the same framed socket forwarded over your SSH. This remote session is your
+daemon on that machine, over your SSH.
 
 Harness forwards the remote socket over `ssh -N -L`, reusing your existing SSH trust — no new
 credentials. Because the daemon owns scrollback and persists it to disk, a remote session's
@@ -380,7 +385,7 @@ end)
 harness.on("tab.created", function(e) harness.tab.label{ tab = e.tab, title = "new" } end)
 ```
 
-A tunneled client doesn't run a GUI action until Settings → Remote Control is on. This Mac always can.
+A tunneled client doesn't run a GUI action until Settings → Terminal → Remote control is on. This Mac always can.
 
 ### Per-host / per-command profiles
 
@@ -406,16 +411,16 @@ live):
 
 ## 13. Agent hooks (notifications)
 
-Harness detects coding agents (Claude Code, Codex, Cursor, Pi, Hermes, OpenClaw, and more) and
-can notify you when one stops or needs input. For the agents with a hook mechanism, wire it up
-once:
+Harness detects coding agents (Claude Code, Codex, Cursor, Grok, OpenCode, Pi, Hermes, OpenClaw,
+and more) and can notify you when one stops or needs input. For the agents with a hook
+mechanism, wire it up once:
 
 ```bash
-harness-cli install-hooks claude-code      # or codex | cursor | pi | hermes | openclaw
+harness-cli install-hooks claude-code      # or codex | cursor | grok | opencode | pi | hermes | openclaw
 ```
 
 It deep-merges into the agent's own config (e.g. `~/.claude/settings.json`), backing it up first
-— never clobbering. Agents without a hook mechanism (aider, gemini, goose, opencode) are detected
+— never clobbering. Agents without a hook mechanism (aider, gemini, goose) are detected
 automatically and notify via Harness's activity path, so there's nothing to install for them.
 
 ### Output triggers
@@ -444,11 +449,11 @@ notification. Configure under `"triggers"` in `settings.json` (saved changes app
 
 | Shortcut | Action | | Shortcut | Action |
 |---|---|---|---|---|
-| `Cmd-T` / `Cmd-W` | New / close tab | | `Cmd-K` | Command palette |
+| `Cmd-T` / `Cmd-W` | New tab / close pane | | `Cmd-K` | Command palette |
 | `Cmd-D` / `Cmd-Shift-D` | Split H / V | | `Cmd-;` | Command prompt |
 | `Cmd-1`…`Cmd-9` | Switch to tab N | | `Cmd-,` | Settings |
 | `Cmd-Shift-[` / `]` | Prev / next tab | | `Cmd-\` | Toggle sidebar |
-| `Cmd-Shift-N` | New workspace | | `Cmd-+` / `-` / `0` | Font bigger / smaller / reset |
+| `Cmd-Shift-N` | New session | | `Cmd-+` / `-` / `0` | Font bigger / smaller / reset |
 | `Cmd-Shift-U` | Jump to next notification | | `prefix ?` | Cheatsheet |
 
 > Coming from another multiplexer? [MIGRATION.md](MIGRATION.md) has a key-by-key translation table

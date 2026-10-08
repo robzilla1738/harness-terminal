@@ -14,7 +14,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | Multi-client sizing | `smallest` (tmux) or `owner`; non-owners reflow locally, see "Viewing at C×R · Take", and can take the size. | Owner/advisory sizing, take, local reflow (designed) |
 | Only one client answers terminal queries | Yes, in both size modes: the size owner, or in `smallest` mode the most recent client to size the pane. | Same |
 | Read-only watching | `attach --read-only`; Copy Watch Command in the app. | Built in from the start (stated) |
-| Idle cost | A pane quiet for a minute has its history held LZ4-compressed; reads decompress a copy. | LZ4 online grid compression, encrypted snapshots |
+| Idle cost | A pane quiet for a minute has its history held LZ4-compressed (macOS daemon; a Linux daemon keeps it as is); reads decompress a copy. | LZ4 online grid compression, encrypted snapshots |
 | Evented PTY I/O | Reads and writes: a pane frozen with Ctrl-S holds a buffer, not a thread. | Yes |
 
 ## Automation
@@ -38,7 +38,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | Tabs and vertical tabs | Title-bar pills or a sidebar. | SuperTabs, vertical tabs |
 | Multiple windows, tab tear-off | ⌘N opens a window; each shows one session and comes back on relaunch. Drag a tab off the bar (or Move Tab to New Window) for a window of its own, onto another window to join its session; sidebar tab rows drag between sessions. | Yes |
 | Dock tile | Up to four agents, ringed by attention; badge counts what needs you. | Deck icons |
-| Tab peek and overview | Yes, with colored previews from the daemon's `vt` capture. | Metal-rendered live previews, gestures |
+| Tab peek and overview | Yes, live: each tab's panes drawn by the terminal renderer itself, laid out like their splits, following new output up to 15 times a second while on screen. | Metal-rendered live previews, gestures |
 | Session names | "drifting cedar" style; rename in the switcher. | Same |
 | Go to directory | ⌥⌘G browser on the pane's daemon, local or remote. | ⇧⌘G |
 | Themes | 492 built in, save and export your own, theme fit for off-palette colors. | 41 designer themes, Oklab harmonization |

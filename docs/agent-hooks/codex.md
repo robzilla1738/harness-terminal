@@ -27,6 +27,9 @@ Code, deep-merged into any existing hooks):
 }
 ```
 
+Each Harness command above also ends with `; printf …` writing an OSC 7501 report to the
+tty, left out here for readability (see [README.md](README.md)).
+
 > **Codex hooks are enabled by default** in current releases — the old
 > `[features] hooks = true` flag only *disables* them, so Harness no longer
 > writes `~/.codex/config.toml`. On a very old Codex that ignores `hooks.json`,
@@ -34,7 +37,7 @@ Code, deep-merged into any existing hooks):
 
 ## What you'll see
 
-- The tab pill's dot turns OpenAI green when Codex is the running agent.
+- The tab's app tile turns OpenAI green when Codex is the running agent.
 - When Codex pauses (waiting on approval, etc.), the pane's status flips to
   `awaiting` and `Cmd+Shift+U` jumps right to it.
 

@@ -21,6 +21,9 @@ hooks:
 # <<< harness-managed <<<
 ```
 
+Each Harness command above also ends with `; printf …` writing an OSC 7501 report to the
+tty, left out here for readability (see [README.md](README.md)).
+
 ## Required: approve the hook
 
 Hermes will not run a shell hook until you approve it:
@@ -36,4 +39,4 @@ commands by design). You can verify with `hermes hooks doctor`.
 > If your `config.yaml` already has a top-level `hooks:` key, merge the Harness
 > entry into it by hand — YAML allows only one `hooks:` mapping per document.
 
-The dot color for Hermes panes is `#ff7e6b`.
+The app tile color for Hermes panes is `#ff7e6b`.

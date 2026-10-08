@@ -25,6 +25,9 @@ export const HarnessNotify = async ({ $ }) => ({
 })
 ```
 
+Each Harness command above also ends with `; printf …` writing an OSC 7501 report to the
+tty, left out here for readability (see [README.md](README.md)).
+
 - `session.idle` fires when the agent finishes a turn and goes quiet.
 - `permission.asked` fires when it needs your approval.
 
@@ -35,8 +38,8 @@ the previous copy).
 
 ## What you'll see
 
-- The tab pill's dot turns OpenCode teal when an `opencode` process is detected.
+- The tab's app tile turns OpenCode teal when an `opencode` process is detected.
 - On idle / permission events you get a macOS banner + sidebar entry;
   `Cmd+Shift+U` jumps to the pane.
 
-The dot color for OpenCode panes is `#56b6c2`.
+The app tile color for OpenCode panes is `#56b6c2`.

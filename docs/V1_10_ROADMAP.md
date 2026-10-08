@@ -1,6 +1,6 @@
 # Harness — v1.10 Roadmap: Faster, Smoother, Better
 
-> **Status:** ✅ **Complete — PR-25 → PR-37 all merged 2026-06-10 as #141–#154** (per-PR markers below; PR-29 landed as two halves, #144 engine + #145 kit/renderer); external #46/#48/#58 landed the same day; shipping in **v1.10.0** (not yet cut — the Release section below remains the runbook). Generated 2026-06-09 against `main` `c73b10f` (v1.9.0 + the merged-but-unreleased #139). Successor to [docs/AUDIT_ROADMAP.md](AUDIT_ROADMAP.md) (PR-1…21 all shipped in v1.9.0; its deferred P5 tail — PR-22/23/24 — is absorbed here as PR-30/31/32, PR-29, and PR-36).
+> **Status:** ✅ **Complete — PR-25 → PR-37 all merged 2026-06-10 as #141–#154** (per-PR markers below; PR-29 landed as two halves, #144 engine + #145 kit/renderer); external #46/#48/#58 landed the same day; shipped in **v1.10.0** (2026-06-10; the Release section below is the record of that cut — [docs/RELEASE.md](RELEASE.md) is the current runbook). Generated 2026-06-09 against `main` `c73b10f` (v1.9.0 + the merged-but-unreleased #139). Successor to [docs/AUDIT_ROADMAP.md](AUDIT_ROADMAP.md) (PR-1…21 all shipped in v1.9.0; its deferred P5 tail — PR-22/23/24 — is absorbed here as PR-30/31/32, PR-29, and PR-36).
 > Executed in the merge order below, one focused themed PR at a time (impl + tests + green CI, merged on review).
 
 ## Context

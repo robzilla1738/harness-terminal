@@ -1,6 +1,6 @@
 # Agent handbook — Harness (extended reference)
 
-Entry point: [../claude.md](../claude.md) (slim agent context). **Not** loaded by default — open when editing the renderer, compositor, daemon IPC, UI chrome, or test matrix.
+Entry point: `claude.md` at the repo root (slim agent context; a local, gitignored file, so it is not in every checkout). **Not** loaded by default — open when editing the renderer, compositor, daemon IPC, UI chrome, or test matrix.
 
 Update this file together with `claude.md` / `agents.md` when those sections change.
 
@@ -61,7 +61,7 @@ keys (`NSTextInputClient`).
 The opt-in config import (`TerminalConfigImporter`) reads compatible source-terminal configs so
 users moving in keep their colors/font — kept by product decision.
 
-**Before touching the terminal renderer or theme system, read the relevant package entry points under `Packages/` and keep [../claude.md](../claude.md) authority rules in mind:**
+**Before touching the terminal renderer or theme system, read the relevant package entry points under `Packages/` and keep the `claude.md` authority rules in mind:**
 `HarnessTerminalEngine`, `HarnessCopyMode`, `HarnessTheme`, `HarnessTerminalRenderer`,
 `HarnessTerminalKit`.
 
@@ -213,12 +213,12 @@ users moving in keep their colors/font — kept by product decision.
 ```
 harness/
 ├── Package.swift, project.yml, Makefile, Harness.entitlements
-├── Harness.xcodeproj/             # generated via xcodegen
-├── .github/workflows/ci.yml       # swift build/test + non-blocking benchmarks
-├── claude.md / agents.md          # slim agent entry (≤40k chars)
+├── Harness.xcodeproj/             # generated via xcodegen (committed; CI builds it)
+├── .github/workflows/ci.yml       # macOS + Linux build/test, Xcode project build, lint, benchmarks
+├── .github/workflows/release.yml  # sign, notarize, publish (see docs/RELEASE.md)
+├── claude.md / agents.md          # slim agent entry (≤40k chars; local, gitignored)
 ├── docs/AGENT-HANDBOOK.md         # this file (extended reference)
-├── CHANGELOG.md, design-system.md # release notes; chrome design tokens (GUI)
-├── marketing/                     # HyperFrames promo video — see marketing/README.md (not app code)
+├── CHANGELOG.md, design-system.md # release notes; chrome design tokens (GUI; design-system.md is local, gitignored)
 ├── Apps/Harness/
 │   ├── Resources/Assets.xcassets, Harness.icns (generated)
 │   └── Sources/HarnessApp/
@@ -226,11 +226,14 @@ harness/
 │       ├── Services/              # SessionCoordinator, MainExecutor, KeybindingsService,
 │       │                          # TerminalPaneRegistry, TerminalPaneRegistryAccess,
 │       │                          # SurfaceShellTracker, CLIInstaller, DaemonLauncher,
-│       │                          # DefaultTerminalManager, DefaultTerminalOpener
-│       ├── Settings/              # SettingsViewController, KeyRecorderView, LiveTerminalPreview
+│       │                          # DefaultTerminalManager, DefaultTerminalOpener,
+│       │                          # RemoteHostsService, SparkleUpdater, ThemeLibrary
+│       ├── Settings/              # SettingsViewController, KeyRecorderView
 │       └── UI/                    # MainSplit, sidebar, tabs, PrefixKeymap, CommandPrompt,
-│                                  # CopyMode, StatusLine, notifications, CommandPalette, Chrome,
-│                                  # DisplayPanesOverlay, AboutPanelController, HarnessControls
+│                                  # StatusLine, notifications, CommandPalette, Chrome,
+│                                  # WorkspaceOverview, SessionSwitcher, TabPeek, PaneHeader,
+│                                  # DockTile, QuickTerminal, DisplayPanesOverlay,
+│                                  # AboutPanelController, HarnessControls
 ├── Packages/
 │   ├── CHarnessSys/               # C ioctl shim (variadic PTY sizing on Linux)
 │   ├── CHarnessBase64/            # Strict OSC 52 base64. Images stay on Foundation
@@ -253,7 +256,10 @@ harness/
 ├── Tools/harness/Sources/HarnessCLI/  # HarnessCLI, AttachClient, WindowAttachClient,
 │                                      # AgentHookInstaller
 ├── Tests/
+│   ├── GridCompositorParityTests/
+│   ├── HarnessAppTests/
 │   ├── HarnessBenchmarks/
+│   ├── HarnessCLITests/
 │   ├── HarnessCopyModeTests/
 │   ├── HarnessCoreTests/
 │   ├── HarnessDaemonTests/
@@ -304,7 +310,7 @@ harness/
 
 JSON over `harness.sock` via `IPCEnvelope` / `IPCReply` (`IPCCodec`). Clients: `DaemonClient` (CLI), `DaemonSessionService` (app). Server: `DaemonServer` → `SurfaceRegistry`.
 
-Extend in [`IPCMessage.swift`](Packages/HarnessCore/Sources/HarnessCore/IPC/IPCMessage.swift).
+Extend in [`IPCMessage.swift`](../Packages/HarnessCore/Sources/HarnessCore/IPC/IPCMessage.swift).
 
 | Group | Requests (representative) |
 |-------|---------------------------|
@@ -312,8 +318,9 @@ Extend in [`IPCMessage.swift`](Packages/HarnessCore/Sources/HarnessCore/IPC/IPCM
 | **Layout** | `newWorkspace`, `newSession`, `newTab`, `newTabInWorkspace`, `newSplit`, `closeTab/Session/Workspace`, `closeEphemeralSessions`, `killPane`, `swapPanes`, `resizePane`, `resizePaneRatio`, `zoomPane`, `breakPane`, `joinPane`, `linkWindow`, `unlinkWindow`, `rotatePanes`, `applyLayout`, `nextLayout`, `previousLayout`, `renumberWindows`, `selectPaneDirectional`, `selectPane`, `respawnPane` |
 | **Selection** | `selectWorkspace`, `selectWorkspaceByName`, `selectSession`, `selectTab`, `reorderTab`, `swapTab`, `reorderSession`, renames |
 | **Metadata** | `updateTabTitle/Cwd/GitBranch`, `setTheme`, `setKeepSessionsOnQuit`, `setSessionPersistent`, `notify`, `clearNotification` |
-| **PTY I/O** | `createSurface`, `ensureSurface`, `attachSurface`, `closeSurface`, `sendData`, `send`/`sendKeys`, `capturePane`, `capturePaneRange`, `pipePane`, `setCopyMode`, `resizeSurface` |
-| **Streaming** | `subscribeSurfaceOutput`, `subscribeSurfaceOutputReadOnly`, `subscribeSnapshot`, `cancelSubscription`, `replayScrollback`, `detachSurface`, `identifyClient`, `detachClient` |
+| **PTY I/O** | `createSurface`, `ensureSurface`, `attachSurface`, `closeSurface`, `sendData`, `send`/`sendKeys`, `capturePane`, `capturePaneRange`, `captureFormatted`, `pipePane`, `setCopyMode`, `resizeSurface`, `writeTempFile` |
+| **Streaming** | `attachStream`, `subscribeSurfaceOutput`, `subscribeSurfaceOutputReadOnly`, `subscribeSnapshot`, `subscribeEvents`, `cancelSubscription`, `replayScrollback`, `replayScrollbackSequenced`, `detachSurface`, `identifyClient`, `detachClient` |
+| **Workspace / API** | `setSurfaceSizeMode`, `takeSurface`, `surfaceContext`, `foregroundProcess`, `processTree`, `paneQuery`, `paneWait`, `listDir`, `moveTab`, `publishKeymap` |
 | **Buffers** | `setBuffer`, `getBuffer`, `listBuffers`, `deleteBuffer`, `pasteBuffer` |
 | **Options / hooks / UI** | `setOption`, `showOptions`, `setEnvironment`, `showEnvironment`, `bindHook`, `unbindHook`, `listHooks`, `displayMessage`, `waitFor` |
 | **Agents** | `detectAgent` |
@@ -329,7 +336,7 @@ guard let match = editor.tab(forSurfaceKey: surfaceKey) else { return }
 editor.setTabStatus(workspaceID: match.workspaceID, tabID: match.tabID, ...)
 ```
 
-**Terminal I/O:** `ensureSurface` → `sendData` (GUI keys) → `subscribeSurfaceOutput` → scrollback replay on attach. A second window uses `subscribeSurfaceOutputReadOnly`: it receives replay and live output, and `DaemonServer` drops `.input` / `.send` / `.sendData` from that fd. `listWorkspaces.tabCount` = sidebar **session** count (legacy field name). Quit leaves the daemon up; the GUI keeps a viewport capped by `TerminalHostView.historyLineCap`, not a second unbounded history.
+**Terminal I/O:** `ensureSurface` → `sendData` (GUI keys) → `attachStream` on attach: one request whose `.attached` reply carries the daemon's current screen, then history as binary output frames (1 MiB chunks), then live output. The app paints that screen first and rebuilds the scrollback off the main thread; a reconnect to the same daemon epoch resumes from the last byte it painted. A daemon without the `attach-stream` capability gets the older `subscribeSurfaceOutput` + `replayScrollback` pair. A read-only watcher (`attachStream` with `readOnly`, or `subscribeSurfaceOutputReadOnly`) receives the same output, and `DaemonServer` drops `.input` / `.send` / `.sendData` from that fd and ignores its size vote. `listWorkspaces.tabCount` = sidebar **session** count (legacy field name). Quit leaves the daemon up; the GUI keeps a viewport capped by `TerminalHostView.historyLineCap`, not a second unbounded history.
 
 ---
 
@@ -337,18 +344,20 @@ editor.setTabStatus(workspaceID: match.workspaceID, tabID: match.tabID, ...)
 
 Binary: `.build/{debug,release}/harness-cli`, `Harness.app/Contents/MacOS/harness-cli`, or `~/Library/Application Support/Harness/bin/harness-cli` after `install`.
 
-Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or [docs/COMMANDS.md](docs/COMMANDS.md).
+Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or [docs/COMMANDS.md](COMMANDS.md).
 
 | Category | Examples |
 |----------|----------|
+| **Everyday** | `ls`, `inspect [<pane>] [-s <session>]`, `new [name] [-- cmd]`, `wait -b <pane> [--for 10m]`, `keymap`, `actions` (all take `--json`); `run [--split right] [--wait] -- <cmd>` |
+| **API / scripting** | `api list`, `api describe <method>`, `api call <method> --args '{…}'`, `events --follow`, `config check`, `config reload`, `do <file.lua>` / `do -e '…'` |
 | **Health** | `ping`, `doctor [--json]`, `daemon-stats`, `list-clients`, `detach-client --client <uuid>` |
 | **Remote** | `remote add --name <n> --ssh <user@host> --socket <remote-path>`, `remote list`, `remote remove`; global `--host <name>` on every daemon command (SSH tunnel to `sessions/remote-hosts.json`) |
 | **Query** | `list-workspaces`, `list-surfaces`, `list-sessions`, `list-windows`, `list-panes`, `has-session`, `get-snapshot`, `list-commands` |
 | **Layout** | `new-workspace --name api`, `new-session --workspace Default --cwd ~`, `new-tab --workspace Default`, `new-split --tab <uuid> --direction horizontal`, `select-workspace/tab/session`, `rename-tab/session`, `rename-workspace --id <uuid> --name "…"`, `close-tab/session`, `promote-session`, `demote-session` |
-| **Pane** | `send-keys --surface <uuid> --keys "C-c Enter"`, `capture-pane [-S <n> -E <n>] [-e] [-J]` (`-e` raw escapes, `-J` joins soft-wraps; plain = grid-reconstructed), `pipe-pane --surface <uuid> "<cmd>"`, `kill-pane`, `swap-pane`, `resize-pane --dir L`, `zoom-pane`, `select-pane --pane <uuid> --dir L`, `break-pane`, `join-pane --src --dst --direction`, `respawn-pane -k`, `copy-mode` |
+| **Pane** | `send-keys --surface <uuid> --keys "C-c Enter"`, `capture-pane [-S <n> -E <n>] [-e] [-J]` (`-e` raw escapes, `-J` joins soft-wraps; plain = grid-reconstructed), `capture-pane --format text\|vt\|html [--trim] [--unwrap] [--screen]`, `pipe-pane --surface <uuid> "<cmd>"`, `kill-pane`, `swap-pane`, `resize-pane --dir L`, `zoom-pane`, `select-pane --pane <uuid> --dir L`, `break-pane`, `join-pane --src --dst --direction`, `respawn-pane -k`, `copy-mode` |
 | **Window link / control** | `link-window --tab <uuid> --target-session <uuid>`, `unlink-window --tab <uuid>`, `control-mode` / `-CC` (tmux control protocol over stdio) |
 | **Layouts** | `select-layout --tab <uuid> --layout tiled`, `next-layout --tab <uuid>`, `previous-layout --tab <uuid>`, `rotate-window --tab <uuid> [--reverse]` |
-| **Attach** | `attach --surface <uuid> [--detach-keys "C-a d"]` (single pane); `attach-window [--tab <id> \| --session <id\|name> \| --window <id>] [--detach-keys …]` (full split layout — the compositor) |
+| **Attach** | `attach --surface <uuid> [--read-only] [--history] [--detach-keys "C-a d"]` (single pane; paints the current screen first, `--history` replays scrollback instead); `attach-window [--tab <id> \| --session <id\|name> \| --window <id>] [--detach-keys …]` (full split layout — the compositor) |
 | **Bindings** | `bind-key` (`bind`), `unbind-key` (`unbind`), `list-keys` (local `keybindings.json`) |
 | **Buffers** | `set-buffer`, `list-buffers`, `show-buffer`, `delete-buffer`, `paste-buffer --surface <uuid>` |
 | **Options** | `set-option` (`setw`) `-g status on`, `show-options -g` |
@@ -364,7 +373,7 @@ Requires daemon running (app or launchd). Full flags: `harness-cli` (no args) or
 
 **Note:** Marked `join-pane -h/-v` is a normal `Command` (prefix `j`). The explicit `harness-cli join-pane --src --dst --direction` form bypasses `CommandParser` and calls IPC directly.
 
-**Remote socket path:** run `harness-cli socket-path` on the remote box to print its control-socket path for `remote add --socket`. Full grammar: [docs/COMMANDS.md](docs/COMMANDS.md) (Remote section) and [docs/MULTIPLEXER_GUIDE.md](docs/MULTIPLEXER_GUIDE.md).
+**Remote socket path:** run `harness-cli socket-path` on the remote box to print its control-socket path for `remote add --socket`. Full grammar: [docs/COMMANDS.md](COMMANDS.md) (Remote section) and [docs/MULTIPLEXER_GUIDE.md](MULTIPLEXER_GUIDE.md).
 
 ---
 
@@ -400,7 +409,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 **`CommandIPCTranslator`** (`HarnessCore/Commands`): pure `Command` + `CommandTarget` → `.requests([IPCRequest])` / `.clientLocal(Command)` / `.unresolved`. The **one** home of the split-direction inversion (`Command.SplitDirection` is divider-orientation — `.vertical` = side-by-side per `CommandParser`; the layout `SplitDirection` is the opposite, so `layoutDirection(for:)` inverts). Adopted by the GUI, the compositor, and `DaemonCommandExecutor` so a prefix verb, a `keybindings.json` override, and a hook-fired command behave identically.
 
-**Multi-client sizing:** `DaemonServer` records each client's requested PTY size per surface and resizes to the **smallest** (tmux `window-size smallest`); a surface grows back when a small client detaches.
+**Multi-client sizing:** `DaemonServer` records each client's requested PTY size per surface and, in the default `size-mode smallest`, resizes to the **smallest** (tmux `window-size smallest`); a surface grows back when a small client detaches. In `size-mode owner` one client owns the size and the others view it. In either mode the daemon names one client per pane to answer terminal queries (DA/DSR).
 
 **Concurrency invariant (compositor):** the stdin reader thread does **only** `read()` — every byte is handed to `renderQueue`, the single owner of all input/mode/layout state (`inPrefix`, `prefixPending`, `pendingTable`, `copyMode`, `rects`, `activeSurface`, …). Never touch that state off `renderQueue`. Teardown drains the queue (`renderQueue.sync`) and sets `tornDown` before the final cleanup write, so no `composeAndWrite` races the reset sequence.
 
@@ -408,7 +417,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 **Tests:** `GridCompositorTests` (borders/SGR/diff), `GridCompositorCopyModeTests`, `PaneRectSolverTests` (layout), `CommandIPCTranslatorTests` (verb mapping + split inversion), `HarnessGridTerminalTests` (engine fidelity), `CopyModeReducerTests`, and renderer/engine conformance suites. Run AppKit-linked grid tests via `xcrun xctest` only if `swift test`'s parallel runner is flaky.
 
-**Parity:** the compositor now has copy-mode + SGR mouse, `-t session:window.pane` targeting, `wait-for`, the `bind -n` root table, and `switch-client -T` modal key tables — the broad tmux verb surface is captured in [docs/COMMANDS.md](docs/COMMANDS.md) and [docs/MULTIPLEXER_GUIDE.md](docs/MULTIPLEXER_GUIDE.md): control mode `-CC`, `link-window`, `display-popup`/`-menu`, `lock`/`clock-mode`, `command-prompt`, `choose-*`, `confirm-before`, `pipe-pane`, `capture-pane -S/-E/-e/-J`, command aliases. Deliberate architectural divergences are called out in [docs/MIGRATION.md](docs/MIGRATION.md); grouped sessions and session-lifecycle options should not be half-wired against Harness's value-typed session-owned tabs + always-visible-sessions model.
+**Parity:** the compositor now has copy-mode + SGR mouse, `-t session:window.pane` targeting, `wait-for`, the `bind -n` root table, and `switch-client -T` modal key tables — the broad tmux verb surface is captured in [docs/COMMANDS.md](COMMANDS.md) and [docs/MULTIPLEXER_GUIDE.md](MULTIPLEXER_GUIDE.md): control mode `-CC`, `link-window`, `display-popup`/`-menu`, `lock`/`clock-mode`, `command-prompt`, `choose-*`, `confirm-before`, `pipe-pane`, `capture-pane -S/-E/-e/-J`, command aliases. Deliberate architectural divergences are called out in [docs/MIGRATION.md](MIGRATION.md); grouped sessions and session-lifecycle options should not be half-wired against Harness's value-typed session-owned tabs + always-visible-sessions model.
 
 ---
 
@@ -427,8 +436,8 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `offMainParserFramePipeline` | **Default ON**; moves terminal byte ingestion and frame building to a per-surface serial worker while AppKit and Metal presentation stay on the main actor. Race-guarded for production: `nextDrawable` keeps its timeout (a stalled GPU/occluded window can't block the main thread), the `lastPlainFrame` row-reuse cache is **generation-tagged** (a frame built against a superseded grid is dropped, never presented), frame builds coalesce **latest-wins** on the worker, a failed encode/present re-arms `needsRender`, and resize/first-paint render **synchronously** (`RenderScheduler.renderSynchronously`) so they land inside the `CATransaction` with no stretch flicker. An explicit stored `false` opts out (legacy byte-for-byte main-thread path) |
 | `showPromptGutter` | Draws the OSC 133 prompt gutter stripe (green/red success/failure) when shell integration marks are present |
 | `prefixKey` | Prefix binding (`ctrl-a`; empty disables); edited via `KeyRecorderView` in Settings |
-| `experienceMode` | `ExperienceMode` (plain/persistent/tmux/agent). Gates chrome + default persistence on the one daemon core. `HarnessSettings()` and `makeDefaults` start at `.persistent`. A file with no `experienceMode` key still decodes as `.full` (raw value `tmux`). See [docs/MODES.md](docs/MODES.md) |
-| `tmuxControlsEnabled` | `Bool?` override for tmux chrome; nil derives from mode. `showsTmuxChrome` (mode default ⊕ override) is the single gate `PrefixKeymap`/`StatusLineView`/onboarding consult; `effectivePrefixKey` is nil when chrome is hidden or the key is blank |
+| `experienceMode` | `ExperienceMode` (plain/persistent/tmux/agent). Gates chrome + default persistence on the one daemon core. `HarnessSettings()` and `makeDefaults` start at `.persistent`. A file with no `experienceMode` key still decodes as `.full` (raw value `tmux`). See [docs/MODES.md](MODES.md) |
+| `prefixKeyEnabled`, `statusLineEnabled`, `harnessControlsEnabled` | `Bool?` overrides for the prefix and the status line; nil derives from the mode. Each resolves separately: the per-component override, then the umbrella `harnessControlsEnabled` (the legacy `tmuxControlsEnabled` key still decodes into it), then the mode default (`effectivePrefixKeyEnabled` → `PrefixKeymap`, `effectiveStatusLineEnabled` → `StatusLineView`). `effectivePrefixKey` is nil when the prefix is off or the key is blank |
 | `scrollbackLines` | Scrollback size. **0 = unlimited sentinel**, which both the daemon replay ring and the GUI line history cap at `ScrollbackBudget.unlimitedSafetyCapBytes` (512 MiB). A positive count is `lines * 160` bytes on the daemon and that many lines in the GUI. |
 | `cursorStyle`, `cursorBlink`, `copyOnSelect` | Terminal behavior |
 | `dividerHex`, `statusLineHex` | Chrome accents (nil → derive from theme) |
@@ -443,11 +452,11 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `windowPaddingBalance` | Center the grid by distributing the sub-cell remainder onto both sides (default on) |
 | `minimumContrast` | WCAG fg/bg contrast floor (1 = off … 21); imported from `minimum-contrast`, enforced by `CellColorResolver` |
 | `appearanceMode`, `systemLightThemeName`, `systemDarkThemeName` | `theme` uses the named theme. `light` uses the light theme and ignores a stored dark canvas. `macos-system` follows `NSApp.effectiveAppearance`. Light appearance (explicit or system-light) firms paint opacity to at least `ChromeMaterial.lightPaintOpacityFloor` (0.94) without writing the stored `backgroundOpacity`. |
-| `paneDensity` | `comfortable` (default): split panes use the island inset and radius, divider thickness 0. `compact`: flush panes, 1pt divider, no island radius. Do not add both the inset and the divider. |
+| `paneDensity` | `comfortable` (default): every pane, a lone one included, is an inset card with the island radius, divider thickness 0, and a header when `paneHeaders` is on. `compact`: flush panes, 1pt divider, no island radius. Do not add both the inset and the divider. |
 | `themeFit` | Optional Oklab contrast correction (`ThemeFitCache`). A missing value follows appearance: on for a light canvas, off for a dark one. A stored bool wins. Reduce Motion does not turn it off. `minimumContrast` stays a separate WCAG floor. |
 | `pasteProtection` | Confirm pastes containing newlines / control chars when bracketed paste is off (default on) |
 | `commandFinishedThresholdSeconds` | Minimum runtime (OSC 133 timing) for the `commandFinished` notification to fire in an unfocused pane (default 10s) |
-| `notificationEvents` | Sparse per-event banner gating keyed by `NotificationEvent` (`agentWaiting`, `agentFinished`, `bell`, `commandFinished`); an absent key uses the event's default. Picks *which* events notify; `systemNotificationsEnabled` / `notificationSoundEnabled` pick *how*. Read via `isEventEnabled(_:)`. The old `commandFinishedNotifications` bool migrates into `notificationEvents["commandFinished"]` |
+| `notificationEvents` | Sparse per-event banner gating keyed by `NotificationEvent` (`agentWaiting`, `agentFinished`, `failed`, `bell`, `commandFinished`; Settings ▸ Notifications shows one switch each); an absent key uses the event's default. Picks *which* events notify; `systemNotificationsEnabled` / `notificationSoundEnabled` pick *how*. Read via `isEventEnabled(_:)`. The old `commandFinishedNotifications` bool migrates into `notificationEvents["commandFinished"]` |
 
 **Terminal config import** (`TerminalConfigImporter`): reads a compatible source terminal config so users migrating in keep their colors/font. The font **face** is imported but the font **size** is not — `fontSize` is Harness-owned (default 16); `makeDefaults`/`applyImportedDefaults`/`resetToImportedConfig` deliberately don't pull `font-size` from the source terminal (a terminal's size preference doesn't carry over). A Ghostty path (parent directory `ghostty`, file `config.ghostty`, or `com.mitchellh.ghostty`) is named Ghostty, and `skippedKeys` lists every key that was not applied, including `font-size`. **Do not strip `#` in values** — only lines starting with `#` are comments. Re-import via Settings or `source-config` / prefix `r`. `minimumContrast` is imported into `settings.json` and enforced by the renderer (`CellColorResolver`).
 
@@ -459,7 +468,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 
 Shell env: `/usr/bin/env HARNESS_SURFACE=<uuid> $SHELL -l`
 
-**Detection:** `AgentDetector` + daemon `AgentScanner` (~1.5s) on process tree from shell PID. Kinds: codex, claude-code, cursor, pi, hermes, openclaw, opencode, aider, gemini, goose, generic. **`install-hooks`** writes configs for six agents (codex, claude-code, cursor, pi, hermes, openclaw); it **deep-merges** into the agent's existing config (e.g. `~/.claude/settings.json`) — never overwrites — and is idempotent (`JSONMerge.deepMerge` in HarnessCore, covered by `HarnessCoreTests`). Codex's hooks use the event/matcher shape (NOT the inert `on_pause`/`on_done` keys) **and** `install` enables `[features] hooks = true` in `~/.codex/config.toml` (Codex won't load `hooks.json` otherwise — mirrors the Skillz integration). Agents with no shell-command hook mechanism (opencode, aider, gemini, goose) are **not** installable — they notify via the hook-independent activity path once detected. The install logic lives in **`HarnessCore.AgentHookInstaller`** (`install`/`isInstalled`/`installableAgents`, `homeOverride` for tests), shared by the CLI shim (`AgentHookInstallerCLI`) **and** the GUI's per-agent "Install hooks" button (Settings ▸ Agents) — no shelling out, no duplication.
+**Detection:** `AgentDetector` + daemon `AgentScanner` (~1.5s) on process tree from shell PID. Kinds: codex, claude-code, cursor, grok, pi, hermes, openclaw, opencode, aider, gemini, goose, generic. **`install-hooks`** writes configs for eight agents (codex, claude-code, cursor, grok, opencode, pi, hermes, openclaw); JSON configs (e.g. `~/.claude/settings.json`) are **deep-merged** — never overwritten — grok/opencode/pi get a Harness-owned file, and hermes/openclaw a marked region; every install backs the file up first and is idempotent (`JSONMerge.deepMerge` in HarnessCore, covered by `HarnessCoreTests`). Each hook runs `harness-cli notify` and also prints an OSC 7501 report to the tty. Codex's hooks use the event/matcher shape (NOT the inert `on_pause`/`on_done` keys) in `~/.codex/hooks.json`; Codex enables hooks by default, so `install` no longer touches `~/.codex/config.toml`. Agents with no hook mechanism (aider, gemini, goose) are **not** installable — they notify via the hook-independent activity path once detected. The install logic lives in **`HarnessCore.AgentHookInstaller`** (`install`/`isInstalled`/`installableAgents`, `homeOverride` for tests), shared by the CLI shim (`AgentHookInstallerCLI`) **and** the GUI's per-agent "Install hooks" button (Settings ▸ Agents) — no shelling out, no duplication.
 
 **OSC 9;4 progress pipeline:** `TerminalProgressReport` (engine, `HarnessTerminalEngine`) parses `ESC ] 9 ; 4 ; <state> ; <value> ST` (ConEmu/Ghostty/Windows Terminal semantics) and invokes `onProgress` on the surface view. `SurfaceProgressTracker` (`@MainActor`, app-local, never persisted) aggregates reports per surface and expires them after a hardcoded **15 s stale timeout** (re-armed by each keep-alive) — matching Ghostty's cleanup window for programs that die without sending the remove. `TabPillView` reads `SurfaceProgressTracker.shared.isActive(_:)` and paints the **working dot** (Ghostty-style tiny indicator before the tab title) while the report is live. **Fallback for agents that don't emit OSC 9;4** (e.g. Codex): the tab dot also lights when `tab.agent?.activity == .working` and the tab is not already `.waiting` — the activity comes from `AgentDetector` / `AgentScanner` output recency via the daemon. An explicit OSC 9;4 report always outranks the fallback.
 
@@ -472,57 +481,70 @@ harness-cli install-hooks claude-code
 harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 ```
 
-Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.json`): `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted` (full list in [docs/COMMANDS.md](docs/COMMANDS.md)).
+Per-agent guides: [docs/agent-hooks/](agent-hooks/). Daemon hooks (`hooks.json`): `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted` (full list in [docs/COMMANDS.md](COMMANDS.md)).
 
-**UI:** `SessionCardRowView`, `TabPillView`, **`AgentChipView`** in sidebar/session rows when agent kind is detected or inferred (static chip, not activity-gated), `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated per-event by `notificationEvents` then by `systemNotificationsEnabled`, and presented even in-foreground via `DesktopNotifier`'s `ForegroundPresenter` (`UNUserNotificationCenterDelegate`). Notifications are the attention channel: a program's own OSC 7501 `blocked`/`done`/`error` report becomes a banner through `ProgramStatusAlerts` (HarnessCore), detector edges through `pushAgentActivityNotifications`; both skip the pane you're looking at, and several alerts in one snapshot share one banner.
+**UI:** `TabPillView`, `SidebarTabRowView`, and Overview tiles lead with an **`IconTileView`** app tile (a `>_` tile for a shell, the agent's brand tile when the kind is detected or inferred) and a `TabStatusView` mark (spinner or progress ring, hand, check, cross), `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated per-event by `notificationEvents` then by `systemNotificationsEnabled`, and presented even in-foreground via `DesktopNotifier`'s `ForegroundPresenter` (`UNUserNotificationCenterDelegate`). Notifications are the attention channel: a program's own OSC 7501 `blocked`/`done`/`error` report becomes a banner through `ProgramStatusAlerts` (HarnessCore), detector edges through `pushAgentActivityNotifications`; both skip the pane you're looking at, and several alerts in one snapshot share one banner.
 
 **Quick terminal (v1.9):** `QuickTerminalController` — a Quake-style dropdown panel on a global hotkey (`quickTerminalEnabled`/`quickTerminalHotkey` settings); slides over the frontmost app, hosts a normal daemon-owned session, hides on focus loss. **Bell feedback (v1.9):** `terminalHostDidRingBell` → `BellFeedback` (audible/visual per `bellMode`), tab badge for background bells, bridged to tmux `visual-bell`/`bell-action` options.
 
-**Notification delivery (one path):** `SessionCoordinator.deliverAgentAlert(event:title:body:)` is the single sink. It first gates on the per-event "which events notify me" choice (`settings.isEventEnabled(event)`, backed by `notificationEvents`), then honors the two delivery toggles — banner (`systemNotificationsEnabled`) and chime (`notificationSoundEnabled`). The `NotificationEvent` cases and their sites: `.agentWaiting` — the explicit `harness-cli notify` path (`pushNewRemoteNotifications`, rich message, owns `.waiting` tabs) plus `terminalHostDidRequestDesktopNotification`; `.agentFinished` — the **hook-independent** `pushAgentActivityNotifications` path firing on the agent-activity `working → idle/awaiting` edge (the AI stopped producing output), so a ping lands for **any detected agent under any shell** with no hook install; `.bell` — `terminalHostDidRingBell`; `.commandFinished` — `terminalHostDidFinishCommand`. The activity path skips `.waiting` tabs (so the two never double-fire), skips the pane you're actively watching, and has a 30s per-surface cooldown so a streaming agent can't spam. Only the OS banner is gated by these settings — the in-app sidebar ring/waiting state (`requestDaemon(.notify)`) is independent.
+**Notification delivery (one path):** `SessionCoordinator.deliverAgentAlert(event:title:body:)` is the single sink. It first gates on the per-event "which events notify me" choice (`settings.isEventEnabled(event)`, backed by `notificationEvents`), then honors the two delivery toggles — banner (`systemNotificationsEnabled`) and chime (`notificationSoundEnabled`). The `NotificationEvent` cases and their sites: `.agentWaiting` — the explicit `harness-cli notify` path (`pushNewRemoteNotifications`, rich message, owns `.waiting` tabs) plus `terminalHostDidRequestDesktopNotification`; `.agentFinished` — the **hook-independent** `pushAgentActivityNotifications` path firing on the agent-activity `working → idle/awaiting` edge (the AI stopped producing output), so a ping lands for **any detected agent under any shell** with no hook install; `.agentWaiting` / `.agentFinished` / `.failed` also come from a program's own OSC 7501 `blocked` / `done` / `error` report (`pushProgramStatusNotifications` over `ProgramStatusAlerts`; more than two in one snapshot share one summary banner); `.bell` — `terminalHostDidRingBell`; `.commandFinished` — `terminalHostDidFinishCommand`. The activity path skips `.waiting` tabs (so the two never double-fire), skips the pane you're actively watching, and has a 30s per-surface cooldown so a streaming agent can't spam. Only the OS banner is gated by these settings — the in-app sidebar ring/waiting state (`requestDaemon(.notify)`) is independent.
 
-**Chrome:** tab-strip controls (`sidebar toggle`, new tab, overflow) use `HarnessDesign.applyGlyphButtonChrome` — no disc, no stroke; hover is a rounded square. Sidebar footer and the notification bell still use `applyIconButtonChrome` (a disc). The active tab and the selected session card share `activeGlassTint` / `activeGlassBorderAlpha` (dark: faint lift; light: white at 0.22, hairline 0.10, no shadow). Session row height is `sessionRowHeight` (58). The card corner is 10. Tab pills are `tabPillHeight` (28). `PaneIslandView` has no header. Single pane: inset 0, radius 0, border 0. Comfortable splits: `ChromeLayout.cardInsets` gap and radius, divider thickness 0. Compact splits: no island inset, 1pt divider.
+**Chrome:** icon buttons (the tab row's sessions button, "+", and overflow; the sidebar's toggle, "+", and footer; pane-header split buttons; the notification bell) use `HarnessDesign.applyGlyphButtonChrome` — no disc, no stroke; hover is a rounded square. `applyIconButtonChrome` (a disc) is only `SoftIconButton`'s unused default style. The active tab and the selected session card share `activeGlassTint` / `activeGlassBorderAlpha` (dark: faint lift; light: white at 0.22, hairline 0.10, no shadow). Session row height is `sessionRowHeight` (58). The card corner is 10 (`Radius.overlay`). Tab pills are `tabPillHeight` (30). Comfortable density: every pane, a lone one included, is a separated `PaneIslandView` card (`ChromeLayout.cardInsets` gap, radius 10, 1pt hairline) with a `PaneHeaderView` when `paneHeaders` is on; divider thickness 0. Compact: no island inset, no header, 1pt divider.
 
-**Brand icons:** `AgentChipView`, `TabPillView`, the `MenuBarController` menu, and Settings ▸ Agents render each agent's mark from **`AgentIconArt`** via **`SVGPathParser`** → `CGPath` and **`AgentIconRenderer`** (`templateImage` tintable by `contentTintColor`; `coloredImage` baked for `NSMenuItem`; `monogramTemplate` for the text-only fallback). Sources (attribution in [docs/THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md)): **lobe-icons** `@lobehub/icons-static-svg` (MIT) for `codex`, `claude`, `cursor`, `openclaw`, `opencode`, `gemini`, `goose`; a **vendor brand mark** (matching the Skillz app) for `pi` (Inflection). No bundled raster assets — vector, crisp at any size, the same procedural approach as the box-drawing. Agents with no mark (Hermes, Aider) fall back to a tinted two-letter monogram (`AgentIconRenderer.monogramTemplate`); the per-agent color override tints it. **Hermes** uses the monogram deliberately: its official mark is a detailed portrait that is illegible at the 14–18px sizes the icon is shown at.
+**Brand icons:** `IconTileView` (tabs, sidebar tab rows, Overview tiles), `PaneHeaderView`, the Dock tile (`DockTileRenderer`), the `MenuBarController` menu, and Settings ▸ Agents render each agent's mark from **`AgentIconArt`** via **`SVGPathParser`** → `CGPath` and **`AgentIconRenderer`** (`templateImage` tintable by `contentTintColor`; `coloredImage` baked for `NSMenuItem`; `monogramTemplate` for the text-only fallback). Sources (attribution in [docs/THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)): **lobe-icons** `@lobehub/icons-static-svg` (MIT) for `codex`, `claude`, `cursor`, `openclaw`, `opencode`, `gemini`, `goose`; a **vendor brand mark** (matching the Skillz app) for `pi` (Inflection). No bundled raster assets — vector, crisp at any size, the same procedural approach as the box-drawing. Agents with no mark (Hermes, Aider) fall back to a tinted two-letter monogram (`AgentIconRenderer.monogramTemplate`); the per-agent color override tints it. **Hermes** uses the monogram deliberately: its official mark is a detailed portrait that is illegible at the 14–18px sizes the icon is shown at.
 
 ---
 
 ## UI and key classes
 
 ```
+Default (title-bar tabs, no sidebar):
 ┌──────────────────────────────────────────────────────────┐
-│ Search 🔔 ▢   │ Tab bar (pills +)                      │
-│ Session cards  ├────────────────────────────────────────┤
-│                │ Terminal panes (native renderer)       │
-│ Footer         │ Status line (FormatString)             │
-└────────────────┴────────────────────────────────────────┘
+│ ● ● ●  ▣ sessions │ Tab pills (app tile, title, mark)  + │
+├──────────────────────────────────────────────────────────┤
+│ Pane cards (header + native renderer)                    │
+│ Status line (FormatString)                               │
+└──────────────────────────────────────────────────────────┘
+
+Sidebar mode (⌘\):
+┌────────────────┬─────────────────────────────────────────┐
+│ ▢ 🔔 +         │ Pane cards (header + native renderer)   │
+│ Session name   │                                         │
+│   tab rows     │                                         │
+│ Footer         │ Status line (FormatString)              │
+└────────────────┴─────────────────────────────────────────┘
 ```
 
-> Sidebar header is **search field + notification bell + sidebar toggle** (single active
-> workspace — the workspace pill / switcher and footer "new workspace" button are dormant,
-> not wired into the UI; `WorkspacePillButton` / `WorkspaceSwitcherPanelView` stay in
-> `HarnessSidebarPanelViewController` for easy re-enable).
+> New installs start with tabs in the title bar and no sidebar; ⌘\ switches to sidebar mode,
+> where the tab row goes away. The sidebar's top row is **toggle + notification bell + "+"**;
+> its footer holds filter, agents, new session, and add remote host. Only one workspace is
+> active — the workspace pill / switcher are dormant, not wired into the UI;
+> `WorkspacePillButton` / `WorkspaceSwitcherPanelView` stay in
+> `HarnessSidebarPanelViewController` for easy re-enable.
 
 | Component | File | Notes |
 |-----------|------|-------|
 | Window shell | `MainWindowController` | Root window, chrome palette |
 | Main menu | `MainMenuBuilder` | Global shortcuts (Cmd+T, Cmd+K, …) |
-| Main split | `MainSplitViewController` | Snapshot observer; sidebar collapse via `SplitChromeDelegate.allowFullCollapse` (divider min drops to 0 for a programmatic collapse, stays 200 for user drags) + a tab-strip toggle button; traffic-light leading inset applies to `WindowTitleStripView` (via `ContentAreaViewController.setTabBarLeadingInset`) when the sidebar collapses — the tab bar itself receives inset 0 (it sits below the title strip, already clear of the lights) |
-| Sidebar | `HarnessSidebarPanelViewController` | Sessions, agents |
-| Tab bar | `TerminalTabBarView` | `SoftIconButton`: `isBordered = false` for `+` |
+| Main split | `MainSplitViewController` | Snapshot observer; sidebar collapse via `SplitChromeDelegate.allowFullCollapse` (divider min drops to 0 for a programmatic collapse, stays 200 for user drags); when the sidebar collapses the tab row gets the traffic-light leading inset via `ContentAreaViewController.setTabBarLeadingInset` |
+| Sidebar | `HarnessSidebarPanelViewController` | Sidebar mode: `SidebarSessionHeaderView` per session, `SidebarTabRowView` per tab |
+| Tab bar | `TerminalTabBarView` | Title-bar row: sessions button, `TabPillView` pills, `+` pinned right; `SoftIconButton`: `isBordered = false` for `+` |
+| Pane header | `PaneHeaderView` | Program mark, pane identity, split-right / split-down; drag source for pane moves; `paneHeaders` setting |
+| Workspace Overview | `WorkspaceOverviewController` | ⌘⇧O live tile grid; thumbnails via `TabThumbnailView` from the daemon's screen capture |
+| Session switcher | `SessionSwitcherController` | ⌃⌘S popover under the sessions button (`KeyablePanel`) |
 | Terminals | `ContentAreaViewController` | Pane mount on structure change |
 | Copy mode | `HarnessCopyMode`, `TerminalHostView` / `HarnessTerminalSurfaceView` | Shared reducer over engine grids; vim/emacs tables; yank to pasteboard + buffer |
 | Status line | `StatusLineView` | `OptionStore` + `FormatString` |
 | Notifications | `NotificationBellButton`, `NotificationDropdownPanelView` | Waiting-tab badge + dropdown |
-| Title strip | `WindowTitleStripView` | Draggable strip above the tab bar (30 pt); shows active tab's `folder · basename` (Ghostty-style); hidden while an agent owns the pane; traffic-light leading inset slides in via `setLeadingInset` when sidebar collapses; hosted by `ContentAreaViewController` |
 | Window edge border | `WindowBorderOverlayView` | Click-through hairline overlay on the window's inner edge; color/opacity from `windowBorderHex` / `windowBorderOpacity` settings; auto-hidden in fullscreen |
 | Scrollbar | `TerminalScrollbarView` | Transient auto-hide overlay scrollbar in `TerminalHostView`; purely decorative (click-through, no track chrome); shares debounced-fade timing with `ResizeHUDView` |
 | Resize HUD | `ResizeHUDView` | Live grid-size overlay shown during resize; gated by `resize-overlay` setting (suppressed on first open); hosted by `TerminalHostView` via `onGridSizeWillChange` callback |
 | Default terminal | `DefaultTerminalManager`, `DefaultTerminalOpener` | Settings ▸ Terminal — `ssh`/`telnet`/`x-man-page` + `.command`/`.tool`; `AppDelegate` opens URLs via `SessionCoordinator.openDefaultTerminalLaunch`. **Gotcha:** `NSWorkspace.setDefaultApplication` completions must be `@Sendable` (invoked off main actor; Swift 6 traps MainActor-isolated closures). |
 | Display panes | `DisplayPanesOverlay` | Prefix `q` / `display-panes` — tmux-style numbered overlay |
 | About | `AboutPanelController` | Menu → About Harness |
-| Onboarding | `OnboardingController` → `HarnessOnboarding` | Thin app bridge to the embedded SwiftUI immersive first-run wizard; first launch + Help → Welcome; dismisses back into Harness, never exits the app |
+| Onboarding | `OnboardingController` → `HarnessOnboarding` | Thin app bridge to the embedded SwiftUI first-run wizard (Welcome → Overview → Notifications → Command line → Ready); first launch + Help ▸ Welcome to Harness; dismisses back into Harness, never exits the app |
 | Prefix / prompt | `PrefixKeymap`, `CommandPromptController` | |
-| Palette | `CommandPaletteController` | `Cmd+K`, MRU; featured themes only |
+| Palette | `CommandPaletteController` | `Cmd+K`, MRU; every menu command (with its menu path); right-click ▸ Change Shortcut…; featured themes listed, the full catalog by search |
 | Menu bar | `MenuBarController` | `NSStatusItem` (Harness mark, template); menu lists active agent sessions + every workspace's sessions from the daemon snapshot (shell-agnostic); rebuilt on open |
 | Design / chrome | `HarnessDesign`, `HarnessChrome` | Tokens, `ChromeBackdrop`, `HarnessPillButton` (theme-aware monochrome primary/secondary — used by onboarding + settings instead of system-blue bezels), Liquid Glass |
 | Toast / blur | `Toast`, `WindowBlur` | Transient feedback, backdrop blur |
@@ -535,7 +557,7 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Shell tracker | `SurfaceShellTracker` | cwd polling via proc tree |
 | Daemon fallback | `DaemonLauncher` | Starts daemon when launchd unavailable |
 | Terminal | `TerminalHostView` | Hosts `HarnessTerminalSurfaceView`; daemon I/O |
-| Settings UI | `SettingsViewController`, `KeyRecorderView`, `LiveTerminalPreview`, `HarnessControls` | Standalone native macOS Settings window via `SettingsWindowController` (not embedded); rebuilt per open; standard titled window, sidebar vibrancy, native search, and pages **Appearance · Colors · Terminal · Keys · Agents · Advanced** as grouped preference sections. Form controls in `HarnessControls.swift` use system semantic colors and the user accent so the window tracks macOS light/dark appearance while keeping Harness-specific controls for sliders, swatches, segmented choices, and searchable selects. `LiveTerminalPreview` remains a theme-true mini pane. **Agents** page = per-agent rows (icon + matched executables + color swatch + one-click Install hooks). **Advanced** = curated daemon-owned `OptionStore` options (status format, mouse, base-index, monitor, repeat-time, pane borders…) read/written via `showOptions`/`setOption` IPC. |
+| Settings UI | `SettingsViewController`, `KeyRecorderView`, `HarnessControls` | Standalone native macOS Settings window via `SettingsWindowController` (not embedded); rebuilt per open; standard titled window, sidebar vibrancy, native search, and pages **Appearance · Colors · Terminal · Keys · Notifications · Agents · Advanced** as grouped preference sections. Form controls in `HarnessControls.swift` use system semantic colors and the user accent so the window tracks macOS light/dark appearance while keeping Harness-specific controls for sliders, swatches, segmented choices, and searchable selects. **Notifications** page = one switch per `NotificationEvent` ("Notify me when") plus Delivery (banner, sound, macOS permission status, test). **Agents** page = per-agent rows (icon + matched executables + color swatch + one-click Install hooks). **Advanced** = curated daemon-owned `OptionStore` options (status format, mouse, base-index, monitor, repeat-time, pane borders…) read/written via `showOptions`/`setOption` IPC. |
 | Daemon | `SurfaceRegistry`, `RealPty`, `DaemonServer` | Session authority |
 | Core | `SessionEditor`, `CommandParser`, `OptionStore`, `HookRegistry`, `PasteBufferStore`, `FormatString` | |
 
@@ -544,15 +566,15 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 ## Build and test
 
 ```bash
-make build | preview | preview-stop | preview-clean | release | release-notes | package | dmg | smoke-dmg | sign | appcast | finalize | hotfix-release | icon | clean
+make build | bench | bench-record | bench-check | preview | preview-stop | preview-clean | release | release-notes | package | dmg | smoke-dmg | sign | appcast | finalize | hotfix-release | icon | clean
 xcodegen generate
 swift test                                    # fast, deterministic
 HARNESS_LIVE_DAEMON_TESTS=1 swift test        # + real shell / socket tests
 ```
 
-`make package` is an alias for `make release`. Optional marketing video targets (`video-dev`, `video-render`, …) live in the Makefile and run under `marketing/video` — see [marketing/README.md](marketing/README.md).
+`make package` is an alias for `make release`.
 
-**CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): **Build & test (macOS)** on `macos-15` (Xcode 16) — full `swift test` + non-blocking benchmarks; **Build & test (Linux, headless daemon)** — daemon/CLI/core/engine only (no GUI/renderer/compositor).
+**CI** ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)), on `macos-26` with Xcode 26.6 (`XCODE_VERSION`, pinned to match `release.yml`): **Build & test (macOS)** — `swift build`, `swift build -c release`, then `swift test --enable-code-coverage` with `HARNESS_LIVE_DAEMON_TESTS=1`; **Build & test (Linux, headless daemon)** in a `swift:6.0` container — daemon/CLI/core/engine only (no GUI/renderer/compositor), debug + release build and the live daemon tests, **advisory for now** (`continue-on-error`); **Xcode project builds** — `xcodebuild` Debug of the committed `Harness.xcodeproj`; **Format lint (advisory)**; **Manifest version agreement** (Sparkle pin in `Package.swift` / `project.yml` / `project.pbxproj`); **Benchmarks (non-blocking)**.
 
 **Release prep:** after updating CHANGELOG.md, run `make release-notes` — it regenerates `GeneratedReleaseNotes.swift` (the post-update "what's new" terminal banner) from the top changelog block. `ReleaseNotesGuardTests` and a `package-app.sh` guard fail on stale notes.
 
@@ -560,7 +582,7 @@ HARNESS_LIVE_DAEMON_TESTS=1 swift test        # + real shell / socket tests
 
 Bundle in `Harness.app/Contents/MacOS/`: `Harness`, `HarnessDaemon`, `harness-cli`; icon at `Contents/Resources/Harness.icns`.
 
-**Building in Xcode:** `xcodegen generate` (only after adding/removing files or editing `project.yml`), then `open Harness.xcodeproj`; pick the **`Harness`** scheme + **My Mac** and ⌘B / ⌘R. The app target depends on `HarnessDaemon` + `harness-cli` and a `postBuildScript` copies both into the bundle, so one build refreshes all three. The generated scheme runs ten test targets (Core, Daemon, TerminalKit, CopyMode, TerminalEngine, Theme, TerminalRenderer, Onboarding, GridCompositorParity, plus the env-gated Benchmarks); only `HarnessCLITests` and `HarnessAppTests` stay SPM-only (they depend on executable targets, which Xcode test bundles can't link) — run those via `swift test`.
+**Building in Xcode:** `xcodegen generate` (only after adding/removing files or editing `project.yml`), then `open Harness.xcodeproj`; pick the **`Harness`** scheme + **My Mac** and ⌘B / ⌘R. The app target depends on `HarnessDaemon` + `harness-cli` and a `postBuildScript` copies both into the bundle, so one build refreshes all three. The generated scheme runs ten test targets (Core, Daemon, TerminalKit, CopyMode, TerminalEngine, Theme, TerminalRenderer, Onboarding, GridCompositorParity, plus the env-gated Benchmarks); `HarnessCLITests` and `HarnessAppTests` stay SPM-only (they depend on executable targets, which Xcode test bundles can't link), and so does `HarnessScriptTests` — run those via `swift test`.
 
 **Daemon restart (critical, learned the hard way):** `HarnessDaemon` is a separate launchd process (`KeepAlive`) — rebuilding/relaunching the app does **not** restart it. Daemon-code changes (PTY env like `COLORTERM`, IPC, session authority) only take effect after you restart it **and** open a fresh pane (PTY env is applied at shell spawn):
 
@@ -590,7 +612,7 @@ App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The lau
 
 **HarnessBenchmarks** (opt-in perf baselines for VT parse / readGrid / scrollback / IPC codec / compositor / frame building / renderer stats / atlas caches / off-main stall sampling): `make bench` or `HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks` (skipped otherwise so `swift test` stays fast). Benchmarks print JSON timing lines; do not gate CI on absolute timings. The engine gate is `testConsumerScoreboard` (`consumer_<workload>` with the `feedNanos`/`frameBuildNanos` split — parse dominates, frame build is ~0.1 ms); `testIPCInclusiveScoreboard` runs the same payloads through the real `IPCCodec` output frame to confirm the daemon framing/chunking tax is negligible. The cross-terminal `Scripts/benchmarks/terminal_stress_runner.py` drain is **not** an engine measure (PTY-drain, ±25–33% on window focus, can move opposite to engine speed) — gate on the in-process scoreboard, not the drain ratios.
 
-**Comparative receipts (`Scripts/scorecard.sh` + [docs/SCORECARD.md](docs/SCORECARD.md)):** the Harness-vs-Ghostty scorecard — cold start (startup.log phase deltas vs wall-clock-to-window), sustained PTY throughput, idle power (`powermetrics`; app + daemon summed), long-session memory, and Harness-side input-to-photon percentiles. Orchestration + reporting only; run sections on quiet, plugged-in owner hardware and commit the results to the doc — numbers are **receipts, never CI gates**, and probe asymmetries are stated in the report itself. `--dry-run` self-checks the helpers (Linux-safe).
+**Comparative receipts (`Scripts/scorecard.sh` + [docs/SCORECARD.md](SCORECARD.md)):** the Harness-vs-Ghostty scorecard — cold start (startup.log phase deltas vs wall-clock-to-window), sustained PTY throughput, idle power (`powermetrics`; app + daemon summed), long-session memory, and Harness-side input-to-photon percentiles. Orchestration + reporting only; run sections on quiet, plugged-in owner hardware and commit the results to the doc — numbers are **receipts, never CI gates**, and probe asymmetries are stated in the report itself. `--dry-run` self-checks the helpers (Linux-safe).
 
 **Frame signpost instrumentation (`HARNESS_FRAME_SIGNPOSTS=1`):** `FrameSignposter` (`HarnessTerminalKit`) is gated off by default (each call is a single branch when disabled, so it is safe on the hot path). Enable with `PREVIEW_SIGNPOSTS=1 make preview` — `open` strips the shell environment, so the preview script passes the flag as a launch argument (`open -n … --args -HARNESS_FRAME_SIGNPOSTS 1`, read via `UserDefaults`); setting `HARNESS_FRAME_SIGNPOSTS=1` in the launch environment also works for direct binary launches (`xctrace … --launch`). This enables `os_signpost` intervals around the per-frame `parse → gridRead → frameBuild → present` pipeline on the `com.robert.harness / frame` track, and `TerminalRenderStats` splits `encodeNanos` into `buildInstancesNanos` (CPU instance build) + `uploadNanos` (GPU buffer upload) so a slow encode is attributable per value boundary (grid read / frame build / instance build / upload). The periodic log line blends samples from ALL presenting surfaces — single visible surface for attribution. The `present` interval is the most informative: it wraps `nextDrawable()` + `inFlightSemaphore.wait()` on the main thread and captures the vsync / GPU back-pressure stall. Every 120 frames it also logs p50/p95/max present latency (µs) to the unified log, readable with `log stream --predicate 'subsystem == "com.robert.harness"'` without Instruments. Profile with `xctrace record --template 'os_signpost'` on a `make preview` run.
 
@@ -612,11 +634,14 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 
 | Action | Shortcut |
 |--------|----------|
-| New workspace / tab | `Cmd+Shift+N` / `Cmd+T` |
-| Close tab / workspace | `Cmd+W` / `Cmd+Shift+W` |
+| New window / session / tab | `Cmd+N` / `Cmd+Shift+N` / `Cmd+T` |
+| Close pane (then tab) / tab / session | `Cmd+W` / `Cmd+Opt+W` / `Cmd+Shift+W` |
+| Select pane / prev-next pane / zoom pane | `Cmd+Opt+arrows` / `Cmd+[` `Cmd+]` / `Cmd+Shift+Return` |
 | Split H / V | `Cmd+D` / `Cmd+Shift+D` |
 | Jump to notification | `Cmd+Shift+U` |
 | Command palette | `Cmd+K` |
+| Workspace Overview / tab peek / switch session | `Cmd+Shift+O` / `Ctrl+Cmd+P` / `Ctrl+Cmd+S` |
+| Keyboard shortcuts list | `Cmd+/` |
 | Command prompt | `Cmd+;` |
 | Settings | `Cmd+,` |
 | Toggle sidebar | `Cmd+\` |
@@ -624,7 +649,7 @@ Global menu shortcuts are defined in `MainMenuBuilder`, not `KeyTableSet.root` (
 | Tab prev/next | `Cmd+Shift+[` / `]` |
 | Font +/- / reset | `Cmd++` / `Cmd+-` / `Cmd+0` |
 
-**Prefix (default `Ctrl-A`):** [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md). Session navigation
+**Prefix (default `Ctrl-A`):** [docs/KEYBINDINGS.md](KEYBINDINGS.md). Session navigation
 rides the prefix table (#46): `prefix (` / `prefix )` cycle the focused sidebar session in the
 active workspace via the bindable `previous-session` / `next-session` verbs (plus
 `select-session <index>`) — shared by the `:` prompt, `keybindings.json`, the compositor prefix

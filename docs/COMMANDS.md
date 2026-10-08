@@ -29,7 +29,7 @@ harness-cli new api -- npm run dev                   # a session running a comma
 | `inspect [<pane>] [-s <session>] [--json]` | One pane (ids, cwd, program, agent, size, program status, process tree) or one session (`api call pane.view` / `session.view`). With no target, the caller's pane. |
 | `new [<name>] [--cwd DIR] [--json] [-- COMMAND…]` | Create a session in the caller's workspace and select it. A command runs in the session's shell, so the session outlives it. Prints the session id, or `{session, surface}`. |
 | `wait (-b <pane>) [--for DURATION] [--until child\|command]` | Wait for the pane's program to exit, or for its prompt to report a finished command, and exit with that status. `--for 90`, `30s`, `10m`, `2h`; running out exits 1. `wait <channel>` is still tmux's `wait-for`. |
-| `keymap [--json]` / `actions [--json]` | Every key binding (KEY, ACTION, ARGS, SOURCE: `keybindings`, or the Lua layer `default`/`config`/`app`); every Lua action and built-in command. |
+| `keymap [--json]` / `actions [--json]` | Every key binding (KEY, ACTION, ARGS, SOURCE: `keybindings`, `palette` for a shortcut assigned in the command palette, or the Lua layer `default`/`config`/`app`; a Lua function binding shows as `(lua function)`); every Lua action and built-in command. |
 | `run [--split right\|below\|left\|above] [--ratio PCT] [--cwd DIR] [--label TEXT] [--surface TARGET] [--no-focus] [--keep-open] [--wait] [--timeout SECS] [--json] -- COMMAND…` | Start a command in a new tab, or in a split of the current (or `--surface`) pane. The pane closes when the command exits unless `--keep-open`. `--wait` blocks and exits with the command's status (with `--keep-open` it waits for the command's shell-integration mark instead). Prints the new surface id, or `{surface, pane, tab}` with `--json`. |
 
 **Targets.** Anywhere `--session`, `--tab`, `--window`, `--surface`, or `--pane` takes an ID, it also takes, in this order:
@@ -138,11 +138,11 @@ These query the current Harness state and do not change your layout.
 | `list-windows [--session <name\|uuid>]` | Tabs across all sessions, or one session's. |
 | `list-panes [--tab <uuid>]` | Panes of the targeted (or active) tab, index-prefixed, active flagged. |
 | `has-session --session <name\|uuid>` | Scripting verb: exit `0` if it exists, `1` if not; prints nothing. |
-| `daemon-stats [--json]` | Daemon pid, version, uptime, surfaces, scrollback, clients, how many idle panes are parked and how small their history is held, and how long startup took (layout load, respawning surfaces, socket ready). A pane parks after a minute without output: its history is kept LZ4-compressed until it prints again. |
+| `daemon-stats [--json]` | Daemon pid, version, uptime, surfaces, scrollback, clients, how many idle panes are parked and how small their history is held, and how long startup took (layout load, respawning surfaces, socket ready). A pane parks after a minute without output: its history is kept LZ4-compressed until it prints again (on macOS; a Linux daemon keeps it as it is). |
 | `list-commands` | Print the bindable command vocabulary. |
 | `list-agents [--waiting]` | List all running agents with state, age, and surface ID. `--waiting` filters to agents that need a response. |
 | `events` | Print session, pane, and agent events as JSON lines. |
-| `process [--surface <id>]` | Print a surface's foreground process as JSON. Defaults to the first surface. |
+| `process [--surface <id>]` | Print a surface's foreground process as JSON. Defaults to the caller's pane, else the active one. |
 | `size-mode <smallest\|owner>` | Set multi-client PTY sizing; it survives a daemon restart. `smallest` is the default (every attached client votes). `owner` follows the client that took the surface: the others reflow their own view (or show the owner's grid when a full-screen program is running), and their pane header reads **Viewing at C×R · Take**. Take Size is also in the pane's menu and the command palette. Each change emits `pane.owner_changed`. |
 | `take-surface --surface <id> [--client <uuid>]` | Make one attached client the size owner of a surface. |
 | `save-layout --name <name>` | Save the active tab's split tree, each pane's directory, and the command line running in it (an idle pane saves as a plain shell). |
@@ -176,7 +176,7 @@ These CLI commands are pure local output and do not require the daemon.
 
 ### Attaching from a plain terminal
 
-`harness-cli attach --surface <id> [--read-only] [--history]` connects a single pane (raw
+`harness-cli attach --surface <id> [--read-only] [--history] [--detach-keys <bytes>]` connects a single pane (raw
 passthrough). It paints the pane's current screen, colors, cursor, and input modes included,
 then goes live, the way tmux attaches; `--history` replays the whole scrollback into your
 terminal first instead. `--read-only` watches: your keys (other than the detach keys) aren't
@@ -200,7 +200,7 @@ reuses your existing SSH trust (keys/agent/config); no new credentials or crypto
 |---|---|
 | `remote add --name <name> --ssh <user@host> --socket <remote-path> [--ssh-arg <arg> …]` | Register a remote daemon. `--socket` is the daemon's control-socket path on the remote (run `harness-cli socket-path` there to print it). Repeat `--ssh-arg` to pass extra ssh options. |
 | `socket-path` | Print this machine's daemon control-socket path (what `remote add --socket` wants). Needs no running daemon. |
-| `remote list` | List registered remotes (`name  ssh-target  socket`). |
+| `remote list [--json]` | List registered remotes (`name  ssh-target  socket`), with `[connected]` when any Harness process holds its tunnel. |
 | `remote remove --name <name>` | Forget a remote and tear down its tunnel. |
 | `<command> … --host <name>` | Run any client command against the named remote instead of the local daemon (`ping`, `new-session`, `send-keys`, `capture-pane`, `doctor`, …). Exception: `attach-window` always renders the **local** daemon — run it on the machine whose daemon you want to see (see the multiplexer guide). |
 
@@ -209,7 +209,7 @@ In the app, **Remote ▸ *host* ▸ Connect** opens that machine in a window of 
 In the app, pasting or dropping an image or file into a pane on a remote host uploads it to that host first (owner-only, swept after a day, up to 11 MB) and pastes the remote path. **Remote ▸ Suggest Tailscale Peers…** probes your online peers over SSH and lists the ones running Harness first, with their socket already filled in. A pane's menu has **Copy Watch Command**: a `harness-cli [--host …] attach --read-only --surface …` line for watching it from any terminal.
 
 Allowed `--ssh-arg` options are validated: `-p` (port), `-i` (identity file), `-J` (jump
-host), `-l` (login user), and the flag-only `-4 -6 -A -T -q -v`. Example:
+host), `-l` (login user), and the flag-only `-4 -6 -A -a -T -q -v` (also `-vv`, `-vvv`). Example:
 `remote add --name devbox --ssh me@devbox --socket "$(ssh -p 2222 me@devbox harness-cli socket-path)" --ssh-arg -p --ssh-arg 2222`.
 
 ## Buffers (paste store)
@@ -284,7 +284,7 @@ Built-in defaults include:
 | `set-hook [--if <format>] <event> "<command>"` | Bindable form (the `:` prompt, `bind-key`, `source-file`) of `bind-hook`. |
 | `show-hooks [<event>]` / `unbind-hook <uuid>` | Bindable list/remove forms. |
 
-Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `session-created`, `session-renamed`, `session-closed`, `window-renamed`, `window-linked`, `window-unlinked`, `window-layout-changed`, `alert-activity`, `alert-silence`, `alert-bell`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted`. Hook commands format with the EVENT's subject (e.g. `#{session_name}` in `session-closed` names the closed session).
+Events: `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `session-created`, `session-renamed`, `session-closed`, `window-renamed`, `window-linked`, `window-unlinked`, `window-layout-changed`, `alert-activity`, `alert-silence`, `alert-bell`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted`, `command-error`, `pane-focus-in`, `pane-focus-out`, `window-pane-changed`. Hook commands format with the EVENT's subject (e.g. `#{session_name}` in `session-closed` names the closed session).
 
 ## JSON API
 
@@ -313,6 +313,7 @@ From inside a pane the daemon sets `HARNESS_SESSION`, `HARNESS_TAB`, `HARNESS_PA
 | `pane.wait` | Wait until the child exits (`until: child`) or OSC 133 D (`until: command`). Default timeout is 30 seconds. Timeout exits 1. |
 | `pane.theme` | Set one pane's theme through a profile rule. |
 | `pane.reset` | RIS (`ESC c`). |
+| `client.list` / `client.disconnect` | Connected clients, or disconnect one by `id`. |
 
 Targets resolve exactly like the CLI's `-t`: a full id, a unique id prefix, a 1-based position, or a case-insensitive label (an unnamed session is `Session N`, as the sidebar shows it). A pane target takes either its pane id or its surface id. `session:`, `tab:`, `pane:`, and `client:` must match that kind. More than one match exits 3 and lists them; nothing is changed.
 
@@ -360,6 +361,8 @@ A GUI action from a tunneled client runs only when Remote Control is on. A local
 | Command | Effect |
 |---|---|
 | `send-keys <tokens…>` | Inject keystrokes (`C-c`, `Up`, `Enter`, etc.) into the active pane. |
+| `capture-pane [--scrollback] [-S <start>] [-E <end>] [-e] [-J] [-p]` | Print a pane's contents. `-S`/`-E` pick a line range (negative counts back from the bottom), `-e` keeps escapes, `-J` joins soft-wrapped lines. |
+| `capture-pane --format text\|vt\|html [--trim] [--unwrap] [--screen]` | The same capture as `api call pane.capture`. `--screen` captures only the visible screen, without scrollback (cheaper: no history is parsed). |
 | `send-prefix` | Send the prefix key to the active pane. |
 | `display-message <format>` | Render a `FormatString` and surface as a non-blocking status toast. |
 | `command-prompt [-p <prompt1,prompt2,…>] "<template>"` | Open the command prompt pre-filled with a template; `%%` / `%1` are replaced by user-typed values. Multiple `-p` prompts are asked in sequence. |

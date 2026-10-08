@@ -55,7 +55,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Command set: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`, `find-window`, `kill-server`, `start-server`, `respawn-window`, `refresh-client`, and more
 - Command prefix keymap (default `Ctrl-A`) with a live cheatsheet (prefix `?`)
 - Agent detection for Claude Code, Codex, Cursor, Grok, Pi, Hermes, OpenClaw, OpenCode, Aider, Gemini, and Goose — each with a brand color and a sidebar chip
-- Agent alerts as desktop banners and a sidebar bell; `Cmd+Shift+U` jumps to whoever is waiting
+- Agent alerts as desktop notifications and a notification bell, with a switch per event in Settings ▸ Notifications (needs you, finished, failed, bell, long command finished); `Cmd+Shift+U` jumps to whoever is waiting
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`) and a native macOS Settings window (`Cmd+,`)
 - 492 built-in color themes with a pure-black Harness default, a deep Harness Navy, and a crisp Harness Light, plus `.harnesstheme` export / import for sharing — double-click (or Open With) a theme file to install it, optionally applying its colors immediately. Settings ▸ Colors ▸ Theme saves the colors on screen as a named theme or exports them; saved and imported themes list in the theme menu
@@ -97,11 +97,15 @@ Install it onto your `PATH`:
 export PATH="$HOME/Library/Application Support/Harness/bin:$PATH"
 ```
 
-The first-run setup in `Harness.app` performs the same local installation for new
-users: it copies `harness-cli` and `HarnessDaemon`, registers the LaunchAgent,
-adds PATH blocks for zsh/bash/fish with backups, installs fish completions, asks
-for notification permission, and offers detected agent hooks. On a fresh install, Harness displays
-a one-shot welcome tour; after an update, it shows release highlights (suppressible via the `update-banner` option).
+On a fresh install, `Harness.app` opens a one-shot first-run tour (Welcome → Overview →
+Notifications → Command line → Ready; reopen it from Help ▸ Welcome to Harness). Its
+Notifications step asks for notification permission and installs hooks for the agents it
+detects in one click. Its optional Command line step performs the same local installation:
+it copies `harness-cli` and `HarnessDaemon`, registers the LaunchAgent only when none is
+working (so the daemon your sessions run in keeps running), adds a PATH block with a backup
+to the shells you use (your login shell plus any shell that already has a profile), and
+writes fish completions when fish is one of them. After an update, Harness shows release
+highlights (suppressible via the `update-banner` option).
 
 ## Remote & headless daemons
 
@@ -182,7 +186,7 @@ HARNESS_LIVE_DAEMON_TESTS=1 swift test  # adds the real socket / PTY / security 
 make bench
 ```
 
-CI runs all three on every push: the deterministic suite, the live daemon tests, and a release build. The live tests spin up a real daemon over a Unix socket and a real PTY, so run them locally before changing the daemon, IPC, or PTY code.
+CI (on pushes to `main` and on pull requests) builds debug and release and runs the whole suite with the live daemon tests switched on, on `macos-26` with Xcode 26.6, the same toolchain releases are built with. It also builds `Harness.xcodeproj`, and builds and tests the headless daemon and CLI on Linux (Swift 6.0; advisory for now). The live tests spin up a real daemon over a Unix socket and a real PTY, so run them locally before changing the daemon, IPC, or PTY code.
 
 `make bench` runs opt-in release benchmarks and prints machine-readable JSON timing lines. Treat those as a structural baseline, not a pass/fail gate — GPU and timing numbers vary by machine.
 
@@ -202,7 +206,7 @@ xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug \
 ## Requirements
 
 - Apple silicon Mac running macOS 15.0 or later for the downloadable DMG
-- Xcode 16+ / Swift 6.0 (to build from source)
+- Xcode 26.6 or later (to build from source; CI and releases use 26.6)
 - For a headless/remote daemon: any machine with Swift 6.0 (macOS or Linux) — build the daemon + CLI with `swift build -c release` (the GUI app, renderer, and Sparkle are macOS-only and are dropped from the Linux build)
 
 ## Documentation

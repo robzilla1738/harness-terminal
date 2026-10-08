@@ -1,0 +1,6 @@
+# GitHub language stats: count Harness's own code. Lua 5.1 is vendored C, and these Swift
+# files are generated data (themes, release notes, Unicode width tables).
+Packages/CLua51/** linguist-vendored
+Packages/HarnessTheme/Sources/HarnessTheme/BundledThemesData.swift linguist-generated
+Packages/HarnessCore/Sources/HarnessCore/ReleaseNotes/GeneratedReleaseNotes.swift linguist-generated
+Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine/Width/CharacterWidthTable.swift linguist-generated
