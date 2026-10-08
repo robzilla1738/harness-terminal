@@ -19,14 +19,18 @@ set -euo pipefail
 #                  summed (two-process architecture stated, never hidden). Needs sudo.
 #   memory         RSS/footprint after a scripted 1M-line scroll session. Run INSIDE each
 #                  terminal:  Scripts/scorecard.sh memory harness
+#                  Harness also records the daemon on its own (footprint by pid, plus its
+#                  ring and parked-pane bytes from `harness-cli daemon-stats`) at baseline,
+#                  after the scroll, and after idle parking (SCORECARD_PARK_SECONDS).
 #   input-latency  Harness-only FrameSignposter percentiles via Scripts/measure-fluidity.sh
 #                  (comparative across Harness builds; Ghostty has no signposts — use an
 #                  external camera/typometer for a cross-terminal number).
-#   report         Collate $SCORECARD_OUT/*.jsonl + *.txt into a markdown table.
-#   --dry-run      Self-check: validates helper presence + the startup.log parser against a
-#                  synthetic fixture. Runs on Linux CI too (no macOS-only calls).
+#   report         Collate $SCORECARD_OUT/*.jsonl, *.tsv + *.txt into markdown tables.
+#   --dry-run      Self-check: validates helper presence + the startup.log, footprint, and
+#                  daemon-stats parsers against synthetic fixtures. Runs on Linux CI too (no
+#                  macOS-only calls).
 #
-# Output dir: $SCORECARD_OUT (default /tmp/harness-scorecard). Results are plain text/JSONL
+# Output dir: $SCORECARD_OUT (default /tmp/harness-scorecard). Results are plain text/TSV/JSONL
 # so `report` (and humans) can diff them.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,8 +39,12 @@ RUNNER="$REPO_ROOT/Scripts/benchmarks/terminal_stress_runner.py"
 LAUNCHES="${SCORECARD_LAUNCHES:-10}"
 POWER_SECONDS="${SCORECARD_POWER_SECONDS:-60}"
 MEMORY_LINES="${SCORECARD_MEMORY_LINES:-1000000}"
+# The daemon parks a pane after 60s without output, checking every 30s.
+PARK_SECONDS="${SCORECARD_PARK_SECONDS:-100}"
+CLI="${SCORECARD_CLI:-harness-cli}"
+DAEMON_MEMORY="$OUT_DIR/memory-daemon.tsv"
 
-usage() { sed -n '4,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '4,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 note() { printf '\033[1m[scorecard]\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[31m[scorecard] error:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -46,6 +54,26 @@ die() { printf '\033[31m[scorecard] error:\033[0m %s\n' "$*" >&2; exit 1; }
 # code path the real cold-start section uses.
 parse_startup_log() {
     awk '/^[A-Za-z]+ \+[0-9.]+ms$/ { phase=$1; ms=$2; sub(/^\+/, "", ms); sub(/ms$/, "", ms); print phase "\t" ms }' "$1"
+}
+
+# phys_footprint in bytes from `footprint --format bytes` output.
+parse_footprint() { awk '$1 == "phys_footprint:" { print $2; exit }' "$1"; }
+
+# "pid<TAB>live ring<TAB>parked panes<TAB>parked raw<TAB>parked held" from `harness-cli
+# daemon-stats --json`. The live ring is raw bytes; a parked pane's ring is held LZ4-compressed.
+parse_daemon_stats() {
+    python3 - "$1" <<'PY'
+import json, sys
+stats = json.load(open(sys.argv[1]))
+keys = ("pid", "totalScrollbackBytes", "parkedSurfaceCount", "parkedRawBytes", "parkedStoredBytes")
+print("\t".join(str(stats.get(key) or 0) for key in keys))
+PY
+}
+
+# Markdown rows for $DAEMON_MEMORY.
+daemon_memory_table() {
+    awk -F'\t' 'function mb(b) { return sprintf("%.1f MB", b / 1048576) }
+        { printf "| %s | %s (%s) | %s | %d | %s -> %s |\n", $1, mb($2), $3, mb($4), $5, mb($6), mb($7) }' "$1"
 }
 
 self_check() {
@@ -65,12 +93,30 @@ daemonConnected +88.0ms
 firstSnapshot +93.4ms
 EOF
     parsed="$(parse_startup_log "$fixture" | awk -F'\t' '$1 == "firstDrawablePresented" { print $2 }')"
-    rm -f "$fixture"
     [ "$parsed" = "41.5" ] || die "startup.log parser self-check failed (got '$parsed', want '41.5')"
+
+    cat > "$fixture" <<'EOF'
+HarnessDaemon [4242]: 64-bit    Footprint: 75497472 B (16384 bytes per page)
+
+Auxiliary data:
+    phys_footprint: 75497472 B
+    phys_footprint_peak: 91226112 B
+EOF
+    parsed="$(parse_footprint "$fixture")"
+    [ "$parsed" = "75497472" ] || die "footprint parser self-check failed (got '$parsed', want '75497472')"
+
+    cat > "$fixture" <<'EOF'
+{"build":127,"clientCount":2,"parkedRawBytes":8388608,"parkedStoredBytes":1048576,"parkedSurfaceCount":3,"pid":4242,"snapshotRevision":9,"subscriberCount":4,"surfaceCount":4,"totalScrollbackBytes":2097152,"uptimeSeconds":120}
+EOF
+    parsed="$(parse_daemon_stats "$fixture")"
+    rm -f "$fixture"
+    [ "$parsed" = "$(printf '4242\t2097152\t3\t8388608\t1048576')" ] \
+        || die "daemon-stats parser self-check failed (got '$parsed')"
 
     if [ "$(uname)" = "Darwin" ]; then
         command -v powermetrics >/dev/null || note "warning: powermetrics not found (idle-power needs it)"
         command -v footprint >/dev/null || note "warning: footprint not found (memory falls back to ps RSS)"
+        command -v "$CLI" >/dev/null || note "warning: $CLI not found (memory's daemon receipts need it; set SCORECARD_CLI)"
         [ -d "/Applications/Ghostty.app" ] || command -v ghostty >/dev/null \
             || note "warning: Ghostty not installed — sections degrade to Harness-only"
     else
@@ -205,11 +251,33 @@ idle_power() {
     cat "$result" >&2
 }
 
+# Append one daemon receipt to $DAEMON_MEMORY: "phase<TAB>footprint bytes<TAB>probe" then the
+# parse_daemon_stats fields. The footprint is the daemon's alone (by pid), never summed with the
+# app. Prints nothing: output into this pane would wake it before it parks.
+sample_daemon() {
+    local phase="$1" stats="$OUT_DIR/daemon-stats-$1.json" fp="$OUT_DIR/daemon-footprint-$1.txt"
+    "$CLI" daemon-stats --json > "$stats" || die "$CLI daemon-stats failed (set SCORECARD_CLI to this daemon's harness-cli)"
+    local row pid bytes probe=phys_footprint
+    row="$(parse_daemon_stats "$stats")"
+    pid="${row%%$'\t'*}"
+    footprint --format bytes --noCategories "$pid" > "$fp" 2>/dev/null || true
+    bytes="$(parse_footprint "$fp")"
+    if [ -z "$bytes" ]; then
+        probe=rss
+        bytes=$(( $(ps -o rss= -p "$pid") * 1024 ))
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$phase" "$bytes" "$probe" "${row#*$'\t'}" >> "$DAEMON_MEMORY"
+}
+
 memory() {
     local terminal="${1:-}"
     [ -n "$terminal" ] || die "usage: scorecard.sh memory <harness|ghostty> (run INSIDE that terminal)"
     mkdir -p "$OUT_DIR"
     local result="$OUT_DIR/memory-$terminal.txt"
+    if [ "$terminal" = harness ]; then
+        rm -f "$DAEMON_MEMORY"
+        sample_daemon baseline
+    fi
     note "memory: scrolling $MEMORY_LINES lines through this terminal, then sampling the host app"
     python3 - "$MEMORY_LINES" <<'PY'
 import sys
@@ -225,12 +293,19 @@ PY
         echo "terminal: $terminal  lines: $MEMORY_LINES  date: $(date -u +%FT%TZ)"
         if command -v footprint >/dev/null; then
             case "$terminal" in
-                harness) footprint Harness HarnessDaemon 2>/dev/null || true ;;
+                harness) footprint Harness 2>/dev/null || true ;;
                 *) footprint Ghostty 2>/dev/null || true ;;
             esac
         fi
         ps axo rss,comm | grep -Ei "harness|ghostty" | grep -v grep || true
     } > "$result"
+    if [ "$terminal" = harness ]; then
+        sample_daemon scrolled
+        note "waiting ${PARK_SECONDS}s for the daemon to park idle panes — leave this pane alone"
+        sleep "$PARK_SECONDS"
+        sample_daemon parked
+        note "daemon receipts -> $DAEMON_MEMORY"
+    fi
     note "memory sample -> $result"
     cat "$result" >&2
 }
@@ -285,6 +360,14 @@ for r in rows:
 PY
         echo
     done
+    if [ -f "$DAEMON_MEMORY" ]; then
+        echo "### Daemon memory"
+        echo
+        echo "| phase | daemon footprint (probe) | live ring (raw) | parked panes | parked ring (raw -> held) |"
+        echo "|---|---|---|---|---|"
+        daemon_memory_table "$DAEMON_MEMORY"
+        echo
+    fi
     for f in "$OUT_DIR"/idle-power.txt "$OUT_DIR"/memory-*.txt "$OUT_DIR"/input-latency-harness.txt; do
         [ -e "$f" ] || continue
         echo "### $(basename "$f" .txt)"

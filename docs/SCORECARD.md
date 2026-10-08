@@ -21,7 +21,8 @@ padding 0, 160×48 grid, same theme brightness class.
 | Sustained throughput | `Scripts/benchmarks/terminal_stress_runner.py` run **inside** each terminal — first-party byte payloads, MB/s drained end-to-end, 5 runs, compare medians | None — the runner is terminal-agnostic by design. **Re-measure the issue #27 workloads (ansi_sgr / attributes / unicode) first**: that loss predates the #31 parse speedups and #139 UCD width tables. If still behind, the follow-up is measurement-first profiling of the SGR/attr dispatch path — no speculative engine surgery. |
 | Input-to-photon | CGEvent injection + `FrameSignposter` percentiles (`Scripts/measure-fluidity.sh`, p50/p95/p99) | Harness-only: Ghostty has no equivalent probe. Cross-terminal latency needs an external camera/typometer; signposter numbers compare Harness against its own previous releases. |
 | Idle power | `powermetrics --samplers tasks --show-process-energy`, 60 s, 4 panes open, one window unfocused | Harness app + HarnessDaemon are **summed** — the two-process architecture is part of the result, never hidden. |
-| Long-session memory | 1 M lines scrolled through a pane, then `footprint(1)` (fallback `ps` RSS) | The GUI history line cap follows the daemon scrollback byte budget (about 160 bytes per line). Compare like-for-like caps. The 2026-06-10 memory row predates that cap. |
+| Long-session memory | 1 M lines scrolled through a pane, then `footprint(1)` of the app (fallback `ps` RSS) | The GUI history line cap follows the daemon scrollback byte budget (about 160 bytes per line). Compare like-for-like caps. The 2026-06-10 memory row predates that cap. |
+| Daemon memory (idle cost) | Harness only, in the same `memory harness` run. The daemon's own `phys_footprint` (by pid from `harness-cli daemon-stats --json`, fallback `ps` RSS; `SCORECARD_CLI` picks the CLI) at three points: baseline, after the 1 M-line scroll, and after `SCORECARD_PARK_SECONDS` (default 100) of silence, past the 60 s park threshold and its 30 s check. Each row also has the daemon's live ring bytes (raw) and its parked panes with their ring raw vs held (LZ4) | Never summed with the app. The parked row needs the pane left alone through the wait: any output into it wakes it. Parking covers every idle pane, not only the one that scrolled. |
 
 ### Running it
 
@@ -31,7 +32,7 @@ Scripts/scorecard.sh cold-start         # both apps, N=10 each
 Scripts/scorecard.sh throughput harness # inside a Harness pane
 Scripts/scorecard.sh throughput ghostty # inside a Ghostty window
 Scripts/scorecard.sh idle-power         # sudo; leave both idle
-Scripts/scorecard.sh memory harness     # inside each terminal
+Scripts/scorecard.sh memory harness     # inside each terminal (Harness adds daemon rows; ~2 min)
 PREVIEW_SIGNPOSTS=1 make preview && Scripts/scorecard.sh input-latency
 Scripts/scorecard.sh report             # markdown to paste below
 ```
