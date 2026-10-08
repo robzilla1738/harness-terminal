@@ -167,8 +167,10 @@ public enum IPCRequest: Codable, Sendable {
     case foregroundProcess(surfaceID: String)
     /// Foreground process plus working directory, for layout capture.
     case surfaceContext(surfaceID: String)
-    /// Grid capture through `PaneCapture` (`text`, `html`, or `vt`).
-    case captureFormatted(surfaceID: String, format: String, trim: Bool, unwrap: Bool)
+    /// Grid capture through `PaneCapture` (`text`, `html`, or `vt`): history and screen, or with
+    /// `screen` the visible screen alone, which never parses history. Older clients send no
+    /// `screen`; older daemons ignore it and send history too.
+    case captureFormatted(surfaceID: String, format: String, trim: Bool, unwrap: Bool, screen: Bool? = nil)
     /// Child, foreground process, and ancestors as JSON.
     case processTree(surfaceID: String)
     /// `pwd`, `title`, `size`, or `program_status` as JSON.

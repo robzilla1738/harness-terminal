@@ -489,6 +489,30 @@ final class PerformanceBenchmarks: XCTestCase {
         printBenchmark("unwatched_panes_20x1mib_screens", nanos: nanos, fields: [("heap_bytes", "\(heap)")])
     }
 
+    /// What the Overview's thumbnail poll costs the daemon per pane: the full VT capture it used
+    /// to take (history and screen; cold, then with the grid held) against the screen capture it
+    /// takes now, and the heap the full capture's grid holds until its hold runs out.
+    func testThumbnailCaptureScreenVersusFull() throws {
+        try skipUnlessEnabled()
+        for ring in [1 << 20, 8 << 20] {
+            let pty = try unwatchedPane(ring: ring, output: scrollingLog(bytes: ring))
+            defer { pty.close() }
+            waitForScreen(pty)
+            let label = "\(ring >> 20)mib"
+            var screen = ""
+            let screenNanos = timedNanos { screen = pty.captureFormatted(format: "vt", trim: false, unwrap: false, screen: true) }
+            let before = heapInUse()
+            var full = ""
+            let coldNanos = timedNanos { full = pty.captureFormatted(format: "vt", trim: false, unwrap: false) }
+            let held = heapInUse() - before
+            let warmNanos = timedNanos { full = pty.captureFormatted(format: "vt", trim: false, unwrap: false) }
+            XCTAssertEqual(full.components(separatedBy: "\n").suffix(48).joined(separator: "\n"), screen)
+            printBenchmark("thumbnail_capture_screen_\(label)", nanos: screenNanos, fields: [("bytes", "\(screen.utf8.count)")])
+            printBenchmark("thumbnail_capture_full_cold_\(label)", nanos: coldNanos, fields: [("bytes", "\(full.utf8.count)"), ("grid_heap_bytes", "\(held)")])
+            printBenchmark("thumbnail_capture_full_held_\(label)", nanos: warmNanos)
+        }
+    }
+
     private func heapInUse() -> Int {
         var stats = malloc_statistics_t()
         malloc_zone_statistics(nil, &stats)

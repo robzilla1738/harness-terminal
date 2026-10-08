@@ -76,12 +76,13 @@ final class TabThumbnailView: NSView {
             let client = DaemonClient(endpoint: endpoint)
             var captures: [SurfaceID: TerminalThumbnail] = [:]
             for surface in surfaces {
-                // Untrimmed, so the capture's last `rows` lines are the screen.
+                // The screen alone, untrimmed: `rows` lines. An older daemon sends its history
+                // too, and the thumbnail keeps the last `rows` lines either way.
                 guard case let .text(json)? = try? client.request(.paneQuery(surfaceID: surface.uuidString, kind: "size"), timeout: 1),
                       let size = try? JSONDecoder().decode(PaneSize.self, from: Data(json.utf8)),
                       size.cols > 0, size.rows > 0,
                       case let .text(vt)? = try? client.request(
-                          .captureFormatted(surfaceID: surface.uuidString, format: "vt", trim: false, unwrap: false), timeout: 1
+                          .captureFormatted(surfaceID: surface.uuidString, format: "vt", trim: false, unwrap: false, screen: true), timeout: 1
                       )
                 else { continue }
                 captures[surface] = TerminalThumbnail(capture: vt, columns: size.cols, rows: size.rows, style: style)

@@ -386,14 +386,19 @@ public final class TerminalEmulator: VTParserHandler {
     /// The OSC 133 semantic mark on a copy-mode-space line, or nil.
     public func mark(atBufferLine index: Int) -> SemanticMark? { current.mark(atBufferLine: index) }
 
-    /// The full buffer as plain-text lines for `capture-pane`. `joinWrapped` (tmux `-J`)
-    /// joins soft-wrapped physical rows into their logical line.
-    public func captureLines(joinWrapped: Bool) -> [String] { current.captureLines(joinWrapped: joinWrapped) }
-
-    /// Cell lines for styled capture (HTML / VT). Same wrap join as `captureLines`.
-    public func captureCellLines(joinWrapped: Bool) -> [[TerminalGridCell]] {
-        current.captureCellLines(joinWrapped: joinWrapped)
+    /// The full buffer as plain-text lines for `capture-pane`, or the screen alone without
+    /// `history`. `joinWrapped` (tmux `-J`) joins soft-wrapped physical rows into their logical line.
+    public func captureLines(joinWrapped: Bool, history: Bool = true) -> [String] {
+        current.captureLines(joinWrapped: joinWrapped, history: history)
     }
+
+    /// Cell lines for styled capture (HTML / VT). Same wrap join and `history` as `captureLines`.
+    public func captureCellLines(joinWrapped: Bool, history: Bool = true) -> [[TerminalGridCell]] {
+        current.captureCellLines(joinWrapped: joinWrapped, history: history)
+    }
+
+    /// Whether screen row `row` soft-wraps into the next.
+    func screenRowWraps(_ row: Int) -> Bool { current.isLineWrapped(current.historyCount + row) }
 
     /// Virtual-line span `[first, last]` of the logical (soft-wrapped) line containing virtual
     /// `line` (space: `[history ++ viewport]`, 0 = oldest). Drives triple-click logical-line

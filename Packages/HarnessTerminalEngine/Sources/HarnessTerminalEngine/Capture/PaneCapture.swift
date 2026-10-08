@@ -10,16 +10,16 @@ public enum PaneCapture {
         return render(term: term.emulatorForCapture, format: format, trim: trim, unwrap: unwrap)
     }
 
-    /// Render the emulator the daemon already caught up. Capture calls this so the
-    /// PTY read loop does not rebuild the grid.
-    public static func render(term: TerminalEmulator, format: String, trim: Bool, unwrap: Bool) -> String {
+    /// Render the emulator the daemon already caught up: its history and screen, or the screen
+    /// alone without `history`. Capture calls this so the PTY read loop does not rebuild the grid.
+    public static func render(term: TerminalEmulator, format: String, trim: Bool, unwrap: Bool, history: Bool = true) -> String {
         switch format {
         case "html":
-            return html(term.captureCellLines(joinWrapped: unwrap), trim: trim)
+            return html(term.captureCellLines(joinWrapped: unwrap, history: history), trim: trim)
         case "vt":
-            return vt(term.captureCellLines(joinWrapped: unwrap), trim: trim)
+            return vt(term.captureCellLines(joinWrapped: unwrap, history: history), trim: trim)
         default:
-            var lines = term.captureLines(joinWrapped: unwrap)
+            var lines = term.captureLines(joinWrapped: unwrap, history: history)
             if trim { lines = trimLines(lines) }
             return lines.joined(separator: "\n")
         }
@@ -98,12 +98,27 @@ public enum PaneCapture {
         let grid = term.readGrid()
         var out = term.isAlternateScreenActive ? "\u{1b}[?1049h" : ""
         out += "\u{1b}[0m\u{1b}[H\u{1b}[2J"
+        var continues = false
         for row in 0 ..< grid.rows {
             let start = row * grid.cols
             var cells = Array(grid.cells[start ..< start + grid.cols])
-            while let last = cells.last, isBlank(last), last.background == .none, !last.inverse { cells.removeLast() }
-            guard !cells.isEmpty else { continue }
-            out += "\u{1b}[\(row + 1);1H" + vtRow(cells)
+            // A soft-wrapped row is written out to its last column, so its continuation's first
+            // character wraps onto the next row as it did, except the blank a wide character
+            // left when it didn't fit: it wraps again and leaves that blank. Other rows drop
+            // their unwritten tail.
+            let wraps = row < grid.rows - 1 && term.screenRowWraps(row)
+            if !wraps {
+                while let last = cells.last, isUnwritten(last) { cells.removeLast() }
+            } else if let last = cells.last, isUnwritten(last), grid.cells[start + grid.cols].width == .wide {
+                cells.removeLast()
+            }
+            if continues {
+                // An emptied continuation still needs a character to wrap onto it, erased after.
+                out += cells.isEmpty ? " \u{1b}[1K" : vtRow(cells)
+            } else if !cells.isEmpty {
+                out += "\u{1b}[\(row + 1);1H" + vtRow(cells)
+            }
+            continues = wraps
         }
         let modes = term.modes
         let flags: [(Bool, String)] = [
@@ -125,6 +140,13 @@ public enum PaneCapture {
         let pen = sgrCodes(term.penCell)
         out += pen.isEmpty ? "\u{1b}[0m" : "\u{1b}[0;\(pen)m"
         return Data(out.utf8)
+    }
+
+    /// A cell nothing was written to (a written space reads differently in a trimmed capture).
+    private static func isUnwritten(_ cell: TerminalGridCell) -> Bool {
+        var plain = cell
+        plain.hyperlinkID = 0
+        return plain == .blank
     }
 
     private static func vtRow(_ cells: [TerminalGridCell]) -> String {

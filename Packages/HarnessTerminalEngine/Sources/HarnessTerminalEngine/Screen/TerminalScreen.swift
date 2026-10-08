@@ -581,11 +581,12 @@ final class TerminalScreen {
     /// reflected faithfully, unlike a raw byte-stream strip). A wide glyph's `spacerTail`
     /// column is skipped; codepoint 0 reads as a space. When `joinWrapped` (tmux `-J`),
     /// physical rows that ended in a soft autowrap are concatenated with their continuation
-    /// into one logical line; otherwise every physical row is one line.
-    func physicalRows() -> [(cells: [TerminalGridCell], wrapped: Bool)] {
+    /// into one logical line; otherwise every physical row is one line. Without `history`, the
+    /// viewport alone.
+    func physicalRows(history includeHistory: Bool = true) -> [(cells: [TerminalGridCell], wrapped: Bool)] {
         var phys: [(cells: [TerminalGridCell], wrapped: Bool)] = []
-        phys.reserveCapacity(history.count + rows)
-        for h in history { phys.append((h.cells, h.wrapped)) }
+        phys.reserveCapacity((includeHistory ? history.count : 0) + rows)
+        if includeHistory { for h in history { phys.append((h.cells, h.wrapped)) } }
         for r in 0 ..< rows {
             phys.append((Array(cells[r * cols ..< (r + 1) * cols]), rowWrapped[r]))
         }
@@ -593,8 +594,8 @@ final class TerminalScreen {
     }
 
     /// Logical lines of cells. `joinWrapped` concatenates a soft-wrapped row with its continuation.
-    func captureCellLines(joinWrapped: Bool) -> [[TerminalGridCell]] {
-        let phys = physicalRows()
+    func captureCellLines(joinWrapped: Bool, history: Bool = true) -> [[TerminalGridCell]] {
+        let phys = physicalRows(history: history)
         guard joinWrapped else { return phys.map(\.cells) }
         var out: [[TerminalGridCell]] = []
         var current: [TerminalGridCell] = []
@@ -611,8 +612,8 @@ final class TerminalScreen {
         return out
     }
 
-    func captureLines(joinWrapped: Bool) -> [String] {
-        let phys = physicalRows()
+    func captureLines(joinWrapped: Bool, history: Bool = true) -> [String] {
+        let phys = physicalRows(history: history)
 
         func text(_ cells: [TerminalGridCell], trimTrailing: Bool) -> String {
             var end = cells.count

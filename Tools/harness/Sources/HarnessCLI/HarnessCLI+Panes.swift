@@ -30,17 +30,19 @@ extension HarnessCLI {
     static func handleCapturePane(_ args: [String], client: DaemonClient) throws {
         guard let surface = flagValue(args, flag: "--surface") else {
             fputs("Usage: harness-cli capture-pane [--surface <id>] [--scrollback] [-S <start>] [-E <end>] [-e] [-J] [-p]\n"
-                + "       harness-cli capture-pane [--surface <id>] --format text|vt|html [--trim] [--unwrap]\n", harnessStderr)
+                + "       harness-cli capture-pane [--surface <id>] --format text|vt|html [--trim] [--unwrap] [--screen]\n", harnessStderr)
             exit(1)
         }
-        // `--format`/`--trim`/`--unwrap`: the same capture as `api call pane.capture`.
-        if let format = flagValue(args, flag: "--format") ?? ((args.contains("--trim") || args.contains("--unwrap")) ? "text" : nil) {
+        // `--format`/`--trim`/`--unwrap`/`--screen`: the same capture as `api call pane.capture`.
+        let formatted = ["--trim", "--unwrap", "--screen"].contains(where: args.contains)
+        if let format = flagValue(args, flag: "--format") ?? (formatted ? "text" : nil) {
             guard ["text", "vt", "html"].contains(format) else {
                 fputs("capture-pane: --format must be text, vt, or html\n", harnessStderr)
                 exit(CLIExit.usage)
             }
             let response = try checkedRequest(client, .captureFormatted(
-                surfaceID: surface, format: format, trim: args.contains("--trim"), unwrap: args.contains("--unwrap")
+                surfaceID: surface, format: format, trim: args.contains("--trim"), unwrap: args.contains("--unwrap"),
+                screen: args.contains("--screen")
             ), timeout: 10)
             if case let .text(text) = response { print(text) }
             return

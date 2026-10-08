@@ -306,7 +306,7 @@ From inside a pane the daemon sets `HARNESS_SESSION`, `HARNESS_TAB`, `HARNESS_PA
 | `pane.swap` / `pane.move` / `pane.detach` | Swap with `with`; move next to `to` on a `side` (`left`, `right`, `above`, `below`; a pane alone in its tab takes the tab with it); break out into its own tab. |
 | `pane.resize` / `pane.focus_direction` | Move a divider (`direction`, `amount` cells); focus the neighbour in `direction`. |
 | `pane.write` / `pane.send_key` | Write text, or send key tokens. Cursor keys follow DECCKM. `hex: true` sends raw bytes. |
-| `pane.capture` | `text`, `html`, or `vt`. `trim` drops trailing whitespace. `unwrap` joins soft-wrapped rows. |
+| `pane.capture` | `text`, `html`, or `vt`. `trim` drops trailing whitespace. `unwrap` joins soft-wrapped rows. `screen` captures only the visible screen, without scrollback (cheaper: no history is parsed). |
 | `pane.process` / `pane.pwd` / `pane.title` / `pane.size` | Process tree, working directory as a `file://` URL plus the owner, tab title, cell size. `pane.view` returns all of these at once. |
 | `pane.list_dir` | Names in a directory on the daemon that owns the pane. The root is that pane's cwd unless `path` is set. `find-files` stays a separate SSH `find`. |
 | `pane.program_status` | OSC 7501 records. See [PROGRAM-STATUS.md](PROGRAM-STATUS.md). |

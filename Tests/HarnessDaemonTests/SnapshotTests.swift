@@ -289,6 +289,108 @@ final class SnapshotTests: XCTestCase {
         XCTAssertFalse(pty.readLoopRunsAuthoritativeParser)
     }
 
+    /// A screen-only capture renders the same from the full grid, from the screen grid, and from
+    /// the parked screen's VT painted into a fresh grid, in every format, and it is the last rows
+    /// of the full capture (what the thumbnails used to cut out of it).
+    func testScreenCapturesMatchAcrossGridsAndThePark() {
+        let lines: [String] = (0 ..< 300).map { "\u{1b}[3\($0 % 8);4\(($0 + 3) % 8)mline \($0)\u{1b}[0m plain\r\n" }
+        let corpus: [String] = [
+            lines.joined(),
+            "wide 日本語テキスト and e\u{301}combined 👍🏽 " + String(repeating: "界", count: 30) + "\r\n",
+            String(repeating: "soft-wrapped words ", count: 9) + "\r\n" + String(repeating: "x", count: 39) + "界tail\r\n",
+            "\u{1b}[1;3;4:3;9;53;58;2;10;20;30mstyles\u{1b}[0m \u{1b}[2;5;7;8mmore\u{1b}[0m\r\n",
+            "\u{1b}[44mblue to the end\u{1b}[K\u{1b}[0m\r\n\u{1b}[31;4mred underlined blanks\u{1b}[K   \u{1b}[0m\r\n",
+            "\u{1b}[38;5;202;48;2;1;2;3mcolors\u{1b}[0m \u{1b}(0lqqk\u{1b}(B drawn\r\n",
+            "a\tb\ttabbed\r\n\u{1b}[2Aover\u{1b}[2B\r\nfamily 👨‍👩‍👧 done\r\n",
+            String(repeating: "z", count: 45) + "\u{1b}[2K\r\n",
+            "\u{1b}[?1049h\u{1b}[H\u{1b}[2Jeditor \u{1b}[7mstatus\u{1b}[0m\u{1b}[3;8r\u{1b}[8;1H" + String(repeating: "y\n", count: 12),
+            "\u{1b}[r\u{1b}[?1049lback on the main screen\r\n",
+        ]
+        let full = AuthoritativeParser()
+        let screen = AuthoritativeParser(historyLines: 1)
+        var ring: [SnapshotByteSpan] = []
+        var sequence: UInt64 = 1
+        for part in corpus {
+            ring.append(SnapshotByteSpan(sequence: sequence, data: Data(part.utf8)))
+            sequence += UInt64(part.utf8.count)
+            full.catchUp(ring: ring, cols: 40, rows: 10)
+            screen.catchUp(ring: ring, cols: 40, rows: 10)
+            guard let fullTerm = full.terminal, let screenTerm = screen.terminal, let frame = full.frame() else {
+                return XCTFail("no grid")
+            }
+            let painted = TerminalEmulator(cols: 40, rows: 10)
+            painted.feed(frame.vt)
+            for format in ["text", "vt", "html"] {
+                for trim in [false, true] {
+                    for unwrap in [false, true] {
+                        let expected = PaneCapture.render(term: fullTerm, format: format, trim: trim, unwrap: unwrap, history: false)
+                        let label = "\(format) trim \(trim) unwrap \(unwrap) after \(part.prefix(12))"
+                        XCTAssertEqual(PaneCapture.render(term: screenTerm, format: format, trim: trim, unwrap: unwrap, history: false), expected, label)
+                        XCTAssertEqual(PaneCapture.render(term: painted, format: format, trim: trim, unwrap: unwrap, history: false), expected, "parked: \(label)")
+                    }
+                }
+            }
+            let lines = PaneCapture.render(term: fullTerm, format: "vt", trim: false, unwrap: false).components(separatedBy: "\n")
+            XCTAssertEqual(
+                PaneCapture.render(term: fullTerm, format: "vt", trim: false, unwrap: false, history: false),
+                lines.suffix(10).joined(separator: "\n")
+            )
+        }
+    }
+
+    /// A screen capture reads the screen grid and builds no grid with history; it is the last
+    /// rows of a full capture. A full capture's grid goes once it sits unused for the hold, and
+    /// captures that keep coming keep it.
+    func testAScreenCaptureBuildsNoHistoryGridAndAFullCapturesGridGoesAfterItsHold() throws {
+        let pty = try catPty()
+        pty.start()
+        defer { pty.close() }
+        pty.historyGridHold = 1
+        pty.injectSyntheticOutput(Data((0 ..< 60).map { "row \($0)\r\n" }.joined().utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("row 59") })
+
+        let screen = pty.captureFormatted(format: "vt", trim: false, unwrap: false, screen: true)
+        XCTAssertFalse(pty.gridIsResident, "no history parsed for the screen")
+        XCTAssertTrue(screen.contains("row 59"))
+        XCTAssertFalse(screen.contains("row 0"))
+        let full = pty.captureFormatted(format: "vt", trim: false, unwrap: false)
+        XCTAssertTrue(full.contains("row 0"))
+        XCTAssertEqual(full.components(separatedBy: "\n").suffix(24).joined(separator: "\n"), screen)
+        XCTAssertTrue(pty.gridIsResident)
+
+        let polling = Date()
+        while Date().timeIntervalSince(polling) < 1.5 {
+            _ = pty.captureGrid(start: -2, end: nil, joinWrapped: false)
+            XCTAssertTrue(pty.gridIsResident, "a capture that keeps coming keeps the grid")
+            usleep(100_000)
+        }
+        XCTAssertTrue(waitUntil(timeout: 5) { !pty.gridIsResident }, "an unused grid goes after its hold")
+    }
+
+    /// A parked pane answers a screen capture from the screen kept at the park: it stays parked,
+    /// with no grid in the heap, persisted or not.
+    func testAParkedPaneAnswersAScreenCaptureWithoutAGrid() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("harness-park-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for persisted in [true, false] {
+            let pty = try catPty()
+            pty.start()
+            defer { pty.close() }
+            if persisted { pty.setParkMaterialForTesting(directory: directory, key: Data(repeating: 5, count: 32)) }
+            pty.injectSyntheticOutput(Data("\u{1b}[1mparked\u{1b}[0m screen\r\n".utf8))
+            XCTAssertTrue(waitUntil { pty.screenGrid.fedThrough == pty.ringEnd && pty.ringEnd > 1 })
+            let live = ["text", "vt", "html"].map { pty.captureFormatted(format: $0, trim: true, unwrap: true, screen: true) }
+
+            pty.parkIfIdle(now: Date().addingTimeInterval(120))
+            let parked = ["text", "vt", "html"].map { pty.captureFormatted(format: $0, trim: true, unwrap: true, screen: true) }
+            XCTAssertEqual(parked, live, "persisted \(persisted)")
+            XCTAssertNotNil(pty.parkedFootprint, "still parked")
+            XCTAssertFalse(pty.screenGrid.resident)
+            XCTAssertFalse(pty.gridIsResident)
+        }
+    }
+
     /// What a client painting `frame` would show.
     private func screenText(_ frame: ScreenFrame?) -> String {
         guard let frame else { return "" }

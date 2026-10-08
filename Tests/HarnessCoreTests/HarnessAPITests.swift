@@ -8,9 +8,24 @@ final class HarnessAPITests: XCTestCase {
         XCTAssertTrue(json.contains("https://json-schema.org/draft/2020-12/schema"))
         XCTAssertTrue(json.contains("\"title\" : \"pane.capture\"") || json.contains("\"title\" : \"pane.capture\""))
         XCTAssertTrue(json.contains("pane.capture"))
-        for token in ["text", "html", "vt", "pane", "format", "trim", "unwrap"] {
+        for token in ["text", "html", "vt", "pane", "format", "trim", "unwrap", "screen"] {
             XCTAssertTrue(json.contains(token), "schema missing \(token)")
         }
+    }
+
+    func testPaneCaptureTakesTheScreenOnlyFlag() {
+        let catalog = APICatalog(panes: [
+            APIPaneRecord(surfaceID: "surface-a", paneID: "pane-a", tabID: "tab", sessionID: "session", label: "shell"),
+        ])
+        let plan = { (arguments: [String: APIArgument]) in
+            HarnessAPI.plan(method: "pane.capture", arguments: arguments, catalog: catalog, environment: APIEnvironment(environment: [:]))
+        }
+        guard case let .capture(_, _, _, _, screen) = plan(["pane": .string("shell"), "screen": .bool(true)]) else {
+            return XCTFail("expected a capture")
+        }
+        XCTAssertTrue(screen)
+        guard case let .capture(_, _, _, _, history) = plan(["pane": .string("shell")]) else { return XCTFail("expected a capture") }
+        XCTAssertFalse(history, "history and screen unless asked")
     }
 
     func testIntegerArgumentsStayIntegers() {

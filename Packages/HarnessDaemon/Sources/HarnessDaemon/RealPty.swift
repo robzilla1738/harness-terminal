@@ -176,6 +176,12 @@ public final class RealPty: @unchecked Sendable {
     /// never from the PTY read loop.
     private let snapshotLock = NSLock()
     private let authoritative = AuthoritativeParser()
+    /// How long the capture grid outlives its last capture: up to 100,000 lines of cells (about
+    /// 700 MB for an 8 MiB log at 160 columns), so a one-off capture lets it go soon, while one
+    /// that polls keeps it and parses only what's new. The two below are under `snapshotLock`.
+    var historyGridHold: TimeInterval = 10
+    private var historyGridUsedAt = DispatchTime.now()
+    private var historyGridReleasePending = false
     /// The screen alone, for attach and park: kept caught up while no client watches
     /// (`ScreenWarmer`) and through an attach, so the next one paints without parsing the ring.
     /// It keeps no history, so it costs one screen of cells where the capture grid can hold
@@ -970,11 +976,34 @@ public final class RealPty: @unchecked Sendable {
         return tail
     }
 
-    /// `pane.capture`. Same grid rebuild the unit tests call.
-    public func captureFormatted(format: String, trim: Bool, unwrap: Bool) -> String {
-        withAuthoritative { term in
-            PaneCapture.render(term: term, format: format, trim: trim, unwrap: unwrap)
-        } ?? ""
+    /// `pane.capture`: history and screen from the capture grid, or with `screenOnly` the visible
+    /// screen alone from the screen grid, which parses no history. A parked pane answers that from
+    /// the screen kept at the park, painted into a throwaway grid, so it stays parked and compact.
+    public func captureFormatted(format: String, trim: Bool, unwrap: Bool, screen screenOnly: Bool = false) -> String {
+        guard screenOnly else {
+            return withAuthoritative { term in
+                PaneCapture.render(term: term, format: format, trim: trim, unwrap: unwrap)
+            } ?? ""
+        }
+        let size = currentWinsize()
+        screenLock.lock()
+        defer { screenLock.unlock() }
+        scrollbackLock.lock()
+        let parked = idleGrid.parked
+        let ring = parked ? [] : ringLocked()
+        scrollbackLock.unlock()
+        let term: TerminalEmulator
+        if parked {
+            guard let frame = parkedScreenLocked() else { return "" }
+            term = TerminalEmulator(cols: size.cols, rows: size.rows)
+            term.feed(frame.vt)
+        } else {
+            parkedScreen = nil
+            screen.catchUp(ring: ring, cols: size.cols, rows: size.rows)
+            guard let caughtUp = screen.terminal else { return "" }
+            term = caughtUp
+        }
+        return PaneCapture.render(term: term, format: format, trim: trim, unwrap: unwrap, history: false)
     }
 
     /// Child, foreground process, and up to 16 ancestors. The walk stops at pid 1.
@@ -1273,15 +1302,19 @@ public final class RealPty: @unchecked Sendable {
     /// parses only what it hasn't seen unless the grid was let go, resized, or fell out of the
     /// ring. The grid stays for the next attach. Caller holds `screenLock`.
     private func screenFrameLocked(ring: [SnapshotByteSpan], parked: Bool, size: (cols: Int, rows: Int)) -> ScreenFrame? {
-        if parked {
-            if let parkedScreen { return parkedScreen }
-            guard let url = parkFileURL(), let sealed = try? Data(contentsOf: url),
-                  let plain = SnapshotCipher.open(sealed: sealed, key: parkKey()) else { return nil }
-            return ScreenFrame.decode(plain)
-        }
+        if parked { return parkedScreenLocked() }
         parkedScreen = nil
         screen.catchUp(ring: ring, cols: size.cols, rows: size.rows)
         return screen.frame()
+    }
+
+    /// The screen kept at the park: in memory, or sealed in the park file. Caller holds
+    /// `screenLock` and has seen the pane parked.
+    private func parkedScreenLocked() -> ScreenFrame? {
+        if let parkedScreen { return parkedScreen }
+        guard let url = parkFileURL(), let sealed = try? Data(contentsOf: url),
+              let plain = SnapshotCipher.open(sealed: sealed, key: parkKey()) else { return nil }
+        return ScreenFrame.decode(plain)
     }
 
     /// What an attaching client needs from the ring: the bytes after `fromSequence` when the
@@ -1362,7 +1395,28 @@ public final class RealPty: @unchecked Sendable {
         defer { snapshotLock.unlock() }
         authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
         guard let term = authoritative.terminal else { return nil }
+        historyGridUsedAt = DispatchTime.now()
+        if !historyGridReleasePending {
+            historyGridReleasePending = true
+            releaseHistoryGrid(after: historyGridHold)
+        }
         return body(term)
+    }
+
+    /// Let the capture grid go once it has gone `historyGridHold` without a capture.
+    private func releaseHistoryGrid(after delay: TimeInterval) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.snapshotLock.lock()
+            defer { self.snapshotLock.unlock() }
+            let idle = Double(DispatchTime.now().uptimeNanoseconds &- self.historyGridUsedAt.uptimeNanoseconds) / 1e9
+            if idle >= self.historyGridHold {
+                self.authoritative.releaseGrid()
+                self.historyGridReleasePending = false
+            } else {
+                self.releaseHistoryGrid(after: self.historyGridHold - idle)
+            }
+        }
     }
 
     private func releaseAuthoritativeGrid() {

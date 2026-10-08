@@ -32,6 +32,18 @@ final class IPCCodecTests: XCTestCase {
         XCTAssertNil(shell)
     }
 
+    /// An older client's capture has no `screen`: it reads as nil, a capture with history.
+    func testLegacyCaptureFormattedDecodesWithoutScreen() throws {
+        let payload = #"{"request":{"captureFormatted":{"surfaceID":"s","format":"vt","trim":false,"unwrap":false}}}"#.data(using: .utf8)!
+        let envelope = try JSONDecoder().decode(IPCEnvelope.self, from: payload)
+        guard case let .captureFormatted(surfaceID, format, _, _, screen) = try XCTUnwrap(envelope.request) else {
+            return XCTFail("expected captureFormatted")
+        }
+        XCTAssertEqual(surfaceID, "s")
+        XCTAssertEqual(format, "vt")
+        XCTAssertNil(screen)
+    }
+
     func testLegacyNewSplitRequestsDecodeWithoutShell() throws {
         let tabID = UUID()
         let paneID = UUID()
@@ -523,6 +535,7 @@ final class IPCCodecTests: XCTestCase {
         .surfaceContext(surfaceID: "surface-1"),
         .captureFormatted(surfaceID: "surface-1", format: "text", trim: true, unwrap: false),
         .captureFormatted(surfaceID: "surface-1", format: "html", trim: false, unwrap: true),
+        .captureFormatted(surfaceID: "surface-1", format: "vt", trim: false, unwrap: false, screen: true),
         .processTree(surfaceID: "surface-1"),
         .paneQuery(surfaceID: "surface-1", kind: "pwd"),
         .listDir(surfaceID: "surface-1", path: nil),

@@ -100,8 +100,8 @@ public enum APIExecutor {
                 ? .sendData(surfaceID: surfaceID, data: HexKeys.bytes(keys))
                 : .sendKeys(surfaceID: surfaceID, keys: keys)
             return try reply(client.request(request))
-        case let .capture(surfaceID, format, trim, unwrap):
-            let response = try client.request(.captureFormatted(surfaceID: surfaceID, format: format, trim: trim, unwrap: unwrap), timeout: 10)
+        case let .capture(surfaceID, format, trim, unwrap, screen):
+            let response = try client.request(.captureFormatted(surfaceID: surfaceID, format: format, trim: trim, unwrap: unwrap, screen: screen), timeout: 10)
             guard case let .text(text) = response else { return try reply(response) }
             return .ok(try encode(["format": format, "text": text]))
         case let .wait(surfaceID, until, timeout):

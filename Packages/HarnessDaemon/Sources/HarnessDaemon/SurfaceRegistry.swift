@@ -1024,9 +1024,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 return .text(ControlPlane.processJSON(pid: -1, executable: ""))
             }
             return .text(ControlPlane.processJSON(pid: Int(probed.pid), executable: probed.executable))
-        case let .captureFormatted(surfaceID, format, trim, unwrap):
+        case let .captureFormatted(surfaceID, format, trim, unwrap, screen):
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
-            return .text(session.captureFormatted(format: format, trim: trim, unwrap: unwrap))
+            return .text(session.captureFormatted(format: format, trim: trim, unwrap: unwrap, screen: screen ?? false))
         case let .processTree(surfaceID):
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
             return .text(session.processTreeJSON())

@@ -275,7 +275,7 @@ public enum APIPlan: Sendable {
     /// One daemon read whose text reply is already JSON.
     case query(IPCRequest)
     case sendKey(surfaceID: String, keys: [String], hex: Bool)
-    case capture(surfaceID: String, format: String, trim: Bool, unwrap: Bool)
+    case capture(surfaceID: String, format: String, trim: Bool, unwrap: Bool, screen: Bool)
     case wait(surfaceID: String, until: String, timeout: Double)
     case theme(surfaceID: String, theme: String)
 }
@@ -330,6 +330,7 @@ public enum HarnessAPI {
             "format": enumString("text, html, or vt", ["text", "html", "vt"]),
             "trim": bool("Drop trailing whitespace"),
             "unwrap": bool("Join soft-wrapped rows"),
+            "screen": bool("Only the visible screen, without scrollback"),
         ]), object([
             "format": string("The format that was rendered"),
             "text": string("Captured text"),
@@ -644,7 +645,10 @@ public enum HarnessAPI {
             guard ["text", "html", "vt"].contains(format) else {
                 throw APIPlanError(code: .badArguments, message: "format must be text, html, or vt")
             }
-            return .capture(surfaceID: try pane().surfaceID, format: format, trim: arguments["trim"]?.bool ?? false, unwrap: arguments["unwrap"]?.bool ?? false)
+            return .capture(
+                surfaceID: try pane().surfaceID, format: format, trim: arguments["trim"]?.bool ?? false,
+                unwrap: arguments["unwrap"]?.bool ?? false, screen: arguments["screen"]?.bool ?? false
+            )
         case "pane.wait":
             let until = arguments["until"]?.string ?? "child"
             guard until == "child" || until == "command" else {
