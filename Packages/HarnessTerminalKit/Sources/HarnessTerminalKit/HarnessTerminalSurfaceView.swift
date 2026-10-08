@@ -1599,6 +1599,13 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
+    /// Compile the terminal shaders before the first pane needs them (off the main thread).
+    public nonisolated static func warmRenderer() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let device = MTLCreateSystemDefaultDevice() { TerminalMetalRenderer.warm(device: device) }
+        }
+    }
+
     /// The backing scale the current renderer was built for.
     private var rendererScale: CGFloat?
 

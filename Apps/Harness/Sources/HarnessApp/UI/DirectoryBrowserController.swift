@@ -51,6 +51,7 @@ final class DirectoryBrowserController: NSObject, NSTextFieldDelegate, NSTableVi
         table.headerView = nil
         table.rowHeight = 22
         table.dataSource = self
+        table.setAccessibilityLabel("Folders")
         table.delegate = self
         table.target = self
         table.doubleAction = #selector(openSelected)

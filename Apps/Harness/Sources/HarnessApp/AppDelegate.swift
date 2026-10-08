@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import HarnessCore
+import HarnessTerminalKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         StartupMetrics.shared.mark(.launchStart)
+        HarnessTerminalSurfaceView.warmRenderer()
         ThemeLibrary.reload()
         // Build the UI immediately so launch never blocks on the daemon. The
         // coordinator starts from a default snapshot and repopulates the moment

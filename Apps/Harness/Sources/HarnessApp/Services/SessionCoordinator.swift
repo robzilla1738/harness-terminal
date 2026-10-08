@@ -724,6 +724,40 @@ final class SessionCoordinator: NSObject {
         let workspaces = connectedOwners.flatMap { snapshot(for: $0).workspaces }
         pushNewRemoteNotifications(from: workspaces)
         pushAgentActivityNotifications(from: workspaces)
+        announceAttentionChanges(in: workspaces)
+    }
+
+    /// Each tab's mark at the last snapshot, so VoiceOver hears when one starts needing you.
+    private var announcedActivity: [TabID: TabActivity] = [:]
+    private var lastAnnouncement = Date.distantPast
+
+    /// VoiceOver: say when a tab comes to need you, fails, or finishes ("drifting cedar ›
+    /// claude: needs you"). One announcement covers several tabs changing at once, and they're
+    /// spaced at least two seconds apart so a busy session can't talk over everything.
+    private func announceAttentionChanges(in workspaces: [Workspace]) {
+        var changed: [String] = []
+        var current: [TabID: TabActivity] = [:]
+        for workspace in workspaces {
+            for session in workspace.sessions {
+                for tab in session.tabs {
+                    let activity = TabActivity.of(tab)
+                    current[tab.id] = activity
+                    guard activity != announcedActivity[tab.id], activity == .blocked || activity == .error || activity == .done,
+                          announcedActivity[tab.id] != nil, let state = TabStatusView.label(activity)
+                    else { continue }
+                    let name = SurfaceIdentity.label(directory: tab.cwd, program: tab.currentCommand, agent: tab.agent?.kind.commandToken)
+                    changed.append("\(SessionDisplayName.title(of: session, in: workspace)) › \(name): \(state)")
+                }
+            }
+        }
+        announcedActivity = current
+        guard !changed.isEmpty, NSWorkspace.shared.isVoiceOverEnabled, Date().timeIntervalSince(lastAnnouncement) >= 2 else { return }
+        lastAnnouncement = Date()
+        NSAccessibility.post(
+            element: NSApp.mainWindow ?? NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [.announcement: changed.prefix(3).joined(separator: ". "), .priority: NSAccessibilityPriorityLevel.high.rawValue]
+        )
     }
 
     private func pushNewRemoteNotifications(from workspaces: [Workspace]) {

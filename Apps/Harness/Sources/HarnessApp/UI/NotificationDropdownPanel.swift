@@ -146,6 +146,9 @@ private final class NotificationRowView: NSView {
         layer?.cornerCurve = .continuous
         translatesAutoresizingMaskIntoConstraints = false
         heightAnchor.constraint(equalToConstant: 50).isActive = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("\(entry.tabTitle), \(entry.agentKind?.displayName ?? "Agent"): \(entry.body)")
 
         let coordinator = SessionCoordinator.shared
 
@@ -209,6 +212,11 @@ private final class NotificationRowView: NSView {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
     override func mouseDown(with event: NSEvent) {}
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
 
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)

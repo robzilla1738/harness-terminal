@@ -86,7 +86,11 @@ struct AtlasEntry {
 /// Glyphs are rasterized and uploaded on demand and cached by `GlyphKey`. A cached `nil`
 /// means the glyph has no ink (e.g. space) so the renderer skips it.
 final class GlyphAtlas {
-    let texture: MTLTexture
+    /// Grows (by re-creating and copying) as pages fill: a pane that only ever shows ASCII
+    /// holds one 1 MiB page, not all of them.
+    private(set) var texture: MTLTexture
+    private let device: MTLDevice
+    private var allocatedPages: Int
     let size: Int
     let maxPages: Int
 
@@ -144,24 +148,14 @@ final class GlyphAtlas {
 
     // Startup contract: the atlas is created EMPTY and glyphs are rasterized purely on
     // demand (`entry(for:)` → `rasterizer.rasterize` → `place`), so launch never pays to
-    // pre-rasterize a glyph set. Only the 1024×1024 texture is allocated up front; the first
+    // pre-rasterize a glyph set. Only one 1024×1024 page is allocated up front; the first
     // visible characters rasterize as they're drawn. Do not add a startup prewarm/preload
     // here — eager rasterization is exactly the work we keep off the first-paint path.
     init?(device: MTLDevice, rasterizer: GlyphRasterizer, size: Int = 1024, maxPages: Int = 4) {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .r8Unorm,
-            width: size,
-            height: size,
-            mipmapped: false
-        )
-        descriptor.textureType = .type2DArray
-        descriptor.arrayLength = max(1, maxPages)
-        descriptor.usage = [.shaderRead]
-        // Apple Silicon (unified memory) requires .shared for CPU-writable textures;
-        // discrete GPUs use .managed. `replace(region:)` works for both.
-        descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
-        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        guard let texture = Self.makeTexture(device: device, size: size, pages: 1) else { return nil }
         self.texture = texture
+        self.device = device
+        self.allocatedPages = 1
         self.size = size
         self.maxPages = max(1, maxPages)
         self.rasterizer = rasterizer
@@ -393,6 +387,44 @@ final class GlyphAtlas {
         )
     }
 
+    private static func makeTexture(device: MTLDevice, size: Int, pages: Int) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r8Unorm,
+            width: size,
+            height: size,
+            mipmapped: false
+        )
+        descriptor.textureType = .type2DArray
+        descriptor.arrayLength = max(1, pages)
+        descriptor.usage = [.shaderRead]
+        // Apple Silicon (unified memory) requires .shared for CPU-writable textures;
+        // discrete GPUs use .managed. `replace(region:)` works for both.
+        descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
+        return device.makeTexture(descriptor: descriptor)
+    }
+
+    /// Double the pages (up to `maxPages`), carrying the filled ones over. Frames already
+    /// in flight keep the old texture alive until they finish.
+    private func growTexture() -> Bool {
+        let pages = min(maxPages, allocatedPages * 2)
+        guard pages > allocatedPages, let grown = Self.makeTexture(device: device, size: size, pages: pages) else { return false }
+        let region = MTLRegionMake2D(0, 0, size, size)
+        var bytes = [UInt8](repeating: 0, count: size * size)
+        for slice in 0 ..< allocatedPages {
+            bytes.withUnsafeMutableBytes { raw in
+                texture.getBytes(raw.baseAddress!, bytesPerRow: size, bytesPerImage: size * size,
+                                 from: region, mipmapLevel: 0, slice: slice)
+            }
+            bytes.withUnsafeBytes { raw in
+                grown.replace(region: region, mipmapLevel: 0, slice: slice, withBytes: raw.baseAddress!,
+                              bytesPerRow: size, bytesPerImage: size * size)
+            }
+        }
+        texture = grown
+        allocatedPages = pages
+        return true
+    }
+
     private func advancePage() -> Bool {
         // Advance only into a NEVER-USED page (`pagesUsed`, the append frontier) — never
         // `pageIndex + 1`, which after an LRU eviction can be a page still holding live cached
@@ -402,6 +434,7 @@ final class GlyphAtlas {
         // the LRU page. During the initial growth phase `pageIndex == pagesUsed - 1`, so this
         // is byte-identical to the old `pageIndex + 1` stepping.
         guard pagesUsed < maxPages else { return false }
+        if pagesUsed >= allocatedPages, !growTexture() { return false }
         pageIndex = pagesUsed
         pagesUsed += 1
         penX = 0

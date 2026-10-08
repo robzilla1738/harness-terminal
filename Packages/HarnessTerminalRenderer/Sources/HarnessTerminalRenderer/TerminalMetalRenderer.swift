@@ -222,27 +222,11 @@ public final class TerminalMetalRenderer {
         self.cellPixelHeight = max(1, Int((metrics.height * scale).rounded()))
         self.ascentPixels = Int((metrics.ascent * scale).rounded())
 
-        do {
-            let library = try device.makeLibrary(source: MetalShaders.source, options: nil)
-            bgPipeline = try Self.makePipeline(
-                device: device, library: library,
-                vertex: "bg_vertex", fragment: "bg_fragment", blending: false
-            )
-            glyphPipeline = try Self.makePipeline(
-                device: device, library: library,
-                vertex: "glyph_vertex", fragment: "glyph_fragment", blending: true
-            )
-            decoPipeline = try Self.makePipeline(
-                device: device, library: library,
-                vertex: "deco_vertex", fragment: "deco_fragment", blending: true
-            )
-            imagePipeline = try Self.makePipeline(
-                device: device, library: library,
-                vertex: "image_vertex", fragment: "image_fragment", blending: true
-            )
-        } catch {
-            return nil
-        }
+        guard let pipelines = Self.pipelines(for: device) else { return nil }
+        bgPipeline = pipelines.bg
+        glyphPipeline = pipelines.glyph
+        decoPipeline = pipelines.deco
+        imagePipeline = pipelines.image
         self.imageCache = ImageTextureCache(device: device)
         self.bgInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "bg-instances")
         self.glyphInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "glyph-instances")
@@ -259,6 +243,40 @@ public final class TerminalMetalRenderer {
         self.commandQueue = queue
         self.atlas = atlas
         self.sampler = sampler
+    }
+
+    /// Compiled once per GPU and shared by every pane: compiling the shaders from source took
+    /// a few hundred milliseconds cold, and every pane (and every font change) built its own.
+    /// Pipeline states are thread-safe to share. (Queues stay per pane: one queue caps the
+    /// command buffers in flight, and many panes would wait on each other.)
+    private struct Pipelines: @unchecked Sendable {
+        let bg: MTLRenderPipelineState
+        let glyph: MTLRenderPipelineState
+        let deco: MTLRenderPipelineState
+        let image: MTLRenderPipelineState
+    }
+
+    private static let pipelineLock = NSLock()
+    nonisolated(unsafe) private static var compiled: [UInt64: Pipelines] = [:]
+
+    private static func pipelines(for device: MTLDevice) -> Pipelines? {
+        pipelineLock.lock()
+        defer { pipelineLock.unlock() }
+        if let cached = compiled[device.registryID] { return cached }
+        guard let library = try? device.makeLibrary(source: MetalShaders.source, options: nil),
+              let bg = try? makePipeline(device: device, library: library, vertex: "bg_vertex", fragment: "bg_fragment", blending: false),
+              let glyph = try? makePipeline(device: device, library: library, vertex: "glyph_vertex", fragment: "glyph_fragment", blending: true),
+              let deco = try? makePipeline(device: device, library: library, vertex: "deco_vertex", fragment: "deco_fragment", blending: true),
+              let image = try? makePipeline(device: device, library: library, vertex: "image_vertex", fragment: "image_fragment", blending: true)
+        else { return nil }
+        let built = Pipelines(bg: bg, glyph: glyph, deco: deco, image: image)
+        compiled[device.registryID] = built
+        return built
+    }
+
+    /// Compile the shaders ahead of the first pane (call off the main thread at launch).
+    public static func warm(device: MTLDevice) {
+        _ = pipelines(for: device)
     }
 
     private static func makePipeline(
