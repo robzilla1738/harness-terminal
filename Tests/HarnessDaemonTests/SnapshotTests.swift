@@ -108,6 +108,30 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(screenOnly.screen, screen)
     }
 
+    /// Another reader (a capture, another attach, the park tick) can catch the grid up past the
+    /// ring a screen-only attach copied. The attach still gets that screen, and live output
+    /// takes up where it ends.
+    func testAScreenOnlyAttachTakesUpFromAScreenAnotherReaderMovedAhead() throws {
+        let pty = try catPty()
+        pty.start()
+        defer { pty.close() }
+        pty.injectSyntheticOutput(Data("before\r\n".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("before") })
+        let copied = pty.attachHistory(history: false, fromSequence: nil).endSequence
+
+        pty.attachWillReadScreenForTesting = { [unowned pty] in
+            pty.attachWillReadScreenForTesting = nil
+            pty.injectSyntheticOutput(Data("after\r\n".utf8))
+            XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("after") })
+            XCTAssertTrue(pty.captureGrid(start: nil, end: nil, joinWrapped: false).contains("after"))
+        }
+        let start = pty.attachHistory(history: false, fromSequence: nil)
+        let screen = try XCTUnwrap(start.screen, "the screen ahead of the copied ring is still sent")
+        XCTAssertTrue(screenText(screen).contains("after"))
+        XCTAssertEqual(start.endSequence, screen.sequence, "live output takes up where the screen ends")
+        XCTAssertGreaterThan(start.endSequence, copied)
+    }
+
     func testParkedRingCompressesTerminalOutputAndRoundTrips() {
         let output = Data((0 ..< 2_000).map { "\u{1b}[32mline \($0) of a long build log\u{1b}[0m\r\n" }.joined().utf8)
         let ring = ParkedRing(sequence: 7, bytes: output)

@@ -1236,21 +1236,31 @@ public final class RealPty: @unchecked Sendable {
         return frame
     }
 
+    /// Runs between an attach's ring copy and its screen, so a test can race another reader there.
+    var attachWillReadScreenForTesting: (() -> Void)?
+
     /// What an attaching client needs from the ring: the bytes after `fromSequence` when the
     /// ring still holds them (a resume), else the screen and, with `history`, all of the ring
-    /// (`resync`: the client starts over). `endSequence` is where live output takes over; the
-    /// screen is taken there, and left out if a concurrent reader moved the grid past it.
-    /// Chunks keep their ring sequences.
+    /// (`resync`: the client starts over). `endSequence` is where live output takes over. With
+    /// history the screen is taken there, and left out if a concurrent reader moved the grid
+    /// past it. Without, live output takes over where the screen ends, which may be past the
+    /// ring: the client's live frames are held from before the ring was read, so none are
+    /// missed. Chunks keep their ring sequences.
     func attachHistory(history: Bool = true, fromSequence: UInt64?, chunkLimit: Int = 1 << 20) -> AttachHistory {
         scrollbackLock.lock()
         let ring = ringLocked()
         let parked = idleGrid.parked
         let end = nextSequence
         scrollbackLock.unlock()
+        attachWillReadScreenForTesting?()
+        guard history else {
+            let screen = screenFrame(ring: ring, parked: parked).flatMap { $0.sequence >= end ? $0 : nil }
+            return AttachHistory(chunks: [], endSequence: screen?.sequence ?? end, resync: true, screen: screen)
+        }
         let first = ring.first?.sequence ?? end
-        let resume = history && fromSequence.map { $0 >= first && $0 <= end } ?? false
+        let resume = fromSequence.map { $0 >= first && $0 <= end } ?? false
         var chunks: [ScrollbackReplaySegment] = []
-        for span in ring where history {
+        for span in ring {
             var data = span.data
             var sequence = span.sequence
             if resume, let from = fromSequence {
