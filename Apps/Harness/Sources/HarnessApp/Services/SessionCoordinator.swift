@@ -214,16 +214,43 @@ final class SessionCoordinator: NSObject {
     }
 
     /// Make `owner`'s daemon the active one: its window came to the front. With `session`,
-    /// that session is selected before the first sync, so the window never flashes another.
-    /// The daemon that was active stays attached in the background, panes and all.
+    /// that session (and its workspace) is selected before the first sync, so the window never
+    /// flashes another. Nothing here waits on the daemon: the selection shows at once and the
+    /// daemon hears about it off the main thread. The daemon that was active stays attached in
+    /// the background, panes and all.
     func activate(owner: String, selecting session: SessionID? = nil) {
-        guard owner != activeOwner, let link = links.removeValue(forKey: owner) else { return }
-        link.stop()
-        attachLink(DaemonLink(owner: activeOwner, endpoint: activeEndpoint, snapshot: snapshot))
-        if let session, let workspace = link.snapshot.workspaces.first(where: { $0.sessions.contains { $0.id == session } }) {
-            _ = try? DaemonSessionService(endpoint: link.endpoint).request(.selectSession(workspaceID: workspace.id, sessionID: session))
+        if owner != activeOwner {
+            guard let link = links.removeValue(forKey: owner) else { return }
+            link.stop()
+            attachLink(DaemonLink(owner: activeOwner, endpoint: activeEndpoint, snapshot: snapshot))
+            switchActiveDaemon(to: owner, endpoint: link.endpoint, known: link.snapshot, selecting: session)
+        } else if let session, let selected = select(session) {
+            applySnapshot(selected, metadataOnly: false)
+            refreshSnapshot()
         }
-        switchActiveDaemon(to: owner, endpoint: link.endpoint, known: link.snapshot)
+    }
+
+    /// `snapshot` with `session` and its workspace active; nil when they already are (or no
+    /// workspace has it). The selection goes to the daemon off the main thread; fetches and
+    /// commands after it wait for it. The revision stays: the daemon's own commit moves it.
+    private func select(_ session: SessionID) -> SessionSnapshot? {
+        guard let index = snapshot.workspaces.firstIndex(where: { $0.sessions.contains { $0.id == session } }) else { return nil }
+        var selected = snapshot
+        let workspaceID = selected.workspaces[index].id
+        selected.workspaces[index].activeSessionID = session
+        selected.activeWorkspaceID = workspaceID
+        guard selected != snapshot else { return nil }
+        // The session first: selecting the workspace first would show its other session for a moment.
+        send(.selectSession(workspaceID: workspaceID, sessionID: session), .selectWorkspace(id: workspaceID))
+        return selected
+    }
+
+    /// Send selections to the active daemon off the main thread, in order (see `selections`).
+    private func send(_ requests: IPCRequest...) {
+        let service = DaemonSessionService(endpoint: activeEndpoint)
+        selections.async {
+            for request in requests { _ = try? service.request(request) }
+        }
     }
 
     private func attachLink(_ link: DaemonLink) {
@@ -301,9 +328,8 @@ final class SessionCoordinator: NSObject {
         if let context = WindowContexts.all.first(where: { $0.owner == owner && $0.window != nil }), let window = context.window {
             activate(owner: owner, selecting: session ?? context.sessionID)
             window.makeKeyAndOrderFront(nil)
-            if let session, let workspace = snap.workspaces.first(where: { $0.sessions.contains { $0.id == session } }) {
-                selectSession(workspaceID: workspace.id, sessionID: session)
-            }
+            // Becoming key selects the window's own session: `session` replaces it.
+            if let session { activate(owner: owner, selecting: session) }
             return
         }
         guard let target = session ?? snap.activeWorkspace?.activeSessionID ?? snap.workspaces.first?.sessions.first?.id else { return }
@@ -446,23 +472,26 @@ final class SessionCoordinator: NSObject {
 
     /// Point commands, new panes, and the push channel at `owner`'s daemon and sync from it.
     /// Panes of the daemon that was active keep their hosts (its windows still show them).
-    /// `known` is that daemon's last snapshot: it stands in until the fetch answers, so a
-    /// daemon that's slow to answer never shows another machine's sessions as its own.
-    private func switchActiveDaemon(to owner: String, endpoint: Endpoint, known: SessionSnapshot? = nil) {
-        if let known {
-            snapshot = known
-            lastRevision = known.revision
-        }
+    /// `known` is that daemon's last snapshot: it shows at once (with `session` selected) and
+    /// stands in until the fetch answers off the main thread, so a daemon that's slow to answer
+    /// never holds up the window or shows another machine's sessions as its own.
+    private func switchActiveDaemon(to owner: String, endpoint: Endpoint, known: SessionSnapshot? = nil, selecting session: SessionID? = nil) {
         activeOwner = owner
         RemoteHostsService.shared.setActiveHost(owner == DaemonSidebar.localID ? nil : owner)
         activeEndpoint = endpoint
         daemon.switchEndpoint(endpoint)
+        if let known {
+            // Taken quietly first, so only the selection counts as a change.
+            snapshot = known
+            lastRevision = known.revision
+            applySnapshot(session.flatMap(select) ?? known, metadataOnly: false)
+        }
         // Re-point the push channel: the old subscription is pinned to the old daemon
         // (its onEnd is invalidated by the generation bump inside). A failed attempt has
         // no onEnd to retry from, so back off explicitly.
         startSnapshotSubscription()
         if snapshotSubscription == nil { scheduleSnapshotResubscribe() }
-        _ = syncFromDaemon()
+        refreshSnapshot()
     }
 
     /// Drop hosts (and per-pane bookkeeping) for panes no attached daemon has any more.
@@ -477,7 +506,7 @@ final class SessionCoordinator: NSObject {
     func syncFromDaemon(metadataOnly: Bool = false) -> Bool {
         let remote: SessionSnapshot
         do {
-            remote = try daemon.fetchSnapshot()
+            remote = try selections.sync { try daemon.fetchSnapshot() }
         } catch {
             // Don't silently no-op: a failed hydration leaves the UI showing stale layout/metadata.
             // Log + throttled toast (`noteDaemonError`); the app self-heals on the next sync.
@@ -1552,9 +1581,10 @@ final class SessionCoordinator: NSObject {
         NotificationCenter.default.post(name: .harnessActiveSurfaceDidChange, object: self)
         // Push focus to the daemon (single source of truth) so other clients —
         // attach-window compositors, target-less CLI commands — agree on the active
-        // pane. Suppressed while reflecting a remote change to avoid a feedback loop.
+        // pane. Suppressed while reflecting a remote change to avoid a feedback loop. Off the
+        // main thread: focus moves with every window that comes forward, on any daemon.
         if !suppressActivePaneSync, let surfaceID, let loc = tabAndPane(forSurface: surfaceID) {
-            _ = requestDaemon(.selectPane(tabID: loc.tabID, paneID: loc.paneID))
+            send(.selectPane(tabID: loc.tabID, paneID: loc.paneID))
         }
     }
 
@@ -1745,19 +1775,29 @@ final class SessionCoordinator: NSObject {
     }
 
     /// Adopt per-tab `synchronize-panes` options written outside the GUI (`setw`,
-    /// the compositor toggle) into the local mirror. Called from metadata sync.
-    func adoptSynchronizeOptions() {
-        guard case let .options(entries)? = requestDaemon(.showOptions(scope: "tab")) else { return }
-        var changed = false
-        for entry in entries where entry.key == "synchronize-panes" {
-            guard let target = entry.target, let tabID = TabID(uuidString: target) else { continue }
-            let on = entry.value == "on" || entry.value == "true" || entry.value == "1"
-            if on != synchronizedTabIDs.contains(tabID) {
-                if on { synchronizedTabIDs.insert(tabID) } else { synchronizedTabIDs.remove(tabID) }
-                changed = true
+    /// the compositor toggle) into the local mirror. Called from full syncs, so it asks off the
+    /// main thread: a window coming forward never waits on a (remote) daemon for it.
+    private func adoptSynchronizeOptions() {
+        let service = daemon
+        let owner = activeOwner
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard case let .options(entries)? = try? service.request(.showOptions(scope: "tab")) else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard owner == self.activeOwner else { return }
+                    var changed = false
+                    for entry in entries where entry.key == "synchronize-panes" {
+                        guard let target = entry.target, let tabID = TabID(uuidString: target) else { continue }
+                        let on = entry.value == "on" || entry.value == "true" || entry.value == "1"
+                        if on != self.synchronizedTabIDs.contains(tabID) {
+                            if on { self.synchronizedTabIDs.insert(tabID) } else { self.synchronizedTabIDs.remove(tabID) }
+                            changed = true
+                        }
+                    }
+                    if changed { self.refreshSyncSiblings() }
+                }
             }
         }
-        if changed { refreshSyncSiblings() }
     }
 
     /// Push each live host its sibling surface ids when its tab is synchronized
@@ -2254,8 +2294,8 @@ final class SessionCoordinator: NSObject {
 
     /// Subscribe to the daemon's snapshot pushes if not already subscribed. Called after
     /// every successful sync, so the channel comes up as soon as the daemon answers; the
-    /// follow-up async sync closes the fetch→subscribe race (a revision committed between
-    /// the snapshot we just fetched and the subscription registering).
+    /// follow-up background fetch closes the fetch→subscribe race (a revision committed
+    /// between the snapshot we just fetched and the subscription registering).
     private func startSnapshotSubscriptionIfNeeded() {
         guard snapshotSubscription == nil else { return }
         startSnapshotSubscription()
@@ -2266,9 +2306,7 @@ final class SessionCoordinator: NSObject {
             scheduleSnapshotResubscribe()
             return
         }
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated { _ = self?.syncFromDaemon(metadataOnly: true) }
-        }
+        refreshSnapshot()
     }
 
     private func startSnapshotSubscription() {
@@ -2303,49 +2341,56 @@ final class SessionCoordinator: NSObject {
         if snapshotSubscription != nil { snapshotResubscribeDelay = 1 }
     }
 
-    /// A pushed-revision fetch is in flight / another push landed while it was.
-    private var pushFetchInFlight = false
-    private var pushRefetch = false
-
     private func handlePushedRevision(_ revision: Int) {
         // Echo guard: our own mutations sync synchronously, so the push for a revision we
         // already hold must not trigger a second fetch.
         guard revision != lastRevision else { return }
-        guard !pushFetchInFlight else {
-            pushRefetch = true
+        refreshSnapshot()
+    }
+
+    /// Selections sent to the active daemon off the main thread, in order. Fetches and commands
+    /// wait for the ones already sent, so they see (and act on) the session in front.
+    private let selections = DispatchQueue(label: "com.robert.harness.selections", qos: .userInitiated)
+    /// A background fetch is in flight / another was asked for while it was.
+    private var fetchInFlight = false
+    private var refetch = false
+
+    /// Fetch the active daemon's snapshot off the main thread (a remote daemon answers over SSH)
+    /// and apply it. metadataOnly: a pushed revision never rebuilds every pane's renderer — the
+    /// daemon commits often while an agent streams. Structure changes still remount
+    /// (structureChanged is computed independently) and a CLI theme change still applies
+    /// (themeChanged forces the chrome path).
+    private func refreshSnapshot() {
+        guard !fetchInFlight else {
+            refetch = true
             return
         }
-        // Fetched off the main thread (a remote daemon answers over SSH). metadataOnly: a
-        // pushed revision never rebuilds every pane's renderer — the daemon commits often while
-        // an agent streams. Structure changes still remount (structureChanged is computed
-        // independently) and a CLI theme change still applies (themeChanged forces the chrome path).
-        pushFetchInFlight = true
-        pushRefetch = false
+        fetchInFlight = true
+        refetch = false
         let service = daemon
         let owner = activeOwner
         let applied = appliedSnapshots
+        let selections = selections
         DispatchQueue.global(qos: .userInitiated).async {
+            selections.sync {} // after the selections already sent, without holding up later ones
             let fresh = try? service.fetchSnapshot()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    self.pushFetchInFlight = false
-                    // Another daemon became active, or a synchronous sync landed meanwhile (it is
+                    self.fetchInFlight = false
+                    // Another daemon became active, or a sync or selection landed meanwhile (it is
                     // at least as new): this answer is stale.
                     if let fresh, owner == self.activeOwner, applied == self.appliedSnapshots {
                         self.applySnapshot(fresh, metadataOnly: true)
                     }
-                    if self.pushRefetch {
-                        self.pushRefetch = false
-                        self.syncFromDaemon(metadataOnly: true)
-                    }
+                    if self.refetch { self.refreshSnapshot() }
                 }
             }
         }
     }
 
     /// The daemon went away (restart, backlog eviction, socket death): retry with capped
-    /// backoff until it answers. On success, sync immediately — revisions pushed during
-    /// the gap were lost with the socket.
+    /// backoff until it answers. On success, fetch at once — revisions pushed during the
+    /// gap were lost with the socket.
     private func scheduleSnapshotResubscribe() {
         let delay = snapshotResubscribeDelay
         snapshotResubscribeDelay = min(delay * 2, 8)
@@ -2354,7 +2399,7 @@ final class SessionCoordinator: NSObject {
                 guard let self, self.snapshotSubscription == nil else { return }
                 self.startSnapshotSubscription()
                 if self.snapshotSubscription != nil {
-                    self.syncFromDaemon(metadataOnly: true)
+                    self.refreshSnapshot()
                 } else {
                     self.scheduleSnapshotResubscribe()
                 }
@@ -2418,7 +2463,7 @@ final class SessionCoordinator: NSObject {
     @discardableResult
     func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
         do {
-            return try daemon.request(request)
+            return try selections.sync { try daemon.request(request) }
         } catch {
             // Never block the UI with a modal: a transient miss (e.g. the daemon
             // is still spawning at launch) must degrade gracefully. Log always,

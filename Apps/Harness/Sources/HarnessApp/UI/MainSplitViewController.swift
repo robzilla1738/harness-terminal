@@ -152,21 +152,10 @@ final class MainSplitViewController: NSViewController {
     }
 
     /// The window in front is the daemon's active session, so actions and the CLI's notion of
-    /// "here" follow what you're looking at.
+    /// "here" follow what you're looking at. Never waits on the daemon (it may be remote).
     @objc private func windowDidBecomeKey() {
-        let coordinator = SessionCoordinator.shared
         WindowContexts.lastKey = context
-        if context.owner != coordinator.activeOwner {
-            coordinator.activate(owner: context.owner, selecting: context.sessionID)
-        }
-        guard let session = context.sessionID,
-              let workspace = context.workspace,
-              coordinator.snapshot.activeWorkspace?.activeSessionID != session || coordinator.snapshot.activeWorkspaceID != workspace.id
-        else { return }
-        // The session first: selecting the workspace first would make this window follow that
-        // workspace's active session for a moment (mounting its panes, resizing its PTYs).
-        coordinator.selectSession(workspaceID: workspace.id, sessionID: session)
-        if coordinator.snapshot.activeWorkspaceID != workspace.id { coordinator.selectWorkspace(workspace.id) }
+        SessionCoordinator.shared.activate(owner: context.owner, selecting: context.sessionID)
     }
 
     /// A custom divider color is an overlaid hairline. With no custom color the
