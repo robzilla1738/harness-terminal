@@ -71,8 +71,8 @@ enum TabPeekController {
         }
     }
 
-    /// Each tab's last screen lines, from the daemon, off the main thread (a remote daemon
-    /// over SSH would otherwise stall the peek for every pane).
+    /// Each tab's last screen lines in color (the `vt` capture), from the daemon, off the main
+    /// thread (a remote daemon over SSH would otherwise stall the peek for every pane).
     private static func fetchPreviews() {
         let coordinator = SessionCoordinator.shared
         let surfaces = (coordinator.snapshot.activeWorkspace?.tabs ?? []).map { ($0.id.uuidString, $0.rootPane.allSurfaceIDs()) }
@@ -82,7 +82,7 @@ enum TabPeekController {
             var previews: [String: String] = [:]
             for (tabID, tabSurfaces) in surfaces {
                 previews[tabID] = tabSurfaces.compactMap { surfaceID -> String? in
-                    let request = IPCRequest.capturePaneRange(surfaceID: surfaceID.uuidString, start: nil, end: nil, escapeSequences: false, joinWrapped: false)
+                    let request = IPCRequest.captureFormatted(surfaceID: surfaceID.uuidString, format: "vt", trim: true, unwrap: false)
                     guard case let .text(text)? = try? client.request(request, timeout: 1) else { return nil }
                     return text.split(separator: "\n", omittingEmptySubsequences: false).suffix(6).joined(separator: "\n")
                 }.joined(separator: "\n")
@@ -153,14 +153,21 @@ enum TabPeekController {
         } else {
             visible = model.tabs
         }
-        let body = visible.enumerated().map { index, tab in
+        guard let field = keyView?.text else { return }
+        let font = field.font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
+        let plain: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+        let body = NSMutableAttributedString()
+        for (index, tab) in visible.enumerated() {
+            if index > 0 { body.append(NSAttributedString(string: "\n\n", attributes: plain)) }
             let marker = model.tabs.firstIndex(where: { $0.id == tab.id }) == model.selection ? "> " : "  "
             let badge = TabPeek.badge(tab.mark)
-            let badgeText = badge.isEmpty ? "" : " [\(badge)]"
-            let preview = tab.preview.isEmpty ? "" : "\n" + tab.preview
-            return "\(marker)\(tab.title)\(badgeText)\(preview)"
-        }.joined(separator: "\n\n")
-        keyView?.text.stringValue = body.isEmpty ? "No other tabs" : body
+            body.append(NSAttributedString(string: marker + tab.title + (badge.isEmpty ? "" : " [\(badge)]"), attributes: plain))
+            if !tab.preview.isEmpty {
+                body.append(NSAttributedString(string: "\n", attributes: plain))
+                body.append(VTPreviewText.attributed(tab.preview, font: font, foreground: .secondaryLabelColor))
+            }
+        }
+        field.attributedStringValue = body.length == 0 ? NSAttributedString(string: "No other tabs", attributes: plain) : body
     }
 }
 

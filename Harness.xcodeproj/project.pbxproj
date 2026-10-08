@@ -330,6 +330,7 @@
 		C7E8E4FF6E4C1B61A606F4D0 /* HarnessTerminalSurfaceDragDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB808C784D47F165C2E844FC /* HarnessTerminalSurfaceDragDropTests.swift */; };
 		C876582161E734B944F8444D /* FluidityBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B96E6248BC7810AA9E168EB /* FluidityBenchmarks.swift */; };
 		C8D8E22B16FC1B7A15009E29 /* PrefixKeymap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87D766FA02E02860C0BAC11 /* PrefixKeymap.swift */; };
+		C9214E850E9DFBDBA01F92A5 /* VTPreviewText.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7A3BBBC163B6281B8EF5465 /* VTPreviewText.swift */; };
 		C99BA68EE068EB2E4DB931BB /* HarnessCopyMode in Frameworks */ = {isa = PBXBuildFile; productRef = D104338C78B1AD80EE41F4F3 /* HarnessCopyMode */; };
 		CA1B618F5E03B11B9CD12AD6 /* TerminalAccessibilityTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDDDF185CEB94B879DA85CC4 /* TerminalAccessibilityTextTests.swift */; };
 		CAA564CDDC5B6042CEFB4723 /* emoji_mixed__9x4__to__7x6.golden in Resources */ = {isa = PBXBuildFile; fileRef = 89FA308796861662F4B2B69A /* emoji_mixed__9x4__to__7x6.golden */; };
@@ -677,6 +678,7 @@
 		A657998E790ADAEAB45B5BF1 /* TerminalHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalHostViewTests.swift; sourceTree = "<group>"; };
 		A73A493EC780E0465DB3F6D9 /* WorkspaceOverviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOverviewController.swift; sourceTree = "<group>"; };
 		A75A61F63B71608690269266 /* HarnessChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessChrome.swift; sourceTree = "<group>"; };
+		A7A3BBBC163B6281B8EF5465 /* VTPreviewText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VTPreviewText.swift; sourceTree = "<group>"; };
 		A7D5BB303ED12340A45F0F84 /* CompositorFixtureSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompositorFixtureSpec.swift; sourceTree = "<group>"; };
 		A85FF9109AACFB15B6F55C2A /* ControlKeyNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlKeyNormalizerTests.swift; sourceTree = "<group>"; };
 		A90509DE8F3B7C7839C1EE4C /* ThemeLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeLibrary.swift; sourceTree = "<group>"; };
@@ -1038,6 +1040,7 @@
 				62640E925402A67A764903C8 /* TabStatusView.swift */,
 				FB39A88BC9BC722B53472CB4 /* TerminalTabBarView.swift */,
 				AC4C4E4331C8177B281FBD72 /* Toast.swift */,
+				A7A3BBBC163B6281B8EF5465 /* VTPreviewText.swift */,
 				529595B70272EEEC10AF08E4 /* WindowBlur.swift */,
 				4A9927D299A57D58A4F3CFFC /* WindowBorderOverlayView.swift */,
 				A73A493EC780E0465DB3F6D9 /* WorkspaceOverviewController.swift */,
@@ -2122,6 +2125,7 @@
 				2C06CA490C6FD11C4E891DE5 /* ThemeImportController.swift in Sources */,
 				69CFC06A5A77716038E58E74 /* ThemeLibrary.swift in Sources */,
 				9766BBA7CF5BF33018C0B13F /* Toast.swift in Sources */,
+				C9214E850E9DFBDBA01F92A5 /* VTPreviewText.swift in Sources */,
 				3C7E2A84108B690A43D2E6DB /* WindowBlur.swift in Sources */,
 				99D8B9AC1120BF2E99546FB4 /* WindowBorderOverlayView.swift in Sources */,
 				D3485A8B23152940A119F5FA /* WorkspaceOverviewController.swift in Sources */,

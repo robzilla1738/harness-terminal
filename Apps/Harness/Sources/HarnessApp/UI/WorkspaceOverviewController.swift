@@ -212,7 +212,7 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
 
     // MARK: - Previews
 
-    /// Screen text for every pane in view, from the daemon, off the main thread.
+    /// Every pane's screen in color (the `vt` capture), from the daemon, off the main thread.
     private func fetchPreviews() {
         guard !fetching else { return }
         fetching = true
@@ -222,8 +222,8 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
             let client = DaemonClient(endpoint: endpoint)
             var texts: [SurfaceID: String] = [:]
             for surface in surfaces {
-                // The rendered grid, not `capturePane`'s raw byte replay (escapes and all).
-                let request = IPCRequest.capturePaneRange(surfaceID: surface.uuidString, start: nil, end: nil, escapeSequences: false, joinWrapped: false)
+                // The rendered grid as styled runs, not `capturePane`'s raw byte replay.
+                let request = IPCRequest.captureFormatted(surfaceID: surface.uuidString, format: "vt", trim: true, unwrap: false)
                 if case let .text(text)? = try? client.request(request, timeout: 1) {
                     texts[surface] = text
                 }
@@ -370,12 +370,8 @@ private final class OverviewTileView: NSView {
 
     /// The last lines of each pane's screen, bottom-aligned like the terminal itself.
     func setPreview(_ screens: [String]) {
-        let lines = screens.flatMap { screen -> [Substring] in
-            var rows = screen.split(separator: "\n", omittingEmptySubsequences: false)
-            while let last = rows.last, last.trimmingCharacters(in: .whitespaces).isEmpty { rows.removeLast() }
-            return Array(rows.suffix(12))
-        }
-        preview.stringValue = lines.suffix(12).joined(separator: "\n")
+        let lines = screens.flatMap { VTPreviewText.lastLines($0, 12) }.suffix(12).joined(separator: "\n")
+        preview.attributedStringValue = VTPreviewText.attributed(lines, font: preview.font ?? .monospacedSystemFont(ofSize: 9, weight: .regular), foreground: HarnessChrome.current.textSecondary)
     }
 
     func setSelected(_ selected: Bool) {
