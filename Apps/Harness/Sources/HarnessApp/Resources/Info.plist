@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.12.1</string>
+    <string>1.13.0</string>
     <key>CFBundleVersion</key>
-    <string>127</string>
+    <string>128</string>
     <key>CFBundleIconFile</key>
     <string>Harness</string>
     <key>CFBundleURLTypes</key>
