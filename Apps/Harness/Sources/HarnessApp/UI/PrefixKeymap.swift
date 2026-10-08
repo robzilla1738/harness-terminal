@@ -69,7 +69,7 @@ final class PrefixKeymap {
         // Root table (`bind -n`): no-prefix global bindings, consulted on every key. Empty by
         // default so normal typing passes straight through; only an explicitly-bound key is
         // swallowed and run.
-        if let spec = makeSpec(from: event) {
+        if let spec = Self.makeSpec(from: event) {
             if let binding = KeybindingsService.shared.lookup(table: .root, spec: spec) {
                 executeBinding(binding)
                 return nil
@@ -142,7 +142,7 @@ final class PrefixKeymap {
 
     /// Map an NSEvent into a `KeySpec` so the prefix table can resolve it.
     /// Returns `nil` for events whose characters we can't represent (dead keys).
-    private func makeSpec(from event: NSEvent) -> KeySpec? {
+    static func makeSpec(from event: NSEvent) -> KeySpec? {
         guard let chars = event.charactersIgnoringModifiers else { return nil }
         let mask = event.modifierFlags
         let normalizedChars = ControlKeyNormalizer.normalizedKey(
@@ -158,6 +158,7 @@ final class PrefixKeymap {
             case 0x09: key = "Tab"
             case 0x0D: key = "Enter"
             case 0x7F: key = "Backspace"
+            case 0x20: key = "Space"
             case 0xF700: key = "Up"
             case 0xF701: key = "Down"
             case 0xF702: key = "Left"
@@ -185,7 +186,7 @@ final class PrefixKeymap {
     private func consume(event: NSEvent) {
         // The active table is the prefix table by default, or a `switch-client -T` target.
         let table = pendingTable ?? .prefix
-        guard let spec = makeSpec(from: event) else {
+        guard let spec = Self.makeSpec(from: event) else {
             NSSound.beep()
             disarm()
             return

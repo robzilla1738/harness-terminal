@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import HarnessApp
@@ -24,6 +25,15 @@ final class PrefixKeymapFallbackTests: XCTestCase {
             spec: KeySpec(key: "c", modifiers: []), shiftPressed: false))
         XCTAssertNil(PrefixKeymap.capsLockRootFallback(
             spec: KeySpec(key: "Escape", modifiers: []), shiftPressed: false))
+    }
+
+    /// The default prefix table binds `Space` (next-layout), so the space bar must name it.
+    func testSpaceBarIsTheSpaceKey() throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+            context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 0x31
+        ))
+        XCTAssertEqual(PrefixKeymap.makeSpec(from: event), KeySpec(key: "Space"))
     }
 
     func testModifiersAreCarriedThrough() {
