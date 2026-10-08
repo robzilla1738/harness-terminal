@@ -460,6 +460,8 @@ final class TerminalScreen {
 
     /// The DECSTBM scroll region as 1-based inclusive rows — for the DECRQSS reply to `DCS $ q r ST`.
     var scrollRegionOneBased: (top: Int, bottom: Int) { (scrollTop + 1, scrollBottom + 1) }
+    /// A blank cell in the current pen: the attributes the next printed character gets.
+    var penCell: TerminalGridCell { makeCell(0x20, width: .normal) }
 
     /// A snapshot scrolled `offset` lines up into history (0 = the live viewport). The
     /// window spans `rows` lines over the virtual sequence [history ++ viewport]; history

@@ -312,17 +312,25 @@ public final class ScriptEngine {
         lua_settop(state, -2)
     }
 
+    public enum BindingRun: Equatable {
+        case ran
+        case notBound
+        /// The function raised an error.
+        case failed(String)
+    }
+
     /// Runs the root Lua function bound to `spec` (`harness-cli do --binding`, from a key in
-    /// the app). False when no function has that spec.
-    public func runBinding(spec: String) -> Bool {
-        guard let parsed = ScriptKey.parse(spec), parsed.mode == nil else { return false }
+    /// the app).
+    public func runBinding(spec: String) -> BindingRun {
+        guard let parsed = ScriptKey.parse(spec), parsed.mode == nil else { return .notBound }
         let bound = keymap.root.last { binding in
             if case .function = binding.target { return binding.sequence == parsed.sequence }
             return false
         }
-        guard let bound, case let .function(id) = bound.target else { return false }
+        guard let bound, case let .function(id) = bound.target else { return .notBound }
+        let before = warnings.count
         _ = callFunction(id)
-        return true
+        return warnings.count > before ? .failed(warnings[before...].joined(separator: "; ")) : .ran
     }
 
     private static let trampoline: @convention(c) (OpaquePointer?) -> Int32 = { state in
@@ -568,7 +576,7 @@ public final class ScriptEngine {
         case LUA_TNONE, LUA_TNIL: break
         case LUA_TTABLE:
             guard case let .object(fields)? = Self.argument(state, 2, depth: 0) else {
-                return failure("\(method) arguments must be a table with named fields", .badArguments)
+                return failure("\(method) arguments must be a table of plain values with named fields (no cycles)", .badArguments)
             }
             arguments = fields
         default:
@@ -602,7 +610,26 @@ public final class ScriptEngine {
 
     /// A Lua value as an API argument. A table with keys 1…n is an array; any other table is
     /// an object. Functions and other values have no JSON form and are dropped.
+    /// Most table entries one `harness.call` converts; past it the call fails instead of
+    /// hanging on a structure that expands exponentially.
+    private static let maxArgumentNodes = 100_000
+
+    /// Nil when the value has no JSON form at all: a table that contains itself, nests deeper
+    /// than 32, or expands past the budget.
     private static func argument(_ state: OpaquePointer, _ index: Int32, depth: Int) -> APIArgument? {
+        var visiting = Set<UnsafeRawPointer>()
+        var budget = maxArgumentNodes
+        var invalid = false
+        let value = argument(state, index, depth: depth, visiting: &visiting, budget: &budget, invalid: &invalid)
+        return invalid ? nil : value
+    }
+
+    private static func argument(
+        _ state: OpaquePointer, _ index: Int32, depth: Int,
+        visiting: inout Set<UnsafeRawPointer>, budget: inout Int, invalid: inout Bool
+    ) -> APIArgument? {
+        budget -= 1
+        guard budget >= 0 else { invalid = true; return nil }
         let index = index > 0 ? index : lua_gettop(state) + index + 1
         switch lua_type(state, index) {
         case LUA_TSTRING:
@@ -613,12 +640,16 @@ public final class ScriptEngine {
             let number = lua_tonumber(state, index)
             return number.rounded() == number && abs(number) < 1e15 ? .int(Int(number)) : .double(number)
         case LUA_TTABLE:
-            guard depth < 32 else { return nil }
+            guard depth < 32, let identity = lua_topointer(state, index), visiting.insert(identity).inserted else {
+                invalid = true
+                return nil
+            }
+            defer { visiting.remove(identity) }
             var fields: [String: APIArgument] = [:]
             var items: [Int: APIArgument] = [:]
             lua_pushnil(state)
             while lua_next(state, index) != 0 {
-                if let value = argument(state, -1, depth: depth + 1) {
+                if let value = argument(state, -1, depth: depth + 1, visiting: &visiting, budget: &budget, invalid: &invalid) {
                     if lua_type(state, -2) == LUA_TNUMBER {
                         items[Int(lua_tonumber(state, -2))] = value
                     } else if lua_type(state, -2) == LUA_TSTRING, let key = luaString(state, -2) {

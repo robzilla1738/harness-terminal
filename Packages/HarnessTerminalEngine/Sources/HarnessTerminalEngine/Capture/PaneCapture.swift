@@ -114,8 +114,16 @@ public enum PaneCapture {
         ]
         for (on, sequence) in flags where on { out += sequence }
         if modes.kittyKeyboardFlags != 0 { out += "\u{1b}[>\(modes.kittyKeyboardFlags)u" }
+        // A program's scroll region (a fixed status line) and autowrap; setting the region homes
+        // the cursor, so it comes before the cursor is placed.
+        let region = term.scrollRegion
+        if region.top != 1 || region.bottom != grid.rows { out += "\u{1b}[\(region.top);\(region.bottom)r" }
+        if !term.autowrapEnabled { out += "\u{1b}[?7l" }
         out += "\u{1b}[\(grid.cursor.row + 1);\(grid.cursor.col + 1)H"
         if !grid.cursor.visible { out += "\u{1b}[?25l" }
+        // The pen the program left set, so its next output draws as it would have.
+        let pen = sgrCodes(term.penCell)
+        out += pen.isEmpty ? "\u{1b}[0m" : "\u{1b}[0;\(pen)m"
         return Data(out.utf8)
     }
 

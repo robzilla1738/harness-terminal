@@ -41,6 +41,22 @@ final class ScriptEngineTests: XCTestCase {
         XCTAssertEqual(engine.numberGlobal("seen"), 1)
     }
 
+    func testAFailingBindingAndACyclicArgumentReportErrors() throws {
+        let engine = try ScriptEngine()
+        engine.call = { _, _ in XCTFail("a cyclic argument must not reach the API"); return .ok("{}") }
+        let loaded = engine.load("""
+        harness.bind("cmd+e", function() error("boom") end)
+        local t = {}
+        t.a = t
+        t.b = t
+        local value, message, code = harness.call("pane.write", { text = t })
+        assert(value == nil and code == 2, message)
+        """, from: "/cfg/init.lua", replacingFileLayer: false)
+        guard case .loaded = loaded else { return XCTFail("\(loaded)") }
+        guard case let .failed(message) = engine.runBinding(spec: "cmd+e") else { return XCTFail("expected a failure") }
+        XCTAssertTrue(message.contains("boom"))
+    }
+
     func testCallWithoutADaemonFailsWithExitFour() throws {
         let engine = try ScriptEngine()
         let loaded = engine.load("""
@@ -61,8 +77,8 @@ final class ScriptEngineTests: XCTestCase {
         """, from: "/cfg/init.lua", replacingFileLayer: false)
         guard case .loaded = loaded else { return XCTFail("\(loaded)") }
         XCTAssertEqual(engine.keymap.exportedBindings().first { $0.spec == "cmd+k" }?.function, true)
-        XCTAssertTrue(engine.runBinding(spec: "cmd+k"))
-        XCTAssertFalse(engine.runBinding(spec: "cmd+j"))
+        XCTAssertEqual(engine.runBinding(spec: "cmd+k"), .ran)
+        XCTAssertEqual(engine.runBinding(spec: "cmd+j"), .notBound)
     }
 
     func testModeTableEntersAndAnActionBindStillLoads() throws {
@@ -253,6 +269,8 @@ final class ScriptEngineTests: XCTestCase {
         else { return XCTFail("load") }
         XCTAssertEqual(engine.takeQueued(), ["split-window -h", "next-window"])
         XCTAssertEqual(engine.takeQueued(), [])
-        XCTAssertEqual(ScriptActionRunner.queuedCommands(Data("split-window -h\n\n next-window \n".utf8)), ["split-window -h", "next-window"])
+        let stdout = ["building", ScriptActionRunner.queuedLine("split-window -h"), "", ScriptActionRunner.queuedLine(" next-window ")].joined(separator: "\n")
+        XCTAssertEqual(ScriptActionRunner.queuedCommands(Data(stdout.utf8)), ["split-window -h", "next-window"], "print output is not a command")
+        XCTAssertEqual(ScriptActionRunner.queuedCommands(Data(ScriptActionRunner.queuedLine("display-message 'a\nb'").utf8)), ["display-message 'a\nb'"])
     }
 }

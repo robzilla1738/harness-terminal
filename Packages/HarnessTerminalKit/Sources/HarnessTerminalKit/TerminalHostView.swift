@@ -30,6 +30,8 @@ public protocol TerminalHostDelegate: AnyObject {
     func terminalHostScriptActionFinished(_ result: ScriptActionResult, surfaceID: SurfaceID)
     /// Another client took this pane's size, or gave it back (`owner` size mode).
     func terminalHostSizeOwnershipChanged(_ ownership: SizeOwnership, surfaceID: SurfaceID)
+    /// Something the user should see that isn't an error dialog (a paste that didn't go through).
+    func terminalHostShowMessage(_ message: String, surfaceID: SurfaceID)
 }
 
 extension TerminalHostDelegate {
@@ -48,6 +50,7 @@ extension TerminalHostDelegate {
     /// Default no-op — only the GUI shows action failures and runs queued commands.
     public func terminalHostScriptActionFinished(_ result: ScriptActionResult, surfaceID: SurfaceID) {}
     public func terminalHostSizeOwnershipChanged(_ ownership: SizeOwnership, surfaceID: SurfaceID) {}
+    public func terminalHostShowMessage(_ message: String, surfaceID: SurfaceID) {}
 }
 
 struct TerminalHostResolvedAppearance: Equatable {
@@ -80,6 +83,8 @@ public final class TerminalHostView: NSView {
     /// How far this pane's terminal has read the daemon's output. A reconnect to the same
     /// daemon hands it back and gets only what it missed, with no reset or repaint.
     private var attachPoint: DaemonClient.AttachPoint?
+    /// Bumped for every attach, so callbacks from a superseded one change nothing.
+    private var attachGeneration = 0
     /// The daemon's latest word on who sizes this pane. Nil until this client has voted.
     public private(set) var sizeOwnership: SizeOwnership?
     private var isActiveBorder = false
@@ -259,13 +264,26 @@ public final class TerminalHostView: NSView {
         ensureDaemonSurface(cwd: workingDirectory, shell: shell, settings: settings)
         configureNative(nativeView, io: io, inputGate: inputGate)
         if remote {
-            // The shell is on another Mac: a pasted image or file goes there first.
+            // The shell is on another Mac: a pasted image or file goes there first, and its
+            // Kitty graphics can't name files on this one.
+            nativeView.setReadsLocalGraphicsFiles(false)
             let client = daemonClient
-            nativeView.uploadForPaste = { data, name, done in
+            let surface = surfaceID
+            nativeView.uploadForPaste = { [weak self] data, name, done in
                 DispatchQueue.global(qos: .userInitiated).async {
                     let response = try? client.request(.writeTempFile(name: name, data: data), timeout: 30)
                     let path: String? = if case let .text(path)? = response { path } else { nil }
-                    DispatchQueue.main.async { MainActor.assumeIsolated { done(path) } }
+                    let failure: String? = switch response {
+                    case .text?: nil
+                    case let .error(message)?: "Couldn't paste \(name): \(message)"
+                    default: "Couldn't paste \(name): the remote host didn't answer"
+                    }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            if let failure { self?.hostDelegate?.terminalHostShowMessage(failure, surfaceID: surface) }
+                            done(path)
+                        }
+                    }
                 }
             }
         }
@@ -1015,7 +1033,7 @@ public final class TerminalHostView: NSView {
     }
 
     private func startDaemonOutput() {
-        let (onStart, onData) = makeAttachHandlers(reconnecting: false)
+        let (onStart, onData) = makeAttachHandlers()
         do {
             outputSubscription = try daemonClient.attach(
                 surfaceID: surfaceID.uuidString,
@@ -1041,17 +1059,18 @@ public final class TerminalHostView: NSView {
     /// (An unstructured `Task { @MainActor in }` is not order-preserving and scrambled
     /// cursor-positioned redraws under bursty output.) A resync resets the terminal first;
     /// history bytes are fed as a replay so old bells and queries don't fire again (#168).
-    private func makeAttachHandlers(reconnecting: Bool) -> (
+    private func makeAttachHandlers() -> (
         onStart: @Sendable (DaemonClient.AttachStart) -> Void,
         onData: @Sendable (Data, UInt64) -> Void
     ) {
+        attachGeneration += 1
+        let generation = attachGeneration
         let progress = AttachProgress()
         let onStart: @Sendable (DaemonClient.AttachStart) -> Void = { [weak self] start in
             progress.historyEnd = start.historyEnd
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self else { return }
-                    if reconnecting, self.intentionallyDetached || self.outputSubscription != nil { return }
+                    guard let self, generation == self.attachGeneration, !self.intentionallyDetached else { return }
                     self.attachPoint = start.point
                     if start.resync { self.nativeView.receive("\u{1b}c") }
                 }
@@ -1061,7 +1080,7 @@ public final class TerminalHostView: NSView {
             let replay = sequence < progress.historyEnd
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self else { return }
+                    guard let self, generation == self.attachGeneration else { return }
                     self.nativeView.receive(data, replay: replay)
                     self.attachPoint?.sequence = sequence &+ UInt64(data.count)
                 }
@@ -1146,7 +1165,7 @@ public final class TerminalHostView: NSView {
         let cwd = cachedCwd ?? FileManager.default.homeDirectoryForCurrentUser.path
         let shell = cachedShell
         let scrollbackBytes = Self.scrollbackBytes(forLines: cachedSettings?.scrollbackLines ?? 10_000)
-        let (onStart, onData) = makeAttachHandlers(reconnecting: true)
+        let (onStart, onData) = makeAttachHandlers()
         let onOwnership = makeOwnershipHandler()
         let onEnd = makeOutputEndHandler()
         let resume = attachPoint

@@ -797,24 +797,33 @@ struct APITargets {
     let catalog: APICatalog
     let environment: APIEnvironment
 
+    // Positions count like the CLI's: sessions of the caller's workspace, tabs of its
+    // session, panes of its tab. The caller is its `HARNESS_*` pane, else what the window shows.
+    private var hereSurface: String? { environment.surface ?? catalog.activeSurface }
+    private var hereTab: String? {
+        environment.tab ?? catalog.panes.first { $0.surfaceID == hereSurface }?.tabID ?? catalog.activeTab
+    }
+    private var hereSession: String? {
+        environment.session ?? catalog.tabs.first { $0.id == hereTab }?.sessionID ?? catalog.activeSession
+    }
+
     func session(_ token: String?) throws -> APISessionRecord {
+        let workspace = catalog.sessions.first { $0.id == hereSession }?.workspaceID
         let id = try resolve(token, kind: .session,
                              candidates: catalog.sessions.map { TargetCandidate(id: $0.id, labels: [$0.label]) },
-                             positional: catalog.sessions.map(\.id))
+                             positional: catalog.sessions.filter { workspace == nil || $0.workspaceID == workspace }.map(\.id))
         return catalog.sessions.first { $0.id == id }!
     }
 
     func tab(_ token: String?) throws -> APITabRecord {
-        let scope = environment.session.map { session in catalog.tabs.filter { $0.sessionID == session } } ?? catalog.tabs
         let id = try resolve(token, kind: .tab,
                              candidates: catalog.tabs.map { TargetCandidate(id: $0.id, labels: [$0.label]) },
-                             positional: scope.map(\.id))
+                             positional: catalog.tabs.filter { $0.sessionID == hereSession }.map(\.id))
         return catalog.tabs.first { $0.id == id }!
     }
 
     func pane(_ token: String?) throws -> APIPaneRecord {
-        let callerTab = environment.tab ?? catalog.panes.first { $0.surfaceID == environment.surface }?.tabID
-        let scope = callerTab.map { tab in catalog.panes.filter { $0.tabID == tab } } ?? catalog.panes
+        let scope = catalog.panes.filter { $0.tabID == hereTab }
         let id = try resolve(token, kind: .pane,
                              candidates: catalog.panes.map { TargetCandidate(id: $0.surfaceID, otherIDs: [$0.paneID], labels: [$0.label]) },
                              positional: scope.map(\.surfaceID))

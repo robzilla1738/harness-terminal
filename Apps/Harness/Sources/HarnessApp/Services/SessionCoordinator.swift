@@ -2277,6 +2277,10 @@ extension SessionCoordinator: TerminalHostDelegate {
         Self.applyScriptResult(result)
     }
 
+    func terminalHostShowMessage(_ message: String, surfaceID: SurfaceID) {
+        DisplayMessage.show(message)
+    }
+
     func terminalHostSizeOwnershipChanged(_ ownership: SizeOwnership, surfaceID: SurfaceID) {
         NotificationCenter.default.post(name: .harnessSizeOwnershipDidChange, object: nil)
     }

@@ -55,6 +55,11 @@ public enum HarnessThemeCatalog {
         }
     }
 
+    /// Whether `name` belongs to a built-in theme (a saved theme can't take it).
+    public static func isBuiltin(_ name: String) -> Bool {
+        builtins.contains { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame }
+    }
+
     private static let userThemesLock = NSLock()
     nonisolated(unsafe) private static var storedUserThemes: [HarnessThemeDefinition] = []
 
@@ -62,8 +67,8 @@ public enum HarnessThemeCatalog {
     /// name contains the query, case-insensitive.
     public static func search(_ query: String) -> [HarnessThemeDefinition] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return all }
-        return all.filter { $0.name.lowercased().contains(q) }
+        guard !q.isEmpty else { return allThemes }
+        return allThemes.filter { $0.name.lowercased().contains(q) }
     }
 
     /// Every known theme, featured ones first (in `featuredNames` order), then the rest

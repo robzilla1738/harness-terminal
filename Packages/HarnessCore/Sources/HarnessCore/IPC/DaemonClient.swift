@@ -194,15 +194,14 @@ public final class DaemonClient: @unchecked Sendable {
         return subscription
     }
 
-    /// Whether the daemon has `attach-stream`. Asked once per client.
+    /// Whether the daemon has `attach-stream`. Remembered once the daemon answers; a probe
+    /// that fails (daemon starting, tunnel not up) is asked again next time.
     public func supportsAttachStream() -> Bool {
         capabilityLock.lock()
         if let known = attachStreamSupported { capabilityLock.unlock(); return known }
         capabilityLock.unlock()
-        var supported = false
-        if case let .daemonStats(stats)? = try? request(.daemonStats, timeout: 2) {
-            supported = stats.capabilities?.contains(DaemonStats.attachStream) == true
-        }
+        guard case let .daemonStats(stats)? = try? request(.daemonStats, timeout: 2) else { return false }
+        let supported = stats.capabilities?.contains(DaemonStats.attachStream) == true
         capabilityLock.lock()
         attachStreamSupported = supported
         capabilityLock.unlock()
@@ -220,7 +219,7 @@ public final class DaemonClient: @unchecked Sendable {
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
         let fd = try connectSocket()
-        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSnapshot(label: label)))
+        let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSnapshot(label: label, directives: onDirective != nil)))
         do { try writeAll(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(

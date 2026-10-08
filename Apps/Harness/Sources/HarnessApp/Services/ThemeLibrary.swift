@@ -45,7 +45,10 @@ enum ThemeLibrary {
 
     /// Save the current colors as a theme in the themes folder, then switch to it so it shows
     /// as the selected theme (its colors are the same, so nothing on screen changes).
+    struct NameTaken: Error {}
+
     static func saveCurrent(as name: String) throws {
+        guard !HarnessThemeCatalog.isBuiltin(name) else { throw NameTaken() }
         guard let document = currentDocument(named: name) else { throw CocoaError(.fileWriteUnknown) }
         _ = try files.install(document, into: HarnessPaths.themesDirectory)
         reload()

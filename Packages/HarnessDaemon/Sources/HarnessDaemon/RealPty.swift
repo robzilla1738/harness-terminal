@@ -120,14 +120,20 @@ public final class RealPty: @unchecked Sendable {
     /// each chunk to its own queue with a write-backlog cap and drops a stuck client — so this
     /// queue can't grow without bound.
     private let deliveryQueue = DispatchQueue(label: "com.robert.harness.realpty.deliver")
-    /// Blocking PTY-master `write()`s run here, never on the caller's thread. `SurfaceRegistry`
-    /// dispatches input (`sendData`) while holding the registry lock on the daemon's serial IPC
-    /// queue; a blocking write to a flow-controlled (C-s) or full PTY buffer there would wedge the
-    /// WHOLE daemon (every other surface's IPC blocks on the lock). Offloading to this serial queue
-    /// keeps the blast radius to this one surface's input — which matches terminal flow-control
-    /// semantics — while the daemon keeps serving everyone else. Serial ⇒ keystrokes stay ordered;
-    /// no userspace buffering ⇒ no dropped input.
-    private let writeQueue = DispatchQueue(label: "com.robert.harness.realpty.write")
+    /// Input to the PTY master, never on the caller's thread: `SurfaceRegistry` sends input
+    /// while holding the registry lock on the daemon's IPC queue. Serial, so keystrokes stay in
+    /// order; the master is non-blocking, so a flow-controlled (C-s) or full PTY holds a buffer,
+    /// not a thread.
+    private let inputWriter = PtyInputWriter(queue: DispatchQueue(label: "com.robert.harness.realpty.write"))
+
+    /// A private dup of the live master and its shell generation, for the input writer.
+    private func dupMaster() -> (fd: Int32, generation: UInt64)? {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        guard master >= 0 else { return nil }
+        let fd = sysDup(master)
+        return fd >= 0 ? (fd, generation) : nil
+    }
     /// Delayed-SIGKILL escalation timers (`scheduleKillEscalation`) run here, off every
     /// hot path. A child that ignores SIGTERM+SIGHUP would otherwise leave the `watchForExit`
     /// `waitpid(pid, …, 0)` blocked forever, leaking that thread for the daemon's lifetime.
@@ -400,37 +406,9 @@ public final class RealPty: @unchecked Sendable {
         self.launchArgumentsOverride = nil
     }
 
+    /// Input to the shell, in order, never blocking a thread (see `PtyInputWriter`).
     public func write(_ data: Data) {
-        guard !data.isEmpty else { return }
-        // Off the caller's thread (see `writeQueue`): the daemon must never block on a full PTY.
-        writeQueue.async { [weak self] in
-            guard let self else { return }
-            // Take a PRIVATE dup of the master under the lock rather than writing the bare
-            // snapshot. A PTY write blocks when the buffer is flow-controlled (C-s) or full, and
-            // the loop re-issues after EINTR/partial writes — a wide window during which close()/
-            // respawn() can sysClose(master) and let the OS recycle that fd number to an unrelated
-            // descriptor (another surface's PTY, a client socket, the listen socket). Writing input
-            // bytes there would corrupt it. The dup owns a distinct fd the OS won't recycle until we
-            // close it and keeps the original PTY open, so the write can only ever reach this PTY.
-            self.lifecycleLock.lock()
-            let fd = self.master
-            let dupFd = fd >= 0 ? sysDup(fd) : -1
-            self.lifecycleLock.unlock()
-            guard dupFd >= 0 else { return }
-            defer { sysClose(dupFd) }
-            data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-                guard let base = buffer.baseAddress else { return }
-                var written = 0
-                while written < buffer.count {
-                    let result = sysWrite(dupFd, base.advanced(by: written), buffer.count - written)
-                    if result < 0 {
-                        if errno == EINTR { continue }
-                        break
-                    }
-                    written += result
-                }
-            }
-        }
+        inputWriter.write(data) { [weak self] in self?.dupMaster() }
     }
 
     public func write(_ text: String) {
@@ -448,7 +426,11 @@ public final class RealPty: @unchecked Sendable {
         scrollback.removeAll()
         scrollbackHead = 0
         scrollbackBytes = 0
-        nextSequence = 1
+        // A parked ring is history too. Sequences keep counting up: an attached client marks
+        // anything below its history end as replay, and a resume point from before the clear
+        // must fall outside the ring so it resyncs.
+        parked = nil
+        idleGrid.restore()
         scrollbackLock.unlock()
         scrollbackFile?.reset()
     }
@@ -892,6 +874,7 @@ public final class RealPty: @unchecked Sendable {
             return
         }
         isClosed = true
+        inputWriter.reset()
         let dyingGeneration = generation
         generation &+= 1
         let pid = childPID
@@ -1161,14 +1144,21 @@ public final class RealPty: @unchecked Sendable {
         scrollbackBytes -= bytes.count
     }
 
-    /// Put the parked ring back in front of the live one. Caller holds `scrollbackLock`.
+    /// Put the parked ring back in front of the live one, in 16 KiB entries like a seeded
+    /// ring, so eviction trims the oldest bytes instead of dropping the whole history at once.
+    /// Caller holds `scrollbackLock`.
     private func mergeParkedHistoryLocked() {
         if let ring = parked {
             let bytes = ring.bytes
-            if !bytes.isEmpty {
-                scrollback.insert(ScrollbackEntry(sequence: ring.sequence, data: bytes), at: scrollbackHead)
-                scrollbackBytes += bytes.count
+            var entries: [ScrollbackEntry] = []
+            var offset = 0
+            while offset < bytes.count {
+                let end = min(offset + 16 * 1024, bytes.count)
+                entries.append(ScrollbackEntry(sequence: ring.sequence &+ UInt64(offset), data: bytes.subdata(in: offset ..< end)))
+                offset = end
             }
+            scrollback.insert(contentsOf: entries, at: scrollbackHead)
+            scrollbackBytes += bytes.count
         }
         parked = nil
         idleGrid.restore()
@@ -1408,6 +1398,9 @@ public final class RealPty: @unchecked Sendable {
 
     private func startReading(fd: Int32, generation gen: UInt64) {
         guard fd >= 0 else { return }
+        // Non-blocking, so input writes never park a thread (see `PtyInputWriter`). The flag is
+        // on the shared file description, so reads see it too: an empty read is a wakeup, not EOF.
+        _ = harness_set_nonblocking(fd)
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: readQueue)
         source.setEventHandler { [weak self] in
             guard let self else { return }
@@ -1418,6 +1411,7 @@ public final class RealPty: @unchecked Sendable {
             let n = self.readBuffer.withUnsafeMutableBufferPointer { ptr -> Int in
                 sysRead(fd, ptr.baseAddress, ptr.count)
             }
+            if n < 0, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
             if n <= 0 {
                 // EOF / error: the shell for this generation ended.
                 self.childEnded(generation: gen)

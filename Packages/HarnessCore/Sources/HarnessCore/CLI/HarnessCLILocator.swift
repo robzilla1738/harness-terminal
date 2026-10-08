@@ -132,12 +132,28 @@ public enum ScriptActionRunner {
     }
 
     /// `harness.queue` output: one command per non-empty stdout line.
+    /// `harness.queue` commands from the action's stdout. Each is one marked line (a record
+    /// separator, then the command as a JSON string), so a script's own `print` output is never
+    /// run as a command and a command may contain a newline.
     public static func queuedCommands(_ stdout: Data) -> [String] {
         String(decoding: stdout, as: UTF8.self)
             .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+            .compactMap { line -> String? in
+                guard line.first == queueMarker,
+                      let command = try? JSONDecoder().decode(String.self, from: Data(line.dropFirst().utf8))
+                else { return nil }
+                let trimmed = command.trimmingCharacters(in: .whitespaces)
+                return trimmed.isEmpty ? nil : trimmed
+            }
     }
+
+    /// The stdout line `queuedCommands` reads back.
+    public static func queuedLine(_ command: String) -> String {
+        let json = (try? JSONEncoder().encode(command)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
+        return String(queueMarker) + json
+    }
+
+    private static let queueMarker: Character = "\u{1e}"
 
     /// Last non-empty stderr line, or the exit status when the action printed nothing.
     /// `name` is the request's label (`action build`).

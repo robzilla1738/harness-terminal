@@ -41,9 +41,10 @@ public enum AttachClient {
         public init() {}
     }
 
-    /// Leaves the alternate screen and turns off every input mode a pane can switch on.
+    /// Leaves the alternate screen, clears the scroll region, turns autowrap back on, and turns
+    /// off every input mode a pane can switch on.
     static let terminalReset = Data((
-        "\u{1b}[?1049l\u{1b}[?1l\u{1b}>\u{1b}[?2004l\u{1b}[?1004l\u{1b}[?1000l\u{1b}[?1002l"
+        "\u{1b}[?1049l\u{1b}[r\u{1b}[?7h\u{1b}[?1l\u{1b}>\u{1b}[?2004l\u{1b}[?1004l\u{1b}[?1000l\u{1b}[?1002l"
             + "\u{1b}[?1003l\u{1b}[?1006l\u{1b}[<u\u{1b}[?25h\u{1b}[0m\r\n"
     ).utf8)
 

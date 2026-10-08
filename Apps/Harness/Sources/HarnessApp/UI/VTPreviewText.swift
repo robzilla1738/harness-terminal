@@ -102,6 +102,9 @@ enum VTPreviewText {
                 case 40 ... 47: background = .index(number - 40)
                 case 48: background = extended()
                 case 49: background = nil
+                case 58: _ = extended() // underline color: not drawn in previews, but its
+                                        // parameters must not be read as more codes
+                case 59: break
                 case 90 ... 97: foreground = .index(number - 90 + 8)
                 case 100 ... 107: background = .index(number - 100 + 8)
                 default: break

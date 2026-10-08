@@ -23,6 +23,8 @@ final class DirectoryBrowserController: NSObject, NSTextFieldDelegate, NSTableVi
     private let pathLabel = NSTextField(labelWithString: "")
     private let table = NSTableView()
     private var listing = PaneDirListing(root: "/", entries: [])
+    /// Nothing listed yet (or the last listing failed): there's no folder to act on.
+    private var loaded = false
     private var shown: [PaneDirEntry] = []
     private var loading = 0
 
@@ -94,7 +96,12 @@ final class DirectoryBrowserController: NSObject, NSTextFieldDelegate, NSTableVi
             let response = try? client.request(.listDir(surfaceID: surfaceID, path: path), timeout: 5)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard ticket == self.loading, case let .text(body)? = response, let listing = PaneDirectory.decode(body) else { return }
+                    guard ticket == self.loading else { return }
+                    guard case let .text(body)? = response, let listing = PaneDirectory.decode(body) else {
+                        self.pathLabel.stringValue = "Couldn't list \(path ?? "this pane's folder") on its host"
+                        return
+                    }
+                    self.loaded = true
                     self.listing = listing
                     self.field.stringValue = ""
                     self.refresh()
@@ -126,6 +133,7 @@ final class DirectoryBrowserController: NSObject, NSTextFieldDelegate, NSTableVi
     }
 
     private func finish(_ modifiers: NSEvent.ModifierFlags) {
+        guard loaded else { return }
         let path = selected
         close()
         let coordinator = SessionCoordinator.shared

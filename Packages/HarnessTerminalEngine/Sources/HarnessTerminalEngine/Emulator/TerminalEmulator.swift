@@ -1,3 +1,4 @@
+import CHarnessBase64
 import Foundation
 import Dispatch // DispatchTime: a monotonic clock for command-duration timing (explicit for Linux)
 
@@ -160,6 +161,9 @@ public final class TerminalEmulator: VTParserHandler {
     /// (and `a=T`), consumed by `a=p` (place-many) — the transmit-once/place-many model image
     /// plugins use. Bounded by count + total bytes; oldest evicted on overflow.
     private var kittyTransmitted: [(id: Int, image: DecodedImage)] = []
+    /// Image numbers (`I=`) sent without an id, and the id assigned to each, as Kitty does.
+    private var kittyNumbers: [Int: Int] = [:]
+    private var nextKittyAssignedID = 1 << 30
     private let maxKittyTransmittedImages = 64
     private var kittyTransmittedBytes = 0
 
@@ -179,6 +183,12 @@ public final class TerminalEmulator: VTParserHandler {
     /// view uses this to synthesize arrow keys for the scroll wheel — the alternate screen
     /// has no scrollback to scroll.
     public var isAlternateScreenActive: Bool { onAlternateScreen }
+    /// The scroll region (DECSTBM), 1-based and inclusive.
+    public var scrollRegion: (top: Int, bottom: Int) { current.scrollRegionOneBased }
+    /// Autowrap (DECAWM).
+    public var autowrapEnabled: Bool { current.autowrap }
+    /// The attributes the next printed character gets, as a blank cell.
+    public var penCell: TerminalGridCell { current.penCell }
 
     /// Cap on retained primary-screen scrollback. `0` means **unlimited** (history is never
     /// trimmed); any positive value caps the ring. Negative inputs clamp to `0` (unlimited).
@@ -638,21 +648,21 @@ public final class TerminalEmulator: VTParserHandler {
                 kittyAck(idKey: echoKey, id: echoID, ok: false, message: loaded.error, quietness: base.quietness)
                 return
             }
-            if base.imageID != 0 { storeKittyTransmitted(id: base.imageID, image: image) }
+            let id = kittyID(for: base, assigning: true)
+            if let id { storeKittyTransmitted(id: id, image: image) }
             if base.action == "T" {
-                placeImage(image, cols: base.cols, rows: base.rows, z: base.z,
-                           kittyID: base.imageID != 0 ? base.imageID : nil)
+                placeImage(image, cols: base.cols, rows: base.rows, z: base.z, kittyID: id)
             }
             kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
 
         case "p":
             // Put/place a previously-transmitted image by id (transmit-once / place-many).
-            guard base.imageID != 0, let image = kittyTransmitted(id: base.imageID) else {
+            guard let id = kittyID(for: base, assigning: false), let image = kittyTransmitted(id: id) else {
                 kittyAck(idKey: echoKey, id: echoID, ok: false,
                          message: "ENOENT:image not found", quietness: base.quietness)
                 return
             }
-            placeImage(image, cols: base.cols, rows: base.rows, z: base.z, kittyID: base.imageID)
+            placeImage(image, cols: base.cols, rows: base.rows, z: base.z, kittyID: id)
             kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
 
         case "d":
@@ -672,30 +682,68 @@ public final class TerminalEmulator: VTParserHandler {
         case "d":
             return (command.decode(base64Payload: payload), "EBADF:could not decode image")
         case "f", "t":
-            guard readsGraphicsFiles else { return (nil, "EBADF:file transmission is off here") }
-            guard let name = Data(base64Encoded: Data(payload), options: [.ignoreUnknownCharacters]).flatMap({ String(data: $0, encoding: .utf8) }),
+            // One answer for "missing", "unreadable", and "not an image", so a program (perhaps
+            // on another machine) can't probe which files exist here.
+            let failed = (nil as DecodedImage?, "EBADF:could not load image")
+            guard readsGraphicsFiles,
+                  let name = Data(base64Encoded: Data(payload), options: [.ignoreUnknownCharacters]).flatMap({ String(data: $0, encoding: .utf8) }),
                   name.hasPrefix("/")
-            else { return (nil, "EINVAL:bad file path") }
-            let url = URL(fileURLWithPath: name)
+            else { return failed }
+            // Resolve `..` and symlinks before reading, and before deciding what may be deleted.
+            let url = URL(fileURLWithPath: name).resolvingSymlinksInPath().standardizedFileURL
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
                   values.isRegularFile == true, (values.fileSize ?? 0) <= ImageLimits.maxBytesPerScreen,
                   let handle = try? FileHandle(forReadingFrom: url)
-            else { return (nil, "EBADF:cannot read \(name)") }
+            else { return failed }
             defer { try? handle.close() }
             if command.dataOffset > 0 { try? handle.seek(toOffset: UInt64(command.dataOffset)) }
             let data = (command.dataSize > 0 ? try? handle.read(upToCount: command.dataSize) : try? handle.readToEnd()) ?? Data()
-            if command.medium == "t", Self.isKittyTempFile(name) { try? FileManager.default.removeItem(at: url) }
-            return (command.decode(raw: data), "EBADF:could not decode image")
+            if command.medium == "t", Self.isKittyTempFile(url) { try? FileManager.default.removeItem(at: url) }
+            guard let image = command.decode(raw: data) else { return failed }
+            return (image, "")
+        case "s":
+            return kittySharedMemoryImage(command, payload: payload)
         default:
             return (nil, "EINVAL:transmission medium \(command.medium) is not supported")
         }
     }
 
-    /// The spec only lets a terminal delete a temp file in a temp folder with this marker.
-    static func isKittyTempFile(_ path: String) -> Bool {
-        guard path.contains("tty-graphics-protocol") else { return false }
-        let temp = [NSTemporaryDirectory(), "/tmp/", "/var/tmp/", "/private/tmp/", "/dev/shm/"]
-        return temp.contains { path.hasPrefix($0) }
+    /// The id an image command refers to: its `i=`, else the id assigned to its `I=` number
+    /// (a new one when transmitting), else none.
+    private func kittyID(for command: KittyGraphicsCommand, assigning: Bool) -> Int? {
+        if command.imageID != 0 { return command.imageID }
+        guard command.imageNumber != 0 else { return nil }
+        if assigning {
+            nextKittyAssignedID += 1
+            kittyNumbers[command.imageNumber] = nextKittyAssignedID
+        }
+        return kittyNumbers[command.imageNumber]
+    }
+
+    /// `t=s`: the payload names a POSIX shared-memory object; read it (honoring `O=`/`S=`) and
+    /// unlink it, as the protocol asks.
+    private func kittySharedMemoryImage(_ command: KittyGraphicsCommand, payload: [UInt8]) -> (image: DecodedImage?, error: String) {
+        let failed = (nil as DecodedImage?, "EBADF:could not load image")
+        guard readsGraphicsFiles,
+              let name = Data(base64Encoded: Data(payload), options: [.ignoreUnknownCharacters]).flatMap({ String(data: $0, encoding: .utf8) }),
+              !name.isEmpty, !name.contains("\0")
+        else { return failed }
+        var bytes: UnsafeMutablePointer<UInt8>?
+        let count = harness_shm_take(name, command.dataOffset, command.dataSize, ImageLimits.maxBytesPerScreen, &bytes)
+        guard count >= 0, let bytes else { return failed }
+        defer { free(bytes) }
+        guard let image = command.decode(raw: Data(bytes: bytes, count: count)) else { return failed }
+        return (image, "")
+    }
+
+    /// The spec lets a terminal delete only a temp file in a temp folder whose name carries
+    /// this marker. `url` is already resolved.
+    static func isKittyTempFile(_ url: URL) -> Bool {
+        guard url.lastPathComponent.contains("tty-graphics-protocol") else { return false }
+        let folders = [NSTemporaryDirectory(), "/tmp", "/var/tmp", "/dev/shm"].map {
+            URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        }
+        return folders.contains { url.path.hasPrefix($0) }
     }
 
     /// `a=d`: lowercase targets remove placements; uppercase also forget the transmitted image.
@@ -707,7 +755,9 @@ public final class TerminalEmulator: VTParserHandler {
         let removed: Set<Int>
         switch Character(target.lowercased()) {
         case "i": removed = current.deleteImages { command.imageID != 0 && $0.kittyID == command.imageID }
-        case "n": removed = current.deleteImages { command.imageNumber != 0 && $0.kittyID == command.imageNumber }
+        case "n":
+            let id = kittyNumbers[command.imageNumber]
+            removed = current.deleteImages { id != nil && $0.kittyID == id }
         case "c": removed = current.deleteImages { $0.covers(row: self.current.cursorRow, col: self.current.cursorCol) }
         case "p": removed = current.deleteImages { $0.covers(row: row, col: col) }
         case "q": removed = current.deleteImages { $0.covers(row: row, col: col) && $0.z == command.z }
@@ -1346,6 +1396,7 @@ public final class TerminalEmulator: VTParserHandler {
         // delete-all — otherwise images survive a full reset and keep occupying the
         // per-screen byte budget.
         kittyTransmitted.removeAll()
+        kittyNumbers.removeAll()
         kittyTransmittedBytes = 0
         pointerShape = nil
         if !userVariables.isEmpty {

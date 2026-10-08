@@ -128,15 +128,14 @@ struct HarnessCLI {
                 // makes it ephemeral again.
                 _ = try checkedRequest(client, .setSessionPersistent(sessionID: sessionID, persistent: command == "promote-session"))
             case "send":
-                // No `--text`: send what's piped in (`make 2>&1 | harness-cli send -b logs`).
-                let piped = isatty(STDIN_FILENO) == 0
+                // No `--text`: send what's piped in (`make 2>&1 | harness-cli send -b logs`). Stdin
+                // is only read then, so a loop feeding `--text` keeps the rest of its input.
+                let text = flagValue(args, flag: "--text") ?? (isatty(STDIN_FILENO) == 0
                     ? String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
-                    : nil
-                guard let surface = flagValue(args, flag: "--surface"),
-                      let text = flagValue(args, flag: "--text") ?? piped
-                else {
+                    : nil)
+                guard let surface = flagValue(args, flag: "--surface"), let text else {
                     fputs("Usage: harness-cli send [--surface <id>] (--text \"...\" | < input)\n", harnessStderr)
-                    exit(1)
+                    exit(CLIExit.usage)
                 }
                 _ = try checkedRequest(client, .send(surfaceID: surface, text: text))
             case "notify":
@@ -369,8 +368,12 @@ struct HarnessCLI {
 
     /// The caller's `HARNESS_*` context only describes the local daemon, not a `--host`.
     static func targetContext(_ snapshot: SessionSnapshot, _ args: [String]) -> TargetContext {
-        let local = flagValue(args, flag: "--host") == nil
-        return .current(in: snapshot, environment: local ? ProcessInfo.processInfo.environment : nil)
+        .current(in: snapshot, environment: callerEnvironment(args))
+    }
+
+    /// `HARNESS_*` for this invocation: the process environment, or nothing with `--host`.
+    static func callerEnvironment(_ args: [String]) -> [String: String]? {
+        flagValue(args, flag: "--host") == nil ? ProcessInfo.processInfo.environment : nil
     }
 
     // MARK: - Remote daemons (over SSH)

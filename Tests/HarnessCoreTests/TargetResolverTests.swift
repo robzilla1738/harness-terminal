@@ -70,6 +70,25 @@ final class TargetContextTests: XCTestCase {
         XCTAssertEqual(CLIArguments.normalize(["inspect", "logs", "--json"], command: "inspect"), ["inspect", "--surface", "logs", "--json"])
     }
 
+    func testShortFlagsLeaveCommandTextAlone() {
+        let binding = ["bind-key", "C-n", "new-session", "-s", "work"]
+        XCTAssertEqual(CLIArguments.normalize(binding, command: "bind-key"), binding)
+        XCTAssertEqual(CLIArguments.normalize(["capture-pane", "-e", "-b", "2"], command: "capture-pane"), ["capture-pane", "-e", "--pane", "2"])
+        XCTAssertEqual(CLIArguments.normalize(["do", "-e", "-s"], command: "do"), ["do", "-e", "-s"], "-e takes code for do")
+    }
+
+    func testANamedTabOrSessionNeverFallsBackToTheCaller() {
+        let (snapshot, work, demo) = fixture()
+        let context = TargetContext.current(in: snapshot, environment: ["HARNESS_SURFACE": right.surfaceID.uuidString])
+        let logs = work.tabs[1]
+        let args = CLIArguments.withDefaultTarget(["kill-pane", "--tab", logs.id.uuidString], command: "kill-pane", snapshot: snapshot, context: context)
+        XCTAssertEqual(args, ["kill-pane", "--pane", logs.rootPane.allPaneIDs()[0].uuidString, "--tab", logs.id.uuidString])
+        let unknown = ["send", "--session", UUID().uuidString, "--text", "x"]
+        XCTAssertEqual(CLIArguments.withDefaultTarget(unknown, command: "send", snapshot: snapshot, context: context), unknown,
+                       "an unresolved session adds nothing; the command reports it")
+        _ = demo
+    }
+
     func testPaneCommandsGetTheContextPane() {
         let (snapshot, _, _) = fixture()
         let context = TargetContext.current(in: snapshot, environment: ["HARNESS_SURFACE": right.surfaceID.uuidString])

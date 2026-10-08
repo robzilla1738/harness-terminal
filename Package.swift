@@ -181,12 +181,13 @@ let package = Package(
             path: "Packages/HarnessCore/Sources/HarnessCore",
             swiftSettings: strictFoundationSettings
         ),
-        // Strict base64 for the OSC 52 feed path. Internal; not a package product.
+        // The engine's C helpers: strict base64 for the OSC 52 feed path, and POSIX shared memory
+        // for Kitty graphics. Internal; not a package product.
         .target(
             name: "CHarnessBase64",
             path: "Packages/CHarnessBase64"
         ),
-        // Terminal engine. Foundation, plus the private base64 decoder above.
+        // Terminal engine. Foundation, plus the private C helpers above.
         // No external packages, so it links for headless CLI use and unit tests without a GPU.
         .target(
             name: "HarnessTerminalEngine",

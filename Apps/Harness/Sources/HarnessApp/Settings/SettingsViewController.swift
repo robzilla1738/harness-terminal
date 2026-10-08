@@ -952,6 +952,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             try ThemeLibrary.saveCurrent(as: name)
             populateThemePopup(themePopup, selectedThemeName: name)
             Toast.show("Saved theme “\(name)”", in: view)
+        } catch is ThemeLibrary.NameTaken {
+            Toast.show("“\(name)” is a built-in theme; choose another name", in: view)
         } catch {
             Toast.show("Couldn't save the theme", in: view)
         }

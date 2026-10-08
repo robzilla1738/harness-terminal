@@ -361,9 +361,14 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// When false, a resize reflows this client's primary screen and does not vote a PTY size.
     /// The alternate screen is not reflowed. Default true keeps the single-client ioctl path.
     /// Whether this client sets the PTY size. A non-owner reflows locally instead; becoming
-    /// the owner again re-commits the grid to the view so the PTY follows it.
+    /// the owner again re-commits the grid to the view and votes that size, since the window
+    /// may have been resized while its votes didn't count.
     public var sizeOwner = true {
-        didSet { if sizeOwner, !oldValue { updateGridSize() } }
+        didSet {
+            guard sizeOwner, !oldValue else { return }
+            updateGridSize()
+            onResize?(columns, rows)
+        }
     }
 
     /// A non-owner on the alternate screen shows the owner's grid as-is: a full-screen program
@@ -426,6 +431,13 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Whether a program may set the system clipboard via OSC 52 (tmux
     /// `set-clipboard`). The host sets this from the option; default on.
     public var allowProgramClipboardAccess = true
+    /// Whether Kitty graphics may load images from files and shared memory on this Mac. Off for
+    /// a pane whose program runs on another machine: its paths aren't ours, and reading them
+    /// would let it probe this Mac's disk.
+    public func setReadsLocalGraphicsFiles(_ allowed: Bool) {
+        emulatorSync { $0.readsGraphicsFiles = allowed }
+    }
+
     /// Whether a program may READ the system clipboard via OSC 52 (`allow-clipboard-read`).
     /// Off by default: anything running in the pane, or on a remote host, could read it.
     public var allowProgramClipboardRead = false

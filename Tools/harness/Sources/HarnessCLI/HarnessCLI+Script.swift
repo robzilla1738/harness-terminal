@@ -90,7 +90,8 @@ extension HarnessCLI {
         let feed = client.map { EventFeed(client: $0) }
         engine.poll = { feed?.poll() }
         if let client {
-            engine.call = { method, arguments in APIExecutor.call(method: method, arguments: arguments, client: client) }
+            let environment = APIEnvironment(environment: callerEnvironment(args) ?? [:])
+            engine.call = { method, arguments in APIExecutor.call(method: method, arguments: arguments, client: client, environment: environment) }
             engine.log = { level, message in
                 fputs("[\(level)] \(message)\n", harnessStderr)
                 _ = try? client.request(.displayMessage(format: message, print: false), timeout: 2)
@@ -120,9 +121,14 @@ extension HarnessCLI {
                     origin: actionOrigin
                 )
         case let .binding(spec):
-            outcome = engine.runBinding(spec: spec)
-                ? ScriptInvocation(ran: true, queued: [], exitCode: 0, message: nil)
-                : ScriptInvocation(ran: false, queued: [], exitCode: Int(CLIExit.targetNotFound), message: "no Lua function is bound to \(spec)")
+            switch engine.runBinding(spec: spec) {
+            case .ran:
+                outcome = ScriptInvocation(ran: true, queued: [], exitCode: 0, message: nil)
+            case .notBound:
+                outcome = ScriptInvocation(ran: false, queued: [], exitCode: Int(CLIExit.targetNotFound), message: "no Lua function is bound to \(spec)")
+            case let .failed(message):
+                outcome = ScriptInvocation(ran: true, queued: [], exitCode: Int(CLIExit.failed), message: "binding \(spec): \(message)")
+            }
         case let .script(source, name):
             switch HarnessAPI.arguments(from: flagValue(args, flag: "--args") ?? "{}") {
             case let .success(arguments): engine.setArguments(arguments)
@@ -152,14 +158,14 @@ extension HarnessCLI {
     private static func runQueued(_ commands: [String], origin: ScriptOrigin, args: [String]) {
         guard !commands.isEmpty else { return }
         if origin == .key || origin == .palette {
-            commands.forEach { print($0) }
+            commands.forEach { print(ScriptActionRunner.queuedLine($0)) }
             fflush(stdout)
             return
         }
         guard let client = try? makeClient(args) else { return }
         for command in commands {
             do {
-                try CommandRunner.run(command, client: client, focusSurface: ProcessInfo.processInfo.environment["HARNESS_SURFACE"])
+                try CommandRunner.run(command, client: client, focusSurface: callerEnvironment(args)?["HARNESS_SURFACE"])
             } catch {
                 fputs("queued \(command): \(error)\n", harnessStderr)
             }

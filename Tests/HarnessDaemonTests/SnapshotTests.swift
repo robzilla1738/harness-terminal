@@ -84,6 +84,31 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(tiny.bytes, Data("x".utf8))
     }
 
+    func testUnparkingKeepsHistoryAndClearingAParkedPaneForgetsIt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("harness-park-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pty = try catPty(scrollbackURL: directory.appendingPathComponent("scrollback.log"))
+        pty.start()
+        defer { pty.close() }
+        pty.setParkMaterialForTesting(directory: directory, key: Data(repeating: 3, count: 32))
+        let line = String(repeating: "x", count: 200) + "\n"
+        for _ in 0 ..< 400 { pty.injectSyntheticOutput(Data(line.utf8)) }
+        XCTAssertTrue(waitUntil { pty.scrollbackByteCount >= 60 * 1024 })
+        pty.parkIfIdle(now: Date().addingTimeInterval(120))
+        pty.injectSyntheticOutput(Data("woke\n".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).hasSuffix("woke\n") })
+        XCTAssertGreaterThan(pty.replay(fromSequence: nil).count, 32 * 1024, "one new byte past the cap trims old bytes, not the whole history")
+
+        let before = pty.attachHistory(fromSequence: nil).endSequence
+        pty.parkIfIdle(now: Date().addingTimeInterval(240))
+        pty.clearScrollback()
+        XCTAssertFalse(pty.replay(fromSequence: nil).contains("xxxx"), "clearing forgets the parked ring too")
+        pty.injectSyntheticOutput(Data("fresh\n".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("fresh") })
+        XCTAssertGreaterThanOrEqual(pty.attachHistory(fromSequence: nil).chunks.first?.sequence ?? 0, before, "sequences keep counting up")
+    }
+
     func testCipherRoundTripAndFileKeyIsOwnerReadWrite() throws {
         let key = Data(repeating: 9, count: 32)
         let plain = Data("park-me".utf8)
@@ -212,5 +237,34 @@ final class PastedFilesTests: XCTestCase {
         guard case .failure = PastedFiles.write(Data(count: PastedFiles.maxBytes + 1), named: "big", in: directory) else {
             return XCTFail("too big")
         }
+    }
+}
+
+final class PtyInputWriterTests: XCTestCase {
+    /// A pipe stands in for a PTY nobody reads: the writer fills it, keeps the rest without
+    /// blocking, and finishes in order once the reader drains it.
+    func testAFullPTYHoldsInputWithoutBlockingAndDeliversItInOrder() throws {
+        var fds: [Int32] = [0, 0]
+        XCTAssertEqual(pipe(&fds), 0)
+        defer { close(fds[0]); close(fds[1]) }
+        _ = fcntl(fds[1], F_SETFL, fcntl(fds[1], F_GETFL) | O_NONBLOCK)
+        let writeEnd = fds[1]
+        let writer = PtyInputWriter(queue: DispatchQueue(label: "test.writer"))
+        let master: PtyInputWriter.Master = { (dup(writeEnd), 1) }
+        let chunk = Data(repeating: UInt8(ascii: "a"), count: 64 * 1024)
+        let started = Date()
+        for _ in 0 ..< 4 { writer.write(chunk, master: master) }
+        writer.write(Data("END".utf8), master: master)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "write never blocks the caller")
+
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        let deadline = Date().addingTimeInterval(10)
+        while !received.suffix(3).elementsEqual(Data("END".utf8)), Date() < deadline {
+            let n = read(fds[0], &buffer, buffer.count)
+            if n > 0 { received.append(contentsOf: buffer[0 ..< n]) }
+        }
+        XCTAssertEqual(received.count, 4 * chunk.count + 3)
+        XCTAssertEqual(received.suffix(3), Data("END".utf8))
     }
 }

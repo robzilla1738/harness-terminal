@@ -68,7 +68,7 @@ extension HarnessCLI {
         }
         // Skip the subcommand at index 0; the first remaining non-flag, non-surface
         // token is the shell command (omitted → stop piping).
-        let command = args.dropFirst().first { !$0.hasPrefix("-") && $0 != surface }
+        let command = positionalArgs(args, skippingValuesFor: ["--surface", "--pane", "--host"]).first
         _ = try checkedRequest(client, .pipePane(surfaceID: surface, shellCommand: command))
     }
 

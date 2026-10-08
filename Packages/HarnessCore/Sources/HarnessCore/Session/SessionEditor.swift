@@ -1067,9 +1067,12 @@ public struct SessionEditor: Sendable {
             snapshot.workspaces[source.workspaceIndex].sessions[source.sessionIndex].tabs[source.tabIndex] = tab
         } else {
             // A pane alone in its tab takes the tab with it, unless that's the session's only
-            // tab (the session would be left with nothing to show).
+            // tab (the session would be left with nothing to show) or the tab is shared with a
+            // grouped session (its copies there would keep showing the moved pane).
             var session = snapshot.workspaces[source.workspaceIndex].sessions[source.sessionIndex]
-            guard session.tabs.count > 1, !sourceTab.rootPane.allPaneIDs().contains(destPaneID) else { return nil }
+            guard session.tabs.count > 1, !sourceTab.rootPane.allPaneIDs().contains(destPaneID),
+                  groupCounterparts(of: sourceTab.id).isEmpty
+            else { return nil }
             session.tabs.remove(at: source.tabIndex)
             if session.activeTabID == sourceTab.id {
                 session.activeTabID = session.tabs[min(source.tabIndex, session.tabs.count - 1)].id

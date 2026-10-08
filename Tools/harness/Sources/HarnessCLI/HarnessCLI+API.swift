@@ -59,7 +59,8 @@ extension HarnessCLI {
             fputs("\(unreachableReason(error) ?? "\(error)")\n", harnessStderr)
             exit(CLIExit.unreachable)
         }
-        let result = APIExecutor.call(method: name, arguments: parsed, client: client)
+        let result = APIExecutor.call(method: name, arguments: parsed, client: client,
+                                      environment: APIEnvironment(environment: callerEnvironment(args) ?? [:]))
         if let json = result.json { print(json) }
         if let message = result.message { fputs(message + "\n", harnessStderr) }
         exit(result.exitCode)

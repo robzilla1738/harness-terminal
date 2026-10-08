@@ -57,6 +57,11 @@ public final class DaemonServer: @unchecked Sendable {
     /// The ownership each subscriber was last told, per surface, so a push goes out only when
     /// a client's view changes.
     private var sentOwnership: [Int32: [String: SizeOwnership]] = [:]
+    /// Connections that attached with `attachStream`: they understand `.sizeOwnership`. An
+    /// older client's decoder would choke on it and drop its stream.
+    private var streamClients: Set<Int32> = []
+    /// Snapshot subscribers that asked for client directives (older apps can't decode them).
+    private var directiveSubscribers: Set<Int32> = []
 
     private struct ClientRecord {
         let id: UUID
@@ -126,7 +131,9 @@ public final class DaemonServer: @unchecked Sendable {
         registry.onClientDirective = { [weak self] directive in
             self?.queue.async { [weak self] in
                 guard let self else { return }
-                for fd in self.snapshotSubscribers { self.send(.clientDirective(directive), to: fd) }
+                for fd in self.snapshotSubscribers where self.directiveSubscribers.contains(fd) {
+                    self.send(.clientDirective(directive), to: fd)
+                }
             }
         }
         registry.attachedClientCountProvider = { [registeredClientCount] in
@@ -373,7 +380,8 @@ public final class DaemonServer: @unchecked Sendable {
                 _ = surfaceID
                 continue
             }
-            if case let .subscribeSnapshot(label) = request {
+            if case let .subscribeSnapshot(label, directives) = request {
+                if directives == true { directiveSubscribers.insert(fd) }
                 handleSubscribeSnapshot(label: label, fd: fd)
                 continue
             }
@@ -724,6 +732,7 @@ public final class DaemonServer: @unchecked Sendable {
     /// JSON frame cap.
     private func handleAttach(_ attach: AttachRequest, fd: Int32) {
         if attach.readOnly { readOnlyClients.insert(fd) } else { readOnlyClients.remove(fd) }
+        streamClients.insert(fd)
         let floor = SequenceFloor()
         guard addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, floor: floor) else {
             send(.error("Surface not found"), to: fd)
@@ -887,6 +896,8 @@ public final class DaemonServer: @unchecked Sendable {
         for (surfaceID, size) in sizeArbiter.disconnect(client: fd) {
             _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
         }
+        streamClients.remove(fd)
+        directiveSubscribers.remove(fd)
         let surfaces = sentOwnership.removeValue(forKey: fd).map { Array($0.keys) } ?? []
         surfaces.forEach(pushOwnership)
     }
@@ -903,7 +914,7 @@ public final class DaemonServer: @unchecked Sendable {
     private func pushOwnership(_ surfaceID: String) {
         guard let size = sizeArbiter.effectiveSize(surfaceID) else { return }
         let owner = sizeArbiter.owner(of: surfaceID)
-        for (fd, subscriptions) in outputSubscriptions where subscriptions.contains(where: { $0.surfaceID == surfaceID }) {
+        for (fd, subscriptions) in outputSubscriptions where streamClients.contains(fd) && subscriptions.contains(where: { $0.surfaceID == surfaceID }) {
             let state = SizeOwnership(
                 surfaceID: surfaceID,
                 owner: sizeArbiter.mode == .smallest || owner == nil || owner == fd,

@@ -126,7 +126,9 @@ public enum IPCRequest: Codable, Sendable {
     /// layout commit so clients (the attach-window compositor) re-render on structure
     /// changes without polling. Intercepted by `DaemonServer` (FD-level), like
     /// `subscribeSurfaceOutput`.
-    case subscribeSnapshot(label: String?)
+    /// `directives`: this client decodes `.clientDirective` pushes (optional, so older peers
+    /// on either side still decode the request).
+    case subscribeSnapshot(label: String?, directives: Bool? = nil)
     case applyLayout(tabID: UUID, layout: String, mainPaneID: UUID?)
     case nextLayout(tabID: UUID)
     case previousLayout(tabID: UUID)

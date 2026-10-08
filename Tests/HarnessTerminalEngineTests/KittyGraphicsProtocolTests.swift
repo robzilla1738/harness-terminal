@@ -1,4 +1,5 @@
 import XCTest
+import CHarnessBase64
 @testable import HarnessTerminalEngine
 
 /// Roadmap PR-14: the Kitty graphics protocol beyond display — ack (`OK`/error gated by quietness),
@@ -112,8 +113,40 @@ final class KittyGraphicsProtocolTests: XCTestCase {
 
         term.feed("\u{1b}_Ga=T,t=f,f=32,s=1,v=1,i=5;\(Data("/nonexistent/x".utf8).base64EncodedString())\u{1b}\\")
         XCTAssertTrue(responses().joined().contains("\u{1b}_Gi=5;EBADF"))
-        term.feed("\u{1b}_Ga=T,t=s,f=32,s=1,v=1,i=6;AAAA\u{1b}\\")
-        XCTAssertTrue(responses().joined().contains("\u{1b}_Gi=6;EINVAL"))
+        term.feed("\u{1b}_Ga=T,t=x,f=32,s=1,v=1,i=6;AAAA\u{1b}\\")
+        XCTAssertTrue(responses().joined().contains("\u{1b}_Gi=6;EINVAL"), "an unknown medium is refused")
+    }
+
+    func testATempPathThatEscapesTheTempFolderIsNotDeleted() throws {
+        let (term, _) = makeTerm()
+        let outside = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".harness-test-tty-graphics-protocol-\(UUID().uuidString)")
+        try Data([0xFF, 0, 0, 0xFF]).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let sneaky = "/tmp/../" + outside.path.dropFirst()
+        term.feed("\u{1b}_Ga=T,t=t,f=32,s=1,v=1,i=7;\(Data(sneaky.utf8).base64EncodedString())\u{1b}\\")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path), "only files really in a temp folder are deleted")
+    }
+
+    func testImageNumbersGetAnIDAndDeleteByNumber() {
+        let (term, _) = makeTerm()
+        term.feed("\u{1b}_Ga=T,f=32,s=1,v=1,I=5;\(pixel)\u{1b}\\")
+        term.feed("\u{1b}_Ga=T,f=32,s=1,v=1,i=5;\(pixel)\u{1b}\\")
+        term.feed("\u{1b}_Ga=p,I=5\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 3, "a=p finds the image by its number")
+        term.feed("\u{1b}_Ga=d,d=n,I=5\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 1, "d=n removes the numbered image, not id 5")
+    }
+
+    func testSharedMemoryTransmission() {
+        let (term, _) = makeTerm()
+        let name = "/hsm\(UInt32.random(in: 0 ... .max))"
+        let bytes: [UInt8] = [0xFF, 0, 0, 0xFF]
+        XCTAssertEqual(harness_shm_put(name, bytes, 4), 0)
+        term.feed("\u{1b}_Ga=T,t=s,f=32,s=1,v=1,i=8;\(Data(name.utf8).base64EncodedString())\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 1)
+        var leftover: UnsafeMutablePointer<UInt8>?
+        XCTAssertEqual(harness_shm_take(name, 0, 0, 16, &leftover), -1, "the terminal unlinks the object")
     }
 
     func testDeleteByPositionAndZAndLowercaseKeepsData() {
