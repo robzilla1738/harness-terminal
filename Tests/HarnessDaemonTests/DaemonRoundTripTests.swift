@@ -20,6 +20,8 @@ final class DaemonRoundTripTests: XCTestCase {
         setenv("HARNESS_HOME", dir.path, 1)
         try HarnessPaths.ensureDirectories()
 
+        // As HarnessDaemonMain does: a write racing a closing peer must not kill the process.
+        ignoreSIGPIPE()
         server = DaemonServer()
         // start() resumes the accept DispatchSource on the server's own GCD queue, so
         // the server handles connections without runLoop(). (runLoop() calls
@@ -267,7 +269,9 @@ final class DaemonRoundTripTests: XCTestCase {
 
     /// A resync while output keeps coming: the reply carries the screen, and the history and live
     /// frames after it are one unbroken run of sequences (nothing missed, nothing twice) even
-    /// though the daemon reads the history off its queue while live frames are held.
+    /// though the daemon reads the history off its queue while live frames are held. The shell
+    /// prints half the lines, waits for the attach, then prints the rest, so there is always
+    /// history and always live output.
     func testResyncAttachCarriesTheScreenAndStaysGapFreeUnderOutput() throws {
         let client = DaemonClient()
         let sid = UUID().uuidString
@@ -275,9 +279,9 @@ final class DaemonRoundTripTests: XCTestCase {
         _ = try client.request(.sendData(surfaceID: sid, data: Data("PS1=''; stty -echo\n".utf8)))
         usleep(300_000)
         let count = 20_000
-        _ = try client.request(.sendData(surfaceID: sid, data: Data(
-            "i=0; while [ $i -lt \(count) ]; do echo FLOOD_$i; i=$((i+1)); done; echo FLOOD_DONE\n".utf8
-        )))
+        let flood = "i=0; while [ $i -lt \(count / 2) ]; do echo FLOOD_$i; i=$((i+1)); done; read go; "
+            + "while [ $i -lt \(count) ]; do echo FLOOD_$i; i=$((i+1)); done; echo FLOOD_DONE\n"
+        _ = try client.request(.sendData(surfaceID: sid, data: Data(flood.utf8)))
         usleep(50_000)
 
         let output = OutputAccumulator()
@@ -288,6 +292,8 @@ final class DaemonRoundTripTests: XCTestCase {
             spans.set((spans.value ?? []) + [(sequence, sequence + UInt64(data.count))])
         })
         defer { subscription.cancel() }
+        XCTAssertTrue(waitUntil(timeout: 15) { start.value != nil })
+        _ = try client.request(.sendData(surfaceID: sid, data: Data("go\n".utf8)))
         XCTAssertTrue(waitUntil(timeout: 15) { output.contains("FLOOD_DONE") })
 
         let reply = try XCTUnwrap(start.value)
