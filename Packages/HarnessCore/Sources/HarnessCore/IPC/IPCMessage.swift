@@ -96,6 +96,9 @@ public enum IPCRequest: Codable, Sendable {
     /// know this case and replies `.error("unrecognized request")`, so the caller degrades to the
     /// plain `replayScrollback` (replay-then-stream) path — no dedup, but never a double-deliver.
     case replayScrollbackSequenced(surfaceID: String, fromSequence: UInt64?)
+    /// One-step attach (daemons with the `attach-stream` capability): reply `.attached`, then
+    /// the history as binary output frames, then live output. Replaces subscribe + replay.
+    case attachStream(AttachRequest)
     case resizeSurface(surfaceID: String, rows: UInt16, cols: UInt16)
     case detachSurface(surfaceID: String)
     /// Identify this connection to the daemon so it shows up in `list-clients`
@@ -208,6 +211,45 @@ public enum DirectionalAxis: String, Codable, Sendable {
     }
 }
 
+/// `attachStream`. With `history`, the daemon streams the ring after `fromSequence` (a resume
+/// when `epoch` matches and the bytes are still held) or all of it (a resync). Without it,
+/// the reply carries the screen as VT bytes and only live output follows (`harness-cli attach`).
+public struct AttachRequest: Codable, Equatable, Sendable {
+    public var surfaceID: String
+    public var label: String?
+    public var readOnly: Bool
+    public var history: Bool
+    public var fromSequence: UInt64?
+    public var epoch: String?
+
+    public init(surfaceID: String, label: String? = nil, readOnly: Bool = false, history: Bool = true, fromSequence: UInt64? = nil, epoch: String? = nil) {
+        self.surfaceID = surfaceID
+        self.label = label
+        self.readOnly = readOnly
+        self.history = history
+        self.fromSequence = fromSequence
+        self.epoch = epoch
+    }
+}
+
+public struct AttachReply: Codable, Equatable, Sendable {
+    /// The daemon's boot id. A resume is only valid against the same epoch.
+    public var epoch: String
+    /// The client must reset its terminal: what follows starts from the beginning.
+    public var resync: Bool
+    /// The sequence live output starts at; a client resumes from the last byte it saw.
+    public var endSequence: UInt64
+    /// The visible screen as VT bytes, for a screen-only attach.
+    public var screen: Data?
+
+    public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil) {
+        self.epoch = epoch
+        self.resync = resync
+        self.endSequence = endSequence
+        self.screen = screen
+    }
+}
+
 /// A request from the daemon to the attached apps, for verbs that act on app-side state
 /// (`harness-cli copy-mode` enters the app's copy-mode overlay on that pane).
 public enum ClientDirective: Codable, Equatable, Sendable {
@@ -235,6 +277,8 @@ public enum IPCResponse: Codable, Sendable {
     case snapshotChanged(revision: Int)
     /// Pushed on a `subscribeSnapshot` channel: something only an attached app can do.
     case clientDirective(ClientDirective)
+    /// First frame on an `attachStream` connection.
+    case attached(AttachReply)
     case agentInfo(AgentSnapshot?)
     case clients([ClientSummary])
     case daemonStats(DaemonStats)

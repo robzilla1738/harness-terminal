@@ -18,51 +18,59 @@ final class SnapshotTests: XCTestCase {
         let extended = first + [SnapshotByteSpan(sequence: 4, data: Data("B".utf8))]
         parser.catchUp(ring: extended, cols: 10, rows: 2)
         XCTAssertEqual(parser.bytesFed, fed + 1)
-        XCTAssertTrue(parser.frame()?.lines.joined().contains("AAAB") == true)
+        XCTAssertTrue(screenText(parser.frame()).contains("AAAB"))
+        XCTAssertEqual(parser.frame()?.sequence, 5)
 
         let evicted = [SnapshotByteSpan(sequence: 100, data: Data("Z".utf8))]
         parser.catchUp(ring: evicted, cols: 10, rows: 2)
-        let frame = parser.frame()
-        XCTAssertTrue(frame?.lines.joined().contains("Z") == true)
-        XCTAssertFalse(frame?.lines.joined().contains("AAA") == true)
-        XCTAssertEqual(frame?.lines.count, frame?.rows)
+        let text = screenText(parser.frame())
+        XCTAssertTrue(text.contains("Z"))
+        XCTAssertFalse(text.contains("AAA"))
     }
 
-    func testReadyFrameComesBeforeNewestHistoryAndPaintsAFullScreen() {
-        let frame = ReadyFrame(
-            cols: 4, rows: 2, cursorRow: 0, cursorCol: 1, cursorVisible: true,
-            alternateScreen: false, cursorKeysApplication: true, keypadApplication: false,
-            lines: ["ab  ", "cd  "], sequence: 8
-        )
-        let pieces = AttachStream.pieces(
-            frame: frame,
-            historyNewestFirst: [Data("newest".utf8), Data("oldest".utf8)]
-        )
-        guard case let .ready(painted) = pieces.first else {
-            return XCTFail("the first piece is the screen")
-        }
-        XCTAssertEqual(painted.lines.count, painted.rows)
-        XCTAssertEqual(painted.cursorKeysApplication, true)
-        XCTAssertEqual(painted.lines, frame.lines)
-        guard pieces.count == 3, case let .history(newest) = pieces[1], case let .history(oldest) = pieces[2] else {
-            return XCTFail("history follows the screen, newest first, got \(pieces.count) pieces")
-        }
-        XCTAssertEqual(String(decoding: newest, as: UTF8.self), "newest")
-        XCTAssertEqual(String(decoding: oldest, as: UTF8.self), "oldest")
+    func testScreenFramePaintsTheSameScreenAndRoundTripsThroughThePark() throws {
+        let source = TerminalEmulator(cols: 20, rows: 3)
+        source.feed(Data("plain \u{1b}[1;31mred\u{1b}[0m after\r\n\u{1b}[?1h\u{1b}[?2004hnext".utf8))
+        let vt = PaneCapture.screen(source)
+        let painted = TerminalEmulator(cols: 20, rows: 3)
+        painted.feed(vt)
+        XCTAssertEqual(painted.captureLines(joinWrapped: false), source.captureLines(joinWrapped: false))
+        XCTAssertEqual(painted.readGrid().cursor.row, source.readGrid().cursor.row)
+        XCTAssertEqual(painted.readGrid().cursor.col, source.readGrid().cursor.col)
+        XCTAssertTrue(painted.modes.cursorKeysApplication)
+        XCTAssertTrue(painted.modes.bracketedPaste)
+        let after = try XCTUnwrap(painted.readGrid().cell(row: 0, col: 11))
+        XCTAssertFalse(after.bold, "a reset follows the styled run")
+        XCTAssertTrue(try XCTUnwrap(painted.readGrid().cell(row: 0, col: 6)).bold)
+
+        let frame = ScreenFrame(vt: vt, sequence: 42)
+        XCTAssertEqual(ScreenFrame.decode(frame.encoded()), frame)
     }
 
-    func testDesyncedClientMatchesTheAuthoritativeScreenAndLeavesTheOtherClient() {
-        let frame = ReadyFrame(
-            cols: 5, rows: 1, cursorRow: 0, cursorCol: 5, cursorVisible: true,
-            alternateScreen: false, cursorKeysApplication: false, keypadApplication: false,
-            lines: ["hello"], sequence: 5
-        )
-        var client = ["WRONG"]
-        let other = ["stable"]
-        let returned = DesyncReattach.apply(authoritative: frame, to: &client, other: other)
-        XCTAssertEqual(client, ["hello"])
-        XCTAssertEqual(returned, other)
-        XCTAssertEqual(frame.lines, ["hello"])
+    func testAttachHistoryResumesInsideTheRingAndResyncsOutsideIt() throws {
+        let pty = try catPty()
+        pty.start()
+        defer { pty.close() }
+        pty.injectSyntheticOutput(Data("first\n".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("first") })
+        let full = pty.attachHistory(fromSequence: nil)
+        XCTAssertTrue(full.resync, "no resume point: start over")
+        XCTAssertTrue(full.chunks.map { String(decoding: $0.data, as: UTF8.self) }.joined().contains("first"))
+
+        pty.injectSyntheticOutput(Data("second\n".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("second") })
+        let resumed = pty.attachHistory(fromSequence: full.endSequence)
+        XCTAssertFalse(resumed.resync)
+        let text = resumed.chunks.map { String(decoding: $0.data, as: UTF8.self) }.joined()
+        XCTAssertTrue(text.contains("second"))
+        XCTAssertFalse(text.contains("first"), "a resume sends only what was missed")
+        XCTAssertEqual(resumed.chunks.first?.sequence, full.endSequence)
+
+        XCTAssertTrue(pty.attachHistory(fromSequence: resumed.endSequence + 1_000).resync, "a point past the end resyncs")
+        let small = pty.attachHistory(fromSequence: nil, chunkLimit: 3)
+        XCTAssertTrue(small.chunks.allSatisfy { $0.data.count <= 3 })
+        let joined = { (history: AttachHistory) in history.chunks.map(\.data).reduce(Data(), +) }
+        XCTAssertEqual(joined(small), joined(full) + joined(resumed), "chunking keeps every byte in order")
     }
 
     func testCipherRoundTripAndFileKeyIsOwnerReadWrite() throws {
@@ -125,21 +133,10 @@ final class SnapshotTests: XCTestCase {
         XCTAssertFalse(pty.gridIsResident)
         let url = directory.appendingPathComponent("\(pty.id).park")
         let sealed = try Data(contentsOf: url)
-        XCTAssertNil(ReadyFrame.decode(sealed), "the file is the ciphertext, not the frame")
-        let frame = try XCTUnwrap(pty.readyFrameForClient())
-        XCTAssertTrue(frame.lines.joined(separator: "\n").contains("park-me"))
-        XCTAssertEqual(frame.lines.count, frame.rows)
+        XCTAssertFalse(String(decoding: sealed, as: UTF8.self).contains("park-me"), "the file is ciphertext")
+        let frame = try XCTUnwrap(pty.screenFrame())
+        XCTAssertTrue(screenText(frame).contains("park-me"))
         XCTAssertFalse(pty.gridIsResident, "serving the parked screen does not bring the grid back")
-
-        let pieces = pty.attachPieces()
-        guard case let .ready(painted) = pieces.first else { return XCTFail("ready frame first") }
-        XCTAssertEqual(painted.lines.count, painted.rows)
-        XCTAssertTrue(painted.lines.joined(separator: "\n").contains("park-me"))
-        guard pieces.count > 1, case let .history(newest) = pieces[1] else {
-            return XCTFail("history follows the screen")
-        }
-        XCTAssertTrue(String(decoding: newest, as: UTF8.self).contains("park-me"))
-        XCTAssertFalse(pty.gridIsResident)
 
         pty.setScrollbackPersistence(enabled: false)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
@@ -158,6 +155,14 @@ final class SnapshotTests: XCTestCase {
         pty.injectSyntheticOutput(Data("x".utf8))
         XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("x") })
         XCTAssertFalse(pty.readLoopRunsAuthoritativeParser)
+    }
+
+    /// What a client painting `frame` would show.
+    private func screenText(_ frame: ScreenFrame?) -> String {
+        guard let frame else { return "" }
+        let term = TerminalEmulator(cols: 80, rows: 24)
+        term.feed(frame.vt)
+        return term.captureLines(joinWrapped: false).joined(separator: "\n")
     }
 
     private func catPty(scrollbackURL: URL? = nil) throws -> RealPty {

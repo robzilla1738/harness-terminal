@@ -12,7 +12,7 @@ final class PaneCaptureTests: XCTestCase {
         XCTAssertTrue(html.contains("&lt;"))
         XCTAssertTrue(html.contains("font-weight:bold"))
         XCTAssertTrue(html.contains("color:#cd0000"))
-        XCTAssertTrue(vt.contains("\u{1b}[1;31m"))
+        XCTAssertTrue(vt.contains("\u{1b}[0;1;31m"), "each style run starts from a reset")
         XCTAssertTrue(vt.contains("\u{1b}[0m"))
         XCTAssertFalse(vt.contains("&lt;"))
     }

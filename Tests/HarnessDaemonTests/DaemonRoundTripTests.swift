@@ -211,6 +211,60 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertEqual(missing, [], "gap-free attach must lose no output the surface holds; missing: \(missing)")
     }
 
+    /// The streamed attach loses nothing across the handshake, and a resume against the same
+    /// daemon sends only what was missed, with no reset. A screen-only attach paints the screen.
+    func testStreamedAttachIsGapFreeAndResumesWithoutARepaint() throws {
+        let client = DaemonClient()
+        XCTAssertTrue(client.supportsAttachStream())
+        // A plain sh with no prompt or echo, so the markers land in the output untouched.
+        let sid = UUID().uuidString
+        _ = try client.request(.ensureSurface(surfaceID: sid, cwd: nil, shell: "/bin/sh", rows: 24, cols: 80, scrollbackBytes: nil))
+        _ = try client.request(.sendData(surfaceID: sid, data: Data("PS1=''; stty -echo\n".utf8)))
+        usleep(300_000)
+        let writer = DaemonClient()
+        func emit(_ token: String) { _ = try? writer.request(.sendData(surfaceID: sid, data: Data("printf '\(token)\\n'\n".utf8))) }
+        emit("STREAM_BEFORE")
+        usleep(300_000)
+
+        let output = OutputAccumulator()
+        let starts = AtomicBox<DaemonClient.AttachStart>()
+        let next = AtomicBox<UInt64>()
+        let first = try client.attach(surfaceID: sid, label: "stream-test", onStart: { starts.set($0) }, onData: { data, sequence in
+            _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "")
+            next.set(sequence + UInt64(data.count))
+        })
+        emit("STREAM_LIVE")
+        XCTAssertTrue(waitUntil(timeout: 10) { output.contains("STREAM_BEFORE") && output.contains("STREAM_LIVE") })
+        let start = try XCTUnwrap(starts.value)
+        XCTAssertTrue(start.resync, "a first attach starts from the beginning")
+        let point = try XCTUnwrap(start.point)
+        first.cancel()
+
+        emit("STREAM_MISSED")
+        usleep(400_000)
+        let resumed = OutputAccumulator()
+        let second = AtomicBox<DaemonClient.AttachStart>()
+        let subscription = try client.attach(
+            surfaceID: sid, label: "stream-test",
+            resume: DaemonClient.AttachPoint(epoch: point.epoch, sequence: try XCTUnwrap(next.value)),
+            onStart: { second.set($0) },
+            onData: { data, _ in _ = resumed.appendAndContains(String(decoding: data, as: UTF8.self), marker: "") }
+        )
+        defer { subscription.cancel() }
+        XCTAssertTrue(waitUntil(timeout: 10) { resumed.contains("STREAM_MISSED") })
+        XCTAssertEqual(second.value?.resync, false)
+        XCTAssertFalse(resumed.contains("STREAM_BEFORE"), "a resume does not resend what was painted")
+
+        let screen = AtomicBox<Data>()
+        let watcher = try client.attachStream(
+            AttachRequest(surfaceID: sid, label: "screen-test", readOnly: true, history: false),
+            onAttached: { if let vt = $0.screen { screen.set(vt) } }, onData: { _, _ in }
+        )
+        defer { watcher.cancel() }
+        XCTAssertTrue(waitUntil(timeout: 5) { screen.value != nil })
+        XCTAssertTrue(String(decoding: screen.value ?? Data(), as: UTF8.self).contains("STREAM_MISSED"))
+    }
+
     /// Item 1 — the sequenced replay reports a usable end boundary that advances as output is
     /// appended. The boundary is what the gap-free attach dedupes its buffered live frames against;
     /// a non-advancing or zero boundary would either re-show overlap or (with the old `.text`-only

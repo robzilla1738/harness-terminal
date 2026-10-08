@@ -19,40 +19,33 @@ struct SnapshotByteSpan: Equatable, Sendable {
     var data: Data
 }
 
-/// Visible screen handed to a client before scrollback. Internal. Not a
-/// compatibility promise and not a published wire format.
-struct ReadyFrame: Equatable, Sendable, Codable {
-    var cols: Int
-    var rows: Int
-    var cursorRow: Int
-    var cursorCol: Int
-    var cursorVisible: Bool
-    var alternateScreen: Bool
-    var cursorKeysApplication: Bool
-    var keypadApplication: Bool
-    var lines: [String]
+/// The visible screen as VT bytes (`PaneCapture.screen`) and the ring sequence it reflects.
+/// A screen-only attach paints it; a parked pane seals it to disk.
+struct ScreenFrame: Equatable, Sendable {
+    var vt: Data
     var sequence: UInt64
 
-    func encoded() -> Data? {
-        try? JSONEncoder().encode(self)
+    /// `[sequence: 8 bytes BE][vt]`, the plaintext of a `.park` file.
+    func encoded() -> Data {
+        var out = Data(capacity: 8 + vt.count)
+        withUnsafeBytes(of: sequence.bigEndian) { out.append(contentsOf: $0) }
+        out.append(vt)
+        return out
     }
 
-    static func decode(_ data: Data) -> ReadyFrame? {
-        try? JSONDecoder().decode(ReadyFrame.self, from: data)
+    static func decode(_ data: Data) -> ScreenFrame? {
+        guard data.count >= 8 else { return nil }
+        let sequence = data.prefix(8).reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+        return ScreenFrame(vt: Data(data.dropFirst(8)), sequence: sequence)
     }
 }
 
-enum AttachPiece: Equatable {
-    case ready(ReadyFrame)
-    case history(Data)
-}
-
-/// Ready frame first, then history newest-first. A client can paint `ready`
-/// before it reads the rest.
-enum AttachStream {
-    static func pieces(frame: ReadyFrame, historyNewestFirst: [Data]) -> [AttachPiece] {
-        [.ready(frame)] + historyNewestFirst.map { .history($0) }
-    }
+/// The ring bytes an attaching client is sent, oldest first, and where live output resumes.
+struct AttachHistory: Equatable {
+    var chunks: [RealPty.ScrollbackReplaySegment]
+    var endSequence: UInt64
+    /// The client's `fromSequence` was evicted or absent: it must reset before painting.
+    var resync: Bool
 }
 
 /// Bytes the snapshot has not applied yet. Nil means the ring no longer holds
@@ -196,51 +189,13 @@ final class AuthoritativeParser {
         }
     }
 
-    func frame() -> ReadyFrame? {
+    func frame() -> ScreenFrame? {
         guard let term else { return nil }
-        let grid = term.readGrid()
-        return ReadyFrame(
-            cols: grid.cols,
-            rows: grid.rows,
-            cursorRow: grid.cursor.row,
-            cursorCol: grid.cursor.col,
-            cursorVisible: grid.cursor.visible,
-            alternateScreen: term.isAlternateScreenActive,
-            cursorKeysApplication: term.modes.cursorKeysApplication,
-            keypadApplication: term.modes.keypadApplication,
-            lines: Self.lines(grid),
-            sequence: fedThrough
-        )
+        return ScreenFrame(vt: PaneCapture.screen(term), sequence: fedThrough)
     }
 
     func releaseGrid() {
         term = nil
-    }
-
-    private static func lines(_ grid: TerminalGridSnapshot) -> [String] {
-        (0 ..< grid.rows).map { row in
-            var line = ""
-            var col = 0
-            while col < grid.cols {
-                guard let cell = grid.cell(row: row, col: col) else { break }
-                if cell.width == .spacerTail {
-                    col += 1
-                    continue
-                }
-                line += cell.codepoint == 0 ? " " : cell.cluster
-                col += 1
-            }
-            return line
-        }
-    }
-}
-
-/// A desynced client copies the authoritative screen. The other client is returned
-/// untouched, and this function does not write the client's bytes anywhere.
-enum DesyncReattach {
-    static func apply(authoritative: ReadyFrame, to client: inout [String], other: [String]) -> [String] {
-        client = authoritative.lines
-        return other
     }
 }
 

@@ -457,6 +457,7 @@ final class IPCCodecTests: XCTestCase {
         .createSurface(cwd: "/tmp", shell: "/bin/zsh"),
         .ensureSurface(surfaceID: "surface-1", cwd: "/tmp", shell: "/bin/zsh", rows: 40, cols: 120, scrollbackBytes: 1_048_576),
         .attachSurface(surfaceID: "surface-1"),
+        .attachStream(AttachRequest(surfaceID: "surface-1", label: "test", readOnly: true, history: true, fromSequence: 42, epoch: "e")),
         .closeSurface(surfaceID: "surface-1"),
         .sendKeys(surfaceID: "surface-1", keys: ["C-a", "n", "Enter"]),
         .capturePane(surfaceID: "surface-1", includeScrollback: true),
@@ -565,6 +566,7 @@ final class IPCCodecTests: XCTestCase {
         .replayResult(text: "history", endSequence: 99),
         .snapshotChanged(revision: 12),
         .clientDirective(.copyMode(surfaceID: "s", enabled: true)),
+        .attached(AttachReply(epoch: "e", resync: false, endSequence: 9, screen: Data([0x1b, 0x5b, 0x48]))),
         .agentInfo(AgentSnapshot(kind: .claudeCode, executable: "/usr/bin/claude", pid: 4321)),
         .agentInfo(nil),
         .clients([ClientSummary(
@@ -617,7 +619,8 @@ final class IPCCodecTests: XCTestCase {
              .showOptions, .setEnvironment, .showEnvironment, .bindHook, .unbindHook, .listHooks,
              .displayMessage, .setSurfaceSizeMode, .takeSurface, .foregroundProcess, .surfaceContext,
              .captureFormatted, .processTree, .paneQuery, .listDir, .resetSurface, .paneWait, .subscribeEvents,
-             .publishKeymap, .noteHostsChanged, .noteClientConnection, .noteTailscaleStatus, .presentClient:
+             .publishKeymap, .noteHostsChanged, .noteClientConnection, .noteTailscaleStatus, .presentClient,
+             .attachStream:
             break
         }
     }
@@ -630,7 +633,7 @@ final class IPCCodecTests: XCTestCase {
         case .workspaces, .surfaces, .agents, .workspaceID, .sessionID, .tabID, .paneID,
              .surfaceID, .snapshot, .text, .data, .replayResult, .snapshotChanged, .clientDirective, .agentInfo,
              .clients, .daemonStats, .clientID, .buffer, .buffers, .options, .hookID, .hooks,
-             .follow, .error:
+             .follow, .attached, .error:
             break
         }
     }

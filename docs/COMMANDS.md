@@ -175,7 +175,12 @@ These CLI commands are pure local output and do not require the daemon.
 
 ### Attaching from a plain terminal
 
-`harness-cli attach --surface <id>` connects a single pane (raw passthrough).
+`harness-cli attach --surface <id> [--read-only] [--history]` connects a single pane (raw
+passthrough). It paints the pane's current screen, colors, cursor, and input modes included,
+then goes live, the way tmux attaches; `--history` replays the whole scrollback into your
+terminal first instead. `--read-only` watches: your keys (other than the detach keys) aren't
+sent and your terminal's size doesn't resize the pane. Detaching turns off any mouse, paste,
+or alternate-screen mode the pane's program left on.
 `harness-cli attach-window [--tab <id>] [--detach-keys <bytes>]` renders a whole
 tab's **split layout** — every pane with borders, a status line, and the active
 pane's cursor — into any plain terminal (incl. over ssh). Without `--tab` it

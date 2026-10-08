@@ -16,6 +16,8 @@ public struct DaemonStats: Codable, Sendable {
     /// Build number (`HarnessVersion.build`) of the running daemon — the handshake the app
     /// and CLI compare against their own build to detect a stale daemon (issue #60).
     public var build: Int?
+    /// Protocol features beyond the baseline (`attach-stream`). Nil from older daemons.
+    public var capabilities: [String]?
 
     public init(
         pid: Int32,
@@ -26,7 +28,8 @@ public struct DaemonStats: Codable, Sendable {
         subscriberCount: Int,
         snapshotRevision: Int,
         version: String? = nil,
-        build: Int? = nil
+        build: Int? = nil,
+        capabilities: [String]? = nil
     ) {
         self.pid = pid
         self.uptimeSeconds = uptimeSeconds
@@ -37,10 +40,13 @@ public struct DaemonStats: Codable, Sendable {
         self.snapshotRevision = snapshotRevision
         self.version = version
         self.build = build
+        self.capabilities = capabilities
     }
 }
 
 public extension DaemonStats {
+    static let attachStream = "attach-stream"
+
     /// Whether the daemon these stats describe is stale relative to `expectedBuild`
     /// (the caller's `HarnessVersion.build`). A nil build is a daemon too old to know
     /// the handshake — stale by definition. `!=` rather than `<` so a rollback (daemon

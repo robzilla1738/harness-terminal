@@ -1142,7 +1142,7 @@ public final class RealPty: @unchecked Sendable {
         authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
         let frame = authoritative.frame()
         snapshotLock.unlock()
-        if let frame, let plain = frame.encoded(), let sealed = SnapshotCipher.seal(plain: plain, key: parkKey()) {
+        if let frame, let sealed = SnapshotCipher.seal(plain: frame.encoded(), key: parkKey()) {
             writeParkFile(sealed)
         }
         releaseAuthoritativeGrid()
@@ -1199,30 +1199,17 @@ public final class RealPty: @unchecked Sendable {
         scrollbackPersistenceEnabled = true
     }
 
-    /// Screen first, then the byte ring newest-first. Painting uses only the first piece.
-    func attachPieces() -> [AttachPiece] {
-        let ring = copyRing()
-        let frame = readyFrameForClient() ?? ReadyFrame(
-            cols: 0, rows: 0, cursorRow: 0, cursorCol: 0, cursorVisible: true,
-            alternateScreen: false, cursorKeysApplication: false, keypadApplication: false,
-            lines: [], sequence: 0
-        )
-        return AttachStream.pieces(frame: frame, historyNewestFirst: ring.reversed().map(\.data))
-    }
-
-    /// The screen a new client paints. A parked pane loads the encrypted snapshot
-    /// and does not put the grid back in the heap.
-    func readyFrameForClient() -> ReadyFrame? {
+    /// The screen a new client paints. A parked pane serves its sealed snapshot and does not
+    /// put the grid back in the heap.
+    func screenFrame() -> ScreenFrame? {
         scrollbackLock.lock()
         let parked = idleGrid.parked
         scrollbackLock.unlock()
-        if parked, let url = parkFileURL() {
-            let key = parkKey()
-            if let sealed = try? Data(contentsOf: url),
-               let plain = SnapshotCipher.open(sealed: sealed, key: key),
-               let frame = ReadyFrame.decode(plain) {
-                return frame
-            }
+        if parked, let url = parkFileURL(),
+           let sealed = try? Data(contentsOf: url),
+           let plain = SnapshotCipher.open(sealed: sealed, key: parkKey()),
+           let frame = ScreenFrame.decode(plain) {
+            return frame
         }
         let ring = copyRing()
         let size = currentWinsize()
@@ -1231,6 +1218,38 @@ public final class RealPty: @unchecked Sendable {
         let frame = authoritative.frame()
         snapshotLock.unlock()
         return frame
+    }
+
+    /// What an attaching client needs from the ring: the bytes after `fromSequence` when the
+    /// ring still holds them (a resume), else all of it (`resync`: the client starts over).
+    /// `endSequence` is where live output takes over. Chunks keep their ring sequences.
+    func attachHistory(fromSequence: UInt64?, chunkLimit: Int = 1 << 20) -> AttachHistory {
+        scrollbackLock.lock()
+        let segments = replaySegmentsLocked()
+        let end = nextSequence
+        scrollbackLock.unlock()
+        let first = segments.first?.sequence ?? end
+        let resume = fromSequence.map { $0 >= first && $0 <= end } ?? false
+        var chunks: [ScrollbackReplaySegment] = []
+        for segment in segments {
+            var data = segment.data
+            var sequence = segment.sequence
+            if resume, let from = fromSequence {
+                let segmentEnd = sequence &+ UInt64(data.count)
+                guard from < segmentEnd else { continue }
+                if from > sequence {
+                    data = data.dropFirst(Int(from - sequence))
+                    sequence = from
+                }
+            }
+            while !data.isEmpty {
+                let piece = data.prefix(chunkLimit)
+                chunks.append(ScrollbackReplaySegment(sequence: sequence, data: Data(piece)))
+                sequence &+= UInt64(piece.count)
+                data = data.dropFirst(piece.count)
+            }
+        }
+        return AttachHistory(chunks: chunks, endSequence: end, resync: !resume)
     }
 
     private func ringLocked() -> [SnapshotByteSpan] {

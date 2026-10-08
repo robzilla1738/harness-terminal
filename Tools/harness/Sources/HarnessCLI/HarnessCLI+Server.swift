@@ -7,10 +7,12 @@ import HarnessCore
 extension HarnessCLI {
     static func handleAttach(_ args: [String]) throws -> Int32 {
         guard let surface = flagValue(args, flag: "--surface") else {
-            fputs("Usage: harness-cli attach --surface <id> [--detach-keys <bytes>] [--host <name>]\n", harnessStderr)
+            fputs("Usage: harness-cli attach --surface <id> [--read-only] [--history] [--detach-keys <bytes>] [--host <name>]\n", harnessStderr)
             return 64
         }
         var configuration = AttachClient.Configuration()
+        configuration.readOnly = args.contains("--read-only")
+        configuration.history = args.contains("--history")
         switch resolveDetachSequence(args) {
         case .parsed(let seq): configuration.detachSequence = seq
         case .absent: break  // flag absent — keep the default

@@ -82,6 +82,9 @@ public final class DaemonServer: @unchecked Sendable {
     /// `wait-for` named channels (queue-confined, like the other connection state).
     private let waitForRegistry = WaitForRegistry()
     private let startedAt = Date()
+    /// This daemon's boot id. A client may resume an attach only within the same epoch:
+    /// a restarted daemon numbers its ring afresh.
+    private let epoch = UUID().uuidString
 
     /// `enableVersionBanner` is passed by the real daemon entry point only (`main.swift`):
     /// the first-run / what's-new banner is daemon policy, not something every embedded or
@@ -344,6 +347,10 @@ public final class DaemonServer: @unchecked Sendable {
                 handleSubscribe(surfaceID: surfaceID, label: label, fd: fd)
                 continue
             }
+            if case let .attachStream(attach) = request {
+                handleAttach(attach, fd: fd)
+                continue
+            }
             if case let .sendData(surfaceID, payload) = request, readOnlyClients.contains(fd) {
                 send(.ok, to: fd)
                 _ = surfaceID
@@ -547,7 +554,8 @@ public final class DaemonServer: @unchecked Sendable {
                 subscriberCount: totalSubs,
                 snapshotRevision: registry.revision,
                 version: HarnessVersion.short,
-                build: HarnessVersion.build
+                build: HarnessVersion.build,
+                capabilities: [DaemonStats.attachStream]
             )
             return .daemonStats(stats)
         default:
@@ -682,16 +690,56 @@ public final class DaemonServer: @unchecked Sendable {
     }
 
     private func handleSubscribe(surfaceID: String, label: String?, fd: Int32) {
+        guard addOutputSubscription(surfaceID: surfaceID, label: label, fd: fd, floor: nil) else {
+            send(.error("Surface not found"), to: fd)
+            return
+        }
+        send(.ok, to: fd)
+    }
+
+    /// `attachStream`: the reply, then the history as ordinary output frames, then live
+    /// output. Everything goes out on this queue, and live frames queued while the history is
+    /// sent are dropped below `endSequence` (the history has them), so nothing is missed or
+    /// sent twice. History is binary frames, so its size is bounded by the ring, not the
+    /// JSON frame cap.
+    private func handleAttach(_ attach: AttachRequest, fd: Int32) {
+        if attach.readOnly { readOnlyClients.insert(fd) } else { readOnlyClients.remove(fd) }
+        let floor = SequenceFloor()
+        guard addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, floor: floor) else {
+            send(.error("Surface not found"), to: fd)
+            return
+        }
+        guard attach.history else {
+            let screen = registry.screenFrame(surfaceID: attach.surfaceID)
+            floor.value = screen?.sequence ?? 0
+            send(.attached(AttachReply(epoch: epoch, resync: true, endSequence: floor.value, screen: screen?.vt)), to: fd)
+            return
+        }
+        let resumeFrom = attach.epoch == epoch ? attach.fromSequence : nil
+        guard let history = registry.attachHistory(surfaceID: attach.surfaceID, fromSequence: resumeFrom) else {
+            send(.error("Surface not found"), to: fd)
+            return
+        }
+        floor.value = history.endSequence
+        send(.attached(AttachReply(epoch: epoch, resync: history.resync, endSequence: history.endSequence)), to: fd)
+        for chunk in history.chunks {
+            sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)
+        }
+    }
+
+    /// Streams `surfaceID`'s output to `fd` and registers `fd` as a client. `floor` drops live
+    /// frames an attach's history already covered. False when the surface doesn't exist.
+    private func addOutputSubscription(surfaceID: String, label: String?, fd: Int32, floor: SequenceFloor?) -> Bool {
         guard let token = registry.subscribe(surfaceID: surfaceID, handler: { [weak self] data, sequence in
             guard let server = self else { return }
             server.queue.async { [weak server] in
                 guard let server else { return }
+                if let floor, sequence < floor.value { return }
                 server.registry.metrics.recordOutputNotification()
                 server.sendDataFrame(data, sequence: sequence, to: fd)
             }
         }) else {
-            send(.error("Surface not found"), to: fd)
-            return
+            return false
         }
         outputSubscriptions[fd, default: []].append((surfaceID, token))
         // A subscription connection is long-lived and identifies a real client
@@ -716,13 +764,15 @@ public final class DaemonServer: @unchecked Sendable {
             // GUI/attach clients register here, never through identifyClient.
             registeredClientCount.update(clients.count)
         }
-        send(.ok, to: fd)
+        return true
     }
 
     /// Record this client's requested size. In `smallest` mode the PTY becomes the
     /// minimum vote. In `owner` mode only the owner's vote changes the PTY; a
     /// non-owner records an advisory size and this returns without resizing.
     private func handleResize(surfaceID: String, rows: UInt16, cols: UInt16, fd: Int32) {
+        // A read-only watcher sees the pane at the size the writers chose.
+        guard !readOnlyClients.contains(fd) else { return }
         guard let size = sizeArbiter.vote(client: fd, surface: surfaceID, rows: rows, cols: cols) else { return }
         _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
     }
@@ -875,4 +925,9 @@ public enum DaemonError: Error, CustomStringConvertible {
         case .listenFailed: "Failed to listen on socket"
         }
     }
+}
+
+/// The first sequence an attach's live frames may carry. Set and read on the server queue.
+private final class SequenceFloor: @unchecked Sendable {
+    var value: UInt64 = .max
 }

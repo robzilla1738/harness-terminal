@@ -12,6 +12,8 @@ public final class DaemonClient: @unchecked Sendable {
     /// Where this client connects. Defaults to the local daemon's control socket, so every existing
     /// `DaemonClient()` call is unchanged; a remote client passes the local end of an SSH tunnel.
     private let endpoint: Endpoint
+    private let capabilityLock = NSLock()
+    private var attachStreamSupported: Bool?
 
     public init(endpoint: Endpoint = .localControlSocket) {
         self.endpoint = endpoint
@@ -104,6 +106,104 @@ public final class DaemonClient: @unchecked Sendable {
             subscription.discardBufferedAndDeliverDirect()
         }
         return subscription
+    }
+
+    /// Where a client's terminal stands in a daemon's output: the daemon's epoch and the next
+    /// sequence it expects. Handing it back on reconnect resumes instead of repainting.
+    public struct AttachPoint: Equatable, Sendable {
+        public var epoch: String
+        public var sequence: UInt64
+        public init(epoch: String, sequence: UInt64) {
+            self.epoch = epoch
+            self.sequence = sequence
+        }
+    }
+
+    /// How an attach starts. With `resync` the caller resets its terminal before the bytes
+    /// that follow; otherwise they continue where `resume` left off. Bytes below `historyEnd`
+    /// are history (feed them as a replay: no bells or notifications); `point` is nil on a
+    /// daemon that can't resume.
+    public struct AttachStart: Equatable, Sendable {
+        public var resync: Bool
+        public var historyEnd: UInt64
+        public var point: AttachPoint?
+    }
+
+    /// Attach to a surface's output with its history. On a daemon with `attach-stream` this
+    /// is one request: the history streams as binary frames (no JSON size cap) and a known
+    /// `resume` point sends only what was missed. An older daemon gets subscribe + replay.
+    /// `onStart` runs before any `onData`, on the subscription's read thread.
+    @discardableResult
+    public func attach(
+        surfaceID: String,
+        label: String? = nil,
+        readOnly: Bool = false,
+        resume: AttachPoint? = nil,
+        onStart: @escaping @Sendable (AttachStart) -> Void,
+        onData: @escaping @Sendable (Data, UInt64) -> Void,
+        onEnd: (@Sendable () -> Void)? = nil
+    ) throws -> DaemonSubscription {
+        guard supportsAttachStream() else {
+            // The replay is history at sequence 0; live frames count from 1 so none is taken for it.
+            return try attachReplayingSurfaceOutput(
+                surfaceID: surfaceID, label: label, readOnly: readOnly,
+                onReplay: { text in
+                    onStart(AttachStart(resync: true, historyEnd: 1, point: nil))
+                    if !text.isEmpty { onData(Data(text.utf8), 0) }
+                },
+                onData: { data, sequence in onData(data, max(sequence, 1)) },
+                onEnd: onEnd
+            )
+        }
+        let request = AttachRequest(
+            surfaceID: surfaceID, label: label, readOnly: readOnly, history: true,
+            fromSequence: resume?.sequence, epoch: resume?.epoch
+        )
+        return try attachStream(request, onAttached: { reply in
+            onStart(AttachStart(
+                resync: reply.resync, historyEnd: reply.endSequence,
+                point: AttachPoint(epoch: reply.epoch, sequence: reply.endSequence)
+            ))
+        }, onData: onData, onEnd: onEnd)
+    }
+
+    /// The `attachStream` request itself: `.attached`, then output frames. `harness-cli attach`
+    /// uses it screen-only (`history: false`), painting `reply.screen`.
+    @discardableResult
+    public func attachStream(
+        _ request: AttachRequest,
+        onAttached: @escaping @Sendable (AttachReply) -> Void,
+        onData: @escaping @Sendable (Data, UInt64) -> Void,
+        onEnd: (@Sendable () -> Void)? = nil
+    ) throws -> DaemonSubscription {
+        let fd = try connectSocket()
+        let payload = try IPCCodec.encode(IPCEnvelope(request: .attachStream(request)))
+        do { try writeAll(payload, to: fd) } catch { close(fd); throw error }
+        let subscription = DaemonSubscription(fd: fd)
+        subscription.start(onResponse: { response in
+            switch response {
+            case let .attached(reply): onAttached(reply)
+            case let .data(data, sequence): onData(data, sequence)
+            default: break
+            }
+        }, onEnd: onEnd)
+        if RemoteAttach.isTunnel(endpoint) { subscription.presentAsTunnel() }
+        return subscription
+    }
+
+    /// Whether the daemon has `attach-stream`. Asked once per client.
+    public func supportsAttachStream() -> Bool {
+        capabilityLock.lock()
+        if let known = attachStreamSupported { capabilityLock.unlock(); return known }
+        capabilityLock.unlock()
+        var supported = false
+        if case let .daemonStats(stats)? = try? request(.daemonStats, timeout: 2) {
+            supported = stats.capabilities?.contains(DaemonStats.attachStream) == true
+        }
+        capabilityLock.lock()
+        attachStreamSupported = supported
+        capabilityLock.unlock()
+        return supported
     }
 
     /// Long-lived snapshot subscription: invokes `onRevision` each time the daemon

@@ -89,14 +89,44 @@ public enum PaneCapture {
         return parts.joined(separator: ";")
     }
 
+    /// The visible screen as bytes that repaint it on any terminal: the alternate screen when
+    /// it's active, every row with its attributes, the cursor, and the input modes a program
+    /// set (cursor keys, keypad, bracketed paste, focus and mouse reporting, Kitty keyboard).
+    /// `attach` paints this instead of replaying history.
+    public static func screen(_ term: TerminalEmulator) -> Data {
+        let grid = term.readGrid()
+        var out = term.isAlternateScreenActive ? "\u{1b}[?1049h" : ""
+        out += "\u{1b}[0m\u{1b}[H\u{1b}[2J"
+        for row in 0 ..< grid.rows {
+            let start = row * grid.cols
+            var cells = Array(grid.cells[start ..< start + grid.cols])
+            while let last = cells.last, isBlank(last), last.background == .none, !last.inverse { cells.removeLast() }
+            guard !cells.isEmpty else { continue }
+            out += "\u{1b}[\(row + 1);1H" + vtRow(cells)
+        }
+        let modes = term.modes
+        let flags: [(Bool, String)] = [
+            (modes.cursorKeysApplication, "\u{1b}[?1h"), (modes.keypadApplication, "\u{1b}="),
+            (modes.bracketedPaste, "\u{1b}[?2004h"), (modes.focusReporting, "\u{1b}[?1004h"),
+            (modes.mouseClick, "\u{1b}[?1000h"), (modes.mouseDrag, "\u{1b}[?1002h"),
+            (modes.mouseAny, "\u{1b}[?1003h"), (modes.mouseSGR, "\u{1b}[?1006h"),
+        ]
+        for (on, sequence) in flags where on { out += sequence }
+        if modes.kittyKeyboardFlags != 0 { out += "\u{1b}[>\(modes.kittyKeyboardFlags)u" }
+        out += "\u{1b}[\(grid.cursor.row + 1);\(grid.cursor.col + 1)H"
+        if !grid.cursor.visible { out += "\u{1b}[?25l" }
+        return Data(out.utf8)
+    }
+
     private static func vtRow(_ cells: [TerminalGridCell]) -> String {
         var out = ""
         var previous = ""
         for cell in cells where cell.width != .spacerTail {
-            let sgr = sgr(cell)
-            if sgr != previous {
-                out += sgr
-                previous = sgr
+            let style = sgrCodes(cell)
+            if style != previous {
+                // Every change starts from a reset, so dropping an attribute is never missed.
+                out += style.isEmpty ? "\u{1b}[0m" : "\u{1b}[0;\(style)m"
+                previous = style
             }
             out += cell.codepoint == 0 ? " " : cell.cluster
         }
@@ -104,13 +134,29 @@ public enum PaneCapture {
         return out
     }
 
-    private static func sgr(_ cell: TerminalGridCell) -> String {
+    private static func sgrCodes(_ cell: TerminalGridCell) -> String {
         var codes: [String] = []
         if cell.bold { codes.append("1") }
+        if cell.faint { codes.append("2") }
+        if cell.italic { codes.append("3") }
+        switch cell.underline {
+        case .none: break
+        case .single: codes.append("4")
+        case .double: codes.append("4:2")
+        case .curly: codes.append("4:3")
+        case .dotted: codes.append("4:4")
+        case .dashed: codes.append("4:5")
+        }
+        if cell.blink { codes.append("5") }
+        if cell.inverse { codes.append("7") }
+        if cell.invisible { codes.append("8") }
+        if cell.strikethrough { codes.append("9") }
+        if cell.overline { codes.append("53") }
         if let code = sgrColor(cell.foreground, foreground: true) { codes.append(code) }
         if let code = sgrColor(cell.background, foreground: false) { codes.append(code) }
-        guard !codes.isEmpty else { return "" }
-        return "\u{1b}[\(codes.joined(separator: ";"))m"
+        if case let .rgb(r, g, b) = cell.underlineColor { codes.append("58;2;\(r);\(g);\(b)") }
+        if case let .palette(index) = cell.underlineColor { codes.append("58;5;\(index)") }
+        return codes.joined(separator: ";")
     }
 
     private static func sgrColor(_ color: TerminalGridColor, foreground: Bool) -> String? {

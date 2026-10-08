@@ -1001,7 +1001,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
             session.injectSyntheticOutput(Data([0x1B, 0x63]))
             return .ok
-        case .paneWait, .subscribeEvents, .publishKeymap, .noteHostsChanged, .presentClient,
+        case .paneWait, .subscribeEvents, .publishKeymap, .noteHostsChanged, .presentClient, .attachStream,
              .noteClientConnection, .noteTailscaleStatus:
             return .error("handled by the daemon server")
         case let .surfaceContext(surfaceID):
@@ -1065,6 +1065,22 @@ public final class SurfaceRegistry: @unchecked Sendable {
         let session = sessions[surfaceID]
         lock.unlock()
         return session?.subscribe(handler)
+    }
+
+    /// The ring an attaching client is sent (`RealPty.attachHistory`).
+    func attachHistory(surfaceID: String, fromSequence: UInt64?) -> AttachHistory? {
+        lock.lock()
+        let session = sessions[surfaceID]
+        lock.unlock()
+        return session?.attachHistory(fromSequence: fromSequence)
+    }
+
+    /// The visible screen as VT bytes, for a screen-only attach.
+    func screenFrame(surfaceID: String) -> ScreenFrame? {
+        lock.lock()
+        let session = sessions[surfaceID]
+        lock.unlock()
+        return session?.screenFrame()
     }
 
     public func cancelSubscription(surfaceID: String, token: UUID) {

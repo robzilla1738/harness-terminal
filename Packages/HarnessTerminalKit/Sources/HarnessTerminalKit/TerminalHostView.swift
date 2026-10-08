@@ -74,6 +74,9 @@ public final class TerminalHostView: NSView {
     private let io: SurfaceIO
     private let inputGate: InputGate
     private var outputSubscription: DaemonSubscription?
+    /// How far this pane's terminal has read the daemon's output. A reconnect to the same
+    /// daemon hands it back and gets only what it missed, with no reset or repaint.
+    private var attachPoint: DaemonClient.AttachPoint?
     private var isActiveBorder = false
     private var cachedSettings: HarnessSettings?
     private var cachedThemeName: String
@@ -884,15 +887,15 @@ public final class TerminalHostView: NSView {
         showDetachedOverlay()
     }
 
-    /// Re-grab a surface released with `detachFromDaemonSurface()`: resubscribe and replay
-    /// scrollback so the pane catches up. No-op if still attached.
+    /// Re-grab a surface released with `detachFromDaemonSurface()`: reattach from where the pane
+    /// left off so it catches up. No-op if still attached.
     public func reattachToDaemonSurface() {
         guard outputSubscription == nil else { return }
         intentionallyDetached = false
         reconnectAttempts = 0
         hideReconnectingOverlay()
         hideDetachedOverlay()
-        startDaemonOutput(resetBeforeReplay: true)
+        startDaemonOutput()
     }
 
     /// Drop a dimmed "released — click to re-grab" affordance over the frozen pane. Topmost so it
@@ -988,32 +991,14 @@ public final class TerminalHostView: NSView {
         return false
     }
 
-    private func startDaemonOutput(resetBeforeReplay: Bool = false) {
-        // Gap-free attach: subscribe FIRST (live frames buffer), THEN replay, then flush the
-        // buffered live frames deduped against the replay boundary — so a byte appended between the
-        // replay snapshot and the handler registration is delivered exactly once instead of dropped.
-        // `onReplay` resets stale content (when reconnecting) and feeds the replayed history; both
-        // run on main, and live frames only reach main AFTER this (via `makeOutputDataHandler`'s
-        // `main.async`), so FIFO keeps history before live output.
-        let reset = resetBeforeReplay
-        let onData = makeOutputDataHandler()
-        let onReplay: @Sendable (String) -> Void = { [weak self] text in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    // Reconnect/reattach: RIS first so the replay replaces stale pre-restart content
-                    // instead of stacking on it. First connect: emulator empty, so RIS is a no-op.
-                    // `replay: true` keeps replayed queries/bells/notifications from re-firing (#168).
-                    if reset { self.nativeView.receive("\u{1b}c") }
-                    if !text.isEmpty { self.nativeView.receive(text, replay: true) }
-                }
-            }
-        }
+    private func startDaemonOutput() {
+        let (onStart, onData) = makeAttachHandlers(reconnecting: false)
         do {
-            outputSubscription = try daemonClient.attachReplayingSurfaceOutput(
+            outputSubscription = try daemonClient.attach(
                 surfaceID: surfaceID.uuidString,
                 label: "Harness.app",
-                onReplay: onReplay,
+                resume: attachPoint,
+                onStart: onStart,
                 onData: onData,
                 onEnd: makeOutputEndHandler()
             )
@@ -1026,19 +1011,39 @@ public final class TerminalHostView: NSView {
         }
     }
 
-    /// Output-stream data handler, shared by the initial connect and the off-main reconnect. Feeds
-    /// the emulator on the main thread IN ORDER: the subscription read loop is serial (frames decode
-    /// in the daemon's byte order) and `DispatchQueue.main.async` is strict FIFO, so byte order is
-    /// preserved end to end. An unstructured `Task { @MainActor in }` is NOT order-preserving — under
-    /// fast/bursty output (the binary transport makes decode far faster, so chunks arrive
-    /// back-to-back) two tasks could run on the main actor out of order, feeding a TUI's
-    /// cursor-positioned redraws to the emulator scrambled (overlapping, interleaved text).
-    private func makeOutputDataHandler() -> @Sendable (Data, UInt64) -> Void {
-        { [weak self] data, _ in
+    /// The attach callbacks, shared by the first connect, a re-grab, and a reconnect. They run
+    /// on the subscription's read thread and hop to main IN ORDER: the read loop is serial and
+    /// `DispatchQueue.main.async` is strict FIFO, so the emulator sees the daemon's byte order.
+    /// (An unstructured `Task { @MainActor in }` is not order-preserving and scrambled
+    /// cursor-positioned redraws under bursty output.) A resync resets the terminal first;
+    /// history bytes are fed as a replay so old bells and queries don't fire again (#168).
+    private func makeAttachHandlers(reconnecting: Bool) -> (
+        onStart: @Sendable (DaemonClient.AttachStart) -> Void,
+        onData: @Sendable (Data, UInt64) -> Void
+    ) {
+        let progress = AttachProgress()
+        let onStart: @Sendable (DaemonClient.AttachStart) -> Void = { [weak self] start in
+            progress.historyEnd = start.historyEnd
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.nativeView.receive(data) }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if reconnecting, self.intentionallyDetached || self.outputSubscription != nil { return }
+                    self.attachPoint = start.point
+                    if start.resync { self.nativeView.receive("\u{1b}c") }
+                }
             }
         }
+        let onData: @Sendable (Data, UInt64) -> Void = { [weak self] data, sequence in
+            let replay = sequence < progress.historyEnd
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.nativeView.receive(data, replay: replay)
+                    self.attachPoint?.sequence = sequence &+ UInt64(data.count)
+                }
+            }
+        }
+        return (onStart, onData)
     }
 
     /// Output-stream end handler, shared by the initial connect and the off-main reconnect. If we
@@ -1062,7 +1067,7 @@ public final class TerminalHostView: NSView {
     /// Recover a surface whose output stream dropped unexpectedly (daemon restart/crash). Probe the
     /// daemon off-main so a still-restarting one never blocks the UI; once it answers, re-ensure the
     /// surface (idempotent — the respawned daemon already recreated it from layout.json) and
-    /// resubscribe with a clean replay. Bounded backoff covers the restart window; after that, fall
+    /// reattach (resuming when the daemon is the same one). Bounded backoff covers the restart window; after that, fall
     /// back to the manual "click to re-grab" affordance. No-op once intentionally detached.
     private func scheduleDaemonReconnect() {
         guard !intentionallyDetached, outputSubscription == nil else { return }
@@ -1079,7 +1084,7 @@ public final class TerminalHostView: NSView {
         reconnectAttempts += 1
         let delay = DaemonReconnectPolicy.delay(forAttempt: attempt)
         // Capture main-actor state so the whole probe + (re)attach handshake — ping, ensureSurface,
-        // replayScrollback, and subscribe — runs OFF main. A still-restarting daemon answers slowly
+        // and attach — runs OFF main. A still-restarting daemon answers slowly
         // (or its socket blocks), so doing these synchronous round trips on main froze the UI for the
         // duration of every retry. Only the view touches (RIS reset, replay receive, subscription
         // assignment, `io.attach`) hop back to main.
@@ -1088,22 +1093,9 @@ public final class TerminalHostView: NSView {
         let cwd = cachedCwd ?? FileManager.default.homeDirectoryForCurrentUser.path
         let shell = cachedShell
         let scrollbackBytes = Self.scrollbackBytes(forLines: cachedSettings?.scrollbackLines ?? 10_000)
-        let onData = makeOutputDataHandler()
+        let (onStart, onData) = makeAttachHandlers(reconnecting: true)
         let onEnd = makeOutputEndHandler()
-        // The view touches are built on main as `@Sendable` closures capturing `[weak self]`, so the
-        // off-main worker never captures the (non-Sendable, @MainActor) `self` itself — it only calls
-        // these to hop back. `onReplay`: reset stale content (RIS) + replay history; `onAttached`:
-        // commit the new subscription (or, on nil, reschedule the backoff).
-        let onReplay: @Sendable (String) -> Void = { [weak self] text in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self, !self.intentionallyDetached, self.outputSubscription == nil else { return }
-                    self.nativeView.receive("\u{1b}c")
-                    // `replay: true` keeps replayed queries/bells/notifications from re-firing (#168).
-                    if !text.isEmpty { self.nativeView.receive(text, replay: true) }
-                }
-            }
-        }
+        let resume = attachPoint
         let onAttached: @Sendable (DaemonSubscription?) -> Void = { [weak self] subscription in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -1134,13 +1126,10 @@ public final class TerminalHostView: NSView {
             guard case .ok? = try? client.request(.ensureSurface(
                 surfaceID: sid, cwd: cwd, shell: shell, rows: 24, cols: 80, scrollbackBytes: scrollbackBytes
             )) else { onAttached(nil); return }
-            // Gap-free resubscribe: the helper subscribes first (buffering live frames), replays,
-            // then flushes the buffered frames deduped against the replay boundary — closing the
-            // window where a byte appended between the replay and the subscribe was dropped. The
-            // helper invokes `onReplay` (reset + replayed history on main) before the live stream,
-            // and the buffered/live frames reach main via `onData` AFTER it, so FIFO keeps order.
-            let subscription = try? client.attachReplayingSurfaceOutput(
-                surfaceID: sid, label: "Harness.app", onReplay: onReplay, onData: onData, onEnd: onEnd
+            // Same daemon: resume from the last byte painted. A restarted daemon (new epoch) or an
+            // evicted gap resyncs: reset, then the full history.
+            let subscription = try? client.attach(
+                surfaceID: sid, label: "Harness.app", resume: resume, onStart: onStart, onData: onData, onEnd: onEnd
             )
             onAttached(subscription)
         }
@@ -1469,4 +1458,10 @@ enum DaemonReconnectPolicy {
     }
 
     static func isExhausted(attempts: Int) -> Bool { attempts >= maxAttempts }
+}
+
+/// The history boundary of one attach, written by `onStart` and read by `onData`, both on the
+/// subscription's serial read thread.
+private final class AttachProgress: @unchecked Sendable {
+    var historyEnd: UInt64 = 0
 }

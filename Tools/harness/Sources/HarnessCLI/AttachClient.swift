@@ -32,8 +32,20 @@ public enum AttachClient {
         /// Human-readable label sent via `identifyClient`. Shows up in
         /// `harness-cli list-clients`.
         public var label: String = "harness-cli attach"
+        /// Watch only: keystrokes (other than the detach keys) are not sent, and this client's
+        /// terminal size doesn't vote on the pane's size.
+        public var readOnly = false
+        /// Replay the whole scrollback into this terminal before going live. Off by default:
+        /// the attach paints the pane's current screen, like tmux.
+        public var history = false
         public init() {}
     }
+
+    /// Leaves the alternate screen and turns off every input mode a pane can switch on.
+    static let terminalReset = Data((
+        "\u{1b}[?1049l\u{1b}[?1l\u{1b}>\u{1b}[?2004l\u{1b}[?1004l\u{1b}[?1000l\u{1b}[?1002l"
+            + "\u{1b}[?1003l\u{1b}[?1006l\u{1b}[<u\u{1b}[?25h\u{1b}[0m\r\n"
+    ).utf8)
 
     public static func run(
         surfaceID: String,
@@ -104,9 +116,22 @@ private final class LiveSession: @unchecked Sendable {
     func connect() throws {
         try installWakePipe()
         installSignalHandlers()
+        if !configuration.history, client.supportsAttachStream() {
+            // Screen first: the daemon sends the pane's current screen as VT bytes (alternate
+            // screen, cursor, and input modes included), then live output.
+            let request = AttachRequest(surfaceID: surfaceID, label: configuration.label, readOnly: configuration.readOnly, history: false)
+            subscription = try client.attachStream(
+                request,
+                onAttached: { [weak self] reply in if let screen = reply.screen { self?.writeOut(screen) } },
+                onData: { [weak self] data, _ in self?.writeOut(data) },
+                onEnd: { [weak self] in self?.requestDetach() }
+            )
+            return
+        }
         subscription = try client.attachReplayingSurfaceOutput(
             surfaceID: surfaceID,
             label: configuration.label,
+            readOnly: configuration.readOnly,
             onReplay: { [weak self] text in
                 if !text.isEmpty, let data = text.data(using: .utf8) { self?.writeOut(data) }
             },
@@ -135,8 +160,9 @@ private final class LiveSession: @unchecked Sendable {
         // by `AttachInputBatcher` so a large paste burst becomes a few large
         // `sendData` requests instead of one per read, without delaying typing
         // or the detach sequence.
+        let readOnly = configuration.readOnly
         func send(_ data: Data?) {
-            guard let data, !data.isEmpty else { return }
+            guard !readOnly, let data, !data.isEmpty else { return }
             _ = try? client.request(.sendData(surfaceID: surfaceID, data: data), timeout: 1)
         }
         var batcher = AttachInputBatcher(detachSequence: configuration.detachSequence)
@@ -187,8 +213,10 @@ private final class LiveSession: @unchecked Sendable {
             }
         }
 
-        // Tear down.
+        // Tear down, and hand the terminal back in the state we found it: the pane's program
+        // may have turned on the alternate screen, mouse reporting, or other input modes.
         sub.cancel()
+        writeOut(AttachClient.terminalReset)
         _ = try? client.request(.detachSurface(surfaceID: surfaceID), timeout: 1)
         sigwinchSource?.cancel()
         sigtermSource?.cancel()
