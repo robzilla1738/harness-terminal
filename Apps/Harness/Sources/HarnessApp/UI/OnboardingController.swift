@@ -22,7 +22,7 @@ enum OnboardingController {
         HarnessOnboarding.present()
     }
 
-    /// Bridge the isolated onboarding module to the core agent-hook installer, so the Setup
+    /// Bridge the isolated onboarding module to the core agent-hook installer, so the Notifications
     /// step can detect installed agents and wire up notification hooks in one click.
     private static func configureEnvironment() {
         OnboardingEnvironment.detectAgents = {

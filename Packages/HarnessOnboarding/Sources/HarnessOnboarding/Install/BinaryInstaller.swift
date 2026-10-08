@@ -1,239 +1,115 @@
 import Foundation
 import AppKit
 
-/// The one-click installer logic for the standalone Harness CLI onboarding experience.
+/// Installs `harness-cli` and `HarnessDaemon` into Application Support for the onboarding wizard.
 ///
-/// It is deliberately self-contained (no link to HarnessCore) but follows the exact
-/// same paths, plist template, and launchctl patterns as the real `harness-cli install`
-/// and `LaunchAgentInstaller` so that the result is 100% compatible with a future
-/// full Harness.app or CLI-only distribution.
+/// It is deliberately self-contained (no link to HarnessCore) but follows the same paths, plist
+/// template, and launchctl patterns as `harness-cli install` and `LaunchAgentInstaller`, so either
+/// one can take over from the other.
 @MainActor
 enum BinaryInstaller {
-    enum DetectionStatus: Equatable {
-        case found(version: String?, path: URL)
-        case willInstall
-        case notFound
-
-        var display: String {
-            switch self {
-            // Fall back to the detected binary's name so the Daemon row reads "Found HarnessDaemon"
-            // — not the CLI's "Found harness-cli" (both rows pass version: nil today).
-            case .found(let v, let path): "Found \(v ?? path.lastPathComponent)"
-            case .willInstall: "Will install"
-            case .notFound: "Not found in common locations"
-            }
-        }
-
-        var isReady: Bool {
-            switch self {
-            case .found, .willInstall: true
-            case .notFound: false
-            }
-        }
-    }
-
-    struct InstallReport {
-        let cliInstalled: Bool
-        let daemonInstalled: Bool
-        let launchAgentInstalled: Bool
-        let messages: [String]
-    }
-
     enum InstallError: LocalizedError {
-        case missingBundledTools(messages: [String])
+        case missingBundledTools
 
         var errorDescription: String? {
-            switch self {
-            case .missingBundledTools(let messages):
-                return (messages + ["Harness.app is missing its bundled command-line tools. Rebuild or reinstall Harness."])
-                    .joined(separator: "\n")
-            }
+            "This copy of Harness is missing its command-line tools. Reinstall Harness from the DMG."
         }
     }
-
-    // MARK: - Detection (the locations the real harness-cli install also checks)
 
     /// The `Contents/MacOS` directory of the host app. Embedded in Harness.app this is where
     /// the bundled `harness-cli` + `HarnessDaemon` live (copied in by the "Copy Bundled Tools"
-    /// build step), so the Install step copies straight out of the running bundle.
+    /// build step), so installs copy straight out of the running bundle.
     nonisolated private static var bundledMacOSDir: URL? {
         Bundle.main.executableURL?.deletingLastPathComponent()
     }
 
-    static func detectCLI() -> DetectionStatus {
-        let candidates: [URL] = [
-            // 1. Inside the running app bundle's MacOS dir (Harness.app embeds the binaries)
-            bundledMacOSDir?.appendingPathComponent("harness-cli"),
-            // 2. Next to the app (the "all-in-one DMG" layout)
-            Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("harness-cli"),
-            // 3. Inside a sibling Harness.app (if the user has the GUI version)
-            URL(fileURLWithPath: "/Applications/Harness.app/Contents/MacOS/harness-cli"),
-            // 4. Already installed by a previous run or the GUI app
-            HarnessCLIPaths.installedCLIPath,
-            // 5. Dev builds
-            URL(fileURLWithPath: ".build/release/harness-cli", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
-        ].compactMap { $0 }
-
-        for url in candidates {
-            if FileManager.default.fileExists(atPath: url.path) {
-                // Best-effort version (the real binary prints nothing on --version today,
-                // so we just report the path; the UI shows "Found").
-                return .found(version: nil, path: url)
-            }
-        }
-        return .willInstall   // we will copy from the best candidate we can find at install time
+    /// Where to copy `binary` from: the running bundle, a sibling of it (an Xcode build), or an
+    /// installed Harness.app. Nil when none has it.
+    nonisolated static func bundledSource(named binary: String) -> URL? {
+        [
+            bundledMacOSDir?.appendingPathComponent(binary),
+            Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(binary),
+            URL(fileURLWithPath: "/Applications/Harness.app/Contents/MacOS/\(binary)"),
+        ]
+        .compactMap { $0 }
+        .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    static func detectDaemon() -> DetectionStatus {
-        let candidates: [URL] = [
-            bundledMacOSDir?.appendingPathComponent("HarnessDaemon"),
-            Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("HarnessDaemon"),
-            URL(fileURLWithPath: "/Applications/Harness.app/Contents/MacOS/HarnessDaemon"),
-            HarnessCLIPaths.installedDaemonPath,
-            URL(fileURLWithPath: ".build/release/HarnessDaemon", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
-        ].compactMap { $0 }
-        for url in candidates {
-            if FileManager.default.fileExists(atPath: url.path) {
-                return .found(version: nil, path: url)
-            }
+    // MARK: - Install
+
+    // `performInstall` and its helpers are `nonisolated`: they touch only the filesystem and spawn
+    // processes. `buildNumberProbe` is a main-actor static var, so a caller leaving the main actor
+    // captures it first and passes it as `probe` (see `OnboardingSetup.installBinaries`).
+
+    nonisolated static func performInstall(cliSource: URL? = nil, daemonSource: URL? = nil,
+                                           probe: (@Sendable (URL) -> Int?)? = nil) throws {
+        guard let cliSrc = cliSource ?? bundledSource(named: "harness-cli"),
+              let daemonSrc = daemonSource ?? bundledSource(named: "HarnessDaemon") else {
+            throw InstallError.missingBundledTools
         }
-        return .willInstall
-    }
-
-    // MARK: - The actual install (idempotent, user-friendly)
-
-    // NOTE: performInstall and its helpers are `nonisolated` because they touch only the
-    // filesystem and spawn Processes — they read/write no @MainActor state.  The one
-    // exception is `buildNumberProbe`, which is a `static var` and therefore @MainActor-
-    // isolated.  Callers that need to run off the main thread should capture the closure
-    // in a local `let` before leaving the main actor (the call site in SetupStepView does
-    // exactly this via `Task.detached`).  See SetupStepView.performInstall for the pattern.
-
-    nonisolated static func performInstall(cliSource: URL?, daemonSource: URL?, probe: (@Sendable (URL) -> Int?)? = nil) throws -> InstallReport {
-        var messages: [String] = []
-        var cliOK = false
-        var daemonOK = false
-        var agentOK = false
-
         try HarnessCLIPaths.ensureDirectories()
 
         // Re-running onboarding from an *older* Harness.app (Help → Welcome re-opens this wizard)
         // must never silently downgrade a newer installed daemon/CLI. The bundled CLI + daemon
         // always ship from the same app build, so a single source-vs-installed `harness-cli`
         // build-number comparison governs the overwrite decision for *both* binaries (the daemon
-        // has no version flag of its own). The v1.3.2 BinaryRefresher doesn't heal this — it
-        // byte-diffs against the launching app's own bundle, not the previously installed copy.
-        let cliSrc = cliSource ?? findBestSource(named: "harness-cli")
-        let daemonSrc = daemonSource ?? findBestSource(named: "HarnessDaemon")
-        // Use the caller-provided probe closure (captured before going off-main) so we
-        // never touch the @MainActor `buildNumberProbe` static var from a nonisolated context.
-        // The default (nil) falls back to the same DispatchSemaphore-bounded implementation
-        // that the static var holds, but avoids the actor-isolation issue.
+        // has no version flag of its own).
         let resolvedProbe: (URL) -> Int? = probe ?? BinaryInstaller.defaultBuildNumberProbe
-        let sourceBuild = cliSrc.flatMap { resolvedProbe($0) }
+        let sourceBuild = resolvedProbe(cliSrc)
         let installedBuild = resolvedProbe(HarnessCLIPaths.installedCLIPath)
+        try copyReplacing(src: cliSrc, dest: HarnessCLIPaths.installedCLIPath, executable: true,
+                          sourceBuild: sourceBuild, installedBuild: installedBuild)
+        try copyReplacing(src: daemonSrc, dest: HarnessCLIPaths.installedDaemonPath, executable: true,
+                          sourceBuild: sourceBuild, installedBuild: installedBuild)
 
-        // Copy CLI
-        if let src = cliSrc {
-            let dest = HarnessCLIPaths.installedCLIPath
-            let outcome = try copyReplacing(src: src, dest: dest, executable: true,
-                                            sourceBuild: sourceBuild, installedBuild: installedBuild)
-            messages.append(outcome.message(binary: "harness-cli", dest: dest))
-            cliOK = true
-        } else {
-            messages.append("harness-cli source not found; skipping binary copy")
+        installLaunchAgentIfNeeded()
+    }
+
+    /// Point launchd at the installed daemon, but only when there is no working LaunchAgent yet.
+    /// By the time the wizard runs, the app has usually registered one for the bundled daemon, and
+    /// rewriting it would `bootout` that daemon along with every shell and agent running in it. The
+    /// app moves the agent to the installed copy itself the next time its daemon fails to answer.
+    /// Best-effort: the app starts a daemon on its own when launchd won't.
+    nonisolated private static func installLaunchAgentIfNeeded() {
+        let plistURL = HarnessCLIPaths.launchAgentURL
+        if let existing = launchAgentDaemonPath(at: plistURL),
+           FileManager.default.isExecutableFile(atPath: existing) { return }
+
+        let home = HarnessCLIPaths.applicationSupport
+        let log = home.appendingPathComponent("logs/daemon.log")
+        try? FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        if FileManager.default.fileExists(atPath: plistURL.path) {
+            _ = runLaunchctl(["bootout", "gui/\(getuid())", plistURL.path])
         }
+        let plist = launchAgentPlist(daemonPath: HarnessCLIPaths.installedDaemonPath, harnessHome: home, logPath: log)
+        guard (try? plist.write(to: plistURL, atomically: true, encoding: .utf8)) != nil else { return }
+        _ = runLaunchctl(["bootstrap", "gui/\(getuid())", plistURL.path])
+        _ = runLaunchctl(["enable", "gui/\(getuid())/\(HarnessCLIPaths.launchAgentLabel)"])
+    }
 
-        // Copy Daemon — same build comparison as the CLI (they ship together from one app build).
-        if let src = daemonSrc {
-            let dest = HarnessCLIPaths.installedDaemonPath
-            let outcome = try copyReplacing(src: src, dest: dest, executable: true,
-                                            sourceBuild: sourceBuild, installedBuild: installedBuild)
-            messages.append(outcome.message(binary: "HarnessDaemon", dest: dest))
-            daemonOK = true
-        } else {
-            messages.append("HarnessDaemon source not found; skipping binary copy")
-        }
-
-        guard cliOK, daemonOK else {
-            throw InstallError.missingBundledTools(messages: messages)
-        }
-
-        // LaunchAgent (always try; uses the exact template we captured from the real installer)
-        if daemonOK || FileManager.default.fileExists(atPath: HarnessCLIPaths.installedDaemonPath.path) {
-            let daemonPath = HarnessCLIPaths.installedDaemonPath
-            let home = HarnessCLIPaths.applicationSupport
-            let log = home.appendingPathComponent("logs/daemon.log")
-            try? FileManager.default.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-            let plistContent = launchAgentPlist(daemonPath: daemonPath, harnessHome: home, logPath: log)
-            let plistURL = HarnessCLIPaths.launchAgentURL
-            try? FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-            let existed = FileManager.default.fileExists(atPath: plistURL.path)
-            let changed = (try? String(contentsOf: plistURL, encoding: .utf8)) != plistContent
-
-            if changed {
-                if existed {
-                    _ = runLaunchctl(["bootout", "gui/\(getuid())", plistURL.path])
-                }
-                try plistContent.write(to: plistURL, atomically: true, encoding: .utf8)
-            }
-
-            let result = runLaunchctl(["bootstrap", "gui/\(getuid())", plistURL.path])
-            if result.status == 0 || result.status == 37 || result.status == 5 {
-                agentOK = true
-                messages.append("LaunchAgent installed → \(plistURL.path)")
-            } else {
-                messages.append("LaunchAgent bootstrap returned \(result.status): \(result.output)")
-            }
-            _ = runLaunchctl(["enable", "gui/\(getuid())/\(HarnessCLIPaths.launchAgentLabel)"])
-        } else {
-            messages.append("No daemon binary available — LaunchAgent not installed")
-        }
-
-        return InstallReport(
-            cliInstalled: cliOK,
-            daemonInstalled: daemonOK,
-            launchAgentInstalled: agentOK,
-            messages: messages
-        )
+    /// The daemon a LaunchAgent plist runs (its first `ProgramArguments` entry), if it parses.
+    nonisolated static func launchAgentDaemonPath(at url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let arguments = plist["ProgramArguments"] as? [String] else { return nil }
+        return arguments.first
     }
 
     // MARK: - Helpers
 
-    nonisolated private static func findBestSource(named binary: String) -> URL? {
-        if let bundled = bundledMacOSDir?.appendingPathComponent(binary),
-           FileManager.default.fileExists(atPath: bundled.path) { return bundled }
-
-        let relative = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(binary)
-        if FileManager.default.fileExists(atPath: relative.path) { return relative }
-
-        let app = URL(fileURLWithPath: "/Applications/Harness.app/Contents/MacOS/\(binary)")
-        if FileManager.default.fileExists(atPath: app.path) { return app }
-
-        return nil
-    }
-
-    /// What an overwrite attempt decided to do, so the wizard can surface it (e.g. a "kept newer
-    /// installed daemon" status when re-run from an older app).
+    /// What an overwrite attempt decided to do (e.g. keep a newer installed daemon when re-run
+    /// from an older app).
     enum CopyOutcome: Equatable {
         case copied
         case skippedIdentical
         case keptNewerInstalled
-
-        func message(binary: String, dest: URL) -> String {
-            switch self {
-            case .copied:             "\(binary) → \(dest.path)"
-            case .skippedIdentical:   "\(binary) already current → \(dest.path)"
-            case .keptNewerInstalled: "kept newer installed \(binary) → \(dest.path)"
-            }
-        }
     }
 
     /// How long `buildNumberProbe` waits for `version --json` before declaring the binary
-    /// unresponsive. The probe runs off the main thread (see `performInstall` + the
-    /// `Task.detached` in `SetupStepView`), so this bound is the maximum extra latency
+    /// unresponsive. The probe runs off the main thread (see `OnboardingSetup.installBinaries`),
+    /// so this bound is the maximum extra latency
     /// the install step can add per binary before giving up and proceeding on the
     /// no-build fallback path. `nonisolated` so the Sendable probe closure below can read it.
     nonisolated static let probeTimeout: TimeInterval = 3

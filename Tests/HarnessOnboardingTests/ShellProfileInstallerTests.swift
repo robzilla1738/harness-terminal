@@ -105,4 +105,18 @@ final class ShellProfileInstallerTests: XCTestCase {
         XCTAssertTrue(content.contains("'/Users/test/Library/Application Support/Harness/bin'"))
         XCTAssertEqual(content.components(separatedBy: "# >>> Harness CLI PATH >>>").count - 1, 1)
     }
+
+    func testRelevantProfilesAreTheLoginShellPlusShellsAlreadyInUse() throws {
+        let home = try makeHome()
+        // A fresh zsh account: only zsh, even though no .zshrc exists yet.
+        XCTAssertEqual(ShellProfileInstaller.relevantProfiles(home: home, loginShell: "/bin/zsh").map(\.shell), [.zsh])
+
+        // A fish user who also kept a .bash_profile: fish first, then bash; zsh is left alone.
+        try "".write(to: home.appendingPathComponent(".bash_profile"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(ShellProfileInstaller.relevantProfiles(home: home, loginShell: "/opt/homebrew/bin/fish").map(\.shell),
+                       [.fish, .bash])
+
+        // An unknown login shell falls back to zsh, the macOS default.
+        XCTAssertEqual(ShellProfileInstaller.relevantProfiles(home: home, loginShell: "/bin/tcsh").map(\.shell), [.zsh, .bash])
+    }
 }

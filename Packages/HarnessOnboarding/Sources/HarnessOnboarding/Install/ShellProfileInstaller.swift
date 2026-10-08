@@ -51,6 +51,27 @@ enum ShellProfileInstaller {
         }
     }
 
+    /// The profiles worth editing: the login shell's, plus any other shell whose profile already
+    /// exists. A zsh user never gets a `.bash_profile` or a fish config created for them.
+    static func relevantProfiles(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        binDirectory: URL = HarnessCLIPaths.binDirectory,
+        loginShell: String? = currentLoginShell()
+    ) -> [Profile] {
+        let login = loginShell.flatMap { Shell(rawValue: URL(fileURLWithPath: $0).lastPathComponent) } ?? .zsh
+        let all = profiles(home: home, binDirectory: binDirectory)
+        return all.filter { $0.shell == login }
+            + all.filter { $0.shell != login && FileManager.default.fileExists(atPath: $0.profileURL.path) }
+    }
+
+    /// The account's login shell from the user database (a GUI app's `$SHELL` can be stale or unset).
+    static func currentLoginShell() -> String? {
+        guard let entry = getpwuid(getuid()), let shell = entry.pointee.pw_shell else {
+            return ProcessInfo.processInfo.environment["SHELL"]
+        }
+        return String(cString: shell)
+    }
+
     @discardableResult
     static func install(
         _ shell: Shell,

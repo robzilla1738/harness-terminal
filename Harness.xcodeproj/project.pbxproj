@@ -19,7 +19,6 @@
 		066126CD37B80D4B650FC24B /* PaneCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231DCD13BC0CEFFB10E480DD /* PaneCaptureTests.swift */; };
 		06C4B758AFDB0FDA91201715 /* TmuxMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BBE7387149A5556239509BE /* TmuxMigrationTests.swift */; };
 		0706C4D881F7C1FD570BD261 /* PtyInputWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83157291435B127894ECD2D0 /* PtyInputWriter.swift */; };
-		0734084DD27811216808CCF8 /* BinaryInstallerDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F83705677FB6029DA2B83A7C /* BinaryInstallerDisplayTests.swift */; };
 		076308B3BD278A7808CC9C1C /* DaemonServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5122A39E062976C92BBDDDB2 /* DaemonServer.swift */; };
 		084B9F215A3A2B1600D90FDE /* DaemonLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2025ED6B78DAA6996707D2F7 /* DaemonLauncher.swift */; };
 		0B74CD03A3DDFDB1A73D8545 /* HarnessCLI+Sessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB54B7FEC702248DA06C357D /* HarnessCLI+Sessions.swift */; };
@@ -834,7 +833,6 @@
 		F65E988F7DC60DB925F1D00E /* HarnessCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HarnessCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F6A955567971E04AEBD4ACB6 /* ShellIntegrationInjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellIntegrationInjectionTests.swift; sourceTree = "<group>"; };
 		F80D994CF018DFCF5AD804CA /* HarnessPathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessPathsTests.swift; sourceTree = "<group>"; };
-		F83705677FB6029DA2B83A7C /* BinaryInstallerDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryInstallerDisplayTests.swift; sourceTree = "<group>"; };
 		F911CEE8AC2C1BA10D60E230 /* CommandPaletteCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteCatalog.swift; sourceTree = "<group>"; };
 		F913A1FD23783BAACAB189B6 /* PasteBufferStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteBufferStoreTests.swift; sourceTree = "<group>"; };
 		F9E632C296DF8B1837B6776C /* SessionPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPersistenceTests.swift; sourceTree = "<group>"; };
@@ -1258,7 +1256,6 @@
 		8B669157E806DF3CE4D47ADF /* HarnessOnboardingTests */ = {
 			isa = PBXGroup;
 			children = (
-				F83705677FB6029DA2B83A7C /* BinaryInstallerDisplayTests.swift */,
 				E43C936FEA07AF65E3E4C948 /* BinaryInstallerVersionTests.swift */,
 				A1755742095DC424B5ED75DB /* OnboardingEnvironmentTests.swift */,
 				61D8D3FAB4B00D89523177AA /* ShellProfileInstallerTests.swift */,
@@ -2244,7 +2241,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0734084DD27811216808CCF8 /* BinaryInstallerDisplayTests.swift in Sources */,
 				BD9D4E5EB30B50ECFE2240E5 /* BinaryInstallerVersionTests.swift in Sources */,
 				43BB99082EB1FDCFA66A568D /* OnboardingEnvironmentTests.swift in Sources */,
 				E55C26CA654DCA675B1DF923 /* ShellProfileInstallerTests.swift in Sources */,

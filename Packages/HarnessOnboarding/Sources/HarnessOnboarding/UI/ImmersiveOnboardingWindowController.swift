@@ -1,13 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// The full-screen, borderless immersive shell for the Harness CLI onboarding.
+/// The full-screen, borderless takeover that hosts the first-run wizard over a black ambient field.
 @MainActor
 final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     /// Called once the wizard fades out and closes. Embedded in Harness.app this just clears
     /// the owning reference and reveals the app — it must never terminate the host process.
     private let onDismiss: () -> Void
+    private let setup = OnboardingSetup()
 
     init(onDismiss: @escaping () -> Void) {
         self.onDismiss = onDismiss
@@ -38,11 +39,7 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
         super.init(window: panel)
         panel.delegate = self
 
-        let root = ImmersiveRootView(
-            onFinish: { [weak self] in self?.closeWithFade(launchDemo: false) },
-            onFinishWithDemo: { [weak self] in self?.closeWithFade(launchDemo: true) },
-            onSkip: { [weak self] in self?.closeWithFade(launchDemo: false) }
-        )
+        let root = ImmersiveRootView(setup: setup, onFinish: { [weak self] in self?.closeWithFade() })
         let hosting = NSHostingView(rootView: root)
         hosting.translatesAutoresizingMaskIntoConstraints = false
 
@@ -55,7 +52,11 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
             hosting.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
 
-        panel.onCancel = { [weak self] in self?.closeWithFade(launchDemo: false) }
+        // Esc and ⌘. skip the rest of the wizard, except while a step is mid-install.
+        panel.onCancel = { [weak self] in
+            guard let self, !self.setup.isBusy else { return }
+            self.closeWithFade()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -67,8 +68,6 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        WindowBlur.apply(radius: 72, to: window)
-
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = reduce ? 0.12 : 0.55
@@ -79,11 +78,10 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
 
     private var isClosing = false
 
-    private func closeWithFade(launchDemo: Bool) {
+    /// Fade out, close, and hand focus back to a Harness window.
+    private func closeWithFade() {
         guard !isClosing else { return }
         isClosing = true
-
-        if launchDemo { NSApp.activate(ignoringOtherApps: true) }
 
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -94,9 +92,7 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
             MainActor.assumeIsolated {
                 self?.close()
                 self?.onDismiss()
-                if launchDemo {
-                    NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
-                }
+                NSApp.windows.first(where: { !($0 is NSPanel) && $0.isVisible })?.makeKeyAndOrderFront(nil)
             }
         })
     }
@@ -110,41 +106,26 @@ private final class ImmersivePanel: NSPanel {
 }
 
 private struct ImmersiveRootView: View {
+    let setup: OnboardingSetup
     let onFinish: () -> Void
-    let onFinishWithDemo: () -> Void
-    let onSkip: () -> Void
 
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         ZStack {
             AmbientBackground(reduceMotion: reduceMotion)
 
-            Rectangle()
-                .fill(reduceTransparency ? .black.opacity(0.78) : .black.opacity(0.06))
-                .ignoresSafeArea()
-
-            if !reduceTransparency {
-                GlassEffectView(tint: .black, cornerRadius: 0)
-                    .opacity(0.48)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
-
-            OnboardingWizardView(onFinish: onFinish,
-                                 onFinishWithDemo: onFinishWithDemo,
-                                 onSkip: onSkip)
-                .frame(maxWidth: 980)
+            OnboardingWizardView(setup: setup, onFinish: onFinish)
+                .frame(maxWidth: 940)
                 .padding(40)
-                .scaleEffect(appeared ? 1.0 : (reduceMotion ? 1.0 : 0.97))
+                .scaleEffect(appeared || reduceMotion ? 1.0 : 0.97)
                 .opacity(appeared ? 1.0 : 0.0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             withAnimation(reduceMotion ? .easeOut(duration: 0.15)
-                          : .spring(response: 0.6, dampingFraction: 0.82).delay(0.05)) {
+                          : .spring(response: 0.6, dampingFraction: 0.86).delay(0.05)) {
                 appeared = true
             }
         }

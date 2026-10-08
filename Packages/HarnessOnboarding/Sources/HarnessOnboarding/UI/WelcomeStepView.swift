@@ -1,37 +1,39 @@
 import SwiftUI
 import AppKit
 
-/// First screen: the Harness mark, name, and tagline by themselves.
+/// First screen: the Harness mark, name, and what it is in one sentence.
 struct WelcomeStepView: View {
     @State private var appeared = false
-    @State private var hasPlayedSound = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer(minLength: 10)
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
 
             logo
-                .frame(width: 210, height: 210)
-                .shadow(color: .black.opacity(0.22), radius: 28, x: 0, y: 18)
+                .frame(width: 120, height: 120)
+                .scaleEffect(appeared || reduceMotion ? 1 : 0.92)
                 .accessibilityHidden(true)
+                .padding(.bottom, 34)
 
-            VStack(spacing: 10) {
-                Text("Harness CLI")
-                    .font(.system(size: 34, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.94))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+            Text("Welcome to Harness")
+                .font(.system(size: 40, weight: .semibold))
+                .tracking(-0.8)
+                .foregroundStyle(ImmersivePalette.SUI.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.bottom, 14)
 
-                Text("The command line for Harness — drive sessions, splits, and agents from anywhere.")
-                    .font(.system(size: 14.5, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.60))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .frame(maxWidth: 420)
-            }
+            Text("The Mac terminal that keeps your sessions running and tells you the moment an agent needs you.")
+                .font(.system(size: 16))
+                .foregroundStyle(ImmersivePalette.SUI.textSecondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 440)
 
-            Spacer(minLength: 20)
+            Spacer(minLength: 0)
         }
         .opacity(appeared ? 1 : 0)
         .offset(y: appeared || reduceMotion ? 0 : 12)
@@ -47,11 +49,12 @@ struct WelcomeStepView: View {
                 .scaledToFit()
         } else {
             Image(systemName: "app.connected.to.app.below.fill")
-                .font(.system(size: 92, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.92))
+                .font(.system(size: 64, weight: .semibold))
+                .foregroundStyle(ImmersivePalette.SUI.textPrimary)
         }
     }
 
+    /// The transparent brand mark the app bundles (see `package-app.sh`), else the app icon.
     static func logoImage(bundle: Bundle = .main) -> NSImage? {
         if let url = bundle.url(forResource: "HarnessLogo", withExtension: "png"),
            let image = NSImage(contentsOf: url) {
@@ -61,17 +64,8 @@ struct WelcomeStepView: View {
     }
 
     private func animateIn() {
-        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.75, dampingFraction: 0.84).delay(0.12)) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.8, dampingFraction: 0.86).delay(0.1)) {
             appeared = true
-        }
-        playEntrySoundIfNeeded()
-    }
-
-    private func playEntrySoundIfNeeded() {
-        guard !hasPlayedSound else { return }
-        hasPlayedSound = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            NSSound(named: "Glass")?.play()
         }
     }
 }

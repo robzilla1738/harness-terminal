@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// Shared monochrome components for the immersive onboarding wizard.
-/// One calm liquid-glass plane, off-white text, sparse controls, and no decorative clutter.
+/// One calm glass plane over black, off-white text, one white primary action per step.
 
 enum Motion {
     @MainActor static var reduce: Bool {
@@ -17,217 +17,230 @@ enum Motion {
     }
 }
 
+/// Eyebrow, title, and one or two sentences of body — the top of every step but Welcome.
 struct StepIntro: View {
     let eyebrow: String
     let title: String
     let bodyText: String
-    var maxWidth: CGFloat = 560
 
     var body: some View {
-        VStack(spacing: 11) {
+        VStack(spacing: 0) {
             Text(eyebrow)
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .tracking(2.5)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .tracking(2.2)
                 .textCase(.uppercase)
                 .foregroundStyle(ImmersivePalette.SUI.textTertiary)
-                .lineLimit(1)
+                .padding(.bottom, 12)
+                .accessibilityHidden(true)
 
             Text(title)
-                .font(.system(size: 34, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.94))
+                .font(.system(size: 30, weight: .semibold))
+                .tracking(-0.4)
+                .foregroundStyle(ImmersivePalette.SUI.textPrimary)
                 .multilineTextAlignment(.center)
-                .lineSpacing(2)
                 .lineLimit(2)
-                .minimumScaleFactor(0.78)
-                .frame(maxWidth: maxWidth)
+                .minimumScaleFactor(0.8)
+                .padding(.bottom, 10)
+                .accessibilityAddTraits(.isHeader)
 
             Text(bodyText)
-                .font(.system(size: 14.5, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.64))
+                .font(.system(size: 14))
+                .foregroundStyle(ImmersivePalette.SUI.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: maxWidth)
         }
+        .frame(maxWidth: 540)
     }
 }
 
-struct GlassPrimaryButtonStyle: ButtonStyle {
-    var minWidth: CGFloat? = nil
+/// A list row: a symbol tile, a title with a line of detail, and an optional trailing status.
+struct IconRow<Trailing: View>: View {
+    let symbol: String
+    let title: String
+    let detail: String
+    @ViewBuilder var trailing: () -> Trailing
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14.5, weight: .semibold))
-            .frame(minWidth: minWidth, minHeight: 22)
-            .padding(.horizontal, 30)
-            .padding(.vertical, 10)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.82 : 0.94))
-                    .shadow(color: .white.opacity(configuration.isPressed ? 0.04 : 0.15), radius: 24, x: 0, y: 0)
-            )
-            .foregroundStyle(Color.black.opacity(0.92))
-            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
-            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: configuration.isPressed)
-    }
-}
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(ImmersivePalette.SUI.textPrimary.opacity(0.86))
+                .frame(width: 34, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(.white.opacity(0.06))
+                        .strokeBorder(.white.opacity(0.09), lineWidth: 1)
+                )
+                .accessibilityHidden(true)
 
-struct GlassSecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13.5, weight: .semibold))
-            .frame(minHeight: 20)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 8)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(.white.opacity(configuration.isPressed ? 0.12 : 0.065))
-                    .overlay(Capsule(style: .continuous).strokeBorder(.white.opacity(0.15), lineWidth: 1))
-            )
-            .foregroundStyle(Color.white.opacity(0.86))
-            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
-            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: configuration.isPressed)
-    }
-}
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(ImmersivePalette.SUI.textPrimary)
+                Text(detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(ImmersivePalette.SUI.textSecondary.opacity(0.85))
+                    .lineSpacing(1.5)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-struct GlassSmallButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .frame(minHeight: 18)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(.white.opacity(configuration.isPressed ? 0.12 : 0.055))
-                    .overlay(Capsule(style: .continuous).strokeBorder(.white.opacity(0.13), lineWidth: 1))
-            )
-            .foregroundStyle(Color.white.opacity(0.74))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-    }
-}
-
-
-struct GlassStatusButtonStyle: ButtonStyle {
-    var tone: StatusPill.Tone = .success
-
-    private var color: Color {
-        switch tone {
-        case .neutral: Color.white.opacity(0.58)
-        case .pending: Color.white.opacity(0.82)
-        case .success: ImmersivePalette.SUI.success
-        case .danger:  ImmersivePalette.SUI.danger
+            trailing()
         }
-    }
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13.5, weight: .semibold, design: .monospaced))
-            .frame(minHeight: 20)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 8)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(color.opacity(configuration.isPressed ? 0.20 : 0.13))
-                    .overlay(Capsule(style: .continuous).strokeBorder(color.opacity(0.28), lineWidth: 1))
-            )
-            .foregroundStyle(color)
-            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
-            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: configuration.isPressed)
+        .accessibilityElement(children: .combine)
     }
 }
 
-struct GlassCard<Content: View>: View {
-    var cornerRadius: CGFloat = 20
-    var padding: CGFloat = 18
+extension IconRow where Trailing == EmptyView {
+    init(symbol: String, title: String, detail: String) {
+        self.init(symbol: symbol, title: title, detail: detail) { EmptyView() }
+    }
+}
+
+/// Rows separated by hairlines, at the width every step's list shares.
+struct RowList<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        content()
-            .padding(padding)
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.white.opacity(0.045))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(.white.opacity(0.10), lineWidth: 1)
-                    )
-            )
+        VStack(spacing: 0) {
+            Group(subviews: content()) { rows in
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 {
+                        Rectangle().fill(ImmersivePalette.SUI.border).frame(height: 1).padding(.leading, 48)
+                    }
+                    row.padding(.vertical, 12)
+                }
+            }
+        }
+        .frame(maxWidth: 500)
     }
 }
 
-struct QuietRow: View {
-    let title: String
-    let detail: String
-    var value: String? = nil
+/// One line of feedback under a step's list: what just happened, or what went wrong and why.
+struct StatusNote: View {
+    let text: Text
     var tone: StatusPill.Tone = .neutral
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.88))
-                    .lineLimit(1)
-                Text(detail)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Color.white.opacity(0.44))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            if let value {
-                StatusPill(text: value, tone: tone)
-            }
-        }
-    }
-}
-
-struct CommandRow: View {
-    let command: String
-    let note: String
-    init(_ command: String, _ note: String) { self.command = command; self.note = note }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(command)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.88))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Text(note)
-                .font(.system(size: 11.5))
-                .foregroundStyle(Color.white.opacity(0.44))
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 2)
+        text
+            .font(.system(size: 12))
+            .foregroundStyle(tone == .danger ? ImmersivePalette.SUI.danger : ImmersivePalette.SUI.textTertiary)
+            .multilineTextAlignment(.center)
+            .lineSpacing(2)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 480)
+            .transition(.opacity)
     }
 }
 
 struct StatusPill: View {
-    enum Tone { case neutral, pending, success, danger }
+    enum Tone { case neutral, success, danger }
     let text: String
     var tone: Tone = .neutral
 
     private var color: Color {
         switch tone {
-        case .neutral: Color.white.opacity(0.58)
-        case .pending: Color.white.opacity(0.82)
+        case .neutral: ImmersivePalette.SUI.textSecondary
         case .success: ImmersivePalette.SUI.success
         case .danger:  ImmersivePalette.SUI.danger
         }
     }
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-            .foregroundStyle(color)
-            .frame(minHeight: 18)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule(style: .continuous).fill(color.opacity(0.13)))
-            .overlay(Capsule(style: .continuous).strokeBorder(color.opacity(0.24), lineWidth: 1))
-            .lineLimit(1)
+        HStack(spacing: 5) {
+            if tone == .success {
+                Image(systemName: "checkmark").font(.system(size: 9.5, weight: .bold))
+            }
+            Text(text).font(.system(size: 11.5, weight: .medium))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .background(Capsule().fill(color.opacity(0.12)))
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+/// A shortcut drawn as keycaps, e.g. `KeyCaps(["⇧", "⌘", "U"])`.
+struct KeyCaps: View {
+    let keys: [String]
+    init(_ keys: [String]) { self.keys = keys }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
+                Text(key)
+                    .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(ImmersivePalette.SUI.textPrimary)
+                    .frame(minWidth: 24, minHeight: 24)
+                    .padding(.horizontal, key.count > 1 ? 6 : 0)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.white.opacity(0.08))
+                            .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                    )
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Buttons
+
+struct GlassPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Color.black.opacity(0.92))
+            .frame(minWidth: 104, minHeight: 20)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.80 : 0.95))
+                    .shadow(color: .white.opacity(0.10), radius: 18)
+            )
+            .contentShape(.focusEffect, Capsule())
+            .opacity(isEnabled ? 1 : 0.55)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: configuration.isPressed)
+    }
+}
+
+/// Text-only button for everything but the primary action (Back, Not Now, Skip Setup).
+struct GlassTextButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(ImmersivePalette.SUI.textSecondary.opacity(configuration.isPressed ? 0.6 : 1))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Capsule())
+            .contentShape(.focusEffect, Capsule())
+            .opacity(isEnabled ? 1 : 0.4)
+    }
+}
+
+/// A small dark arc that turns while the primary button works. AppKit's spinner draws light on
+/// this always-dark panel and all but vanishes on the white button.
+struct Spinner: View {
+    @State private var turning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0.12, to: 0.88)
+            .stroke(Color.black.opacity(0.7), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .frame(width: 14, height: 14)
+            .rotationEffect(.degrees(turning ? 360 : 0))
+            .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: turning)
+            .onAppear { turning = true }
+            .accessibilityHidden(true)
     }
 }

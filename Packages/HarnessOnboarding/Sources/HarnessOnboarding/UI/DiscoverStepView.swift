@@ -1,47 +1,40 @@
 import SwiftUI
 
-/// A concise overview of what Harness does before setup begins.
+/// What sets Harness apart, in four rows, before setup begins.
 struct DiscoverStepView: View {
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let points: [Point] = [
-        Point(title: "Splits and layouts, built in", detail: "Make splits, move and resize panes, send keys, and capture output — straight from the command line."),
-        Point(title: "Sessions you can name and reopen", detail: "Workspaces, sessions, tabs, and panes are real objects. List them, reopen them, script them."),
-        Point(title: "Attach from anywhere", detail: "Render a session's full split layout in any terminal, even over SSH. Your work follows you."),
-        Point(title: "Agents tell you when they need you", detail: "Harness spots Claude Code, Codex, Cursor, and Gemini in your panes and pings you when one finishes or gets stuck."),
+    private let points: [(symbol: String, title: String, detail: String)] = [
+        ("rectangle.stack", "Sessions that outlive the window",
+         "Tabs, splits, and scrollback live in a background daemon. Quit, relaunch, and pick up where you left off."),
+        ("bell.badge", "Agents that tell you when they need you",
+         "Harness spots Claude Code, Codex, Cursor, and more, and notifies you when one wants approval, finishes, or fails."),
+        ("macwindow.on.rectangle", "Every window, every machine",
+         "Open as many windows as you like, and connect to other Macs or Linux boxes over SSH, all live side by side."),
+        ("chevron.left.forwardslash.chevron.right", "Scriptable to the core",
+         "harness-cli, a JSON API, and Lua config drive the same sessions, tabs, and panes you see."),
     ]
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
             StepIntro(
                 eyebrow: "Overview",
-                title: "The command line for a modern terminal.",
-                bodyText: "Harness gives your shells, tabs, panes, and coding agents one command layer — and you can reach it from anywhere."
+                title: "A terminal built for long-running work.",
+                bodyText: "Your shells and agents keep going whether or not Harness is open."
             )
 
-            VStack(spacing: 0) {
-                ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
-                    QuietRow(title: point.title, detail: point.detail)
-                        .padding(.vertical, 11)
+            RowList {
+                ForEach(Array(points.enumerated()), id: \.offset) { index, point in
+                    IconRow(symbol: point.symbol, title: point.title, detail: point.detail)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared || reduceMotion ? 0 : 8)
                         .animation(reduceMotion ? .easeOut(duration: 0.18)
-                                   : .spring(response: 0.48, dampingFraction: 0.86).delay(Double(index) * 0.05),
+                                   : .spring(response: 0.5, dampingFraction: 0.88).delay(0.08 + Double(index) * 0.05),
                                    value: appeared)
-                    if index < points.count - 1 {
-                        Rectangle().fill(.white.opacity(0.075)).frame(height: 1)
-                    }
                 }
             }
-            .frame(maxWidth: 520)
         }
         .onAppear { appeared = true }
-    }
-
-    private struct Point: Identifiable {
-        let id = UUID()
-        let title: String
-        let detail: String
     }
 }

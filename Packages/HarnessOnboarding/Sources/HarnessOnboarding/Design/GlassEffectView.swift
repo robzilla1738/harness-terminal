@@ -7,10 +7,10 @@ import AppKit
 /// - On macOS 26+: uses the real `NSGlassEffectView` with a subtle tint.
 /// - Pre-26: `NSVisualEffectView` (.underWindowBackground + behindWindow) + a near-opaque
 ///   theme-tinted overlay so the glass doesn't feel too light on older systems.
-/// - The tint color should be the "resting chrome" color (terminalBackground in our palette)
-///   so the onboarding panel feels like a floating piece of the same seamless surface.
+/// - The tint should be the resting chrome color (black, like Harness's default canvas) so the
+///   panel reads as a floating piece of the same surface.
 struct GlassEffectView: NSViewRepresentable {
-    var tint: NSColor = ImmersivePalette.terminalBackground
+    var tint: NSColor = .black
     var cornerRadius: CGFloat = 0
 
     func makeNSView(context: Context) -> NSView {
@@ -60,17 +60,6 @@ struct GlassEffectView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         // The tint/overlay is static for a given window; if we ever need live theme
         // switching we can expose more state here.
-    }
-}
-
-/// Convenience SwiftUI modifier that drops a full-bleed glass layer behind content.
-extension View {
-    func glassBackground(tint: NSColor = ImmersivePalette.terminalBackground,
-                         cornerRadius: CGFloat = 0) -> some View {
-        self.background(
-            GlassEffectView(tint: tint, cornerRadius: cornerRadius)
-                .ignoresSafeArea()
-        )
     }
 }
 

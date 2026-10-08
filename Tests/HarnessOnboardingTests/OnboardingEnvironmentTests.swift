@@ -10,7 +10,7 @@ final class OnboardingEnvironmentTests: XCTestCase {
     // overrides a nonisolated XCTest method), so it can't touch the MainActor seam — each test
     // restores the seam inline instead.
     func testFishCompletionScriptDefaultsToNilSoTheStepSkipsInIsolation() {
-        // Unset by default (preview/test) → the Shell step skips writing fish completion rather than
+        // Unset by default (preview/test) → the Command Line step skips writing fish completion rather than
         // embedding a drift-prone literal.
         OnboardingEnvironment.fishCompletionScript = { nil }
         XCTAssertNil(OnboardingEnvironment.fishCompletionScript())

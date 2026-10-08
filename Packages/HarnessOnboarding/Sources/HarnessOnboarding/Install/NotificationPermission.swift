@@ -18,8 +18,13 @@ enum NotificationPermission {
         }
     }
 
+    /// `UNUserNotificationCenter` raises outside an app bundle (tests, previews), so those report
+    /// `.undetermined` and never prompt.
+    private static var isAvailable: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+
     /// Current permission, delivered on the main queue.
     static func current(_ completion: @escaping @MainActor @Sendable (State) -> Void) {
+        guard isAvailable else { return deliver(.undetermined, to: completion) }
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             let state = map(settings.authorizationStatus)
             deliver(state, to: completion)
@@ -28,6 +33,7 @@ enum NotificationPermission {
 
     /// Prompt when undecided; open System Settings ▸ Notifications when already denied.
     static func request(_ completion: @escaping @MainActor @Sendable (State) -> Void) {
+        guard isAvailable else { return deliver(.undetermined, to: completion) }
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             switch settings.authorizationStatus {
             case .denied:

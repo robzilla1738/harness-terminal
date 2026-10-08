@@ -218,4 +218,20 @@ final class BinaryInstallerVersionTests: XCTestCase {
         XCTAssertLessThan(elapsed, BinaryInstaller.probeTimeout + 3,
                           "the probe must give up within the bounded window, not block forever")
     }
+
+    /// Install leaves a working LaunchAgent alone (rewriting it would boot out the running daemon
+    /// and every shell in it), so it has to read which daemon an existing plist points at.
+    func testLaunchAgentDaemonPathReadsTheFirstProgramArgument() throws {
+        let dir = try makeDir()
+        let plist = dir.appendingPathComponent("agent.plist")
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["Label": "x", "ProgramArguments": ["/Applications/Harness.app/Contents/MacOS/HarnessDaemon"]],
+            format: .xml, options: 0)
+        try data.write(to: plist)
+        XCTAssertEqual(BinaryInstaller.launchAgentDaemonPath(at: plist), "/Applications/Harness.app/Contents/MacOS/HarnessDaemon")
+
+        try write("not a plist", to: plist)
+        XCTAssertNil(BinaryInstaller.launchAgentDaemonPath(at: plist))
+        XCTAssertNil(BinaryInstaller.launchAgentDaemonPath(at: dir.appendingPathComponent("missing.plist")))
+    }
 }

@@ -3,7 +3,7 @@ import Foundation
 /// Injection seam that lets the (deliberately HarnessCore-free) onboarding module offer
 /// agent-hook setup without importing the core installer. `HarnessApp` populates these
 /// closures with the real `AgentHookInstaller`-backed implementations before presenting the
-/// wizard; left unset, the Setup step's agent-hooks row simply hides, so the wizard stays
+/// wizard; left unset, the Notifications step's agent-hooks row simply hides, so the wizard stays
 /// fully functional in isolation (and in previews/tests). Mirrors how the module already
 /// wraps install paths behind its own helpers (`BinaryInstaller`, `NotificationPermission`).
 @MainActor
@@ -29,7 +29,7 @@ public enum OnboardingEnvironment {
 
     /// The canonical fish completion script for `harness-cli`, generated from `CLICommandCatalog`
     /// (`CompletionGenerator.script(for: .fish)`). `HarnessApp` populates this; left unset (preview/
-    /// test isolation) the Shell step simply skips writing the fish completion rather than embedding
+    /// test isolation) the Command Line step simply skips writing the fish completion rather than embedding
     /// a second, drift-prone command list. This keeps the catalog the single source of truth.
     public static var fishCompletionScript: () -> String? = { nil }
 }
