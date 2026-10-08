@@ -695,11 +695,14 @@ public final class ScriptEngine {
         case let text as String:
             lua_pushstring(state, text)
         case let number as NSNumber:
-            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+            // JSON booleans are the only char-typed numbers JSONSerialization produces.
+            if String(cString: number.objCType) == "c" {
                 lua_pushboolean(state, number.boolValue ? 1 : 0)
             } else {
                 lua_pushnumber(state, number.doubleValue)
             }
+        case let flag as Bool: // Linux may hand back a Swift Bool rather than an NSNumber
+            lua_pushboolean(state, flag ? 1 : 0)
         case let items as [Any]:
             lua_createtable(state, Int32(items.count), 0)
             var slot: Int32 = 0

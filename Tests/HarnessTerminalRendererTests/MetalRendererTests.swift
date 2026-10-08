@@ -1612,17 +1612,23 @@ final class MetalRendererTests: XCTestCase {
     /// order for a scanned list), then swept away.
     func testImageTextureCacheScalesToManyEntries() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device available") }
-        let count = 50_000
-        let cache = ImageTextureCache(device: device, maxBytes: 1 << 30, maxEntries: count)
         let rgba: [UInt8] = [255, 0, 0, 255]
-        for id in 1 ... count { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
-        // Timed: hits that reorder every entry, then the sweep. No uploads, so this is the cache's
-        // own bookkeeping, milliseconds when it's O(1) per touch and seconds when it's O(n).
-        let start = Date()
-        for id in (1 ... count).reversed() { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
-        for _ in 0 ... ImageTextureCache.idleFrames + 1 { cache.endFrame(animating: false) }
-        XCTAssertEqual(cache.count, 0)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        // The cache's own bookkeeping for `count` entries: hits that reorder every entry, then the
+        // sweep that frees them all. Uploads happen before the clock starts.
+        func bookkeeping(_ count: Int) -> TimeInterval {
+            let cache = ImageTextureCache(device: device, maxBytes: 1 << 30, maxEntries: count)
+            for id in 1 ... count { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
+            let start = Date()
+            for id in (1 ... count).reversed() { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
+            for _ in 0 ... ImageTextureCache.idleFrames + 1 { cache.endFrame(animating: false) }
+            XCTAssertEqual(cache.count, 0)
+            return Date().timeIntervalSince(start)
+        }
+        // Eight times the entries: about 8x the time when each touch is O(1), about 64x when it's
+        // O(n). A ratio, so a slow runner or coverage instrumentation doesn't matter.
+        let small = bookkeeping(5_000)
+        let large = bookkeeping(40_000)
+        XCTAssertLessThan(large / max(small, 1e-4), 24, "small \(small)s, large \(large)s")
     }
 
     func testPromptGutterStripeRendersInLeftPadding() throws {

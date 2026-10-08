@@ -596,17 +596,8 @@ public final class DaemonServer: @unchecked Sendable {
     }
 
     private func peerUID(_ fd: Int32) -> UInt32? {
-        #if canImport(Darwin)
-        var uid: uid_t = 0
-        var gid: gid_t = 0
-        guard getpeereid(fd, &uid, &gid) == 0 else { return nil }
-        return UInt32(uid)
-        #else
-        var cred = ucred()
-        var length = socklen_t(MemoryLayout<ucred>.size)
-        guard getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &length) == 0 else { return nil }
-        return UInt32(cred.uid)
-        #endif
+        let uid = harness_peer_uid(fd)
+        return uid >= 0 ? UInt32(uid) : nil
     }
 
     private enum WriteOutcome { case complete, wouldBlock, failed }
