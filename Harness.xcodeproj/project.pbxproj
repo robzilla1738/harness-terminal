@@ -161,6 +161,7 @@
 		5E6F13C58E216BA6D3FACE2B /* AnotherMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE78C4E8A2B830588539A62E /* AnotherMacTests.swift */; };
 		5E84FEEFB6029B8B8FE73B21 /* HarnessCLI+Install.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53207D56DDE8DCA3027F7AA5 /* HarnessCLI+Install.swift */; };
 		5E98B2AE7520DFE6D47F0586 /* DaemonLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DBC405C97165768A4900A41 /* DaemonLifecycle.swift */; };
+		5F0F1CFF6BF1473092D2EC60 /* SplitCornerHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D66F1FC5D7DD912FE14D7491 /* SplitCornerHandle.swift */; };
 		5F345498F29FC8CA57AFDFCA /* HarnessCLI+API.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2E69C777EE2860ACB3E340 /* HarnessCLI+API.swift */; };
 		5F4408D7C85949E16AEA0347 /* HarnessScript in Frameworks */ = {isa = PBXBuildFile; productRef = FFD4D4E69553767820818A44 /* HarnessScript */; };
 		606C8E6FD469B2F1595AECFD /* VTCorrectnessClusterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B43B53593341D3A67D6FA7B5 /* VTCorrectnessClusterTests.swift */; };
@@ -373,6 +374,7 @@
 		E1A5B472D5109D3C5B58D97D /* HarnessCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0EC3D41A1DD8120D1040606 /* HarnessCore */; };
 		E31866571A3304590DF257F0 /* prompt_marks__16x5__to__16x3.golden in Resources */ = {isa = PBXBuildFile; fileRef = 3777DFD34F4323F087E40A48 /* prompt_marks__16x5__to__16x3.golden */; };
 		E361AE85641EAB59EF6229DA /* DaemonLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96E987176364EC7DE00A18BD /* DaemonLifecycleTests.swift */; };
+		E467F28C60607F2555FD092D /* PaneTransitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8916EA83E9FD269F8591802A /* PaneTransitions.swift */; };
 		E48E56C865E8DB8E02FED280 /* prompt_marks__16x5__to__16x12.golden in Resources */ = {isa = PBXBuildFile; fileRef = 8403F5E4357BCACC4D438C4C /* prompt_marks__16x5__to__16x12.golden */; };
 		E55C26CA654DCA675B1DF923 /* ShellProfileInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61D8D3FAB4B00D89523177AA /* ShellProfileInstallerTests.swift */; };
 		E5E2284205082AE424329905 /* SelectionScrollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC95DA4ED1B517CD68D14515 /* SelectionScrollTests.swift */; };
@@ -640,6 +642,7 @@
 		8758FC29D707EE45A5C1985C /* hard_short__20x5__to__7x6.golden */ = {isa = PBXFileReference; path = hard_short__20x5__to__7x6.golden; sourceTree = "<group>"; };
 		885792B5486D68C29A07A732 /* ScrollbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollbackTests.swift; sourceTree = "<group>"; };
 		888E0A94D613CF07E13DC5E2 /* SelectLastCommandOutputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectLastCommandOutputTests.swift; sourceTree = "<group>"; };
+		8916EA83E9FD269F8591802A /* PaneTransitions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneTransitions.swift; sourceTree = "<group>"; };
 		8986DFF2824FC1BCF050FB78 /* EnvironmentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentStoreTests.swift; sourceTree = "<group>"; };
 		89FA308796861662F4B2B69A /* emoji_mixed__9x4__to__7x6.golden */ = {isa = PBXFileReference; path = emoji_mixed__9x4__to__7x6.golden; sourceTree = "<group>"; };
 		8A685AD93826D3B233E39874 /* DaemonSessionServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonSessionServiceTests.swift; sourceTree = "<group>"; };
@@ -759,6 +762,7 @@
 		D5DF8DED6A2356A843B0D39A /* prose_softwrap__40x6__to__24x6.golden */ = {isa = PBXFileReference; path = prose_softwrap__40x6__to__24x6.golden; sourceTree = "<group>"; };
 		D5F2496F03DB91983E3F5956 /* FrameBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBuilderTests.swift; sourceTree = "<group>"; };
 		D63DA77DC70E5E962937FB27 /* harness */ = {isa = PBXFileReference; lastKnownFileType = folder; name = harness; path = .; sourceTree = SOURCE_ROOT; };
+		D66F1FC5D7DD912FE14D7491 /* SplitCornerHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitCornerHandle.swift; sourceTree = "<group>"; };
 		D745FE112DC4440236DABA22 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D798A050D3824B4FEA80EA3A /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
 		D7EF7E2D845AA0AA644F588C /* AgentIconRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentIconRenderer.swift; sourceTree = "<group>"; };
@@ -1038,10 +1042,12 @@
 				86FAF41DBA8B11C7DD568780 /* OnboardingController.swift */,
 				8F1FFD1F44FF211A8A61CF6A /* PaneDrag.swift */,
 				7DD4B5A1963C7EBBBDC2199C /* PaneHeaderView.swift */,
+				8916EA83E9FD269F8591802A /* PaneTransitions.swift */,
 				93B6EE4051D1702BE7F6D1AC /* Phase67UI.swift */,
 				E87D766FA02E02860C0BAC11 /* PrefixKeymap.swift */,
 				6316AC2C0004EF15D7AC6FE7 /* RemoteHostSheet.swift */,
 				7FA29BDABEF3ECC9E9B03A6D /* SessionSwitcherController.swift */,
+				D66F1FC5D7DD912FE14D7491 /* SplitCornerHandle.swift */,
 				C91C2E3C2A8847B6A0514123 /* StatusLineView.swift */,
 				612B768408ED5B185B103ADC /* TabPeekController.swift */,
 				62640E925402A67A764903C8 /* TabStatusView.swift */,
@@ -2111,6 +2117,7 @@
 				9C6DEF330BAF774917666A83 /* OnboardingController.swift in Sources */,
 				AEBB9881F106196A41F3A68C /* PaneDrag.swift in Sources */,
 				3ACFC64F44A94012C4C8244E /* PaneHeaderView.swift in Sources */,
+				E467F28C60607F2555FD092D /* PaneTransitions.swift in Sources */,
 				DA2D4A06C95D60F7ECE577C1 /* Phase67UI.swift in Sources */,
 				C8D8E22B16FC1B7A15009E29 /* PrefixKeymap.swift in Sources */,
 				CDFA24163B65AF52C41EDB6C /* QuickTerminalController.swift in Sources */,
@@ -2123,6 +2130,7 @@
 				259C3B8E2D245BA53B69AC8F /* SessionSwitcherController.swift in Sources */,
 				4DC7CBA5BF35736A11DC6E09 /* SettingsViewController.swift in Sources */,
 				29959EF8E57E8232339953E2 /* SparkleUpdater.swift in Sources */,
+				5F0F1CFF6BF1473092D2EC60 /* SplitCornerHandle.swift in Sources */,
 				147C1684F38588D94A0677BF /* StatusLineView.swift in Sources */,
 				0D923218EB4B50083BEFD14C /* SurfaceProgressTracker.swift in Sources */,
 				87EB8777EA8043B7752985B8 /* SurfaceShellTracker.swift in Sources */,

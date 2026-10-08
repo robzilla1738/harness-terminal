@@ -251,6 +251,9 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         reloadIfNeeded(force: force)
     }
 
+    /// The tab (and zoom) the last layout showed, so only changes within it animate.
+    private var lastAnimatedTab = ""
+
     func reloadIfNeeded(force: Bool) {
         guard terminalHost.bounds.width > 1, terminalHost.bounds.height > 1 else {
             pendingReload = (pendingReload ?? false) || force
@@ -269,6 +272,11 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             // No per-pane chrome work needed on the fast path (structure unchanged).
             return
         }
+        // Only a pane added to or removed from the tab on screen animates; switching tabs or
+        // zooming swaps the layout at once.
+        let sameTab = lastAnimatedTab == "\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "")"
+        lastAnimatedTab = "\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "")"
+        let before = sameTab ? PaneTransitions.frames(of: paneContainer, in: terminalHost) : [:]
         lastStructureKey = key
 
         paneContainer?.removeFromSuperview()
@@ -289,6 +297,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             container.bottomAnchor.constraint(equalTo: terminalHost.bottomAnchor),
         ])
         paneContainer = container
+        PaneTransitions.animate(from: before, into: container, in: terminalHost)
         // Re-assert the focused-pane border after the (re)mount — reused hosts keep
         // their flag, but a freshly shown tab needs its active pane established.
         coordinator.ensureActivePane(for: tab)
@@ -371,6 +380,15 @@ final class PaneContainerView: NSView {
         announceFocusedPane()
     }
 
+    /// Each pane's card frame, in `space`'s coordinates.
+    func islandFrames(in space: NSView) -> [SurfaceID: NSRect] {
+        Dictionary(islands.map { ($0.surfaceID, space.convert($0.bounds, from: $0)) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    func island(for surfaceID: SurfaceID) -> PaneIslandView? {
+        islands.first { $0.surfaceID == surfaceID }
+    }
+
     private var showsHeaders = false
     private var announcedSurface: SurfaceID?
 
@@ -420,6 +438,35 @@ final class PaneContainerView: NSView {
     override func layout() {
         super.layout()
         updateGapFill()
+        updateCornerHandles()
+    }
+
+    // MARK: - Corner handles
+
+    private var cornerHandles: [SplitCornerHandle] = []
+
+    /// One handle per place two perpendicular dividers meet, kept on top of the panes.
+    private func updateCornerHandles() {
+        let splits = descendants(of: self).compactMap { $0 as? HarnessSplitView }
+        let junctions = SplitCornerHandle.junctions(of: splits, in: self)
+        while cornerHandles.count > junctions.count { cornerHandles.removeLast().removeFromSuperview() }
+        while cornerHandles.count < junctions.count {
+            let handle = SplitCornerHandle(frame: .zero)
+            addSubview(handle, positioned: .above, relativeTo: nil)
+            cornerHandles.append(handle)
+        }
+        for (handle, junction) in zip(cornerHandles, junctions) {
+            handle.across = junction.across
+            handle.along = junction.along
+            if handle.frame != junction.frame {
+                handle.frame = junction.frame
+                window?.invalidateCursorRects(for: handle)
+            }
+        }
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants(of: $0) }
     }
 
     /// Fill = the container minus each island's rounded rect, in the chrome color at the
@@ -752,10 +799,15 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
         // The divider-index key is present only when the user dragged a divider —
         // skip programmatic setPosition and window/layout resizes.
         guard notification.userInfo?["NSSplitViewDividerIndex"] != nil else { return }
-        persistRatio()
+        saveRatio()
+        // A divider drag moves the corner handles where it meets another divider.
+        var view = superview
+        while let current = view, !(current is PaneContainerView) { view = current.superview }
+        view?.needsLayout = true
     }
 
-    private func persistRatio() {
+    /// Save the divider's position as this split's ratio (debounced), as a drag does.
+    func saveRatio() {
         guard let tabID, let firstPaneID, let secondPaneID, subviews.count >= 2 else { return }
         let total = isVertical ? bounds.width : bounds.height
         guard total > 1 else { return }

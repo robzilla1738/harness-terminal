@@ -34,8 +34,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 
 | Feature | Harness | Rex |
 |---|---|---|
-| Native splits | Yes, with pane headers. Drag a pane by its header to split, swap, move to a tab, or break out. | SuperSplit: animated, corner drags, cross-window drag |
-| Animated splits, corner drags | Not yet. | Yes |
+| Native splits | Yes, with pane headers. Drag a pane by its header to split, swap, move to a tab, or break out. New panes grow out of the one they split, closed ones shrink away, and the corner where two dividers meet drags both. | SuperSplit: animated, corner drags, cross-window drag |
 | Tabs and vertical tabs | Title-bar pills or a sidebar. | SuperTabs, vertical tabs |
 | Multiple windows, tab tear-off | Not yet: one window. | Yes |
 | Dock tile | Up to four agents, ringed by attention; badge counts what needs you. | Deck icons |
