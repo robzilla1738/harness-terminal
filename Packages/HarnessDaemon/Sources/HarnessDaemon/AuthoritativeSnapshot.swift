@@ -78,11 +78,13 @@ enum SnapshotCipher {
         guard let box = try? AES.GCM.seal(plain, using: material) else { return nil }
         return box.combined
         #else
-        var out = Data([0x01])
-        out.reserveCapacity(plain.count + 1)
-        for (index, byte) in plain.enumerated() {
-            out.append(byte ^ key[index % key.count])
-        }
+        // No CryptoKit: the bytes stay plain, guarded by the 0600 file mode like the scrollback
+        // log beside them. The header names the key and checks the body, so a park file from
+        // another key, or a damaged one, is refused rather than read as garbage.
+        var out = Data([0x02])
+        out.append(fingerprint(key))
+        out.append(fingerprint(plain))
+        out.append(plain)
         return out
         #endif
     }
@@ -94,16 +96,21 @@ enum SnapshotCipher {
         guard let box = try? AES.GCM.SealedBox(combined: sealed) else { return nil }
         return try? AES.GCM.open(box, using: material)
         #else
-        guard sealed.first == 0x01 else { return nil }
-        let body = sealed.dropFirst()
-        var out = Data()
-        out.reserveCapacity(body.count)
-        for (index, byte) in body.enumerated() {
-            out.append(byte ^ key[index % key.count])
-        }
-        return out
+        guard sealed.count >= 17, sealed.first == 0x02,
+              sealed.dropFirst().prefix(8) == fingerprint(key) else { return nil }
+        let plain = Data(sealed.dropFirst(17))
+        return sealed.dropFirst(9).prefix(8) == fingerprint(plain) ? plain : nil
         #endif
     }
+
+    #if !canImport(CryptoKit)
+    /// FNV-1a 64, little-endian. A fingerprint, not a MAC: it tells keys and bodies apart.
+    private static func fingerprint(_ data: Data) -> Data {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in data { hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01b3 }
+        return withUnsafeBytes(of: hash.littleEndian) { Data($0) }
+    }
+    #endif
 
     private static func key32(_ key: Data) -> Data {
         if key.count >= 32 { return Data(key.prefix(32)) }

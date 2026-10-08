@@ -5,7 +5,7 @@ import XCTest
 final class ProcessCaptureTests: XCTestCase {
     func testLargeOutputOnBothStreamsDoesNotDeadlock() throws {
         // 256 KiB on stdout and stderr: four times a pipe buffer each.
-        let script = "yes a | head -c 262144; yes b | head -c 262144 >&2; exit 3"
+        let script = "head -c 262144 /dev/zero; head -c 262144 /dev/zero >&2; exit 3"
         let result = try ProcessCapture.run(URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", script])
         XCTAssertEqual(result.status, 3)
         XCTAssertEqual(result.stdout.count, 262_144)

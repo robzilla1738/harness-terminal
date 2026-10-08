@@ -162,7 +162,9 @@ final class SnapshotTests: XCTestCase {
         let ring = ParkedRing(sequence: 7, bytes: output)
         XCTAssertEqual(ring.bytes, output)
         XCTAssertEqual(ring.rawCount, output.count)
-        XCTAssertLessThan(ring.stored.count, output.count / 3, "terminal output compresses well")
+        if RingCodec.compress(output) != nil { // LZ4 is Apple's; elsewhere the ring stays as it is
+            XCTAssertLessThan(ring.stored.count, output.count / 3, "terminal output compresses well")
+        }
         let tiny = ParkedRing(sequence: 1, bytes: Data("x".utf8))
         XCTAssertFalse(tiny.compressed, "bytes that don't shrink are kept as they are")
         XCTAssertEqual(tiny.bytes, Data("x".utf8))

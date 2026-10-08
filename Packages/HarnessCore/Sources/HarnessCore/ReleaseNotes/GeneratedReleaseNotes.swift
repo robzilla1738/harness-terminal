@@ -6,7 +6,7 @@
 extension ReleaseNotes {
     public static let current = ReleaseNotes(
         version: "1.13.0",
-        changelogDigest: "3051cef1cc2d654e",
+        changelogDigest: "dfca3ee3c2500268",
         sections: [
             Section(title: "Added", items: [
                 "Several machines at once",
@@ -86,6 +86,8 @@ extension ReleaseNotes {
                 "The scorecard measures the daemon's own memory",
             ]),
             Section(title: "Fixed", items: [
+                "Programs in a pane stop when told to",
+                "The Linux daemon builds and tests again",
                 "Windows come forward without waiting on their daemon",
                 "Rename Tab does something",
                 "Exactly one client answers terminal queries",

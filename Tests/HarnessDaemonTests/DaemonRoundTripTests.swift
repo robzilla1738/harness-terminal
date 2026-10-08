@@ -308,8 +308,11 @@ final class DaemonRoundTripTests: XCTestCase {
             XCTAssertEqual(next.sequence, previous.end, "frames continue exactly where the last one ended")
         }
         XCTAssertTrue(run.contains { $0.sequence < reply.historyEnd } && run.contains { $0.sequence >= reply.historyEnd })
-        let lines = output.snapshot.components(separatedBy: "\r\n")
-        XCTAssertEqual(lines.compactMap { $0.hasPrefix("FLOOD_") ? Int($0.dropFirst(6)) : nil }, Array(0 ..< count), "every line once, in order")
+        // Each line's number wherever it sits on its line (the shell's own output can share the first).
+        let numbers = output.snapshot.components(separatedBy: "\r\n").compactMap { line in
+            line.range(of: "FLOOD_").flatMap { Int(line[$0.upperBound...]) }
+        }
+        XCTAssertEqual(numbers, Array(0 ..< count), "every line once, in order")
     }
 
     /// A pane fills while no client is attached (as after the app quits): the daemon parses its
