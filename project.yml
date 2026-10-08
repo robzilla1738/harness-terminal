@@ -98,7 +98,7 @@ targets:
       # warning about HarnessDaemonCore-Swift.h.
       SWIFT_INSTALL_OBJC_HEADER: NO
       DEFINES_MODULE: NO
-      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap"
+      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap"
   HarnessDaemon:
     type: tool
     platform: macOS
@@ -140,7 +140,7 @@ targets:
       PRODUCT_NAME: harness-cli
       SWIFT_VERSION: "6.0"
       MACOSX_DEPLOYMENT_TARGET: "15.0"
-      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap"
+      OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap"
   HarnessCoreTests:
     type: bundle.unit-test
     platform: macOS

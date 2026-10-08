@@ -2564,7 +2564,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap";
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = com.robert.HarnessDaemonCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -2852,7 +2852,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap";
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = com.robert.harness.cli;
 				PRODUCT_NAME = "harness-cli";
 				SDKROOT = macosx;
@@ -2927,7 +2927,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap";
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = com.robert.harness.cli;
 				PRODUCT_NAME = "harness-cli";
 				SDKROOT = macosx;
@@ -2981,7 +2981,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap";
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessSys.modulemap -Xcc -fmodule-map-file=$(GENERATED_MODULEMAP_DIR)/CHarnessBase64.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = com.robert.HarnessDaemonCore;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
