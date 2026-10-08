@@ -7,12 +7,13 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     /// The session this window shows; set by `MainSplitViewController`.
     var context = WindowContext()
 
-    /// A torn-off tab: onto another Harness window, it joins that window's session; anywhere
-    /// else it becomes a session of its own in a new window there.
+    /// A torn-off tab: onto another Harness window on the same machine, it joins that window's
+    /// session; anywhere else it becomes a session of its own in a new window there.
     func tabBarDidTearOff(tabID: TabID, at screenPoint: NSPoint) {
         let coordinator = SessionCoordinator.shared
+        let owner = context.owner
         let target = WindowContexts.all.first { context in
-            guard let window = context.window, window !== view.window, window.isVisible else { return false }
+            guard context.owner == owner, let window = context.window, window !== view.window, window.isVisible else { return false }
             return window.frame.contains(screenPoint)
         }
         if let target, let session = target.sessionID {
@@ -180,7 +181,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func reloadTabBar() {
-        let session = context.session(in: SessionCoordinator.shared.snapshot)
+        let session = context.session
         tabBar.reload(tabs: session?.tabs ?? [], activeTabID: session?.activeTabID)
     }
 
@@ -208,7 +209,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func refreshTabBarMetadata() {
-        let session = context.session(in: SessionCoordinator.shared.snapshot)
+        let session = context.session
         tabBar.refreshMetadata(tabs: session?.tabs ?? [], activeTabID: session?.activeTabID)
         paneContainer?.refreshHeaders()
     }
@@ -279,9 +280,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         }
 
         let coordinator = SessionCoordinator.shared
-        guard let workspace = context.workspace(in: coordinator.snapshot),
-              let tab = context.tab(in: coordinator.snapshot)
-        else { return }
+        guard let workspace = context.workspace, let tab = context.tab else { return }
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
         let density = "\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)|\(tabRowHidden)"
@@ -305,7 +304,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             cwd: tab.cwd,
             program: tab.currentCommand,
             agent: tab.agent?.kind.commandToken,
-            themeName: coordinator.snapshot.themeName
+            themeName: context.snapshot.themeName
         )
         container.translatesAutoresizingMaskIntoConstraints = false
         terminalHost.addSubview(container)
@@ -414,7 +413,7 @@ final class PaneContainerView: NSView {
 
     /// Re-read each pane's identity and focus into its header and its VoiceOver label.
     func refreshHeaders() {
-        guard let tab = coordinator.snapshot.workspaces.lazy.flatMap(\.sessions).flatMap(\.tabs).first(where: { $0.id == tabID }) else { return }
+        guard let tabID, let tab = coordinator.tab(tabID) else { return }
         let leaves = tab.rootPane.allLeaves()
         let focused = coordinator.activeSurfaceID
         for island in islands {

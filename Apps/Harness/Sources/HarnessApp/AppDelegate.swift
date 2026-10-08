@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Observes the macOS system appearance so auto light/dark theme switching can follow it.
     private var appearanceObservation: NSKeyValueObservation?
     private var externalOpenReady = false
+    private var contextClickMonitor: Any?
     private var queuedExternalOpens: [QueuedExternalOpen] = []
 
     private struct QueuedExternalOpen {
@@ -42,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notchController = NotchPanelController.shared
         notchController?.start()
         PrefixKeymap.shared.install()
+        installContextClickFocus()
         PaletteShortcuts.shared.reload()
         QuickTerminalController.shared.start()
         SurfaceShellTracker.shared.start()
@@ -138,16 +140,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Windows
 
-    /// Show `session` in a window: the one already showing it, or a new one (placed at
-    /// `origin` when given, else cascaded from the key window). nil opens a window that
-    /// follows the active session (the first window at launch).
+    /// Show `session` (on `owner`'s daemon) in a window: the one already showing it, or a new
+    /// one (placed at `origin` when given, else cascaded from the key window). nil opens a
+    /// window that follows the active session (the first window at launch).
     @discardableResult
-    func openWindow(showing session: SessionID?, at origin: NSPoint? = nil) -> NSWindow? {
+    func openWindow(showing session: SessionID?, owner: String = DaemonSidebar.localID, at origin: NSPoint? = nil) -> NSWindow? {
         if let session, let existing = WindowContexts.window(showing: session) {
             existing.makeKeyAndOrderFront(nil)
             return existing
         }
-        let controller = MainWindowController(sessionID: session)
+        let controller = MainWindowController(sessionID: session, owner: owner)
         guard let window = controller.window else { return nil }
         if let origin {
             window.setFrameTopLeftPoint(origin)
@@ -163,6 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+        // Becoming key does this too; a window that opens behind another app isn't key yet.
+        if session != nil { SessionCoordinator.shared.activate(owner: owner, selecting: session) }
         for name in [NSWindow.didMoveNotification, NSWindow.didEndLiveResizeNotification] {
             NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.saveWindows() }
@@ -177,14 +181,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         newWindow()
     }
 
-    /// A new session in a new window. The window exists before the snapshot that makes the
-    /// session active arrives, so the window behind never switches to it.
+    /// A new session in a new window, on the machine of the window in front. The window exists
+    /// before the snapshot that makes the session active arrives, so the window behind never
+    /// switches to it.
     func newWindow(cwd: String? = nil, name: String? = nil) {
         let coordinator = SessionCoordinator.shared
         guard let workspace = coordinator.snapshot.activeWorkspaceID ?? coordinator.snapshot.workspaces.first?.id,
               let session = coordinator.createSession(in: workspace, cwd: cwd, name: name)
         else { return }
-        openWindow(showing: session)
+        openWindow(showing: session, owner: coordinator.activeOwner)
         coordinator.syncFromDaemon()
         SurfaceShellTracker.shared.bumpScan()
     }
@@ -194,8 +199,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func moveTabToNewWindow(_ tabID: TabID, at origin: NSPoint? = nil) {
         let coordinator = SessionCoordinator.shared
         guard let session = coordinator.moveTab(tabID, toSession: nil) else { return }
-        openWindow(showing: session, at: origin)
+        openWindow(showing: session, owner: coordinator.activeOwner, at: origin)
         coordinator.syncFromDaemon()
+    }
+
+    /// A right-click (or control-click) doesn't make a window key, but its menus act on "the
+    /// active session": bring the window forward first, so they act on the one clicked in.
+    private func installContextClickFocus() {
+        contextClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { [weak self] event in
+            let contextClick = event.type == .rightMouseDown || event.modifierFlags.contains(.control)
+            if contextClick, let window = event.window, !window.isKeyWindow,
+               self?.windowControllers.contains(where: { $0.window === window }) == true {
+                window.makeKeyAndOrderFront(nil)
+            }
+            return event
+        }
     }
 
     // MARK: - Window restore
@@ -204,10 +222,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminating = false
     /// Saving waits for the restore, so the launch window can't overwrite the list it reads.
     private var windowsRestored = false
+    /// Saved windows on hosts that haven't reconnected yet: kept in the list until they reopen,
+    /// so a host that's down at launch gets its windows back next time.
+    private var unrestoredWindows: [SavedWindow] = []
 
     private struct SavedWindow: Codable {
         var session: UUID
         var frame: String
+        /// The remote host it was on; nil for this Mac.
+        var host: String?
     }
 
     /// Remember each window's session and frame, so a relaunch reopens them. Closing the last
@@ -215,28 +238,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func saveWindows() {
         guard windowsRestored, !terminating else { return }
         let saved = windowControllers.compactMap { controller -> SavedWindow? in
-            guard let window = controller.window, let session = controller.context?.sessionID else { return nil }
-            return SavedWindow(session: session, frame: NSStringFromRect(window.frame))
-        }
+            guard let window = controller.window, let context = controller.context, let session = context.sessionID else { return nil }
+            let host = context.owner == DaemonSidebar.localID ? nil : context.owner
+            return SavedWindow(session: session, frame: NSStringFromRect(window.frame), host: host)
+        } + unrestoredWindows
         UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.openWindowsKey)
     }
 
     /// Reopen the windows saved at the last quit whose sessions still exist. The first window
-    /// already shows the active session.
+    /// already shows the active session. Windows on remote hosts come back once their host
+    /// reconnects (in the background; a host that doesn't answer just leaves them closed).
     private func restoreWindows() {
         defer {
             windowsRestored = true
             saveWindows()
         }
         guard let data = UserDefaults.standard.data(forKey: Self.openWindowsKey),
-              let saved = try? JSONDecoder().decode([SavedWindow].self, from: data), saved.count > 1
+              let saved = try? JSONDecoder().decode([SavedWindow].self, from: data)
         else { return }
-        let snapshot = SessionCoordinator.shared.snapshot
+        reopen(saved.filter { $0.host == nil }, owner: DaemonSidebar.localID)
+        let coordinator = SessionCoordinator.shared
+        unrestoredWindows = saved.filter { $0.host != nil }
+        for host in Set(saved.compactMap(\.host)) {
+            coordinator.attachRemote(named: host) { [weak self] attached in
+                guard attached, let self else { return }
+                self.unrestoredWindows.removeAll { $0.host == host }
+                self.reopen(saved.filter { $0.host == host }, owner: host)
+                self.saveWindows()
+            }
+        }
+    }
+
+    /// Open the saved windows whose sessions `owner`'s daemon still has, keeping the window
+    /// in front where it is.
+    private func reopen(_ entries: [SavedWindow], owner: String) {
+        let snapshot = SessionCoordinator.shared.snapshot(for: owner)
         let sessions = Set(snapshot.workspaces.flatMap(\.sessions).map(\.id))
         let front = NSApp.keyWindow
-        for entry in saved where sessions.contains(entry.session) && entry.session != snapshot.activeWorkspace?.activeSessionID {
+        // The first window already shows the active session.
+        let active = SessionCoordinator.shared.activeOwner == owner ? snapshot.activeWorkspace?.activeSessionID : nil
+        for entry in entries where sessions.contains(entry.session) && entry.session != active {
             guard WindowContexts.window(showing: entry.session) == nil,
-                  let window = openWindow(showing: entry.session) else { continue }
+                  let window = openWindow(showing: entry.session, owner: owner) else { continue }
             let frame = NSRectFromString(entry.frame)
             if frame.width >= window.minSize.width, NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) {
                 window.setFrame(frame, display: false)

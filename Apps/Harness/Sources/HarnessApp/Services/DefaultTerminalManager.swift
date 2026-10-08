@@ -143,6 +143,13 @@ enum DefaultTerminalOpener {
     /// Finder "New Harness Window Here" service): it opens a new session in a new window. ssh/telnet/
     /// man-page and file-with-command requests always open a tab in the active session.
     static func open(_ urls: [URL], asWindow: Bool = false) {
+        // Finder folders and local files open on this Mac, even with a remote window in front:
+        // a new window there, or a tab in a window on this Mac.
+        if asWindow {
+            SessionCoordinator.shared.activate(owner: DaemonSidebar.localID)
+        } else {
+            SessionCoordinator.shared.showDaemon(DaemonSidebar.localID)
+        }
         for url in urls {
             guard let request = DefaultTerminalLaunchRequest.make(for: url) else { continue }
             if asWindow, request.command == nil, let cwd = request.cwd {

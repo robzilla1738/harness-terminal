@@ -191,7 +191,7 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
         var list = (workspace?.sessions ?? []).map { session in
             SwitcherSession(id: session.id.uuidString, title: workspace.map { SessionDisplayName.title(of: session, in: $0) } ?? session.name, owner: here, ownerTitle: hereTitle)
         }
-        // Sessions last seen on other daemons, from the sidebar's machine boards.
+        // Sessions on the other attached daemons; picking one opens or focuses its window.
         for group in coordinator.sidebarGroups() {
             for row in group.sessions where row.owner != here {
                 let owner = row.owner == DaemonSidebar.localID ? "This Mac" : row.owner

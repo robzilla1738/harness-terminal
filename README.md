@@ -68,7 +68,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - `harness-cli api` for a JSON method list, schemas, and calls, plus `events --follow` for a live event stream
 - Lua 5.1 config at `~/.config/harness/init.lua` (`HARNESS_CONFIG` overrides the path). It runs in the CLI. The daemon does not run it
 - Two pane densities (comfortable cards with headers, or compact 1-point borders) and automatic contrast correction on a light canvas
-- One window can show This Mac and another machine's daemon as separate sidebar groups. The attach is your SSH tunnel to that daemon
+- Several machines at once: each remote host opens in its own window next to your local ones, all live, and the sidebar groups every machine's sessions. Each attach is your SSH tunnel to that daemon
 
 ## harness-cli
 

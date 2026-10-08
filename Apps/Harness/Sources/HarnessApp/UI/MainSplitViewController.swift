@@ -155,8 +155,11 @@ final class MainSplitViewController: NSViewController {
     /// "here" follow what you're looking at.
     @objc private func windowDidBecomeKey() {
         let coordinator = SessionCoordinator.shared
+        if context.owner != coordinator.activeOwner {
+            coordinator.activate(owner: context.owner, selecting: context.sessionID)
+        }
         guard let session = context.sessionID,
-              let workspace = context.workspace(in: coordinator.snapshot),
+              let workspace = context.workspace,
               coordinator.snapshot.activeWorkspace?.activeSessionID != session || coordinator.snapshot.activeWorkspaceID != workspace.id
         else { return }
         if coordinator.snapshot.activeWorkspaceID != workspace.id { coordinator.selectWorkspace(workspace.id) }
@@ -195,7 +198,7 @@ final class MainSplitViewController: NSViewController {
     }
 
     @objc private func snapshotChanged(_ note: Notification) {
-        guard context.update(from: SessionCoordinator.shared.snapshot) else {
+        guard context.update() else {
             // This window's session closed (or moved into another window): close it.
             view.window?.close()
             return
@@ -241,12 +244,12 @@ final class MainSplitViewController: NSViewController {
     }
 
     private func updateWindowTitle() {
-        let snap = SessionCoordinator.shared.snapshot
-        guard let session = context.session(in: snap), let workspace = context.workspace(in: snap) else {
+        guard let session = context.session, let workspace = context.workspace else {
             view.window?.title = "Harness"
             return
         }
-        view.window?.title = "\(SessionDisplayName.title(of: session, in: workspace)) — Harness"
+        let host = context.owner == DaemonSidebar.localID ? "" : " — \(context.owner)"
+        view.window?.title = "\(SessionDisplayName.title(of: session, in: workspace))\(host) — Harness"
     }
 
     func setSidebarVisible(_ visible: Bool) {

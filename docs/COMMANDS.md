@@ -204,6 +204,8 @@ reuses your existing SSH trust (keys/agent/config); no new credentials or crypto
 | `remote remove --name <name>` | Forget a remote and tear down its tunnel. |
 | `<command> … --host <name>` | Run any client command against the named remote instead of the local daemon (`ping`, `new-session`, `send-keys`, `capture-pane`, `doctor`, …). Exception: `attach-window` always renders the **local** daemon — run it on the machine whose daemon you want to see (see the multiplexer guide). |
 
+In the app, **Remote ▸ *host* ▸ Connect** opens that machine in a window of its own; your other windows, local or on other hosts, stay where they are and keep streaming. The window in front decides which daemon commands, shortcuts, and the palette act on. The sidebar lists every connected machine's sessions; picking one on another machine brings its window forward (or opens one). **Disconnect** closes that host's windows and its tunnel; its sessions keep running there. Windows on remote hosts reopen at launch once their host answers.
+
 In the app, pasting or dropping an image or file into a pane on a remote host uploads it to that host first (owner-only, swept after a day, up to 11 MB) and pastes the remote path. **Remote ▸ Suggest Tailscale Peers…** probes your online peers over SSH and lists the ones running Harness first, with their socket already filled in. A pane's menu has **Copy Watch Command**: a `harness-cli [--host …] attach --read-only --surface …` line for watching it from any terminal.
 
 Allowed `--ssh-arg` options are validated: `-p` (port), `-i` (identity file), `-J` (jump

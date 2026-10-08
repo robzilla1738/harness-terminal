@@ -553,16 +553,15 @@ final class HarnessSidebarPanelViewController: NSViewController {
     }
 
     @objc func reload() {
-        let snap = SessionCoordinator.shared.snapshot
-        let workspace = context.workspace(in: snap)
-        workspaces = snap.workspaces
+        let workspace = context.workspace
+        workspaces = context.snapshot.workspaces
         activeWorkspaceID = workspace?.id
-        activeSessionID = context.session(in: snap)?.id
+        activeSessionID = context.session?.id
         sessions = workspace?.sessions ?? []
         let name = workspace?.name ?? "Workspace"
         outline = SidebarOutline.lines(
             groups: SessionCoordinator.shared.sidebarGroups(),
-            liveOwner: RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID,
+            liveOwner: context.owner,
             live: sessions,
             activeSessionID: activeSessionID,
             query: sessionFilter,
@@ -958,6 +957,11 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         return sessions.firstIndex { $0.id.uuidString == id }
     }
 
+    /// Whether `tabID` is on this window's daemon.
+    private func ownsTab(_ tabID: TabID) -> Bool {
+        context.snapshot.workspaces.contains { $0.sessions.contains { $0.tabs.contains { $0.id == tabID } } }
+    }
+
     /// The live tab at `row`.
     private func liveTab(atRow row: Int) -> (session: SessionGroup, tab: Tab)? {
         guard outline.indices.contains(row), case let .tab(sessionID, tabID, _) = outline[row],
@@ -988,7 +992,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let item = NSPasteboardItem()
         if let index = liveSessionIndex(atRow: row) {
-            item.setString(String(index), forType: Self.sessionRowPasteboardType)
+            item.setString(sessions[index].id.uuidString, forType: Self.sessionRowPasteboardType)
         } else if let (_, tab) = liveTab(atRow: row) {
             item.setString(tab.id.uuidString, forType: Self.tabRowPasteboardType)
         } else {
@@ -1003,13 +1007,19 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         proposedRow row: Int,
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
-        if info.draggingPasteboard.availableType(from: [Self.tabRowPasteboardType]) != nil {
+        if let raw = info.draggingPasteboard.string(forType: Self.tabRowPasteboardType) {
+            // Tabs move between sessions of one daemon, never across machines.
+            guard let id = UUID(uuidString: raw), ownsTab(id) else { return [] }
             if dropOperation == .on, liveSessionIndex(atRow: row) == nil {
                 tableView.setDropRow(row, dropOperation: .above)
             }
             return tabDropTarget(row: row, operation: dropOperation == .on && liveSessionIndex(atRow: row) != nil ? .on : .above) == nil ? [] : .move
         }
-        guard dropOperation == .above, row == outline.count || liveSessionIndex(atRow: row) != nil else { return [] }
+        // Sessions reorder within this window's list (not across workspaces or machines).
+        guard dropOperation == .above, row == outline.count || liveSessionIndex(atRow: row) != nil,
+              let raw = info.draggingPasteboard.string(forType: Self.sessionRowPasteboardType),
+              sessions.contains(where: { $0.id.uuidString == raw })
+        else { return [] }
         return .move
     }
 
@@ -1030,7 +1040,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         dropOperation: NSTableView.DropOperation
     ) -> Bool {
         if let raw = info.draggingPasteboard.string(forType: Self.tabRowPasteboardType), let tabID = UUID(uuidString: raw) {
-            guard var target = tabDropTarget(row: row, operation: dropOperation) else { return false }
+            guard ownsTab(tabID), var target = tabDropTarget(row: row, operation: dropOperation) else { return false }
             // Within one session the index counts after the tab leaves its place.
             if let from = target.session.tabs.firstIndex(where: { $0.id == tabID }) {
                 if from < target.index { target.index -= 1 }
@@ -1041,8 +1051,7 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         guard let workspaceID = activeWorkspaceID,
               let item = info.draggingPasteboard.pasteboardItems?.first,
               let raw = item.string(forType: Self.sessionRowPasteboardType),
-              let from = Int(raw),
-              sessions.indices.contains(from)
+              let from = sessions.firstIndex(where: { $0.id.uuidString == raw })
         else { return false }
         // Drop gap → index among sessions: the number of session headings above it.
         let gap = (0 ..< min(row, outline.count)).filter { liveSessionIndex(atRow: $0) != nil }.count

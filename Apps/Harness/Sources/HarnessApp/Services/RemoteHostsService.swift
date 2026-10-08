@@ -2,7 +2,7 @@ import Foundation
 import HarnessCore
 
 /// App-side facade over `RemoteHostStore` + `SSHTunnelManager`: lists/edits saved remote daemons
-/// and brings up the SSH tunnel that lets the GUI drive one. Connecting blocks (it spawns ssh and
+/// and brings up the SSH tunnels that let the GUI drive them, several at once. Connecting blocks (it spawns ssh and
 /// waits for the remote daemon to answer), so callers run `connect` off the main thread.
 /// @unchecked Sendable: the store/tunnel manager are thread-safe; `_activeHostName` is lock-guarded.
 final class RemoteHostsService: @unchecked Sendable {
@@ -23,9 +23,13 @@ final class RemoteHostsService: @unchecked Sendable {
         }
     }
 
-    /// The host the GUI is currently pointed at, or nil when on the local daemon.
+    /// The host the key window is on, or nil when it's on this Mac. Set by the coordinator.
     var activeHostName: String? {
         lock.lock(); defer { lock.unlock() }; return _activeHostName
+    }
+
+    func setActiveHost(_ name: String?) {
+        lock.lock(); _activeHostName = name; lock.unlock()
     }
 
     func hosts() -> [RemoteHost] { store.load() }
@@ -68,14 +72,11 @@ final class RemoteHostsService: @unchecked Sendable {
         guard let host = store.host(named: name) else {
             throw DaemonSessionError.daemonError("unknown remote host '\(name)'")
         }
-        let endpoint = try SSHTunnelManager.shared.endpoint(for: host)
-        lock.lock(); _activeHostName = name; lock.unlock()
-        return endpoint
+        return try SSHTunnelManager.shared.endpoint(for: host)
     }
 
-    /// Tear down the active tunnel and forget it (the caller switches back to the local daemon).
-    func disconnect() {
-        lock.lock(); let name = _activeHostName; _activeHostName = nil; lock.unlock()
-        if let name { SSHTunnelManager.shared.stop(host: name) }
+    /// Tear down a host's tunnel (the coordinator has already detached from it).
+    func disconnect(named name: String) {
+        SSHTunnelManager.shared.stop(host: name)
     }
 }

@@ -53,7 +53,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 |---|---|---|
 | Transport | SSH: your keys, config, and jump hosts; the daemon socket is forwarded. | QUIC/WebTransport, PAM logins |
 | Tailscale | Suggest Tailscale Peers probes peers over SSH and lists those running Harness, socket filled in. | Each server joins as a tsnet node |
-| Several remote hosts at once | Not yet: the window shows one daemon at a time; the sidebar lists the others' sessions. | Yes |
+| Several remote hosts at once | Yes: each host gets its own windows beside your local ones, all live; the sidebar lists every machine's sessions, and the window in front decides where commands go. | Yes |
 | Paste into a remote pane | Images and files upload to that host first. | Bidirectional clipboard protocol (stated) |
 
 ## Not planned

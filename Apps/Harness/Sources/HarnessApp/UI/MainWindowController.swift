@@ -14,8 +14,9 @@ final class MainWindowController: NSWindowController {
     /// The session this window shows.
     var context: WindowContext? { (contentViewController as? MainSplitViewController)?.context }
 
-    /// `sessionID`: the session this window shows; nil follows the daemon's active one.
-    convenience init(sessionID: SessionID? = nil) {
+    /// `sessionID`: the session this window shows (on `owner`'s daemon); nil follows the
+    /// active one.
+    convenience init(sessionID: SessionID? = nil, owner: String = DaemonSidebar.localID) {
         HarnessChrome.update(
             themeName: SessionCoordinator.shared.snapshot.themeName,
             opacity: CGFloat(SessionCoordinator.shared.settings.backgroundOpacity),
@@ -53,7 +54,7 @@ final class MainWindowController: NSWindowController {
         window.toolbarStyle = .unified
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
         Self.applyWindowAppearance(window)
-        let context = WindowContext(sessionID: sessionID)
+        let context = WindowContext(sessionID: sessionID, owner: owner)
         WindowContexts.register(context)
         window.contentViewController = MainSplitViewController(context: context)
         // Assigning `contentViewController` resizes the window to the split view's

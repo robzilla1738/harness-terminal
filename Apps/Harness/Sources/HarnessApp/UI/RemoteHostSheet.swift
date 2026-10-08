@@ -238,7 +238,7 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
         }
         busy = true
         show("Connecting to \(host.sshTarget)…")
-        let wasActive = RemoteHostsService.shared.activeHostName == host.name
+        let wasActive = SessionCoordinator.shared.isConnected(host.name)
         DispatchQueue.global(qos: .userInitiated).async {
             let message: String
             let ok: Bool

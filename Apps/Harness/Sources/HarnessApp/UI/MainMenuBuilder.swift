@@ -310,7 +310,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         menu.addItem(.separator())
 
         let hosts = RemoteHostsService.shared.hosts()
-        let active = RemoteHostsService.shared.activeHostName
+        let coordinator = SessionCoordinator.shared
         if hosts.isEmpty {
             let none = NSMenuItem(title: "No saved hosts", action: nil, keyEquivalent: "")
             none.isEnabled = false
@@ -318,13 +318,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         } else {
             for host in hosts {
                 let item = NSMenuItem(title: "\(host.name) — \(host.sshTarget)", action: nil, keyEquivalent: "")
-                item.state = (host.name == active) ? .on : .off
+                let connected = coordinator.isConnected(host.name)
+                item.state = connected ? .on : .off
                 let actions = NSMenu(title: host.name)
-                for (title, selector) in [
-                    ("Connect", #selector(connectRemoteHost(_:))),
-                    ("Edit…", #selector(editRemoteHost(_:))),
-                    ("Remove…", #selector(removeRemoteHost(_:))),
-                ] {
+                var entries: [(String, Selector)] = [(connected ? "Show" : "Connect", #selector(connectRemoteHost(_:)))]
+                if connected { entries.append(("Disconnect", #selector(disconnectRemoteHost(_:)))) }
+                entries += [("Edit…", #selector(editRemoteHost(_:))), ("Remove…", #selector(removeRemoteHost(_:)))]
+                for (title, selector) in entries {
                     let action = NSMenuItem(title: title, action: selector, keyEquivalent: "")
                     action.target = self
                     action.representedObject = host.name
@@ -335,9 +335,9 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
             }
         }
         menu.addItem(.separator())
-        let local = NSMenuItem(title: "Use Local Daemon", action: #selector(useLocalDaemon), keyEquivalent: "")
+        let local = NSMenuItem(title: "This Mac", action: #selector(useLocalDaemon), keyEquivalent: "")
         local.target = self
-        local.state = (active == nil) ? .on : .off
+        local.state = coordinator.activeOwner == DaemonSidebar.localID ? .on : .off
         menu.addItem(local)
     }
 
@@ -431,19 +431,25 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        if RemoteHostsService.shared.activeHostName == name {
-            SessionCoordinator.shared.disconnectRemote()
-        }
+        SessionCoordinator.shared.disconnectRemote(named: name)
         RemoteHostsService.shared.removeHost(named: name)
     }
 
+    /// Opens the host in a window of its own (or brings its window forward); windows on other
+    /// machines stay put.
     @objc func connectRemoteHost(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
         SessionCoordinator.shared.connectToRemote(named: name)
     }
 
+    @objc func disconnectRemoteHost(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        SessionCoordinator.shared.disconnectRemote(named: name)
+    }
+
+    /// Brings a window on this Mac forward, opening one if every window is remote.
     @objc func useLocalDaemon() {
-        SessionCoordinator.shared.disconnectRemote()
+        SessionCoordinator.shared.showDaemon(DaemonSidebar.localID)
     }
 
     @objc func newSession() {
