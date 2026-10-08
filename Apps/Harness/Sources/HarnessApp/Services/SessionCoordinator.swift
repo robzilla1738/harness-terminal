@@ -245,12 +245,11 @@ final class SessionCoordinator: NSObject {
         return selected
     }
 
-    /// Send selections to the active daemon off the main thread, in order (see `selections`).
+    /// Send selections to the active daemon off the main thread, in order (see `SelectionQueue`).
     private func send(_ requests: IPCRequest...) {
-        let service = DaemonSessionService(endpoint: activeEndpoint)
-        selections.async {
-            for request in requests { _ = try? service.request(request) }
-        }
+        selectionsSent += 1
+        let queue = selections(for: activeEndpoint)
+        for request in requests { queue.async(request) }
     }
 
     private func attachLink(_ link: DaemonLink) {
@@ -506,7 +505,7 @@ final class SessionCoordinator: NSObject {
     func syncFromDaemon(metadataOnly: Bool = false) -> Bool {
         let remote: SessionSnapshot
         do {
-            remote = try selections.sync { try daemon.fetchSnapshot() }
+            remote = try selections(for: activeEndpoint).sync { try daemon.fetchSnapshot() }
         } catch {
             // Don't silently no-op: a failed hydration leaves the UI showing stale layout/metadata.
             // Log + throttled toast (`noteDaemonError`); the app self-heals on the next sync.
@@ -2348,9 +2347,21 @@ final class SessionCoordinator: NSObject {
         refreshSnapshot()
     }
 
-    /// Selections sent to the active daemon off the main thread, in order. Fetches and commands
-    /// wait for the ones already sent, so they see (and act on) the session in front.
-    private let selections = DispatchQueue(label: "com.robert.harness.selections", qos: .userInitiated)
+    /// Selections waiting to go out, one queue per daemon: fetches and commands wait only for
+    /// their own daemon's, so a slow (or silently dead) remote never holds up this Mac.
+    private var selectionQueues: [Endpoint: SelectionQueue] = [:]
+    /// Bumped by every selection sent, so a background fetch that started earlier can tell its
+    /// answer may predate it (an old active pane would pull focus back).
+    private var selectionsSent = 0
+
+    private func selections(for endpoint: Endpoint) -> SelectionQueue {
+        if let queue = selectionQueues[endpoint] { return queue }
+        let service = DaemonSessionService(endpoint: endpoint)
+        let queue = SelectionQueue { _ = try? service.request($0) }
+        selectionQueues[endpoint] = queue
+        return queue
+    }
+
     /// A background fetch is in flight / another was asked for while it was.
     private var fetchInFlight = false
     private var refetch = false
@@ -2370,16 +2381,21 @@ final class SessionCoordinator: NSObject {
         let service = daemon
         let owner = activeOwner
         let applied = appliedSnapshots
-        let selections = selections
+        let sent = selectionsSent
+        let queue = selections(for: activeEndpoint)
         DispatchQueue.global(qos: .userInitiated).async {
-            selections.sync {} // after the selections already sent, without holding up later ones
+            queue.sync {} // after the selections already sent, without holding up later ones
             let fresh = try? service.fetchSnapshot()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.fetchInFlight = false
-                    // Another daemon became active, or a sync or selection landed meanwhile (it is
-                    // at least as new): this answer is stale.
-                    if let fresh, owner == self.activeOwner, applied == self.appliedSnapshots {
+                    // Another daemon became active, or a sync landed meanwhile (it is at least as
+                    // new): this answer is stale. So is one that started before a selection went
+                    // out (a pane click applies no snapshot): ask again, or the old active pane
+                    // takes focus back.
+                    if sent != self.selectionsSent {
+                        self.refetch = true
+                    } else if let fresh, owner == self.activeOwner, applied == self.appliedSnapshots {
                         self.applySnapshot(fresh, metadataOnly: true)
                     }
                     if self.refetch { self.refreshSnapshot() }
@@ -2463,7 +2479,7 @@ final class SessionCoordinator: NSObject {
     @discardableResult
     func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
         do {
-            return try selections.sync { try daemon.request(request) }
+            return try selections(for: activeEndpoint).sync { try daemon.request(request) }
         } catch {
             // Never block the UI with a modal: a transient miss (e.g. the daemon
             // is still spawning at launch) must degrade gracefully. Log always,

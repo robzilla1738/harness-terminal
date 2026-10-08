@@ -5,7 +5,7 @@ import Foundation
 /// the local forwarded socket — so `.unix` covers both local and (tunnelled) remote use. `.tcp` is
 /// reserved for a future native encrypted transport (see the deferred TLS phase) and currently
 /// throws `EndpointError.notYetSupported` when connected.
-public enum Endpoint: Sendable, Equatable, Codable {
+public enum Endpoint: Sendable, Hashable, Codable {
     case unix(path: String)
     case tcp(host: String, port: UInt16)
 
