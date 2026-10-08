@@ -305,6 +305,46 @@ final class KittyAnimationTests: XCTestCase {
         XCTAssertEqual(play(term, at: 0).pixel, blue, "a placeholder slice shows the current frame")
     }
 
+    // MARK: Deleting frames
+
+    func testDeletingTheLastFrameShowsTheOneBefore() {
+        let (term, responses) = makeTerm()
+        placeRedImage(term)
+        addFrame(term, blue)
+        addFrame(term, green)
+        term.feed(apc("a=a,i=1,c=3"))
+        term.feed(apc("a=d,d=f,i=1,r=9")) // past the end: the last frame
+        XCTAssertEqual(shown(term), blue + blue, "the current frame was deleted, so the new last one shows")
+        XCTAssertEqual(responses().last, "\u{1b}_Gi=1;OK\u{1b}\\")
+        term.feed(apc("a=a,i=1,c=3"))
+        XCTAssertEqual(shown(term), blue + blue, "frame 3 is gone")
+        XCTAssertEqual(term.readGrid().images.count, 1, "the placement stays")
+    }
+
+    func testDeletingAnEarlierFrameKeepsTheCurrentOne() {
+        let (term, _) = makeTerm()
+        placeRedImage(term)
+        addFrame(term, blue)
+        addFrame(term, green)
+        term.feed(apc("a=a,i=1,c=3"))
+        term.feed(apc("a=d,d=f,i=1,r=2"))
+        XCTAssertEqual(shown(term), green + green)
+        term.feed(apc("a=a,i=1,c=2"))
+        XCTAssertEqual(shown(term), green + green, "green is frame 2 now")
+    }
+
+    func testDeletingWithoutAFrameNumberDropsTheRootAndTheOnlyFrameStays() {
+        let (term, _) = makeTerm()
+        term.feed(apc("a=T,f=32,s=2,v=1,I=5", red + red))
+        term.feed(apc("a=f,I=5,f=32,s=2,v=1", blue + blue))
+        term.feed(apc("a=d,d=F,I=5")) // by number; no `r`: the root, as Kitty does
+        XCTAssertEqual(shown(term), blue + blue, "frame 2 took the root's place")
+        term.feed(apc("a=d,d=F,I=5"))
+        XCTAssertEqual(shown(term), blue + blue, "an image's only frame is never deleted")
+        term.feed(apc("a=p,I=5"))
+        XCTAssertEqual(term.readGrid().images.count, 2, "the image is still stored")
+    }
+
     // MARK: Memory
 
     func testFramesCountAgainstTheImageQuotaAndDeletingFreesThem() throws {
@@ -324,6 +364,9 @@ final class KittyAnimationTests: XCTestCase {
         XCTAssertTrue(responses().last?.hasPrefix("\u{1b}_Gi=1;ENOSPC") == true, "a fifth frame would not fit")
         term.feed(apc("a=f,i=1,r=4,f=32,s=1,v=1", green))
         XCTAssertEqual(responses().last, "\u{1b}_Gi=1;OK\u{1b}\\", "editing a frame needs no room")
+        term.feed(apc("a=d,d=f,i=1,r=4"))
+        term.feed(apc("a=f,i=1,f=32,s=1,v=1", blue))
+        XCTAssertEqual(responses().last, "\u{1b}_Gi=1;OK\u{1b}\\", "a deleted frame frees its bytes")
 
         term.feed(apc("a=d,d=I,i=1"))
         term.feed(apc("a=t,f=32,s=1,v=1,i=3", red))

@@ -124,6 +124,20 @@ struct KittyImage {
         if command.loopCount > 0 { maxLoops = command.loopCount - 1 }
     }
 
+    /// `a=d,d=f`: removes frame `r`, or the last frame when `r` is past it, as Kitty does (an
+    /// absent `r` names the root, and frame 2 takes its place). An image's only frame stays.
+    mutating func deleteFrame(_ number: Int) {
+        guard frames.count > 1 else { return }
+        let removed = min(max(number, 1), frames.count) - 1
+        frames.remove(at: removed)
+        if removed < current {
+            current -= 1
+        } else if removed == current {
+            current = min(current, frames.count - 1)
+            shownAt = nil
+        }
+    }
+
     /// Kitty's playback step, for an image that `isAnimating`: once the current frame's gap has
     /// passed, move on to the next frame that has one. Wrapping around counts a loop; loading
     /// waits at the last frame for more instead. Returns when the frame after this one is due, or

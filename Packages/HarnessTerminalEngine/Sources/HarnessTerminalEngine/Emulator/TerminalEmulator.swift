@@ -862,9 +862,17 @@ public final class TerminalEmulator: VTParserHandler {
 
     /// `a=d`: lowercase targets remove placements; uppercase also forget the transmitted image.
     /// `a` all, `i` by id, `n` by number, `c` at the cursor, `p`/`q` at a cell, `x` a column,
-    /// `y` a row, `z` a z-index, `r` an id range.
+    /// `y` a row, `z` a z-index, `r` an id range. `f` removes an animation frame instead.
     private func deleteKittyImages(_ command: KittyGraphicsCommand) {
         let target = command.deleteTarget
+        if target.lowercased() == "f" {
+            // Frame `r` of the image `i=` or `I=` names; its bytes leave the budget with it.
+            guard let id = kittyID(for: command, assigning: false), let index = kittyImageIndex(id) else { return }
+            kittyImageBytes -= kittyImages[index].byteCount
+            kittyImages[index].deleteFrame(command.frameNumber)
+            kittyImageBytes += kittyImages[index].byteCount
+            return
+        }
         let (row, col) = (command.y - 1, command.x - 1)
         // The images a target names by id rather than by where they sit: their virtual placements
         // go too, and uppercase forgets them even when nothing was placed.
