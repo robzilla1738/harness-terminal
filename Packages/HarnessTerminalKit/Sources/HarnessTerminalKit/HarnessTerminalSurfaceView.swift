@@ -614,6 +614,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var rows: Int = 24
     /// Live grid size. Peek and overview read this and do not write it, so `stty size` stays put.
     public var gridCellCount: (rows: Int, columns: Int) { (rows, columns) }
+    /// Bumped on the main thread each time parsed output reaches the screen, so a thumbnail
+    /// following this pane knows when it has something new to draw.
+    public private(set) var outputGeneration: UInt64 = 0
     /// Copy-mode `w`/`b`/`e` separator set. The app pushes the `word-separators` option.
     public var copyModeWordSeparators: String = CopyModeWords.tmuxDefault
     /// The last frame built on the plain live path (no scrollback/selection/copy-mode/IME), kept
@@ -821,6 +824,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         if replay { emulatorState.emulator.isReplaying = true }
         emulatorState.emulator.feed(data)
         if replay { emulatorState.emulator.isReplaying = false }
+        outputGeneration &+= 1
         // Trigger scan on the just-completed lines (emulator is main-confined here). On replay
         // the scan only advances its high-water (no notifications/highlights for restored output).
         if let scanner = triggerScanner {
@@ -908,6 +912,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     private func applyPendingMainHop() {
         guard let hop = emulatorState.takePendingMainHop() else { return }
         testingMainHopCount &+= 1
+        outputGeneration &+= 1
         // Refresh the input-side mirror (see `inputModes()`); chunks merge in FIFO order on the
         // emulator queue, so the staged state is always the emulator's latest.
         inputModesMirror = hop.modes
@@ -1299,6 +1304,37 @@ public final class HarnessTerminalSurfaceView: NSView {
         emulatorSync { emulator in
             let cursor = emulator.readGrid().cursor
             return (emulator.captureLines(joinWrapped: false), emulator.historyCount + cursor.row, cursor.col)
+        }
+    }
+
+    /// How this pane draws, for thumbnails of it and of panes no window has mounted. This and
+    /// `thumbnail(_:)` live here (not `TerminalThumbnail.swift`) because they read private state.
+    public var thumbnailStyle: TerminalThumbnailStyle {
+        let configuration = frameBuildConfiguration
+        return TerminalThumbnailStyle(
+            makeBuilder: { configuration.makeBuilder(reverseVideo: $0) },
+            canvasBackground: canvasBackground,
+            canvasForeground: canvasForeground,
+            canvasOpacity: canvasOpacity,
+            font: .init(family: fontFamily, size: fontSize, thicken: fontThicken, thickenStrength: fontThickenStrength),
+            gamma: glyphGamma,
+            ligatures: ligaturesEnabled,
+            colorSpaceName: layerColorSpaceName as String
+        )
+    }
+
+    /// The live screen as a thumbnail draws it, built on the emulator's queue (behind any output
+    /// still parsing) and handed back on main. A read: no damage is consumed, nothing is resized,
+    /// and nothing reaches the PTY.
+    public func thumbnail(_ done: @escaping @MainActor @Sendable (TerminalThumbnail) -> Void) {
+        let style = thumbnailStyle
+        guard offMainParserFramePipelineEnabled else {
+            done(style.thumbnail(of: emulatorState.emulator))
+            return
+        }
+        emulatorState.async { emulator in
+            let thumbnail = style.thumbnail(of: emulator)
+            DispatchQueue.main.async { done(thumbnail) }
         }
     }
 

@@ -14,6 +14,7 @@
 		03DEB8C82D220CE6336FFE0D /* FindWindowMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7355FBB3F88013A31CF267CC /* FindWindowMatcherTests.swift */; };
 		0413762C3C531D0F3291B1A5 /* prompt_marks__16x5__to__48x4.golden in Resources */ = {isa = PBXBuildFile; fileRef = 99558AC1182382D976810E47 /* prompt_marks__16x5__to__48x4.golden */; };
 		0478FC4FC5D95D99998EDA2A /* RealPtyCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9242CB1ACF1019A7C4C19945 /* RealPtyCaptureTests.swift */; };
+		048B6C5F71F9DCADA7D885A9 /* TabThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEB3790C7FA013ED5ADE4F9 /* TabThumbnailView.swift */; };
 		0529A1B128F24933ED5ECEA0 /* ControlKeyNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A85FF9109AACFB15B6F55C2A /* ControlKeyNormalizerTests.swift */; };
 		066126CD37B80D4B650FC24B /* PaneCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231DCD13BC0CEFFB10E480DD /* PaneCaptureTests.swift */; };
 		06C4B758AFDB0FDA91201715 /* TmuxMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BBE7387149A5556239509BE /* TmuxMigrationTests.swift */; };
@@ -309,6 +310,7 @@
 		B21549FEB0B782423E9BC7D8 /* RealPty.swift in Sources */ = {isa = PBXBuildFile; fileRef = F43DED9291885610DB352103 /* RealPty.swift */; };
 		B244547C177738C471711E62 /* ExperienceModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 819339E44FFF2D3D9764E6D5 /* ExperienceModeTests.swift */; };
 		B4A048B96191BC01B711F5F2 /* prompt_marks__16x5__to__13x5.golden in Resources */ = {isa = PBXBuildFile; fileRef = F4473B88D438BCE33370D096 /* prompt_marks__16x5__to__13x5.golden */; };
+		B50A3E59BDC61B4549E1C433 /* TerminalThumbnailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFEB2364CECF9EFC566201D /* TerminalThumbnailTests.swift */; };
 		B532CC21E3FEBF6C2EAC74A0 /* HarnessGridTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 767AE419CE7934C00380AD0A /* HarnessGridTerminalTests.swift */; };
 		B57D37C9DF555424774117B7 /* PaneStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028273159E468DC46DD4AA0F /* PaneStyleTests.swift */; };
 		B75627186128B46DA567C091 /* NotchPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9206BAD43CF558C92B4BE39 /* NotchPanelController.swift */; };
@@ -338,7 +340,6 @@
 		C7E8E4FF6E4C1B61A606F4D0 /* HarnessTerminalSurfaceDragDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB808C784D47F165C2E844FC /* HarnessTerminalSurfaceDragDropTests.swift */; };
 		C876582161E734B944F8444D /* FluidityBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B96E6248BC7810AA9E168EB /* FluidityBenchmarks.swift */; };
 		C8D8E22B16FC1B7A15009E29 /* PrefixKeymap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87D766FA02E02860C0BAC11 /* PrefixKeymap.swift */; };
-		C9214E850E9DFBDBA01F92A5 /* VTPreviewText.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7A3BBBC163B6281B8EF5465 /* VTPreviewText.swift */; };
 		C99BA68EE068EB2E4DB931BB /* HarnessCopyMode in Frameworks */ = {isa = PBXBuildFile; productRef = D104338C78B1AD80EE41F4F3 /* HarnessCopyMode */; };
 		CA1B618F5E03B11B9CD12AD6 /* TerminalAccessibilityTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDDDF185CEB94B879DA85CC4 /* TerminalAccessibilityTextTests.swift */; };
 		CAA564CDDC5B6042CEFB4723 /* emoji_mixed__9x4__to__7x6.golden in Resources */ = {isa = PBXBuildFile; fileRef = 89FA308796861662F4B2B69A /* emoji_mixed__9x4__to__7x6.golden */; };
@@ -623,6 +624,7 @@
 		7ABF937953A9CC985DDC673B /* HarnessBenchmarks.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HarnessBenchmarks.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7B76747EF2EE74D26F676E5E /* EngineConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineConformanceTests.swift; sourceTree = "<group>"; };
 		7BE2C23E1D42C14C6316C133 /* RenderSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderSchedulerTests.swift; sourceTree = "<group>"; };
+		7BEB3790C7FA013ED5ADE4F9 /* TabThumbnailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabThumbnailView.swift; sourceTree = "<group>"; };
 		7CF685349756C2A772058EB5 /* DaemonRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonRoundTripTests.swift; sourceTree = "<group>"; };
 		7D06D1A08582363087906E26 /* ChromeMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeMenuTests.swift; sourceTree = "<group>"; };
 		7DD4B5A1963C7EBBBDC2199C /* PaneHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneHeaderView.swift; sourceTree = "<group>"; };
@@ -694,7 +696,6 @@
 		A657998E790ADAEAB45B5BF1 /* TerminalHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalHostViewTests.swift; sourceTree = "<group>"; };
 		A73A493EC780E0465DB3F6D9 /* WorkspaceOverviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOverviewController.swift; sourceTree = "<group>"; };
 		A75A61F63B71608690269266 /* HarnessChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessChrome.swift; sourceTree = "<group>"; };
-		A7A3BBBC163B6281B8EF5465 /* VTPreviewText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VTPreviewText.swift; sourceTree = "<group>"; };
 		A7D5BB303ED12340A45F0F84 /* CompositorFixtureSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompositorFixtureSpec.swift; sourceTree = "<group>"; };
 		A85FF9109AACFB15B6F55C2A /* ControlKeyNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlKeyNormalizerTests.swift; sourceTree = "<group>"; };
 		A90509DE8F3B7C7839C1EE4C /* ThemeLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeLibrary.swift; sourceTree = "<group>"; };
@@ -781,6 +782,7 @@
 		DB2289CA91DBE6D3A6F32ACE /* SSHTunnelManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHTunnelManagerTests.swift; sourceTree = "<group>"; };
 		DB38DF4410112E47ED141A91 /* HarnessCLI+Panes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HarnessCLI+Panes.swift"; sourceTree = "<group>"; };
 		DC8B874CE39031F096488994 /* libHarnessDaemonCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libHarnessDaemonCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		DDFEB2364CECF9EFC566201D /* TerminalThumbnailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalThumbnailTests.swift; sourceTree = "<group>"; };
 		DE08D3EAEB78C8C90A3B5292 /* prose_softwrap__40x6__to__16x12.golden */ = {isa = PBXFileReference; path = prose_softwrap__40x6__to__16x12.golden; sourceTree = "<group>"; };
 		DE9E43E8439F63774978C118 /* HarnessLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = HarnessLogo.png; sourceTree = "<group>"; };
 		DEBCDA481C9242DCF0BC362E /* CellOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellOverlayTests.swift; sourceTree = "<group>"; };
@@ -1060,9 +1062,9 @@
 				C91C2E3C2A8847B6A0514123 /* StatusLineView.swift */,
 				612B768408ED5B185B103ADC /* TabPeekController.swift */,
 				62640E925402A67A764903C8 /* TabStatusView.swift */,
+				7BEB3790C7FA013ED5ADE4F9 /* TabThumbnailView.swift */,
 				FB39A88BC9BC722B53472CB4 /* TerminalTabBarView.swift */,
 				AC4C4E4331C8177B281FBD72 /* Toast.swift */,
-				A7A3BBBC163B6281B8EF5465 /* VTPreviewText.swift */,
 				529595B70272EEEC10AF08E4 /* WindowBlur.swift */,
 				4A9927D299A57D58A4F3CFFC /* WindowBorderOverlayView.swift */,
 				B9B0B93CA0D26C8912BED337 /* WindowContext.swift */,
@@ -1410,6 +1412,7 @@
 				888E0A94D613CF07E13DC5E2 /* SelectLastCommandOutputTests.swift */,
 				66EC9D7B1BA359C6E525C011 /* SpecialKeyMappingTests.swift */,
 				A657998E790ADAEAB45B5BF1 /* TerminalHostViewTests.swift */,
+				DDFEB2364CECF9EFC566201D /* TerminalThumbnailTests.swift */,
 				F130CE1B8BF54583AE852CF6 /* ThemeManagerTests.swift */,
 				78F091C8C6D34CF25BF94098 /* TriggerTests.swift */,
 			);
@@ -2151,6 +2154,7 @@
 				87EB8777EA8043B7752985B8 /* SurfaceShellTracker.swift in Sources */,
 				3DF1C6950D6CF677425619B5 /* TabPeekController.swift in Sources */,
 				4CA8D1B654B45DC464E012DE /* TabStatusView.swift in Sources */,
+				048B6C5F71F9DCADA7D885A9 /* TabThumbnailView.swift in Sources */,
 				F0CA4861C2391275B78EE407 /* TerminalPaneRegistry.swift in Sources */,
 				1DA45B2E56169234852AF361 /* TerminalPaneRegistryAccess.swift in Sources */,
 				11BD404F759FB4CEA5A5F6E0 /* TerminalServicesProvider.swift in Sources */,
@@ -2158,7 +2162,6 @@
 				2C06CA490C6FD11C4E891DE5 /* ThemeImportController.swift in Sources */,
 				69CFC06A5A77716038E58E74 /* ThemeLibrary.swift in Sources */,
 				9766BBA7CF5BF33018C0B13F /* Toast.swift in Sources */,
-				C9214E850E9DFBDBA01F92A5 /* VTPreviewText.swift in Sources */,
 				3C7E2A84108B690A43D2E6DB /* WindowBlur.swift in Sources */,
 				99D8B9AC1120BF2E99546FB4 /* WindowBorderOverlayView.swift in Sources */,
 				0CBD910E0F308FD7037E7361 /* WindowContext.swift in Sources */,
@@ -2295,6 +2298,7 @@
 				E5E2284205082AE424329905 /* SelectionScrollTests.swift in Sources */,
 				F506083C2BCD4EF2BA346FD4 /* SpecialKeyMappingTests.swift in Sources */,
 				55A43F1E300325FE099A4D70 /* TerminalHostViewTests.swift in Sources */,
+				B50A3E59BDC61B4549E1C433 /* TerminalThumbnailTests.swift in Sources */,
 				F72A00AD90FDA5C086977EB8 /* ThemeManagerTests.swift in Sources */,
 				161FE87D69CBB4032FF5DDD8 /* TriggerTests.swift in Sources */,
 			);

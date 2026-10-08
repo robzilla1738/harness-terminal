@@ -812,6 +812,12 @@ public final class TerminalHostView: NSView {
 
     public var gridCellCount: (rows: Int, columns: Int) { nativeView.gridCellCount }
 
+    public var outputGeneration: UInt64 { nativeView.outputGeneration }
+    public var thumbnailStyle: TerminalThumbnailStyle { nativeView.thumbnailStyle }
+    public func thumbnail(_ done: @escaping @MainActor @Sendable (TerminalThumbnail) -> Void) {
+        nativeView.thumbnail(done)
+    }
+
     public var copyModeWordSeparators: String {
         get { nativeView.copyModeWordSeparators }
         set { nativeView.copyModeWordSeparators = newValue }

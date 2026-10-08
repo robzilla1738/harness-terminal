@@ -344,9 +344,9 @@ final class WorkspacePivotTests: XCTestCase {
 
 final class OverviewOrderTests: XCTestCase {
     func testWaitingTabsLeadAndFilterMatchesTitleSessionOrDirectory() {
-        let a = OverviewTab(id: "a", title: "~/api › nvim", panes: [OverviewPane(program: "nvim", cwd: "/api", liveText: "")], sessionName: "Work")
-        let b = OverviewTab(id: "b", title: "~ › claude", panes: [], sessionName: "Demo", agent: .claudeCode, needsYou: true)
-        let c = OverviewTab(id: "c", title: "~/web", panes: [OverviewPane(program: "shell", cwd: "/web", liveText: "")], sessionName: "Work")
+        let a = OverviewTab(id: "a", title: "~/api › nvim", panes: [OverviewPane(program: "nvim", cwd: "/api", liveText: "")], layout: .leaf(PaneLeaf()), sessionName: "Work")
+        let b = OverviewTab(id: "b", title: "~ › claude", panes: [], layout: .leaf(PaneLeaf()), sessionName: "Demo", agent: .claudeCode, needsYou: true)
+        let c = OverviewTab(id: "c", title: "~/web", panes: [OverviewPane(program: "shell", cwd: "/web", liveText: "")], layout: .leaf(PaneLeaf()), sessionName: "Work")
         XCTAssertEqual(WorkspaceOverviewBuilder.ordered([a, b, c]).map(\.id), ["b", "a", "c"])
         XCTAssertEqual(WorkspaceOverviewBuilder.ordered([a, b, c], query: "work").map(\.id), ["a", "c"])
         XCTAssertEqual(WorkspaceOverviewBuilder.ordered([a, b, c], query: "/web").map(\.id), ["c"])

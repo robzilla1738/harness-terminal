@@ -3,8 +3,8 @@ import HarnessCore
 
 /// Workspace Overview (View ▸ Workspace Overview, ⌘⇧O): every tab as a live tile over the
 /// window, anything waiting on you first. Type to filter, arrows to move, ↩ to open, Esc to
-/// close. Previews are the panes' screen text fetched off the main thread; opening and
-/// refreshing never create a terminal view or resize a PTY.
+/// close. Each tile draws the tab's panes live with the terminal renderer (`TabThumbnailView`);
+/// opening and refreshing never create a terminal view or resize a PTY.
 @MainActor
 enum WorkspaceOverviewController {
     private static var panel: KeyablePanel?
@@ -54,14 +54,14 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
     private var all: [OverviewTab] = []
     private var shown: [OverviewTab] = []
     private var tiles: [OverviewTileView] = []
+    /// Every tab's tile, kept across filtering so a tab's thumbnail isn't rebuilt per keystroke.
+    private var tilesByID: [String: OverviewTileView] = [:]
     private var selected = 0
     private var columns = 3
-    private var previews: [SurfaceID: String] = [:]
     private var timer: Timer?
-    private var fetching = false
+    private var capturing = false
 
     private static let tileMinWidth: CGFloat = 300
-    private static let tileHeight: CGFloat = 210
     private static let gap: CGFloat = 16
 
     override init(frame frameRect: NSRect) {
@@ -126,18 +126,20 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
         ])
         all = WorkspaceOverviewBuilder.tabs(from: SessionCoordinator.shared.snapshot)
         rebuild(selectActive: true)
-        fetchPreviews()
+        refreshCaptures()
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.fetchPreviews() }
+            MainActor.assumeIsolated { self?.refreshCaptures() }
         }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Stops the capture refresh, and the live thumbnails with their tiles.
     func stop() {
         timer?.invalidate()
         timer = nil
+        tiles.forEach { $0.removeFromSuperview() }
     }
 
     override func layout() {
@@ -151,7 +153,8 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
         shown = WorkspaceOverviewBuilder.ordered(all, query: filterField.stringValue)
         tiles.forEach { $0.removeFromSuperview() }
         tiles = shown.enumerated().map { index, tab in
-            let tile = OverviewTileView(tab: tab)
+            let tile = tilesByID[tab.id] ?? OverviewTileView(tab: tab)
+            tilesByID[tab.id] = tile
             tile.onClick = { [weak self] in self?.open(index) }
             tile.onHover = { [weak self] in self?.select(index) }
             grid.addSubview(tile)
@@ -163,7 +166,6 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
             selected = min(selected, max(shown.count - 1, 0))
         }
         empty.isHidden = !shown.isEmpty
-        applyPreviews()
         updateSelection()
         needsLayout = true
     }
@@ -173,18 +175,19 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
         guard width > 0 else { return }
         columns = max(1, Int((width + Self.gap) / (Self.tileMinWidth + Self.gap)))
         let tileWidth = floor((width - Self.gap * CGFloat(columns - 1)) / CGFloat(columns))
+        let tileHeight = OverviewTileView.height(forWidth: tileWidth)
         for (index, tile) in tiles.enumerated() {
             let row = index / columns
             let column = index % columns
             tile.frame = NSRect(
                 x: CGFloat(column) * (tileWidth + Self.gap),
-                y: CGFloat(row) * (Self.tileHeight + Self.gap),
+                y: CGFloat(row) * (tileHeight + Self.gap),
                 width: tileWidth,
-                height: Self.tileHeight
+                height: tileHeight
             )
         }
         let rows = (tiles.count + columns - 1) / columns
-        grid.frame = NSRect(x: 0, y: 0, width: width, height: max(CGFloat(rows) * (Self.tileHeight + Self.gap) - Self.gap, 0))
+        grid.frame = NSRect(x: 0, y: 0, width: width, height: max(CGFloat(rows) * (tileHeight + Self.gap) - Self.gap, 0))
     }
 
     private func select(_ index: Int) {
@@ -210,37 +213,16 @@ private final class OverviewView: NSView, NSTextFieldDelegate, NSWindowDelegate 
         coordinator.selectTab(workspaceID: workspace, tabID: tab)
     }
 
-    // MARK: - Previews
+    // MARK: - Captures
 
-    /// Every pane's screen in color (the `vt` capture), from the daemon, off the main thread.
-    private func fetchPreviews() {
-        guard !fetching else { return }
-        fetching = true
-        let surfaces = shown.flatMap { $0.panes.compactMap(\.surfaceID) }
-        let endpoint = SessionCoordinator.shared.activeEndpoint
-        DispatchQueue.global(qos: .userInitiated).async {
-            let client = DaemonClient(endpoint: endpoint)
-            var texts: [SurfaceID: String] = [:]
-            for surface in surfaces {
-                // The rendered grid as styled runs, not `capturePane`'s raw byte replay.
-                let request = IPCRequest.captureFormatted(surfaceID: surface.uuidString, format: "vt", trim: true, unwrap: false)
-                if case let .text(text)? = try? client.request(request, timeout: 1) {
-                    texts[surface] = text
-                }
-            }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self.fetching = false
-                    self.previews.merge(texts) { $1 }
-                    self.applyPreviews()
-                }
-            }
-        }
-    }
-
-    private func applyPreviews() {
-        for (tab, tile) in zip(shown, tiles) {
-            tile.setPreview(tab.panes.compactMap(\.surfaceID).compactMap { previews[$0] })
+    /// Panes with a terminal draw themselves live; the rest refresh from the daemon's capture.
+    private func refreshCaptures() {
+        guard !capturing else { return }
+        capturing = true
+        TabThumbnailView.capture(tiles.flatMap(\.preview.capturedSurfaces)) { [weak self] captures in
+            guard let self else { return }
+            capturing = false
+            tiles.forEach { $0.preview.show(captures) }
         }
     }
 
@@ -288,19 +270,28 @@ private final class FlippedGridView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// One tab: icon tile, identity, session, a "Needs you" badge, and the panes' latest text.
+/// One tab: icon tile, identity, session, a "Needs you" badge, and its panes drawn live.
 @MainActor
 private final class OverviewTileView: NSView {
     var onClick: (() -> Void)?
     var onHover: (() -> Void)?
+    let preview: TabThumbnailView
     private let tile = IconTileView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
     private let badge = NSTextField(labelWithString: "Needs you")
-    private let preview = NSTextField(wrappingLabelWithString: "")
-    private let previewBox = NSView()
+
+    private static let inset = HarnessDesign.Spacing.lg
+    /// Preview height over width: about a terminal window's shape.
+    private static let previewAspect: CGFloat = 0.6
+
+    /// A tile's height at `width`: the header row, then a window-shaped preview.
+    static func height(forWidth width: CGFloat) -> CGFloat {
+        (3 * inset + HarnessDesign.iconTileSize + (width - 2 * inset) * previewAspect).rounded()
+    }
 
     init(tab: OverviewTab) {
+        preview = TabThumbnailView(root: tab.layout)
         super.init(frame: .zero)
         let c = HarnessChrome.current
         wantsLayer = true
@@ -324,21 +315,11 @@ private final class OverviewTileView: NSView {
         badge.textColor = c.attention
         badge.isHidden = !tab.needsYou
 
-        previewBox.wantsLayer = true
-        previewBox.layer?.cornerRadius = HarnessDesign.Radius.control
-        previewBox.layer?.backgroundColor = c.iconTileFill.withAlphaComponent(0.6).cgColor
-        preview.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
-        preview.textColor = c.textSecondary
-        preview.maximumNumberOfLines = 0
-        preview.lineBreakMode = .byClipping
-
-        for view in [tile, title, subtitle, badge, previewBox] {
+        for view in [tile, title, subtitle, badge, preview] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
-        preview.translatesAutoresizingMaskIntoConstraints = false
-        previewBox.addSubview(preview)
-        let inset = HarnessDesign.Spacing.lg
+        let inset = Self.inset
         NSLayoutConstraint.activate([
             tile.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
             tile.topAnchor.constraint(equalTo: topAnchor, constant: inset),
@@ -350,16 +331,11 @@ private final class OverviewTileView: NSView {
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -inset),
             badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
             badge.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
-            previewBox.topAnchor.constraint(equalTo: tile.bottomAnchor, constant: inset),
-            previewBox.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
-            previewBox.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
-            previewBox.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -inset),
-            preview.leadingAnchor.constraint(equalTo: previewBox.leadingAnchor, constant: HarnessDesign.Spacing.sm),
-            preview.trailingAnchor.constraint(equalTo: previewBox.trailingAnchor, constant: -HarnessDesign.Spacing.sm),
-            preview.bottomAnchor.constraint(equalTo: previewBox.bottomAnchor, constant: -HarnessDesign.Spacing.sm),
-            preview.topAnchor.constraint(greaterThanOrEqualTo: previewBox.topAnchor, constant: HarnessDesign.Spacing.sm),
+            preview.topAnchor.constraint(equalTo: tile.bottomAnchor, constant: inset),
+            preview.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            preview.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
+            preview.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -inset),
         ])
-        previewBox.layer?.masksToBounds = true
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel([tab.title, tab.sessionName, tab.needsYou ? "needs you" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
@@ -367,12 +343,6 @@ private final class OverviewTileView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
-
-    /// The last lines of each pane's screen, bottom-aligned like the terminal itself.
-    func setPreview(_ screens: [String]) {
-        let lines = screens.flatMap { VTPreviewText.lastLines($0, 12) }.suffix(12).joined(separator: "\n")
-        preview.attributedStringValue = VTPreviewText.attributed(lines, font: preview.font ?? .monospacedSystemFont(ofSize: 9, weight: .regular), foreground: HarnessChrome.current.textSecondary)
-    }
 
     func setSelected(_ selected: Bool) {
         let c = HarnessChrome.current

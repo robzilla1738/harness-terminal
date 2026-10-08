@@ -166,8 +166,8 @@ final class CraftSliceTests: XCTestCase {
 
     func testTabPeekKeepsTheLiveGridSize() {
         var peek = TabPeek(rows: 24, columns: 80, tabs: [
-            TabPeek.Tab(id: "a", title: "a", preview: "one", mark: nil),
-            TabPeek.Tab(id: "b", title: "b", preview: "two", mark: ProgramMark(
+            TabPeek.Tab(id: "a", title: "a", layout: .leaf(PaneLeaf()), mark: nil),
+            TabPeek.Tab(id: "b", title: "b", layout: .leaf(PaneLeaf()), mark: ProgramMark(
                 attention: .blocked, kind: nil, message: nil, app: "codex", progress: nil, fromRealReport: true
             )),
         ])
@@ -175,7 +175,7 @@ final class CraftSliceTests: XCTestCase {
         XCTAssertEqual(peek.phase, .peeking)
         peek.move(delta: 1)
         XCTAssertEqual(peek.selection, 1)
-        peek.replaceTabs(peek.tabs + [TabPeek.Tab(id: "c", title: "c", preview: "", mark: nil)])
+        peek.replaceTabs(peek.tabs + [TabPeek.Tab(id: "c", title: "c", layout: .leaf(PaneLeaf()), mark: nil)])
         peek.toggle(reduceMotion: false)
         XCTAssertEqual(peek.phase, .overview)
         XCTAssertEqual(peek.rows, 24)
