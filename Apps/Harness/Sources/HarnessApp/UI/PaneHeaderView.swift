@@ -5,7 +5,7 @@ import HarnessCore
 /// (`~/Code/app › nvim`), and split-right / split-down buttons. Double-click zooms the
 /// pane; right-click offers split, zoom, rename, and close.
 @MainActor
-final class PaneHeaderView: NSView {
+final class PaneHeaderView: NSView, NSDraggingSource {
     private let surfaceID: SurfaceID
     private let icon = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
@@ -143,12 +143,41 @@ final class PaneHeaderView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        dragOrigin = convert(event.locationInWindow, from: nil)
         if event.clickCount == 2 {
             focusPane()
             coordinator.zoomActivePane()
         } else {
             focusPane()
         }
+    }
+
+    // MARK: - Dragging the pane
+
+    private var dragOrigin: NSPoint?
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin = dragOrigin else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard hypot(point.x - origin.x, point.y - origin.y) > 4 else { return }
+        dragOrigin = nil
+        let item = NSDraggingItem(pasteboardWriter: PaneDrag.item(for: surfaceID))
+        item.setDraggingFrame(bounds, contents: snapshotImage())
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) { dragOrigin = nil }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+
+    private func snapshotImage() -> NSImage {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return NSImage(size: bounds.size) }
+        cacheDisplay(in: bounds, to: rep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+        return image
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

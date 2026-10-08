@@ -477,7 +477,7 @@ final class CommandIPCTranslatorTests: XCTestCase {
         let active = try XCTUnwrap(target.paneID)
         let spec = TargetSpec(pane: .byIndex(0), raw: ".0")
         guard case let .requests(reqs) = CommandIPCTranslator.translate(.movePane(direction: .vertical, source: spec), target: target),
-              case let .joinPane(src, dst, _) = reqs.first
+              case let .joinPane(src, dst, _, _) = reqs.first
         else { return XCTFail("expected joinPane from move-pane") }
         XCTAssertEqual(src, firstPane)
         XCTAssertEqual(dst, active)

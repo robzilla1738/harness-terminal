@@ -255,13 +255,16 @@ extension SessionEditor {
         }
     }
 
-    func insertSplit(_ node: inout PaneNode, at target: PaneID, with newLeaf: PaneLeaf, direction: SplitDirection) {
+    /// Split `target` in two. `.after` puts `newLeaf` right of / below it, `.before` left / above.
+    func insertSplit(_ node: inout PaneNode, at target: PaneID, with newLeaf: PaneLeaf, direction: SplitDirection, placement: SplitPlacement = .after) {
         switch node {
         case let .leaf(leaf) where leaf.id == target:
-            node = .branch(direction: direction, ratio: 0.5, first: .leaf(leaf), second: .leaf(newLeaf))
+            node = placement == .after
+                ? .branch(direction: direction, ratio: 0.5, first: .leaf(leaf), second: .leaf(newLeaf))
+                : .branch(direction: direction, ratio: 0.5, first: .leaf(newLeaf), second: .leaf(leaf))
         case .branch(let dir, let ratio, var first, var second):
-            insertSplit(&first, at: target, with: newLeaf, direction: direction)
-            insertSplit(&second, at: target, with: newLeaf, direction: direction)
+            insertSplit(&first, at: target, with: newLeaf, direction: direction, placement: placement)
+            insertSplit(&second, at: target, with: newLeaf, direction: direction, placement: placement)
             node = .branch(direction: dir, ratio: ratio, first: first, second: second)
         default:
             break

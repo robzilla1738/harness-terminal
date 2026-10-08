@@ -380,8 +380,9 @@ public enum HarnessAPI {
         ], required: ["with"]), object(["ok": bool("Applied")])),
         method("pane.move", "Move a pane next to another pane", object([
             "pane": string("Pane to move"), "to": string("Pane to split"),
-            "direction": enumString("horizontal or vertical", ["horizontal", "vertical"]),
-        ], required: ["to"]), object(["ok": bool("Applied")])),
+            "side": enumString("Where it lands next to `to` (default right)", ["left", "right", "above", "below"]),
+            "direction": enumString("horizontal or vertical, when no side is given (the pane goes after)", ["horizontal", "vertical"]),
+        ], required: ["to"]), object(["pane": string("The moved pane's new id")])),
         method("pane.detach", "Move a pane into its own new tab", object(["pane": string("Pane id or label")]), object(["tab": string("New tab id")])),
         method("pane.resize", "Move a pane's divider", object([
             "pane": string("Pane id or label"),
@@ -598,8 +599,16 @@ public enum HarnessAPI {
             return .request(.swapPanes(srcPaneID: try uuid(pane().paneID), dstPaneID: try uuid(other.paneID)))
         case "pane.move":
             let destination = try targets.pane(arguments["to"]?.string)
-            let layoutDirection = SplitDirection(rawValue: arguments["direction"]?.string ?? "horizontal") ?? .horizontal
-            return .request(.joinPane(sourcePaneID: try uuid(pane().paneID), destPaneID: try uuid(destination.paneID), direction: layoutDirection))
+            let zones: [String: PaneDropZone] = ["left": .left, "right": .right, "above": .top, "below": .bottom]
+            let zone = arguments["side"]?.string.flatMap { zones[$0] }
+            if arguments["side"] != nil, zone == nil {
+                throw APIPlanError(code: .badArguments, message: "side must be left, right, above, or below")
+            }
+            let layoutDirection = zone?.direction ?? SplitDirection(rawValue: arguments["direction"]?.string ?? "horizontal") ?? .horizontal
+            return .request(.joinPane(
+                sourcePaneID: try uuid(pane().paneID), destPaneID: try uuid(destination.paneID),
+                direction: layoutDirection, placement: zone?.placement ?? .after
+            ))
         case "pane.detach":
             return .request(.breakPane(paneID: try uuid(pane().paneID)))
         case "pane.resize":

@@ -82,6 +82,25 @@ final class SessionEditorPhase4Tests: XCTestCase {
         XCTAssertEqual(editor.snapshot.revision, revisionBefore, "no revision bump on a refused join")
     }
 
+    func testJoinPanePlacesBeforeOrAfterAndTakesALoneTabWithIt() throws {
+        var editor = SessionEditor()
+        let (ws, tabID, original) = try defaultTab(editor)
+        let second = try XCTUnwrap(editor.splitPane(in: ws, tabID: tabID, paneID: original, direction: .vertical))
+        let loneTab = try XCTUnwrap(editor.breakPane(paneID: second))
+        let lone = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession?.tabs.first { $0.id == loneTab }?.rootPane.allPaneIDs().first)
+
+        let joined = try XCTUnwrap(editor.joinPane(sourcePaneID: lone, destPaneID: original, direction: .horizontal, placement: .before))
+        let session = try XCTUnwrap(editor.snapshot.activeWorkspace?.activeSession)
+        XCTAssertFalse(session.tabs.contains { $0.id == loneTab }, "the emptied tab closes")
+        let tab = try XCTUnwrap(session.tabs.first { $0.id == tabID })
+        XCTAssertEqual(tab.rootPane.allPaneIDs(), [joined, original], "before puts it on the left")
+
+        // The last tab of a session can't be emptied this way.
+        let onlyTabSessionID = try XCTUnwrap(editor.addSession(to: ws))
+        let only = try XCTUnwrap(editor.snapshot.workspaces[0].sessions.first { $0.id == onlyTabSessionID }?.tabs.first?.rootPane.allPaneIDs().first)
+        XCTAssertNil(editor.joinPane(sourcePaneID: only, destPaneID: original, direction: .horizontal))
+    }
+
     func testJoinPaneRefusesSamePane() throws {
         var editor = SessionEditor()
         let (ws, tabID, original) = try defaultTab(editor)

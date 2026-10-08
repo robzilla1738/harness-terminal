@@ -4,6 +4,10 @@ import HarnessTerminalKit
 
 @MainActor
 final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate {
+    func tabBarDidReceivePane(_ surfaceID: SurfaceID, onTab tabID: TabID?) {
+        SessionCoordinator.shared.dropPane(surfaceID, ontoTab: tabID)
+    }
+
     private let tabBar = TerminalTabBarView()
     private let terminalHost = NSView()
     private var paneContainer: PaneContainerView?
@@ -567,11 +571,50 @@ final class PaneIslandView: NSView {
             ])
             self.header = header
         }
+        registerForDraggedTypes([PaneDrag.type])
         applyChrome()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: - Pane drops
+
+    private var dropHighlight: PaneDropHighlightView?
+
+    private func dropZone(_ info: NSDraggingInfo) -> PaneDropZone? {
+        guard let source = PaneDrag.surfaceID(in: info), source != surfaceID else { return nil }
+        return PaneDropZone.at(convert(info.draggingLocation, from: nil), in: bounds)
+    }
+
+    private func showDrop(_ zone: PaneDropZone?) -> NSDragOperation {
+        guard let zone else {
+            dropHighlight?.removeFromSuperview()
+            dropHighlight = nil
+            return []
+        }
+        if dropHighlight == nil {
+            let highlight = PaneDropHighlightView(frame: bounds)
+            highlight.autoresizingMask = [.width, .height]
+            addSubview(highlight, positioned: .above, relativeTo: nil)
+            dropHighlight = highlight
+        }
+        dropHighlight?.zone = zone
+        return .move
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { showDrop(dropZone(sender)) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { showDrop(dropZone(sender)) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { _ = showDrop(nil) }
+    override func draggingEnded(_ sender: NSDraggingInfo) { _ = showDrop(nil) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let zone = dropZone(sender)
+        _ = showDrop(nil)
+        guard let zone, let source = PaneDrag.surfaceID(in: sender) else { return false }
+        SessionCoordinator.shared.dropPane(source, onto: surfaceID, zone: zone)
+        return true
+    }
 
     func embed(_ host: NSView) {
         host.translatesAutoresizingMaskIntoConstraints = false

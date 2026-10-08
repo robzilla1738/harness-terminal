@@ -14,6 +14,8 @@ protocol TerminalTabBarDelegate: AnyObject {
     func tabBarDidRequestToggleSidebar()
     func tabBarDidRequestPeek()
     func tabBarDidRequestSessions(from anchor: NSView)
+    /// A dragged pane dropped on a tab (moves into it) or on empty bar space (nil: own tab).
+    func tabBarDidReceivePane(_ surfaceID: SurfaceID, onTab tabID: TabID?)
 }
 
 extension TerminalTabBarDelegate {
@@ -107,7 +109,52 @@ final class TerminalTabBarView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    // MARK: - Pane drops
+
+    /// The pill a dragged pane hovers; after a moment its tab is selected, so the pane can be
+    /// carried into that tab's splits.
+    private var dropHoverTab: TabID?
+    private var dropHoverWork: DispatchWorkItem?
+
+    private func pill(at info: NSDraggingInfo) -> TabPillView? {
+        let point = convert(info.draggingLocation, from: nil)
+        return orderedPills.first { !$0.isHidden && $0.frame.contains(point) }
+    }
+
+    private func trackPaneDrag(_ info: NSDraggingInfo) -> NSDragOperation {
+        guard PaneDrag.surfaceID(in: info) != nil else { return [] }
+        let hovered = pill(at: info)?.tabID
+        if hovered != dropHoverTab {
+            dropHoverWork?.cancel()
+            dropHoverTab = hovered
+            if let hovered, hovered != activeTabID {
+                let work = DispatchWorkItem { [weak self] in self?.delegate?.tabBarDidSelect(tabID: hovered) }
+                dropHoverWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+            }
+        }
+        return .move
+    }
+
+    private func endPaneDrag() {
+        dropHoverWork?.cancel()
+        dropHoverWork = nil
+        dropHoverTab = nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { trackPaneDrag(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { trackPaneDrag(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { endPaneDrag() }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { endPaneDrag() }
+        guard let surface = PaneDrag.surfaceID(in: sender) else { return false }
+        delegate?.tabBarDidReceivePane(surface, onTab: pill(at: sender)?.tabID)
+        return true
+    }
+
     private func setup() {
+        registerForDraggedTypes([PaneDrag.type])
         HarnessDesign.applyTabBarChrome(to: self)
 
         newTabButton.style = .glyph

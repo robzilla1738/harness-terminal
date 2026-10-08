@@ -176,3 +176,19 @@ final class AttentionRankTests: XCTestCase {
         XCTAssertEqual(AttentionRank.sorted(rows, rank: \.1, lastActivity: \.2).map(\.0), ["blocked", "new-working", "old-working", "idle"])
     }
 }
+
+final class PaneDropZoneTests: XCTestCase {
+    func testEdgesSplitAndTheMiddleSwaps() {
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 200)
+        XCTAssertEqual(PaneDropZone.at(CGPoint(x: 20, y: 100), in: bounds), .left)
+        XCTAssertEqual(PaneDropZone.at(CGPoint(x: 390, y: 100), in: bounds), .right)
+        XCTAssertEqual(PaneDropZone.at(CGPoint(x: 200, y: 190), in: bounds), .top)
+        XCTAssertEqual(PaneDropZone.at(CGPoint(x: 200, y: 10), in: bounds), .bottom)
+        XCTAssertEqual(PaneDropZone.at(CGPoint(x: 200, y: 100), in: bounds), .center)
+        XCTAssertEqual(PaneDropZone.left.direction, .horizontal)
+        XCTAssertEqual(PaneDropZone.left.placement, .before)
+        XCTAssertEqual(PaneDropZone.bottom.placement, .after)
+        XCTAssertNil(PaneDropZone.center.direction)
+        XCTAssertEqual(PaneDropZone.top.highlight(in: bounds), CGRect(x: 0, y: 100, width: 400, height: 100))
+    }
+}

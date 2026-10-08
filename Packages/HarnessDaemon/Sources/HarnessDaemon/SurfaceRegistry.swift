@@ -859,8 +859,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             commit()
             return .tabID(newTab)
-        case let .joinPane(source, dest, direction):
-            guard let newPane = editor.joinPane(sourcePaneID: source, destPaneID: dest, direction: direction) else {
+        case let .joinPane(source, dest, direction, placement):
+            guard let newPane = editor.joinPane(sourcePaneID: source, destPaneID: dest, direction: direction, placement: placement ?? .after) else {
                 return .error("Cannot join pane")
             }
             commit()

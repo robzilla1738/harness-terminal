@@ -1047,62 +1047,53 @@ public struct SessionEditor: Sendable {
     public mutating func joinPane(
         sourcePaneID: PaneID,
         destPaneID: PaneID,
-        direction: SplitDirection
+        direction: SplitDirection,
+        placement: SplitPlacement = .after
     ) -> PaneID? {
-        // Validate BOTH ends before mutating (the swapPanes pattern). The removal below writes
-        // into `snapshot` immediately, so failing the destination lookup afterwards would leave
-        // the source pane silently dropped from its tab — corruption that every read serves and
-        // the next unrelated commit persists. CLI/IPC pass arbitrary --src/--dst UUIDs here.
-        guard sourcePaneID != destPaneID else { return nil }
-        var destinationExists = false
-        var sourceJoinable = false
-        for workspace in snapshot.workspaces {
-            for session in workspace.sessions {
-                for tab in session.tabs {
-                    if leaf(in: tab.rootPane, paneID: destPaneID) != nil { destinationExists = true }
-                    if leaf(in: tab.rootPane, paneID: sourcePaneID) != nil {
-                        // A lone pane can't be joined away — it would orphan an empty tab.
-                        sourceJoinable = tab.rootPane.allPaneIDs().count > 1
-                    }
-                }
+        // Validate BOTH ends before mutating (the swapPanes pattern): failing the destination
+        // lookup after the removal would drop the source pane from its tab. CLI/IPC pass
+        // arbitrary ids here.
+        guard sourcePaneID != destPaneID,
+              let source = paneLocation(paneID: sourcePaneID),
+              paneLocation(paneID: destPaneID) != nil
+        else { return nil }
+        let sourceTab = snapshot.workspaces[source.workspaceIndex].sessions[source.sessionIndex].tabs[source.tabIndex]
+        guard let leaf = leaf(in: sourceTab.rootPane, paneID: sourcePaneID) else { return nil }
+        if sourceTab.rootPane.allPaneIDs().count > 1 {
+            var tab = sourceTab
+            _ = removePane(&tab.rootPane, target: sourcePaneID)
+            if tab.zoomedPaneID == sourcePaneID { tab.zoomedPaneID = nil }
+            repairActivePane(&tab, removed: sourcePaneID)
+            snapshot.workspaces[source.workspaceIndex].sessions[source.sessionIndex].tabs[source.tabIndex] = tab
+        } else {
+            // A pane alone in its tab takes the tab with it, unless that's the session's only
+            // tab (the session would be left with nothing to show).
+            var session = snapshot.workspaces[source.workspaceIndex].sessions[source.sessionIndex]
+            guard session.tabs.count > 1, !sourceTab.rootPane.allPaneIDs().contains(destPaneID) else { return nil }
+            session.tabs.remove(at: source.tabIndex)
+            if session.activeTabID == sourceTab.id {
+                session.activeTabID = session.tabs[min(source.tabIndex, session.tabs.count - 1)].id
             }
+            snapshot.workspaces[source.workspaceIndex].sessions[source.sessionIndex] = session
         }
-        guard destinationExists, sourceJoinable else { return nil }
-        var sourceLeaf: PaneLeaf?
-        for workspaceIndex in snapshot.workspaces.indices {
-            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
-                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
-                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
-                    if let leaf = leaf(in: tab.rootPane, paneID: sourcePaneID) {
-                        sourceLeaf = leaf
-                        if tab.rootPane.allPaneIDs().count > 1 {
-                            _ = removePane(&tab.rootPane, target: sourcePaneID)
-                            if tab.zoomedPaneID == sourcePaneID { tab.zoomedPaneID = nil }
-                            repairActivePane(&tab, removed: sourcePaneID)
-                            snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
-                        } else {
-                            // Source pane is the only one in its tab — joining
-                            // would orphan an empty tab. Refuse.
-                            return nil
-                        }
-                    }
-                }
-            }
-        }
-        guard let leaf = sourceLeaf else { return nil }
-        for workspaceIndex in snapshot.workspaces.indices {
-            for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
-                for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
-                    var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
-                    guard tab.rootPane.allPaneIDs().contains(destPaneID) else { continue }
-                    let newLeaf = PaneLeaf(id: UUID(), surfaceID: leaf.surfaceID, daemonSurfaceID: leaf.daemonSurfaceID)
-                    insertSplit(&tab.rootPane, at: destPaneID, with: newLeaf, direction: direction)
-                    // Focus follows the joined pane into the destination tab.
-                    tab.lastActivePaneID = tab.activePaneID
-                    tab.activePaneID = newLeaf.id
-                    snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
-                    bumpRevision()
-                    return newLeaf.id
+        guard let dest = paneLocation(paneID: destPaneID) else { return nil }
+        var tab = snapshot.workspaces[dest.workspaceIndex].sessions[dest.sessionIndex].tabs[dest.tabIndex]
+        let newLeaf = PaneLeaf(id: UUID(), surfaceID: leaf.surfaceID, daemonSurfaceID: leaf.daemonSurfaceID)
+        insertSplit(&tab.rootPane, at: destPaneID, with: newLeaf, direction: direction, placement: placement)
+        // Focus follows the joined pane into the destination tab.
+        tab.lastActivePaneID = tab.activePaneID
+        tab.activePaneID = newLeaf.id
+        snapshot.workspaces[dest.workspaceIndex].sessions[dest.sessionIndex].tabs[dest.tabIndex] = tab
+        bumpRevision()
+        return newLeaf.id
+    }
+
+    /// Where a pane lives, by index.
+    private func paneLocation(paneID: PaneID) -> (workspaceIndex: Int, sessionIndex: Int, tabIndex: Int)? {
+        for (w, workspace) in snapshot.workspaces.enumerated() {
+            for (s, session) in workspace.sessions.enumerated() {
+                if let t = session.tabs.firstIndex(where: { leaf(in: $0.rootPane, paneID: paneID) != nil }) {
+                    return (w, s, t)
                 }
             }
         }

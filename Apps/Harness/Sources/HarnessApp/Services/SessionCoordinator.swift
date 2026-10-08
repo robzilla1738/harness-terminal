@@ -927,6 +927,36 @@ final class SessionCoordinator: NSObject {
         syncFromDaemon()
     }
 
+    /// A pane dragged onto another: an edge splits the target with the dragged pane on that
+    /// side, the middle swaps them. The dragged pane may come from another tab.
+    func dropPane(_ source: SurfaceID, onto target: SurfaceID, zone: PaneDropZone) {
+        let tabs = snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+        guard let sourcePane = tabs.lazy.compactMap({ self.paneID(for: source, in: $0.rootPane) }).first,
+              let targetPane = tabs.lazy.compactMap({ self.paneID(for: target, in: $0.rootPane) }).first
+        else { return }
+        let request: IPCRequest = zone.direction.map {
+            .joinPane(sourcePaneID: sourcePane, destPaneID: targetPane, direction: $0, placement: zone.placement)
+        } ?? .swapPanes(srcPaneID: sourcePane, dstPaneID: targetPane)
+        if case let .error(message)? = requestDaemon(request) { DisplayMessage.show(message) }
+        syncFromDaemon()
+    }
+
+    /// A pane dropped on a tab moves into it, beside that tab's focused pane; dropped on empty
+    /// tab-bar space it gets a tab of its own.
+    func dropPane(_ source: SurfaceID, ontoTab tabID: TabID?) {
+        let tabs = snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+        guard let sourcePane = tabs.lazy.compactMap({ self.paneID(for: source, in: $0.rootPane) }).first else { return }
+        let request: IPCRequest
+        if let tabID, let tab = tabs.first(where: { $0.id == tabID }) {
+            guard let anchor = tab.activePaneID ?? tab.rootPane.allPaneIDs().first, anchor != sourcePane else { return }
+            request = .joinPane(sourcePaneID: sourcePane, destPaneID: anchor, direction: .horizontal, placement: .after)
+        } else {
+            request = .breakPane(paneID: sourcePane)
+        }
+        if case let .error(message)? = requestDaemon(request) { DisplayMessage.show(message) }
+        syncFromDaemon()
+    }
+
     private func paneID(for surfaceID: SurfaceID, in node: PaneNode) -> PaneID? {
         switch node {
         case let .leaf(leaf) where leaf.surfaceID == surfaceID:

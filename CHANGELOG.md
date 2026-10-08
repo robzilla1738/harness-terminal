@@ -65,6 +65,7 @@ Not a release. Local `main` carries this work so the next session starts from it
 - **The daemon is the session.** Quitting the app leaves the daemon up. A new attach replays the same grid. A second client can subscribe read-only (`subscribeSurfaceOutputReadOnly`): it sees output and its writes do not reach the child. Surface cwd, foreground command, and hooks survive reconnect.
 
 ### Added
+- **Drag panes by their header.** Drop on another pane's edge to split it with the dragged pane on that side, or on its middle to swap the two. Hover a tab to switch to it, drop on a tab to move the pane there, or drop on empty tab-bar space to give it its own tab. A pane alone in its tab can be moved too; its emptied tab closes. `pane.move` takes the same `side` (`left`, `right`, `above`, `below`), and `join-pane` requests carry the placement.
 - **Sessions get names.** A new session is called something like "drifting cedar" instead of "Session 4", so it's easy to say and to target (`-s cedar`). In the session switcher, ⌘R or a right-click renames the selected session in place.
 - **One attention order everywhere.** An explicit request for you, then anything blocked on you, then errors, finished work, running work, and idle, ties by most recent activity. The notch, the menu-bar agent list, and the Dock all use it.
 - **A Dock tile that shows your agents.** Up to four agents sit under the app icon, ringed red when blocked or failed, green when done, and in the accent color while working. The badge counts what needs you, not just waiting tabs.

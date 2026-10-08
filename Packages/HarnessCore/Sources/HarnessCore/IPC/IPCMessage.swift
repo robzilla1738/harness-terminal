@@ -129,7 +129,8 @@ public enum IPCRequest: Codable, Sendable {
     case previousLayout(tabID: UUID)
     case rotatePanes(tabID: UUID, forward: Bool)
     case breakPane(paneID: UUID)
-    case joinPane(sourcePaneID: UUID, destPaneID: UUID, direction: SplitDirection)
+    /// `placement` is optional so a request from an older client decodes (it means `.after`).
+    case joinPane(sourcePaneID: UUID, destPaneID: UUID, direction: SplitDirection, placement: SplitPlacement? = nil)
     case respawnPane(surfaceID: String, keepHistory: Bool)
     /// tmux `clear-history`: drop the surface's scrollback without respawning the process.
     case clearHistory(surfaceID: String)

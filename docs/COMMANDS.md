@@ -298,7 +298,7 @@ From inside a pane the daemon sets `HARNESS_SESSION`, `HARNESS_TAB`, `HARNESS_PA
 | `pane.split` | Split. `direction` is `horizontal` or `vertical` (default `vertical`). `command` is an executable path. `false` runs `/usr/bin/false`. |
 | `pane.view` | Everything about one pane in one call: ids, cwd, program, agent, size, program status, process tree. |
 | `pane.zoom` / `pane.focus` / `pane.label` / `pane.close` | Zoom, focus, rename the pane's tab, close. |
-| `pane.swap` / `pane.move` / `pane.detach` | Swap with `with`; move next to `to` (or a `direction` neighbour); break out into its own tab. |
+| `pane.swap` / `pane.move` / `pane.detach` | Swap with `with`; move next to `to` on a `side` (`left`, `right`, `above`, `below`; a pane alone in its tab takes the tab with it); break out into its own tab. |
 | `pane.resize` / `pane.focus_direction` | Move a divider (`direction`, `amount` cells); focus the neighbour in `direction`. |
 | `pane.write` / `pane.send_key` | Write text, or send key tokens. Cursor keys follow DECCKM. `hex: true` sends raw bytes. |
 | `pane.capture` | `text`, `html`, or `vt`. `trim` drops trailing whitespace. `unwrap` joins soft-wrapped rows. |
