@@ -138,6 +138,7 @@ These query the current Harness state and do not change your layout.
 | `list-windows [--session <name\|uuid>]` | Tabs across all sessions, or one session's. |
 | `list-panes [--tab <uuid>]` | Panes of the targeted (or active) tab, index-prefixed, active flagged. |
 | `has-session --session <name\|uuid>` | Scripting verb: exit `0` if it exists, `1` if not; prints nothing. |
+| `daemon-stats [--json]` | Daemon pid, version, uptime, surfaces, scrollback, clients, how many idle panes are parked and how small their history is held, and how long startup took (layout load, respawning surfaces, socket ready). A pane parks after a minute without output: its history is kept LZ4-compressed until it prints again. |
 | `list-commands` | Print the bindable command vocabulary. |
 | `list-agents [--waiting]` | List all running agents with state, age, and surface ID. `--waiting` filters to agents that need a response. |
 | `events` | Print session, pane, and agent events as JSON lines. |

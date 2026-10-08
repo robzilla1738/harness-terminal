@@ -11,6 +11,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 Not a release. Local `main` carries this work so the next session starts from it. `HarnessVersion.short` stays 1.12.1. The 1.13–1.17 names are feature slices in this unreleased work, not a version bump.
 
 ### Fixed
+- **Idle parking did what it said.** It dropped a grid that was only built on demand anyway and left the ring untouched; the history it claimed to hold was never written.
 - **Large scrollback no longer reattaches blank.** History used to replay as one JSON string, where every escape byte grows to six characters; past the 16 MiB frame cap the pane came back empty. Attach is now one request: history streams as binary frames in 1 MiB chunks, then live output follows with no gap and no duplicate.
 - **Reconnecting resumes instead of repainting.** A pane remembers the daemon's epoch and the last byte it painted. When its connection drops and comes back to the same daemon, it gets only what it missed: no reset, no flicker. A restarted daemon, or output that has scrolled out of the ring, still gets a full resync.
 - **A read-only watcher can't resize the pane.** Its size vote is ignored.
@@ -64,6 +65,7 @@ Not a release. Local `main` carries this work so the next session starts from it
 - **The daemon is the session.** Quitting the app leaves the daemon up. A new attach replays the same grid. A second client can subscribe read-only (`subscribeSurfaceOutputReadOnly`): it sees output and its writes do not reach the child. Surface cwd, foreground command, and hooks survive reconnect.
 
 ### Added
+- **Idle panes cost a fraction of their scrollback.** After a minute without output a pane's history is held LZ4-compressed; reading it (capture, attach) decompresses a copy, and the next output unpacks it. `daemon-stats` reports parked panes, their stored vs raw size, and startup timings (layout load, respawning surfaces, socket ready).
 - **Owner sizing you can see.** In `size-mode owner` the daemon tells every attached client whether it owns a pane's size. A window that doesn't stops resizing the PTY, its pane header says **Viewing at 120×40 · Take**, and Take Size (header, pane menu, palette) makes it the owner. A full-screen program keeps the owner's grid instead of being reflowed. `size-mode` now survives a daemon restart, and ownership changes emit `pane.owner_changed`.
 - **`attach` paints the screen, like tmux.** `harness-cli attach` shows the pane's current screen, with its alternate screen, cursor, and input modes, instead of dumping the scrollback into your terminal (`--history` keeps the old behavior). `--read-only` watches without typing or resizing.
 - **The whole API from Lua.** `harness.call(method, args)` and a generated function per method (`harness.pane.split{…}`, `harness.tab.create{…}`, `harness.session.list()`, …) run the same executor as `api call` and return tables, or `nil, message, code`. `harness.layout.pane/horizontal/vertical` build layouts, `harness.args` carries `do --args`, and `harness.log` writes to stderr and `show-messages`.

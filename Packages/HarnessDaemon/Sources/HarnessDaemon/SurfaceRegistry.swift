@@ -102,12 +102,15 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 versionBannerStore.markSeen()
             }
         }
+        var phase = DispatchTime.now()
         editor.snapshot = store.load()
         if editor.snapshot.workspaces.isEmpty {
             editor.snapshot = SessionSnapshot()
             try? store.saveImmediately(editor.snapshot)
         }
+        startupMillis["layout"] = Self.millis(since: &phase)
         ensureAllSnapshotSurfaces()
+        startupMillis["surfaces"] = Self.millis(since: &phase)
         // A first install has no layout to restore — the seeded default tab IS the first
         // surface the user ever sees, so the welcome banner lands there instead of waiting
         // for an explicit new-tab. Updates keep restored panes untouched (banner waits for
@@ -208,6 +211,23 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// every surface. The `Array` holds **strong references**, so a surface closed
     /// concurrently can't be deallocated mid-sum (its `scrollbackByteCount` stays a
     /// valid guarded read); the totals are mutually consistent with the copied set.
+    /// Time spent loading the layout and respawning its surfaces at startup.
+    public private(set) var startupMillis: [String: Double] = [:]
+
+    static func millis(since start: inout DispatchTime) -> Double {
+        let now = DispatchTime.now()
+        defer { start = now }
+        return Double(now.uptimeNanoseconds &- start.uptimeNanoseconds) / 1_000_000
+    }
+
+    /// Parked surfaces and their ring bytes, stored (compressed) and raw.
+    public var parkTelemetry: (count: Int, stored: Int, raw: Int) {
+        lock.lock()
+        let surfaces = Array(sessions.values)
+        lock.unlock()
+        return surfaces.compactMap(\.parkedFootprint).reduce((0, 0, 0)) { ($0.0 + 1, $0.1 + $1.stored, $0.2 + $1.raw) }
+    }
+
     public var surfaceTelemetry: (surfaceCount: Int, scrollbackBytes: Int) {
         acquireRegistryLock()
         let surfaces = Array(sessions.values)

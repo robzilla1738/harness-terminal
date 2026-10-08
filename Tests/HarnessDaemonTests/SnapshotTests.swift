@@ -73,6 +73,17 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(joined(small), joined(full) + joined(resumed), "chunking keeps every byte in order")
     }
 
+    func testParkedRingCompressesTerminalOutputAndRoundTrips() {
+        let output = Data((0 ..< 2_000).map { "\u{1b}[32mline \($0) of a long build log\u{1b}[0m\r\n" }.joined().utf8)
+        let ring = ParkedRing(sequence: 7, bytes: output)
+        XCTAssertEqual(ring.bytes, output)
+        XCTAssertEqual(ring.rawCount, output.count)
+        XCTAssertLessThan(ring.stored.count, output.count / 3, "terminal output compresses well")
+        let tiny = ParkedRing(sequence: 1, bytes: Data("x".utf8))
+        XCTAssertFalse(tiny.compressed, "bytes that don't shrink are kept as they are")
+        XCTAssertEqual(tiny.bytes, Data("x".utf8))
+    }
+
     func testCipherRoundTripAndFileKeyIsOwnerReadWrite() throws {
         let key = Data(repeating: 9, count: 32)
         let plain = Data("park-me".utf8)
@@ -137,6 +148,15 @@ final class SnapshotTests: XCTestCase {
         let frame = try XCTUnwrap(pty.screenFrame())
         XCTAssertTrue(screenText(frame).contains("park-me"))
         XCTAssertFalse(pty.gridIsResident, "serving the parked screen does not bring the grid back")
+
+        XCTAssertNotNil(pty.parkedFootprint, "the ring is held packed while parked")
+        XCTAssertTrue(pty.replay(fromSequence: nil).contains("park-me"), "reading a parked ring decompresses a copy")
+        XCTAssertNotNil(pty.parkedFootprint, "and leaves it parked")
+        pty.injectSyntheticOutput(Data("woke\n".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("woke") })
+        XCTAssertNil(pty.parkedFootprint, "output unparks the ring")
+        XCTAssertTrue(pty.replay(fromSequence: nil).contains("park-me\nwoke") || pty.replay(fromSequence: nil).contains("park-me\r\nwoke"),
+                      "the old bytes come back in front of the new ones")
 
         pty.setScrollbackPersistence(enabled: false)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))

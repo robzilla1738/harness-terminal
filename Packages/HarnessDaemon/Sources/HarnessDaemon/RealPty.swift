@@ -163,11 +163,9 @@ public final class RealPty: @unchecked Sendable {
     /// Last PTY read. Idle parking uses this, not a wall clock in the read loop.
     private var lastPTYReadAt = Date()
     private var idleGrid = IdleGrid()
-    /// History kept after the live ring is dropped. Replay reads this (or the
-    /// scrollback file) while parked. Restore puts it back and does not claim
-    /// the old process is still running.
-    private var parkedBlob: Data?
-    private var parkedSequence: UInt64 = 1
+    /// The ring while the surface is parked (idle), compressed. Readers decompress a copy;
+    /// the next PTY output puts it back into `scrollback`.
+    private var parked: ParkedRing?
     /// Authoritative grid. Touched only under `snapshotLock`, never from the PTY read loop.
     private let snapshotLock = NSLock()
     private let authoritative = AuthoritativeParser()
@@ -957,8 +955,8 @@ public final class RealPty: @unchecked Sendable {
     private func scrollbackData(includeHistory: Bool) -> Data {
         scrollbackLock.lock()
         defer { scrollbackLock.unlock() }
-        // Only the live entries (from `scrollbackHead`): the dead prefix is evicted scrollback.
-        let live = scrollback[scrollbackHead...]
+        // The parked ring plus the live entries (the dead prefix is evicted scrollback).
+        let live = replaySegmentsLocked()
         if includeHistory {
             return live.reduce(into: Data()) { $0.append($1.data) }
         }
@@ -1118,9 +1116,9 @@ public final class RealPty: @unchecked Sendable {
         return out
     }
 
-    /// After `threshold` seconds without a PTY read, write an encrypted snapshot
-    /// and drop the parsed grid. The byte ring and the child stay. The read loop
-    /// does not call this.
+    /// After `threshold` seconds without a PTY read: seal the screen to the park file (when
+    /// the surface persists), compress the byte ring into one blob, and drop the parsed grid.
+    /// The child keeps running. The read loop does not call this.
     func parkIfIdle(now: Date = Date(), threshold: TimeInterval = IdleGrid.defaultThreshold) {
         scrollbackLock.lock()
         let idleFor = now.timeIntervalSince(lastPTYReadAt)
@@ -1128,9 +1126,13 @@ public final class RealPty: @unchecked Sendable {
         let wasParked = model.parked
         model.tick(secondsSincePTYRead: idleFor, threshold: threshold)
         idleGrid = model
+        guard model.parked, !wasParked else {
+            scrollbackLock.unlock()
+            return
+        }
         let ring = ringLocked()
+        packRingLocked()
         scrollbackLock.unlock()
-        guard model.parked, !wasParked else { return }
 
         if !scrollbackPersistenceEnabled {
             deleteParkFile()
@@ -1148,21 +1150,34 @@ public final class RealPty: @unchecked Sendable {
         releaseAuthoritativeGrid()
     }
 
-    /// Put a previously extracted blob back into the live ring. Caller holds `scrollbackLock`.
+    /// Compress the live ring into `parked`. Caller holds `scrollbackLock`.
+    private func packRingLocked() {
+        let live = scrollback[scrollbackHead...]
+        guard parked == nil, let first = live.first else { return }
+        let bytes = live.reduce(into: Data()) { $0.append($1.data) }
+        parked = ParkedRing(sequence: first.sequence, bytes: bytes)
+        scrollback.removeAll(keepingCapacity: false)
+        scrollbackHead = 0
+        scrollbackBytes -= bytes.count
+    }
+
+    /// Put the parked ring back in front of the live one. Caller holds `scrollbackLock`.
     private func mergeParkedHistoryLocked() {
-        if let blob = parkedBlob, !blob.isEmpty {
-            scrollback.insert(ScrollbackEntry(sequence: parkedSequence, data: blob), at: scrollbackHead)
-            scrollbackBytes += blob.count
+        if let ring = parked {
+            let bytes = ring.bytes
+            if !bytes.isEmpty {
+                scrollback.insert(ScrollbackEntry(sequence: ring.sequence, data: bytes), at: scrollbackHead)
+                scrollbackBytes += bytes.count
+            }
         }
-        parkedBlob = nil
+        parked = nil
         idleGrid.restore()
     }
 
-    func restoreParkedGrid() {
-        scrollbackLock.lock()
-        defer { scrollbackLock.unlock() }
-        guard idleGrid.parked else { return }
-        mergeParkedHistoryLocked()
+    /// Ring bytes held compressed while parked, and their uncompressed size.
+    var parkedFootprint: (stored: Int, raw: Int)? {
+        scrollbackLock.lock(); defer { scrollbackLock.unlock() }
+        return parked.map { ($0.stored.count, $0.rawCount) }
     }
 
     var presentsProcessAsRunning: Bool {
@@ -1254,8 +1269,8 @@ public final class RealPty: @unchecked Sendable {
 
     private func ringLocked() -> [SnapshotByteSpan] {
         var spans: [SnapshotByteSpan] = []
-        if let blob = parkedBlob, !blob.isEmpty {
-            spans.append(SnapshotByteSpan(sequence: parkedSequence, data: blob))
+        if let ring = parked {
+            spans.append(SnapshotByteSpan(sequence: ring.sequence, data: ring.bytes))
         }
         for entry in scrollback[scrollbackHead...] {
             spans.append(SnapshotByteSpan(sequence: entry.sequence, data: entry.data))
@@ -1338,8 +1353,8 @@ public final class RealPty: @unchecked Sendable {
     /// Live ring plus parked history, in sequence order. Caller holds `scrollbackLock`.
     private func replaySegmentsLocked() -> [ScrollbackReplaySegment] {
         var segments: [ScrollbackReplaySegment] = []
-        if let blob = parkedBlob, !blob.isEmpty {
-            segments.append(ScrollbackReplaySegment(sequence: parkedSequence, data: blob))
+        if let ring = parked {
+            segments.append(ScrollbackReplaySegment(sequence: ring.sequence, data: ring.bytes))
         }
         segments.append(contentsOf: scrollback[scrollbackHead...].map {
             ScrollbackReplaySegment(sequence: $0.sequence, data: $0.data)

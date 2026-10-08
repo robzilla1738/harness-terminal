@@ -88,6 +88,8 @@ public final class DaemonServer: @unchecked Sendable {
     /// This daemon's boot id. A client may resume an attach only within the same epoch:
     /// a restarted daemon numbers its ring afresh.
     private let epoch = UUID().uuidString
+    /// Startup phases the server itself times (`listen`); the registry times the rest.
+    private var startupMillis: [String: Double] = [:]
 
     /// `enableVersionBanner` is passed by the real daemon entry point only (`main.swift`):
     /// the first-run / what's-new banner is daemon policy, not something every embedded or
@@ -139,6 +141,8 @@ public final class DaemonServer: @unchecked Sendable {
     }
 
     public func start() throws {
+        var phase = DispatchTime.now()
+        defer { startupMillis["listen"] = SurfaceRegistry.millis(since: &phase) }
         try HarnessPaths.ensureDirectories()
         if FileManager.default.fileExists(atPath: HarnessPaths.socketURL.path) {
             // Stale-socket recovery ordering: consult the PID file FIRST. If it names a dead
@@ -556,6 +560,7 @@ public final class DaemonServer: @unchecked Sendable {
         case .daemonStats:
             let telemetry = registry.surfaceTelemetry
             let totalSubs = outputSubscriptions.values.reduce(0) { $0 + $1.count }
+            let parked = registry.parkTelemetry
             let stats = DaemonStats(
                 pid: getpid(),
                 uptimeSeconds: Date().timeIntervalSince(startedAt),
@@ -566,7 +571,11 @@ public final class DaemonServer: @unchecked Sendable {
                 snapshotRevision: registry.revision,
                 version: HarnessVersion.short,
                 build: HarnessVersion.build,
-                capabilities: [DaemonStats.attachStream]
+                capabilities: [DaemonStats.attachStream],
+                parkedSurfaceCount: parked.count,
+                parkedStoredBytes: parked.stored,
+                parkedRawBytes: parked.raw,
+                startupMillis: registry.startupMillis.merging(startupMillis) { $1 }
             )
             return .daemonStats(stats)
         default:

@@ -231,6 +231,12 @@ extension HarnessCLI {
             print("clients: \(stats.clientCount)")
             print("subscribers: \(stats.subscriberCount)")
             print("snapshot-revision: \(stats.snapshotRevision)")
+            if let count = stats.parkedSurfaceCount, count > 0 {
+                print("parked: \(count) surfaces, \(stats.parkedStoredBytes ?? 0) bytes held for \(stats.parkedRawBytes ?? 0)")
+            }
+            if let phases = stats.startupMillis, !phases.isEmpty {
+                print("startup: " + phases.sorted { $0.key < $1.key }.map { String(format: "%@ %.0fms", $0.key, $0.value) }.joined(separator: ", "))
+            }
         }
     }
 

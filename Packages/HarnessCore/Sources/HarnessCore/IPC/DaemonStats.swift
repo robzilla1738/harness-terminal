@@ -18,6 +18,12 @@ public struct DaemonStats: Codable, Sendable {
     public var build: Int?
     /// Protocol features beyond the baseline (`attach-stream`). Nil from older daemons.
     public var capabilities: [String]?
+    /// Idle surfaces whose ring is held compressed, and that ring's size stored vs raw.
+    public var parkedSurfaceCount: Int?
+    public var parkedStoredBytes: Int?
+    public var parkedRawBytes: Int?
+    /// Milliseconds spent in each startup phase (`layout`, `surfaces`, `listen`).
+    public var startupMillis: [String: Double]?
 
     public init(
         pid: Int32,
@@ -29,7 +35,11 @@ public struct DaemonStats: Codable, Sendable {
         snapshotRevision: Int,
         version: String? = nil,
         build: Int? = nil,
-        capabilities: [String]? = nil
+        capabilities: [String]? = nil,
+        parkedSurfaceCount: Int? = nil,
+        parkedStoredBytes: Int? = nil,
+        parkedRawBytes: Int? = nil,
+        startupMillis: [String: Double]? = nil
     ) {
         self.pid = pid
         self.uptimeSeconds = uptimeSeconds
@@ -41,6 +51,10 @@ public struct DaemonStats: Codable, Sendable {
         self.version = version
         self.build = build
         self.capabilities = capabilities
+        self.parkedSurfaceCount = parkedSurfaceCount
+        self.parkedStoredBytes = parkedStoredBytes
+        self.parkedRawBytes = parkedRawBytes
+        self.startupMillis = startupMillis
     }
 }
 
