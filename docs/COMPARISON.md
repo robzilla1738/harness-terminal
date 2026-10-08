@@ -45,7 +45,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | VoiceOver | Tabs, panes, focus announcements. | VoiceOver in SuperSplit |
 | Kitty graphics | Direct, file, temp-file, and shared-memory transmission; place-many; every delete target; Unicode placeholders (images that live in text, so they survive tmux and editors). Not yet: animation. | 100% (libghostty) |
 | Kitty keyboard, OSC 52 | Yes; clipboard reads opt-in (`allow-clipboard-read`). | Yes |
-| Rebind from the palette | Not yet (bind with `bind-key` or Lua). | — |
+| Rebind from the palette | Right-click any action ▸ Change Shortcut…; conflicts with menu items and other actions are flagged. | — |
 
 ## Remote
 

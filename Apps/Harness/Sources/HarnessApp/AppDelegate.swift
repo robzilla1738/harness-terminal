@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notchController = NotchPanelController.shared
         notchController?.start()
         PrefixKeymap.shared.install()
+        PaletteShortcuts.shared.reload()
         QuickTerminalController.shared.start()
         SurfaceShellTracker.shared.start()
         // Secure keyboard entry: take the process-global keylogging lock while frontmost iff the

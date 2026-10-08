@@ -167,6 +167,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Per-agent brand color overrides keyed by `AgentKind.rawValue`.
     /// Missing keys use the built-in agent default.
     public var agentColorOverrides: [String: String]
+    /// Shortcuts assigned from the command palette: action id → `cmd-shift-z` style chord.
+    public var paletteShortcuts: [String: String]
     /// Color of the 1px hairline divider between sidebar and content (and any
     /// other in-window divider line). nil → derive from the theme.
     public var dividerHex: String?
@@ -417,6 +419,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         cursorTextHex: String? = nil,
         paletteHex: [String?] = Array(repeating: nil, count: 16),
         agentColorOverrides: [String: String] = [:],
+        paletteShortcuts: [String: String] = [:],
         // nil = derive from theme (dark themes resolve to a quiet #1E1E1E hairline; see
         // MainSplitViewController.resolvedDividerColor). A pinned value would override that
         // on every theme, so leave it unset.
@@ -498,6 +501,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.cursorTextHex = cursorTextHex
         self.paletteHex = HarnessSettings.normalizedPalette(paletteHex)
         self.agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColorOverrides)
+        self.paletteShortcuts = paletteShortcuts
         self.dividerHex = dividerHex
         self.statusLineHex = statusLineHex
         self.windowBorderHex = windowBorderHex
@@ -759,6 +763,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         )
         let agentColors = try container.decodeIfPresent([String: String].self, forKey: .agentColorOverrides) ?? fallback.agentColorOverrides
         agentColorOverrides = HarnessSettings.normalizedAgentColorOverrides(agentColors)
+        paletteShortcuts = try container.decodeIfPresent([String: String].self, forKey: .paletteShortcuts) ?? [:]
         dividerHex = try container.decodeIfPresent(String.self, forKey: .dividerHex)
         statusLineHex = try container.decodeIfPresent(String.self, forKey: .statusLineHex)
         windowBorderHex = try container.decodeIfPresent(String.self, forKey: .windowBorderHex)

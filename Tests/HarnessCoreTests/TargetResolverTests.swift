@@ -128,10 +128,11 @@ final class TargetContextTests: XCTestCase {
             ScriptBindingRecord(spec: "cmd+k", action: "clear", layer: ScriptLayer.configFile.rawValue, source: "init.lua"),
             ScriptBindingRecord(spec: "cmd+r", enter: "resize", layer: ScriptLayer.recorder.rawValue, source: "app"),
         ])
-        let rows = KeymapRow.rows(tables: KeyTableSet(tables: []), manifest: manifest)
+        let rows = KeymapRow.rows(tables: KeyTableSet(tables: []), manifest: manifest, palette: ["action.zoomPane": "cmd-shift-z"])
         XCTAssertEqual(rows, [
             KeymapRow(key: "cmd+k", action: "clear", args: "", source: "config"),
             KeymapRow(key: "cmd+r", action: "enter-mode", args: "resize", source: "app"),
+            KeymapRow(key: "cmd-shift-z", action: "action.zoomPane", args: "", source: "palette"),
         ])
     }
 }

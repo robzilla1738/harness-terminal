@@ -44,7 +44,7 @@ enum CommandPaletteController {
 
     static func present(relativeTo parent: NSWindow?) {
         panel?.close()
-        let controller = PaletteViewController(actions: buildActions(), recentIDs: loadRecents())
+        let controller = PaletteViewController(actions: withAssignedShortcuts(buildActions()), recentIDs: loadRecents())
         let panel = KeyablePanel(
             contentRect: NSRect(x: 0, y: 0, width: 620, height: 440),
             styleMask: [.nonactivatingPanel, .borderless],
@@ -87,12 +87,33 @@ enum CommandPaletteController {
         controller.focusSearch()
     }
 
+    /// Run a palette action by id (a shortcut assigned to it). Unknown ids do nothing.
+    static func run(actionID: String) {
+        guard let action = buildActions().first(where: { $0.id == actionID }) else { return }
+        recordUsage(actionID)
+        action.handler()
+    }
+
+    static func title(ofAction actionID: String) -> String? {
+        buildActions().first { $0.id == actionID }?.title
+    }
+
     static func recordUsage(_ actionID: String) {
         var current = loadRecents()
         current.removeAll { $0 == actionID }
         current.insert(actionID, at: 0)
         if current.count > recentLimit { current = Array(current.prefix(recentLimit)) }
         UserDefaults.standard.set(current, forKey: recentDefaultsKey)
+    }
+
+    /// Show a shortcut assigned from the palette in place of the action's built-in hint.
+    private static func withAssignedShortcuts(_ actions: [PaletteAction]) -> [PaletteAction] {
+        actions.map { action in
+            guard let assigned = PaletteShortcuts.shared.shortcut(for: action.id) else { return action }
+            return PaletteAction(id: action.id, title: action.title, subtitle: action.subtitle, symbol: action.symbol,
+                                 shortcut: assigned.displayString, section: action.section,
+                                 searchOnly: action.searchOnly, handler: action.handler)
+        }
     }
 
     private static func loadRecents() -> [String] {
@@ -580,7 +601,7 @@ private enum FuzzyMatcher {
 
 @MainActor
 final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate,
-    NSTextFieldDelegate, NSWindowDelegate
+    NSTextFieldDelegate, NSWindowDelegate, NSMenuDelegate
 {
     private let searchField = NSTextField()
     private let tableView = NSTableView()
@@ -664,6 +685,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         tableView.action = #selector(activate)
         tableView.doubleAction = #selector(activate)
         tableView.target = self
+        tableView.menu = makeShortcutMenu()
         tableView.translatesAutoresizingMaskIntoConstraints = false
 
         scrollView.documentView = tableView
@@ -936,6 +958,46 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         case let .item(action):
             return PaletteItemView(action: action, query: searchField.stringValue)
         }
+    }
+
+    // MARK: - Shortcuts
+
+    /// Right-click an action: give it a shortcut, or take one away.
+    private func makeShortcutMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let row = tableView.clickedRow
+        guard row >= 0, row < rows.count, case let .item(action) = rows[row], action.section != .recent else { return }
+        let change = NSMenuItem(title: "Change Shortcut…", action: #selector(changeShortcut(_:)), keyEquivalent: "")
+        change.target = self
+        change.representedObject = action.id
+        menu.addItem(change)
+        if PaletteShortcuts.shared.shortcut(for: action.id) != nil {
+            let remove = NSMenuItem(title: "Remove Shortcut", action: #selector(removeShortcut(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = action.id
+            menu.addItem(remove)
+        }
+    }
+
+    @objc private func changeShortcut(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let action = allActions.first(where: { $0.id == id })
+        else { return }
+        let parent = view.window?.parent ?? NSApp.mainWindow
+        view.window?.close()
+        ShortcutRecorderPanel.present(actionID: id, title: action.title, over: parent)
+    }
+
+    @objc private func removeShortcut(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        PaletteShortcuts.shared.set(nil, for: id)
+        view.window?.close()
     }
 
     @objc private func activate() {

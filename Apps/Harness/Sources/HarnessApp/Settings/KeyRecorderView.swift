@@ -173,7 +173,7 @@ final class KeyRecorderView: NSView {
         return true
     }
 
-    private static func keyModifiers(from flags: NSEvent.ModifierFlags) -> KeySpec.Modifiers {
+    static func keyModifiers(from flags: NSEvent.ModifierFlags) -> KeySpec.Modifiers {
         var modifiers: KeySpec.Modifiers = []
         if flags.contains(.control) { modifiers.insert(.control) }
         if flags.contains(.option) { modifiers.insert(.option) }

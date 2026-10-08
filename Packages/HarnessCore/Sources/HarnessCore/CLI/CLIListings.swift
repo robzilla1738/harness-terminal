@@ -106,10 +106,11 @@ public struct KeymapRow: Encodable, Equatable, Sendable {
     public var key: String
     public var action: String
     public var args: String
-    /// `keybindings` (tmux-style tables), or the Lua layer: `default`, `config`, `app`.
+    /// `keybindings` (tmux-style tables), `palette` (assigned in the command palette), or the
+    /// Lua layer: `default`, `config`, `app`.
     public var source: String
 
-    public static func rows(tables: KeyTableSet, manifest: ScriptManifest?) -> [KeymapRow] {
+    public static func rows(tables: KeyTableSet, manifest: ScriptManifest?, palette: [String: String] = [:]) -> [KeymapRow] {
         var rows: [KeymapRow] = []
         for table in tables.tableList {
             for binding in table.bindings {
@@ -130,6 +131,9 @@ public struct KeymapRow: Encodable, Equatable, Sendable {
                 (action, args) = (record.action ?? "", "")
             }
             rows.append(KeymapRow(key: record.spec, action: action, args: args, source: layerName(record.layer)))
+        }
+        for (actionID, chord) in palette.sorted(by: { $0.key < $1.key }) {
+            rows.append(KeymapRow(key: chord, action: actionID, args: "", source: "palette"))
         }
         return rows
     }

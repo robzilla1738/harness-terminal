@@ -102,6 +102,7 @@ These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefi
 | Workspace Overview (live tile grid) | `⌘⇧O` |
 | Jump to notification | `⌘⇧U` |
 | Tab peek | `⌃⌘P` |
+| Give a palette action its own shortcut | right-click it in the palette ▸ Change Shortcut… |
 | Go to Directory (folder browser on the pane's daemon: ↩ cd, ⌘↩ new tab, ⌥↩ insert path, → open, ← up) | `⌥⌘G` |
 | Settings | `⌘,` |
 | Enter Full Screen (native, macOS Space transition) | `⌃⌘F` |

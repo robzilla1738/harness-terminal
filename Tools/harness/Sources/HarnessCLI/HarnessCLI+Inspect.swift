@@ -138,7 +138,8 @@ extension HarnessCLI {
 
     /// `keymap [--json]`: every key from keybindings.json and the Lua config.
     static func handleKeymap(_ args: [String]) throws {
-        let rows = KeymapRow.rows(tables: KeybindingsStore.load(), manifest: ScriptStore.load())
+        let rows = KeymapRow.rows(tables: KeybindingsStore.load(), manifest: ScriptStore.load(),
+                                  palette: HarnessSettings.load().paletteShortcuts)
         try emit(rows, args) {
             print(TextTable.render(["KEY", "ACTION", "ARGS", "SOURCE"], rows.map { [$0.key, $0.action, $0.args, $0.source] }))
         }
