@@ -7,12 +7,15 @@ final class SettingsViewControllerFollowSystemThemeTests: XCTestCase {
 
         XCTAssertTrue(source.contains("private let systemLightThemePopup = HarnessSelect(frame: .zero)"))
         XCTAssertTrue(source.contains("private let systemDarkThemePopup = HarnessSelect(frame: .zero)"))
-        XCTAssertTrue(source.contains("settingsRow(\"Light Theme\", systemLightThemePopup)"))
-        XCTAssertTrue(source.contains("settingsRow(\"Dark Theme\", systemDarkThemePopup)"))
-        XCTAssertTrue(source.contains("let followsSystem = selectedAppearanceMode == .macOSSystem"))
-        XCTAssertTrue(source.contains("row.isHidden = !followsSystem"))
-        XCTAssertTrue(source.contains("systemLightThemePopup.isEnabled = followsSystem"))
-        XCTAssertTrue(source.contains("systemDarkThemePopup.isEnabled = followsSystem"))
+        XCTAssertTrue(source.contains("settingsRow(\"Light theme\", systemLightThemePopup)"))
+        XCTAssertTrue(source.contains("settingsRow(\"Dark theme\", systemDarkThemePopup)"))
+        // Theme shows one picker; Light shows the light half; Auto (follow macOS) shows both.
+        let availability = try sourceBlock(named: "updateSystemThemePickerAvailability", in: source)
+        XCTAssertTrue(availability.contains("let followsSystem = mode == .macOSSystem"))
+        XCTAssertTrue(availability.contains("setRow(themeRow, hidden: mode != .theme)"))
+        XCTAssertTrue(availability.contains("setRow(lightThemeRow, hidden: mode == .theme)"))
+        XCTAssertTrue(availability.contains("setRow(darkThemeRow, hidden: !followsSystem)"))
+        XCTAssertTrue(availability.contains("systemDarkThemePopup.isEnabled = followsSystem"))
     }
 
     func testSystemThemeSelectorsPersistWithoutMutatingThemeNameAndClearOverrides() throws {
@@ -167,7 +170,7 @@ final class SettingsViewControllerFollowSystemThemeTests: XCTestCase {
             systemDarkThemeName: ""
         )
         seedUnsetSystemThemeNames(&seeded, selectedThemeName: "Dracula", validThemeNames: ["Dracula"])
-        XCTAssertEqual(seeded.systemLightThemeName, "Zenwritten Light")
+        XCTAssertEqual(seeded.systemLightThemeName, "Harness Light")
         XCTAssertEqual(seeded.systemDarkThemeName, "Dracula")
 
         var preserved = HarnessSettings(
@@ -209,7 +212,7 @@ final class SettingsViewControllerFollowSystemThemeTests: XCTestCase {
         validThemeNames: Set<String>
     ) {
         if settings.systemLightThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            settings.systemLightThemeName = "Zenwritten Light"
+            settings.systemLightThemeName = "Harness Light"
         }
         if settings.systemDarkThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            validThemeNames.contains(selectedThemeName) {

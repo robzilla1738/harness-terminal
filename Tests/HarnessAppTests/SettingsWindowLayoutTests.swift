@@ -1,0 +1,112 @@
+import AppKit
+import XCTest
+@testable import HarnessApp
+import HarnessCore
+
+/// Every Settings pane lays out cleanly at the window's default and minimum sizes, in the dark
+/// default and in light mode: no ambiguous layout, nothing past the page edge, no wrapped label
+/// cut short.
+@MainActor
+final class SettingsWindowLayoutTests: XCTestCase {
+    override class func setUp() {
+        super.setUp()
+        // Settings reads and writes the shared coordinator's store. Point it at a scratch home
+        // (short, so the socket path fits) before anything touches it, and leave it there: a
+        // later save must never land in the real settings file.
+        setenv("HARNESS_HOME", "/tmp/hst-\(UUID().uuidString.prefix(6))", 1)
+        _ = NSApplication.shared
+    }
+
+    func testEveryPaneLaysOutCleanly() {
+        for mode in [HarnessAppearanceMode.theme, .light] {
+            var settings = HarnessSettings()
+            settings.appearanceMode = mode
+            SessionCoordinator.shared.settings = settings
+            SessionCoordinator.shared.applySettingsToHosts()
+            XCTAssertEqual(HarnessChrome.current.isDark, mode == .theme)
+            for size in [NSSize(width: 940, height: 680), NSSize(width: 840, height: 600)] {
+                let controller = SettingsViewController()
+                let window = NSWindow(contentViewController: controller)
+                window.setContentSize(size)
+                for pane in SettingsPane.allCases {
+                    controller.showPage(pane)
+                    window.layoutIfNeeded()
+                    for problem in layoutProblems(in: controller.view) {
+                        XCTFail("\(pane.title) at \(Int(size.width))×\(Int(size.height)), \(mode): \(problem)")
+                    }
+                }
+                window.close()
+            }
+        }
+    }
+
+    func testToggleAndSegmentAnswerTheKeyboardAndVoiceOver() {
+        let target = ActionCounter()
+        let toggle = HarnessToggle(frame: .zero)
+        toggle.target = target
+        toggle.action = #selector(ActionCounter.fire)
+        XCTAssertTrue(toggle.accessibilityPerformPress())
+        XCTAssertEqual(toggle.state, .on)
+        toggle.keyDown(with: key(" ", code: 49))
+        XCTAssertEqual(toggle.state, .off)
+
+        let segment = HarnessSegmented(frame: .zero)
+        segment.setSegments(["Block", "Beam", "Underline"])
+        segment.target = target
+        segment.action = #selector(ActionCounter.fire)
+        segment.keyDown(with: key("", code: 124))
+        XCTAssertEqual(segment.titleOfSelectedItem, "Beam")
+        XCTAssertTrue(segment.accessibilityPerformDecrement())
+        XCTAssertEqual(segment.titleOfSelectedItem, "Block")
+        _ = segment.accessibilityPerformDecrement() // already first: stays, sends nothing
+        XCTAssertEqual(segment.titleOfSelectedItem, "Block")
+        XCTAssertEqual(target.count, 4)
+    }
+
+    func testSegmentsAreWideEnoughForTheirTitles() {
+        let segment = HarnessSegmented(frame: .zero)
+        segment.setSegments(["Comfortable", "Compact"])
+        let label = NSTextField(labelWithString: "Comfortable")
+        label.font = .systemFont(ofSize: 11.5, weight: .medium)
+        XCTAssertGreaterThanOrEqual(segment.intrinsicContentSize.width / 2, label.intrinsicContentSize.width + 8)
+    }
+
+    private func layoutProblems(in root: NSView) -> [String] {
+        guard let doc = descendants(of: root).compactMap({ $0 as? NSScrollView }).first?.documentView else {
+            return ["no page"]
+        }
+        var problems: [String] = []
+        for view in descendants(of: doc) where !view.isHiddenOrHasHiddenAncestor {
+            let frame = view.convert(view.bounds, to: doc)
+            if frame.maxX > doc.bounds.maxX + 0.5 || frame.minX < -0.5 {
+                problems.append("\(type(of: view)) runs past the page edge (\(frame))")
+            }
+            if view.hasAmbiguousLayout {
+                problems.append("\(type(of: view)) has an ambiguous layout")
+            }
+            if let label = view as? NSTextField, !label.isEditable, label.cell?.wraps == true,
+               label.intrinsicContentSize.height > label.bounds.height + 1 {
+                problems.append("“\(label.stringValue.prefix(40))” is clipped")
+            }
+        }
+        return problems
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap(descendants)
+    }
+
+    private func key(_ characters: String, code: UInt16) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: false, keyCode: code
+        )!
+    }
+}
+
+@MainActor
+private final class ActionCounter: NSObject {
+    var count = 0
+    @objc func fire() { count += 1 }
+}

@@ -2850,6 +2850,8 @@ enum DesktopNotifier {
     /// The current system authorization status, on the main actor — drives the Settings
     /// permission indicator so the user can tell whether macOS is allowing alerts at all.
     static func authorizationStatus(_ completion: @escaping @MainActor (UNAuthorizationStatus) -> Void) {
+        // UNUserNotificationCenter throws outside an app bundle (a unit test host, `swift run`).
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return }
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             let status = settings.authorizationStatus
             DispatchQueue.main.async { MainActor.assumeIsolated { completion(status) } }

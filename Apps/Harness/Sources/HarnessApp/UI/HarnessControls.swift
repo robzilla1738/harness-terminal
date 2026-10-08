@@ -204,6 +204,35 @@ final class HarnessSearchField: NSView, NSTextFieldDelegate {
     }
 }
 
+// MARK: - Keyboard focus
+
+/// Keyboard-focus outline for the custom controls below: a 2pt ring in the theme's `focusRing`
+/// color (the cursor accent, never the system blue) drawn just outside the control's shape.
+/// Like AppKit's own buttons, these controls take focus only when Full Keyboard Access is on.
+@MainActor
+final class HarnessFocusRing {
+    private let shape = CAShapeLayer()
+
+    init(in host: CALayer?) {
+        shape.fillColor = nil
+        shape.lineWidth = 2
+        shape.isHidden = true
+        host?.addSublayer(shape)
+    }
+
+    static var controlsTakeFocus: Bool { NSApp?.isFullKeyboardAccessEnabled ?? false }
+
+    func update(rect: NSRect, radius: CGFloat, visible: Bool) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        shape.isHidden = !visible
+        let outset: CGFloat = 3
+        let ring = rect.insetBy(dx: -outset, dy: -outset)
+        shape.path = CGPath(roundedRect: ring, cornerWidth: radius + outset, cornerHeight: radius + outset, transform: nil)
+        shape.strokeColor = HarnessChrome.current.focusRing.withAlphaComponent(0.85).cgColor
+        CATransaction.commit()
+    }
+}
+
 // MARK: - Toggle (switch)
 
 /// Monochrome switch replacing `NSButton(checkboxWithTitle:)` / `setButtonType(.switch)`.
@@ -215,6 +244,8 @@ final class HarnessToggle: NSControl {
     private let label = NSTextField(labelWithString: "")
     private var trackingArea: NSTrackingArea?
     private var isHovered = false { didSet { applyChrome() } }
+    private lazy var focusRing = HarnessFocusRing(in: layer)
+    private var isFocused = false { didSet { needsLayout = true } }
 
     private static let trackWidth: CGFloat = 38
     private static let trackHeight: CGFloat = 22
@@ -280,7 +311,26 @@ final class HarnessToggle: NSControl {
         track.cornerRadius = Self.trackHeight / 2
         knob.cornerRadius = Self.knobSize / 2
         positionKnob(animated: false)
+        focusRing.update(rect: track.frame, radius: Self.trackHeight / 2, visible: isFocused)
         applyChrome()
+    }
+
+    override var acceptsFirstResponder: Bool { isEnabled && HarnessFocusRing.controlsTakeFocus }
+    override func becomeFirstResponder() -> Bool { isFocused = true; return true }
+    override func resignFirstResponder() -> Bool { isFocused = false; return true }
+
+    override func keyDown(with event: NSEvent) {
+        // Space flips the switch, as it does a focused NSSwitch.
+        if event.charactersIgnoringModifiers == " " { flip() } else { super.keyDown(with: event) }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityPerformPress() -> Bool { flip(); return true }
+
+    private func flip() {
+        guard isEnabled else { return }
+        state = state == .on ? .off : .on
+        if let action { _ = NSApp.sendAction(action, to: target, from: self) }
     }
 
     private func positionKnob(animated: Bool) {
@@ -314,13 +364,14 @@ final class HarnessToggle: NSControl {
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard bounds.contains(point) else { return }
-        state = state == .on ? .off : .on
-        if let action { _ = NSApp.sendAction(action, to: target, from: self) }
+        flip()
     }
 
     func applyChrome() {
         let c = HarnessChrome.current
         CATransaction.begin(); CATransaction.setDisableActions(true)
+        alphaValue = isEnabled ? 1 : 0.45
+        knob.shadowOpacity = 0
         if state == .on {
             // Monochrome ON: a near-foreground filled track with an on-canvas knob,
             // matching `HarnessPillButton.primary`. The app never uses the macOS accent.
@@ -331,7 +382,14 @@ final class HarnessToggle: NSControl {
             track.backgroundColor = c.surfaceElevated.cgColor
             track.borderWidth = 1
             track.borderColor = (isHovered ? c.borderStrong : c.border).cgColor
-            knob.backgroundColor = c.textSecondary.cgColor
+            if c.isDark {
+                knob.backgroundColor = c.textSecondary.cgColor
+            } else {
+                // A white knob with a soft shadow on paper, like the system switch; the grey
+                // ink knob read as a dark blob on a light canvas.
+                knob.backgroundColor = NSColor.white.cgColor
+                HarnessDesign.applyShadow(.elevation1, to: knob)
+            }
         }
         CATransaction.commit()
         label.textColor = c.textPrimary
@@ -352,6 +410,8 @@ final class HarnessSlider: NSControl {
     private var isActive = false { didSet { applyChrome() } }
     // Same layout-churn guard as HarnessTextField — skip redundant CALayer color writes.
     private var lastChromeToken: NSColor?
+    private lazy var focusRing = HarnessFocusRing(in: layer)
+    private var isFocused = false { didSet { needsLayout = true } }
 
     var minValue: Double = 0
     var maxValue: Double = 1
@@ -405,6 +465,7 @@ final class HarnessSlider: NSControl {
                             width: Self.knobSize, height: Self.knobSize)
         knob.cornerRadius = Self.knobSize / 2
         CATransaction.commit()
+        focusRing.update(rect: knob.frame, radius: Self.knobSize / 2, visible: isFocused)
         // Guard redundant color writes: isActive changes bypass this by calling applyChrome()
         // directly via the didSet above.
         let token = HarnessChrome.current.surfaceElevated
@@ -423,6 +484,30 @@ final class HarnessSlider: NSControl {
 
     override func mouseEntered(with event: NSEvent) { isActive = true }
     override func mouseExited(with event: NSEvent) { if currentDrag == false { isActive = false } }
+
+    override var acceptsFirstResponder: Bool { isEnabled && HarnessFocusRing.controlsTakeFocus }
+    override func becomeFirstResponder() -> Bool { isFocused = true; return true }
+    override func resignFirstResponder() -> Bool { isFocused = false; return true }
+
+    /// Arrow keys move a twentieth of the range per press and commit like a finished drag.
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 123, 125: step(-1)
+        case 124, 126: step(1)
+        default: super.keyDown(with: event)
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityPerformIncrement() -> Bool { step(1); return true }
+    override func accessibilityPerformDecrement() -> Bool { step(-1); return true }
+
+    private func step(_ direction: Double) {
+        guard isEnabled else { return }
+        doubleValue = value + direction * (maxValue - minValue) / 20
+        if let action { _ = NSApp.sendAction(action, to: target, from: self) }
+        onCommit?()
+    }
 
     private var currentDrag = false
     override func mouseDown(with event: NSEvent) {
@@ -475,6 +560,8 @@ final class HarnessSwatchWell: NSControl {
     private let swatch = CALayer()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false { didSet { applyChrome() } }
+    private lazy var focusRing = HarnessFocusRing(in: layer)
+    private var isFocused = false { didSet { needsLayout = true } }
 
     var color: NSColor = .gray {
         didSet { applyChrome() }
@@ -500,8 +587,20 @@ final class HarnessSwatchWell: NSControl {
         swatch.frame = bounds
         swatch.cornerRadius = HarnessDesign.Radius.control
         CATransaction.commit()
+        focusRing.update(rect: bounds, radius: HarnessDesign.Radius.control, visible: isFocused)
         applyChrome()
     }
+
+    override var acceptsFirstResponder: Bool { isEnabled && HarnessFocusRing.controlsTakeFocus }
+    override func becomeFirstResponder() -> Bool { isFocused = true; return true }
+    override func resignFirstResponder() -> Bool { isFocused = false; return true }
+
+    override func keyDown(with event: NSEvent) {
+        if event.charactersIgnoringModifiers == " " || event.keyCode == 36 { openPanel() } else { super.keyDown(with: event) }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityPerformPress() -> Bool { openPanel(); return true }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -581,6 +680,8 @@ final class HarnessSegmented: NSControl {
     private var trackingArea: NSTrackingArea?
     // Same layout-churn guard as HarnessTextField — skip redundant CALayer color writes.
     private var lastChromeToken: NSColor?
+    private lazy var focusRing = HarnessFocusRing(in: layer)
+    private var isFocused = false { didSet { needsLayout = true } }
 
     var selectedSegment: Int {
         get { selectedIndex }
@@ -639,8 +740,10 @@ final class HarnessSegmented: NSControl {
         if let i = titles.firstIndex(of: title) { selectedSegment = i }
     }
 
+    /// Equal-width segments sized to the longest title, so no label ever truncates.
     override var intrinsicContentSize: NSSize {
-        let perSegment: CGFloat = 72
+        let widest = labels.map { ceil($0.intrinsicContentSize.width) }.max() ?? 0
+        let perSegment = max(56, widest + 22)
         return NSSize(width: max(1, CGFloat(titles.count)) * perSegment, height: 26)
     }
 
@@ -658,11 +761,36 @@ final class HarnessSegmented: NSControl {
             labels[i].frame = NSRect(x: CGFloat(i) * w + 4, y: (bounds.height - textHeight) / 2,
                                      width: max(0, w - 8), height: textHeight)
         }
+        focusRing.update(rect: bounds, radius: HarnessDesign.Radius.control, visible: isFocused)
         // Hover/selection changes bypass this guard via their own applyChrome() calls.
         let token = HarnessChrome.current.surfaceElevated
         guard token != lastChromeToken else { return }
         lastChromeToken = token
         applyChrome()
+    }
+
+    override var acceptsFirstResponder: Bool { isEnabled && HarnessFocusRing.controlsTakeFocus }
+    override func becomeFirstResponder() -> Bool { isFocused = true; return true }
+    override func resignFirstResponder() -> Bool { isFocused = false; return true }
+
+    /// ← / → move the selection, the way a focused NSSegmentedControl does.
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 123: move(-1)
+        case 124: move(1)
+        default: super.keyDown(with: event)
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityPerformIncrement() -> Bool { move(1); return true }
+    override func accessibilityPerformDecrement() -> Bool { move(-1); return true }
+
+    private func move(_ delta: Int) {
+        let next = selectedIndex + delta
+        guard isEnabled, titles.indices.contains(next) else { return }
+        selectedSegment = next
+        if let action { _ = NSApp.sendAction(action, to: target, from: self) }
     }
 
     override func updateTrackingAreas() {
@@ -683,7 +811,7 @@ final class HarnessSegmented: NSControl {
     override func mouseExited(with event: NSEvent) { hoverIndex = nil }
     override func mouseDown(with event: NSEvent) {}
     override func mouseUp(with event: NSEvent) {
-        guard let i = index(at: convert(event.locationInWindow, from: nil)) else { return }
+        guard isEnabled, let i = index(at: convert(event.locationInWindow, from: nil)) else { return }
         selectedSegment = i
         if let action { _ = NSApp.sendAction(action, to: target, from: self) }
     }
@@ -706,6 +834,7 @@ final class HarnessSegmented: NSControl {
         for (i, label) in labels.enumerated() {
             label.textColor = (i == selectedIndex ? c.textPrimary : c.textSecondary)
         }
+        alphaValue = isEnabled ? 1 : 0.45
     }
 }
 
@@ -725,8 +854,14 @@ final class HarnessSelect: NSControl {
     private var popover: HarnessSelectPopover?
     // Same layout-churn guard as HarnessTextField — skip redundant CALayer color writes.
     private var lastChromeToken: NSColor?
+    private lazy var focusRing = HarnessFocusRing(in: layer)
+    private var isFocused = false { didSet { needsLayout = true } }
 
     var titleOfSelectedItem: String? { selected }
+    /// Placeholder for the popover's filter field.
+    var searchPlaceholder = "Search"
+    /// The leading items (the featured themes) sit above a hairline when the list is unfiltered.
+    var featuredCount = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -763,7 +898,6 @@ final class HarnessSelect: NSControl {
 
     // Popup-compatible shims.
     func removeAllItems() { items.removeAll() }
-    func addItem(withTitle title: String) { items.append(title) }
     func addItems(withTitles titles: [String]) { items.append(contentsOf: titles) }
     func selectItem(withTitle title: String) {
         guard items.contains(title) else { return }
@@ -774,6 +908,7 @@ final class HarnessSelect: NSControl {
 
     override func layout() {
         super.layout()
+        focusRing.update(rect: bounds, radius: HarnessDesign.Radius.control, visible: isFocused)
         // Hover changes bypass this guard via isHovered.didSet → applyChrome().
         let token = HarnessChrome.current.surfaceElevated
         guard token != lastChromeToken else { return }
@@ -808,10 +943,28 @@ final class HarnessSelect: NSControl {
         showPopover()
     }
 
+    override var acceptsFirstResponder: Bool { isEnabled && HarnessFocusRing.controlsTakeFocus }
+    override func becomeFirstResponder() -> Bool { isFocused = true; return true }
+    override func resignFirstResponder() -> Bool { isFocused = false; return true }
+
+    override func keyDown(with event: NSEvent) {
+        // Space, Return, or ↓ opens the list, like a focused pop-up button.
+        if event.charactersIgnoringModifiers == " " || event.keyCode == 36 || event.keyCode == 125 {
+            showPopover()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityPerformPress() -> Bool { showPopover(); return true }
+
     private func showPopover() {
-        guard let window else { return }
+        guard let window, isEnabled else { return }
         popover?.dismiss() // never leave a previous popover (+ its event monitor) dangling
-        let pop = HarnessSelectPopover(items: items, selected: selected) { [weak self] choice in
+        let pop = HarnessSelectPopover(
+            items: items, selected: selected, placeholder: searchPlaceholder, featuredCount: featuredCount
+        ) { [weak self] choice in
             guard let self else { return }
             self.selected = choice
             self.titleLabel.stringValue = choice
@@ -845,6 +998,8 @@ final class HarnessSelect: NSControl {
 final class HarnessSelectPopover: NSObject {
     private let allItems: [String]
     private let initialSelection: String?
+    private let placeholder: String
+    private let featuredCount: Int
     private let onPick: (String) -> Void
     /// Called once, after the panel + event monitor have been fully torn down.
     /// `HarnessSelect` uses this to nil its own `popover` reference so the 490-item
@@ -855,12 +1010,14 @@ final class HarnessSelectPopover: NSObject {
     private var panel: NSPanel?
     private let search = HarnessSearchField()
     private let stack = NSStackView()
-    private var rows: [SelectRow] = []
+    private var rows: [NSView] = []
     private var monitor: Any?
 
-    init(items: [String], selected: String?, onPick: @escaping (String) -> Void) {
+    init(items: [String], selected: String?, placeholder: String, featuredCount: Int, onPick: @escaping (String) -> Void) {
         self.allItems = items
         self.initialSelection = selected
+        self.placeholder = placeholder
+        self.featuredCount = featuredCount
         self.onPick = onPick
         super.init()
     }
@@ -870,7 +1027,7 @@ final class HarnessSelectPopover: NSObject {
         let overlay = HarnessOverlayBackground()
         overlay.translatesAutoresizingMaskIntoConstraints = false
 
-        search.placeholderString = "Search themes…"
+        search.placeholderString = placeholder
         search.onChange = { [weak self] q in self?.filter(q) }
         search.translatesAutoresizingMaskIntoConstraints = false
 
@@ -952,7 +1109,14 @@ final class HarnessSelectPopover: NSObject {
         rows.removeAll()
         let q = query.lowercased().trimmingCharacters(in: .whitespaces)
         let filtered = q.isEmpty ? allItems : allItems.filter { $0.lowercased().contains(q) }
-        for name in filtered.prefix(400) {
+        for (index, name) in filtered.prefix(400).enumerated() {
+            if q.isEmpty, index > 0, index == featuredCount {
+                let rule = HarnessDesign.divider()
+                stack.addArrangedSubview(rule)
+                rule.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 8).isActive = true
+                rule.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -8).isActive = true
+                rows.append(rule)
+            }
             let row = SelectRow(title: name, isSelected: name == initialSelection) { [weak self] in
                 self?.onPick(name)
                 self?.dismiss()

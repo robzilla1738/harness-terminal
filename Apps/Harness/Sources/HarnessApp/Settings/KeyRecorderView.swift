@@ -3,9 +3,10 @@ import HarnessCore
 
 /// A focusable pill that captures the next keystroke and emits a normalized
 /// prefix-key string (e.g. `ctrl-a`, `cmd-shift-p`) in the same format
-/// `ParsedShortcut.parse` understands. Click → "Press a key…" → the recorded
-/// shortcut is shown as glyphs (⌃A) and the raw string is reported via
-/// `onChange` so the caller can save it to settings.
+/// `ParsedShortcut.parse` understands. Click (or Space / Return while it has keyboard
+/// focus) → "Press a key…" → the recorded shortcut is shown as glyphs (⌃A) and the raw
+/// string is reported via `onChange` so the caller can save it to settings. Tabbing onto
+/// the recorder only focuses it, so Tab can still move on to the next control.
 @MainActor
 final class KeyRecorderView: NSView {
     /// The serialized shortcut, lower-cased dash form (`ctrl-a`). Empty string
@@ -13,6 +14,8 @@ final class KeyRecorderView: NSView {
     private(set) var value: String
 
     var onChange: ((String) -> Void)?
+    /// What the pill says when no shortcut is set.
+    private let emptyTitle: String
 
     private let label = NSTextField(labelWithString: "")
     private let hint = NSTextField(labelWithString: "Click to record")
@@ -21,9 +24,11 @@ final class KeyRecorderView: NSView {
         didSet { updateAppearance() }
     }
     private var monitor: Any?
+    private var isFocused = false { didSet { updateAppearance() } }
 
-    init(initial: String) {
+    init(initial: String, emptyTitle: String = "None") {
         self.value = initial
+        self.emptyTitle = emptyTitle
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = HarnessDesign.Radius.control
@@ -76,6 +81,8 @@ final class KeyRecorderView: NSView {
             clearButton.widthAnchor.constraint(equalToConstant: 16),
             clearButton.heightAnchor.constraint(equalToConstant: 16),
         ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
         refresh()
         updateAppearance()
     }
@@ -84,8 +91,9 @@ final class KeyRecorderView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override var acceptsFirstResponder: Bool { true }
-    override func becomeFirstResponder() -> Bool { startRecording(); return true }
-    override func resignFirstResponder() -> Bool { stopRecording(); return true }
+    override func becomeFirstResponder() -> Bool { isFocused = true; return true }
+    override func resignFirstResponder() -> Bool { isFocused = false; stopRecording(); return true }
+    override func accessibilityPerformPress() -> Bool { startRecording(); return true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -104,12 +112,26 @@ final class KeyRecorderView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        guard recording else { super.keyDown(with: event); return }
+        guard recording else {
+            // Space or Return arms the recorder from the keyboard, like pressing a button.
+            if event.charactersIgnoringModifiers == " " || event.keyCode == 36 {
+                startRecording()
+            } else {
+                super.keyDown(with: event)
+            }
+            return
+        }
         if event.keyCode == 53 {
             stopRecording()
             return
         }
         _ = record(event)
+    }
+
+    /// A bare Tab / Shift-Tab is never a sensible prefix or hotkey; while recording it gives
+    /// up and moves focus on, so keyboard users can't get trapped in the recorder.
+    private static func isFocusTraversal(_ event: NSEvent) -> Bool {
+        event.keyCode == 48 && event.modifierFlags.intersection([.command, .control, .option]).isEmpty
     }
 
     private func startRecording() {
@@ -121,6 +143,7 @@ final class KeyRecorderView: NSView {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             if event.keyCode == 53 { self.stopRecording(); return nil }
+            if Self.isFocusTraversal(event) { self.stopRecording(); return event }
             return self.record(event) ? nil : event
         }
     }
@@ -140,6 +163,12 @@ final class KeyRecorderView: NSView {
         refresh()
     }
 
+    /// Re-derive colors after a theme change (Settings re-skins every themed control).
+    func applyChrome() {
+        refresh()
+        updateAppearance()
+    }
+
     private func refresh() {
         let c = HarnessChrome.current
         clearButton.isHidden = value.isEmpty
@@ -151,7 +180,7 @@ final class KeyRecorderView: NSView {
             hint.stringValue = "Press a key… (Esc to cancel)"
         } else {
             hint.isHidden = true
-            label.stringValue = value.isEmpty ? "No prefix" : ShortcutRecorderSerializer.glyphString(for: value)
+            label.stringValue = value.isEmpty ? emptyTitle : ShortcutRecorderSerializer.glyphString(for: value)
             label.textColor = value.isEmpty ? c.textSecondary : c.textPrimary
         }
     }
@@ -161,10 +190,14 @@ final class KeyRecorderView: NSView {
     private func updateAppearance() {
         let c = HarnessChrome.current
         layer?.backgroundColor = (recording ? c.textPrimary.withAlphaComponent(0.12) : c.surfaceElevated).cgColor
-        layer?.borderColor = (recording ? c.borderStrong : c.border).cgColor
+        layer?.borderColor = (recording || isFocused ? c.focusRing : c.border).cgColor
     }
 
     private func record(_ event: NSEvent) -> Bool {
+        if Self.isFocusTraversal(event) {
+            stopRecording()
+            return false
+        }
         guard let serialized = ShortcutRecorderSerializer.serialize(
             keyCode: event.keyCode,
             raw: event.charactersIgnoringModifiers,

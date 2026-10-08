@@ -188,6 +188,30 @@ public enum ThemeManager {
         return ResolvedAppearance(canvas: canvas, paletteHex: base.paletteHex)
     }
 
+    /// The named theme that paints under an appearance mode: the chosen theme in theme mode,
+    /// else the light or dark half the mode picks (Harness Light / Harness Default when the
+    /// stored name isn't a theme). Selection and cursor-text colors come from this one, so a
+    /// light canvas never gets the dark theme's selection.
+    public static func activeThemeName(
+        themeName: String,
+        appearanceMode: HarnessAppearanceMode,
+        systemAppearance: HarnessSystemAppearance,
+        systemLightThemeName: String?,
+        systemDarkThemeName: String?
+    ) -> String {
+        let half: HarnessSystemAppearance
+        switch appearanceMode {
+        case .theme: return themeName
+        case .light: half = .light
+        case .macOSSystem: half = systemAppearance
+        }
+        return systemTheme(
+            systemAppearance: half,
+            systemLightThemeName: systemLightThemeName,
+            systemDarkThemeName: systemDarkThemeName
+        )?.name ?? (half == .light ? defaultSystemLightThemeName : defaultSystemDarkThemeName)
+    }
+
     /// The existing light theme (the user's light theme, else Harness Light, else the
     /// documented light baseline). Shared by explicit light and a light Mac.
     private static func lightAppearance(systemLightThemeName: String?) -> ResolvedAppearance {

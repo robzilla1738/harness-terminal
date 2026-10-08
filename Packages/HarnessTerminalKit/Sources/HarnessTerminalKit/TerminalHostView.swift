@@ -53,15 +53,15 @@ extension TerminalHostDelegate {
     public func terminalHostShowMessage(_ message: String, surfaceID: SurfaceID) {}
 }
 
-struct TerminalHostResolvedAppearance: Equatable {
-    let canvasBackgroundHex: String
-    let canvasForegroundHex: String
-    let cursorHex: String
-    let outputPaletteHex: [String?]
-    let oscPaletteHex: [String?]?
-    let selectionBackgroundHex: String?
-    let selectionForegroundHex: String?
-    let cursorTextHex: String?
+public struct TerminalHostResolvedAppearance: Equatable {
+    public let canvasBackgroundHex: String
+    public let canvasForegroundHex: String
+    public let cursorHex: String
+    public let outputPaletteHex: [String?]
+    public let oscPaletteHex: [String?]?
+    public let selectionBackgroundHex: String?
+    public let selectionForegroundHex: String?
+    public let cursorTextHex: String?
 }
 
 /// Hosts one terminal pane: Harness's native `HarnessTerminalSurfaceView` (GPU renderer +
@@ -632,11 +632,19 @@ public final class TerminalHostView: NSView {
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
     }
 
-    static func resolvedNativeAppearance(
+    /// The colors a pane paints with. Public so Settings previews exactly what the panes show.
+    public static func resolvedNativeAppearance(
         themeName: String,
         settings: HarnessSettings,
         systemAppearance: HarnessSystemAppearance
     ) -> TerminalHostResolvedAppearance {
+        let colorTheme = ThemeManager.activeThemeName(
+            themeName: themeName,
+            appearanceMode: settings.appearanceMode,
+            systemAppearance: systemAppearance,
+            systemLightThemeName: settings.systemLightThemeName,
+            systemDarkThemeName: settings.systemDarkThemeName
+        )
         let appearance = ThemeManager.resolvedAppearance(
             themeName: themeName,
             appearanceMode: settings.appearanceMode,
@@ -658,11 +666,11 @@ public final class TerminalHostView: NSView {
             ),
             oscPaletteHex: nativeOSCPaletteHex(settings: settings, appearance: appearance),
             selectionBackgroundHex: settings.selectionBackgroundHex
-                ?? ThemeManager.selectionBackgroundHex(themeName: themeName),
+                ?? ThemeManager.selectionBackgroundHex(themeName: colorTheme),
             selectionForegroundHex: settings.selectionForegroundHex
-                ?? ThemeManager.selectionForegroundHex(themeName: themeName),
+                ?? ThemeManager.selectionForegroundHex(themeName: colorTheme),
             cursorTextHex: settings.cursorTextHex
-                ?? ThemeManager.cursorTextHex(themeName: themeName)
+                ?? ThemeManager.cursorTextHex(themeName: colorTheme)
         )
     }
 

@@ -4,7 +4,21 @@ import XCTest
 
 @MainActor
 final class KeyRecorderViewTests: XCTestCase {
-    func testFirstResponderKeyDownRecordsControlA() {
+    func testSpaceArmsTheFocusedRecorder() {
+        let recorder = KeyRecorderView(initial: "ctrl-b")
+        var recorded: String?
+        recorder.onChange = { recorded = $0 }
+
+        XCTAssertTrue(recorder.becomeFirstResponder())
+        recorder.keyDown(with: keyEvent(raw: " ", modifiers: [], keyCode: 49))
+        recorder.keyDown(with: keyEvent(raw: "\u{01}", modifiers: .control, keyCode: 0))
+
+        XCTAssertEqual(recorded, "ctrl-a")
+        XCTAssertEqual(recorder.value, "ctrl-a")
+    }
+
+    func testFocusAloneDoesNotRecord() {
+        // Tabbing onto the recorder must not swallow the next key (Tab itself included).
         let recorder = KeyRecorderView(initial: "ctrl-b")
         var recorded: String?
         recorder.onChange = { recorded = $0 }
@@ -12,8 +26,20 @@ final class KeyRecorderViewTests: XCTestCase {
         XCTAssertTrue(recorder.becomeFirstResponder())
         recorder.keyDown(with: keyEvent(raw: "\u{01}", modifiers: .control, keyCode: 0))
 
-        XCTAssertEqual(recorded, "ctrl-a")
-        XCTAssertEqual(recorder.value, "ctrl-a")
+        XCTAssertNil(recorded)
+        XCTAssertEqual(recorder.value, "ctrl-b")
+    }
+
+    func testBareTabWhileRecordingGivesUp() {
+        let recorder = KeyRecorderView(initial: "ctrl-b")
+        var recorded: String?
+        recorder.onChange = { recorded = $0 }
+
+        recorder.mouseDown(with: mouseEvent())
+        recorder.keyDown(with: keyEvent(raw: "\t", modifiers: [], keyCode: 48))
+
+        XCTAssertNil(recorded)
+        XCTAssertEqual(recorder.value, "ctrl-b")
     }
 
     func testClickThenKeyDownRecordsControlB() {
@@ -34,6 +60,7 @@ final class KeyRecorderViewTests: XCTestCase {
         recorder.onChange = { recorded = $0 }
 
         XCTAssertTrue(recorder.becomeFirstResponder())
+        recorder.keyDown(with: keyEvent(raw: " ", modifiers: [], keyCode: 49))
         recorder.keyDown(with: keyEvent(raw: "\u{1B}", modifiers: [], keyCode: 53))
 
         XCTAssertNil(recorded)
@@ -46,6 +73,7 @@ final class KeyRecorderViewTests: XCTestCase {
         recorder.onChange = { recorded = $0 }
 
         XCTAssertTrue(recorder.becomeFirstResponder())
+        recorder.keyDown(with: keyEvent(raw: " ", modifiers: [], keyCode: 49))
         recorder.keyDown(with: keyEvent(raw: "", modifiers: .control, keyCode: 0))
 
         XCTAssertNil(recorded)
