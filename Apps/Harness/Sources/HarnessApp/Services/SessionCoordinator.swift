@@ -2253,6 +2253,16 @@ extension SessionCoordinator: TerminalHostDelegate {
         Self.applyScriptResult(result)
     }
 
+    func terminalHostSizeOwnershipChanged(_ ownership: SizeOwnership, surfaceID: SurfaceID) {
+        NotificationCenter.default.post(name: .harnessSizeOwnershipDidChange, object: nil)
+    }
+
+    /// Make this window's size the active pane's size, when another client owns it.
+    func takeActivePaneSize() {
+        guard let surfaceID = activeSurfaceID else { return }
+        terminalHostIfExists(for: surfaceID)?.takeSize()
+    }
+
     /// Show a Lua action's failure and run the commands it queued with `harness.queue`,
     /// through the same executor as the `:` prompt and key bindings.
     static func applyScriptResult(_ result: ScriptActionResult) {
@@ -2435,4 +2445,6 @@ private enum HarnessPathDisplay {
 extension Notification.Name {
     /// The focused pane changed (pane headers re-dim on this).
     static let harnessActiveSurfaceDidChange = Notification.Name("HarnessActiveSurfaceDidChange")
+    /// Some pane's size owner changed (its header shows or hides "Viewing at …").
+    static let harnessSizeOwnershipDidChange = Notification.Name("HarnessSizeOwnershipDidChange")
 }

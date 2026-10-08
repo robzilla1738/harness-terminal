@@ -28,6 +28,8 @@ public protocol TerminalHostDelegate: AnyObject {
     func terminalHostDidClose(surfaceID: SurfaceID)
     /// A Lua action bound to a key in this pane finished: show its failure, run what it queued.
     func terminalHostScriptActionFinished(_ result: ScriptActionResult, surfaceID: SurfaceID)
+    /// Another client took this pane's size, or gave it back (`owner` size mode).
+    func terminalHostSizeOwnershipChanged(_ ownership: SizeOwnership, surfaceID: SurfaceID)
 }
 
 extension TerminalHostDelegate {
@@ -45,6 +47,7 @@ extension TerminalHostDelegate {
     public func terminalHostDidMatchTrigger(_ rule: TriggerRule, lineText: String, surfaceID: SurfaceID) {}
     /// Default no-op — only the GUI shows action failures and runs queued commands.
     public func terminalHostScriptActionFinished(_ result: ScriptActionResult, surfaceID: SurfaceID) {}
+    public func terminalHostSizeOwnershipChanged(_ ownership: SizeOwnership, surfaceID: SurfaceID) {}
 }
 
 struct TerminalHostResolvedAppearance: Equatable {
@@ -77,6 +80,8 @@ public final class TerminalHostView: NSView {
     /// How far this pane's terminal has read the daemon's output. A reconnect to the same
     /// daemon hands it back and gets only what it missed, with no reset or repaint.
     private var attachPoint: DaemonClient.AttachPoint?
+    /// The daemon's latest word on who sizes this pane. Nil until this client has voted.
+    public private(set) var sizeOwnership: SizeOwnership?
     private var isActiveBorder = false
     private var cachedSettings: HarnessSettings?
     private var cachedThemeName: String
@@ -1000,6 +1005,7 @@ public final class TerminalHostView: NSView {
                 resume: attachPoint,
                 onStart: onStart,
                 onData: onData,
+                onOwnership: makeOwnershipHandler(),
                 onEnd: makeOutputEndHandler()
             )
             // Ride this persistent full-duplex connection for input (fire-and-forget), replacing
@@ -1044,6 +1050,35 @@ public final class TerminalHostView: NSView {
             }
         }
         return (onStart, onData)
+    }
+
+    /// Ownership frames: a non-owner stops resizing the PTY (it reflows locally, or shows the
+    /// owner's grid on the alternate screen, where programs draw for that size).
+    private func makeOwnershipHandler() -> @Sendable (SizeOwnership) -> Void {
+        { [weak self] ownership in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.sizeOwnership = ownership
+                    self.nativeView.sizeOwner = ownership.owner
+                    if !ownership.owner {
+                        self.nativeView.adoptOwnerSize(cols: Int(ownership.cols), rows: Int(ownership.rows))
+                    }
+                    self.hostDelegate?.terminalHostSizeOwnershipChanged(ownership, surfaceID: self.surfaceID)
+                }
+            }
+        }
+    }
+
+    /// Make this window's size the pane's size (`owner` mode). Off main; the daemon pushes
+    /// the new ownership back.
+    public func takeSize() {
+        guard let clientID = sizeOwnership?.clientID else { return }
+        let client = daemonClient
+        let sid = surfaceID.uuidString
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = try? client.request(.takeSurface(surfaceID: sid, clientID: clientID))
+        }
     }
 
     /// Output-stream end handler, shared by the initial connect and the off-main reconnect. If we
@@ -1094,6 +1129,7 @@ public final class TerminalHostView: NSView {
         let shell = cachedShell
         let scrollbackBytes = Self.scrollbackBytes(forLines: cachedSettings?.scrollbackLines ?? 10_000)
         let (onStart, onData) = makeAttachHandlers(reconnecting: true)
+        let onOwnership = makeOwnershipHandler()
         let onEnd = makeOutputEndHandler()
         let resume = attachPoint
         let onAttached: @Sendable (DaemonSubscription?) -> Void = { [weak self] subscription in
@@ -1129,7 +1165,8 @@ public final class TerminalHostView: NSView {
             // Same daemon: resume from the last byte painted. A restarted daemon (new epoch) or an
             // evicted gap resyncs: reset, then the full history.
             let subscription = try? client.attach(
-                surfaceID: sid, label: "Harness.app", resume: resume, onStart: onStart, onData: onData, onEnd: onEnd
+                surfaceID: sid, label: "Harness.app", resume: resume, onStart: onStart, onData: onData,
+                onOwnership: onOwnership, onEnd: onEnd
             )
             onAttached(subscription)
         }

@@ -356,6 +356,10 @@ final class PaneContainerView: NSView {
             self, selector: #selector(activeSurfaceDidChange),
             name: .harnessActiveSurfaceDidChange, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(activeSurfaceDidChange),
+            name: .harnessSizeOwnershipDidChange, object: nil
+        )
     }
 
     @objc private func activeSurfaceDidChange() { refreshHeaders() }
@@ -375,7 +379,8 @@ final class PaneContainerView: NSView {
             header.update(
                 title: SurfaceIdentity.label(directory: identity.directory, program: identity.program, agent: identity.agent?.commandToken),
                 agent: identity.agent,
-                focused: leaves.count == 1 || island.surfaceID == focused
+                focused: leaves.count == 1 || island.surfaceID == focused,
+                ownership: island.terminalHost?.sizeOwnership
             )
         }
     }
@@ -515,7 +520,7 @@ final class PaneContainerView: NSView {
 /// Rounded terminal island: an optional title row over the terminal host.
 @MainActor
 final class PaneIslandView: NSView {
-    private weak var terminalHost: TerminalHostView?
+    private(set) weak var terminalHost: TerminalHostView?
     private let separated: Bool
     let surfaceID: SurfaceID
     /// Title row, present on comfortable panes when pane headers are on.

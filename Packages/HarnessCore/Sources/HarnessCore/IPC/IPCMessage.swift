@@ -250,6 +250,26 @@ public struct AttachReply: Codable, Equatable, Sendable {
     }
 }
 
+public struct SizeOwnership: Codable, Equatable, Sendable {
+    public var surfaceID: String
+    /// This client sets the PTY size (always true in `smallest` mode, where every client votes).
+    public var owner: Bool
+    public var rows: UInt16
+    public var cols: UInt16
+    public var mode: SurfaceSizeMode
+    /// This connection's client id, for `takeSurface(clientID:)` from another socket.
+    public var clientID: UUID?
+
+    public init(surfaceID: String, owner: Bool, rows: UInt16, cols: UInt16, mode: SurfaceSizeMode, clientID: UUID?) {
+        self.surfaceID = surfaceID
+        self.owner = owner
+        self.rows = rows
+        self.cols = cols
+        self.mode = mode
+        self.clientID = clientID
+    }
+}
+
 /// A request from the daemon to the attached apps, for verbs that act on app-side state
 /// (`harness-cli copy-mode` enters the app's copy-mode overlay on that pane).
 public enum ClientDirective: Codable, Equatable, Sendable {
@@ -279,6 +299,9 @@ public enum IPCResponse: Codable, Sendable {
     case clientDirective(ClientDirective)
     /// First frame on an `attachStream` connection.
     case attached(AttachReply)
+    /// Pushed on an output subscription when this client's share of the surface's size
+    /// changes: whether it owns the size, and the size the PTY has.
+    case sizeOwnership(SizeOwnership)
     case agentInfo(AgentSnapshot?)
     case clients([ClientSummary])
     case daemonStats(DaemonStats)

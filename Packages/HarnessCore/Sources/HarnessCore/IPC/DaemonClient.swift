@@ -141,6 +141,7 @@ public final class DaemonClient: @unchecked Sendable {
         resume: AttachPoint? = nil,
         onStart: @escaping @Sendable (AttachStart) -> Void,
         onData: @escaping @Sendable (Data, UInt64) -> Void,
+        onOwnership: (@Sendable (SizeOwnership) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
         guard supportsAttachStream() else {
@@ -164,7 +165,7 @@ public final class DaemonClient: @unchecked Sendable {
                 resync: reply.resync, historyEnd: reply.endSequence,
                 point: AttachPoint(epoch: reply.epoch, sequence: reply.endSequence)
             ))
-        }, onData: onData, onEnd: onEnd)
+        }, onData: onData, onOwnership: onOwnership, onEnd: onEnd)
     }
 
     /// The `attachStream` request itself: `.attached`, then output frames. `harness-cli attach`
@@ -174,6 +175,7 @@ public final class DaemonClient: @unchecked Sendable {
         _ request: AttachRequest,
         onAttached: @escaping @Sendable (AttachReply) -> Void,
         onData: @escaping @Sendable (Data, UInt64) -> Void,
+        onOwnership: (@Sendable (SizeOwnership) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
         let fd = try connectSocket()
@@ -184,6 +186,7 @@ public final class DaemonClient: @unchecked Sendable {
             switch response {
             case let .attached(reply): onAttached(reply)
             case let .data(data, sequence): onData(data, sequence)
+            case let .sizeOwnership(ownership): onOwnership?(ownership)
             default: break
             }
         }, onEnd: onEnd)

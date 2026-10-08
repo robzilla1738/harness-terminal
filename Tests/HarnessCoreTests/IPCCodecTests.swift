@@ -567,6 +567,7 @@ final class IPCCodecTests: XCTestCase {
         .snapshotChanged(revision: 12),
         .clientDirective(.copyMode(surfaceID: "s", enabled: true)),
         .attached(AttachReply(epoch: "e", resync: false, endSequence: 9, screen: Data([0x1b, 0x5b, 0x48]))),
+        .sizeOwnership(SizeOwnership(surfaceID: "s", owner: false, rows: 40, cols: 120, mode: .owner, clientID: UUID())),
         .agentInfo(AgentSnapshot(kind: .claudeCode, executable: "/usr/bin/claude", pid: 4321)),
         .agentInfo(nil),
         .clients([ClientSummary(
@@ -633,7 +634,7 @@ final class IPCCodecTests: XCTestCase {
         case .workspaces, .surfaces, .agents, .workspaceID, .sessionID, .tabID, .paneID,
              .surfaceID, .snapshot, .text, .data, .replayResult, .snapshotChanged, .clientDirective, .agentInfo,
              .clients, .daemonStats, .clientID, .buffer, .buffers, .options, .hookID, .hooks,
-             .follow, .attached, .error:
+             .follow, .attached, .sizeOwnership, .error:
             break
         }
     }

@@ -54,6 +54,9 @@ public final class DaemonServer: @unchecked Sendable {
     /// Per-client PTY sizes. `smallest` (the default) is tmux compatibility.
     /// `owner` lets one client set the size; other clients' votes do not resize.
     private var sizeArbiter = SurfaceSizeArbiter()
+    /// The ownership each subscriber was last told, per surface, so a push goes out only when
+    /// a client's view changes.
+    private var sentOwnership: [Int32: [String: SizeOwnership]] = [:]
 
     private struct ClientRecord {
         let id: UUID
@@ -91,6 +94,10 @@ public final class DaemonServer: @unchecked Sendable {
     /// test registry should emit into freshly spawned PTYs.
     public init(enableVersionBanner: Bool = false) {
         registry = SurfaceRegistry(enableVersionBanner: enableVersionBanner)
+        // `size-mode` set with `harness-cli size-mode` survives a daemon restart.
+        if let raw = registry.optionStore.get("size-mode")?.stringValue, let mode = SurfaceSizeMode(rawValue: raw) {
+            sizeArbiter = SurfaceSizeArbiter(mode: mode)
+        }
         // Push layout changes to snapshot subscribers (the attach-window compositor),
         // replacing its old 0.5s poll. Hop onto the serial queue for FD-safe sends.
         registry.onSnapshotCommitted = { [weak self] revision in
@@ -369,12 +376,12 @@ public final class DaemonServer: @unchecked Sendable {
             if case let .resizeSurface(surfaceID, rows, cols) = request {
                 handleResize(surfaceID: surfaceID, rows: rows, cols: cols, fd: fd)
                 send(.ok, to: fd)
+                pushOwnership(surfaceID)
                 continue
             }
             if case let .setSurfaceSizeMode(mode) = request {
-                for (surfaceID, size) in sizeArbiter.setMode(mode) {
-                    _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
-                }
+                applySizeMode(mode)
+                registry.optionStore.set(.string(mode.rawValue), key: "size-mode")
                 send(.ok, to: fd)
                 continue
             }
@@ -398,6 +405,10 @@ public final class DaemonServer: @unchecked Sendable {
                     _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
                 }
                 send(.ok, to: fd)
+                pushOwnership(surfaceID)
+                pushFollow(FollowEvent(type: "pane.owner_changed", payload: [
+                    "surface": .string(surfaceID), "client": .string(clients[targetFD]?.id.uuidString ?? ""),
+                ]))
                 continue
             }
             if case let .detachSurface(surfaceID) = request {
@@ -850,6 +861,8 @@ public final class DaemonServer: @unchecked Sendable {
         if let size = sizeArbiter.disconnect(client: fd, surface: surfaceID) {
             _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
         }
+        sentOwnership[fd]?[surfaceID] = nil
+        pushOwnership(surfaceID)
     }
 
     private func cancelSubscriptions(for fd: Int32) {
@@ -864,6 +877,32 @@ public final class DaemonServer: @unchecked Sendable {
         // minimum; `owner` mode hands the surface to the most recent other voter.
         for (surfaceID, size) in sizeArbiter.disconnect(client: fd) {
             _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+        }
+        let surfaces = sentOwnership.removeValue(forKey: fd).map { Array($0.keys) } ?? []
+        surfaces.forEach(pushOwnership)
+    }
+
+    private func applySizeMode(_ mode: SurfaceSizeMode) {
+        for (surfaceID, size) in sizeArbiter.setMode(mode) {
+            _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
+        }
+        Set(outputSubscriptions.values.flatMap { $0.map(\.surfaceID) }).forEach(pushOwnership)
+    }
+
+    /// Tell each client attached to `surfaceID` whether it owns the size and what the size is,
+    /// when that changed for it. A client that hasn't voted yet hears once it does.
+    private func pushOwnership(_ surfaceID: String) {
+        guard let size = sizeArbiter.effectiveSize(surfaceID) else { return }
+        let owner = sizeArbiter.owner(of: surfaceID)
+        for (fd, subscriptions) in outputSubscriptions where subscriptions.contains(where: { $0.surfaceID == surfaceID }) {
+            let state = SizeOwnership(
+                surfaceID: surfaceID,
+                owner: sizeArbiter.mode == .smallest || owner == nil || owner == fd,
+                rows: size.rows, cols: size.cols, mode: sizeArbiter.mode, clientID: clients[fd]?.id
+            )
+            guard sentOwnership[fd]?[surfaceID] != state else { continue }
+            sentOwnership[fd, default: [:]][surfaceID] = state
+            send(.sizeOwnership(state), to: fd)
         }
     }
 

@@ -180,6 +180,16 @@ enum CommandPaletteController {
                 coordinator.zoomActivePane()
             },
             PaletteAction(
+                id: "action.takeSize",
+                title: "Take Size",
+                subtitle: "Size the active pane to this window when another client owns it",
+                symbol: "arrow.up.left.and.down.right.magnifyingglass",
+                shortcut: "",
+                section: .actions
+            ) {
+                coordinator.takeActivePaneSize()
+            },
+            PaletteAction(
                 id: "action.killPane",
                 title: "Kill Pane",
                 subtitle: "Close the active pane and its shell",

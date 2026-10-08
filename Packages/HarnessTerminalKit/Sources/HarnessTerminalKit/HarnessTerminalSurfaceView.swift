@@ -329,7 +329,29 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var onResize: ((Int, Int) -> Void)?
     /// When false, a resize reflows this client's primary screen and does not vote a PTY size.
     /// The alternate screen is not reflowed. Default true keeps the single-client ioctl path.
-    public var sizeOwner = true
+    /// Whether this client sets the PTY size. A non-owner reflows locally instead; becoming
+    /// the owner again re-commits the grid to the view so the PTY follows it.
+    public var sizeOwner = true {
+        didSet { if sizeOwner, !oldValue { updateGridSize() } }
+    }
+
+    /// A non-owner on the alternate screen shows the owner's grid as-is: a full-screen program
+    /// draws for that size, so reflowing it to this view would scramble it. The view clips or
+    /// pads; the PTY is untouched.
+    public func adoptOwnerSize(cols: Int, rows newRows: Int) {
+        guard !sizeOwner, inputAltScreenActive(), cols > 0, newRows > 0, cols != columns || newRows != rows else { return }
+        clearSelection()
+        columns = cols
+        rows = newRows
+        invalidateRenderGeneration()
+        if offMainParserFramePipelineEnabled {
+            emulatorState.setPendingResize((cols, newRows), localOnly: false)
+            renderNowOffMain()
+        } else {
+            emulatorSync { $0.resize(cols: cols, rows: newRows) }
+            scheduler.forceRender()
+        }
+    }
     /// Fires while the grid size changes during a resize so the host can show a dimensions HUD.
     /// `committed` is false for the live (mid-drag) tick and true once the size settles. Never
     /// fires for the terminal's initial sizing live tick (opening a window isn't a resize).

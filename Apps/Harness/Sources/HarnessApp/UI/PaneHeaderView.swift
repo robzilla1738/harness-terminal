@@ -11,6 +11,9 @@ final class PaneHeaderView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let splitRight = SoftIconButton(frame: .zero)
     private let splitDown = SoftIconButton(frame: .zero)
+    /// "Viewing at 120×40 · Take", when another client owns this pane's size.
+    private let viewing = NSButton(title: "", target: nil, action: nil)
+    private var ownership: SizeOwnership?
     private var agent: AgentKind?
     private var isFocused = false
 
@@ -40,8 +43,17 @@ final class PaneHeaderView: NSView {
             button.translatesAutoresizingMaskIntoConstraints = false
         }
 
+        viewing.isBordered = false
+        viewing.font = HarnessDesign.Typography.paneHeader
+        viewing.target = self
+        viewing.action = #selector(takeClicked)
+        viewing.toolTip = "Another window or attached terminal sets this pane's size. Click to size it to this window."
+        viewing.isHidden = true
+        viewing.translatesAutoresizingMaskIntoConstraints = false
+
         addSubview(icon)
         addSubview(titleLabel)
+        addSubview(viewing)
         addSubview(splitRight)
         addSubview(splitDown)
         let inset = HarnessDesign.Spacing.lg
@@ -54,7 +66,9 @@ final class PaneHeaderView: NSView {
             icon.heightAnchor.constraint(equalToConstant: 16),
             titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HarnessDesign.Spacing.md),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: splitRight.leadingAnchor, constant: -HarnessDesign.Spacing.md),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: viewing.leadingAnchor, constant: -HarnessDesign.Spacing.md),
+            viewing.trailingAnchor.constraint(equalTo: splitRight.leadingAnchor, constant: -HarnessDesign.Spacing.md),
+            viewing.centerYAnchor.constraint(equalTo: centerYAnchor),
             splitDown.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.sm),
             splitDown.centerYAnchor.constraint(equalTo: centerYAnchor),
             splitDown.widthAnchor.constraint(equalToConstant: button),
@@ -75,13 +89,16 @@ final class PaneHeaderView: NSView {
     // here are for the pane, not for moving the window.
     override var mouseDownCanMoveWindow: Bool { false }
 
-    func update(title: String, agent: AgentKind?, focused: Bool) {
+    func update(title: String, agent: AgentKind?, focused: Bool, ownership: SizeOwnership? = nil) {
         titleLabel.stringValue = title
         setAccessibilityLabel("Pane: \(title)")
         self.agent = agent
+        self.ownership = ownership
         isFocused = focused
         applyChrome()
     }
+
+    private var viewsAnotherClientsSize: Bool { ownership.map { !$0.owner } ?? false }
 
     func applyChrome() {
         let c = HarnessChrome.current
@@ -98,6 +115,13 @@ final class PaneHeaderView: NSView {
         }
         splitRight.applyChrome()
         splitDown.applyChrome()
+        viewing.isHidden = !viewsAnotherClientsSize
+        if let ownership, viewsAnotherClientsSize {
+            viewing.attributedTitle = NSAttributedString(
+                string: "Viewing at \(ownership.cols)×\(ownership.rows) · Take",
+                attributes: [.font: HarnessDesign.Typography.paneHeader, .foregroundColor: c.accent]
+            )
+        }
     }
 
     // MARK: - Actions
@@ -140,6 +164,11 @@ final class PaneHeaderView: NSView {
             item.target = self
             menu.addItem(item)
         }
+        if viewsAnotherClientsSize {
+            let take = NSMenuItem(title: "Take Size", action: #selector(takeClicked), keyEquivalent: "")
+            take.target = self
+            menu.addItem(take)
+        }
         menu.addItem(.separator())
         let close = NSMenuItem(title: "Close Pane", action: #selector(closeClicked), keyEquivalent: "")
         close.target = self
@@ -148,6 +177,7 @@ final class PaneHeaderView: NSView {
     }
 
     @objc private func zoomClicked() { coordinator.zoomActivePane() }
+    @objc private func takeClicked() { coordinator.terminalHostIfExists(for: surfaceID)?.takeSize() }
     @objc private func renameClicked() { coordinator.beginRenameActiveTab() }
     @objc private func closeClicked() { coordinator.killPane(surfaceID: surfaceID) }
 }

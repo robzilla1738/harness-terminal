@@ -142,7 +142,7 @@ These query the current Harness state and do not change your layout.
 | `list-agents [--waiting]` | List all running agents with state, age, and surface ID. `--waiting` filters to agents that need a response. |
 | `events` | Print session, pane, and agent events as JSON lines. |
 | `process [--surface <id>]` | Print a surface's foreground process as JSON. Defaults to the first surface. |
-| `size-mode <smallest\|owner>` | Set multi-client PTY sizing. `smallest` is the default (every attached client votes). `owner` follows the client that took the surface. |
+| `size-mode <smallest\|owner>` | Set multi-client PTY sizing; it survives a daemon restart. `smallest` is the default (every attached client votes). `owner` follows the client that took the surface: the others reflow their own view (or show the owner's grid when a full-screen program is running), and their pane header reads **Viewing at C×R · Take**. Take Size is also in the pane's menu and the command palette. Each change emits `pane.owner_changed`. |
 | `take-surface --surface <id> [--client <uuid>]` | Make one attached client the size owner of a surface. |
 | `save-layout --name <name>` | Save the active tab's split tree, each pane's directory, and the command line running in it (an idle pane saves as a plain shell). |
 | `restore-layout --name <name> [--dry-run]` | Recreate a saved layout as a new session in the active workspace. `--dry-run` prints the steps instead. |

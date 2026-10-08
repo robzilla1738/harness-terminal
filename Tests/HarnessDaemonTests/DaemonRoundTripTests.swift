@@ -265,6 +265,33 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertTrue(String(decoding: screen.value ?? Data(), as: UTF8.self).contains("STREAM_MISSED"))
     }
 
+    /// `owner` mode end to end: the second client learns it doesn't own the size, takes it by
+    /// client id from another socket, and both clients hear the change.
+    func testOwnershipFramesTellEachClientAndTakeMovesTheSize() throws {
+        let client = DaemonClient()
+        _ = try client.request(.setSurfaceSizeMode(.owner))
+        let sid = UUID().uuidString
+        _ = try client.request(.ensureSurface(surfaceID: sid, cwd: nil, shell: "/bin/sh", rows: 24, cols: 80, scrollbackBytes: nil))
+        let first = AtomicBox<SizeOwnership>()
+        let second = AtomicBox<SizeOwnership>()
+        let a = try client.attach(surfaceID: sid, label: "a", onStart: { _ in }, onData: { _, _ in }, onOwnership: { first.set($0) })
+        defer { a.cancel() }
+        a.resize(sid, rows: 40, cols: 120)
+        XCTAssertTrue(waitUntil(timeout: 5) { first.value?.owner == true && first.value?.cols == 120 })
+        let b = try client.attach(surfaceID: sid, label: "b", onStart: { _ in }, onData: { _, _ in }, onOwnership: { second.set($0) })
+        defer { b.cancel() }
+        b.resize(sid, rows: 20, cols: 60)
+        XCTAssertTrue(waitUntil(timeout: 5) { second.value?.owner == false })
+        XCTAssertEqual(second.value?.cols, 120, "a non-owner hears the owner's size")
+
+        let takerID = try XCTUnwrap(second.value?.clientID)
+        _ = try client.request(.takeSurface(surfaceID: sid, clientID: takerID))
+        XCTAssertTrue(waitUntil(timeout: 5) { second.value?.owner == true && first.value?.owner == false })
+        XCTAssertEqual(first.value?.cols, 60)
+        guard case let .options(entries) = try client.request(.showOptions(scope: "global")) else { return XCTFail("expected options") }
+        XCTAssertEqual(entries.first { $0.key == "size-mode" }?.value, "owner", "the mode is saved for the next daemon")
+    }
+
     /// Item 1 — the sequenced replay reports a usable end boundary that advances as output is
     /// appended. The boundary is what the gap-free attach dedupes its buffered live frames against;
     /// a non-advancing or zero boundary would either re-show overlap or (with the old `.text`-only
