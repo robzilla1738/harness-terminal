@@ -182,7 +182,7 @@ public struct TerminalCursor: Equatable, Sendable {
 /// the RGBA pixels stay in the emulator's store (queried by id on the render thread) so the
 /// `Sendable` snapshot never copies megabytes of pixels across threads.
 public struct ImagePlacementSnapshot: Equatable, Sendable {
-    public let id: Int
+    public var id: Int
     public let row: Int      // top-left cell row (viewport space; may be negative while scrolling off)
     public let col: Int
     public let cols: Int     // cell footprint

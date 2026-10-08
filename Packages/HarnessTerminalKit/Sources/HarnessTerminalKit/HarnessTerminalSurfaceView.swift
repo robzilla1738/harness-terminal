@@ -58,6 +58,8 @@ private struct SurfaceFrameBuildResult: Sendable {
     var hasPeekRow: Bool = false
     var frameBuildNanos: UInt64
     var clearColor: RenderColor
+    /// When the next frame of a Kitty animation this frame draws is due (uptime nanoseconds).
+    var nextAnimationFrame: UInt64?
 }
 
 private final class SurfaceColorProviderState: @unchecked Sendable {
@@ -2199,6 +2201,17 @@ public final class HarnessTerminalSurfaceView: NSView {
         renderLink?.isPaused = false
     }
 
+    /// Kitty animations play unless the user asked macOS to reduce motion; then each image stays
+    /// on the frame it shows.
+    private static var animatesImages: Bool { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Keep the display link timing the next frame of the animations just presented (nil: none
+    /// visible). Occlusion and detaching pause it with the rest of the scheduler.
+    private func scheduleAnimationFrame(at deadline: UInt64?) {
+        scheduler.setAnimationDeadline(deadline)
+        if deadline != nil { wakeDisplayLink() }
+    }
+
     /// Display-cadence tick: present at most one coalesced frame, then pause the link when there's
     /// nothing left to draw so a quiet terminal doesn't wake the CPU every refresh.
     @objc private func displayTick() {
@@ -2237,7 +2250,10 @@ public final class HarnessTerminalSurfaceView: NSView {
         let emulator = emulatorState.emulator
         // Copy mode owns the whole surface while active (its own scroll offset + overlay).
         if renderCopyMode(renderer: renderer, drawable: drawable) { lastPlainFrame = nil; return }
-        let grid = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
+        let snapshot = scrollOffset > 0 ? emulator.readGrid(scrollbackOffset: scrollOffset) : emulator.readGrid()
+        let (grid, nextAnimationFrame) = Self.animatesImages
+            ? emulator.animateImages(in: snapshot, now: DispatchTime.now().uptimeNanoseconds)
+            : (snapshot, nil)
         // Consume dirty-row damage every frame to keep the engine's "since last render" window
         // aligned, then feed it to the builder only on the plain live path. Scrollback, an active
         // selection, and IME preedit all rebuild every row (they aren't tracked by damage), so
@@ -2306,6 +2322,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         if didPresent {
             onRenderStats?(renderer.stats)
             updateTextBlinkTimer(frameHasBlink: frame.hasBlink)
+            scheduleAnimationFrame(at: nextAnimationFrame)
         } else { scheduleRender() } // transient encode/present failure — retry next tick
         StartupMetrics.shared.mark(.firstDrawablePresented) // idempotent: only the first present counts
         // Retain only a plain frame for row reuse; a selection/scrollback/preedit frame would
@@ -2366,10 +2383,12 @@ public final class HarnessTerminalSurfaceView: NSView {
         let findIsActive = findActive
         let findMatchesSnapshot = findMatches
         let triggerMatchesSnapshot = triggerHighlightMatches
+        let animatesImages = Self.animatesImages
 
         // The frame build, identical for the async (coalesced) and synchronous (forced) paths. Pure
-        // over the captured value snapshot + the emulator; the only mutation is `state`'s plain-frame
-        // cache, which is always touched on the serial queue (sync runs there; async dispatches there).
+        // over the captured value snapshot + the emulator; the only mutations are `state`'s
+        // plain-frame cache and the emulator's animation playback, always on the serial queue (sync
+        // runs there; async dispatches there).
         let build: @Sendable (TerminalEmulator) -> SurfaceFrameBuildResult = { emulator in
             // Materialize any staged resize on the queue right before the build so it serializes
             // with the in-flight output feed. EVERY output/commit build applies the shared target
@@ -2394,6 +2413,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             var renderDamage: TerminalDamage?
             var scrollShift = 0
             var peekRow = false
+            var nextAnimationFrame: UInt64?
             if let cm = copyModeState {
                 let offset = cm.scrollbackOffset(historyCount: emulator.historyCount)
                 let grid = emulator.readGrid(scrollbackOffset: offset)
@@ -2427,7 +2447,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 // `gridRead` brackets boundary 1 (the engine→renderer grid snapshot) on the
                 // signpost track, so a per-boundary trace can attribute build time to the
                 // snapshot copy vs the RenderCell resolve that follows.
-                let (grid, damage) = FrameSignposter.shared.interval("gridRead") {
+                let (snapshot, damage) = FrameSignposter.shared.interval("gridRead") {
                     () -> (TerminalGridSnapshot, TerminalDamage) in
                     let grid = peekRow
                         ? Self.appendingPeekRow(
@@ -2437,6 +2457,12 @@ public final class HarnessTerminalSurfaceView: NSView {
                         : emulator.readGrid()
                     return (grid, emulator.consumeDamage())
                 }
+                // Kitty animations move on only for the images this frame draws; the present
+                // hands their next deadline to the scheduler.
+                let grid: TerminalGridSnapshot
+                (grid, nextAnimationFrame) = animatesImages
+                    ? emulator.animateImages(in: snapshot, now: DispatchTime.now().uptimeNanoseconds)
+                    : (snapshot, nil)
                 let findHits = (findIsActive
                     ? Self.viewportFindHighlights(findMatchesSnapshot, scrollOffset: requestedScrollOffset, historyCount: emulator.historyCount, rows: viewRows)
                     : [])
@@ -2581,7 +2607,8 @@ public final class HarnessTerminalSurfaceView: NSView {
                 scrollShift: scrollShift,
                 hasPeekRow: peekRow,
                 frameBuildNanos: DispatchTime.now().uptimeNanoseconds &- frameBuildStart,
-                clearColor: builder.renderColor(reverseVideo ? fg : bg, alpha: opacity)
+                clearColor: builder.renderColor(reverseVideo ? fg : bg, alpha: opacity),
+                nextAnimationFrame: nextAnimationFrame
             )
         }
 
@@ -2637,6 +2664,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             lastPresentedResultIsRendererCoherent = renderer.stats.rowCacheCoherent
             onRenderStats?(renderer.stats)
             updateTextBlinkTimer(frameHasBlink: result.frame.hasBlink)
+            scheduleAnimationFrame(at: result.nextAnimationFrame)
         } else {
             // A genuine drop: nothing reached the glass this turn (repaintLastFrame failures
             // don't count — their callers fall back to another present in the same turn).

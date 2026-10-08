@@ -253,4 +253,31 @@ final class RenderSchedulerTests: XCTestCase {
         sched.start()
         XCTAssertFalse(sched.isOccluded)
     }
+
+    // MARK: - Kitty animation (the link times the next frame of what's on screen)
+
+    func testAnimationDeadlineKeepsTheLinkAwakeAndPresentsOnceDue() {
+        let (sched, renders) = makeScheduler()
+        sched.setAnimationDeadline(1_000)
+        XCTAssertTrue(sched.hasPendingWork, "the link stays awake to time the frame")
+        XCTAssertFalse(sched.tick(now: 999), "not due yet → no present")
+        XCTAssertTrue(sched.hasPendingWork)
+        XCTAssertTrue(sched.tick(now: 1_000), "due → one present")
+        XCTAssertEqual(renders(), 1)
+        XCTAssertFalse(sched.hasPendingWork, "the present reports the next deadline, if any")
+    }
+
+    func testAnimationDeadlineHoldsWhileOccludedAndClearsOnStop() {
+        let (sched, renders) = makeScheduler()
+        sched.setAnimationDeadline(1_000)
+        sched.setOccluded(true)
+        XCTAssertFalse(sched.hasPendingWork, "a covered window animates nothing")
+        XCTAssertFalse(sched.tick(now: 2_000))
+        XCTAssertEqual(renders(), 0)
+        sched.setAnimationDeadline(1_000)
+        sched.stop()
+        sched.start()
+        XCTAssertNil(sched.animationDeadline, "a detached view forgets its animations")
+        XCTAssertFalse(sched.tick(now: 2_000))
+    }
 }

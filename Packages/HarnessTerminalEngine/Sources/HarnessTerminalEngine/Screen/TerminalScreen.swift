@@ -309,6 +309,9 @@ final class TerminalScreen {
     /// Decoded pixels for a placed image (queried by the renderer on the main thread).
     func image(for id: Int) -> DecodedImage? { imageStore[id] }
 
+    /// The Kitty image id placement `id` was placed under, if any.
+    func kittyID(ofPlacement id: Int) -> Int? { placements.first { $0.id == id }?.kittyID }
+
     /// Place a decoded image at the cursor. `cols`/`rows`, when > 0, override the computed cell
     /// footprint (Kitty `c`/`r`, iTerm2 width/height). Advances the cursor below the image.
     func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0, kittyID: Int? = nil) {

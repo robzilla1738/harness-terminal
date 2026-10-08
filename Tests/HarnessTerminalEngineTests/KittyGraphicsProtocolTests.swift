@@ -4,7 +4,7 @@ import CHarnessBase64
 
 /// Roadmap PR-14: the Kitty graphics protocol beyond display — ack (`OK`/error gated by quietness),
 /// query (`a=q`), transmit-once / place-many (`a=t` then `a=p`, keyed by `i=`), and delete
-/// (`a=d` all / by id). Animation (`a=a`) stays deferred.
+/// (`a=d` all / by id). Animation has its own suite, `KittyAnimationTests`.
 final class KittyGraphicsProtocolTests: XCTestCase {
     /// A 1×1 RGBA red pixel, base64 — the smallest valid `f=32,s=1,v=1` payload.
     private let pixel = "/wAA/w=="

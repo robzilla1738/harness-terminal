@@ -43,7 +43,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | Go to directory | ⌥⌘G browser on the pane's daemon, local or remote. | ⇧⌘G |
 | Themes | 492 built in, save and export your own, theme fit for off-palette colors. | 41 designer themes, Oklab harmonization |
 | VoiceOver | Tabs, panes, focus announcements. | VoiceOver in SuperSplit |
-| Kitty graphics | Direct, file, temp-file, and shared-memory transmission; place-many; every delete target; Unicode placeholders (images that live in text, so they survive tmux and editors). Not yet: animation. | 100% (libghostty) |
+| Kitty graphics | Direct, file, temp-file, and shared-memory transmission; place-many; every delete target; Unicode placeholders (images that live in text, so they survive tmux and editors); animation (frames, composition, and terminal-driven playback, paused while the pane is hidden or Reduce Motion is on). | 100% (libghostty) |
 | Kitty keyboard, OSC 52 | Yes; clipboard reads opt-in (`allow-clipboard-read`). | Yes |
 | Rebind from the palette | Right-click any action or menu command ▸ Change Shortcut…; conflicts with menu items, other actions, the prefix, and key tables are flagged. ⌘/ lists every key. | — |
 | Panes without learning a prefix | ⌘D splits, ⌥⌘arrows move, ⌘[ ⌘] cycle, ⇧⌘↩ zooms, ⌃⌘= equalizes, ⌘W closes the pane. | The pitch: "the multiplexer you don't have to learn" |

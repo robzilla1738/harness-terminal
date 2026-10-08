@@ -7,7 +7,8 @@ public struct KittyGraphicsCommand: Equatable {
     public var keys: [String: String]
     public var payload: [UInt8]   // raw bytes after the `;` (still base64 unless empty)
 
-    /// `a` — action: `t` transmit, `T` transmit+display, `p` put/display, `d` delete, `q` query.
+    /// `a` — action: `t` transmit, `T` transmit+display, `p` put/display, `d` delete, `q` query,
+    /// `f` an animation frame, `a` animation control, `c` compose frames.
     public var action: Character { keys["a"].flatMap(\.first) ?? "t" }
     /// `f` — format: 24 RGB, 32 RGBA, 100 PNG (default 32 per spec).
     public var format: Int { keys["f"].flatMap { Int($0) } ?? 32 }
@@ -28,7 +29,8 @@ public struct KittyGraphicsCommand: Equatable {
     /// `c` / `r` — display size in cells (0 = derive from the image).
     public var cols: Int { keys["c"].flatMap { Int($0) } ?? 0 }
     public var rows: Int { keys["r"].flatMap { Int($0) } ?? 0 }
-    /// `z` — z-index; negative draws below text, >=0 above the background.
+    /// `z` — z-index; negative draws below text, >=0 above the background. For `a=f` and `a=a`,
+    /// a frame's gap in milliseconds instead.
     public var z: Int { keys["z"].flatMap { Int($0) } ?? 0 }
     /// `U=1` — a virtual placement shown through Unicode placeholder cells, not drawn here.
     public var unicodePlaceholder: Bool { keys["U"] == "1" }
@@ -38,9 +40,30 @@ public struct KittyGraphicsCommand: Equatable {
     /// `S` / `O` — bytes to read from a file, and where to start (0: the whole file).
     public var dataSize: Int { keys["S"].flatMap { Int($0) } ?? 0 }
     public var dataOffset: Int { keys["O"].flatMap { Int($0) } ?? 0 }
-    /// `x` / `y` — for `a=d`: the cell (1-based) or column / row, or the id range for `d=r`.
+    /// `x` / `y` — for `a=d`: the cell (1-based) or column / row, or the id range for `d=r`. For
+    /// `a=f` and `a=c`: the pixel where the new pixels land in the frame.
     public var x: Int { keys["x"].flatMap { Int($0) } ?? 0 }
     public var y: Int { keys["y"].flatMap { Int($0) } ?? 0 }
+
+    // Animation (`a=f`, `a=a`, `a=c`). Frames are numbered from 1, the root frame.
+    /// `r` — the frame to edit (`a=f`), retime (`a=a`), or compose from (`a=c`).
+    public var frameNumber: Int { keys["r"].flatMap { Int($0) } ?? 0 }
+    /// `c` — the base frame (`a=f`), the frame to show (`a=a`), or the one to compose onto (`a=c`).
+    public var otherFrameNumber: Int { keys["c"].flatMap { Int($0) } ?? 0 }
+    /// `X=1` (`a=f`) / `C=1` (`a=c`) — replace pixels instead of alpha blending them.
+    public var overwrites: Bool { keys[action == "c" ? "C" : "X"] == "1" }
+    /// `Y` — for `a=f`: the RGBA color a frame starts from when it has no base frame.
+    public var backgroundColor: UInt32 { keys["Y"].flatMap { UInt32($0) } ?? 0 }
+    /// `X` / `Y` / `w` / `h` — for `a=c`: the source rectangle's corner, and its size (0: to the
+    /// image's edge).
+    public var sourceX: Int { keys["X"].flatMap { Int($0) } ?? 0 }
+    public var sourceY: Int { keys["Y"].flatMap { Int($0) } ?? 0 }
+    public var width: Int { keys["w"].flatMap { Int($0) } ?? 0 }
+    public var height: Int { keys["h"].flatMap { Int($0) } ?? 0 }
+    /// `s` — for `a=a`: 1 stops, 2 plays and waits at the last frame for more, 3 plays and loops.
+    public var animationState: Int { keys["s"].flatMap { Int($0) } ?? 0 }
+    /// `v` — for `a=a`: 1 loops forever, n plays n − 1 loops, 0 leaves the count alone.
+    public var loopCount: Int { keys["v"].flatMap { Int($0) } ?? 0 }
 
     public static func parse(_ apc: [UInt8]) -> KittyGraphicsCommand? {
         guard let first = apc.first, first == 0x47 else { return nil } // 'G'

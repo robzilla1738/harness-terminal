@@ -1517,6 +1517,42 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertLessThan(Int(px(iw + iw / 2, ih + ih / 2).1), 160, "no-image cell isn't green")
     }
 
+    /// A Kitty animation end to end: the engine plays it, the frame builder resolves the frame
+    /// now current, and the renderer draws that frame's texture.
+    func testKittyAnimationDrawsTheCurrentFrame() throws {
+        let (device, renderer) = try makeRenderer()
+        let (w, h) = renderer.surfacePixelSize(columns: 2, rows: 2)
+        guard let target = makeTarget(device, width: w, height: h) else { throw XCTSkip("no texture") }
+        let term = TerminalEmulator(cols: 2, rows: 2)
+        let pixel = { (rgba: [UInt8]) in Data(rgba).base64EncodedString() }
+        term.feed("\u{1b}_Ga=T,f=32,s=1,v=1,i=1,c=1,r=1;\(pixel([0, 255, 0, 255]))\u{1b}\\")
+        term.feed("\u{1b}_Ga=f,f=32,s=1,v=1,i=1,z=10;\(pixel([255, 0, 0, 255]))\u{1b}\\")
+        term.feed("\u{1b}_Ga=a,i=1,s=3\u{1b}\\")
+        func draw(at now: UInt64) -> (UInt8, UInt8, UInt8, UInt8) {
+            let grid = term.animateImages(in: term.readGrid(), now: now).grid
+            let frame = FrameBuilder(theme: theme).build(grid, region: nil, imageProvider: { term.image(for: $0) })
+            renderer.render(frame, to: target, clearColor: RenderColor(red: 0, green: 0, blue: 0, alpha: 1))
+            return readPixels(target, width: w, height: h)(renderer.cellPixelWidth / 2, renderer.cellPixelHeight / 2)
+        }
+        assertColor(draw(at: 0), r: 0, g: 255, b: 0, label: "root frame", tolerance: 24)
+        assertColor(draw(at: 0), r: 255, g: 0, b: 0, label: "second frame", tolerance: 24)
+        assertColor(draw(at: 10_000_000), r: 255, g: 0, b: 0, label: "the gapless root is skipped", tolerance: 24)
+    }
+
+    /// Each animation frame uploads once: revisiting a frame reuses its texture, and the cache
+    /// evicts by bytes, least recently used first.
+    func testImageTextureCacheKeepsFramesByBytes() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device available") }
+        let cache = ImageTextureCache(device: device, maxBytes: 2 * 4)
+        let rgba: [UInt8] = [255, 0, 0, 255]
+        let first = try XCTUnwrap(cache.texture(id: -1, rgba: rgba, width: 1, height: 1))
+        let second = try XCTUnwrap(cache.texture(id: -2, rgba: rgba, width: 1, height: 1))
+        XCTAssertTrue(cache.texture(id: -1, rgba: rgba, width: 1, height: 1) === first, "a cached frame is not re-uploaded")
+        _ = cache.texture(id: -3, rgba: rgba, width: 1, height: 1) // over budget: evicts -2, the least recent
+        XCTAssertTrue(cache.texture(id: -1, rgba: rgba, width: 1, height: 1) === first)
+        XCTAssertFalse(cache.texture(id: -2, rgba: rgba, width: 1, height: 1) === second, "-2 was evicted and uploads again")
+    }
+
     func testPromptGutterStripeRendersInLeftPadding() throws {
         let (device, renderer) = try makeRenderer()
         // A prompt that succeeded → green stripe (ANSI green, palette[2]). Cursor hidden so it

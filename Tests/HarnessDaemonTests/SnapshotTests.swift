@@ -28,6 +28,21 @@ final class SnapshotTests: XCTestCase {
         XCTAssertFalse(text.contains("AAA"))
     }
 
+    /// Kitty animation commands (chunked frames included) parse in the authoritative grid like
+    /// any other output, and the screen around them is captured intact.
+    func testKittyAnimationCommandsLeaveTheCapturedScreenIntact() {
+        let parser = AuthoritativeParser()
+        let pixel = Data([255, 0, 0, 255]).base64EncodedString()
+        let bytes = "before\r\n\u{1b}_Ga=T,f=32,s=1,v=1,i=1;\(pixel)\u{1b}\\"
+            + "\u{1b}_Ga=f,i=1,f=32,s=1,v=1,z=40,m=1;\(pixel.prefix(4))\u{1b}\\\u{1b}_Gm=0;\(pixel.dropFirst(4))\u{1b}\\"
+            + "\u{1b}_Ga=c,i=1,r=2,c=1\u{1b}\\\u{1b}_Ga=a,i=1,s=3,v=1\u{1b}\\after"
+        parser.catchUp(ring: [SnapshotByteSpan(sequence: 1, data: Data(bytes.utf8))], cols: 20, rows: 4)
+        let text = screenText(parser.frame())
+        XCTAssertTrue(text.contains("before"))
+        XCTAssertTrue(text.contains("after"))
+        XCTAssertEqual(parser.terminal?.readGrid().images.count, 1, "the animated image is placed once")
+    }
+
     func testScreenFramePaintsTheSameScreenAndRoundTripsThroughThePark() throws {
         let source = TerminalEmulator(cols: 20, rows: 3)
         source.feed(Data("plain \u{1b}[1;31mred\u{1b}[0m after\r\n\u{1b}[?1h\u{1b}[?2004hnext".utf8))

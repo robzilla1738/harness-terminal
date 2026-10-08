@@ -157,18 +157,23 @@ public final class TerminalEmulator: VTParserHandler {
     /// a hostile stream can open many distinct ids that each send `m=1` and never finish. Cap the
     /// count of concurrently-reassembling images so the dictionary can't grow without bound.
     private let maxKittyPendingImages = 64
-    /// Transmitted-but-not-yet-placed images, keyed by Kitty image id (`i=`). Populated by `a=t`
+    /// The transfer the last first chunk began: later chunks carry only `m` (and `q`) keys.
+    private var kittyLoadingKey: Int?
+    /// Transmitted images, oldest first, keyed by Kitty image id (`i=`). Populated by `a=t`
     /// (and `a=T`), consumed by `a=p` (place-many) — the transmit-once/place-many model image
-    /// plugins use. Bounded by count + total bytes; oldest evicted on overflow.
-    private var kittyTransmitted: [(id: Int, textureID: Int, image: DecodedImage)] = []
+    /// plugins use — and animated by `a=f` / `a=a` / `a=c`. Bounded by count + total bytes,
+    /// frames included; oldest evicted on overflow.
+    private var kittyImages: [KittyImage] = []
+    /// Names frame pixels to the renderer: a fresh id whenever they change, never reused.
     private var nextKittyTextureID = 0
-    /// Virtual placements (`U=1`) by Kitty image id, drawn wherever placeholder cells name them.
-    private var kittyVirtuals: [Int: KittyPlaceholders.Virtual] = [:]
+    /// Virtual placements (`U=1`) by Kitty image id, drawn wherever placeholder cells name them,
+    /// and the cells each spans.
+    private var kittyVirtuals: [Int: (cols: Int, rows: Int)] = [:]
     /// Image numbers (`I=`) sent without an id, and the id assigned to each, as Kitty does.
     private var kittyNumbers: [Int: Int] = [:]
     private var nextKittyAssignedID = 1 << 30
-    private let maxKittyTransmittedImages = 64
-    private var kittyTransmittedBytes = 0
+    private let maxKittyImages = 64
+    private var kittyImageBytes = 0
 
     public init(cols: Int, rows: Int) {
         let c = max(1, cols)
@@ -202,7 +207,7 @@ public final class TerminalEmulator: VTParserHandler {
 
     /// Read the viewport scrolled `offset` lines up into scrollback (0 = live bottom).
     public func readGrid(scrollbackOffset offset: Int) -> TerminalGridSnapshot {
-        withPlaceholderImages(current.snapshot(scrollbackOffset: offset))
+        withKittyImages(current.snapshot(scrollbackOffset: offset))
     }
 
     // MARK: - Input
@@ -257,15 +262,55 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     public func readGrid() -> TerminalGridSnapshot {
-        withPlaceholderImages(current.snapshot())
+        withKittyImages(current.snapshot())
     }
 
-    /// Adds the image slices Kitty placeholder cells show. Free when nothing uses `U=1`.
-    private func withPlaceholderImages(_ grid: TerminalGridSnapshot) -> TerminalGridSnapshot {
-        let slices = KittyPlaceholders.placements(in: grid, virtuals: kittyVirtuals)
-        guard !slices.isEmpty else { return grid }
+    /// Points the grid's images at what they show now: a placement of a stored Kitty image draws
+    /// the image's current frame, so animation and frame edits reach it, and placeholder cells
+    /// draw slices of their virtual placements. Free when no Kitty image is stored.
+    private func withKittyImages(_ grid: TerminalGridSnapshot) -> TerminalGridSnapshot {
+        guard !kittyImages.isEmpty else { return grid }
+        var images = grid.images.map { placement in
+            guard let id = current.kittyID(ofPlacement: placement.id), let index = kittyImageIndex(id) else {
+                return placement
+            }
+            var placement = placement
+            placement.id = -kittyImages[index].currentFrame.textureID
+            return placement
+        }
+        let virtuals = Dictionary(uniqueKeysWithValues: kittyVirtuals.compactMap { id, size in
+            kittyImageIndex(id).map {
+                (id, KittyPlaceholders.Virtual(textureID: kittyImages[$0].currentFrame.textureID, cols: size.cols, rows: size.rows))
+            }
+        })
+        images += KittyPlaceholders.placements(in: grid, virtuals: virtuals)
         return TerminalGridSnapshot(cols: grid.cols, rows: grid.rows, cells: grid.cells, cursor: grid.cursor,
-                                    images: grid.images + slices, marks: grid.marks)
+                                    images: images, marks: grid.marks)
+    }
+
+    /// Plays the Kitty animations `grid` draws: each running one whose current frame has shown
+    /// for its gap moves on, while images it doesn't draw hold still, as in Kitty. Returns `grid`
+    /// showing the frames now current, and when the next one is due in uptime nanoseconds — nil
+    /// when nothing it draws animates. A renderer calls this with each grid it builds.
+    public func animateImages(in grid: TerminalGridSnapshot, now: UInt64) -> (grid: TerminalGridSnapshot, nextFrameAt: UInt64?) {
+        guard !grid.images.isEmpty else { return (grid, nil) }
+        var nextFrameAt: UInt64?
+        var advanced: [Int: Int] = [:] // the id drawn → the id of the frame now current
+        for index in kittyImages.indices where kittyImages[index].isAnimating {
+            let drawn = -kittyImages[index].currentFrame.textureID
+            guard grid.images.contains(where: { $0.id == drawn }) else { continue }
+            if let due = kittyImages[index].advance(now: now) { nextFrameAt = min(nextFrameAt ?? due, due) }
+            advanced[drawn] = -kittyImages[index].currentFrame.textureID
+        }
+        guard !advanced.isEmpty else { return (grid, nil) }
+        let images = grid.images.map { placement in
+            var placement = placement
+            placement.id = advanced[placement.id] ?? placement.id
+            return placement
+        }
+        let animated = TerminalGridSnapshot(cols: grid.cols, rows: grid.rows, cells: grid.cells, cursor: grid.cursor,
+                                            images: images, marks: grid.marks)
+        return (animated, nextFrameAt)
     }
 
     /// Which viewport rows of the current screen changed since the last call, so a renderer can
@@ -565,10 +610,10 @@ public final class TerminalEmulator: VTParserHandler {
     // MARK: - Inline images
 
     /// Decoded pixels for a placed image (queried by the renderer on the main thread).
-    /// Pixels for a placement id: the screen's own, or (negative) a transmitted Kitty image that
-    /// placeholder cells draw.
+    /// Pixels for a placement id: the screen's own, or (negative) a frame of a stored Kitty image.
     public func image(for id: Int) -> DecodedImage? {
-        id < 0 ? kittyTransmitted.first { $0.textureID == -id }?.image : current.image(for: id)
+        guard id < 0 else { return current.image(for: id) }
+        return kittyImages.lazy.compactMap { $0.frames.first { $0.textureID == -id }?.image }.first
     }
 
     /// Set by the host so an image's cell footprint + cursor advance match the real cell size.
@@ -583,24 +628,28 @@ public final class TerminalEmulator: VTParserHandler {
         current.placeImage(image, cols: cols, rows: rows, z: z, kittyID: kittyID)
     }
 
-    /// Store a transmitted image for later `a=p` placement, bounded by count + total bytes.
-    private func storeKittyTransmitted(id: Int, image: DecodedImage) {
-        kittyTransmitted.removeAll { existing in
-            if existing.id == id { kittyTransmittedBytes -= existing.image.byteCount; return true }
+    /// Store an image as the newest, replacing any with its id, then evict the oldest past the
+    /// count and byte budget.
+    private func storeKittyImage(_ image: KittyImage) {
+        kittyImages.removeAll { existing in
+            if existing.id == image.id { kittyImageBytes -= existing.byteCount; return true }
             return false
         }
-        nextKittyTextureID += 1
-        kittyTransmitted.append((id, nextKittyTextureID, image))
-        kittyTransmittedBytes += image.byteCount
-        while (kittyTransmitted.count > maxKittyTransmittedImages
-               || kittyTransmittedBytes > ImageLimits.maxBytesPerScreen),
-              !kittyTransmitted.isEmpty {
-            kittyTransmittedBytes -= kittyTransmitted.removeFirst().image.byteCount
+        kittyImages.append(image)
+        kittyImageBytes += image.byteCount
+        while (kittyImages.count > maxKittyImages || kittyImageBytes > ImageLimits.maxBytesPerScreen),
+              !kittyImages.isEmpty {
+            kittyImageBytes -= kittyImages.removeFirst().byteCount
         }
     }
 
-    private func kittyTransmitted(id: Int) -> DecodedImage? {
-        kittyTransmitted.first { $0.id == id }?.image
+    private func kittyImageIndex(_ id: Int) -> Int? {
+        kittyImages.firstIndex { $0.id == id }
+    }
+
+    private func nextKittyTexture() -> Int {
+        nextKittyTextureID += 1
+        return nextKittyTextureID
     }
 
     /// Emit the Kitty graphics ack `APC G <i|I>=<id> ; <message> ST`. Per spec it's sent only when
@@ -614,7 +663,8 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     private func handleKittyGraphics(_ cmd: KittyGraphicsCommand) {
-        let key = cmd.imageID
+        let continuation = cmd.keys.keys.allSatisfy { $0 == "m" || $0 == "q" }
+        let key = continuation ? kittyLoadingKey ?? cmd.imageID : cmd.imageID
         if cmd.moreChunks {
             if var pending = kittyPending[key] {
                 // Bound total reassembly memory, but KEEP the entry (with its first chunk's control
@@ -631,10 +681,12 @@ public final class TerminalEmulator: VTParserHandler {
                 // flood of never-finished `m=1` chunks under distinct ids can't grow the map.
                 if kittyPending.count >= maxKittyPendingImages { kittyPending.removeAll() }
                 kittyPending[key] = (cmd, cmd.payload) // first chunk holds the control keys
+                kittyLoadingKey = key
             }
             return
         }
         // Final chunk: combine with any accumulated chunks (whose first command holds the control).
+        kittyLoadingKey = nil
         let base: KittyGraphicsCommand
         var payload: [UInt8]
         if let pending = kittyPending.removeValue(forKey: key) {
@@ -648,24 +700,23 @@ public final class TerminalEmulator: VTParserHandler {
         // Echo whichever handle the client used (`i=` preferred, else `I=`) back in the ack.
         let echoKey = base.imageID != 0 ? "i" : "I"
         let echoID = base.imageID != 0 ? base.imageID : base.imageNumber
+        let ack = { (error: String?) in
+            self.kittyAck(idKey: echoKey, id: echoID, ok: error == nil, message: error ?? "OK", quietness: base.quietness)
+        }
 
         switch base.action {
         case "q":
             // Query (capability/decodability probe): validate without placing or storing. Answering
             // this is what gates detection in `icat`/`timg`/`chafa`, so it must reply.
             let loaded = kittyImage(base, payload: payload)
-            kittyAck(idKey: echoKey, id: echoID, ok: loaded.image != nil,
-                     message: loaded.image != nil ? "OK" : loaded.error, quietness: base.quietness)
+            ack(loaded.image != nil ? nil : loaded.error)
 
         case "t", "T":
             // Transmit (`t`) stores for later place-many; transmit+display (`T`) also places now.
             let loaded = kittyImage(base, payload: payload)
-            guard let image = loaded.image else {
-                kittyAck(idKey: echoKey, id: echoID, ok: false, message: loaded.error, quietness: base.quietness)
-                return
-            }
+            guard let image = loaded.image else { return ack(loaded.error) }
             let id = kittyID(for: base, assigning: true)
-            if let id { storeKittyTransmitted(id: id, image: image) }
+            if let id { storeKittyImage(KittyImage(id: id, image: image, textureID: nextKittyTexture())) }
             if base.action == "T" {
                 if base.unicodePlaceholder {
                     if let id { placeVirtually(id: id, image: image, command: base) }
@@ -673,28 +724,57 @@ public final class TerminalEmulator: VTParserHandler {
                     placeImage(image, cols: base.cols, rows: base.rows, z: base.z, kittyID: id)
                 }
             }
-            kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
+            ack(nil)
 
         case "p":
             // Put/place a previously-transmitted image by id (transmit-once / place-many).
-            guard let id = kittyID(for: base, assigning: false), let image = kittyTransmitted(id: id) else {
-                kittyAck(idKey: echoKey, id: echoID, ok: false,
-                         message: "ENOENT:image not found", quietness: base.quietness)
-                return
+            guard let id = kittyID(for: base, assigning: false), let index = kittyImageIndex(id) else {
+                return ack("ENOENT:image not found")
             }
+            let image = kittyImages[index].currentFrame.image
             if base.unicodePlaceholder {
                 placeVirtually(id: id, image: image, command: base)
             } else {
                 placeImage(image, cols: base.cols, rows: base.rows, z: base.z, kittyID: id)
             }
-            kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
+            ack(nil)
 
         case "d":
             deleteKittyImages(base)
-            kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
+            ack(nil)
+
+        case "f":
+            // An animation frame, in any format a transmit takes. The image grows by a whole
+            // frame, so one that would no longer fit the budget on its own is refused.
+            guard let id = kittyID(for: base, assigning: false), let index = kittyImageIndex(id) else {
+                return ack("ENOENT:image not found")
+            }
+            let loaded = kittyImage(base, payload: payload)
+            guard let frame = loaded.image else { return ack(loaded.error) }
+            var image = kittyImages[index]
+            if let error = image.loadFrame(frame, base, textureID: nextKittyTexture()) { return ack(error) }
+            guard image.byteCount <= ImageLimits.maxBytesPerScreen else {
+                return ack("ENOSPC:too many frames for the image storage quota")
+            }
+            storeKittyImage(image)
+            ack(nil)
+
+        case "a":
+            // Animation control answers only errors, as Kitty does.
+            guard let id = kittyID(for: base, assigning: false), let index = kittyImageIndex(id) else {
+                return ack("ENOENT:image not found")
+            }
+            kittyImages[index].control(base)
+
+        case "c":
+            // Compose: copy a rectangle of one frame onto another.
+            guard let id = kittyID(for: base, assigning: false), let index = kittyImageIndex(id) else {
+                return ack("ENOENT:image not found")
+            }
+            ack(kittyImages[index].compose(base, textureID: nextKittyTexture()))
 
         default:
-            break // `a=a` (animation) and any unknown action are deliberately ignored (deferred).
+            break // unknown actions are ignored
         }
     }
 
@@ -735,11 +815,10 @@ public final class TerminalEmulator: VTParserHandler {
     /// A `U=1` placement: nothing is drawn now; placeholder cells naming `id` show it, `c`×`r`
     /// cells big (or the image's own size in cells).
     private func placeVirtually(id: Int, image: DecodedImage, command: KittyGraphicsCommand) {
-        guard let texture = kittyTransmitted.last(where: { $0.id == id })?.textureID else { return }
         let cell = current.cellPixelSize
         let cols = command.cols > 0 ? command.cols : max(1, (image.pixelWidth + cell.width - 1) / cell.width)
         let rows = command.rows > 0 ? command.rows : max(1, (image.pixelHeight + cell.height - 1) / cell.height)
-        kittyVirtuals[id] = KittyPlaceholders.Virtual(textureID: texture, cols: cols, rows: rows)
+        kittyVirtuals[id] = (cols, rows)
         current.markAllDirty()
     }
 
@@ -814,9 +893,9 @@ public final class TerminalEmulator: VTParserHandler {
         kittyVirtuals = kittyVirtuals.filter { !named($0.key) }
         if kittyVirtuals.count != virtualCount { current.markAllDirty() }
         guard target.isUppercase else { return }
-        kittyTransmitted.removeAll { entry in
+        kittyImages.removeAll { entry in
             guard named(entry.id) || removed.contains(entry.id) else { return false }
-            kittyTransmittedBytes -= entry.image.byteCount
+            kittyImageBytes -= entry.byteCount
             return true
         }
     }
@@ -1436,14 +1515,15 @@ public final class TerminalEmulator: VTParserHandler {
         titleStack.removeAll()
         mode1048Saved = false
         kittyPending.removeAll()
+        kittyLoadingKey = nil
         // RIS returns the terminal to its initial state, so the transmitted-image cache
-        // (transmit-once / place-many storage) must reset too — same cleanup as `d=a`
-        // delete-all — otherwise images survive a full reset and keep occupying the
-        // per-screen byte budget.
-        kittyTransmitted.removeAll()
+        // (transmit-once / place-many storage, animation frames included) must reset too — same
+        // cleanup as `d=a` delete-all — otherwise images survive a full reset and keep occupying
+        // the per-screen byte budget.
+        kittyImages.removeAll()
         kittyNumbers.removeAll()
         kittyVirtuals.removeAll()
-        kittyTransmittedBytes = 0
+        kittyImageBytes = 0
         pointerShape = nil
         if !userVariables.isEmpty {
             userVariables.removeAll()

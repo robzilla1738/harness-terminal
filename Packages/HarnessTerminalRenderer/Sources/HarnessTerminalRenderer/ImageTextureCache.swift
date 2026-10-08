@@ -1,18 +1,22 @@
 import Foundation
+import HarnessTerminalEngine
 import Metal
 
 /// GPU texture cache for inline images, keyed by the engine's monotonic image id (so pixels for
 /// a given id never change — a cache hit is always valid). Mirrors `GlyphAtlas`'s upload pattern.
-/// Bounded by entry count; least-recently-used textures are evicted.
+/// Each Kitty animation frame has its own id, so a playing animation uploads each frame once.
+/// Bounded by bytes — a screen's image budget twice over, room for its images and an animation's
+/// frames together; least-recently-used textures are evicted.
 final class ImageTextureCache {
     private let device: MTLDevice
-    private let maxEntries: Int
+    private let maxBytes: Int
     private var textures: [Int: MTLTexture] = [:]
     private var lru: [Int] = [] // ids, most-recent last
+    private var bytes = 0
 
-    init(device: MTLDevice, maxEntries: Int = 64) {
+    init(device: MTLDevice, maxBytes: Int = 2 * ImageLimits.maxBytesPerScreen) {
         self.device = device
-        self.maxEntries = maxEntries
+        self.maxBytes = maxBytes
     }
 
     /// Texture for image `id`, uploading `pixels` (RGBA8, row-major top-to-bottom) on first sight.
@@ -35,6 +39,7 @@ final class ImageTextureCache {
                 bytesPerRow: width * 4)
         }
         textures[id] = texture
+        bytes += width * height * 4
         touch(id)
         evictIfNeeded()
         return texture
@@ -45,10 +50,13 @@ final class ImageTextureCache {
         lru.append(id)
     }
 
+    /// Drops the least-recently-used textures past the budget, keeping the newest even if it
+    /// alone is larger.
     private func evictIfNeeded() {
-        while textures.count > maxEntries, let oldest = lru.first {
-            lru.removeFirst()
-            textures.removeValue(forKey: oldest)
+        while bytes > maxBytes, lru.count > 1 {
+            if let texture = textures.removeValue(forKey: lru.removeFirst()) {
+                bytes -= texture.width * texture.height * 4
+            }
         }
     }
 }

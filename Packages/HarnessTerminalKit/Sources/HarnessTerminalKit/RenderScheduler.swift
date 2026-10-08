@@ -52,6 +52,10 @@ final class RenderScheduler {
     /// the loop itself on un-occlusion. `forceRender` stays ungated (resize/first-paint forces
     /// while occluded are rare and harmless).
     private(set) var isOccluded = false
+    /// When the next frame of a Kitty animation on screen is due (uptime nanoseconds), from the
+    /// last frame presented; nil when nothing visible animates. It keeps the display link awake
+    /// until then, and the first `tick` at or past it presents.
+    private(set) var animationDeadline: UInt64?
 
     init(render: @escaping () -> Void, renderSynchronously: (() -> Void)? = nil) {
         self.render = render
@@ -62,12 +66,16 @@ final class RenderScheduler {
     /// display link running only while needed (and pause it when idle, so a quiet terminal doesn't
     /// wake the CPU every display tick). An occluded window holds too: its link pauses even with
     /// output flooding in, so a covered pane running a build costs no presents at all.
-    var hasPendingWork: Bool { isRunning && needsRender && !synchronized && !isOccluded }
+    /// A pending animation frame counts too, so the link stays awake to time it.
+    var hasPendingWork: Bool { isRunning && (needsRender || animationDeadline != nil) && !synchronized && !isOccluded }
 
     /// Window visibility changed (see `isOccluded`). Un-occlusion does not present by itself —
     /// the caller re-arms via its normal scheduling so any marks accumulated while covered land
     /// on the next tick.
     func setOccluded(_ occluded: Bool) { isOccluded = occluded }
+
+    /// Record when the presented frame's animations next change (see `animationDeadline`).
+    func setAnimationDeadline(_ deadline: UInt64?) { animationDeadline = deadline }
 
     /// Begin display-cadence scheduling (called when the view enters a window).
     func start() { isRunning = true }
@@ -81,6 +89,7 @@ final class RenderScheduler {
         synchronized = false
         presentedThisInterval = false
         isOccluded = false
+        animationDeadline = nil
     }
 
     /// Request a present at the next display tick. Cheap and idempotent — many marks before a tick
@@ -118,10 +127,15 @@ final class RenderScheduler {
     }
 
     /// Display-cadence callback. Presents one frame iff running, dirty, and not synchronized; clears
-    /// the dirty flag. Returns whether it actually rendered (for tests / display-link pausing).
+    /// the dirty flag. A passed animation deadline makes the surface dirty. Returns whether it
+    /// actually rendered (for tests / display-link pausing).
     @discardableResult
-    func tick() -> Bool {
-        guard hasPendingWork else {
+    func tick(now: UInt64 = DispatchTime.now().uptimeNanoseconds) -> Bool {
+        if let deadline = animationDeadline, now >= deadline {
+            animationDeadline = nil
+            needsRender = true
+        }
+        guard isRunning, needsRender, !synchronized, !isOccluded else {
             // Idle tick: nothing to draw. This ends the current interval, so reopen the
             // immediate-present path for the next arrival after a quiet gap.
             presentedThisInterval = false
