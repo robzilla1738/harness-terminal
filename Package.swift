@@ -268,7 +268,9 @@ let package = Package(
         .testTarget(
             name: "HarnessTerminalEngineTests",
             dependencies: ["HarnessTerminalEngine", "CHarnessBase64"],
-            path: "Tests/HarnessTerminalEngineTests"
+            path: "Tests/HarnessTerminalEngineTests",
+            // Read from disk through #filePath, not bundled.
+            exclude: ["ReflowGolden"]
         ),
         .testTarget(
             name: "HarnessCopyModeTests",
