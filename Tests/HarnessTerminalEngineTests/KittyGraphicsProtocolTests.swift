@@ -149,6 +149,31 @@ final class KittyGraphicsProtocolTests: XCTestCase {
         XCTAssertEqual(harness_shm_take(name, 0, 0, 16, &leftover), -1, "the terminal unlinks the object")
     }
 
+    func testUnicodePlaceholdersDrawSlicesOfAVirtualPlacement() {
+        let (term, _) = makeTerm()
+        XCTAssertEqual(KittyPlaceholders.diacritics.count, 297, "Kitty's row/column table")
+        XCTAssertEqual(KittyPlaceholders.diacritics.prefix(3), [0x0305, 0x030D, 0x030E])
+        // Transmit image 7 as a 2×2-cell virtual placement: nothing is drawn yet.
+        term.feed("\u{1b}_Ga=T,U=1,f=32,s=1,v=1,i=7,c=2,r=2;\(pixel)\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 0)
+        // Row 0: two cells, the first with row/column marks, the second continuing it. Row 1 names
+        // its row and column explicitly. Foreground 7 (256-color) is the image id.
+        let p = "\u{10EEEE}"
+        term.feed("\u{1b}[38;5;7m\(p)\u{0305}\u{0305}\(p)\r\n\(p)\u{030D}\u{0305}\(p)\u{030D}\u{030D}\u{1b}[0m")
+        let images = term.readGrid().images.sorted { ($0.row, $0.col) < ($1.row, $1.col) }
+        XCTAssertEqual(images.count, 2, "each row's consecutive cells are one slice")
+        XCTAssertEqual(images[0].cols, 2)
+        XCTAssertEqual(images[0].sourceX, 0)
+        XCTAssertEqual(images[0].sourceWidth, 1)
+        XCTAssertEqual(images[0].sourceHeight, 0.5)
+        XCTAssertEqual(images[1].row, 1)
+        XCTAssertEqual(images[1].sourceY, 0.5)
+        XCTAssertNotNil(term.image(for: images[0].id), "the slice's pixels come from the transmitted image")
+
+        term.feed("\u{1b}_Ga=d,d=i,i=7\u{1b}\\")
+        XCTAssertTrue(term.readGrid().images.isEmpty, "deleting the image removes its virtual placement")
+    }
+
     func testDeleteByPositionAndZAndLowercaseKeepsData() {
         let (term, _) = makeTerm()
         term.feed("\u{1b}_Ga=T,f=32,s=1,v=1,i=1,z=5;\(pixel)\u{1b}\\")   // row 1 (0-based 0)

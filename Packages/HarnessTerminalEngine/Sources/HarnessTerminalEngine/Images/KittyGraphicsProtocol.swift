@@ -30,6 +30,8 @@ public struct KittyGraphicsCommand: Equatable {
     public var rows: Int { keys["r"].flatMap { Int($0) } ?? 0 }
     /// `z` — z-index; negative draws below text, >=0 above the background.
     public var z: Int { keys["z"].flatMap { Int($0) } ?? 0 }
+    /// `U=1` — a virtual placement shown through Unicode placeholder cells, not drawn here.
+    public var unicodePlaceholder: Bool { keys["U"] == "1" }
     /// `t` — transmission medium: `d` direct (the payload), `f` a file, `t` a temp file to
     /// delete after reading, `s` shared memory. The payload names the file for `f`/`t`.
     public var medium: Character { keys["t"].flatMap(\.first) ?? "d" }

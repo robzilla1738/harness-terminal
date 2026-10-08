@@ -1530,7 +1530,8 @@ public final class TerminalMetalRenderer {
             else { continue }
             var inst = ImageInstance(
                 origin: SIMD2(ox + Float(img.column) * cellW, oy + Float(img.row) * cellH),
-                size: SIMD2(Float(img.columns) * cellW, Float(img.rows) * cellH))
+                size: SIMD2(Float(img.columns) * cellW, Float(img.rows) * cellH),
+                source: img.source)
             encoder.setVertexBytes(&inst, length: MemoryLayout<ImageInstance>.stride, index: 0)
             encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
             encoder.setFragmentTexture(texture, index: 0)

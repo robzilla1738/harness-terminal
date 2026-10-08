@@ -160,6 +160,8 @@ struct DecoInstance {
 struct ImageInstance {
     var origin: SIMD2<Float>
     var size: SIMD2<Float>
+    /// Texture sub-rectangle (x, y, width, height) in 0…1.
+    var source: SIMD4<Float>
 }
 
 /// Line-decoration styles; raw values match the `kind` switch in `deco_fragment`.

@@ -15,7 +15,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | Only one client answers terminal queries | The size owner. | Same |
 | Read-only watching | `attach --read-only`; Copy Watch Command in the app. | Built in from the start (stated) |
 | Idle cost | A pane quiet for a minute has its history held LZ4-compressed; reads decompress a copy. | LZ4 online grid compression, encrypted snapshots |
-| Evented PTY reads | Yes (`DispatchSourceRead`, no thread per PTY). | Yes |
+| Evented PTY I/O | Reads and writes: a pane frozen with Ctrl-S holds a buffer, not a thread. | Yes |
 
 ## Automation
 
@@ -44,7 +44,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | Go to directory | ⌥⌘G browser on the pane's daemon, local or remote. | ⇧⌘G |
 | Themes | 492 built in, save and export your own, theme fit for off-palette colors. | 41 designer themes, Oklab harmonization |
 | VoiceOver | Tabs, panes, focus announcements. | VoiceOver in SuperSplit |
-| Kitty graphics | Direct, file, and temp-file transmission; place-many; every delete target. Not yet: shared memory, Unicode placeholders, animation. | 100% (libghostty) |
+| Kitty graphics | Direct, file, temp-file, and shared-memory transmission; place-many; every delete target; Unicode placeholders (images that live in text, so they survive tmux and editors). Not yet: animation. | 100% (libghostty) |
 | Kitty keyboard, OSC 52 | Yes; clipboard reads opt-in (`allow-clipboard-read`). | Yes |
 | Rebind from the palette | Not yet (bind with `bind-key` or Lua). | — |
 

@@ -177,9 +177,17 @@ public struct ImagePlacementSnapshot: Equatable, Sendable {
     public let cols: Int     // cell footprint
     public let rows: Int
     public let z: Int        // <0 below text, >=0 above background (Kitty z); default 0
+    /// The part of the image this quad shows, as fractions of its width and height. The whole
+    /// image unless this is a slice drawn by Kitty Unicode placeholders.
+    public let sourceX: Double
+    public let sourceY: Double
+    public let sourceWidth: Double
+    public let sourceHeight: Double
 
-    public init(id: Int, row: Int, col: Int, cols: Int, rows: Int, z: Int) {
+    public init(id: Int, row: Int, col: Int, cols: Int, rows: Int, z: Int,
+                sourceX: Double = 0, sourceY: Double = 0, sourceWidth: Double = 1, sourceHeight: Double = 1) {
         self.id = id; self.row = row; self.col = col; self.cols = cols; self.rows = rows; self.z = z
+        self.sourceX = sourceX; self.sourceY = sourceY; self.sourceWidth = sourceWidth; self.sourceHeight = sourceHeight
     }
 }
 

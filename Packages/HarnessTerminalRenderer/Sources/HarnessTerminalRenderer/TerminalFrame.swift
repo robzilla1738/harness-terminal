@@ -114,15 +114,18 @@ public struct FrameImage: Equatable, Sendable {
     public var rows: Int
     public var z: Int
     public var image: DecodedImage
+    /// The part of the image shown, as fractions (the whole image unless a placeholder slice).
+    public var source: SIMD4<Float>
 
-    public init(id: Int, column: Int, row: Int, columns: Int, rows: Int, z: Int, image: DecodedImage) {
+    public init(id: Int, column: Int, row: Int, columns: Int, rows: Int, z: Int, image: DecodedImage,
+                source: SIMD4<Float> = SIMD4(0, 0, 1, 1)) {
         self.id = id; self.column = column; self.row = row
-        self.columns = columns; self.rows = rows; self.z = z; self.image = image
+        self.columns = columns; self.rows = rows; self.z = z; self.image = image; self.source = source
     }
 
     public static func == (lhs: FrameImage, rhs: FrameImage) -> Bool {
         lhs.id == rhs.id && lhs.column == rhs.column && lhs.row == rhs.row
-            && lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.z == rhs.z
+            && lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.z == rhs.z && lhs.source == rhs.source
     }
 }
 
@@ -525,7 +528,8 @@ public struct FrameBuilder {
             for p in snapshot.images {
                 guard let decoded = imageProvider(p.id) else { continue }
                 images.append(FrameImage(id: p.id, column: p.col, row: p.row,
-                                         columns: p.cols, rows: p.rows, z: p.z, image: decoded))
+                                         columns: p.cols, rows: p.rows, z: p.z, image: decoded,
+                                         source: SIMD4(Float(p.sourceX), Float(p.sourceY), Float(p.sourceWidth), Float(p.sourceHeight))))
             }
         }
         // OSC 133 prompt gutter: resolve each marked row's stripe color from the palette —
@@ -727,12 +731,14 @@ public struct FrameBuilder {
                 foreground = paint.foreground
                 drawBackground = paint.drawBackground
             }
+            // A Kitty image placeholder draws its image slice, not a glyph.
+            let placeholder = cell.codepoint == KittyPlaceholders.character
             cells.append(RenderCell(
                 row: row,
                 column: column,
-                codepoint: cell.codepoint,
-                combining0: cell.combining0,
-                combining1: cell.combining1,
+                codepoint: placeholder ? 0x20 : cell.codepoint,
+                combining0: placeholder ? 0 : cell.combining0,
+                combining1: placeholder ? 0 : cell.combining1,
                 foreground: foreground,
                 background: background,
                 underlineColor: paint.underlineColor,

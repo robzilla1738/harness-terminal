@@ -113,7 +113,7 @@ enum MetalShaders {
     }
 
     // Inline image (Sixel / Kitty / iTerm2): one textured quad per image, RGBA sampled directly.
-    struct ImageInstance { float2 origin; float2 size; };
+    struct ImageInstance { float2 origin; float2 size; float4 source; };
 
     vertex VOut image_vertex(uint vid [[vertex_id]],
                              constant ImageInstance &inst [[buffer(0)]],
@@ -123,7 +123,9 @@ enum MetalShaders {
         VOut out;
         out.position = float4(pixelToNDC(px, viewport), 0.0, 1.0);
         out.color = float4(1.0, 1.0, 1.0, 1.0);
-        out.uv = corner; // (0,0) top-left → texture row 0 (top); y-flip is in pixelToNDC
+        // (0,0) top-left → texture row 0 (top); y-flip is in pixelToNDC. `source` picks the
+        // slice a Kitty placeholder cell shows (the whole image otherwise).
+        out.uv = inst.source.xy + corner * inst.source.zw;
         out.pageIndex = 0u;
         return out;
     }
