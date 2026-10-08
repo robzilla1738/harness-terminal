@@ -4,6 +4,12 @@ import XCTest
 /// `swift test` builds this bundle from HarnessDaemonCore. The CLI target is the one that links CLua51.
 final class DaemonLuaLinkTests: XCTestCase {
     func testDaemonTestBundleDoesNotExportLua() throws {
+        #if canImport(Darwin)
+        let macOS = true
+        #else
+        let macOS = false
+        #endif
+        try XCTSkipUnless(macOS, "Reads Mach-O bundles with nm and otool")
         let bundle = Bundle(for: DaemonLuaLinkTests.self).bundlePath
         let nm = try Self.symbols(of: Self.machO(in: bundle))
         XCTAssertFalse(nm.contains("luaL_newstate"), nm)

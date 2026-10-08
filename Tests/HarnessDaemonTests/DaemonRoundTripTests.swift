@@ -8,6 +8,7 @@ final class DaemonRoundTripTests: XCTestCase {
     private var root: URL?
     private var previousHome: String?
     private var server: DaemonServer!
+    private var restoreSIGPIPE: (() -> Void)?
 
     override func setUpWithError() throws {
         try skipUnlessLiveDaemonTests()
@@ -21,7 +22,9 @@ final class DaemonRoundTripTests: XCTestCase {
         try HarnessPaths.ensureDirectories()
 
         // As HarnessDaemonMain does: a write racing a closing peer must not kill the process.
-        ignoreSIGPIPE()
+        // Restored in tearDown, so other suites in this process spawn children with the default.
+        let previous = signal(SIGPIPE, SIG_IGN)
+        restoreSIGPIPE = { signal(SIGPIPE, previous) }
         server = DaemonServer()
         // start() resumes the accept DispatchSource on the server's own GCD queue, so
         // the server handles connections without runLoop(). (runLoop() calls
@@ -33,6 +36,7 @@ final class DaemonRoundTripTests: XCTestCase {
     override func tearDownWithError() throws {
         server?.stop()
         server = nil
+        restoreSIGPIPE?()
         if let previousHome { setenv("HARNESS_HOME", previousHome, 1) } else { unsetenv("HARNESS_HOME") }
         if let root { try? FileManager.default.removeItem(at: root) }
     }

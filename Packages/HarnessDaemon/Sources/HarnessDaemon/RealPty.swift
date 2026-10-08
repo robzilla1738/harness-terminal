@@ -692,6 +692,7 @@ public final class RealPty: @unchecked Sendable {
         argv: [UnsafeMutablePointer<CChar>?],
         envp: [UnsafeMutablePointer<CChar>?]
     ) {
+        harness_reset_signals()
         argv.withUnsafeBufferPointer { argvBuffer in
             envp.withUnsafeBufferPointer { envpBuffer in
                 guard let argvBase = argvBuffer.baseAddress, let path = argvBase.pointee,

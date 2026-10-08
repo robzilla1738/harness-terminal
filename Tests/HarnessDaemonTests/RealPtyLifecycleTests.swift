@@ -43,6 +43,25 @@ final class RealPtyLifecycleTests: XCTestCase {
         XCTAssertTrue(pty.replay(fromSequence: nil).contains(marker), "scrollback should retain output")
     }
 
+    /// The daemon ignores SIGTERM, SIGINT, SIGHUP, and SIGUSR1 (dispatch sources handle them) and
+    /// SIGPIPE. A pane's programs must start with every signal at its default: a plain `kill`
+    /// stops them, and a write to a closed pipe ends them quietly instead of failing with EPIPE.
+    func testPaneProgramsStartWithDefaultSignals() throws {
+        let ignored = [SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGPIPE]
+        let previous = ignored.map { signal($0, SIG_IGN) }
+        defer { for (signo, handler) in zip(ignored, previous) { signal(signo, handler) } }
+        let pty = try makePty()
+        defer { pty.close() }
+
+        let output = OutputAccumulator()
+        _ = pty.subscribe { data, _ in _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "") }
+        // The markers are computed, so the terminal's echo of the command line can't match them.
+        pty.write("sh -c 'kill -TERM $$; echo SURVIVED_$((40+2))'; yes | head -c 1 >/dev/null; echo DONE_$((40+2))\n")
+        XCTAssertTrue(waitUntil(timeout: 8) { output.contains("DONE_42") })
+        XCTAssertFalse(output.contains("SURVIVED_42"), "SIGTERM is not ignored in the pane")
+        XCTAssertFalse(output.snapshot.localizedCaseInsensitiveContains("broken pipe"), "SIGPIPE is not ignored in the pane")
+    }
+
     func testOnExitFiresWhenShellExits() throws {
         let pty = try makePty()
         let exited = expectation(description: "child exited")

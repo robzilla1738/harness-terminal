@@ -9,6 +9,7 @@
 #include "CHarnessSys.h"
 
 #include <sys/ioctl.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <termios.h>
@@ -140,4 +141,19 @@ void harness_close_fds_from(int lowfd) {
     // it unconditionally so the Swift caller can use it without a #if canImport(Glibc)).
     (void)lowfd;
 #endif
+}
+
+void harness_reset_signals(void) {
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    // 1 through 64 covers Darwin's 31 and Linux's real-time range; an invalid number is EINVAL.
+    for (int signo = 1; signo <= 64; signo++) {
+        if (signo == SIGKILL || signo == SIGSTOP) continue;
+        (void)sigaction(signo, &action, NULL);
+    }
+    sigset_t none;
+    sigemptyset(&none);
+    (void)sigprocmask(SIG_SETMASK, &none, NULL);
 }

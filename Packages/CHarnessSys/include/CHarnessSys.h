@@ -38,4 +38,9 @@ int harness_open_pty_master(char *slave_path, size_t slave_len);
 // syscall(2), close(2), getdtablesize(2), or a simple integer loop — no malloc, no stdio.
 void harness_close_fds_from(int lowfd);
 
+// Put every signal back to its default action and unblock them all, for a child between fork and
+// exec: an ignored signal survives exec, and the daemon ignores SIGTERM/SIGINT/SIGHUP/SIGUSR1 (its
+// dispatch sources handle them) and SIGPIPE. Async-signal-safe (sigaction + sigprocmask only).
+void harness_reset_signals(void);
+
 #endif /* C_HARNESS_SYS_H */
