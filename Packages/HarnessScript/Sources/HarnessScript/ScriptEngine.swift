@@ -476,7 +476,7 @@ public final class ScriptEngine {
         }
         lua_pushvalue(state, 2)
         let ref = luaL_ref(state, Self.registry)
-        handlerRefs[event, default: []].append(ref)
+        handlerRefs[FollowEvent.canonicalType(event), default: []].append(ref)
         return 0
     }
 
@@ -690,7 +690,7 @@ public final class ScriptEngine {
 
     private func accepts(_ event: FollowEvent, kind: Int32, state: OpaquePointer) -> Bool {
         if kind == LUA_TSTRING {
-            return event.type == Self.luaString(state, 1)
+            return event.type == Self.luaString(state, 1).map(FollowEvent.canonicalType)
         }
         if kind == LUA_TTABLE {
             // Every field in the filter must match: `type` against the event type, the rest
@@ -698,7 +698,7 @@ public final class ScriptEngine {
             let filter = stringFields(state, 1)
             guard !filter.isEmpty else { return false }
             return filter.allSatisfy { key, value in
-                key == "type" ? event.type == value : event.payload[key]?.display == value
+                key == "type" ? event.type == FollowEvent.canonicalType(value) : event.payload[key]?.display == value
             }
         }
         if kind == LUA_TFUNCTION {

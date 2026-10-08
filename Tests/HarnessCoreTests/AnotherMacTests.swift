@@ -158,7 +158,7 @@ final class AnotherMacTests: XCTestCase {
 
         XCTAssertNil(FollowEvent.tailscaleStatusChanged(commandPresent: false, peerCount: 4))
         let status = try XCTUnwrap(FollowEvent.tailscaleStatusChanged(commandPresent: true, peerCount: 2))
-        XCTAssertEqual(status.type, "tailscale_status_changed")
+        XCTAssertEqual(status.type, "server.tailscale_status")
         XCTAssertEqual(status.payload["server"], .bool(true))
         XCTAssertEqual(status.payload["peers"], .int(2))
 

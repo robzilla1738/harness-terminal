@@ -3,6 +3,18 @@ import Foundation
 /// One line on `harness-cli events --follow`. `type` plus `payload` is the wire shape.
 /// Unknown types are delivered, not rejected. Extra payload fields are ignored by readers.
 public struct FollowEvent: Codable, Equatable, Sendable {
+    /// Event names before they all became `domain.verb`. Lua handlers and waits still accept
+    /// them for a release; `canonicalType` maps one to its current name.
+    public static let legacyNames: [String: String] = [
+        "program_status_changed": "terminal.program_status",
+        "program_status_removed": "terminal.program_status_removed",
+        "session_created": "session.created",
+        "session_destroyed": "session.closed",
+        "tailscale_status_changed": "server.tailscale_status",
+    ]
+
+    public static func canonicalType(_ name: String) -> String { legacyNames[name] ?? name }
+
     public var type: String
     public var payload: [String: FollowValue]
 
@@ -30,7 +42,7 @@ public struct FollowEvent: Codable, Equatable, Sendable {
         if let session { payload["session"] = .string(session) }
         if let app, !app.isEmpty { payload["app"] = .string(app) }
         if let message, !message.isEmpty { payload["message"] = .string(message) }
-        return FollowEvent(type: "program_status_changed", payload: payload)
+        return FollowEvent(type: "terminal.program_status", payload: payload)
     }
 
     public static func keymapChanged(generation: Int, hash: String) -> FollowEvent {
@@ -56,7 +68,7 @@ public struct FollowEvent: Codable, Equatable, Sendable {
     /// Emitted only when `tailscale status` is present. A missing command emits nothing.
     public static func tailscaleStatusChanged(commandPresent: Bool, peerCount: Int) -> FollowEvent? {
         guard commandPresent else { return nil }
-        return FollowEvent(type: "tailscale_status_changed", payload: [
+        return FollowEvent(type: "server.tailscale_status", payload: [
             "peers": .int(peerCount),
             "server": .bool(true),
         ])
@@ -65,7 +77,7 @@ public struct FollowEvent: Codable, Equatable, Sendable {
     public static func programStatusRemoved(pane: String, session: String?) -> FollowEvent {
         var payload: [String: FollowValue] = ["pane": .string(pane)]
         if let session { payload["session"] = .string(session) }
-        return FollowEvent(type: "program_status_removed", payload: payload)
+        return FollowEvent(type: "terminal.program_status_removed", payload: payload)
     }
 }
 
@@ -182,8 +194,8 @@ public enum FollowHookBridge {
         case "after-kill-pane": type = "pane.closed"
         // `after-new-session` fires alongside `session-created`; mapping only one keeps the
         // stream to one event per session.
-        case "session-created": type = "session_created"
-        case "session-closed": type = "session_destroyed"
+        case "session-created": type = "session.created"
+        case "session-closed": type = "session.closed"
         case "session-renamed": type = "session.renamed"
         case "client-attached": type = "client.connected"; server = true
         case "client-detached": type = "client.disconnected"; server = true

@@ -48,4 +48,4 @@ ConEmu progress (OSC 9;4) may fill the root record only until the first real 750
 
 The daemon scans the byte stream with no window open. The GUI parser, given the same bytes, produces the same records. One presenter feeds the tab, the session row, the notch, and the waiting queue. `working` uses the working dot. `blocked` joins the waiting queue, `kind` picks the glyph, and `msg` is shortened plain text. `done` and `error` mark the session row until focus plus a key. The tab chip shows the agent color and, when set, the `app` label.
 
-`harness-cli events --follow` emits `program_status_changed` as soon as a real report is accepted, and `program_status_removed` when a real report clears the records. `harness-cli api call pane.program_status` returns the records for one pane.
+`harness-cli events --follow` emits `terminal.program_status` as soon as a real report is accepted, and `terminal.program_status_removed` when a real report clears the records. `harness-cli api call pane.program_status` returns the records for one pane.

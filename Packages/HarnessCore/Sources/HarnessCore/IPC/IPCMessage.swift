@@ -182,7 +182,7 @@ public enum IPCRequest: Codable, Sendable {
     case noteHostsChanged
     /// The SSH forward to `host` dropped. The daemon publishes `client.connection`.
     case noteClientConnection(host: String)
-    /// `tailscale status` was present. The daemon publishes `tailscale_status_changed`.
+    /// `tailscale status` was present. The daemon publishes `server.tailscale_status`.
     case noteTailscaleStatus(peerCount: Int)
     /// The calling connection describes itself for `client.list`.
     case presentClient(kind: String, version: String, uid: UInt32, tunnel: Bool)

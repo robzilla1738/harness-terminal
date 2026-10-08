@@ -29,6 +29,18 @@ final class ScriptEngineTests: XCTestCase {
         ]))
     }
 
+    func testLegacyEventNamesStillReachHandlers() throws {
+        let engine = try ScriptEngine()
+        engine.allowsHandlers = true
+        let loaded = engine.load("""
+        seen = 0
+        harness.on("session_created", function(e) seen = seen + 1 end)
+        """, from: "script", replacingFileLayer: false)
+        guard case .loaded = loaded else { return XCTFail("\(loaded)") }
+        engine.deliver(FollowEvent(type: "session.created"))
+        XCTAssertEqual(engine.numberGlobal("seen"), 1)
+    }
+
     func testCallWithoutADaemonFailsWithExitFour() throws {
         let engine = try ScriptEngine()
         let loaded = engine.load("""

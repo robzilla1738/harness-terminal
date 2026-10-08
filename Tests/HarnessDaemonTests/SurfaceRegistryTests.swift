@@ -50,7 +50,7 @@ final class SurfaceRegistryTests: XCTestCase {
         XCTAssertEqual(tab?.status, .waiting)
         XCTAssertEqual(tab?.programMark?.fromRealReport, true)
         let followed = registry.followEventsForTesting().map(\.type)
-        XCTAssertTrue(followed.contains("program_status_changed"))
+        XCTAssertTrue(followed.contains("terminal.program_status"))
     }
 
     func testSendKeyUsesApplicationCursorBytesOnlyAfterDECCKM() {
@@ -72,12 +72,12 @@ final class SurfaceRegistryTests: XCTestCase {
         bytes.append(contentsOf: "7501;state=done:app=demo".utf8)
         bytes.append(contentsOf: [0x1B, 0x5C])
         registry.noteSurfaceOutputForTesting(surfaceKey: surface.surfaceID, data: bytes)
-        let event = try XCTUnwrap(registry.followEventsForTesting().first { $0.type == "program_status_changed" })
+        let event = try XCTUnwrap(registry.followEventsForTesting().first { $0.type == "terminal.program_status" })
         XCTAssertEqual(event.payload["state"], .string("done"))
         XCTAssertEqual(event.payload["pane"], .string(surface.surfaceID))
         XCTAssertNotNil(event.payload["session"])
         let line = try event.jsonLine()
-        XCTAssertTrue(line.contains("program_status_changed"))
+        XCTAssertTrue(line.contains("terminal.program_status"))
     }
 
     func testFollowSideEventsNameTitleDirectoryClipboardProgressAndProcess() throws {
@@ -134,7 +134,7 @@ final class SurfaceRegistryTests: XCTestCase {
         }
         registry.noteSurfaceOutputForTesting(surfaceKey: pane, data: bytes)
         let states = registry.followEventsForTesting().compactMap { event -> String? in
-            guard event.type == "program_status_changed" else { return nil }
+            guard event.type == "terminal.program_status" else { return nil }
             if case let .string(state) = event.payload["state"] { return state }
             return nil
         }
@@ -948,9 +948,9 @@ final class SurfaceRegistryTests: XCTestCase {
         registry.noteTunnelClientDropped(client: "client-2")
         registry.noteTailscaleStatus(peerCount: 2)
         let events = registry.followEventsForTesting().filter {
-            $0.type == "client.connection" || $0.type == "tailscale_status_changed"
+            $0.type == "client.connection" || $0.type == "server.tailscale_status"
         }
-        XCTAssertEqual(events.map(\.type), ["client.connection", "client.connection", "tailscale_status_changed"])
+        XCTAssertEqual(events.map(\.type), ["client.connection", "client.connection", "server.tailscale_status"])
         XCTAssertEqual(events[0].payload["state"], .string("dropped"))
         XCTAssertEqual(events[0].payload["host"], .string("devbox"))
         XCTAssertEqual(events[0].payload["server"], .bool(true))
