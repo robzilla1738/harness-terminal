@@ -22,19 +22,20 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  XCODE_VERSION: "16"
+  # Same Xcode and runner as ci.yml, so the release is built by the toolchain CI tested.
+  XCODE_VERSION: "26.6"
 
 jobs:
   release:
     name: Build, sign, notarize, and publish
-    runs-on: macos-15
+    runs-on: macos-26
     environment: release
     permissions:
       contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -123,7 +124,7 @@ jobs:
           fi
 
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .build
@@ -261,7 +262,7 @@ jobs:
 
       - name: Checkout website repository
         if: ${{ inputs.deploy_appcast }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ vars.WEBSITE_REPOSITORY }}
           token: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
@@ -340,7 +341,7 @@ jobs:
 
       - name: Upload release artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: harness-release-${{ inputs.tag }}
           path: |

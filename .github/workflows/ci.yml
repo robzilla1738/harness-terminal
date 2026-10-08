@@ -12,18 +12,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pin the toolchain to a known minor so a `latest-stable` jump (e.g. to a new Xcode with
-  # source-breaking changes) can't turn a green main red without a deliberate bump here.
-  # Deliberately pinned to a full minor version (not just "16") so the runner picks the
-  # exact SDK we tested against. Bump intentionally when adopting new language/SDK features.
-  XCODE_VERSION: "16.3"
+  # The Xcode releases are built with (release.yml pins the same version and runner), so CI
+  # tests what ships. Pinned to a full version so a runner-image update can't turn a green main
+  # red; bump it here and in release.yml together.
+  XCODE_VERSION: "26.6"
 
 jobs:
   build-test:
     name: Build & test (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@v1
@@ -36,7 +35,7 @@ jobs:
           xcodebuild -version
 
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .build
@@ -73,16 +72,20 @@ jobs:
       - name: Build (release)
         run: swift build -c release
 
-      # All eight suites (Core / Engine / CopyMode / Theme / Renderer / Kit / Daemon).
-      # Renderer tests run offscreen, which is fine on a headless runner.
+      # Every suite, with the live socket / PTY / security round-trips (DaemonRoundTrip,
+      # RealPtyLifecycle, contention, hook firing) switched on: they spawn a real shell and Unix
+      # socket and skip without HARNESS_LIVE_DAEMON_TESTS. Renderer tests run offscreen, which is
+      # fine on a headless runner.
       # --enable-code-coverage instruments the test binary so SPM emits per-target .json
       # coverage files under .build/<triple>/debug/codecov/. No floor gate is enforced yet
       # (no stable baseline exists); the artifact below archives the data for trend tracking.
       - name: Test
+        env:
+          HARNESS_LIVE_DAEMON_TESTS: "1"
         run: swift test --enable-code-coverage
 
       - name: Upload coverage data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-macos
           # SPM writes coverage JSON into .build/<triple>/debug/codecov/. The triple varies
@@ -93,10 +96,12 @@ jobs:
 
   linux-build-test:
     name: Build & test (Linux, headless daemon)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # The oldest Swift that Scripts/install-linux.sh promises ("a Swift 6 toolchain"), so a
+    # headless daemon keeps building from source on any Swift 6 box.
     container: swift:6.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Toolchain versions
         run: swift --version
@@ -120,49 +125,27 @@ jobs:
           HARNESS_LIVE_DAEMON_TESTS: "1"
         run: swift test
 
-  live-daemon-tests:
-    name: Live daemon tests (socket / PTY / security)
-    runs-on: macos-15
+  xcode-project:
+    name: Xcode project builds
+    runs-on: macos-26
+    # Releases build with SwiftPM, but Harness.xcodeproj (generated from project.yml) is how the
+    # app is opened in Xcode. Build it so a target or module-map drift can't go unnoticed.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Cache SwiftPM build
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build
-            ~/Library/org.swift.swiftpm
-          # See build-test: exact-match only (no cross-resolution restore-keys), `v2` salt.
-          key: spm-v2-live-${{ runner.os }}-${{ env.XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
-
-      # Self-heal a poisoned cache (see the build-test job): drop a half-extracted Sparkle artifact
-      # so `swift build` re-fetches it cleanly instead of failing on a missing xcframework.
-      - name: Heal partial Sparkle artifact
+      - name: Build (Debug)
         run: |
-          plist=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/Info.plist"
-          if [ -d .build ] && [ ! -f "$plist" ]; then
-            echo "::warning::Sparkle xcframework missing in restored cache — clearing .build/artifacts for a clean re-fetch"
-            rm -rf .build/artifacts
-          fi
-
-      # The socket/PTY/security round-trip suites (DaemonRoundTrip, RealPtyLifecycle, contention,
-      # hook-firing) are gated behind HARNESS_LIVE_DAEMON_TESTS and therefore NEVER run in the default
-      # `swift test`. Run the full suite with the gate ON here so those live tests — spawning a real
-      # shell + Unix socket and checking the daemon's IPC, reconnect, and peer-credential paths — are
-      # actually exercised in CI.
-      - name: Live daemon tests
-        env:
-          HARNESS_LIVE_DAEMON_TESTS: "1"
-        run: swift test
+          xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug \
+            -derivedDataPath .build/xcode CODE_SIGNING_ALLOWED=NO build
 
   lint:
     name: Format lint (advisory)
-    runs-on: macos-15
+    runs-on: macos-26
     # Style only — never block a merge on formatting. Surfaces drift for a human to clean up.
     # Kept advisory (continue-on-error: true) because `swift format lint` operates on the full
     # tree and the current codebase has pre-existing style violations that would make this job
@@ -170,7 +153,7 @@ jobs:
     # tree is clean and violations are held at zero.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@v1
@@ -185,9 +168,9 @@ jobs:
 
   manifest-lint:
     name: Manifest version agreement
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Assert Sparkle version consistency
         run: |
@@ -226,11 +209,11 @@ jobs:
 
   benchmarks:
     name: Benchmarks (non-blocking)
-    runs-on: macos-15
+    runs-on: macos-26
     # Perf baselines are informational here; never block a merge on runner variance.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@v1
@@ -251,7 +234,7 @@ jobs:
           swift test -c release --filter HarnessBenchmarks 2>&1 | tee .build/benchmark-results.txt
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: .build/benchmark-results.txt
