@@ -303,7 +303,7 @@ public final class SSHTunnelManager: @unchecked Sendable {
         // whole life. `endpoint(for:)` reads it back to explain an early exit.
         process.standardOutput = FileHandle.nullDevice
         let log = logURL(for: localSocket)
-        FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        _ = FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
         process.standardError = (try? FileHandle(forWritingTo: log)) ?? FileHandle.nullDevice
         return process
     }

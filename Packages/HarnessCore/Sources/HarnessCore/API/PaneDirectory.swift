@@ -42,7 +42,7 @@ public enum PaneDirectory {
         return names.sorted().map { name in
             let path = (directory as NSString).appendingPathComponent(name)
             var isDirectory: ObjCBool = false
-            fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
+            _ = fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
             return PaneDirEntry(name: name, path: path, directory: isDirectory.boolValue)
         }
     }

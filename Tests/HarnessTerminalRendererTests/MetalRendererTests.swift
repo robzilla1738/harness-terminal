@@ -1615,12 +1615,14 @@ final class MetalRendererTests: XCTestCase {
         let count = 50_000
         let cache = ImageTextureCache(device: device, maxBytes: 1 << 30, maxEntries: count)
         let rgba: [UInt8] = [255, 0, 0, 255]
-        let start = Date()
         for id in 1 ... count { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
+        // Timed: hits that reorder every entry, then the sweep. No uploads, so this is the cache's
+        // own bookkeeping, milliseconds when it's O(1) per touch and seconds when it's O(n).
+        let start = Date()
         for id in (1 ... count).reversed() { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
         for _ in 0 ... ImageTextureCache.idleFrames + 1 { cache.endFrame(animating: false) }
         XCTAssertEqual(cache.count, 0)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
     }
 
     func testPromptGutterStripeRendersInLeftPadding() throws {
