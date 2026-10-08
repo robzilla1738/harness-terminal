@@ -99,6 +99,9 @@ public enum IPCRequest: Codable, Sendable {
     /// One-step attach (daemons with the `attach-stream` capability): reply `.attached`, then
     /// the history as binary output frames, then live output. Replaces subscribe + replay.
     case attachStream(AttachRequest)
+    /// Put bytes in a private temp file on the daemon's machine and reply with its path
+    /// (`.text`). A paste into a remote pane uploads an image or file this way.
+    case writeTempFile(name: String, data: Data)
     case resizeSurface(surfaceID: String, rows: UInt16, cols: UInt16)
     case detachSurface(surfaceID: String)
     /// Identify this connection to the daemon so it shows up in `list-clients`

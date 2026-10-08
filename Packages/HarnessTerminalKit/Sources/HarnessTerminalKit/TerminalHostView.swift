@@ -243,6 +243,7 @@ public final class TerminalHostView: NSView {
         self.io = io
         let inputGate = InputGate(io: io, endpoint: endpoint)
         self.inputGate = inputGate
+        let remote = RemoteAttach.isTunnel(endpoint)
         let nativeView = HarnessTerminalSurfaceView(
             themeName: themeName,
             fontFamily: settings?.fontFamily ?? "Menlo",
@@ -257,6 +258,17 @@ public final class TerminalHostView: NSView {
         super.init(frame: .zero)
         ensureDaemonSurface(cwd: workingDirectory, shell: shell, settings: settings)
         configureNative(nativeView, io: io, inputGate: inputGate)
+        if remote {
+            // The shell is on another Mac: a pasted image or file goes there first.
+            let client = daemonClient
+            nativeView.uploadForPaste = { data, name, done in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let response = try? client.request(.writeTempFile(name: name, data: data), timeout: 30)
+                    let path: String? = if case let .text(path)? = response { path } else { nil }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { done(path) } }
+                }
+            }
+        }
         startDaemonOutput()
         // If the very first subscribe didn't take (daemon mid-restart at creation), don't leave the
         // pane dead — retry on the same backoff that recovers a later drop.
@@ -709,6 +721,12 @@ public final class TerminalHostView: NSView {
     public var allowProgramClipboardAccess: Bool {
         get { nativeView.allowProgramClipboardAccess }
         set { nativeView.allowProgramClipboardAccess = newValue }
+    }
+
+    /// `allow-clipboard-read`: programs may read the clipboard via OSC 52. Default off.
+    public var allowProgramClipboardRead: Bool {
+        get { nativeView.allowProgramClipboardRead }
+        set { nativeView.allowProgramClipboardRead = newValue }
     }
 
     /// Set the terminal identity the engine answers in XTVERSION / secondary DA. The app resolves

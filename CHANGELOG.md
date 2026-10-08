@@ -65,6 +65,13 @@ Not a release. Local `main` carries this work so the next session starts from it
 - **The daemon is the session.** Quitting the app leaves the daemon up. A new attach replays the same grid. A second client can subscribe read-only (`subscribeSurfaceOutputReadOnly`): it sees output and its writes do not reach the child. Surface cwd, foreground command, and hooks survive reconnect.
 
 ### Added
+- **Paste into a remote pane.** An image or file pasted or dropped into a pane on another Mac is uploaded there (a new `writeTempFile` request; owner-only, swept after a day) and the remote path is pasted, instead of a local path the remote shell can't open.
+- **Tailscale discovery that finds Harness.** Suggest Tailscale Peers probes each online peer over SSH and lists the ones running HarnessDaemon first, socket path included.
+- **Copy Watch Command** (pane menu, palette): a read-only `attach` line for the pane, with `--host` when it's remote.
+- **`allow-clipboard-read`** (off by default) answers OSC 52 clipboard reads.
+
+### Changed
+- **Only the size owner answers terminal queries.** When several clients show one pane, only the one that sets its size replies to DA, DSR, and similar queries, so a program gets one answer.
 - **Go to Directory (⌥⌘G).** A folder browser on the daemon that owns the focused pane, this Mac or a remote host: type to filter, → or Tab to open a folder, ← to go up; ↩ cds the pane, ⌘↩ opens a new tab there, ⌥↩ types the path. It replaces the one-level pop-up.
 - **Previews in color.** Overview tiles and tab peek show each pane's screen with its colors and styles, from the daemon's `vt` capture, so a pane that isn't on screen (or lives on another Mac) previews the same way.
 - **Drag panes by their header.** Drop on another pane's edge to split it with the dragged pane on that side, or on its middle to swap the two. Hover a tab to switch to it, drop on a tab to move the pane there, or drop on empty tab-bar space to give it its own tab. A pane alone in its tab can be moved too; its emptied tab closes. `pane.move` takes the same `side` (`left`, `right`, `above`, `below`), and `join-pane` requests carry the placement.

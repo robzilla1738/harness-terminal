@@ -761,10 +761,12 @@ final class SessionCoordinator: NSObject {
     private func updateChromeAndHosts(systemAppearance: HarnessSystemAppearance? = nil) {
         refreshChromePalette(systemAppearance: systemAppearance)
         let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
+        let allowClipboardRead = HarnessOptions.shared.get("allow-clipboard-read")?.boolValue ?? false
         for host in terminalHosts.allHosts() {
             host.applyTheme(named: snapshot.themeName)
             host.applySettings(settings)
             host.allowProgramClipboardAccess = allowClipboard
+            host.allowProgramClipboardRead = allowClipboardRead
             applyTerminalIdentity(to: host)
             pushBorderColors(to: host)
         }
@@ -2277,6 +2279,18 @@ extension SessionCoordinator: TerminalHostDelegate {
 
     func terminalHostSizeOwnershipChanged(_ ownership: SizeOwnership, surfaceID: SurfaceID) {
         NotificationCenter.default.post(name: .harnessSizeOwnershipDidChange, object: nil)
+    }
+
+    /// Copy a command that watches `surfaceID` read-only from any terminal: no typing, no
+    /// resizing. A pane on a saved remote host gets `--host`.
+    func copyWatchCommand(for surfaceID: SurfaceID) {
+        var words = ["harness-cli"]
+        if let host = RemoteHostsService.shared.activeHostName { words += ["--host", ShellQuoting.quote(host)] }
+        words += ["attach", "--read-only", "--surface", surfaceID.uuidString]
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(words.joined(separator: " "), forType: .string)
+        DisplayMessage.show("Copied a read-only attach command")
     }
 
     /// Make this window's size the active pane's size, when another client owns it.

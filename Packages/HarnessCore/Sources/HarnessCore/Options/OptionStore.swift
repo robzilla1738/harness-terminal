@@ -171,6 +171,7 @@ public final class OptionStore: @unchecked Sendable {
         "mouse": .bool(true),
         "mode-keys": .string("vi"),
         "set-clipboard": .bool(true),
+        "allow-clipboard-read": .bool(false),
         "history-limit": .int(10_000),
         // Index of the first window / pane in `-t session:window.pane` targets and
         // in display (`#{window_index}`, `#{pane_index}`, display-panes numbers).

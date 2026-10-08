@@ -60,6 +60,14 @@ public final class TerminalEmulator: VTParserHandler {
     public var onSetClipboard: ((String) -> Void)?
     /// Bytes the terminal must write back to the PTY (DSR cursor report, DA, etc.).
     public var onResponse: ((Data) -> Void)?
+    /// A program asked to read the clipboard (OSC 52 `?`), for the given selection (`c`).
+    /// The host answers with `clipboardReply`, or stays silent; unset, nothing answers.
+    public var onClipboardRead: ((String) -> Void)?
+
+    /// The OSC 52 answer to a read.
+    public static func clipboardReply(selection: String, text: String) -> Data {
+        Data("\u{1b}]52;\(selection);\(Data(text.utf8).base64EncodedString())\u{1b}\\".utf8)
+    }
     /// True while the host feeds persisted scrollback on (re)attach. Replayed bytes restore
     /// state (grid, title, cwd, user vars) but must not re-fire world-facing effects: query
     /// replies would land on the PTY as junk input long after the program stopped waiting
@@ -937,9 +945,15 @@ public final class TerminalEmulator: VTParserHandler {
     private func handleClipboardOSC(_ payload: UnsafeBufferPointer<UInt8>) {
         guard let semi = payload.firstIndex(of: 0x3B) else { return }
         let encoded = oscBytes(payload, from: semi + 1)
-        guard encoded.count > 0, !(encoded.count == 1 && encoded[0] == UInt8(ascii: "?")),
-              let text = Base64Bytes.decodeClipboardText(encoded)
-        else { return }
+        if encoded.count == 1, encoded[0] == UInt8(ascii: "?") {
+            // A read. The host decides whether to answer (`clipboardReply`); a replayed query
+            // from history never asks.
+            guard !isReplaying else { return }
+            let selection = String(decoding: oscBytes(payload, from: 0).prefix(semi), as: UTF8.self)
+            onClipboardRead?(selection.isEmpty ? "c" : selection)
+            return
+        }
+        guard encoded.count > 0, let text = Base64Bytes.decodeClipboardText(encoded) else { return }
         if !isReplaying { onSetClipboard?(text) }
     }
 

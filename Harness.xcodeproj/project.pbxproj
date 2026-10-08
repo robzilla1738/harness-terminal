@@ -212,6 +212,7 @@
 		7B4BC51AEE6B115848CF8EB6 /* AgentInboxPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED4D137AE38994FB0D00AB53 /* AgentInboxPanelView.swift */; };
 		7C61ABA5C4635670B1008C57 /* DaemonSessionServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A685AD93826D3B233E39874 /* DaemonSessionServiceTests.swift */; };
 		7C73D9D9871DAC99CFB2B93B /* HarnessDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5844E35D84A5D77C31D27D62 /* HarnessDesign.swift */; };
+		7C9B20936939CD93C0D6F41F /* PastedFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C267DBA0FB8D562A5A50E45 /* PastedFiles.swift */; };
 		7C9E9D78710F42DBB936C4D6 /* wide_cjk__11x5__to__13x5.golden in Resources */ = {isa = PBXBuildFile; fileRef = 6EAE8E7737374E256A6F8F54 /* wide_cjk__11x5__to__13x5.golden */; };
 		7CF9291D02EA073787F8851B /* IconTileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D0040632889D6C4FA624B3 /* IconTileView.swift */; };
 		7D2C8292A030EE411092451C /* VersionBannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F579B672C34805FD8AE7D48 /* VersionBannerTests.swift */; };
@@ -587,6 +588,7 @@
 		67F15100E8FA45DA6E3556C0 /* ClipboardOSCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardOSCTests.swift; sourceTree = "<group>"; };
 		68025487861E6BE768D2AEBC /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fonts; path = Apps/Harness/Resources/Fonts; sourceTree = SOURCE_ROOT; };
 		6A0021BA0231946954B307AD /* RealPtyColorEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealPtyColorEnvironmentTests.swift; sourceTree = "<group>"; };
+		6C267DBA0FB8D562A5A50E45 /* PastedFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PastedFiles.swift; sourceTree = "<group>"; };
 		6CD3B92DA4B9BF1846DFD9A5 /* FileWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcher.swift; sourceTree = "<group>"; };
 		6DC6232C8A59BCF990C40C43 /* DamageTrackingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DamageTrackingTests.swift; sourceTree = "<group>"; };
 		6DF0EF95D2A4A26E54FBADDE /* emoji_mixed__9x4__to__5x5.golden */ = {isa = PBXFileReference; path = emoji_mixed__9x4__to__5x5.golden; sourceTree = "<group>"; };
@@ -1265,6 +1267,7 @@
 				E63870191AAAF494B6C86D66 /* DaemonMetrics.swift */,
 				5122A39E062976C92BBDDDB2 /* DaemonServer.swift */,
 				C15DAB6FEB240399B4127CF1 /* ParkedRing.swift */,
+				6C267DBA0FB8D562A5A50E45 /* PastedFiles.swift */,
 				F43DED9291885610DB352103 /* RealPty.swift */,
 				BD16EC618FE2A700866D4CC3 /* ScrollbackFile.swift */,
 				B7118759DA679A27E5A64BDB /* SurfaceRegistry.swift */,
@@ -2367,6 +2370,7 @@
 				1207122A18D3229E851E003E /* DaemonMetrics.swift in Sources */,
 				076308B3BD278A7808CC9C1C /* DaemonServer.swift in Sources */,
 				7D909F1CE1BD546B0309FDF9 /* ParkedRing.swift in Sources */,
+				7C9B20936939CD93C0D6F41F /* PastedFiles.swift in Sources */,
 				B21549FEB0B782423E9BC7D8 /* RealPty.swift in Sources */,
 				4B54384DF6D846C959B90A92 /* ScrollbackFile.swift in Sources */,
 				2C0F8854FECE107E3771757C /* SurfaceRegistry+Monitoring.swift in Sources */,

@@ -204,6 +204,8 @@ reuses your existing SSH trust (keys/agent/config); no new credentials or crypto
 | `remote remove --name <name>` | Forget a remote and tear down its tunnel. |
 | `<command> … --host <name>` | Run any client command against the named remote instead of the local daemon (`ping`, `new-session`, `send-keys`, `capture-pane`, `doctor`, …). Exception: `attach-window` always renders the **local** daemon — run it on the machine whose daemon you want to see (see the multiplexer guide). |
 
+In the app, pasting or dropping an image or file into a pane on a remote host uploads it to that host first (owner-only, swept after a day, up to 11 MB) and pastes the remote path. **Remote ▸ Suggest Tailscale Peers…** probes your online peers over SSH and lists the ones running Harness first, with their socket already filled in. A pane's menu has **Copy Watch Command**: a `harness-cli [--host …] attach --read-only --surface …` line for watching it from any terminal.
+
 Allowed `--ssh-arg` options are validated: `-p` (port), `-i` (identity file), `-J` (jump
 host), `-l` (login user), and the flag-only `-4 -6 -A -T -q -v`. Example:
 `remote add --name devbox --ssh me@devbox --socket "$(ssh -p 2222 me@devbox harness-cli socket-path)" --ssh-arg -p --ssh-arg 2222`.
@@ -249,6 +251,7 @@ Built-in defaults include:
 - `mouse` (bool, default `on`) — enable mouse reporting / pane-click selection.
 - `mode-keys` (string, default `vi`) — copy-mode key style.
 - `set-clipboard` (bool, default `on`) — mirror yank → NSPasteboard.
+- `allow-clipboard-read` (bool, default `off`) — let programs read the clipboard with OSC 52 (`ESC ] 52 ; c ; ?`). Off because anything in the pane, including a remote shell, could read it.
 - `history-limit` (int, default `10000`) — scrollback line cap.
 - `base-index` / `pane-base-index` (int, default `0`) — first window / pane index for `-t` targets and index display.
 - `renumber-windows` (bool, default `off`) — renumber tab indices contiguously when a tab closes.

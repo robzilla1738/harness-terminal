@@ -1021,6 +1021,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard let session = sessions[surfaceID] else { return .error("Surface not found") }
             session.injectSyntheticOutput(Data([0x1B, 0x63]))
             return .ok
+        case let .writeTempFile(name, data):
+            switch PastedFiles.write(data, named: name) {
+            case let .success(path): return .text(path)
+            case let .failure(error): return .error(error.message)
+            }
         case .paneWait, .subscribeEvents, .publishKeymap, .noteHostsChanged, .presentClient, .attachStream,
              .noteClientConnection, .noteTailscaleStatus:
             return .error("handled by the daemon server")

@@ -180,6 +180,16 @@ enum CommandPaletteController {
                 coordinator.zoomActivePane()
             },
             PaletteAction(
+                id: "action.copyWatchCommand",
+                title: "Copy Watch Command",
+                subtitle: "harness-cli attach --read-only for the active pane",
+                symbol: "eye",
+                shortcut: "",
+                section: .actions
+            ) {
+                if let surface = coordinator.activeSurfaceID { coordinator.copyWatchCommand(for: surface) }
+            },
+            PaletteAction(
                 id: "action.takeSize",
                 title: "Take Size",
                 subtitle: "Size the active pane to this window when another client owns it",

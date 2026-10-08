@@ -323,6 +323,37 @@ public final class HarnessTerminalSurfaceView: NSView {
         urls.map { shellQuotedPath($0.path) }.joined(separator: " ")
     }
 
+    /// Set when the pane's shell runs on another machine: a pasted image or file is uploaded
+    /// there (bytes, file name, completion with the remote path or nil) instead of pasting a
+    /// local path the remote shell can't open.
+    public var uploadForPaste: ((Data, String, @escaping @MainActor (String?) -> Void) -> Void)?
+
+    /// Upload each file (or the image) to the remote daemon, then paste the remote paths.
+    private func pasteRemotely(_ files: [(Data, String)], upload: @escaping (Data, String, @escaping @MainActor (String?) -> Void) -> Void) {
+        var remaining = files
+        var paths: [String] = []
+        func next() {
+            guard !remaining.isEmpty else {
+                if !paths.isEmpty { pasteText(paths.map(Self.shellQuotedPath).joined(separator: " ")) }
+                return
+            }
+            let (data, name) = remaining.removeFirst()
+            upload(data, name) { path in
+                if let path { paths.append(path) }
+                next()
+            }
+        }
+        next()
+    }
+
+    /// Files from a paste or drop, read for upload. Folders and unreadable files are skipped.
+    private static func uploadable(_ urls: [URL]) -> [(Data, String)] {
+        urls.compactMap { url in
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+            return (data, url.lastPathComponent)
+        }
+    }
+
     /// Bytes the terminal produces for the PTY (typed input, key sequences, DSR/DA).
     public var onInput: ((Data) -> Void)?
     /// New grid size after a resize (columns, rows) — the host forwards this to the daemon.
@@ -395,6 +426,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Whether a program may set the system clipboard via OSC 52 (tmux
     /// `set-clipboard`). The host sets this from the option; default on.
     public var allowProgramClipboardAccess = true
+    /// Whether a program may READ the system clipboard via OSC 52 (`allow-clipboard-read`).
+    /// Off by default: anything running in the pane, or on a remote host, could read it.
+    public var allowProgramClipboardRead = false
 
     private let emulatorState: SurfaceEmulatorState
     private let colorProviderState = SurfaceColorProviderState()
@@ -1345,11 +1379,25 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     private func configureEmulatorCallbacks() {
         let emulator = emulatorState.emulator
+        // Only the client that sizes the pane answers terminal queries (DA, DSR, Kitty acks),
+        // so several attached clients don't each reply to one question.
         emulator.onResponse = { [weak self] data in
             if Thread.isMainThread {
-                self?.onInput?(data)
+                guard let self, self.sizeOwner else { return }
+                self.onInput?(data)
             } else {
-                DispatchQueue.main.async { [weak self] in self?.onInput?(data) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.sizeOwner else { return }
+                    self.onInput?(data)
+                }
+            }
+        }
+        emulator.onClipboardRead = { [weak self] selection in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.allowProgramClipboardRead, self.sizeOwner,
+                      let text = NSPasteboard.general.string(forType: .string)
+                else { return }
+                self.onInput?(TerminalEmulator.clipboardReply(selection: selection, text: text))
             }
         }
         emulator.onTitleChange = { [weak self] title in
@@ -3712,6 +3760,14 @@ public final class HarnessTerminalSurfaceView: NSView {
             pasteText(raw)
             return
         }
+        if let upload = uploadForPaste {
+            if let png = Self.pngImageData(from: pasteboard) {
+                pasteRemotely([(png, "pasted.png")], upload: upload)
+            } else {
+                pasteRemotely(Self.uploadable(Self.droppedFileURLs(from: pasteboard)), upload: upload)
+            }
+            return
+        }
         // Image on the clipboard → write a temp PNG, paste its quoted path.
         if let path = Self.writePastedImage(from: pasteboard) {
             pasteText(Self.shellQuotedPath(path))
@@ -3738,7 +3794,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     /// Best-effort PNG bytes for whatever image the pasteboard carries (screenshot = PNG/TIFF).
-    private static func pngImageData(from pasteboard: NSPasteboard) -> Data? {
+    static func pngImageData(from pasteboard: NSPasteboard) -> Data? {
         // A screenshot is already PNG — trust the raw bytes once they parse as an image.
         if let png = pasteboard.data(forType: .png), NSBitmapImageRep(data: png) != nil {
             return png
@@ -3777,7 +3833,11 @@ public final class HarnessTerminalSurfaceView: NSView {
         let text = Self.droppedPathText(for: urls)
         guard !text.isEmpty else { return false }
         window?.makeFirstResponder(self)
-        pasteText(text)
+        if let upload = uploadForPaste {
+            pasteRemotely(Self.uploadable(urls), upload: upload)
+        } else {
+            pasteText(text)
+        }
         return true
     }
 

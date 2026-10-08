@@ -125,4 +125,16 @@ final class ClipboardOSCTests: XCTestCase {
             XCTAssertNil(captured, "invalid UTF-8 of \(raw.count) bytes must not set the clipboard")
         }
     }
+
+    func testAReadAsksTheHostAndAReplayedReadDoesNot() {
+        let term = TerminalEmulator(cols: 20, rows: 2)
+        var asked: [String] = []
+        term.onClipboardRead = { asked.append($0) }
+        term.feed("\u{1b}]52;c;?\u{07}")
+        XCTAssertEqual(asked, ["c"])
+        term.isReplaying = true
+        term.feed("\u{1b}]52;c;?\u{07}")
+        XCTAssertEqual(asked, ["c"], "history doesn't ask again")
+        XCTAssertEqual(String(decoding: TerminalEmulator.clipboardReply(selection: "c", text: "hi"), as: UTF8.self), "\u{1b}]52;c;aGk=\u{1b}\\")
+    }
 }

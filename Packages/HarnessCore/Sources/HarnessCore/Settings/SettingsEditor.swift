@@ -52,6 +52,7 @@ public enum DaemonSettingsControls {
         ("mouse", "Mouse reporting", "mouse", ["off", "on"]),
         ("mode-keys", "Copy-mode keys", "mode-keys", ["vi", "emacs"]),
         ("set-clipboard", "OSC 52 clipboard", "set-clipboard", ["off", "on"]),
+        ("allow-clipboard-read", "Programs may read the clipboard (OSC 52)", "allow-clipboard-read", ["off", "on"]),
         ("terminal-identity", "Reported identity", "terminal-identity", ["compatible", "harness"]),
         ("base-index", "Window base index", "base-index", ["0", "1"]),
         ("pane-base-index", "Pane base index", "pane-base-index", ["0", "1"]),

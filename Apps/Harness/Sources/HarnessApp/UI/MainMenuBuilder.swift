@@ -341,20 +341,27 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         SessionCoordinator.shared.setAppearanceMode(mode)
     }
 
+    /// Online Tailscale peers, those running Harness first (found by an SSH probe, so their
+    /// socket is already known). Picking one opens Add Remote Host prefilled; nothing is saved
+    /// until that's confirmed.
     @objc func suggestTailscalePeers() {
+        DisplayMessage.show("Looking for Harness on your tailnet…")
         DispatchQueue.global(qos: .userInitiated).async {
             let present = Self.tailscaleCommandPresent()
             let peers = present ? TailscalePeers.parse(Self.tailscaleStatusJSON() ?? Data()) : []
+            let sockets = TailscalePeers.withHarness(peers)
             DispatchQueue.main.async {
-                if FollowEvent.tailscaleStatusChanged(commandPresent: present, peerCount: peers.count) != nil {
-                    _ = try? DaemonClient().request(.noteTailscaleStatus(peerCount: peers.count), timeout: 1)
+                MainActor.assumeIsolated {
+                    if FollowEvent.tailscaleStatusChanged(commandPresent: present, peerCount: peers.count) != nil {
+                        _ = try? DaemonClient().request(.noteTailscaleStatus(peerCount: peers.count), timeout: 1)
+                    }
+                    self.confirmSuggestedPeer(peers, sockets: sockets, commandPresent: present)
                 }
-                self.confirmSuggestedPeer(peers, commandPresent: present)
             }
         }
     }
 
-    private static func tailscaleCommandPresent() -> Bool {
+    nonisolated private static func tailscaleCommandPresent() -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["tailscale"]
@@ -365,7 +372,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         return process.terminationStatus == 0
     }
 
-    private static func tailscaleStatusJSON() -> Data? {
+    nonisolated private static func tailscaleStatusJSON() -> Data? {
         guard !TailscalePeers.joinsTailnet(TailscalePeers.statusArguments) else { return nil }
         guard let result = try? ProcessCapture.run(
             URL(fileURLWithPath: "/usr/bin/env"),
@@ -374,9 +381,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         return result.stdout
     }
 
-    /// Offer the online peers, then open the Add Remote Host sheet prefilled with the pick.
-    /// Nothing is saved until the sheet is confirmed.
-    private func confirmSuggestedPeer(_ peers: [TailscalePeer], commandPresent: Bool) {
+    private func confirmSuggestedPeer(_ peers: [TailscalePeer], sockets: [TailscalePeer: String], commandPresent: Bool) {
         let alert = NSAlert()
         alert.messageText = "Tailscale peers"
         guard commandPresent, !peers.isEmpty else {
@@ -386,16 +391,19 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
             alert.runModal()
             return
         }
-        alert.informativeText = "Pick a machine. You'll confirm the SSH destination and Harness finds its daemon."
+        let ordered = peers.filter { sockets[$0] != nil } + peers.filter { sockets[$0] == nil }
+        alert.informativeText = sockets.isEmpty
+            ? "None answered with a running Harness over SSH. Pick one to set it up by hand."
+            : "\(sockets.count) running Harness. Pick one; you'll confirm before it's saved."
         alert.addButton(withTitle: "Continue")
         alert.addButton(withTitle: "Cancel")
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        popup.addItems(withTitles: peers.map { $0.hostName.isEmpty ? $0.dnsName : $0.hostName })
+        popup.addItems(withTitles: ordered.map { $0.displayName + (sockets[$0] != nil ? "  · Harness" : "") })
         alert.accessoryView = popup
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let peer = peers[min(max(popup.indexOfSelectedItem, 0), peers.count - 1)]
-        let name = peer.hostName.isEmpty ? peer.dnsName : peer.hostName
-        RemoteHostSheet.present(prefill: RemoteHost(name: name, sshTarget: peer.suggestedSSH, remoteSocketPath: ""))
+        let peer = ordered[min(max(popup.indexOfSelectedItem, 0), ordered.count - 1)]
+        let target = sockets[peer] != nil ? peer.address : peer.suggestedSSH
+        RemoteHostSheet.present(prefill: RemoteHost(name: peer.displayName, sshTarget: target, remoteSocketPath: sockets[peer] ?? ""))
     }
 
     @objc func addRemoteHost() {

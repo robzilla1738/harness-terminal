@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TailscalePeer: Equatable, Sendable {
+public struct TailscalePeer: Hashable, Sendable {
     public var hostName: String
     public var dnsName: String
     public var ips: [String]
@@ -13,9 +13,13 @@ public struct TailscalePeer: Equatable, Sendable {
 
     /// Suggested SSH target. The user still confirms it before anything is stored.
     public var suggestedSSH: String {
-        let host = dnsName.isEmpty ? hostName : dnsName
-        return host.isEmpty ? "" : "user@\(host)"
+        address.isEmpty ? "" : "user@\(address)"
     }
+
+    /// The name SSH reaches it by (your ssh config and login name apply).
+    public var address: String { dnsName.isEmpty ? hostName : dnsName }
+
+    public var displayName: String { hostName.isEmpty ? dnsName : hostName }
 }
 
 /// Reads `tailscale status --json` when that command exists. Suggests peers.
@@ -42,6 +46,23 @@ public enum TailscalePeers {
             rows.append(TailscalePeer(hostName: host, dnsName: dns, ips: ips))
         }
         return rows.sorted { $0.hostName.localizedCaseInsensitiveCompare($1.hostName) == .orderedAscending }
+    }
+
+    /// Peers with a running HarnessDaemon, found by probing each one over SSH in parallel
+    /// (key auth only, so nothing prompts). Blocking; call off the main thread.
+    public static func withHarness(_ peers: [TailscalePeer]) -> [TailscalePeer: String] {
+        let lock = NSLock()
+        var found: [TailscalePeer: String] = [:]
+        DispatchQueue.concurrentPerform(iterations: peers.count) { index in
+            let peer = peers[index]
+            guard !peer.address.isEmpty,
+                  let socket = try? RemoteSocketDetector.detect(target: peer.address, sshArgs: [])
+            else { return }
+            lock.lock()
+            found[peer] = socket
+            lock.unlock()
+        }
+        return found
     }
 
     /// A host to store, or nil when the user has not confirmed both the SSH target and the socket.

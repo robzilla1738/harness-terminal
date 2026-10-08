@@ -197,3 +197,20 @@ final class SnapshotTests: XCTestCase {
         )
     }
 }
+
+final class PastedFilesTests: XCTestCase {
+    func testWritesAnOwnerOnlyFileWithASafeName() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("harness-paste-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        guard case let .success(path) = PastedFiles.write(Data("hi".utf8), named: "../../etc/shot.png", in: directory) else {
+            return XCTFail("expected a path")
+        }
+        XCTAssertTrue(path.hasPrefix(directory.path))
+        XCTAssertTrue(path.hasSuffix("-shot.png"))
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.uint16Value, 0o600)
+        guard case .failure = PastedFiles.write(Data(count: PastedFiles.maxBytes + 1), named: "big", in: directory) else {
+            return XCTFail("too big")
+        }
+    }
+}

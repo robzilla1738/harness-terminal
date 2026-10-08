@@ -193,6 +193,10 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             item.target = self
             menu.addItem(item)
         }
+        let watch = NSMenuItem(title: "Copy Watch Command", action: #selector(copyWatchClicked), keyEquivalent: "")
+        watch.target = self
+        watch.toolTip = "A harness-cli attach --read-only line for watching this pane from another terminal"
+        menu.addItem(watch)
         if viewsAnotherClientsSize {
             let take = NSMenuItem(title: "Take Size", action: #selector(takeClicked), keyEquivalent: "")
             take.target = self
@@ -206,6 +210,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
     }
 
     @objc private func zoomClicked() { coordinator.zoomActivePane() }
+    @objc private func copyWatchClicked() { coordinator.copyWatchCommand(for: surfaceID) }
     @objc private func takeClicked() { coordinator.terminalHostIfExists(for: surfaceID)?.takeSize() }
     @objc private func renameClicked() { coordinator.beginRenameActiveTab() }
     @objc private func closeClicked() { coordinator.killPane(surfaceID: surfaceID) }
