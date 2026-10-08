@@ -432,6 +432,15 @@ final class IPCCodecTests: XCTestCase {
     /// `requestExhaustivenessTripwire` is the compile-time partner: adding an enum case breaks
     /// its no-`default` switch, forcing a sample here so the wire format can't silently regress.
     static let allRequestSamples: [IPCRequest] = [
+        .listAttention,
+        .acknowledgeAttention(surfaceID: UUID().uuidString),
+        .snoozeAttention(surfaceID: UUID().uuidString, minutes: 15),
+        .library(.list),
+        .newTabInSession(sessionID: UUID(), cwd: "/tmp"),
+        .searchOutput(id: UUID(), query: "error", caseSensitive: false, sessionID: nil, offset: 0),
+        .searchPaths(id: UUID(), surfaceID: UUID().uuidString, path: nil, query: "src", project: true),
+        .cancelSearch(id: UUID()),
+        .validateOutputMatch(id: UUID(), match: OutputSearchMatch(workspaceID: UUID(), sessionID: UUID(), sessionName: "Work", tabID: UUID(), tabTitle: "Shell", paneID: UUID(), surfaceID: UUID(), line: 3, text: "error"), epoch: "epoch", revision: 1),
         .ping,
         .listWorkspaces,
         .listSurfaces,
@@ -615,6 +624,8 @@ final class IPCCodecTests: XCTestCase {
     /// runtime; its value is the exhaustiveness check the Swift compiler performs on it.
     private func requestExhaustivenessTripwire(_ request: IPCRequest) {
         switch request {
+        case .listAttention, .acknowledgeAttention, .snoozeAttention, .library, .newTabInSession, .searchOutput, .searchPaths, .cancelSearch, .validateOutputMatch:
+            break
         case .ping, .listWorkspaces, .listSurfaces, .listAgents, .getSnapshot, .listClients,
              .daemonStats, .listBuffers, .closeEphemeralSessions, .showMessages:
             break

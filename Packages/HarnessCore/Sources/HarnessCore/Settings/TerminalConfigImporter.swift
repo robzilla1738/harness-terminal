@@ -42,6 +42,7 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     /// Keys present in the file that Harness did not apply. `font-size` is parsed and still listed,
     /// because the face imports and the size stays Harness-owned.
     public var skippedKeys: [String]
+    public var paletteShortcuts: [String: String] = [:]
 
     public var signature: String {
         var parts: [String] = []
@@ -70,6 +71,7 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         parts.append(copyOnSelect.map { String($0) } ?? "")
         parts.append(boldIsBright.map { String($0) } ?? "")
         parts.append(optionAsMeta?.rawValue ?? "")
+        parts.append(paletteShortcuts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ","))
         return parts.joined(separator: "|")
     }
 
@@ -99,7 +101,8 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         boldIsBright: Bool? = nil,
         optionAsMeta: OptionAsMetaMode? = nil,
         sourceName: String? = nil,
-        skippedKeys: [String] = []
+        skippedKeys: [String] = [],
+        paletteShortcuts: [String: String] = [:]
     ) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -127,6 +130,7 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
         self.optionAsMeta = optionAsMeta
         self.sourceName = sourceName
         self.skippedKeys = skippedKeys
+        self.paletteShortcuts = paletteShortcuts
     }
 
     public var hasTerminalColorOverrides: Bool {
@@ -261,6 +265,8 @@ public enum TerminalConfigImporter {
     static func parse(_ text: String) -> ImportedTerminalConfig {
         var values: [String: String] = [:]
         var seen: [String] = []
+        var shortcuts: [String: String] = [:]
+        var skippedBindings: [String] = []
         var paletteHex: [String?] = Array(repeating: nil, count: 16)
         for rawLine in text.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -275,6 +281,16 @@ public enum TerminalConfigImporter {
             // above.
             if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
                 value = String(value.dropFirst().dropLast())
+            }
+            if key == "keybind" {
+                let parts = value.split(separator: "=", maxSplits: 1).map(String.init)
+                let actions = ["new_tab": "action.newTab", "new_window": "action.newWindow", "new_split:right": "action.splitH", "new_split:down": "action.splitV", "toggle_split_zoom": "action.zoomPane"]
+                if parts.count == 2, let action = actions[parts[1]],
+                   let spec = KeySpec.parse(parts[0].replacingOccurrences(of: "+", with: "-")),
+                   spec.modifiers.contains(.command), spec.key.count == 1 {
+                    shortcuts[action] = spec.description
+                } else { skippedBindings.append("keybind: " + value) }
+                continue
             }
             if key == "palette", let entry = parsePaletteEntry(String(value)) {
                 paletteHex[entry.index] = entry.hex
@@ -357,7 +373,8 @@ public enum TerminalConfigImporter {
         if let value = values["macos-option-as-alt"].flatMap(parseOptionAsMeta) {
             defaults.optionAsMeta = value
         }
-        defaults.skippedKeys = Array(Set(seen).subtracting(appliedKeys)).sorted()
+        defaults.skippedKeys = Array(Set(seen).subtracting(appliedKeys)).sorted() + skippedBindings
+        defaults.paletteShortcuts = shortcuts
         return defaults
     }
 
@@ -443,7 +460,8 @@ private extension ImportedTerminalConfig {
             boldIsBright: newer.boldIsBright ?? boldIsBright,
             optionAsMeta: newer.optionAsMeta ?? optionAsMeta,
             sourceName: newer.sourceName ?? sourceName,
-            skippedKeys: Array(Set(skippedKeys).union(newer.skippedKeys)).sorted()
+            skippedKeys: Array(Set(skippedKeys).union(newer.skippedKeys)).sorted(),
+            paletteShortcuts: paletteShortcuts.merging(newer.paletteShortcuts) { _, new in new }
         )
     }
 

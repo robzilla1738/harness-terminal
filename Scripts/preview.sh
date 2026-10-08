@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-PREVIEW_HOME="$ROOT/.harness-preview"
+PREVIEW_HOME="${HARNESS_PREVIEW_HOME:-$ROOT/.harness-preview}"
+PREVIEW_BUNDLE_ID="${HARNESS_PREVIEW_BUNDLE_ID:-com.robert.harness.preview}"
 APP="$PREVIEW_HOME/HarnessPreview.app"
 mkdir -p "$PREVIEW_HOME"
 
@@ -13,7 +14,7 @@ mkdir -p "$PREVIEW_HOME"
 # own status item and its own window list — making visual testing unreliable (e.g. a menu click
 # can't deminiaturize a window owned by a different instance). The daemon is left running so
 # sessions persist across rebuilds.
-pkill -f "$APP/Contents/MacOS/Harness" 2>/dev/null || true
+pkill -f "$APP/Contents/MacOS/Harness$" 2>/dev/null || true
 
 echo "Building debug preview..."
 swift build --product Harness
@@ -67,7 +68,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key>
   <string>Harness</string>
   <key>CFBundleIdentifier</key>
-  <string>com.robert.harness.preview</string>
+  <string>$PREVIEW_BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

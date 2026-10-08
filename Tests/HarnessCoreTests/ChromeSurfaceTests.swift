@@ -153,7 +153,7 @@ final class ChromeSurfaceTests: XCTestCase {
         XCTAssertEqual(card.leading + pad.leading, ChromeLayout.islandGap, accuracy: 0.001)
         XCTAssertEqual(card.trailing + card.leading, ChromeLayout.islandGap, accuracy: 0.001)
         XCTAssertEqual(card.bottom + pad.bottom, ChromeLayout.islandGap, accuracy: 0.001)
-        XCTAssertEqual(pad.top, 0, accuracy: 0.001)
+        XCTAssertEqual(card.top + pad.top, 0, accuracy: 0.001)
         XCTAssertEqual(ChromeLayout.island(separated: true, splitRadius: 10).cornerRadius, 10)
 
         let widths = [80.0, 140.0, 100.0]

@@ -141,6 +141,9 @@ public struct SessionEditor: Sendable {
         else { return false }
         if snapshot.workspaces[workspaceIndex].activeSessionID == sessionID { return true }
         snapshot.workspaces[workspaceIndex].activeSessionID = sessionID
+        if let si = snapshot.workspaces[workspaceIndex].sessions.firstIndex(where: { $0.id == sessionID }) {
+            snapshot.workspaces[workspaceIndex].sessions[si].lastOpenedAt = Date()
+        }
         bumpRevision()
         return true
     }
@@ -549,12 +552,12 @@ public struct SessionEditor: Sendable {
 
     @discardableResult
     public mutating func setProgramMark(surfaceID: SurfaceID, mark: ProgramMark?) -> Bool {
-        guard let match = tabIndex(surfaceID: surfaceID) else { return false }
-        let tabs = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs
-        if tabs[match.tabIndex].programMark == mark { return false }
-        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].programMark = mark
-        bumpRevision()
-        return true
+        updatePaneActivity(surfaceID: surfaceID) { activity in
+            if activity.mark != mark, let mark, mark.attention != .working {
+                activity.unread = true
+            }
+            activity.mark = mark
+        }
     }
 
     public mutating func setTabStatus(
@@ -570,10 +573,18 @@ public struct SessionEditor: Sendable {
     }
 
     public mutating func clearTabNotification(surfaceID: SurfaceID) {
-        guard let match = tabIndex(surfaceID: surfaceID) else { return }
-        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].status = .idle
-        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].notificationText = nil
-        bumpRevision()
+        if let match = tabIndex(surfaceID: surfaceID) {
+            let tab = snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex]
+            if tab.rootPane.allLeaves().allSatisfy({ $0.activity == nil }), tab.notificationText != nil || tab.status == .waiting {
+                snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].status = .idle
+                snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].notificationText = nil
+                bumpRevision()
+            }
+        }
+        updatePaneActivity(surfaceID: surfaceID) {
+            $0.notification = nil
+            $0.unread = false
+        }
     }
 
     /// Set monitoring alert flags on a tab (only the provided flags change). Returns whether
@@ -885,9 +896,8 @@ public struct SessionEditor: Sendable {
     }
 
     public mutating func setAgent(_ agent: AgentSnapshot?, forSurfaceKey key: String) {
-        guard let match = tabIndex(surfaceKey: key) else { return }
-        snapshot.workspaces[match.workspaceIndex].sessions[match.sessionIndex].tabs[match.tabIndex].agent = agent
-        bumpRevision()
+        guard let surfaceID = UUID(uuidString: key) else { return }
+        updatePaneActivity(surfaceID: surfaceID) { $0.agent = agent }
     }
 
     public func listSurfaces() -> [SurfaceSummary] {

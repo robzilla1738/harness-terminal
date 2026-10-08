@@ -73,6 +73,38 @@ public enum AgentHookInstaller {
         return text.contains(hookMarker)
     }
 
+    public enum Health: String, Sendable {
+        case current = "Hooks current"
+        case outdated = "Hooks need updating"
+        case missing = "Hooks not installed"
+        case unreadable = "Hook config unreadable"
+        case unsupported = "Detection only"
+    }
+
+    public static func health(agent: AgentKind, homeOverride: URL? = nil) -> Health {
+        guard let strategy = strategy(for: agent), let url = hookConfigURL(for: agent, homeOverride: homeOverride) else { return .unsupported }
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return .unreadable }
+        guard text.contains(hookMarker) else { return .missing }
+        switch strategy {
+        case let .eventMatcherJSON(_, payload, _), let .eventArrayJSON(_, payload, _), let .ownJSONFile(_, payload):
+            guard let actual = try? JSONSerialization.jsonObject(with: data) else { return .unreadable }
+            return containsManagedValue(actual, expected: payload) ? .current : .outdated
+        case let .ownTextFile(_, contents): return text == contents ? .current : .outdated
+        case let .regionEdit(_, body, _, _, _): return text.contains(body) ? .current : .outdated
+        }
+    }
+
+    private static func containsManagedValue(_ actual: Any, expected: Any) -> Bool {
+        if let expected = expected as? [String: Any], let actual = actual as? [String: Any] {
+            return expected.allSatisfy { key, value in actual[key].map { containsManagedValue($0, expected: value) } ?? false }
+        }
+        if let expected = expected as? [Any], let actual = actual as? [Any] {
+            return expected.allSatisfy { value in actual.contains { containsManagedValue($0, expected: value) } }
+        }
+        return (actual as? NSObject)?.isEqual(expected) == true
+    }
+
     /// Install the agent's Harness hook in its real config file (creating dirs as needed),
     /// preserving everything else. Idempotent. Throws `InstallError.unsupported` for agents
     /// without a hook integration.

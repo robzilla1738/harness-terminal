@@ -28,6 +28,9 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     private let tabBar = TerminalTabBarView()
     private let terminalHost = NSView()
     private var paneContainer: PaneContainerView?
+    private let connectionNotice = NSStackView()
+    private let connectionLabel = NSTextField(labelWithString: "")
+    private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
     private var lastStructureKey = ""
     private var pendingReload: Bool?
     /// Pasteboard change counter captured at left-mouse-down. On mouse-up, if it
@@ -125,6 +128,23 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             terminalHost.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         applyTabRowConstraints()
+        connectionNotice.orientation = .horizontal
+        connectionNotice.spacing = 12
+        connectionNotice.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        connectionNotice.wantsLayer = true
+        connectionNotice.layer?.cornerRadius = 10
+        connectionNotice.addArrangedSubview(connectionLabel)
+        connectionNotice.addArrangedSubview(retryButton)
+        connectionLabel.font = .systemFont(ofSize: 12)
+        retryButton.target = self; retryButton.action = #selector(retryRemote)
+        connectionNotice.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(connectionNotice)
+        NSLayoutConstraint.activate([
+            connectionNotice.topAnchor.constraint(equalTo: terminalHost.topAnchor, constant: 10),
+            connectionNotice.centerXAnchor.constraint(equalTo: terminalHost.centerXAnchor),
+            connectionNotice.widthAnchor.constraint(lessThanOrEqualTo: terminalHost.widthAnchor, constant: -24),
+        ])
+        refreshConnectionNotice()
 
         installCopySelectionToast()
         reloadTabBar()
@@ -164,7 +184,20 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     /// The window's split controller calls this once per snapshot, after its context is
     /// current. Panes remount only when this window's own layout changed (the structure key),
     /// so a change in another window or on another machine leaves them alone.
+    @objc private func retryRemote() { SessionCoordinator.shared.retryConnection(context.owner) }
+
+    private func refreshConnectionNotice() {
+        let state = SessionCoordinator.shared.connectionDescription(for: context.owner)
+        connectionNotice.isHidden = context.owner == DaemonSidebar.localID || state == "Connected"
+        connectionLabel.stringValue = "\(context.owner) · \(state) · Showing last output"
+        connectionLabel.lineBreakMode = .byTruncatingTail
+        retryButton.isEnabled = state == "Disconnected"
+        connectionNotice.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
+        connectionNotice.layer?.backgroundColor = HarnessChrome.current.surfaceElevated.cgColor
+    }
+
     func snapshotChanged(structureChanged: Bool, metadataOnly: Bool) {
+        refreshConnectionNotice()
         if metadataOnly && !structureChanged {
             refreshTabBarMetadata()
             // A layout or ratio set elsewhere (`select-layout`, `rotate-window`, `resize-pane`)
@@ -280,7 +313,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         guard let workspace = context.workspace, let tab = context.tab else { return }
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
-        let density = "\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)|\(tabRowHidden)"
+        let density = "\(coordinator.settings.paneSpacing)|\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)|\(tabRowHidden)"
         let key = "\(density)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
         guard force || key != lastStructureKey else {
             // Same layout: only a ratio set elsewhere (`resize-pane`, Equalize Splits) can
@@ -298,7 +331,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         paneContainer?.removeFromSuperview()
         let container = PaneContainerView(
             tabID: tab.id,
-            padsTop: tabRowHidden,
+            sidebarVisible: tabRowHidden,
             node: displayNode,
             cwd: tab.cwd,
             program: tab.currentCommand,
@@ -363,7 +396,7 @@ final class PaneContainerView: NSView {
     private let tabID: TabID?
     private var islands: [PaneIslandView] = []
 
-    init(tabID: TabID, padsTop: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
+    init(tabID: TabID, sidebarVisible: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
         self.tabID = tabID
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
@@ -371,13 +404,18 @@ final class PaneContainerView: NSView {
         let separated = settings.paneDensity.separatedIslands
         showsHeaders = separated && settings.paneHeaders
         // The root pads by half the gap; each island insets by the other half.
-        let pad = ChromeLayout.containerPadding(separated: separated, padsTop: padsTop)
+        let pad = ChromeLayout.containerPadding(separated: separated, padsTop: sidebarVisible, gap: settings.paneSpacing)
+        // The sidebar supplies its own trailing spacing. Cancel the island's
+        // leading inset here so its border meets the sidebar without a second gap.
+        let leadingPadding = sidebarVisible
+            ? -ChromeLayout.cardInsets(separated: separated, gap: coordinator.settings.paneSpacing).leading
+            : pad.leading
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)
         NSLayoutConstraint.activate([
             content.topAnchor.constraint(equalTo: topAnchor, constant: CGFloat(pad.top)),
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: CGFloat(pad.leading)),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: CGFloat(leadingPadding)),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -CGFloat(pad.trailing)),
             content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -CGFloat(pad.bottom)),
         ])
@@ -532,7 +570,7 @@ final class PaneContainerView: NSView {
             let island = PaneIslandView(surfaceID: leaf.surfaceID, separated: separated, showsHeader: showsHeaders)
             island.translatesAutoresizingMaskIntoConstraints = false
             parent.addSubview(island)
-            let insets = ChromeLayout.cardInsets(separated: separated)
+            let insets = ChromeLayout.cardInsets(separated: separated, gap: coordinator.settings.paneSpacing)
             NSLayoutConstraint.activate([
                 island.topAnchor.constraint(equalTo: parent.topAnchor, constant: CGFloat(insets.top)),
                 island.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: CGFloat(insets.leading)),

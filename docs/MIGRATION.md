@@ -3,6 +3,10 @@
 Harness has tested migration paths for terminal config import and **tmux**
 commands/keybindings. Both rest on first-party code — no plug-ins.
 
+## Preview and undo an import
+
+Choose **Harness → Import Terminal Settings…** to review supported differences before applying them. Customized settings and shortcut imports start unchecked. Supported declarative shortcuts cover new tabs/windows, splits, and pane zoom; unsupported or executable bindings are listed as skipped. **Undo Last Settings Import** restores imported values only where they have not subsequently changed. See [Workspace workflows](WORKSPACE-WORKFLOWS.md#remote-connections-and-migration) for details.
+
 ## Import Terminal Colors And Fonts
 
 Harness reads compatible source terminal configs so your colors and font carry over on day one.

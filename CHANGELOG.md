@@ -6,6 +6,30 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Added
+- Per-pane Activity across attached hosts, with exact-pane navigation, read state, notification snoozing, and hook installation health.
+- Saved Setups with editable layouts, optional startup commands, import/export, and explicit Open versus Open New Copy behavior.
+- Recently Closed layout recovery with fresh shells and up to 20 entries per host.
+- Literal output search across open sessions with case matching, pagination, and source validation before opening results.
+- Fuzzy file and directory selection, Git-aware project paths, and multi-path insertion.
+- Terminal settings import preview with conflicts, supported shortcut mappings, skipped settings, and undo that preserves later edits.
+- Configurable pane spacing in Appearance settings, retaining the 8-point default.
+
+### Changed
+- Wider horizontal tabs share a rounded container; sidebar tabs use matching height and selected styling. Tab dragging starts on the first press.
+- More consistent sidebar spacing, contextual menus, circular hover controls within pills, and darker selected tabs in the default theme.
+- Improved command palette and remote-host sheet readability, slower activity spinners, and clearer connection retry and diagnostic controls.
+- Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
+
+### Fixed
+- A delayed session-backed terminal reconnect can no longer recreate a surface after its pane closes.
+- Marking Activity read or changing snooze preserves the activity's timestamp and does not resolve a blocked process.
+- Path insertion and Go to Directory reject terminal control characters.
+
+These changes are implemented locally. Real remote-host recovery still needs hands-on release verification; iOS is outside this round. See [Workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for behavior and limits.
+
 ## [1.13.0] - 2026-10-08
 
 The workspace release: several windows and several machines at once, a full JSON and Lua API, everyday CLI verbs, attach that paints the screen first, live Overview thumbnails, Kitty graphics animation, notifications in place of the notch, a reworked Settings window and first-run tour, a pure-black default again, and a long list of multiplexer fixes.

@@ -36,6 +36,10 @@ Harness ranges from a plain, get-out-of-your-way terminal to a full session mana
 
 New installs start in Persistent: the quiet look, and sessions survive quitting. An existing settings file that never stored a mode stays Full, so an upgrade does not hide the prefix or the status line. Moving over from another setup? See [docs/MIGRATION.md](docs/MIGRATION.md) — Harness can import an existing terminal config (colors, font, padding) on first run.
 
+## Workspace workflows
+
+**Session → Activity**, **Saved Setups**, **Recently Closed**, and **Search All Sessions** bring ongoing work together across attached hosts. The command palette also exposes these actions. See [Workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for behavior, limits, and CLI examples.
+
 ## Features
 
 - GPU-accelerated rendering by Harness's own terminal engine — accurate sRGB output by default, opt-in converted Display-P3 vivid color, a themed translucent canvas, and program output left untouched unless you opt into theme recoloring; damage-driven redraws keep selection drags, find highlights, IME composition, and streaming output cheap, full-rate on ProMotion displays, and covered or minimized windows stop rendering entirely

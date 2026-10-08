@@ -28,6 +28,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let restoreWindowSizeToggle = HarnessToggle(frame: .zero)
     private let paneDensitySegment = HarnessSegmented(frame: .zero)
     private let paneHeadersToggle = HarnessToggle(frame: .zero)
+    private let paneSpacingField = HarnessTextField()
     private let paddingXField = HarnessTextField()
     private let paddingYField = HarnessTextField()
     private let paddingBalanceToggle = HarnessToggle(frame: .zero)
@@ -215,6 +216,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         updateScrollMultiplierLabel()
 
         for (field, value) in [
+            (paneSpacingField, String(format: "%.0f", settings.paneSpacing)),
             (paddingXField, String(format: "%.0f", settings.windowPaddingX)),
             (paddingYField, String(format: "%.0f", settings.windowPaddingY)),
             (fontSizeField, String(format: "%.0f", settings.fontSize)),
@@ -669,9 +671,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         paddingXField.setAccessibilityLabel("Horizontal padding")
         paddingYField.setAccessibilityLabel("Vertical padding")
         let paddingRow = hstack([paddingXField, unitLabel("×"), paddingYField, unitLabel("pt")], spacing: 6)
+        paneSpacingField.widthAnchor.constraint(equalToConstant: Form.numberFieldWidth).isActive = true
+        paneSpacingField.setAccessibilityLabel("Pane spacing")
         let panesGroup = settingsGroup("Panes", [
             settingsRow("Density", paneDensitySegment,
                         hint: "Comfortable sets panes apart as cards. Compact keeps them flush."),
+            settingsRow("Pane spacing", hstack([paneSpacingField, unitLabel("pt")], spacing: 6),
+                        hint: "Gap around and between panes. 0–24 pt; default 4. Comfortable only."),
             settingsRow("Pane headers", paneHeadersToggle,
                         hint: "Program, directory, and split buttons atop each pane. Comfortable only."),
             settingsRow("Padding", paddingRow, hint: "Space between the text and the pane edge."),
@@ -1063,11 +1069,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         trailing.spacing = 10
         trailing.setHuggingPriority(.required, for: .vertical)
         if AgentHookInstaller.canInstall(kind) {
-            let installed = AgentHookInstaller.isInstalled(agent: kind)
-            let button = NSButton(title: installed ? "Reinstall Hooks" : "Install Hooks", target: self, action: #selector(installHooksClicked(_:)))
+            let health = AgentHookInstaller.health(agent: kind)
+            let installed = health == .current || health == .outdated
+            let button = NSButton(title: health == .outdated ? "Update Hooks" : installed ? "Reinstall Hooks" : "Install Hooks", target: self, action: #selector(installHooksClicked(_:)))
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.setAccessibilityLabel("\(installed ? "Reinstall" : "Install") \(kind.displayName) hooks")
+            button.toolTip = health.rawValue
             hookButtons[kind] = button
             trailing.addArrangedSubview(button)
         }
@@ -2014,6 +2022,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func updateDependentRows() {
         updateSystemThemePickerAvailability()
         setRow(resizeOverlayPositionRow, hidden: resizeOverlaySegment.titleOfSelectedItem == "Never")
+        paneSpacingField.isEnabled = paneDensitySegment.titleOfSelectedItem != "Compact"
         paneHeadersToggle.isEnabled = paneDensitySegment.titleOfSelectedItem != "Compact"
         commandFinishedThresholdField.isEnabled = eventToggles[.commandFinished]?.state == .on
         quickTerminalHotkeyRecorder?.alphaValue = quickTerminalToggle.state == .on ? 1 : 0.45
@@ -2269,6 +2278,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         blurLabel.stringValue = formatBlur(settings.backgroundBlur)
         windowBorderOpacitySlider.doubleValue = Double(settings.windowBorderOpacity)
         windowBorderOpacityLabel.stringValue = formatPercent(settings.windowBorderOpacity)
+        paneSpacingField.stringValue = String(format: "%.0f", settings.paneSpacing)
         paddingXField.stringValue = String(Int(settings.windowPaddingX.rounded()))
         paddingYField.stringValue = String(Int(settings.windowPaddingY.rounded()))
         fontFamilyField.stringValue = settings.fontFamily
@@ -2405,6 +2415,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         write(\.transparentTitlebar, transparentTitlebarToggle.state == .on)
         write(\.sidebarVisible, sidebarVisibleToggle.state == .on)
         write(\.restoreWindowSize, restoreWindowSizeToggle.state == .on)
+        write(\.paneSpacing, HarnessSettings.clampedPaneSpacing(Double(paneSpacingField.stringValue) ?? 4))
         write(\.windowPaddingX, HarnessSettings.clampedPadding(Float(paddingXField.stringValue) ?? 12))
         write(\.windowPaddingY, HarnessSettings.clampedPadding(Float(paddingYField.stringValue) ?? 12))
         let previousAppearanceMode = coordinator.settings.appearanceMode
@@ -2474,6 +2485,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // reset to the persisted value the same way.
         reflectClamped(commandFinishedThresholdField, String(coordinator.settings.commandFinishedThresholdSeconds))
         reflectClamped(fontSizeField, String(format: "%.0f", coordinator.settings.fontSize))
+        reflectClamped(paneSpacingField, String(format: "%.0f", coordinator.settings.paneSpacing))
         reflectClamped(paddingXField, String(format: "%.0f", coordinator.settings.windowPaddingX))
         reflectClamped(paddingYField, String(format: "%.0f", coordinator.settings.windowPaddingY))
         reflectClamped(scrollbackField, String(coordinator.settings.scrollbackLines))

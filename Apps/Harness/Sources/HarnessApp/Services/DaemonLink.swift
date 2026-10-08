@@ -83,6 +83,12 @@ final class DaemonLink {
         subscription = nil
     }
 
+    func accept(_ fresh: SessionSnapshot) {
+        guard fresh.revision >= snapshot.revision else { return }
+        snapshot = fresh
+        onChange?(self)
+    }
+
     /// Fetch the snapshot off the main thread (a remote daemon answers over SSH).
     private func refresh() {
         guard !fetching else {

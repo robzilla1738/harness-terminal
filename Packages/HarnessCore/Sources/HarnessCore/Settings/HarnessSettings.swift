@@ -315,6 +315,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// of `minimumContrast` and of `applyThemeToTerminalOutput`. `nil` follows the
     /// appearance: on for light, off for dark. A stored bool is the user's choice.
     public var themeFit: Bool?
+    /// Space around and between comfortable pane cards, in points.
+    public var paneSpacing: Double
+    public static let defaultPaneSpacing = 8.0
+    public static func clampedPaneSpacing(_ value: Double) -> Double {
+        value.isFinite ? min(24, max(0, value)) : defaultPaneSpacing
+    }
+
     /// Comfortable pane islands or a single-pixel split border.
     public var paneDensity: PaneDensity
     /// A title row (icon, identity, split buttons) atop each comfortable pane.
@@ -454,6 +461,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowPaddingBalance: Bool = true,
         minimumContrast: Double = 1,
         themeFit: Bool? = nil,
+        paneSpacing: Double = HarnessSettings.defaultPaneSpacing,
         paneDensity: PaneDensity = .comfortable,
         paneHeaders: Bool = true,
         pasteProtection: Bool = true,
@@ -530,6 +538,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.windowPaddingBalance = windowPaddingBalance
         self.minimumContrast = HarnessSettings.clampedContrast(minimumContrast)
         self.themeFit = themeFit
+        self.paneSpacing = Self.clampedPaneSpacing(paneSpacing)
         self.paneDensity = paneDensity
         self.paneHeaders = paneHeaders
         self.lightDefaultMigrated = true
@@ -815,6 +824,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         minimumContrast = HarnessSettings.clampedContrast(try fields.decode(.minimumContrast, \.minimumContrast))
         // Absent key follows appearance (light on, dark off). An explicit bool sticks.
         themeFit = try container.decodeIfPresent(Bool.self, forKey: .themeFit)
+        paneSpacing = Self.clampedPaneSpacing(try fields.decode(.paneSpacing, \.paneSpacing))
         paneDensity = try fields.decodeEnum(.paneDensity, \.paneDensity)
         paneHeaders = try fields.decode(.paneHeaders, \.paneHeaders)
         lightDefaultMigrated = true
@@ -1036,6 +1046,14 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         return settings
     }
 
+    public mutating func applyImportedConfig(_ imported: ImportedTerminalConfig) {
+        applyImportedDefaults(imported)
+        for (action, shortcut) in imported.paletteShortcuts {
+            paletteShortcuts = paletteShortcuts.filter { $0.value != shortcut }
+            paletteShortcuts[action] = shortcut
+        }
+    }
+
     private mutating func applyImportedDefaults(_ imported: ImportedTerminalConfig) {
         if let value = imported.fontFamily { fontFamily = value }
         // Font size is Harness-owned (see makeDefaults) — import the face, not the size.
@@ -1058,11 +1076,15 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.optionAsMeta { optionAsMeta = value }
         if let value = imported.minimumContrast { minimumContrast = HarnessSettings.clampedContrast(value) }
         if let value = imported.boldIsBright { boldIsBright = value }
-        selectionBackgroundHex = imported.selectionBackgroundHex
-        selectionForegroundHex = imported.selectionForegroundHex
-        boldColorHex = imported.boldColorHex
-        cursorTextHex = imported.cursorTextHex
-        paletteHex = HarnessSettings.normalizedPalette(imported.paletteHex)
+        if let value = imported.selectionBackgroundHex { selectionBackgroundHex = value }
+        if let value = imported.selectionForegroundHex { selectionForegroundHex = value }
+        if let value = imported.boldColorHex { boldColorHex = value }
+        if let value = imported.cursorTextHex { cursorTextHex = value }
+        let importedPalette = HarnessSettings.normalizedPalette(imported.paletteHex)
+        paletteHex = HarnessSettings.normalizedPalette(paletteHex)
+        for index in importedPalette.indices {
+            if let value = importedPalette[index] { paletteHex[index] = value }
+        }
         importedConfigSignature = imported.signature
     }
 }

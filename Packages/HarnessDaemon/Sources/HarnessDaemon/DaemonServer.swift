@@ -96,6 +96,14 @@ public final class DaemonServer: @unchecked Sendable {
     /// This daemon's boot id. A client may resume an attach only within the same epoch:
     /// a restarted daemon numbers its ring afresh.
     private let epoch = UUID().uuidString
+    private let searchQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.robert.harness.search"
+        queue.maxConcurrentOperationCount = 2
+        return queue
+    }()
+    private var cancelledSearches: [UUID: Date] = [:]
+    private var searches: [UUID: (fd: Int32, cancellation: SurfaceRegistry.FlagBox)] = [:]
     /// Startup phases the server itself times (`listen`); the registry times the rest.
     private var startupMillis: [String: Double] = [:]
 
@@ -287,6 +295,10 @@ public final class DaemonServer: @unchecked Sendable {
         }
         source.setCancelHandler { [weak self] in
             guard let self else { close(clientFD); return }
+            for (id, search) in self.searches where search.fd == clientFD {
+                search.cancellation.update(true)
+                self.searches.removeValue(forKey: id)
+            }
             self.readOnlyClients.remove(clientFD)
             if let removed = self.clients.removeValue(forKey: clientFD) {
                 self.clientFDsByID.removeValue(forKey: removed.id)
@@ -456,6 +468,34 @@ public final class DaemonServer: @unchecked Sendable {
                 handlePaneWait(surfaceID: surfaceID, until: until, timeout: timeout, fd: fd)
                 continue
             }
+            if case let .cancelSearch(id) = request {
+                searches[id]?.cancellation.update(true)
+                cancelledSearches = cancelledSearches.filter { Date().timeIntervalSince($0.value) < 30 }
+                if cancelledSearches.count >= 64, let oldest = cancelledSearches.min(by: { $0.value < $1.value })?.key { cancelledSearches.removeValue(forKey: oldest) }
+                cancelledSearches[id] = Date()
+                send(.ok, to: fd)
+                continue
+            }
+            if case let .searchOutput(id, query, caseSensitive, sessionID, offset) = request {
+                scheduleSearch(id: id, fd: fd) { [registry, epoch] cancellation in
+                    registry.searchOutput(query: query, caseSensitive: caseSensitive, sessionID: sessionID,
+                                          offset: offset, epoch: epoch, cancelled: cancellation)
+                }
+                continue
+            }
+            if case let .validateOutputMatch(id, match, expectedEpoch, revision) = request {
+                guard expectedEpoch == epoch else { send(.error("This daemon restarted. Search again."), to: fd); continue }
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    registry.validateOutputMatch(match, revision: revision, cancelled: cancellation)
+                }
+                continue
+            }
+            if case let .searchPaths(id, surfaceID, path, query, project) = request {
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    registry.searchPaths(surfaceID: surfaceID, path: path, query: query, project: project, cancelled: cancellation)
+                }
+                continue
+            }
             if let intercepted = handleClientLifecycle(request, fd: fd) {
                 send(intercepted, to: fd)
                 continue
@@ -505,6 +545,27 @@ public final class DaemonServer: @unchecked Sendable {
 
     /// Requests the server owns (because they query/mutate the FD layer rather
     /// than session state). Returning `nil` falls through to `registry.handle`.
+    private func scheduleSearch(id: UUID, fd: Int32, work: @escaping @Sendable (SurfaceRegistry.FlagBox) -> IPCResponse) {
+        if let cancelled = cancelledSearches.removeValue(forKey: id), Date().timeIntervalSince(cancelled) < 30 {
+            send(.error("Search cancelled"), to: fd)
+            return
+        }
+        guard searches.count < 32, searches[id] == nil else {
+            send(.error("Too many searches are running. Try again shortly."), to: fd)
+            return
+        }
+        let cancellation = SurfaceRegistry.FlagBox()
+        searches[id] = (fd, cancellation)
+        searchQueue.addOperation { [weak self] in
+            let response = work(cancellation)
+            self?.queue.async { [weak self] in
+                guard let self, let search = searches[id], search.cancellation === cancellation else { return }
+                searches.removeValue(forKey: id)
+                send(response, to: search.fd)
+            }
+        }
+    }
+
     private func handleClientLifecycle(_ request: IPCRequest, fd: Int32) -> IPCResponse? {
         switch request {
         case let .identifyClient(label):
@@ -583,7 +644,7 @@ public final class DaemonServer: @unchecked Sendable {
                 snapshotRevision: registry.revision,
                 version: HarnessVersion.short,
                 build: HarnessVersion.build,
-                capabilities: [DaemonStats.attachStream],
+                capabilities: [DaemonStats.attachStream, DaemonStats.paneAttention, DaemonStats.sessionLibrary, DaemonStats.outputSearch, DaemonStats.pathSearch],
                 parkedSurfaceCount: parked.count,
                 parkedStoredBytes: parked.stored,
                 parkedRawBytes: parked.raw,

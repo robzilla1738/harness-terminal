@@ -5,7 +5,7 @@ import HarnessTerminalEngine
 /// Single source of truth for Harness session layout and notifications.
 /// @unchecked Sendable: all access to `sessions` and `editor` is serialized by `lock`.
 public final class SurfaceRegistry: @unchecked Sendable {
-    private var sessions: [DaemonSurfaceID: RealPty] = [:]
+    var sessions: [DaemonSurfaceID: RealPty] = [:]
     var editor = SessionEditor()
     private let store = SessionStore()
     let lock = NSLock()
@@ -252,6 +252,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
         acquireRegistryLock()
         defer { lock.unlock() }
         switch request {
+        case .searchOutput, .searchPaths, .validateOutputMatch, .cancelSearch:
+            return .error("Search requests require the daemon search worker")
+        case let .library(operation):
+            return handleLibrary(operation)
         case .ping:
             return .pong
         case .listWorkspaces:
@@ -262,6 +266,23 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .surfaces(editor.listSurfaces())
         case .listAgents:
             return .agents(editor.listAgents())
+        case .listAttention:
+            do {
+                return .text(String(decoding: try JSONEncoder().encode(editor.listAttention()), as: UTF8.self))
+            } catch { return .error(error.localizedDescription) }
+        case let .acknowledgeAttention(surfaceID):
+            guard let id = UUID(uuidString: surfaceID), editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).contains(where: { $0.rootPane.allSurfaceIDs().contains(id) }) else { return .error("Pane not found") }
+            if editor.updatePaneActivity(surfaceID: id, { $0.unread = false }) { commit() }
+            return .ok
+        case let .snoozeAttention(surfaceID, minutes):
+            guard let id = UUID(uuidString: surfaceID), [0, 15, 60].contains(minutes) else {
+                return .error("Snooze must be 0, 15, or 60 minutes")
+            }
+            guard editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).contains(where: { $0.rootPane.allSurfaceIDs().contains(id) }) else { return .error("Pane not found") }
+            if editor.updatePaneActivity(surfaceID: id, {
+                $0.snoozedUntil = minutes == 0 ? nil : Date().addingTimeInterval(Double(minutes * 60))
+            }) { commit() }
+            return .ok
         case let .newWorkspace(name):
             let id = editor.addWorkspace(name: name)
             commit()
@@ -286,6 +307,15 @@ public final class SurfaceRegistry: @unchecked Sendable {
             fireHookLocked(.afterNewSession)
             fireHookLocked(.sessionCreated)
             return .sessionID(sessionID)
+        case let .newTabInSession(sessionID, cwd):
+            guard let workspace = editor.snapshot.workspaces.first(where: { $0.sessions.contains(where: { $0.id == sessionID }) }) else { return .error("The source session has closed.") }
+            _ = editor.selectSession(workspaceID: workspace.id, sessionID: sessionID)
+            guard let tabID = editor.addTab(to: workspace.id, cwd: cwd) else { return .error("Could not create tab") }
+            ensureTabSurfaces(tabID: tabID, shell: nil)
+            editor.propagateNewTabToGroup(tabID)
+            commit()
+            fireHookLocked(.afterNewTab)
+            return .tabID(tabID)
         case let .newTab(workspaceID, cwd, shell):
             guard let tabID = editor.addTab(to: workspaceID, cwd: cwd) else {
                 return .error("Workspace not found")
@@ -427,7 +457,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
             let closedSurfaces = Array(Set(([tabID] + counterparts).flatMap { id in
                 allTabs.first(where: { $0.id == id })?.rootPane.allSurfaceIDs().map(\.uuidString) ?? []
             }))
+            let closingTab = allTabs.first { $0.id == tabID }
             guard editor.closeTab(tabID) else { return .error("Tab not found") }
+            if let closingTab, let owningSession {
+                recordClosed(.tab, sessionID: owningSession, name: closingTab.title, tabs: [closingTab])
+            }
             for counterpart in counterparts { _ = editor.closeTab(counterpart) }
             closeSurfaces(closedSurfaces)
             ensureAllSnapshotSurfaces()
@@ -452,6 +486,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                     .rootPane.allSurfaceIDs().first?.uuidString
             )
             guard editor.closeSession(sessionID) else { return .error("Session not found") }
+            if let closingSession { recordClosed(.session, sessionID: sessionID, name: closingSession.name, tabs: closingSession.tabs) }
             closeSurfaces(closedSurfaces)
             // Drop the session's per-session env so entries don't accumulate in environment.json.
             environmentStore.clearSession(sessionID.uuidString)
@@ -468,7 +503,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 .sessions
                 .flatMap { $0.tabs }
                 .flatMap { $0.rootPane.allSurfaceIDs().map(\.uuidString) } ?? []
+            let closingSessions = editor.snapshot.workspaces.first(where: { $0.id == id })?.sessions ?? []
             guard editor.closeWorkspace(id) else { return .error("Cannot close workspace") }
+            for session in closingSessions { recordClosed(.session, sessionID: session.id, name: session.name, tabs: session.tabs) }
             closeSurfaces(closedSurfaces)
             for sessionID in workspaceSessionIDs { environmentStore.clearSession(sessionID.uuidString) }
             commit()
@@ -546,7 +583,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 title: title,
                 body: body
             )
-            NotificationBus.shared.post(notification)
+            let snoozed = editor.listAttention().first { $0.surfaceID.uuidString == surfaceID }?.activity.isSnoozed ?? false
+            if !snoozed { NotificationBus.shared.post(notification) }
             markWaiting(surfaceKey: surfaceID, text: body)
             noteProgramStatusNotifiedLocked(surfaceID)
             commit()
@@ -597,7 +635,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 scrollbackBytes: nil,
                 freshlyCreated: true
             ).map { .surfaceID($0) } ?? .error("Failed to launch shell")
-        case let .ensureSurface(surfaceID, cwd, shell, rows, cols, scrollbackBytes):
+        case let .ensureSurface(surfaceID, cwd, shell, rows, cols, scrollbackBytes, requireInLayout):
+            if requireInLayout == true,
+               !editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).contains(where: { $0.rootPane.allSurfaceIDs().contains(where: { $0.uuidString == surfaceID }) }) {
+                return .error("This pane has closed.")
+            }
             return createOrEnsureSurface(
                 surfaceID: surfaceID,
                 cwd: cwd,
@@ -661,7 +703,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
             return .ok
         case let .killPane(paneID):
             let killedSurfaceID = editor.surfaceID(forPaneID: paneID)?.uuidString
+            let closingSession = editor.snapshot.workspaces.flatMap(\.sessions).first { $0.tabs.contains { $0.rootPane.allPaneIDs().contains(paneID) } }
+            let closingTab = closingSession?.tabs.first { $0.rootPane.allPaneIDs().contains(paneID) }
+            let leaf = closingTab?.rootPane.allLeaves().first { $0.id == paneID }
             guard editor.killPane(paneID) else { return .error("Pane not found") }
+            if let closingSession, let closingTab, let leaf {
+                recordClosed(.pane, sessionID: closingSession.id, name: closingTab.title,
+                             tabs: [Tab(title: closingTab.title, cwd: leaf.cwd ?? closingTab.cwd, rootPane: .leaf(leaf))])
+            }
             if let killedSurfaceID { closeSurfaces([killedSurfaceID]) }
             commit()
             fireHookLocked(.afterKillPane, surfaceKey: killedSurfaceID)
@@ -1170,7 +1219,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             .first(where: { $0.id == match.workspaceID })?
             .sessions.flatMap { $0.tabs }
             .first(where: { $0.id == match.tabID })?
-            .agent?.activity.rawValue
+            .rootPane.allLeaves().first(where: { $0.surfaceID.uuidString == surfaceKey })?.activity?.agent?.activity.rawValue
     }
 
     /// `parents` is the scan tick's shared `ProcessScan.parentMap()` (the agent scan reuses it);
@@ -1657,13 +1706,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
     }
 
     private func markWaiting(surfaceKey: String, text: String) {
-        guard let match = editor.tab(forSurfaceKey: surfaceKey) else { return }
-        editor.setTabStatus(
-            workspaceID: match.workspaceID,
-            tabID: match.tabID,
-            status: .waiting,
-            notificationText: text
-        )
+        guard let id = UUID(uuidString: surfaceKey) else { return }
+        editor.updatePaneActivity(surfaceID: id) {
+            if $0.notification != text { $0.unread = true }
+            $0.notification = text
+        }
     }
 
     func commit() {
@@ -1707,7 +1754,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// `freshlyCreated` marks a surface the user just asked for (new tab/session/split/
     /// `createSurface`) as opposed to a boot restore or reattach revival — only a fresh
     /// surface may consume the pending first-run / what's-new banner.
-    private func createOrEnsureSurface(
+    func createOrEnsureSurface(
         surfaceID: String,
         cwd: String?,
         shell: String?,
@@ -1788,6 +1835,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 session?.write(reply)
             }
             sessions[surfaceID] = session
+            for wi in editor.snapshot.workspaces.indices {
+                for si in editor.snapshot.workspaces[wi].sessions.indices {
+                    for ti in editor.snapshot.workspaces[wi].sessions[si].tabs.indices {
+                        editor.snapshot.workspaces[wi].sessions[si].tabs[ti].rootPane.updateLeaf(surfaceKey: surfaceID) { $0.shell = shellPath }
+                    }
+                }
+            }
             if freshlyCreated { injectVersionBannerIfPending(into: session, columns: Int(cols)) }
             // A dead retained pane (`remain-on-exit`) carries its exit status until revived —
             // this spawn IS the revival, so clear it. Idempotent: a plain ensure on a live
@@ -1891,7 +1945,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 _ = createOrEnsureSurface(
                     surfaceID: leaf.surfaceID.uuidString,
                     cwd: leaf.cwd ?? tab.cwd,
-                    shell: shell,
+                    shell: leaf.shell ?? shell,
                     rows: 24,
                     cols: 80,
                     scrollbackBytes: nil,
@@ -1908,7 +1962,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 _ = createOrEnsureSurface(
                     surfaceID: leaf.surfaceID.uuidString,
                     cwd: leaf.cwd ?? tab.cwd,
-                    shell: nil,
+                    shell: leaf.shell,
                     rows: 24,
                     cols: 80,
                     scrollbackBytes: nil

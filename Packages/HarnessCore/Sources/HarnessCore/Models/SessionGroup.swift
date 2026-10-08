@@ -18,6 +18,8 @@ public struct SessionGroup: Codable, Sendable, Identifiable, Equatable {
     /// `keepSessionsOnQuit || persistent` — so when keep-on-quit is on (Persistent/Full/Agent,
     /// and every pre-modes install) this flag is moot and everything survives. Defaults to
     /// unpinned; promoting a session sets it. Older snapshots decode to `false`.
+    public var originSetupID: UUID?
+    public var lastOpenedAt: Date?
     public var persistent: Bool
 
     public init(
@@ -52,6 +54,8 @@ public struct SessionGroup: Codable, Sendable, Identifiable, Equatable {
         lastActiveTabID = try c.decodeIfPresent(TabID.self, forKey: .lastActiveTabID)
         sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
         groupID = try c.decodeIfPresent(UUID.self, forKey: .groupID)
+        originSetupID = try c.decodeIfPresent(UUID.self, forKey: .originSetupID)
+        lastOpenedAt = try c.decodeIfPresent(Date.self, forKey: .lastOpenedAt)
         persistent = try c.decodeIfPresent(Bool.self, forKey: .persistent) ?? false
     }
 

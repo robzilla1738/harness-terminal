@@ -97,6 +97,7 @@ public final class TerminalHostView: NSView {
     /// (the respawned daemon recreates it from layout.json, but we re-send these in case it must).
     private let cachedCwd: String?
     private let cachedShell: String
+    private let requiresSessionLayout: Bool
     /// True while the pane is intentionally released (`detachFromDaemonSurface`) so the output
     /// stream ending does NOT trigger an auto-reconnect — the user/coordinator asked for the detach.
     private var intentionallyDetached = false
@@ -237,8 +238,10 @@ public final class TerminalHostView: NSView {
         harnessSurfaceEnv: String? = nil,
         settings: HarnessSettings? = nil,
         themeName: String = ThemeManager.defaultThemeName,
-        endpoint: Endpoint = .localControlSocket
+        endpoint: Endpoint = .localControlSocket,
+        requiresSessionLayout: Bool = false
     ) {
+        self.requiresSessionLayout = requiresSessionLayout
         self.surfaceID = surfaceID
         self.daemonClient = DaemonClient(endpoint: endpoint)
         self.cachedThemeName = themeName
@@ -847,6 +850,12 @@ public final class TerminalHostView: NSView {
 
     /// Toggle the in-pane find bar. Opening focuses its field (keystrokes go to the bar, not
     /// the shell); closing clears highlights and returns focus to the terminal.
+    public func revealSearchResult(_ match: OutputSearchMatch, query: String, caseSensitive: Bool) -> Bool {
+        showFind()
+        findBar?.setQuery(query, caseSensitive: caseSensitive)
+        return nativeView.revealSearchResult(query: query, caseSensitive: caseSensitive, line: match.line, fingerprint: match.lineFingerprint)
+    }
+
     public func toggleFind() {
         if findBar != nil { hideFind() } else { showFind() }
     }
@@ -1056,7 +1065,8 @@ public final class TerminalHostView: NSView {
                 shell: shell,
                 rows: 24,
                 cols: 80,
-                scrollbackBytes: Self.scrollbackBytes(forLines: settings?.scrollbackLines ?? 10_000)
+                scrollbackBytes: Self.scrollbackBytes(forLines: settings?.scrollbackLines ?? 10_000),
+                requireInLayout: requiresSessionLayout
             )) {
                 return true
             }
@@ -1216,6 +1226,7 @@ public final class TerminalHostView: NSView {
         let sid = surfaceID.uuidString
         let cwd = cachedCwd ?? FileManager.default.homeDirectoryForCurrentUser.path
         let shell = cachedShell
+        let requireInLayout = requiresSessionLayout
         let scrollbackBytes = Self.scrollbackBytes(forLines: cachedSettings?.scrollbackLines ?? 10_000)
         let (onStart, onData) = makeAttachHandlers()
         let onOwnership = makeOwnershipHandler()
@@ -1249,7 +1260,7 @@ public final class TerminalHostView: NSView {
             // and bounce straight back here.
             guard case .pong? = try? client.request(.ping, timeout: 0.5) else { onAttached(nil); return }
             guard case .ok? = try? client.request(.ensureSurface(
-                surfaceID: sid, cwd: cwd, shell: shell, rows: 24, cols: 80, scrollbackBytes: scrollbackBytes
+                surfaceID: sid, cwd: cwd, shell: shell, rows: 24, cols: 80, scrollbackBytes: scrollbackBytes, requireInLayout: requireInLayout
             )) else { onAttached(nil); return }
             // Same daemon: resume from the last byte painted. A restarted daemon (new epoch) or an
             // evicted gap resyncs: reset, then the full history.

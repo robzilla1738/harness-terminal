@@ -1141,7 +1141,7 @@ final class HarnessSelectPopover: NSObject {
 }
 
 @MainActor
-private final class FlippedStackHost: NSView {
+final class FlippedStackHost: NSView {
     override var isFlipped: Bool { true }
 }
 

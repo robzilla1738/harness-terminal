@@ -26,10 +26,14 @@ final class PaneCloseOverlay: NSView {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.isBordered = false
         button.bezelStyle = .shadowlessSquare
-        button.imageScaling = .scaleProportionallyUpOrDown
+        button.title = ""
+        button.imagePosition = .imageOnly
+        // Give the symbol an explicit native size instead of fitting it into the
+        // button cell's text/image content rect, which can compress the circle.
+        button.imageScaling = .scaleNone
         button.image = NSImage(
             systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close Pane"
-        )
+        )?.withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
         button.target = self
         button.action = #selector(closeClicked)
         button.setAccessibilityLabel("Close Pane")

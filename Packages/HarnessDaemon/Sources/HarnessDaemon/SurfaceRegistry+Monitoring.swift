@@ -360,7 +360,7 @@ extension SurfaceRegistry {
     ) {
         guard let uuid = UUID(uuidString: surfaceKey) else { return }
         let tab = tabForSurfaceLocked(uuid)
-        let detector = tab?.agent.map {
+        let detector = tab?.rootPane.allLeaves().first(where: { $0.surfaceID == uuid })?.activity?.agent.map {
             ProgramStatusDetectorFill(app: $0.kind.rawValue, silent: $0.activity != .working)
         }
         let paneName = (tab?.title.isEmpty == false ? tab?.title : nil) ?? "Terminal"
@@ -375,16 +375,11 @@ extension SurfaceRegistry {
         )
         let markChanged = editor.setProgramMark(surfaceID: uuid, mark: Self.programMark(from: presentation))
         var statusChanged = false
-        if presentation.fromRealReport, let tab, let match = editor.tab(forSurfaceKey: surfaceKey) {
-            let (status, text) = Self.desiredStatus(presentation)
-            if tab.status != status || tab.notificationText != text {
-                editor.setTabStatus(
-                    workspaceID: match.workspaceID,
-                    tabID: match.tabID,
-                    status: status,
-                    notificationText: text
-                )
-                statusChanged = true
+        if presentation.fromRealReport {
+            let (_, text) = Self.desiredStatus(presentation)
+            statusChanged = editor.updatePaneActivity(surfaceID: uuid) {
+                if $0.notification != text, text != nil { $0.unread = true }
+                $0.notification = text
             }
         }
         if markChanged || statusChanged { commit() }
@@ -395,7 +390,8 @@ extension SurfaceRegistry {
             monitors[surfaceKey]?.lastNotifiedAt = Date().timeIntervalSinceReferenceDate
         }
         monitorLock.unlock()
-        if let notified {
+        let snoozed = editor.listAttention().first { $0.surfaceID == uuid }?.activity.isSnoozed ?? false
+        if let notified, !snoozed {
             NotificationBus.shared.post(AgentNotification(
                 surfaceID: uuid,
                 daemonSurfaceID: surfaceKey,

@@ -1,9 +1,8 @@
 import AppKit
 import HarnessCore
 
-/// Sidebar header bell. Shows a small red badge with the count of tabs in
-/// `waiting` state. Click opens the notifications dropdown; `Cmd+Shift+U`
-/// jumps straight to the first waiting tab. Updates live from `NotificationBus.snapshotChanged`.
+/// Unread per-pane activity across attached hosts. Opens the attention view; reading an
+/// alert clears its badge without resolving the program's blocked state.
 @MainActor
 final class NotificationBellButton: NSControl {
     private let iconView = NSImageView()
@@ -90,12 +89,13 @@ final class NotificationBellButton: NSControl {
         if let trackingArea { removeTrackingArea(trackingArea) }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .enabledDuringMouseDrag, .activeInActiveApp, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(area)
         trackingArea = area
+        isHovered = HarnessDesign.pointerIsInside(self)
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
@@ -103,6 +103,7 @@ final class NotificationBellButton: NSControl {
     override func mouseDown(with event: NSEvent) {}
 
     override func mouseUp(with event: NSEvent) {
+        defer { isHovered = HarnessDesign.pointerIsInside(self) }
         let point = convert(event.locationInWindow, from: nil)
         guard bounds.contains(point) else { return }
         if let target, let action {
@@ -111,9 +112,9 @@ final class NotificationBellButton: NSControl {
     }
 
     @objc private func refresh() {
-        let count = SessionCoordinator.shared.snapshot.workspaces.reduce(into: 0) { acc, ws in
-            acc += ws.sessions.flatMap(\.tabs).filter { $0.status == .waiting }.count
-        }
+        let count = SessionCoordinator.shared.attentionList().filter {
+            $0.entry.activity.unread && $0.entry.activity.rank >= .done
+        }.count
         waitingCount = count
         badge.stringValue = count > 99 ? "99+" : "\(count)"
         badgeBackground.isHidden = count == 0

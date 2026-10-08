@@ -25,6 +25,12 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         TerminalBufferSearchOptions(isRegex: regexButton.state == .on, caseSensitive: caseButton.state == .on)
     }
 
+    func setQuery(_ query: String, caseSensitive: Bool) {
+        searchField.stringValue = query
+        regexButton.state = .off
+        caseButton.state = caseSensitive ? .on : .off
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false

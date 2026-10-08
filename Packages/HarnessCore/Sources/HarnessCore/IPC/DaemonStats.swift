@@ -60,6 +60,10 @@ public struct DaemonStats: Codable, Sendable {
 
 public extension DaemonStats {
     static let attachStream = "attach-stream"
+    static let paneAttention = "pane-attention"
+    static let sessionLibrary = "session-library"
+    static let outputSearch = "output-search"
+    static let pathSearch = "path-search"
 
     /// Whether the daemon these stats describe is stale relative to `expectedBuild`
     /// (the caller's `HarnessVersion.build`). A nil build is a daemon too old to know

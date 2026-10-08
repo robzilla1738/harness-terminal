@@ -48,6 +48,13 @@ enum TabContextCommand {
 final class TerminalTabBarView: NSView {
     weak var delegate: TerminalTabBarDelegate?
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        MainMenuBuilder.chromeContextMenu()
+    }
+
+    private var barHeightConstraint: NSLayoutConstraint?
+    private let tabGroup = CALayer()
+    private let tabGroupView = TabGroupBackgroundView()
     private let newTabButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private let overflowButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private var tabs: [Tab] = []
@@ -63,10 +70,8 @@ final class TerminalTabBarView: NSView {
     /// Stacked-squares button that opens the session switcher.
     private let sessionsButton = SoftIconButton(frame: .zero)
     private let pillSpacing = HarnessDesign.Spacing.xs
-    private let minPillWidth: CGFloat = 120
-    private let maxPillWidth: CGFloat = 300
-    /// 1pt rules between neighbouring inactive tabs (none touch the active or hovered tab).
-    private var dividers: [CALayer] = []
+    private let minPillWidth: CGFloat = 219
+    private let maxPillWidth: CGFloat = 375
 
     /// Extra leading inset so the tab strip clears the macOS traffic lights when the
     /// sidebar is collapsed (content shifts to x=0 under `.fullSizeContentView`). 0
@@ -164,6 +169,12 @@ final class TerminalTabBarView: NSView {
     private func setup() {
         registerForDraggedTypes([PaneDrag.type])
         HarnessDesign.applyTabBarChrome(to: self)
+        tabGroup.cornerCurve = .continuous
+        tabGroup.borderWidth = 1
+        tabGroup.actions = ["bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+        tabGroupView.wantsLayer = true
+        tabGroupView.layer = tabGroup
+        addSubview(tabGroupView)
 
         newTabButton.style = .glyph
         newTabButton.setSymbol("plus", accessibilityDescription: "New tab", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
@@ -193,9 +204,17 @@ final class TerminalTabBarView: NSView {
         let height = heightAnchor.constraint(equalToConstant: HarnessDesign.tabBarHeight)
         height.priority = .defaultHigh
         height.isActive = true
+        barHeightConstraint = height
     }
 
     func reload(tabs: [Tab], activeTabID: TabID?) {
+        barHeightConstraint?.constant = HarnessDesign.tabBarHeight
+        // Window activation and routine snapshots must not replace the view that
+        // owns an in-progress mouse press or drag.
+        if tabs.map(\.id) == self.tabs.map(\.id) {
+            refreshMetadata(tabs: tabs, activeTabID: activeTabID)
+            return
+        }
         // A metadata-driven reload can land mid-drag (agent status updates fire often);
         // commit the in-flight reorder first instead of silently discarding the gesture.
         // A tear-off in flight is dropped rather than committed where the mouse happens to be.
@@ -224,7 +243,6 @@ final class TerminalTabBarView: NSView {
             pill.onDragChanged = { [weak self] p, loc in self?.handleDragChanged(p, windowLocation: loc) }
             pill.onDragEnded = { [weak self] p in self?.handleDragEnded(p) }
             pill.onContextCommand = { [weak self] cmd in self?.handleContext(cmd, tabID: id) }
-            pill.onHoverChanged = { [weak self] in self?.updateDividers() }
             addSubview(pill)
             orderedPills.append(pill)
             pillsByID[tab.id] = pill
@@ -236,6 +254,7 @@ final class TerminalTabBarView: NSView {
     /// Update titles/status of existing pills without rebuilding, for live PWD /
     /// title / agent updates. Falls back to a full reload if the set of tabs changed.
     func refreshMetadata(tabs: [Tab], activeTabID: TabID?) {
+        barHeightConstraint?.constant = HarnessDesign.tabBarHeight
         let currentIDs = Set(self.tabs.map(\.id))
         let newIDs = Set(tabs.map(\.id))
         if currentIDs != newIDs || self.tabs.count != tabs.count {
@@ -253,13 +272,14 @@ final class TerminalTabBarView: NSView {
 
     func applyChrome() {
         HarnessDesign.applyTabBarChrome(to: self)
+        tabGroup.backgroundColor = HarnessDesign.chrome.surfaceElevated.cgColor
+        tabGroup.borderColor = HarnessDesign.chrome.border.cgColor
         for pill in orderedPills {
             pill.applyChrome(isActive: pill.tabID == activeTabID)
         }
         newTabButton.applyChrome()
         overflowButton.applyChrome()
         sessionsButton.applyChrome()
-        updateDividers()
     }
 
     /// The sessions button, for anchoring the switcher from a keyboard shortcut.
@@ -295,7 +315,6 @@ final class TerminalTabBarView: NSView {
         newTabButton.frame = NSRect(x: newTabX, y: buttonY, width: controlSize, height: controlSize)
         guard draggingPill == nil else { return } // drag drives its own positioning
         layoutPills()
-        updateDividers()
     }
 
     private var newTabX: CGFloat { bounds.width - edgeInset - controlSize }
@@ -303,39 +322,11 @@ final class TerminalTabBarView: NSView {
     /// The row's centerline in this (unflipped) view: level with the traffic lights.
     private var rowCenterY: CGFloat { bounds.height - HarnessDesign.titleRowCenter }
 
-    /// Hairlines between neighbouring inactive pills. The active pill has its own border,
-    /// and a hovered pill has a fill, so neither gets a rule beside it.
-    private func updateDividers() {
-        let visible = orderedPills.filter { !$0.isHidden }
-        let slots = ChromeLayout.dividerSlots(
-            count: visible.count,
-            activeIndex: visible.firstIndex { $0.tabID == activeTabID },
-            hoveredIndex: visible.firstIndex { $0.isHovered }
-        )
-        while dividers.count < slots.count {
-            let rule = CALayer()
-            rule.actions = ["position": NSNull(), "bounds": NSNull(), "hidden": NSNull()]
-            layer?.addSublayer(rule)
-            dividers.append(rule)
-        }
-        let color = HarnessChrome.current.borderStrong.cgColor
-        let height = HarnessDesign.tabPillHeight * 0.55
-        for (index, rule) in dividers.enumerated() {
-            guard index < slots.count, draggingPill == nil else {
-                rule.isHidden = true
-                continue
-            }
-            let left = visible[slots[index]].frame
-            rule.isHidden = false
-            rule.backgroundColor = color
-            rule.frame = NSRect(x: left.maxX + pillSpacing / 2 - 0.5, y: left.midY - height / 2, width: 1, height: height)
-        }
-    }
-
     private func layoutPills() {
         let count = orderedPills.count
         let buttonY = rowCenterY - controlSize / 2
         guard count > 0 else {
+            tabGroupView.isHidden = true
             overflowButton.isHidden = true
             return
         }
@@ -384,6 +375,25 @@ final class TerminalTabBarView: NSView {
             pill.frame = NSRect(x: x, y: y, width: pillWidth, height: HarnessDesign.tabPillHeight)
             x += pillWidth + pillSpacing
         }
+        // One quiet capsule holds the entire visible group. Only the active tab
+        // gets its own pill; inactive tabs sit directly on this shared surface.
+        tabGroupView.isHidden = count < 2
+        tabGroupView.frame = NSRect(x: contentLeft - 2, y: y - 2,
+                               width: x - pillSpacing - contentLeft + 4,
+                               height: HarnessDesign.tabPillHeight + 4)
+        tabGroup.cornerRadius = tabGroup.bounds.height / 2
+        let visible = orderedPills.filter { !$0.isHidden }
+        tabGroup.sublayers = ChromeLayout.dividerSlots(
+            count: visible.count,
+            activeIndex: visible.firstIndex { $0.tabID == activeTabID },
+            hoveredIndex: nil
+        ).map { index in
+            let rule = CALayer()
+            rule.backgroundColor = HarnessDesign.chrome.borderStrong.cgColor
+            rule.frame = NSRect(x: visible[index].frame.maxX + pillSpacing / 2 - tabGroup.frame.minX,
+                                y: 10, width: 1, height: tabGroup.bounds.height - 20)
+            return rule
+        }
         overflowButton.isHidden = !needsOverflow
         if needsOverflow {
             overflowButton.frame = NSRect(
@@ -422,7 +432,8 @@ final class TerminalTabBarView: NSView {
         let loc = convert(windowLocation, from: nil)
         if draggingPill !== pill {
             draggingPill = pill
-            dragGrabOffsetX = loc.x - pill.frame.minX
+            let start = convert(pill.dragStartLocation ?? windowLocation, from: nil)
+            dragGrabOffsetX = start.x - pill.frame.minX
             pill.layer?.zPosition = 100
         }
         let tearing = loc.y < bounds.minY - tearOffDistance || loc.y > bounds.maxY + tearOffDistance
@@ -558,7 +569,6 @@ private final class TabPillView: NSView {
     var onDragChanged: ((TabPillView, NSPoint) -> Void)?
     var onDragEnded: ((TabPillView) -> Void)?
     var onContextCommand: ((TabContextCommand) -> Void)?
-    var onHoverChanged: (() -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
@@ -592,6 +602,7 @@ private final class TabPillView: NSView {
 
     // Drag detection.
     private var mouseDownLocation: NSPoint?
+    var dragStartLocation: NSPoint? { mouseDownLocation }
     private var isDragging = false
 
     // The tab strip lives in the window's titlebar drag region (`.fullSizeContentView`).
@@ -600,6 +611,16 @@ private final class TabPillView: NSView {
     // `onDragChanged` reorder run smoothly; the empty tab-bar background keeps the default
     // (true), so dragging there still moves the window.
     override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // Treat the whole capsule as a drag handle, including its labels and icon.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        if closeButton.alphaValue > 0, hit === closeButton || hit.isDescendant(of: closeButton) {
+            return hit
+        }
+        return self
+    }
 
     init(tab: Tab, isActive: Bool, position: Int?) {
         tabID = tab.id
@@ -747,7 +768,6 @@ private final class TabPillView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         isHovered = true
-        onHoverChanged?()
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 1
             self.closeWidthConstraint.constant = 14
@@ -758,7 +778,6 @@ private final class TabPillView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         isHovered = false
-        onHoverChanged?()
         HarnessMotion.animate(HarnessDesign.Motion.microFast) { _ in
             closeButton.animator().alphaValue = 0
             self.closeWidthConstraint.constant = 0
@@ -775,7 +794,8 @@ private final class TabPillView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         guard let start = mouseDownLocation else { return }
-        if !isDragging, abs(event.locationInWindow.x - start.x) > 4 {
+        let delta = NSPoint(x: event.locationInWindow.x - start.x, y: event.locationInWindow.y - start.y)
+        if !isDragging, hypot(delta.x, delta.y) > 4 {
             isDragging = true
         }
         if isDragging {
@@ -920,13 +940,10 @@ private final class TabPillView: NSView {
         if isActive {
             if let glass = glassView {
                 glass.isHidden = false
-                // Dark glass is a faint lift. Light glass is only a hint of white,
-                // so the capsule doesn't turn into a bright chip on the pale bar.
-                let glassTint = HarnessDesign.activeGlassTint(isDark: c.isDark, textPrimary: c.textPrimary)
-                HarnessDesign.setLiquidGlassTint(glassTint, on: glass)
+                HarnessDesign.setLiquidGlassTint(HarnessDesign.activeTabGlassTint, on: glass)
                 layer?.backgroundColor = NSColor.clear.cgColor
             } else {
-                layer?.backgroundColor = c.activePillFill.cgColor
+                layer?.backgroundColor = HarnessDesign.activeTabFill.cgColor
             }
             layer?.borderWidth = 1
             layer?.borderColor = c.textPrimary.withAlphaComponent(HarnessDesign.activeGlassBorderAlpha(isDark: c.isDark)).cgColor
@@ -967,4 +984,10 @@ private final class TabPillView: NSView {
         // ⌘N hint: a touch brighter on the active tab, quiet otherwise.
         shortcutLabel.textColor = isActive ? c.textSecondary : c.textTertiary
     }
+}
+
+/// Decorative group surface; tab pills above it own all pointer interactions.
+@MainActor
+private final class TabGroupBackgroundView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

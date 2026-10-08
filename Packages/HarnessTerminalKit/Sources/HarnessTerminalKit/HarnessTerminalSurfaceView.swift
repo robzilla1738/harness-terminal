@@ -3870,6 +3870,21 @@ public final class HarnessTerminalSurfaceView: NSView {
         scheduleRender()
     }
 
+    public func revealSearchResult(query: String, caseSensitive: Bool, line: Int, fingerprint: UInt64) -> Bool {
+        let valid = emulatorSync { emulator in
+            let lines = emulator.captureLines(joinWrapped: false)
+            return lines.indices.contains(line) && OutputSearch.fingerprint(lines[line]) == fingerprint
+        }
+        guard valid else { return false }
+        updateFind(query: query, options: TerminalBufferSearchOptions(caseSensitive: caseSensitive))
+        guard let index = findMatches.firstIndex(where: { $0.bufferLine == line }) else { return false }
+        findCurrentIndex = index
+        scrollToCurrentMatch()
+        onFindResultsChanged?(index + 1, findMatches.count)
+        scheduleRender()
+        return true
+    }
+
     public func findNext() { advanceFind(by: 1) }
     public func findPrevious() { advanceFind(by: -1) }
 

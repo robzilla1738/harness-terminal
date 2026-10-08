@@ -36,10 +36,11 @@ public enum SidebarOutline {
         var lines: [SidebarOutlineLine] = []
         for group in boards {
             var block: [SidebarOutlineLine] = []
+            let hostHit = needle.isEmpty || group.title.lowercased().contains(needle) || group.id.lowercased().contains(needle)
             if group.id == liveOwner {
                 for session in live {
                     let title = sessionTitle(session)
-                    let nameHit = needle.isEmpty || title.lowercased().contains(needle)
+                    let nameHit = hostHit || title.lowercased().contains(needle)
                     let tabs = session.tabs.filter { tab in
                         nameHit || tab.title.lowercased().contains(needle) || tab.cwd.lowercased().contains(needle)
                     }
@@ -55,7 +56,7 @@ public enum SidebarOutline {
                     }
                 }
             } else {
-                for row in group.sessions where needle.isEmpty || row.name.lowercased().contains(needle) {
+                for row in group.sessions where hostHit || row.name.lowercased().contains(needle) {
                     block.append(.session(id: row.id, title: row.name, owner: row.owner, live: false, current: false))
                 }
             }
