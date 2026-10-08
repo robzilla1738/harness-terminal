@@ -53,9 +53,13 @@ final class RenderScheduler {
     /// while occluded are rare and harmless).
     private(set) var isOccluded = false
     /// When the next frame of a Kitty animation on screen is due (uptime nanoseconds), from the
-    /// last frame presented; nil when nothing visible animates. It keeps the display link awake
-    /// until then, and the first `tick` at or past it presents.
+    /// last frame presented; nil when nothing visible animates. Within `linkTimedAnimationWindow`
+    /// it keeps the display link awake; farther off, the link pauses and the view wakes it at
+    /// `animationWake`. The first `tick` at or past it presents.
     private(set) var animationDeadline: UInt64?
+    /// How near (nanoseconds) an animation deadline must be for the display link to time it:
+    /// about two frames at 60 Hz. Waking a paused link costs no more than a frame.
+    static let linkTimedAnimationWindow: UInt64 = 33_000_000
 
     init(render: @escaping () -> Void, renderSynchronously: (() -> Void)? = nil) {
         self.render = render
@@ -66,8 +70,21 @@ final class RenderScheduler {
     /// display link running only while needed (and pause it when idle, so a quiet terminal doesn't
     /// wake the CPU every display tick). An occluded window holds too: its link pauses even with
     /// output flooding in, so a covered pane running a build costs no presents at all.
-    /// A pending animation frame counts too, so the link stays awake to time it.
-    var hasPendingWork: Bool { isRunning && (needsRender || animationDeadline != nil) && !synchronized && !isOccluded }
+    /// An animation frame due within `linkTimedAnimationWindow` counts too, so the link stays
+    /// awake to time it.
+    func hasPendingWork(now: UInt64 = DispatchTime.now().uptimeNanoseconds) -> Bool {
+        let animationIsNear = animationDeadline.map { $0 <= now || $0 - now <= Self.linkTimedAnimationWindow } ?? false
+        return isRunning && (needsRender || animationIsNear) && !synchronized && !isOccluded
+    }
+
+    /// When to wake the paused display link for an animation frame too far off for the link to
+    /// time (see `hasPendingWork`); nil when there's none, or nothing would present it.
+    func animationWake(now: UInt64 = DispatchTime.now().uptimeNanoseconds) -> UInt64? {
+        guard let deadline = animationDeadline, deadline > now, deadline - now > Self.linkTimedAnimationWindow,
+              isRunning, !synchronized, !isOccluded
+        else { return nil }
+        return deadline
+    }
 
     /// Window visibility changed (see `isOccluded`). Un-occlusion does not present by itself —
     /// the caller re-arms via its normal scheduling so any marks accumulated while covered land

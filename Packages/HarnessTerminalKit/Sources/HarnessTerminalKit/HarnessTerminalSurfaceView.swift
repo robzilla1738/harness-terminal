@@ -573,6 +573,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// only while the last presented frame contained blink cells and the pane is visible.
     private var textBlinkTimer: Timer?
     private var textBlinkHidden = false
+    /// One-shot wake for a Kitty animation frame too far off for the display link to time
+    /// (`RenderScheduler.animationWake`); replaced with each deadline, gone with the link.
+    private var animationWakeTimer: Timer?
     /// Whether the most recently presented frame contained SGR-blink cells — drives
     /// `updateTextBlinkTimer` across occlusion changes without rescanning a frame.
     private var lastFrameHadBlink = false
@@ -1932,6 +1935,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         renderLink?.invalidate()
         renderLink = nil
         scheduler.stop()
+        updateAnimationWakeTimer()
     }
 
     /// Window visibility changed (occlusion observer / attach seed). While occluded the scheduler
@@ -1945,6 +1949,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         // nothing to blink — stop the wakeups; re-arm when it can show again.
         restartBlinkTimer()
         updateTextBlinkTimer(frameHasBlink: lastFrameHadBlink)
+        updateAnimationWakeTimer()
         if !occluded { scheduleRender() }
     }
 
@@ -2337,18 +2342,37 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// on the frame it shows.
     private static var animatesImages: Bool { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
-    /// Keep the display link timing the next frame of the animations just presented (nil: none
-    /// visible). Occlusion and detaching pause it with the rest of the scheduler.
+    /// Time the next frame of the animations just presented (nil: none visible). Occlusion and
+    /// detaching pause it with the rest of the scheduler.
     private func scheduleAnimationFrame(at deadline: UInt64?) {
         scheduler.setAnimationDeadline(deadline)
-        if deadline != nil { wakeDisplayLink() }
+        updateAnimationWakeTimer()
+    }
+
+    /// A frame due within a couple of display frames keeps the display link awake; a farther one
+    /// lets `displayTick` pause it and wakes it once, at the deadline, so a slow animation costs
+    /// no empty ticks in between.
+    private func updateAnimationWakeTimer() {
+        animationWakeTimer?.invalidate()
+        animationWakeTimer = nil
+        let now = DispatchTime.now().uptimeNanoseconds
+        if scheduler.animationDeadline != nil, scheduler.hasPendingWork(now: now) { wakeDisplayLink() }
+        guard let wake = scheduler.animationWake(now: now) else { return }
+        let timer = Timer(timeInterval: TimeInterval(wake - now) / 1e9, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.animationWakeTimer = nil
+                self?.wakeDisplayLink()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        animationWakeTimer = timer
     }
 
     /// Display-cadence tick: present at most one coalesced frame, then pause the link when there's
     /// nothing left to draw so a quiet terminal doesn't wake the CPU every refresh.
     @objc private func displayTick() {
         scheduler.tick()
-        if !scheduler.hasPendingWork {
+        if !scheduler.hasPendingWork() {
             renderLink?.isPaused = true
             scheduler.linkDidPause() // reopen the immediate-present path for the next arrival
         }
