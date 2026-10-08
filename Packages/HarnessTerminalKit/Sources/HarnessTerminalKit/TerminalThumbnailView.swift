@@ -23,6 +23,7 @@ extension TerminalHostView: TerminalThumbnailSource {}
 public final class TerminalThumbnailView: NSView {
     private static let liveInterval: TimeInterval = 1.0 / 15
     private static let reducedMotionInterval: TimeInterval = 1
+    private static let imageCacheBytes = 16 * 1024 * 1024
 
     private let metalLayer = CAMetalLayer()
     private var renderer: TerminalMetalRenderer?
@@ -138,10 +139,11 @@ public final class TerminalThumbnailView: NSView {
             cell: metrics, backing: backing
         )
         if renderer == nil || rendererFont != style.font || rendererScale != scale {
-            // Small glyphs: a quarter-size atlas page holds a thumbnail's working set.
+            // Small glyphs: a quarter-size atlas page holds a thumbnail's working set, and a
+            // still screen's images need a small texture budget.
             renderer = TerminalMetalRenderer(
                 device: device, fontFamily: style.font.family, fontSize: style.font.size,
-                scale: scale, atlasSize: 512,
+                scale: scale, atlasSize: 512, imageCacheBytes: Self.imageCacheBytes,
                 fontThicken: style.font.thicken, fontThickenStrength: style.font.thickenStrength
             )
             rendererFont = style.font

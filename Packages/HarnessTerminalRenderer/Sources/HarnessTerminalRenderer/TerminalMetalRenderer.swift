@@ -104,6 +104,9 @@ public final class TerminalMetalRenderer {
     private let sampler: MTLSamplerState
     private let atlas: GlyphAtlas
     private let imageCache: ImageTextureCache
+    /// A pane's image texture budget: a screen's image budget twice over, room for its images
+    /// and an animation's frames together.
+    public static let defaultImageCacheBytes = 2 * ImageLimits.maxBytesPerScreen
     private let ascentPixels: Int
     /// The render-target pixel format both pipelines are built for.
     public static let pixelFormat: MTLPixelFormat = .rgba8Unorm
@@ -180,6 +183,7 @@ public final class TerminalMetalRenderer {
         scale: CGFloat,
         atlasSize: Int = 1024,
         atlasMaxPages: Int = 4,
+        imageCacheBytes: Int = TerminalMetalRenderer.defaultImageCacheBytes,
         fontThicken: Bool = false,
         fontThickenStrength: Int = 255
     ) {
@@ -189,6 +193,7 @@ public final class TerminalMetalRenderer {
             scale: scale,
             atlasSize: atlasSize,
             atlasMaxPages: atlasMaxPages,
+            imageCacheBytes: imageCacheBytes,
             fontThicken: fontThicken,
             fontThickenStrength: fontThickenStrength
         )
@@ -200,6 +205,7 @@ public final class TerminalMetalRenderer {
         scale: CGFloat,
         atlasSize: Int = 1024,
         atlasMaxPages: Int = 4,
+        imageCacheBytes: Int = TerminalMetalRenderer.defaultImageCacheBytes,
         fontThicken: Bool = false,
         fontThickenStrength: Int = 255
     ) {
@@ -227,7 +233,7 @@ public final class TerminalMetalRenderer {
         glyphPipeline = pipelines.glyph
         decoPipeline = pipelines.deco
         imagePipeline = pipelines.image
-        self.imageCache = ImageTextureCache(device: device)
+        self.imageCache = ImageTextureCache(device: device, maxBytes: imageCacheBytes)
         self.bgInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "bg-instances")
         self.glyphInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "glyph-instances")
         self.decoInstanceBuffer = DynamicInstanceBuffer(device: device, ringSize: Self.maxFramesInFlight, label: "deco-instances")
@@ -361,6 +367,8 @@ public final class TerminalMetalRenderer {
     /// scroll tick re-encodes nothing. `smoothScrollClipRows` scissors the draw to the first N
     /// rows' box so content slides out of a fixed window (and the frame's display-only peek row —
     /// built one row below the viewport to fill the translate's gap — stays hidden at fraction 0).
+    /// `animatingImages`: a Kitty animation in `frame` is playing, so the image textures it
+    /// doesn't draw (its other frames) stay cached; otherwise ones undrawn for a few frames go.
     @discardableResult
     public func present(
         _ frame: TerminalFrame,
@@ -374,13 +382,14 @@ public final class TerminalMetalRenderer {
         scrollFractionPx: Float = 0,
         smoothScrollClipRows: Int? = nil,
         frameBuildNanos: UInt64 = 0,
+        animatingImages: Bool = false,
         synchronizedWithTransaction: Bool = false
     ) -> Bool {
         guard let commandBuffer = encode(
             frame, target: drawable.texture, clearColor: clearColor, origin: origin,
             gamma: gamma, ligatures: ligatures, damage: damage, scrollShift: scrollShift,
             scrollFractionPx: scrollFractionPx, smoothScrollClipRows: smoothScrollClipRows,
-            frameBuildNanos: frameBuildNanos
+            frameBuildNanos: frameBuildNanos, animatingImages: animatingImages
         ) else { return false }
         if synchronizedWithTransaction {
             let scheduleStart = DispatchTime.now().uptimeNanoseconds
@@ -410,9 +419,11 @@ public final class TerminalMetalRenderer {
         scrollShift: Int = 0,
         scrollFractionPx: Float = 0,
         smoothScrollClipRows: Int? = nil,
-        frameBuildNanos: UInt64 = 0
+        frameBuildNanos: UInt64 = 0,
+        animatingImages: Bool = false
     ) -> MTLCommandBuffer? {
         let encodeStart = DispatchTime.now().uptimeNanoseconds
+        defer { imageCache.endFrame(animating: animatingImages) }
         var frameStats = TerminalRenderStats(
             cells: frame.cells.count,
             atlasPages: atlas.stats.pages,

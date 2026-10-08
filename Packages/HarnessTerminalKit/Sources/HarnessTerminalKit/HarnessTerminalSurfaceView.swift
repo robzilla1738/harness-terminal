@@ -2449,6 +2449,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             ligatures: ligaturesEnabled,
             damage: plain ? damage : nil,
             frameBuildNanos: frameBuildNanos,
+            animatingImages: nextAnimationFrame != nil,
             synchronizedWithTransaction: metalLayer.presentsWithTransaction
         )
         if didPresent {
@@ -2873,6 +2874,7 @@ public final class HarnessTerminalSurfaceView: NSView {
                 scrollFractionPx: fractionPx,
                 smoothScrollClipRows: clipRows,
                 frameBuildNanos: result.frameBuildNanos,
+                animatingImages: result.nextAnimationFrame != nil,
                 synchronizedWithTransaction: metalLayer.presentsWithTransaction
             )
             return presented ? .presented : .encodeFailure

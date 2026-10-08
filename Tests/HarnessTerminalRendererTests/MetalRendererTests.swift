@@ -1553,6 +1553,76 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertFalse(cache.texture(id: -2, rgba: rgba, width: 1, height: 1) === second, "-2 was evicted and uploads again")
     }
 
+    /// Retransmits and frame edits mint new ids, so a texture no frame draws for a few frames
+    /// goes, while the ones still drawn stay.
+    func testImageTextureCacheFreesUndrawnTextures() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device available") }
+        let cache = ImageTextureCache(device: device, maxBytes: 1 << 20)
+        let rgba: [UInt8] = [255, 0, 0, 255]
+        let kept = try XCTUnwrap(cache.texture(id: -1, rgba: rgba, width: 1, height: 1))
+        _ = cache.texture(id: -2, rgba: rgba, width: 1, height: 1)
+        cache.endFrame(animating: false)
+        for _ in 0 ..< ImageTextureCache.idleFrames {
+            _ = cache.texture(id: -1, rgba: rgba, width: 1, height: 1)
+            cache.endFrame(animating: false)
+        }
+        XCTAssertEqual(cache.count, 2, "a few frames without an image keep it")
+        _ = cache.texture(id: -1, rgba: rgba, width: 1, height: 1)
+        cache.endFrame(animating: false)
+        XCTAssertEqual(cache.count, 1, "-2 went undrawn too long")
+        XCTAssertTrue(cache.texture(id: -1, rgba: rgba, width: 1, height: 1) === kept)
+    }
+
+    /// A playing animation draws one frame at a time; the others stay cached for the next loop,
+    /// and go once it stops.
+    func testImageTextureCacheHoldsAnimationFramesWhilePlaying() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device available") }
+        let cache = ImageTextureCache(device: device, maxBytes: 1 << 20)
+        let rgba: [UInt8] = [255, 0, 0, 255]
+        let frames = try (1 ... 10).map { try XCTUnwrap(cache.texture(id: -$0, rgba: rgba, width: 1, height: 1)) }
+        cache.endFrame(animating: true)
+        for _ in 0 ..< 3 {
+            for (index, frame) in frames.enumerated() {
+                XCTAssertTrue(cache.texture(id: -(index + 1), rgba: rgba, width: 1, height: 1) === frame, "no re-upload")
+                cache.endFrame(animating: true)
+            }
+        }
+        XCTAssertEqual(cache.count, 10)
+        for _ in 0 ... ImageTextureCache.idleFrames {
+            _ = cache.texture(id: -10, rgba: rgba, width: 1, height: 1)
+            cache.endFrame(animating: false)
+        }
+        XCTAssertEqual(cache.count, 1, "stopped: only the frame it holds stays")
+    }
+
+    func testImageTextureCacheCapsEntries() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device available") }
+        let cache = ImageTextureCache(device: device, maxBytes: 1 << 20, maxEntries: 2)
+        let rgba: [UInt8] = [255, 0, 0, 255]
+        let first = try XCTUnwrap(cache.texture(id: -1, rgba: rgba, width: 1, height: 1))
+        let second = try XCTUnwrap(cache.texture(id: -2, rgba: rgba, width: 1, height: 1))
+        _ = cache.texture(id: -1, rgba: rgba, width: 1, height: 1)
+        _ = cache.texture(id: -3, rgba: rgba, width: 1, height: 1) // evicts -2, the least recent
+        XCTAssertEqual(cache.count, 2)
+        XCTAssertTrue(cache.texture(id: -1, rgba: rgba, width: 1, height: 1) === first)
+        XCTAssertFalse(cache.texture(id: -2, rgba: rgba, width: 1, height: 1) === second)
+    }
+
+    /// Lookups and evictions don't scan: 50k textures, each drawn again newest first (the worst
+    /// order for a scanned list), then swept away.
+    func testImageTextureCacheScalesToManyEntries() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device available") }
+        let count = 50_000
+        let cache = ImageTextureCache(device: device, maxBytes: 1 << 30, maxEntries: count)
+        let rgba: [UInt8] = [255, 0, 0, 255]
+        let start = Date()
+        for id in 1 ... count { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
+        for id in (1 ... count).reversed() { _ = cache.texture(id: -id, rgba: rgba, width: 1, height: 1) }
+        for _ in 0 ... ImageTextureCache.idleFrames + 1 { cache.endFrame(animating: false) }
+        XCTAssertEqual(cache.count, 0)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
     func testPromptGutterStripeRendersInLeftPadding() throws {
         let (device, renderer) = try makeRenderer()
         // A prompt that succeeded → green stripe (ANSI green, palette[2]). Cursor hidden so it
