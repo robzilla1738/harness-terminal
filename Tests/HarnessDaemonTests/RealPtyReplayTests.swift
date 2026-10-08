@@ -78,7 +78,7 @@ final class ProcessArgumentsTests: XCTestCase {
         var bytes: [UInt8] = []
         withUnsafeBytes(of: Int32(3).littleEndian) { bytes += $0 }
         bytes += Array("/opt/homebrew/bin/nvim".utf8) + [0, 0, 0]
-        bytes += Array("nvim".utf8) + [0] + Array("a b.zig".utf8) + [0] + Array("+12".utf8) + [0]
+        for argument in ["nvim", "a b.zig", "+12"] { bytes += Array(argument.utf8) + [0] }
         bytes += Array("HOME=/x".utf8) + [0]
         XCTAssertEqual(RealPty.parseProcArgs2(bytes), ["nvim", "a b.zig", "+12"])
     }
