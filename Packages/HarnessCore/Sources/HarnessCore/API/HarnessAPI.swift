@@ -402,9 +402,10 @@ public enum HarnessAPI {
         method("tab.label", "Rename a tab", object([
             "tab": string("Tab id or label"), "title": string("New label"),
         ], required: ["title"]), object(["ok": bool("Applied")])),
-        method("tab.move", "Move a tab to a 0-based index", object([
-            "tab": string("Tab id or label"), "index": int("Destination index"),
-        ], required: ["index"]), object(["ok": bool("Applied")])),
+        method("tab.move", "Move a tab to a 0-based index, in its session or another one", object([
+            "tab": string("Tab id or label"), "index": int("Destination index (default: the end)"),
+            "session": string("Session id or label to move it into, or \"new\" for a session of its own"),
+        ]), object(["session": string("The session the tab is in now")])),
         method("tab.focus", "Select a tab", object(["tab": string("Tab id or label")]), object(["ok": bool("Applied")])),
         method("session.label", "Rename a session", object([
             "session": string("Session id or label"), "name": string("New name"),
@@ -563,9 +564,18 @@ public enum HarnessAPI {
             let tab = try targets.tab(arguments["tab"]?.string)
             let (workspace, id) = (try uuid(tab.workspaceID), try uuid(tab.id))
             if method == "tab.focus" { return .request(.selectTab(workspaceID: workspace, tabID: id)) }
-            guard case let .int(index)? = arguments["index"], index >= 0 else {
-                throw APIPlanError(code: .badArguments, message: "index must be a non-negative integer")
+            var index: Int?
+            if let raw = arguments["index"] {
+                guard case let .int(value) = raw, value >= 0 else {
+                    throw APIPlanError(code: .badArguments, message: "index must be a non-negative integer")
+                }
+                index = value
             }
+            if let session = arguments["session"]?.string {
+                let destination = session == "new" ? nil : try uuid(targets.session(session).id)
+                return .request(.moveTab(tabID: id, toSessionID: destination, index: index))
+            }
+            guard let index else { throw APIPlanError(code: .badArguments, message: "tab.move needs an index or a session") }
             return .request(.reorderTab(workspaceID: workspace, tabID: id, toIndex: index))
         case "pane.split":
             let tab = try targets.tab(arguments["tab"]?.string)

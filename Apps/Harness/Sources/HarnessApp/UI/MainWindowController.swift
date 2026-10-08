@@ -11,7 +11,11 @@ final class MainWindowController: NSWindowController {
     /// settings (`windowBorderHex`/`windowBorderOpacity`); re-applied in `applyTransparency`.
     private let borderOverlay = WindowBorderOverlayView()
 
-    convenience init() {
+    /// The session this window shows.
+    var context: WindowContext? { (contentViewController as? MainSplitViewController)?.context }
+
+    /// `sessionID`: the session this window shows; nil follows the daemon's active one.
+    convenience init(sessionID: SessionID? = nil) {
         HarnessChrome.update(
             themeName: SessionCoordinator.shared.snapshot.themeName,
             opacity: CGFloat(SessionCoordinator.shared.settings.backgroundOpacity),
@@ -49,7 +53,9 @@ final class MainWindowController: NSWindowController {
         window.toolbarStyle = .unified
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
         Self.applyWindowAppearance(window)
-        window.contentViewController = MainSplitViewController()
+        let context = WindowContext(sessionID: sessionID)
+        WindowContexts.register(context)
+        window.contentViewController = MainSplitViewController(context: context)
         // Assigning `contentViewController` resizes the window to the split view's
         // fitting size (~sidebar width). Re-assert the intended default explicitly —
         // otherwise the window opens tiny (previously `minSize` masked this; lowering
@@ -73,7 +79,10 @@ final class MainWindowController: NSWindowController {
         // Opt-in window frame persistence: when enabled, restore the saved frame (size +
         // position) and keep it updated automatically; otherwise open centered at the
         // default size. Window-level only — no effect on sessions or the terminal.
-        if SessionCoordinator.shared.settings.restoreWindowSize {
+        // Only the first window restores the saved frame; later ones cascade from the key window.
+        if WindowContexts.all.count > 1 {
+            window.center()
+        } else if SessionCoordinator.shared.settings.restoreWindowSize {
             window.setFrameAutosaveName(Self.frameAutosaveName)
             if !window.setFrameUsingName(Self.frameAutosaveName) {
                 window.center()

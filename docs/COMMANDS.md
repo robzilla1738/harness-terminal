@@ -297,7 +297,7 @@ From inside a pane the daemon sets `HARNESS_SESSION`, `HARNESS_TAB`, `HARNESS_PA
 | `server.version` | Daemon version and build. |
 | `session.list` / `session.view` | Sessions, or one session. |
 | `session.create` / `session.label` | Create a session (optionally from a layout tree), or rename one. |
-| `tab.create` / `tab.close` / `tab.label` / `tab.move` / `tab.focus` | Open a tab (`cwd`, `command`), close, rename, move to a 0-based `index`, select. |
+| `tab.create` / `tab.close` / `tab.label` / `tab.move` / `tab.focus` | Open a tab (`cwd`, `command`), close, rename, move to a 0-based `index` or into another `session` (`"new"` gives it a session of its own), select. |
 | `pane.split` | Split. `direction` is `horizontal` or `vertical` (default `vertical`). `command` is an executable path. `false` runs `/usr/bin/false`. |
 | `pane.view` | Everything about one pane in one call: ids, cwd, program, agent, size, program status, process tree. |
 | `pane.zoom` / `pane.focus` / `pane.label` / `pane.close` | Zoom, focus, rename the pane's tab, close. |

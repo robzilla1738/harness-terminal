@@ -16,6 +16,8 @@ protocol TerminalTabBarDelegate: AnyObject {
     func tabBarDidRequestSessions(from anchor: NSView)
     /// A dragged pane dropped on a tab (moves into it) or on empty bar space (nil: own tab).
     func tabBarDidReceivePane(_ surfaceID: SurfaceID, onTab tabID: TabID?)
+    /// A tab pill dragged off the bar and released at `screenPoint` (tear-off).
+    func tabBarDidTearOff(tabID: TabID, at screenPoint: NSPoint)
 }
 
 extension TerminalTabBarDelegate {
@@ -190,7 +192,13 @@ final class TerminalTabBarView: NSView {
     func reload(tabs: [Tab], activeTabID: TabID?) {
         // A metadata-driven reload can land mid-drag (agent status updates fire often);
         // commit the in-flight reorder first instead of silently discarding the gesture.
-        if let dragging = draggingPill { handleDragEnded(dragging) }
+        // A tear-off in flight is dropped rather than committed where the mouse happens to be.
+        if tearingOff {
+            tearingOff = false
+            NSCursor.pop()
+        } else if let dragging = draggingPill {
+            handleDragEnded(dragging)
+        }
         self.tabs = tabs
         self.activeTabID = activeTabID
         for pill in orderedPills { pill.removeFromSuperview() }
@@ -400,12 +408,22 @@ final class TerminalTabBarView: NSView {
 
     // MARK: - Drag reorder
 
+    /// A pill dragged this far above or below the bar is being torn off into a window.
+    private let tearOffDistance: CGFloat = 36
+    private var tearingOff = false
+
     private func handleDragChanged(_ pill: TabPillView, windowLocation: NSPoint) {
         let loc = convert(windowLocation, from: nil)
         if draggingPill !== pill {
             draggingPill = pill
             dragGrabOffsetX = loc.x - pill.frame.minX
             pill.layer?.zPosition = 100
+        }
+        let tearing = loc.y < bounds.minY - tearOffDistance || loc.y > bounds.maxY + tearOffDistance
+        if tearing != tearingOff {
+            tearingOff = tearing
+            pill.animator().alphaValue = tearing ? 0.45 : 1
+            if tearing { NSCursor.dragCopy.push() } else { NSCursor.pop() }
         }
         var f = pill.frame
         f.origin.x = max(contentLeft, min(loc.x - dragGrabOffsetX, bounds.width - edgeInset - f.width))
@@ -451,6 +469,14 @@ final class TerminalTabBarView: NSView {
         let from = orderedPills.firstIndex { $0 === pill }
         draggingPill = nil
         dragTargetIndex = nil
+        if tearingOff {
+            tearingOff = false
+            NSCursor.pop()
+            pill.alphaValue = 1
+            needsLayout = true
+            delegate?.tabBarDidTearOff(tabID: pill.tabID, at: NSEvent.mouseLocation)
+            return
+        }
 
         if let target, let from, target != from {
             // Commit; the resulting snapshot reload rebuilds pills in the new order.

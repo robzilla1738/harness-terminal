@@ -141,6 +141,7 @@ Per-agent setup lives in [docs/agent-hooks/README.md](docs/agent-hooks/README.md
 
 | Action | Shortcut |
 |--------|----------|
+| New window | `Cmd+N` |
 | New tab | `Cmd+T` |
 | New session | `Cmd+Shift+N` |
 | Close tab | `Cmd+W` |

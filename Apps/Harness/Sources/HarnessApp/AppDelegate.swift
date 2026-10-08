@@ -4,7 +4,8 @@ import HarnessCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var mainWindowController: MainWindowController?
+    /// Every open window; each shows one session (see `WindowContext`).
+    private var windowControllers: [MainWindowController] = []
     private var menuBarController: MenuBarController?
     private var notchController: NotchPanelController?
     private var terminalServicesProvider: TerminalServicesProvider?
@@ -25,8 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Build the UI immediately so launch never blocks on the daemon. The
         // coordinator starts from a default snapshot and repopulates the moment
         // the daemon answers (below) — no frozen window, no modal timeout dialog.
-        mainWindowController = MainWindowController()
-        mainWindowController?.showWindow(nil)
+        openWindow(showing: nil)
         StartupMetrics.shared.mark(.firstWindow)
         NSApp.activate(ignoringOtherApps: true)
         NSApp.mainMenu = MainMenuBuilder.build()
@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Follow the macOS system appearance so the effective theme and chrome refresh together.
         appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             MainActor.assumeIsolated {
-                self?.mainWindowController?.effectiveAppearanceDidChange()
+                self?.windowControllers.forEach { $0.effectiveAppearanceDidChange() }
             }
         }
         // Belt-and-suspenders for the system light/dark flip: the KVO above (and the split
@@ -64,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main
         ) { _ in
             MainActor.assumeIsolated {
-                (NSApp.delegate as? AppDelegate)?.mainWindowController?.effectiveAppearanceDidChange()
+                (NSApp.delegate as? AppDelegate)?.windowControllers.forEach { $0.effectiveAppearanceDidChange() }
             }
         }
         // Request notification authorization once at launch instead of on every
@@ -81,7 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SessionCoordinator.shared.noteDaemonError(DaemonClientError.timeout)
             }
             // Refresh the window chrome after the daemon is hydrated so it matches the effective theme.
-            self.mainWindowController?.effectiveAppearanceDidChange()
+            self.windowControllers.forEach { $0.effectiveAppearanceDidChange() }
+            if synced { self.restoreWindows() }
             Self.reconcileSessionPersistenceWithMode()
             OnboardingController.presentIfNeeded()
             self.externalOpenReady = true
@@ -135,6 +136,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordModePersistenceApplied(mode)
     }
 
+    // MARK: - Windows
+
+    /// Show `session` in a window: the one already showing it, or a new one (placed at
+    /// `origin` when given, else cascaded from the key window). nil opens a window that
+    /// follows the active session (the first window at launch).
+    @discardableResult
+    func openWindow(showing session: SessionID?, at origin: NSPoint? = nil) -> NSWindow? {
+        if let session, let existing = WindowContexts.window(showing: session) {
+            existing.makeKeyAndOrderFront(nil)
+            return existing
+        }
+        let controller = MainWindowController(sessionID: session)
+        guard let window = controller.window else { return nil }
+        if let origin {
+            window.setFrameTopLeftPoint(origin)
+        } else if let key = NSApp.keyWindow, windowControllers.contains(where: { $0.window === key }) {
+            window.setFrameTopLeftPoint(window.cascadeTopLeft(from: NSPoint(x: key.frame.minX, y: key.frame.maxY)))
+        }
+        windowControllers.append(controller)
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self, weak controller] _ in
+            MainActor.assumeIsolated {
+                self?.windowControllers.removeAll { $0 === controller }
+                self?.saveWindows()
+            }
+        }
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        for name in [NSWindow.didMoveNotification, NSWindow.didEndLiveResizeNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.saveWindows() }
+            }
+        }
+        saveWindows()
+        return window
+    }
+
+    /// File ▸ New Window: a new session, in a window of its own.
+    @objc func newWindow(_ sender: Any?) {
+        newWindow()
+    }
+
+    /// A new session in a new window. The window exists before the snapshot that makes the
+    /// session active arrives, so the window behind never switches to it.
+    func newWindow(cwd: String? = nil, name: String? = nil) {
+        let coordinator = SessionCoordinator.shared
+        guard let workspace = coordinator.snapshot.activeWorkspaceID ?? coordinator.snapshot.workspaces.first?.id,
+              let session = coordinator.createSession(in: workspace, cwd: cwd, name: name)
+        else { return }
+        openWindow(showing: session)
+        coordinator.syncFromDaemon()
+        SurfaceShellTracker.shared.bumpScan()
+    }
+
+    /// Move a tab into a session of its own in a new window (placed at `origin` when given).
+    /// A session's only tab already has its window, which comes forward instead.
+    func moveTabToNewWindow(_ tabID: TabID, at origin: NSPoint? = nil) {
+        let coordinator = SessionCoordinator.shared
+        guard let session = coordinator.moveTab(tabID, toSession: nil) else { return }
+        openWindow(showing: session, at: origin)
+        coordinator.syncFromDaemon()
+    }
+
+    // MARK: - Window restore
+
+    private static let openWindowsKey = "HarnessOpenWindows"
+    private var terminating = false
+    /// Saving waits for the restore, so the launch window can't overwrite the list it reads.
+    private var windowsRestored = false
+
+    private struct SavedWindow: Codable {
+        var session: UUID
+        var frame: String
+    }
+
+    /// Remember each window's session and frame, so a relaunch reopens them. Closing the last
+    /// window quits with an empty list: windows you closed don't come back.
+    private func saveWindows() {
+        guard windowsRestored, !terminating else { return }
+        let saved = windowControllers.compactMap { controller -> SavedWindow? in
+            guard let window = controller.window, let session = controller.context?.sessionID else { return nil }
+            return SavedWindow(session: session, frame: NSStringFromRect(window.frame))
+        }
+        UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.openWindowsKey)
+    }
+
+    /// Reopen the windows saved at the last quit whose sessions still exist. The first window
+    /// already shows the active session.
+    private func restoreWindows() {
+        defer {
+            windowsRestored = true
+            saveWindows()
+        }
+        guard let data = UserDefaults.standard.data(forKey: Self.openWindowsKey),
+              let saved = try? JSONDecoder().decode([SavedWindow].self, from: data), saved.count > 1
+        else { return }
+        let snapshot = SessionCoordinator.shared.snapshot
+        let sessions = Set(snapshot.workspaces.flatMap(\.sessions).map(\.id))
+        let front = NSApp.keyWindow
+        for entry in saved where sessions.contains(entry.session) && entry.session != snapshot.activeWorkspace?.activeSessionID {
+            guard WindowContexts.window(showing: entry.session) == nil,
+                  let window = openWindow(showing: entry.session) else { continue }
+            let frame = NSRectFromString(entry.frame)
+            if frame.width >= window.minSize.width, NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) {
+                window.setFrame(frame, display: false)
+            }
+        }
+        front?.makeKeyAndOrderFront(nil)
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Closing the last window quits the app; the daemon (launchd-managed)
         // keeps sessions alive in the background so reopening reattaches.
@@ -142,6 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        saveWindows()
+        terminating = true
         // The daemon is owned by launchd and intentionally outlives the GUI — never tear it
         // down on quit. Persistent sessions and scrollback stay alive so `harness-cli attach`
         // and a subsequent app launch see the same state.

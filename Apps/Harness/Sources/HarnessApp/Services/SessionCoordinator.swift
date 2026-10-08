@@ -878,7 +878,7 @@ final class SessionCoordinator: NSObject {
     }
 
     func addSession(to workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) {
-        requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, name: name, shell: settings.defaultShell))
+        createSession(in: workspaceID, cwd: cwd, name: name)
         syncFromDaemon()
         // Kick the cwd tracker immediately after session creation so the shell's working
         // directory lights up as early as possible.  A second kick follows the daemon's next
@@ -886,6 +886,16 @@ final class SessionCoordinator: NSObject {
         // is no fixed timing dependency — the notification-driven path handles the "shell not
         // yet spawned" window without a magic timeout.
         SurfaceShellTracker.shared.bumpScan()
+    }
+
+    /// Ask the daemon for a session without syncing, so a caller can open its window before
+    /// the snapshot that makes it active arrives.
+    @discardableResult
+    func createSession(in workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) -> SessionID? {
+        let cwd = cwd ?? activeTabCWD ?? settings.defaultCWD
+        guard case let .sessionID(id)? = requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd, name: name, shell: settings.defaultShell))
+        else { return nil }
+        return id
     }
 
     func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) {
@@ -925,6 +935,23 @@ final class SessionCoordinator: NSObject {
         else { return }
         requestDaemon(.newSplit(tabID: tab.id, paneID: paneID, direction: direction, shell: settings.defaultShell))
         syncFromDaemon()
+    }
+
+    /// Move a tab into `session` (at `index`, else the end), or with nil into a new session of
+    /// its own. Returns where it went. Moving into a new session doesn't sync, so the caller can
+    /// open its window before the snapshot that makes it active arrives.
+    @discardableResult
+    func moveTab(_ tabID: TabID, toSession session: SessionID?, index: Int? = nil) -> SessionID? {
+        switch requestDaemon(.moveTab(tabID: tabID, toSessionID: session, index: index)) {
+        case let .sessionID(id)?:
+            if session != nil { syncFromDaemon() }
+            return id
+        case let .error(message)?:
+            DisplayMessage.show(message)
+            return nil
+        default:
+            return nil
+        }
     }
 
     /// A pane dragged onto another: an edge splits the target with the dragged pane on that
@@ -985,6 +1012,12 @@ final class SessionCoordinator: NSObject {
     }
 
     func selectSession(workspaceID: WorkspaceID, sessionID: SessionID) {
+        // A session already showing in another window: go to that window (becoming key
+        // selects it there) rather than pulling its panes into this one.
+        if let window = WindowContexts.window(showing: sessionID), window !== NSApp.keyWindow {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
         if snapshot.activeWorkspaceID == workspaceID,
            snapshot.activeWorkspace?.activeSessionID == sessionID
         {

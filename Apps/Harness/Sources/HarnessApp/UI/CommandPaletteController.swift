@@ -139,6 +139,26 @@ enum CommandPaletteController {
                 if let id = coordinator.snapshot.activeWorkspaceID { coordinator.addSession(to: id) }
             },
             PaletteAction(
+                id: "action.newWindow",
+                title: "New Window",
+                subtitle: "Open a new session in a new window",
+                symbol: "macwindow.badge.plus",
+                shortcut: "⌘N",
+                section: .actions
+            ) {
+                (NSApp.delegate as? AppDelegate)?.newWindow()
+            },
+            PaletteAction(
+                id: "action.moveTabToNewWindow",
+                title: "Move Tab to New Window",
+                subtitle: "Give the active tab a session and window of its own",
+                symbol: "macwindow.on.rectangle",
+                shortcut: "",
+                section: .actions
+            ) {
+                MenuTarget.shared.moveTabToNewWindow()
+            },
+            PaletteAction(
                 id: "action.newTab",
                 title: "New Tab",
                 subtitle: "Open a new shell in the active session",

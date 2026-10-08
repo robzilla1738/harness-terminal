@@ -6,6 +6,9 @@ import HarnessTerminalEngine
 /// toggle and "+" on the traffic-light row, and filter / agents / new / remote below.
 @MainActor
 final class HarnessSidebarPanelViewController: NSViewController {
+    /// The session this window shows; set by `MainSplitViewController`.
+    var context = WindowContext()
+
     private let chromeHeader = NSView()
     private let workspaceBar = NSView()
     private let workspacePill = WorkspacePillButton()
@@ -476,7 +479,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
         sessionTable.delegate = self
         sessionTable.doubleAction = #selector(sessionDoubleClick)
         sessionTable.target = self
-        sessionTable.registerForDraggedTypes([Self.sessionRowPasteboardType])
+        sessionTable.registerForDraggedTypes([Self.sessionRowPasteboardType, Self.tabRowPasteboardType])
+        sessionTable.setDraggingSourceOperationMask(.move, forLocal: false)
         sessionTable.draggingDestinationFeedbackStyle = .gap
 
         let scroll = NSScrollView()
@@ -550,11 +554,12 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
     @objc func reload() {
         let snap = SessionCoordinator.shared.snapshot
+        let workspace = context.workspace(in: snap)
         workspaces = snap.workspaces
-        activeWorkspaceID = snap.activeWorkspaceID
-        activeSessionID = snap.activeWorkspace?.activeSessionID
-        sessions = snap.activeWorkspace?.sessions ?? []
-        let name = snap.activeWorkspace?.name ?? "Workspace"
+        activeWorkspaceID = workspace?.id
+        activeSessionID = context.session(in: snap)?.id
+        sessions = workspace?.sessions ?? []
+        let name = workspace?.name ?? "Workspace"
         outline = SidebarOutline.lines(
             groups: SessionCoordinator.shared.sidebarGroups(),
             liveOwner: RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID,
@@ -932,6 +937,8 @@ extension HarnessSidebarPanelViewController: NSTextFieldDelegate {
 
 extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewDelegate {
     fileprivate static let sessionRowPasteboardType = NSPasteboard.PasteboardType("com.robert.harness.session-row")
+    /// A tab row: a tab id, droppable into any window's sidebar.
+    fileprivate static let tabRowPasteboardType = NSPasteboard.PasteboardType("com.robert.harness.tab-row")
 
     func numberOfRows(in tableView: NSTableView) -> Int {
         outline.count
@@ -951,14 +958,42 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         return sessions.firstIndex { $0.id.uuidString == id }
     }
 
-    // MARK: - Drag to reorder (session headings only)
+    /// The live tab at `row`.
+    private func liveTab(atRow row: Int) -> (session: SessionGroup, tab: Tab)? {
+        guard outline.indices.contains(row), case let .tab(sessionID, tabID, _) = outline[row],
+              let session = sessions.first(where: { $0.id.uuidString == sessionID }),
+              let tab = session.tabs.first(where: { $0.id.uuidString == tabID })
+        else { return nil }
+        return (session, tab)
+    }
+
+    /// Where a tab dropped at `row` lands: on a session heading, at its end; above a tab
+    /// row, before that tab; above a heading (or past the end), at the previous session's end.
+    private func tabDropTarget(row: Int, operation: NSTableView.DropOperation) -> (session: SessionGroup, index: Int)? {
+        if operation == .on {
+            guard let index = liveSessionIndex(atRow: row) else { return nil }
+            return (sessions[index], sessions[index].tabs.count)
+        }
+        if let (session, tab) = liveTab(atRow: row), let index = session.tabs.firstIndex(where: { $0.id == tab.id }) {
+            return (session, index)
+        }
+        guard let previous = (0 ..< min(row, outline.count)).reversed().lazy.compactMap(liveSessionIndex(atRow:)).first
+        else { return nil }
+        return (sessions[previous], sessions[previous].tabs.count)
+    }
+
+    // MARK: - Drag to reorder sessions, and tabs between sessions
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let index = liveSessionIndex(atRow: row)
-        else { return nil }
+        guard sessionFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let item = NSPasteboardItem()
-        item.setString(String(index), forType: Self.sessionRowPasteboardType)
+        if let index = liveSessionIndex(atRow: row) {
+            item.setString(String(index), forType: Self.sessionRowPasteboardType)
+        } else if let (_, tab) = liveTab(atRow: row) {
+            item.setString(tab.id.uuidString, forType: Self.tabRowPasteboardType)
+        } else {
+            return nil
+        }
         return item
     }
 
@@ -968,8 +1003,24 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         proposedRow row: Int,
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
+        if info.draggingPasteboard.availableType(from: [Self.tabRowPasteboardType]) != nil {
+            if dropOperation == .on, liveSessionIndex(atRow: row) == nil {
+                tableView.setDropRow(row, dropOperation: .above)
+            }
+            return tabDropTarget(row: row, operation: dropOperation == .on && liveSessionIndex(atRow: row) != nil ? .on : .above) == nil ? [] : .move
+        }
         guard dropOperation == .above, row == outline.count || liveSessionIndex(atRow: row) != nil else { return [] }
         return .move
+    }
+
+    /// A tab row dropped outside every Harness window tears off into a window of its own.
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        guard operation.isEmpty,
+              let raw = session.draggingPasteboard.string(forType: Self.tabRowPasteboardType),
+              let tabID = UUID(uuidString: raw),
+              !NSApp.windows.contains(where: { $0.isVisible && $0.frame.contains(screenPoint) })
+        else { return }
+        (NSApp.delegate as? AppDelegate)?.moveTabToNewWindow(tabID, at: screenPoint)
     }
 
     func tableView(
@@ -978,6 +1029,15 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
         row: Int,
         dropOperation: NSTableView.DropOperation
     ) -> Bool {
+        if let raw = info.draggingPasteboard.string(forType: Self.tabRowPasteboardType), let tabID = UUID(uuidString: raw) {
+            guard var target = tabDropTarget(row: row, operation: dropOperation) else { return false }
+            // Within one session the index counts after the tab leaves its place.
+            if let from = target.session.tabs.firstIndex(where: { $0.id == tabID }) {
+                if from < target.index { target.index -= 1 }
+                guard from != target.index else { return false }
+            }
+            return SessionCoordinator.shared.moveTab(tabID, toSession: target.session.id, index: target.index) != nil
+        }
         guard let workspaceID = activeWorkspaceID,
               let item = info.draggingPasteboard.pasteboardItems?.first,
               let raw = item.string(forType: Self.sessionRowPasteboardType),

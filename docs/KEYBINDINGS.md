@@ -89,6 +89,7 @@ These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefi
 
 | Action | Shortcut |
 |--------|----------|
+| New window (a new session in it) | `⌘N` |
 | New tab | `⌘T` |
 | Close tab | `⌘W` |
 | Split horizontal / vertical | `⌘D` / `⌘⇧D` |

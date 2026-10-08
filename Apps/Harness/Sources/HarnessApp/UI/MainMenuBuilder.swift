@@ -58,6 +58,9 @@ enum MainMenuBuilder {
 
         let workspace = NSMenuItem()
         workspace.submenu = NSMenu(title: "Session")
+        let newWindowItem = NSMenuItem(title: "New Window", action: #selector(MenuTarget.newWindow), keyEquivalent: "n")
+        newWindowItem.target = MenuTarget.shared
+        workspace.submenu?.addItem(newWindowItem)
         let newSessionItem = NSMenuItem(title: "New Session", action: #selector(MenuTarget.newSession), keyEquivalent: "N")
         newSessionItem.keyEquivalentModifierMask = [.command, .shift]
         newSessionItem.target = MenuTarget.shared
@@ -72,6 +75,9 @@ enum MainMenuBuilder {
         reopenTab.keyEquivalentModifierMask = [.command]
         reopenTab.target = MenuTarget.shared
         workspace.submenu?.addItem(reopenTab)
+        let moveTab = NSMenuItem(title: "Move Tab to New Window", action: #selector(MenuTarget.moveTabToNewWindow), keyEquivalent: "")
+        moveTab.target = MenuTarget.shared
+        workspace.submenu?.addItem(moveTab)
         let closeSession = NSMenuItem(title: "Close Session", action: #selector(MenuTarget.closeSession), keyEquivalent: "W")
         closeSession.keyEquivalentModifierMask = [.command, .shift]
         closeSession.target = MenuTarget.shared
@@ -460,6 +466,15 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func reopenClosedTab() {
         SessionCoordinator.shared.reopenLastClosedTab()
+    }
+
+    @objc func newWindow() {
+        (NSApp.delegate as? AppDelegate)?.newWindow(nil)
+    }
+
+    @objc func moveTabToNewWindow() {
+        guard let tab = SessionCoordinator.shared.snapshot.activeWorkspace?.activeTab else { return }
+        (NSApp.delegate as? AppDelegate)?.moveTabToNewWindow(tab.id)
     }
 
     @objc func goToDirectory() {

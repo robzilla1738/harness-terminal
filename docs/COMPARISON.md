@@ -36,7 +36,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 |---|---|---|
 | Native splits | Yes, with pane headers. Drag a pane by its header to split, swap, move to a tab, or break out. New panes grow out of the one they split, closed ones shrink away, and the corner where two dividers meet drags both. | SuperSplit: animated, corner drags, cross-window drag |
 | Tabs and vertical tabs | Title-bar pills or a sidebar. | SuperTabs, vertical tabs |
-| Multiple windows, tab tear-off | Not yet: one window. | Yes |
+| Multiple windows, tab tear-off | ⌘N opens a window; each shows one session and comes back on relaunch. Drag a tab off the bar (or Move Tab to New Window) for a window of its own, onto another window to join its session; sidebar tab rows drag between sessions. | Yes |
 | Dock tile | Up to four agents, ringed by attention; badge counts what needs you. | Deck icons |
 | Tab peek and overview | Yes, with colored previews from the daemon's `vt` capture. | Metal-rendered live previews, gestures |
 | Session names | "drifting cedar" style; rename in the switcher. | Same |

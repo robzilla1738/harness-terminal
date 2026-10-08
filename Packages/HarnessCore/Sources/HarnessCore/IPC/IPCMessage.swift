@@ -19,6 +19,9 @@ public enum IPCRequest: Codable, Sendable {
     case selectWorkspaceByName(name: String)
     case selectSession(workspaceID: UUID, sessionID: UUID)
     case selectTab(workspaceID: UUID, tabID: UUID)
+    /// Move a tab to another session (`toSessionID`, at `index`), or to a new session of its
+    /// own when `toSessionID` is nil. Replies `.sessionID` with where it went.
+    case moveTab(tabID: UUID, toSessionID: UUID?, index: Int?)
     case reorderTab(workspaceID: UUID, tabID: UUID, toIndex: Int)
     case swapTab(workspaceID: UUID, tabID: UUID, withIndex: Int)
     case renumberWindows(sessionID: UUID)

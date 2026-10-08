@@ -458,6 +458,7 @@ final class IPCCodecTests: XCTestCase {
         .ensureSurface(surfaceID: "surface-1", cwd: "/tmp", shell: "/bin/zsh", rows: 40, cols: 120, scrollbackBytes: 1_048_576),
         .attachSurface(surfaceID: "surface-1"),
         .writeTempFile(name: "shot.png", data: Data([0x89, 0x50])),
+        .moveTab(tabID: UUID(), toSessionID: nil, index: 2),
         .attachStream(AttachRequest(surfaceID: "surface-1", label: "test", readOnly: true, history: true, fromSequence: 42, epoch: "e")),
         .closeSurface(surfaceID: "surface-1"),
         .sendKeys(surfaceID: "surface-1", keys: ["C-a", "n", "Enter"]),
@@ -622,7 +623,7 @@ final class IPCCodecTests: XCTestCase {
              .displayMessage, .setSurfaceSizeMode, .takeSurface, .foregroundProcess, .surfaceContext,
              .captureFormatted, .processTree, .paneQuery, .listDir, .resetSurface, .paneWait, .subscribeEvents,
              .publishKeymap, .noteHostsChanged, .noteClientConnection, .noteTailscaleStatus, .presentClient,
-             .attachStream, .writeTempFile:
+             .attachStream, .writeTempFile, .moveTab:
             break
         }
     }

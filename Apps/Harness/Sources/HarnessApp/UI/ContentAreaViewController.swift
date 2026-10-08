@@ -4,6 +4,24 @@ import HarnessTerminalKit
 
 @MainActor
 final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate {
+    /// The session this window shows; set by `MainSplitViewController`.
+    var context = WindowContext()
+
+    /// A torn-off tab: onto another Harness window, it joins that window's session; anywhere
+    /// else it becomes a session of its own in a new window there.
+    func tabBarDidTearOff(tabID: TabID, at screenPoint: NSPoint) {
+        let coordinator = SessionCoordinator.shared
+        let target = WindowContexts.all.first { context in
+            guard let window = context.window, window !== view.window, window.isVisible else { return false }
+            return window.frame.contains(screenPoint)
+        }
+        if let target, let session = target.sessionID {
+            if coordinator.moveTab(tabID, toSession: session) != nil { target.window?.makeKeyAndOrderFront(nil) }
+            return
+        }
+        (NSApp.delegate as? AppDelegate)?.moveTabToNewWindow(tabID, at: screenPoint)
+    }
+
     func tabBarDidReceivePane(_ surfaceID: SurfaceID, onTab tabID: TabID?) {
         SessionCoordinator.shared.dropPane(surfaceID, ontoTab: tabID)
     }
@@ -162,8 +180,8 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func reloadTabBar() {
-        let snap = SessionCoordinator.shared.snapshot
-        tabBar.reload(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
+        let session = context.session(in: SessionCoordinator.shared.snapshot)
+        tabBar.reload(tabs: session?.tabs ?? [], activeTabID: session?.activeTabID)
     }
 
     /// Leading inset so the tab row clears the macOS traffic lights when the sidebar is
@@ -190,8 +208,8 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func refreshTabBarMetadata() {
-        let snap = SessionCoordinator.shared.snapshot
-        tabBar.refreshMetadata(tabs: snap.activeWorkspace?.tabs ?? [], activeTabID: snap.activeWorkspace?.activeTabID)
+        let session = context.session(in: SessionCoordinator.shared.snapshot)
+        tabBar.refreshMetadata(tabs: session?.tabs ?? [], activeTabID: session?.activeTabID)
         paneContainer?.refreshHeaders()
     }
 
@@ -261,8 +279,8 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         }
 
         let coordinator = SessionCoordinator.shared
-        guard let workspace = coordinator.snapshot.activeWorkspace,
-              let tab = workspace.activeTab
+        guard let workspace = context.workspace(in: coordinator.snapshot),
+              let tab = context.tab(in: coordinator.snapshot)
         else { return }
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
@@ -281,6 +299,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 
         paneContainer?.removeFromSuperview()
         let container = PaneContainerView(
+            tabID: tab.id,
             padsTop: tabRowHidden,
             node: displayNode,
             cwd: tab.cwd,
@@ -299,8 +318,9 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         paneContainer = container
         PaneTransitions.animate(from: before, into: container, in: terminalHost)
         // Re-assert the focused-pane border after the (re)mount — reused hosts keep
-        // their flag, but a freshly shown tab needs its active pane established.
-        coordinator.ensureActivePane(for: tab)
+        // their flag, but a freshly shown tab needs its active pane established. Only the
+        // window in front owns the app's active pane.
+        if context.followsActiveSession { coordinator.ensureActivePane(for: tab) }
         // Arm the hover × (#168) only on multi-pane tabs — a single-pane tab already has the
         // tab close button, and the pane stays chrome-free at rest either way. Re-armed on
         // every structural (re)mount, so closing down to one pane disarms the survivor.
@@ -345,8 +365,8 @@ final class PaneContainerView: NSView {
     private let tabID: TabID?
     private var islands: [PaneIslandView] = []
 
-    init(padsTop: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
-        self.tabID = SessionCoordinator.shared.snapshot.activeWorkspace?.activeTab?.id
+    init(tabID: TabID, padsTop: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
+        self.tabID = tabID
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
         let settings = SessionCoordinator.shared.settings
@@ -394,7 +414,7 @@ final class PaneContainerView: NSView {
 
     /// Re-read each pane's identity and focus into its header and its VoiceOver label.
     func refreshHeaders() {
-        guard let tab = coordinator.snapshot.activeWorkspace?.activeTab else { return }
+        guard let tab = coordinator.snapshot.workspaces.lazy.flatMap(\.sessions).flatMap(\.tabs).first(where: { $0.id == tabID }) else { return }
         let leaves = tab.rootPane.allLeaves()
         let focused = coordinator.activeSurfaceID
         for island in islands {

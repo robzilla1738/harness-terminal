@@ -369,6 +369,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 emitFollow(event)
             }
             return .ok
+        case let .moveTab(tabID, toSessionID, index):
+            guard let session = editor.moveTab(tabID, toSessionID: toSessionID, index: index) else {
+                return .error("Cannot move that tab (not found, or shared with a grouped session)")
+            }
+            commit()
+            return .sessionID(session)
         case let .reorderTab(workspaceID, tabID, toIndex):
             guard editor.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex) else {
                 return .error("Tab not found")

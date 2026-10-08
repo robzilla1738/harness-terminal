@@ -140,16 +140,13 @@ enum DefaultTerminalManager {
 @MainActor
 enum DefaultTerminalOpener {
     /// Opens each URL as a terminal. `asWindow` only affects a bare directory open (a folder from the
-    /// Finder "New Harness Window Here" service): it starts a new session instead of a tab. ssh/telnet/
+    /// Finder "New Harness Window Here" service): it opens a new session in a new window. ssh/telnet/
     /// man-page and file-with-command requests always open a tab in the active session.
     static func open(_ urls: [URL], asWindow: Bool = false) {
         for url in urls {
             guard let request = DefaultTerminalLaunchRequest.make(for: url) else { continue }
             if asWindow, request.command == nil, let cwd = request.cwd {
-                let coordinator = SessionCoordinator.shared
-                guard let workspaceID = coordinator.snapshot.activeWorkspace?.id
-                    ?? coordinator.snapshot.workspaces.first?.id else { continue }
-                coordinator.addSession(to: workspaceID, cwd: cwd, name: request.title)
+                (NSApp.delegate as? AppDelegate)?.newWindow(cwd: cwd, name: request.title)
             } else {
                 SessionCoordinator.shared.openDefaultTerminalLaunch(request)
             }

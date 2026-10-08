@@ -12,9 +12,21 @@ private final class EffectiveAppearanceReportingView: NSView {
 
 @MainActor
 final class MainSplitViewController: NSViewController {
+    /// The session this window shows (see `WindowContext`).
+    let context: WindowContext
     private let split = SidebarSplitView()
     private let sidebar = HarnessSidebarPanelViewController()
     private let content = ContentAreaViewController()
+
+    init(context: WindowContext) {
+        self.context = context
+        super.init(nibName: nil, bundle: nil)
+        sidebar.context = context
+        content.context = context
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 
     /// ⌃⌘S: drop the switcher from the sessions button when the tab row shows it.
     func showSessionSwitcher() {
@@ -130,6 +142,27 @@ final class MainSplitViewController: NSViewController {
         )
     }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard context.window == nil, let window = view.window else { return }
+        context.window = window
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowDidBecomeKey), name: NSWindow.didBecomeKeyNotification, object: window
+        )
+    }
+
+    /// The window in front is the daemon's active session, so actions and the CLI's notion of
+    /// "here" follow what you're looking at.
+    @objc private func windowDidBecomeKey() {
+        let coordinator = SessionCoordinator.shared
+        guard let session = context.sessionID,
+              let workspace = context.workspace(in: coordinator.snapshot),
+              coordinator.snapshot.activeWorkspace?.activeSessionID != session || coordinator.snapshot.activeWorkspaceID != workspace.id
+        else { return }
+        if coordinator.snapshot.activeWorkspaceID != workspace.id { coordinator.selectWorkspace(workspace.id) }
+        coordinator.selectSession(workspaceID: workspace.id, sessionID: session)
+    }
+
     /// A custom divider color is an overlaid hairline. With no custom color the
     /// split itself has no thickness, so nothing transparent sits between the
     /// sidebar and the terminal.
@@ -162,6 +195,11 @@ final class MainSplitViewController: NSViewController {
     }
 
     @objc private func snapshotChanged(_ note: Notification) {
+        guard context.update(from: SessionCoordinator.shared.snapshot) else {
+            // This window's session closed (or moved into another window): close it.
+            view.window?.close()
+            return
+        }
         let metadataOnly = note.userInfo?["metadataOnly"] as? Bool ?? false
         if note.userInfo?["chromeChanged"] as? Bool == true {
             // Cross-dissolve the chrome (theme switch) instead of a hard color pop.
@@ -204,7 +242,11 @@ final class MainSplitViewController: NSViewController {
 
     private func updateWindowTitle() {
         let snap = SessionCoordinator.shared.snapshot
-        view.window?.title = snap.activeWorkspace.map { "Harness — \($0.name)" } ?? "Harness"
+        guard let session = context.session(in: snap), let workspace = context.workspace(in: snap) else {
+            view.window?.title = "Harness"
+            return
+        }
+        view.window?.title = "\(SessionDisplayName.title(of: session, in: workspace)) — Harness"
     }
 
     func setSidebarVisible(_ visible: Bool) {

@@ -184,6 +184,59 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    /// Move a tab into another session at `index` (default: the end), or with `toSessionID`
+    /// nil into a new session of its own in the same workspace (a tab torn off into a window).
+    /// Moving a session's only tab elsewhere dissolves that session; tearing it off is a no-op
+    /// that returns its own session. Tabs shared with grouped sessions don't move. Returns the
+    /// session the tab is now in, focused on it.
+    @discardableResult
+    public mutating func moveTab(_ tabID: TabID, toSessionID: SessionID?, index: Int? = nil) -> SessionID? {
+        guard let source = tabIndex(tabID: tabID), groupCounterparts(of: tabID).isEmpty else { return nil }
+        let sourceSession = snapshot.workspaces[source.workspaceIndex].sessions[source.sessionIndex]
+        if toSessionID == sourceSession.id {
+            let workspaceID = snapshot.workspaces[source.workspaceIndex].id
+            return reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: index ?? sourceSession.tabs.count - 1) ? sourceSession.id : nil
+        }
+        if toSessionID == nil, sourceSession.tabs.count == 1 { return sourceSession.id }
+        if let toSessionID, sessionIndex(sessionID: toSessionID) == nil { return nil }
+
+        var session = sourceSession
+        let tab = session.tabs.remove(at: source.tabIndex)
+        let workspaceIndex = source.workspaceIndex
+        if session.tabs.isEmpty {
+            snapshot.workspaces[workspaceIndex].sessions.remove(at: source.sessionIndex)
+        } else {
+            if session.activeTabID == tabID { session.activeTabID = session.tabs[min(source.tabIndex, session.tabs.count - 1)].id }
+            snapshot.workspaces[workspaceIndex].sessions[source.sessionIndex] = session
+        }
+
+        let destinationID: SessionID
+        if let toSessionID, let destination = sessionIndex(sessionID: toSessionID) {
+            var target = snapshot.workspaces[destination.workspaceIndex].sessions[destination.sessionIndex]
+            target.tabs.insert(tab, at: max(0, min(target.tabs.count, index ?? target.tabs.count)))
+            target.lastActiveTabID = target.activeTabID
+            target.activeTabID = tab.id
+            snapshot.workspaces[destination.workspaceIndex].sessions[destination.sessionIndex] = target
+            snapshot.workspaces[destination.workspaceIndex].activeSessionID = toSessionID
+            destinationID = toSessionID
+        } else {
+            let taken = Set(snapshot.workspaces.flatMap(\.sessions).map(\.name))
+            let created = SessionGroup(
+                name: SessionNames.generate(avoiding: taken), tabs: [tab], activeTabID: tab.id,
+                sortOrder: snapshot.workspaces[workspaceIndex].sessions.count
+            )
+            snapshot.workspaces[workspaceIndex].sessions.append(created)
+            snapshot.workspaces[workspaceIndex].activeSessionID = created.id
+            destinationID = created.id
+        }
+        let workspace = snapshot.workspaces[workspaceIndex]
+        if !workspace.sessions.contains(where: { $0.id == workspace.activeSessionID }) {
+            snapshot.workspaces[workspaceIndex].activeSessionID = workspace.sessions.first?.id
+        }
+        bumpRevision()
+        return destinationID
+    }
+
     /// Reassign `sortOrder` to be contiguous (0,1,2,…) in current array order for
     /// every tab in `sessionID` (`renumber-windows`). IDs are unchanged.
     @discardableResult

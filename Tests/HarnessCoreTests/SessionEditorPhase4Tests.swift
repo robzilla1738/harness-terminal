@@ -101,6 +101,24 @@ final class SessionEditorPhase4Tests: XCTestCase {
         XCTAssertNil(editor.joinPane(sourcePaneID: only, destPaneID: original, direction: .horizontal))
     }
 
+    func testMoveTabToANewSessionAndIntoAnother() throws {
+        var editor = SessionEditor()
+        let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)
+        let home = try XCTUnwrap(workspace.activeSession)
+        let second = try XCTUnwrap(editor.addTab(to: workspace.id))
+        let tornID = try XCTUnwrap(editor.moveTab(home.tabs[0].id, toSessionID: nil))
+        let torn = try XCTUnwrap(editor.snapshot.workspaces[0].sessions.first { $0.id == tornID })
+        XCTAssertEqual(editor.snapshot.activeWorkspace?.activeSessionID, tornID, "the new session is focused")
+        XCTAssertEqual(torn.tabs.map(\.id), [home.tabs[0].id], "tearing off makes a session of its own")
+        XCTAssertEqual(editor.snapshot.workspaces[0].sessions.first { $0.id == home.id }?.tabs.map(\.id), [second])
+
+        // Its only tab moved back: the torn-off session dissolves.
+        XCTAssertEqual(editor.moveTab(home.tabs[0].id, toSessionID: home.id, index: 0), home.id)
+        XCTAssertNil(editor.snapshot.workspaces[0].sessions.first { $0.id == torn.id })
+        XCTAssertEqual(editor.snapshot.workspaces[0].sessions.first { $0.id == home.id }?.tabs.map(\.id), [home.tabs[0].id, second])
+        XCTAssertEqual(editor.moveTab(second, toSessionID: UUID()), nil, "an unknown session refuses")
+    }
+
     func testJoinPaneRefusesSamePane() throws {
         var editor = SessionEditor()
         let (ws, tabID, original) = try defaultTab(editor)
