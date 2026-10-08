@@ -318,11 +318,9 @@ final class SessionCoordinator: NSObject {
         }
     }
 
-    /// Palette go-to-directory. The `cd` path is shell-quoted.
+    /// Go to Directory (⌥⌘G and the palette): the folder browser for the focused pane.
     func goToListedDirectory() {
-        presentDirectoryChoice(title: "Go to Directory", verb: "Go") { _, path in
-            self.writeToActivePane(PaneDirectory.goToDirectory(path) + "\r")
-        }
+        DirectoryBrowserController.present(over: NSApp.keyWindow ?? NSApp.mainWindow)
     }
 
     private func writeToActivePane(_ text: String) {

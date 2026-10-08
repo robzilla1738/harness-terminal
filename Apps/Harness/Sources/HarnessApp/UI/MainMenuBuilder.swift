@@ -146,6 +146,10 @@ enum MainMenuBuilder {
         findItem.keyEquivalentModifierMask = [.command]
         findItem.target = MenuTarget.shared
         view.submenu?.addItem(findItem)
+        let goToDirectory = NSMenuItem(title: "Go to Directory…", action: #selector(MenuTarget.goToDirectory), keyEquivalent: "g")
+        goToDirectory.keyEquivalentModifierMask = [.command, .option]
+        goToDirectory.target = MenuTarget.shared
+        view.submenu?.addItem(goToDirectory)
         view.submenu?.addItem(.separator())
         // Prompt navigation (OSC 133 shell-integration marks) — the Terminal.app/iTerm2
         // ⌘↑/⌘↓ convention. App-level key equivalents, so the tmux-default-empty `root`
@@ -448,6 +452,10 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func reopenClosedTab() {
         SessionCoordinator.shared.reopenLastClosedTab()
+    }
+
+    @objc func goToDirectory() {
+        SessionCoordinator.shared.goToListedDirectory()
     }
 
     @objc func find() {

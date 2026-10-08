@@ -65,6 +65,7 @@ Not a release. Local `main` carries this work so the next session starts from it
 - **The daemon is the session.** Quitting the app leaves the daemon up. A new attach replays the same grid. A second client can subscribe read-only (`subscribeSurfaceOutputReadOnly`): it sees output and its writes do not reach the child. Surface cwd, foreground command, and hooks survive reconnect.
 
 ### Added
+- **Go to Directory (⌥⌘G).** A folder browser on the daemon that owns the focused pane, this Mac or a remote host: type to filter, → or Tab to open a folder, ← to go up; ↩ cds the pane, ⌘↩ opens a new tab there, ⌥↩ types the path. It replaces the one-level pop-up.
 - **Previews in color.** Overview tiles and tab peek show each pane's screen with its colors and styles, from the daemon's `vt` capture, so a pane that isn't on screen (or lives on another Mac) previews the same way.
 - **Drag panes by their header.** Drop on another pane's edge to split it with the dragged pane on that side, or on its middle to swap the two. Hover a tab to switch to it, drop on a tab to move the pane there, or drop on empty tab-bar space to give it its own tab. A pane alone in its tab can be moved too; its emptied tab closes. `pane.move` takes the same `side` (`left`, `right`, `above`, `below`), and `join-pane` requests carry the placement.
 - **Sessions get names.** A new session is called something like "drifting cedar" instead of "Session 4", so it's easy to say and to target (`-s cedar`). In the session switcher, ⌘R or a right-click renames the selected session in place.

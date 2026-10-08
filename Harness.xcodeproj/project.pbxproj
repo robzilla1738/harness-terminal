@@ -144,6 +144,7 @@
 		55A43F1E300325FE099A4D70 /* TerminalHostViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A657998E790ADAEAB45B5BF1 /* TerminalHostViewTests.swift */; };
 		55E74BDC5032814D6C9B1FA2 /* HarnessTerminalKit in Frameworks */ = {isa = PBXBuildFile; productRef = 80A7F3466CEB9D469FDED468 /* HarnessTerminalKit */; };
 		5621ADA5F72B370B4B1476F4 /* TerminalProtocolCompatibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74BE6C96611A0770600312E6 /* TerminalProtocolCompatibilityTests.swift */; };
+		56394BAC4C132C84F85DD647 /* DirectoryBrowserController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3284C3FC9B829CB81DDE13C7 /* DirectoryBrowserController.swift */; };
 		58E52895BE5D06F1AE5B3D10 /* AgentHookInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76AA397BE8008BA4CC92865F /* AgentHookInstaller.swift */; };
 		596F02748B0B7021508AC3EE /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B7B1A021E55C4A6011748BE /* main.swift */; };
 		59B87A3BF140DD5103FBDD24 /* prose_softwrap__40x6__to__16x3.golden in Resources */ = {isa = PBXBuildFile; fileRef = 17F1B3FAAC5FD88B3474C4F1 /* prose_softwrap__40x6__to__16x3.golden */; };
@@ -510,6 +511,7 @@
 		2F85B26E241FF63B59B14133 /* OptionKeyRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OptionKeyRoutingTests.swift; sourceTree = "<group>"; };
 		301724150939761131DED4D0 /* ShellIntegrationInjectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellIntegrationInjectorTests.swift; sourceTree = "<group>"; };
 		3250876CFBA67ECE29C5E3E2 /* TerminalServicesProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalServicesProvider.swift; sourceTree = "<group>"; };
+		3284C3FC9B829CB81DDE13C7 /* DirectoryBrowserController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryBrowserController.swift; sourceTree = "<group>"; };
 		32D9B954DB84EB205CC303EB /* OptionValidationDaemonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OptionValidationDaemonTests.swift; sourceTree = "<group>"; };
 		33CC50B5E96F7A36C8B559D0 /* HarnessSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessSettingsTests.swift; sourceTree = "<group>"; };
 		3456505729785DD2C9C7D282 /* TerminalGridCellLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalGridCellLayoutTests.swift; sourceTree = "<group>"; };
@@ -1014,6 +1016,7 @@
 				245FF7D7A3A8434F040E6812 /* CommandPaletteController.swift */,
 				F3912417CC3E06CEA28B664B /* CommandPromptController.swift */,
 				5A0B5969E6A4582978144B11 /* ContentAreaViewController.swift */,
+				3284C3FC9B829CB81DDE13C7 /* DirectoryBrowserController.swift */,
 				26F2AD1D92779527F2E5F14A /* DisplayPanesOverlay.swift */,
 				5CB5A241837F614062DD594B /* DockTileRenderer.swift */,
 				A75A61F63B71608690269266 /* HarnessChrome.swift */,
@@ -2075,6 +2078,7 @@
 				AC246DC4CD09B78E19D44A55 /* ContentAreaViewController.swift in Sources */,
 				084B9F215A3A2B1600D90FDE /* DaemonLauncher.swift in Sources */,
 				3F8493C2DE63B3390B882B6E /* DefaultTerminalManager.swift in Sources */,
+				56394BAC4C132C84F85DD647 /* DirectoryBrowserController.swift in Sources */,
 				2A3B080F4B0F44733627AD4D /* DisplayPanesOverlay.swift in Sources */,
 				32A02E23DDB79559BEB1ED1B /* DockTileRenderer.swift in Sources */,
 				2AB847EDCA9FAAAC781CD332 /* FileWatcher.swift in Sources */,
