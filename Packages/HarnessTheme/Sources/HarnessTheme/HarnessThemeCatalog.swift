@@ -6,15 +6,15 @@ import Foundation
 /// Community themes live in the bundled `themes.json` resource and merge in here without
 /// API changes — `theme(named:)`, `search(_:)`, and `allThemes` are the stable surface.
 public enum HarnessThemeCatalog {
-    /// The default theme used when none is selected: a deep navy canvas with a soft blue
-    /// accent and a muted ANSI-16, so fresh installs don't start on over-saturated primaries.
+    /// The default theme used when none is selected: a pure black canvas with white text and
+    /// a muted ANSI-16, so fresh installs don't start on over-saturated primaries.
     public static let defaultThemeName = "Harness Default"
 
     /// Curated, surfaced-first themes.
     public static let featuredNames = [
         "Harness Default",
         "Harness Light",
-        "Harness Black",
+        "Harness Navy",
         "Catppuccin Mocha",
         "Dracula",
         "Tokyo Night",
@@ -114,17 +114,17 @@ public enum HarnessThemeCatalog {
     private static let builtins: [HarnessThemeDefinition] = [
         .make(
             "Harness Default",
-            bg: "#121b2d", fg: "#d5dceb", cursor: "#6fa8f5",
-            selectionBackground: "#2b3d5e",
+            bg: "#000000", fg: "#ffffff", cursor: "#ffffff",
+            selectionBackground: "#333333",
             palette: [
-                "#1c2740", "#e5767f", "#9ccc83", "#e9c47f",
-                "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
-                "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
-                "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
+                "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
+                "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
+                "#6e6e6e", "#d54e53", "#b9ca4a", "#e7c547",
+                "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
             ]
         ),
-        // The light companion to the navy default: near-white with a cool tint, deep ink,
-        // the same blue accent, and ANSI colors that all clear 3.5:1 on the canvas.
+        // The light companion to the default: near-white with a cool tint, deep ink, a blue
+        // accent, and ANSI colors that all clear 3.5:1 on the canvas.
         .make(
             "Harness Light",
             bg: "#f8f9fc", fg: "#1e2430", cursor: "#2463d1",
@@ -136,16 +136,17 @@ public enum HarnessThemeCatalog {
                 "#3d7ef0", "#8f5ee8", "#18858f", "#eef1f6",
             ]
         ),
-        // The pre-navy default, kept so anyone can go back to pure black.
+        // A deep navy canvas with a soft blue accent. Body text clears 7:1 and every ANSI
+        // color 4:1.
         .make(
-            "Harness Black",
-            bg: "#000000", fg: "#ffffff", cursor: "#ffffff",
-            selectionBackground: "#333333",
+            "Harness Navy",
+            bg: "#121b2d", fg: "#d5dceb", cursor: "#6fa8f5",
+            selectionBackground: "#2b3d5e",
             palette: [
-                "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
-                "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
-                "#666666", "#d54e53", "#b9ca4a", "#e7c547",
-                "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
+                "#1c2740", "#e5767f", "#9ccc83", "#e9c47f",
+                "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
+                "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
+                "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
             ]
         ),
         .make(

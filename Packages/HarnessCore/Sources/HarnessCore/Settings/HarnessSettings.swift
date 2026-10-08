@@ -26,7 +26,7 @@ public enum TerminalColorGamut: String, Codable, Sendable {
 }
 
 public enum HarnessAppearanceMode: String, Codable, Sendable, CaseIterable {
-    /// The selected theme. Fresh installs stay on this and paint the navy canvas.
+    /// The selected theme. Fresh installs stay on this and paint the black canvas.
     case theme
     /// A designed light canvas and matching light chrome, independent of the Mac appearance.
     case light
@@ -732,7 +732,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
             appearanceMode = decodedAppearanceMode ?? defaultSettings.appearanceMode
             let storedLight = try container.decodeIfPresent(String.self, forKey: .systemLightThemeName)
             // "Zenwritten Light" was the shipped default, saved whether or not anyone chose it.
-            // It reads washed out next to the navy default, so it moves to Harness Light, once.
+            // It reads washed out next to the default, so it moves to Harness Light, once.
             let migrated = try container.decodeIfPresent(Bool.self, forKey: .lightDefaultMigrated) ?? false
             systemLightThemeName = storedLight.flatMap { !migrated && $0 == Self.retiredLightDefault ? nil : $0 }
                 ?? defaultSettings.systemLightThemeName

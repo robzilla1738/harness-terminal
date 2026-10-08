@@ -20,7 +20,7 @@ Prefer to build it yourself? Jump to [Build from source](#build-from-source).
 
 ## Why Harness
 
-- **It's a real terminal first.** GPU rendering, accurate sRGB color by default, opt-in converted Display-P3 vivid color, ligatures, inline images (Sixel / Kitty / iTerm2), and 492 built-in themes with navy and light Harness defaults. Block and box-drawing glyphs are drawn procedurally, so borders tile without seams at any font.
+- **It's a real terminal first.** GPU rendering, accurate sRGB color by default, opt-in converted Display-P3 vivid color, ligatures, inline images (Sixel / Kitty / iTerm2), and 492 built-in themes with black and light Harness defaults. Block and box-drawing glyphs are drawn procedurally, so borders tile without seams at any font.
 - **Your work outlives the window.** Sessions, tabs, and splits are owned by a daemon. Quit and reopen and everything is exactly where you left it, scrollback included — history is persisted to disk and restored even if the daemon restarts. Attach the same session from a second window or another machine.
 - **It's scriptable, locally or remotely.** `harness-cli` drives the whole thing — open tabs, send keys, capture a pane, resize, swap, zoom — so your tooling can build the layout it needs. Point any command at a headless or remote daemon with `--host <name>`; the daemon and CLI run on Linux too, so a remote box can host your sessions.
 - **It watches your agents.** Harness detects Claude Code, Codex, Cursor, and others by their process tree, shows which session is running what, and pings you when an agent stops or asks for approval. `Cmd+Shift+U` jumps you to the one that's waiting and skips the ones still thinking.
@@ -58,7 +58,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Agent alerts as desktop banners and a sidebar bell; `Cmd+Shift+U` jumps to whoever is waiting
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`) and a native macOS Settings window (`Cmd+,`)
-- 492 built-in color themes with a navy Harness default and a crisp Harness Light (the old pure-black look is "Harness Black"), plus `.harnesstheme` export / import for sharing — double-click (or Open With) a theme file to install it, optionally applying its colors immediately. Settings ▸ Colors ▸ Theme saves the colors on screen as a named theme or exports them; saved and imported themes list in the theme menu
+- 492 built-in color themes with a pure-black Harness default, a deep Harness Navy, and a crisp Harness Light, plus `.harnesstheme` export / import for sharing — double-click (or Open With) a theme file to install it, optionally applying its colors immediately. Settings ▸ Colors ▸ Theme saves the colors on screen as a named theme or exports them; saved and imported themes list in the theme menu
 - Shell integration (OSC 133), auto-injected at spawn for bash / zsh / fish: prompt marks for jump-to-prompt and a command success / failure gutter, no install step (opt out with `set-option shell-integration off`; manual snippets remain in [docs/shell-integration/](docs/shell-integration/README.md))
 - Inline images that stay put across reflow and scroll into history
 - Drag file-backed folders or images into a pane to insert shell-quoted paths

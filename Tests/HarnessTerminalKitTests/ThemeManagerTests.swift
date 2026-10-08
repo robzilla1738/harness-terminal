@@ -240,7 +240,7 @@ final class ThemeManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitLightAndFollowSystemShareALightCanvasThenDefaultRestoresNavy() throws {
+    func testExplicitLightAndFollowSystemShareALightCanvasThenDefaultRestoresBlack() throws {
         let settings = HarnessSettings()
         let lightTheme = try XCTUnwrap(HarnessThemeCatalog.theme(named: settings.systemLightThemeName))
 
@@ -299,7 +299,7 @@ final class ThemeManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testNavyDefaultIsReadable() throws {
+    func testBlackDefaultIsReadable() throws {
         let background = try XCTUnwrap(ChromeColor(hex: ThemeManager.defaultBaselineBackgroundHex))
         let foreground = try XCTUnwrap(ChromeColor(hex: ThemeManager.defaultBaselineForegroundHex))
         XCTAssertGreaterThanOrEqual(foreground.contrastRatio(against: background), 7, "body text clears WCAG AAA")
@@ -312,7 +312,7 @@ final class ThemeManagerTests: XCTestCase {
         }
         let theme = try XCTUnwrap(HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName))
         XCTAssertEqual(theme.backgroundHex.lowercased(), ThemeManager.defaultBaselineBackgroundHex)
-        XCTAssertNotNil(HarnessThemeCatalog.theme(named: "Harness Black"))
+        XCTAssertNotNil(HarnessThemeCatalog.theme(named: "Harness Navy"))
     }
 }
 

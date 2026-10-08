@@ -5,7 +5,7 @@ import HarnessTerminalKit
 
 @MainActor
 final class AppearanceChromeTests: XCTestCase {
-    func testChromeFollowsLightThenRestoresTheNavyDefault() {
+    func testChromeFollowsLightThenRestoresTheBlackDefault() {
         let settings = HarnessSettings()
         XCTAssertEqual(settings.appearanceMode, .theme)
         XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
