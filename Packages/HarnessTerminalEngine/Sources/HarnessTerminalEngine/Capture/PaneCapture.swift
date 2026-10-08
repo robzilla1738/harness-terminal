@@ -5,6 +5,7 @@ public enum PaneCapture {
     public static func render(bytes: Data, cols: Int, rows: Int, format: String, trim: Bool, unwrap: Bool) -> String {
         guard let term = HarnessGridTerminal(cols: cols, rows: rows) else { return "" }
         term.maxScrollbackLines = 100_000
+        term.emulatorForCapture.readsGraphicsFiles = false
         term.feed(bytes)
         return render(term: term.emulatorForCapture, format: format, trim: trim, unwrap: unwrap)
     }

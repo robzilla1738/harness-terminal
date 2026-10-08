@@ -93,6 +93,44 @@ final class KittyGraphicsProtocolTests: XCTestCase {
         XCTAssertEqual(placementCount(term), 1, "d=i removes only the matching image id")
     }
 
+    func testFileAndTempFileTransmission() throws {
+        let (term, responses) = makeTerm()
+        let pixelBytes = Data([0xFF, 0, 0, 0xFF])
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("harness-kitty-\(UUID().uuidString).rgba")
+        try pixelBytes.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let path = Data(file.path.utf8).base64EncodedString()
+        term.feed("\u{1b}_Ga=T,t=f,f=32,s=1,v=1,i=3;\(path)\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "t=f leaves the file")
+
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("tty-graphics-protocol-\(UUID().uuidString)")
+        try pixelBytes.write(to: temp)
+        term.feed("\u{1b}_Ga=T,t=t,f=32,s=1,v=1,i=4;\(Data(temp.path.utf8).base64EncodedString())\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.path), "t=t deletes the temp file once read")
+
+        term.feed("\u{1b}_Ga=T,t=f,f=32,s=1,v=1,i=5;\(Data("/nonexistent/x".utf8).base64EncodedString())\u{1b}\\")
+        XCTAssertTrue(responses().joined().contains("\u{1b}_Gi=5;EBADF"))
+        term.feed("\u{1b}_Ga=T,t=s,f=32,s=1,v=1,i=6;AAAA\u{1b}\\")
+        XCTAssertTrue(responses().joined().contains("\u{1b}_Gi=6;EINVAL"))
+    }
+
+    func testDeleteByPositionAndZAndLowercaseKeepsData() {
+        let (term, _) = makeTerm()
+        term.feed("\u{1b}_Ga=T,f=32,s=1,v=1,i=1,z=5;\(pixel)\u{1b}\\")   // row 1 (0-based 0)
+        term.feed("\u{1b}_Ga=T,f=32,s=1,v=1,i=2;\(pixel)\u{1b}\\")       // row 2
+        term.feed("\u{1b}_Ga=d,d=z,z=5\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 1, "d=z removes that z-index only")
+        term.feed("\u{1b}_Ga=d,d=y,y=2\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 0, "d=y removes what covers that row")
+        term.feed("\u{1b}_Ga=p,i=2\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 1, "lowercase delete keeps the transmitted image")
+        term.feed("\u{1b}_Ga=d,d=I,i=2\u{1b}\\")
+        term.feed("\u{1b}_Ga=p,i=2\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 0, "uppercase forgets it")
+    }
+
     /// RIS (`ESC c`, full reset) must clear the transmitted-image cache, not just placements —
     /// otherwise transmit-once images survive a reset and keep occupying the per-screen byte
     /// budget. Regression for `fullReset()` clearing `kittyPending` but leaking `kittyTransmitted`.

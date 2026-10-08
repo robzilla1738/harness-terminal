@@ -326,14 +326,38 @@ final class TerminalScreen {
         for _ in 0 ..< fRows { lineFeed() }
     }
 
+    /// Where a placement sits now, for Kitty's delete-by-position targets. `row` is the
+    /// viewport row (negative once scrolled into history).
+    struct ImageFootprint {
+        var row: Int
+        var col: Int
+        var rows: Int
+        var cols: Int
+        var z: Int
+        var kittyID: Int?
+
+        func covers(row r: Int, col c: Int) -> Bool {
+            r >= row && r < row + rows && c >= col && c < col + cols
+        }
+    }
+
     /// Kitty `a=d` delete. `kittyID == nil` removes every placement (`d=a`); a non-nil value
     /// removes only placements transmitted/placed under that Kitty image id (`d=i`). Frees the
     /// pixels and repaints the rows the removed images covered.
     func deleteImages(kittyID: Int?) {
-        guard !placements.isEmpty else { return }
+        deleteImages { kittyID == nil || $0.kittyID == kittyID }
+    }
+
+    /// Remove every placement `matching` says to; returns the Kitty ids that were removed.
+    @discardableResult
+    func deleteImages(matching: (ImageFootprint) -> Bool) -> Set<Int> {
+        guard !placements.isEmpty else { return [] }
         var removedAny = false
+        var removedIDs = Set<Int>()
         placements.removeAll { p in
-            guard kittyID == nil || p.kittyID == kittyID else { return false }
+            let footprint = ImageFootprint(row: p.absRow - history.count, col: p.col, rows: p.rows, cols: p.cols, z: p.z, kittyID: p.kittyID)
+            guard matching(footprint) else { return false }
+            if let id = p.kittyID { removedIDs.insert(id) }
             if let bytes = imageStore.removeValue(forKey: p.id)?.byteCount { imageByteTotal -= bytes }
             let row = p.absRow - history.count
             let lo = max(0, row), hi = min(rows, row + p.rows)
@@ -342,6 +366,7 @@ final class TerminalScreen {
             return true
         }
         if removedAny, imageStore.isEmpty { imageByteTotal = 0 } // guard against drift
+        return removedIDs
     }
 
     /// Enforce the per-screen image byte budget by dropping the oldest placements (LRU by age).

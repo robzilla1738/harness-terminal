@@ -30,6 +30,15 @@ public struct KittyGraphicsCommand: Equatable {
     public var rows: Int { keys["r"].flatMap { Int($0) } ?? 0 }
     /// `z` — z-index; negative draws below text, >=0 above the background.
     public var z: Int { keys["z"].flatMap { Int($0) } ?? 0 }
+    /// `t` — transmission medium: `d` direct (the payload), `f` a file, `t` a temp file to
+    /// delete after reading, `s` shared memory. The payload names the file for `f`/`t`.
+    public var medium: Character { keys["t"].flatMap(\.first) ?? "d" }
+    /// `S` / `O` — bytes to read from a file, and where to start (0: the whole file).
+    public var dataSize: Int { keys["S"].flatMap { Int($0) } ?? 0 }
+    public var dataOffset: Int { keys["O"].flatMap { Int($0) } ?? 0 }
+    /// `x` / `y` — for `a=d`: the cell (1-based) or column / row, or the id range for `d=r`.
+    public var x: Int { keys["x"].flatMap { Int($0) } ?? 0 }
+    public var y: Int { keys["y"].flatMap { Int($0) } ?? 0 }
 
     public static func parse(_ apc: [UInt8]) -> KittyGraphicsCommand? {
         guard let first = apc.first, first == 0x47 else { return nil } // 'G'
@@ -59,6 +68,11 @@ public struct KittyGraphicsCommand: Equatable {
         guard let raw = Data(base64Encoded: Data(base64Payload), options: [.ignoreUnknownCharacters]) else {
             return nil
         }
+        return decode(raw: raw)
+    }
+
+    /// Image bytes in the declared format: PNG (or any ImageIO format), or raw RGB / RGBA.
+    public func decode(raw: Data) -> DecodedImage? {
         switch format {
         case 100: // PNG (or any ImageIO format)
             return ImageDecoder.decode(raw)

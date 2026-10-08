@@ -173,6 +173,7 @@ final class AuthoritativeParser {
         if term == nil || sizeChanged || gap == nil {
             let created = TerminalEmulator(cols: max(cols, 1), rows: max(rows, 1))
             created.maxScrollbackLines = 100_000
+            created.readsGraphicsFiles = false
             term = created
             let all = ring.reduce(into: Data()) { $0.append($1.data) }
             if !all.isEmpty { created.feed(all) }

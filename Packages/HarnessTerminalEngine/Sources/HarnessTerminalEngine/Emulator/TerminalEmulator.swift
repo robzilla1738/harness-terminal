@@ -60,6 +60,10 @@ public final class TerminalEmulator: VTParserHandler {
     public var onSetClipboard: ((String) -> Void)?
     /// Bytes the terminal must write back to the PTY (DSR cursor report, DA, etc.).
     public var onResponse: ((Data) -> Void)?
+    /// Whether Kitty graphics may load images from files (`t=f`, `t=t`). The daemon's own
+    /// parser turns this off: it doesn't draw images, and it must not consume a temp file
+    /// before the app that does.
+    public var readsGraphicsFiles = true
     /// A program asked to read the clipboard (OSC 52 `?`), for the given selection (`c`).
     /// The host answers with `clipboardReply`, or stays silent; unset, nothing answers.
     public var onClipboardRead: ((String) -> Void)?
@@ -623,15 +627,15 @@ public final class TerminalEmulator: VTParserHandler {
         case "q":
             // Query (capability/decodability probe): validate without placing or storing. Answering
             // this is what gates detection in `icat`/`timg`/`chafa`, so it must reply.
-            let ok = base.decode(base64Payload: payload) != nil
-            kittyAck(idKey: echoKey, id: echoID, ok: ok,
-                     message: ok ? "OK" : "EBADF:could not decode image", quietness: base.quietness)
+            let loaded = kittyImage(base, payload: payload)
+            kittyAck(idKey: echoKey, id: echoID, ok: loaded.image != nil,
+                     message: loaded.image != nil ? "OK" : loaded.error, quietness: base.quietness)
 
         case "t", "T":
             // Transmit (`t`) stores for later place-many; transmit+display (`T`) also places now.
-            guard let image = base.decode(base64Payload: payload) else {
-                kittyAck(idKey: echoKey, id: echoID, ok: false,
-                         message: "EBADF:could not decode image", quietness: base.quietness)
+            let loaded = kittyImage(base, payload: payload)
+            guard let image = loaded.image else {
+                kittyAck(idKey: echoKey, id: echoID, ok: false, message: loaded.error, quietness: base.quietness)
                 return
             }
             if base.imageID != 0 { storeKittyTransmitted(id: base.imageID, image: image) }
@@ -652,23 +656,73 @@ public final class TerminalEmulator: VTParserHandler {
             kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
 
         case "d":
-            // Delete placements: `d=i`/`d=I` by image id, otherwise (`d=a`/`d=A`/default) all.
-            switch base.deleteTarget {
-            case "i", "I":
-                if base.imageID != 0 {
-                    current.deleteImages(kittyID: base.imageID)
-                    kittyTransmitted.removeAll { e in
-                        e.id == base.imageID ? { kittyTransmittedBytes -= e.image.byteCount; return true }() : false
-                    }
-                }
-            default:
-                current.deleteImages(kittyID: nil)
-                kittyTransmitted.removeAll(); kittyTransmittedBytes = 0
-            }
+            deleteKittyImages(base)
             kittyAck(idKey: echoKey, id: echoID, ok: true, message: "OK", quietness: base.quietness)
 
         default:
             break // `a=a` (animation) and any unknown action are deliberately ignored (deferred).
+        }
+    }
+
+    /// The image a transmit or query names: the payload itself (`t=d`), or a file it points at
+    /// (`t=f`, `t=t`, honoring `O=` / `S=`). A temp file is deleted once read, but only one in
+    /// a temp folder whose name says it's for this protocol, per the spec.
+    private func kittyImage(_ command: KittyGraphicsCommand, payload: [UInt8]) -> (image: DecodedImage?, error: String) {
+        switch command.medium {
+        case "d":
+            return (command.decode(base64Payload: payload), "EBADF:could not decode image")
+        case "f", "t":
+            guard readsGraphicsFiles else { return (nil, "EBADF:file transmission is off here") }
+            guard let name = Data(base64Encoded: Data(payload), options: [.ignoreUnknownCharacters]).flatMap({ String(data: $0, encoding: .utf8) }),
+                  name.hasPrefix("/")
+            else { return (nil, "EINVAL:bad file path") }
+            let url = URL(fileURLWithPath: name)
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true, (values.fileSize ?? 0) <= ImageLimits.maxBytesPerScreen,
+                  let handle = try? FileHandle(forReadingFrom: url)
+            else { return (nil, "EBADF:cannot read \(name)") }
+            defer { try? handle.close() }
+            if command.dataOffset > 0 { try? handle.seek(toOffset: UInt64(command.dataOffset)) }
+            let data = (command.dataSize > 0 ? try? handle.read(upToCount: command.dataSize) : try? handle.readToEnd()) ?? Data()
+            if command.medium == "t", Self.isKittyTempFile(name) { try? FileManager.default.removeItem(at: url) }
+            return (command.decode(raw: data), "EBADF:could not decode image")
+        default:
+            return (nil, "EINVAL:transmission medium \(command.medium) is not supported")
+        }
+    }
+
+    /// The spec only lets a terminal delete a temp file in a temp folder with this marker.
+    static func isKittyTempFile(_ path: String) -> Bool {
+        guard path.contains("tty-graphics-protocol") else { return false }
+        let temp = [NSTemporaryDirectory(), "/tmp/", "/var/tmp/", "/private/tmp/", "/dev/shm/"]
+        return temp.contains { path.hasPrefix($0) }
+    }
+
+    /// `a=d`: lowercase targets remove placements; uppercase also forget the transmitted image.
+    /// `a` all, `i` by id, `n` by number, `c` at the cursor, `p`/`q` at a cell, `x` a column,
+    /// `y` a row, `z` a z-index, `r` an id range.
+    private func deleteKittyImages(_ command: KittyGraphicsCommand) {
+        let target = command.deleteTarget
+        let (row, col) = (command.y - 1, command.x - 1)
+        let removed: Set<Int>
+        switch Character(target.lowercased()) {
+        case "i": removed = current.deleteImages { command.imageID != 0 && $0.kittyID == command.imageID }
+        case "n": removed = current.deleteImages { command.imageNumber != 0 && $0.kittyID == command.imageNumber }
+        case "c": removed = current.deleteImages { $0.covers(row: self.current.cursorRow, col: self.current.cursorCol) }
+        case "p": removed = current.deleteImages { $0.covers(row: row, col: col) }
+        case "q": removed = current.deleteImages { $0.covers(row: row, col: col) && $0.z == command.z }
+        case "x": removed = current.deleteImages { col >= $0.col && col < $0.col + $0.cols }
+        case "y": removed = current.deleteImages { row >= $0.row && row < $0.row + $0.rows }
+        case "z": removed = current.deleteImages { $0.z == command.z }
+        case "r": removed = current.deleteImages { ($0.kittyID ?? 0) >= command.x && ($0.kittyID ?? 0) <= command.y }
+        default: removed = current.deleteImages { _ in true }
+        }
+        guard target.isUppercase else { return }
+        let forget = Character(target.lowercased()) == "a" ? nil : removed.union(command.imageID != 0 ? [command.imageID] : [])
+        kittyTransmitted.removeAll { entry in
+            guard forget?.contains(entry.id) ?? true else { return false }
+            kittyTransmittedBytes -= entry.image.byteCount
+            return true
         }
     }
 

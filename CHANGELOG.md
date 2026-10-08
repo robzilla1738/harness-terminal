@@ -65,6 +65,7 @@ Not a release. Local `main` carries this work so the next session starts from it
 - **The daemon is the session.** Quitting the app leaves the daemon up. A new attach replays the same grid. A second client can subscribe read-only (`subscribeSurfaceOutputReadOnly`): it sees output and its writes do not reach the child. Surface cwd, foreground command, and hooks survive reconnect.
 
 ### Added
+- **More of the Kitty graphics protocol.** Images can be sent as a file (`t=f`) or a temp file (`t=t`, deleted once read when it's a protocol temp file), with `O=`/`S=` offsets. Deletes take every target: at the cursor, at a cell, a column, a row, a z-index, an id range, or an image number; uppercase also frees the image, lowercase keeps it for re-placing. Shared memory (`t=s`), Unicode placeholders, and animation answer with an error or are ignored.
 - **Paste into a remote pane.** An image or file pasted or dropped into a pane on another Mac is uploaded there (a new `writeTempFile` request; owner-only, swept after a day) and the remote path is pasted, instead of a local path the remote shell can't open.
 - **Tailscale discovery that finds Harness.** Suggest Tailscale Peers probes each online peer over SSH and lists the ones running HarnessDaemon first, socket path included.
 - **Copy Watch Command** (pane menu, palette): a read-only `attach` line for the pane, with `--host` when it's remote.
