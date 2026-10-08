@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public struct TailscalePeer: Hashable, Sendable {
     public var hostName: String
@@ -51,18 +52,15 @@ public enum TailscalePeers {
     /// Peers with a running HarnessDaemon, found by probing each one over SSH in parallel
     /// (key auth only, so nothing prompts). Blocking; call off the main thread.
     public static func withHarness(_ peers: [TailscalePeer]) -> [TailscalePeer: String] {
-        let lock = NSLock()
-        var found: [TailscalePeer: String] = [:]
+        let found = Mutex<[TailscalePeer: String]>([:])
         DispatchQueue.concurrentPerform(iterations: peers.count) { index in
             let peer = peers[index]
             guard !peer.address.isEmpty,
                   let socket = try? RemoteSocketDetector.detect(target: peer.address, sshArgs: [])
             else { return }
-            lock.lock()
-            found[peer] = socket
-            lock.unlock()
+            found.withLock { $0[peer] = socket }
         }
-        return found
+        return found.withLock { $0 }
     }
 
     /// A host to store, or nil when the user has not confirmed both the SSH target and the socket.

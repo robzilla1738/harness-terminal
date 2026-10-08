@@ -199,17 +199,17 @@ public enum SettingsPalette {
 
     private static func nextOptional(_ value: Bool?) -> Bool? {
         switch value {
-        case nil: return true
-        case true: return false
-        case false: return nil
+        case .none: return true
+        case .some(true): return false
+        case .some(false): return nil
         }
     }
 
     private static func optionalBool(_ value: Bool?) -> String {
         switch value {
-        case nil: return "Automatic"
-        case true: return "On"
-        case false: return "Off"
+        case .none: return "Automatic"
+        case .some(true): return "On"
+        case .some(false): return "Off"
         }
     }
 

@@ -111,11 +111,12 @@ public enum ScriptActionRunner {
             finished?(ScriptActionResult(failure: "harness-cli not found; \(name) did not run", queued: []))
             return
         }
-        var environment = ProcessInfo.processInfo.environment
-        environment["HARNESS_ORIGIN"] = origin.rawValue
+        var env = ProcessInfo.processInfo.environment
+        env["HARNESS_ORIGIN"] = origin.rawValue
         if let surface, !surface.isEmpty {
-            environment["HARNESS_SURFACE"] = surface
+            env["HARNESS_SURFACE"] = surface
         }
+        let environment = env
         DispatchQueue.global(qos: .userInitiated).async {
             let result: ScriptActionResult
             do {

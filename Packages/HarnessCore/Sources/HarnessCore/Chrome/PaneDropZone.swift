@@ -1,4 +1,8 @@
+#if canImport(CoreGraphics)
 import CoreGraphics
+#else
+import Foundation // CGPoint and CGRect on Linux
+#endif
 
 /// Where a dragged pane lands on another pane: an edge splits that pane and puts the dragged
 /// one on that side; the middle swaps the two. The edge bands are a quarter of the pane, so the
