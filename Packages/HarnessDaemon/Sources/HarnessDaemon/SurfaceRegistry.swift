@@ -1783,7 +1783,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // Internal monitor subscription (Phase 5): cheap output/bell/idle tracking, drained
             // by `processMonitors`. Lives for the surface's lifetime (cleared on teardown).
             // A program-status query is answered here so a pane with no window still replies.
-            _ = session.subscribe { [weak self, weak session] data, _ in
+            _ = session.subscribe(watching: false) { [weak self, weak session] data, _ in
                 guard let reply = self?.noteSurfaceOutput(surfaceKey: surfaceID, data: data) else { return }
                 session?.write(reply)
             }
@@ -1853,6 +1853,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
 
     func launchedShellForTesting(surfaceID: String) -> String? {
         sessions[surfaceID]?.launchedShellForTesting
+    }
+
+    func sessionForTesting(surfaceID: String) -> RealPty? {
+        lock.lock(); defer { lock.unlock() }
+        return sessions[surfaceID]
     }
 
     /// Only called for a tab the user just created (`newTab`/`newTabInWorkspace`), so the
@@ -1999,7 +2004,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         let pipe = PanePipe(process: process, stdin: stdinPipe.fileHandleForWriting)
         // Subscribe + register BEFORE run() so the token is set before a fast-exiting command can
         // fire `terminationHandler` (which must cancel exactly this token, never the global set).
-        let token = session.subscribe { [weak pipe] data, _ in pipe?.feed(data) }
+        let token = session.subscribe(watching: false) { [weak pipe] data, _ in pipe?.feed(data) }
         pipe.token = token
         pipes[surfaceID] = pipe
         // Auto-tear-down when the piped command exits on its own (e.g. `head -1`); otherwise the

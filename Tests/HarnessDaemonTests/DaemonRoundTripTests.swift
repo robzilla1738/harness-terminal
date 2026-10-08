@@ -302,6 +302,36 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertEqual(lines.compactMap { $0.hasPrefix("FLOOD_") ? Int($0.dropFirst(6)) : nil }, Array(0 ..< count), "every line once, in order")
     }
 
+    /// A pane fills while no client is attached (as after the app quits): the daemon parses its
+    /// screen in the background, so the first attach gets it without parsing the ring, and the
+    /// screen stays current once that client leaves again.
+    func testAnUnwatchedPaneHasItsScreenReadyForTheFirstAttach() throws {
+        let client = DaemonClient()
+        let sid = UUID().uuidString
+        _ = try client.request(.ensureSurface(surfaceID: sid, cwd: nil, shell: "/bin/sh", rows: 24, cols: 80, scrollbackBytes: nil))
+        _ = try client.request(.sendData(surfaceID: sid, data: Data(
+            "PS1=''; stty -echo; i=0; while [ $i -lt 5000 ]; do echo UNWATCHED_$i; i=$((i+1)); done; echo UNWATCHED_DONE\n".utf8
+        )))
+        let pty = try XCTUnwrap(server.registry.sessionForTesting(surfaceID: sid))
+        XCTAssertTrue(waitUntil(timeout: 15) {
+            pty.replay(fromSequence: nil).contains("UNWATCHED_DONE") && pty.screenGrid.fedThrough == pty.ringEnd
+        }, "the screen is caught up with no client attached")
+        let parsed = pty.screenGrid.bytesFed
+
+        let start = AtomicBox<DaemonClient.AttachStart>()
+        let subscription = try client.attach(surfaceID: sid, label: "unwatched-test", onStart: { start.set($0) }, onData: { _, _ in })
+        XCTAssertTrue(waitUntil(timeout: 5) { start.value != nil })
+        let screen = String(decoding: try XCTUnwrap(start.value?.screen), as: UTF8.self)
+        XCTAssertTrue(screen.contains("UNWATCHED_DONE"))
+        XCTAssertEqual(pty.screenGrid.bytesFed, parsed, "the attach parsed nothing")
+
+        subscription.cancel()
+        _ = try client.request(.sendData(surfaceID: sid, data: Data("echo AFTER_DETACH\n".utf8)))
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            pty.replay(fromSequence: nil).contains("AFTER_DETACH\r\n") && pty.screenGrid.fedThrough == pty.ringEnd
+        }, "output after the client leaves is parsed in the background too")
+    }
+
     /// `owner` mode end to end: the second client learns it doesn't own the size, takes it by
     /// client id from another socket, and both clients hear the change.
     func testOwnershipFramesTellEachClientAndTakeMovesTheSize() throws {

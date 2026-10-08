@@ -3,8 +3,8 @@ import XCTest
 @testable import HarnessDaemonCore
 @testable import HarnessTerminalEngine
 
-/// Snapshot (1.17). The parser is fed by capture and attach, not by the PTY read
-/// loop. A parked pane keeps the child and drops the grid.
+/// Snapshot (1.17). The parsers are fed by capture, attach and the screen warmer, not by the
+/// PTY read loop. A parked pane keeps the child and drops the grids.
 final class SnapshotTests: XCTestCase {
     func testCatchUpFeedsOnlyTheGapAndResyncsWhenTheRingDropsBytes() {
         let parser = AuthoritativeParser()
@@ -88,7 +88,7 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(joined(small), joined(full) + joined(resumed), "chunking keeps every byte in order")
     }
 
-    func testAResyncCarriesTheScreenAtTheHistoryEndAndLeavesNoGridBehind() throws {
+    func testAResyncCarriesTheScreenAtTheHistoryEndAndKeepsItReady() throws {
         let pty = try catPty()
         pty.start()
         defer { pty.close() }
@@ -100,36 +100,61 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(screen.sequence, full.endSequence, "the screen is the history's last state")
         XCTAssertTrue(screenText(screen).contains("on screen"))
         XCTAssertTrue(String(decoding: screen.vt, as: UTF8.self).contains("\u{1b}[?2004h"), "with the program's modes")
-        XCTAssertFalse(pty.gridIsResident, "the grid parsed for the screen is let go")
+        XCTAssertTrue(pty.screenGrid.resident, "the screen stays for the next attach")
+        XCTAssertFalse(pty.gridIsResident, "and no grid with history is built for it")
         XCTAssertNil(pty.attachHistory(fromSequence: full.endSequence).screen, "a resume continues what the client shows")
 
+        let parsed = pty.screenGrid.bytesFed
         let screenOnly = pty.attachHistory(history: false, fromSequence: nil)
         XCTAssertTrue(screenOnly.chunks.isEmpty)
         XCTAssertEqual(screenOnly.screen, screen)
+        XCTAssertEqual(screenOnly.endSequence, screen.sequence, "live output takes up where the screen ends")
+        XCTAssertEqual(pty.screenGrid.bytesFed, parsed, "the next attach parses nothing")
     }
 
-    /// Another reader (a capture, another attach, the park tick) can catch the grid up past the
-    /// ring a screen-only attach copied. The attach still gets that screen, and live output
-    /// takes up where it ends.
-    func testAScreenOnlyAttachTakesUpFromAScreenAnotherReaderMovedAhead() throws {
+    /// The screen grid keeps one line of history, and paints the same screen as the full grid:
+    /// through scrolling, a scroll region, and the alternate screen and back.
+    func testTheScreenGridPaintsWhatTheFullGridDoesWithoutItsHistory() {
+        let full = AuthoritativeParser()
+        let screen = AuthoritativeParser(historyLines: 1)
+        var ring: [SnapshotByteSpan] = []
+        var sequence: UInt64 = 1
+        let parts = [
+            (0 ..< 500).map { "\u{1b}[3\($0 % 7)mline \($0)\u{1b}[0m\r\n" }.joined(),
+            "\u{1b}[?1049h\u{1b}[H\u{1b}[2Jeditor\u{1b}[5;20r\u{1b}[20;1H" + String(repeating: "x\n", count: 40),
+            "\u{1b}[r\u{1b}[?1049lback\r\n\u{1b}[?2004h",
+        ]
+        for part in parts {
+            ring.append(SnapshotByteSpan(sequence: sequence, data: Data(part.utf8)))
+            sequence += UInt64(part.utf8.count)
+            full.catchUp(ring: ring, cols: 40, rows: 10)
+            screen.catchUp(ring: ring, cols: 40, rows: 10)
+            XCTAssertEqual(screen.frame(), full.frame())
+        }
+        XCTAssertTrue(screenText(screen.frame()).contains("line 499"))
+        XCTAssertEqual(screen.terminal?.captureLines(joinWrapped: false).count, 11, "one line of history")
+    }
+
+    /// Nobody attached: output is parsed into the screen in the background, so an attach finds it
+    /// ready. While a client watches, the screen waits; it catches up once the client leaves.
+    func testAnUnwatchedPaneKeepsItsScreenCurrentAndAWatchedOneCatchesUpWhenItsClientLeaves() throws {
         let pty = try catPty()
         pty.start()
         defer { pty.close() }
-        pty.injectSyntheticOutput(Data("before\r\n".utf8))
-        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("before") })
-        let copied = pty.attachHistory(history: false, fromSequence: nil).endSequence
+        pty.injectSyntheticOutput(Data("unwatched\r\n".utf8))
+        XCTAssertTrue(waitUntil { pty.screenGrid.fedThrough == pty.ringEnd && pty.ringEnd > 1 }, "caught up with no attach")
+        let parsed = pty.screenGrid.bytesFed
+        XCTAssertTrue(screenText(pty.attachHistory(fromSequence: nil).screen).contains("unwatched"))
+        XCTAssertEqual(pty.screenGrid.bytesFed, parsed, "the attach parses nothing")
 
-        pty.attachWillReadScreenForTesting = { [unowned pty] in
-            pty.attachWillReadScreenForTesting = nil
-            pty.injectSyntheticOutput(Data("after\r\n".utf8))
-            XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("after") })
-            XCTAssertTrue(pty.captureGrid(start: nil, end: nil, joinWrapped: false).contains("after"))
-        }
-        let start = pty.attachHistory(history: false, fromSequence: nil)
-        let screen = try XCTUnwrap(start.screen, "the screen ahead of the copied ring is still sent")
-        XCTAssertTrue(screenText(screen).contains("after"))
-        XCTAssertEqual(start.endSequence, screen.sequence, "live output takes up where the screen ends")
-        XCTAssertGreaterThan(start.endSequence, copied)
+        let seen = OutputAccumulator()
+        let token = pty.subscribe { data, _ in _ = seen.appendAndContains(String(decoding: data, as: UTF8.self), marker: "") }
+        pty.injectSyntheticOutput(Data("watched\r\n".utf8))
+        XCTAssertTrue(waitUntil { seen.contains("watched") })
+        XCTAssertLessThan(pty.screenGrid.fedThrough, pty.ringEnd, "a watched pane is not parsed twice")
+        pty.cancelSubscription(token: token)
+        XCTAssertTrue(waitUntil { pty.screenGrid.fedThrough == pty.ringEnd }, "the last client leaving catches it up")
+        XCTAssertTrue(screenText(pty.screenFrame()).contains("watched"))
     }
 
     func testParkedRingCompressesTerminalOutputAndRoundTrips() {
@@ -226,12 +251,13 @@ final class SnapshotTests: XCTestCase {
         pty.parkIfIdle(now: Date().addingTimeInterval(120))
         XCTAssertTrue(pty.childIsAlive)
         XCTAssertFalse(pty.gridIsResident)
+        XCTAssertFalse(pty.screenGrid.resident, "parking lets the screen grid go too")
         let url = directory.appendingPathComponent("\(pty.id).park")
         let sealed = try Data(contentsOf: url)
         XCTAssertFalse(String(decoding: sealed, as: UTF8.self).contains("park-me"), "the file is ciphertext")
         let frame = try XCTUnwrap(pty.screenFrame())
         XCTAssertTrue(screenText(frame).contains("park-me"))
-        XCTAssertFalse(pty.gridIsResident, "serving the parked screen does not bring the grid back")
+        XCTAssertFalse(pty.screenGrid.resident, "serving the parked screen does not bring the grid back")
 
         XCTAssertNotNil(pty.parkedFootprint, "the ring is held packed while parked")
         XCTAssertTrue(pty.replay(fromSequence: nil).contains("park-me"), "reading a parked ring decompresses a copy")
@@ -247,6 +273,8 @@ final class SnapshotTests: XCTestCase {
         pty.parkIfIdle(now: Date().addingTimeInterval(240))
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
         XCTAssertTrue(pty.childIsAlive)
+        XCTAssertTrue(screenText(pty.screenFrame()).contains("woke"), "with nothing on disk the parked screen is kept in memory")
+        XCTAssertFalse(pty.screenGrid.resident)
     }
 
     func testPtyDrainComparisonKeepsTheParserOffTheReadThread() throws {

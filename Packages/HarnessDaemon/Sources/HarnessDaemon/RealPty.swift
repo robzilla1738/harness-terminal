@@ -172,9 +172,19 @@ public final class RealPty: @unchecked Sendable {
     /// The ring while the surface is parked (idle), compressed. Readers decompress a copy;
     /// the next PTY output puts it back into `scrollback`.
     private var parked: ParkedRing?
-    /// Authoritative grid. Touched only under `snapshotLock`, never from the PTY read loop.
+    /// Authoritative grid with its history, for capture. Touched only under `snapshotLock`,
+    /// never from the PTY read loop.
     private let snapshotLock = NSLock()
     private let authoritative = AuthoritativeParser()
+    /// The screen alone, for attach and park: kept caught up while no client watches
+    /// (`ScreenWarmer`) and through an attach, so the next one paints without parsing the ring.
+    /// It keeps no history, so it costs one screen of cells where the capture grid can hold
+    /// 100,000 lines of them. Touched only under `screenLock`, which is taken before
+    /// `scrollbackLock`, never from the PTY read loop.
+    private let screenLock = NSLock()
+    private let screen = AuthoritativeParser(historyLines: 1)
+    /// While parked, the screen at the park when it isn't in the park file. Under `screenLock`.
+    private var parkedScreen: ScreenFrame?
     private var parkDirectoryOverride: URL?
     private var parkKeyOverride: Data?
     private let persistedScrollbackURL: URL?
@@ -194,6 +204,8 @@ public final class RealPty: @unchecked Sendable {
     /// Subscribers receive raw output. Multiple subscribers can attach (the
     /// running app + any number of `harness-cli attach` clients).
     private var subscribers: [UUID: (Data, UInt64) -> Void] = [:]
+    /// The subscribers that paint the pane (clients), as opposed to taps like the monitor.
+    private var watchers: Set<UUID> = []
     private let subscribersLock = NSLock()
 
     /// Extra environment injected into the child shell on spawn *and* respawn
@@ -387,6 +399,8 @@ public final class RealPty: @unchecked Sendable {
         lifecycleLock.unlock()
         startReading(fd: fd, generation: gen)
         watchForExit(pid: pid, generation: gen)
+        // A surface restored with its history has a screen to catch up before anyone attaches.
+        ScreenWarmer.shared.request(self)
     }
 
     /// No-spawn initializer for deterministic unit tests of the reap-record bookkeeping
@@ -692,6 +706,7 @@ public final class RealPty: @unchecked Sendable {
         guard dupFd >= 0 else { return }
         defer { sysClose(dupFd) }
         _ = harness_pty_set_winsize(dupFd, rows, cols)
+        ScreenWarmer.shared.request(self)
     }
 
     public func currentWorkingDirectory() -> String? {
@@ -1102,10 +1117,17 @@ public final class RealPty: @unchecked Sendable {
         return out
     }
 
-    /// After `threshold` seconds without a PTY read: seal the screen to the park file (when
-    /// the surface persists), compress the byte ring into one blob, and drop the parsed grid.
-    /// The child keeps running. The read loop does not call this.
+    /// After `threshold` seconds without a PTY read: keep the screen as VT bytes (sealed in the
+    /// park file when the surface persists), compress the byte ring into one blob, and drop both
+    /// parsed grids. The child keeps running. The read loop does not call this.
     func parkIfIdle(now: Date = Date(), threshold: TimeInterval = IdleGrid.defaultThreshold) {
+        // Checked first without `screenLock`, so the tick never waits on a pane's warm parse.
+        scrollbackLock.lock()
+        let due = !idleGrid.parked && now.timeIntervalSince(lastPTYReadAt) >= threshold
+        scrollbackLock.unlock()
+        guard due else { return }
+        let size = currentWinsize()
+        screenLock.lock()
         scrollbackLock.lock()
         let idleFor = now.timeIntervalSince(lastPTYReadAt)
         var model = idleGrid
@@ -1114,25 +1136,21 @@ public final class RealPty: @unchecked Sendable {
         idleGrid = model
         guard model.parked, !wasParked else {
             scrollbackLock.unlock()
+            screenLock.unlock()
             return
         }
         let ring = ringLocked()
         packRingLocked()
         scrollbackLock.unlock()
-
-        if !scrollbackPersistenceEnabled {
-            deleteParkFile()
-            releaseAuthoritativeGrid()
-            return
-        }
-        let size = currentWinsize()
-        snapshotLock.lock()
-        authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
-        let frame = authoritative.frame()
-        snapshotLock.unlock()
-        if let frame, let sealed = SnapshotCipher.seal(plain: frame.encoded(), key: parkKey()) {
-            writeParkFile(sealed)
-        }
+        // Kept before `screenLock` is let go, so a reader that sees the pane parked finds its
+        // screen: sealed to disk when the surface persists, else (or if the write fails) as VT
+        // bytes in memory, a few KiB.
+        screen.catchUp(ring: ring, cols: size.cols, rows: size.rows)
+        let frame = screen.frame()
+        screen.releaseGrid()
+        if !scrollbackPersistenceEnabled { deleteParkFile() }
+        parkedScreen = scrollbackPersistenceEnabled && frame.map(writeParkFile) == true ? nil : frame
+        screenLock.unlock()
         releaseAuthoritativeGrid()
     }
 
@@ -1190,6 +1208,18 @@ public final class RealPty: @unchecked Sendable {
         return authoritative.gridResident
     }
 
+    /// Whether the screen grid is in the heap, and the ring sequence it has parsed through.
+    var screenGrid: (resident: Bool, fedThrough: UInt64, bytesFed: Int) {
+        screenLock.lock(); defer { screenLock.unlock() }
+        return (screen.gridResident, screen.fedThrough, screen.bytesFed)
+    }
+
+    /// One past the ring's last byte.
+    var ringEnd: UInt64 {
+        scrollbackLock.lock(); defer { scrollbackLock.unlock() }
+        return nextSequence
+    }
+
     var authoritativeBytesFed: Int {
         snapshotLock.lock(); defer { snapshotLock.unlock() }
         return authoritative.bytesFed
@@ -1209,61 +1239,88 @@ public final class RealPty: @unchecked Sendable {
 
     /// The screen a new client paints.
     func screenFrame() -> ScreenFrame? {
+        let size = currentWinsize()
+        screenLock.lock()
+        defer { screenLock.unlock() }
         scrollbackLock.lock()
         let parked = idleGrid.parked
-        let ring = ringLocked()
+        let ring = parked ? [] : ringLocked()
         scrollbackLock.unlock()
-        return screenFrame(ring: ring, parked: parked)
+        return screenFrameLocked(ring: ring, parked: parked, size: size)
     }
 
-    /// The screen after `ring`. A parked pane serves its sealed snapshot, and a pane whose grid
-    /// was not in the heap parses one for the frame and lets it go: attaching doesn't leave a
-    /// grid behind.
-    private func screenFrame(ring: [SnapshotByteSpan], parked: Bool) -> ScreenFrame? {
-        if parked, let url = parkFileURL(),
-           let sealed = try? Data(contentsOf: url),
-           let plain = SnapshotCipher.open(sealed: sealed, key: parkKey()),
-           let frame = ScreenFrame.decode(plain) {
-            return frame
-        }
+    /// Catch the screen grid up to the ring's end while no client watches (`ScreenWarmer`). A
+    /// watched pane catches up when its last client leaves; a parked one keeps its parked screen.
+    func warmScreen() {
+        lifecycleLock.lock()
+        let closed = isClosed
+        lifecycleLock.unlock()
+        subscribersLock.lock()
+        let watched = !watchers.isEmpty
+        subscribersLock.unlock()
+        guard !closed, !watched else { return }
         let size = currentWinsize()
-        snapshotLock.lock()
-        defer { snapshotLock.unlock() }
-        let resident = authoritative.gridResident
-        authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
-        let frame = authoritative.frame()
-        if !resident { authoritative.releaseGrid() }
-        return frame
+        screenLock.lock()
+        defer { screenLock.unlock() }
+        scrollbackLock.lock()
+        let parked = idleGrid.parked
+        let ring = parked ? [] : ringLocked()
+        scrollbackLock.unlock()
+        if !parked { screen.catchUp(ring: ring, cols: size.cols, rows: size.rows) }
     }
 
-    /// Runs between an attach's ring copy and its screen, so a test can race another reader there.
-    var attachWillReadScreenForTesting: (() -> Void)?
+    /// The screen after `ring`: the one kept at the park, else the screen grid caught up, which
+    /// parses only what it hasn't seen unless the grid was let go, resized, or fell out of the
+    /// ring. The grid stays for the next attach. Caller holds `screenLock`.
+    private func screenFrameLocked(ring: [SnapshotByteSpan], parked: Bool, size: (cols: Int, rows: Int)) -> ScreenFrame? {
+        if parked {
+            if let parkedScreen { return parkedScreen }
+            guard let url = parkFileURL(), let sealed = try? Data(contentsOf: url),
+                  let plain = SnapshotCipher.open(sealed: sealed, key: parkKey()) else { return nil }
+            return ScreenFrame.decode(plain)
+        }
+        parkedScreen = nil
+        screen.catchUp(ring: ring, cols: size.cols, rows: size.rows)
+        return screen.frame()
+    }
 
     /// What an attaching client needs from the ring: the bytes after `fromSequence` when the
     /// ring still holds them (a resume), else the screen and, with `history`, all of the ring
-    /// (`resync`: the client starts over). `endSequence` is where live output takes over. With
-    /// history the screen is taken there, and left out if a concurrent reader moved the grid
-    /// past it. Without, live output takes over where the screen ends, which may be past the
-    /// ring: the client's live frames are held from before the ring was read, so none are
-    /// missed. Chunks keep their ring sequences.
+    /// (`resync`: the client starts over). `endSequence` is where live output takes over and
+    /// where the screen stands: the ring is copied and the screen read under `screenLock`, so
+    /// no other reader moves the grid in between. Chunks keep their ring sequences.
     func attachHistory(history: Bool = true, fromSequence: UInt64?, chunkLimit: Int = 1 << 20) -> AttachHistory {
+        if history, let fromSequence {
+            scrollbackLock.lock()
+            let ring = ringLocked()
+            let end = nextSequence
+            scrollbackLock.unlock()
+            if fromSequence >= ring.first?.sequence ?? end, fromSequence <= end {
+                return AttachHistory(chunks: Self.chunks(ring, from: fromSequence, limit: chunkLimit), endSequence: end, resync: false)
+            }
+        }
+        let size = currentWinsize()
+        screenLock.lock()
         scrollbackLock.lock()
         let ring = ringLocked()
         let parked = idleGrid.parked
         let end = nextSequence
         scrollbackLock.unlock()
-        attachWillReadScreenForTesting?()
-        guard history else {
-            let screen = screenFrame(ring: ring, parked: parked).flatMap { $0.sequence >= end ? $0 : nil }
-            return AttachHistory(chunks: [], endSequence: screen?.sequence ?? end, resync: true, screen: screen)
-        }
-        let first = ring.first?.sequence ?? end
-        let resume = fromSequence.map { $0 >= first && $0 <= end } ?? false
+        let screen = screenFrameLocked(ring: ring, parked: parked, size: size)
+        screenLock.unlock()
+        return AttachHistory(
+            chunks: history ? Self.chunks(ring, from: nil, limit: chunkLimit) : [],
+            endSequence: end, resync: true, screen: screen.flatMap { $0.sequence == end ? $0 : nil }
+        )
+    }
+
+    /// `ring` from `from` (all of it when nil) in pieces of at most `limit` bytes.
+    private static func chunks(_ ring: [SnapshotByteSpan], from: UInt64?, limit: Int) -> [ScrollbackReplaySegment] {
         var chunks: [ScrollbackReplaySegment] = []
         for span in ring {
             var data = span.data
             var sequence = span.sequence
-            if resume, let from = fromSequence {
+            if let from {
                 let spanEnd = sequence &+ UInt64(data.count)
                 guard from < spanEnd else { continue }
                 if from > sequence {
@@ -1272,14 +1329,13 @@ public final class RealPty: @unchecked Sendable {
                 }
             }
             while !data.isEmpty {
-                let piece = data.prefix(chunkLimit)
+                let piece = data.prefix(limit)
                 chunks.append(ScrollbackReplaySegment(sequence: sequence, data: Data(piece)))
                 sequence &+= UInt64(piece.count)
                 data = data.dropFirst(piece.count)
             }
         }
-        let screen = resume ? nil : screenFrame(ring: ring, parked: parked).flatMap { $0.sequence == end ? $0 : nil }
-        return AttachHistory(chunks: chunks, endSequence: end, resync: !resume, screen: screen)
+        return chunks
     }
 
     private func ringLocked() -> [SnapshotByteSpan] {
@@ -1328,11 +1384,13 @@ public final class RealPty: @unchecked Sendable {
         return SnapshotKeyStore.loadOrCreate(socketDirectory: directory)
     }
 
-    private func writeParkFile(_ sealed: Data) {
-        guard let url = parkFileURL() else { return }
+    /// Seal `frame` to the park file. False when it couldn't be written.
+    private func writeParkFile(_ frame: ScreenFrame) -> Bool {
+        guard let url = parkFileURL(), let sealed = SnapshotCipher.seal(plain: frame.encoded(), key: parkKey()) else { return false }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? sealed.write(to: url, options: .atomic)
+        guard (try? sealed.write(to: url, options: .atomic)) != nil else { return false }
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return true
     }
 
     private func deleteParkFile() {
@@ -1394,18 +1452,30 @@ public final class RealPty: @unchecked Sendable {
         }
     }
 
-    public func subscribe(_ handler: @escaping (Data, UInt64) -> Void) -> UUID {
+    /// `watching`: the subscriber paints the pane (a client). While one does, the daemon leaves
+    /// the screen grid where it is: the client has its own.
+    public func subscribe(watching: Bool = true, _ handler: @escaping (Data, UInt64) -> Void) -> UUID {
         let token = UUID()
         subscribersLock.lock()
         subscribers[token] = handler
+        if watching { watchers.insert(token) }
         subscribersLock.unlock()
         return token
     }
 
+    /// Once the last watcher goes, the screen is caught up for whoever attaches next.
     public func cancelSubscription(token: UUID? = nil) {
         subscribersLock.lock()
-        if let token { subscribers.removeValue(forKey: token) } else { subscribers.removeAll() }
+        if let token {
+            subscribers.removeValue(forKey: token)
+            watchers.remove(token)
+        } else {
+            subscribers.removeAll()
+            watchers.removeAll()
+        }
+        let unwatched = watchers.isEmpty
         subscribersLock.unlock()
+        if unwatched { ScreenWarmer.shared.request(self) }
     }
 
     /// Inject daemon-originated bytes into this surface's output stream. They flow through
@@ -1469,7 +1539,7 @@ public final class RealPty: @unchecked Sendable {
     private func handleOutput(_ data: Data) {
         scrollbackLock.lock()
         lastPTYReadAt = Date()
-        // Bytes only. The authoritative parser runs in capture and attach, not here.
+        // Bytes only. The parsers run in capture, attach and `ScreenWarmer`, not here.
         if idleGrid.parked {
             mergeParkedHistoryLocked()
         }
@@ -1520,8 +1590,11 @@ public final class RealPty: @unchecked Sendable {
             guard let self else { return }
             self.subscribersLock.lock()
             let handlers = Array(self.subscribers.values)
+            let watched = !self.watchers.isEmpty
             self.subscribersLock.unlock()
             for handler in handlers { handler(data, sequence) }
+            // Nobody watching: keep the screen current for the next attach (coalesced, off here).
+            if !watched { ScreenWarmer.shared.request(self) }
         }
     }
 

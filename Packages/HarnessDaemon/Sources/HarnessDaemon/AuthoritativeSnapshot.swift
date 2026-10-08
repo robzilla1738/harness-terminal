@@ -163,18 +163,26 @@ enum SnapshotKeyStore {
 /// because the read loop never calls `catchUp`.
 final class AuthoritativeParser {
     private var term: TerminalEmulator?
+    private let historyLines: Int
     private(set) var fedThrough: UInt64 = 0
     private(set) var bytesFed = 0
     private(set) var readLoopFeeds = 0
     var gridResident: Bool { term != nil }
     var terminal: TerminalEmulator? { term }
 
+    /// `historyLines` caps the scrollback the grid keeps (at least 1; the emulator reads 0 as
+    /// unlimited). Capture needs it all; a screen needs none, and a full row of history costs
+    /// as much as a row of screen.
+    init(historyLines: Int = 100_000) {
+        self.historyLines = historyLines
+    }
+
     func catchUp(ring: [SnapshotByteSpan], cols: Int, rows: Int) {
         let sizeChanged = term?.cols != cols || term?.rows != rows
         let gap = SnapshotResync.gap(fedThrough: fedThrough, ring: ring)
         if term == nil || sizeChanged || gap == nil {
             let created = TerminalEmulator(cols: max(cols, 1), rows: max(rows, 1))
-            created.maxScrollbackLines = 100_000
+            created.maxScrollbackLines = historyLines
             created.readsGraphicsFiles = false
             term = created
             let all = ring.reduce(into: Data()) { $0.append($1.data) }
@@ -217,5 +225,73 @@ enum PtyDrainComparison {
         for _ in 0 ..< repeats { term.feed(payload) }
         let parseNanos = DispatchTime.now().uptimeNanoseconds &- parseStart
         return (appendNanos, parseNanos)
+    }
+}
+
+/// Keeps the screens of panes no client watches caught up (`RealPty.warmScreen`), so an attach
+/// paints without parsing the ring. A pane asks when it starts, when its last client leaves, and
+/// on output or a resize while nobody watches. Requests coalesce per pane, at most `width` panes
+/// parse at once, at utility QoS (never on the server queue or a PTY read loop), and after each
+/// pass a pane rests nine times as long, so keeping it warm takes at most a tenth of a core even
+/// under a flood.
+final class ScreenWarmer: @unchecked Sendable {
+    static let shared = ScreenWarmer(width: 2)
+
+    private let width: Int
+    private let lock = NSLock()
+    private var pending: [RealPty] = []
+    private var queued: Set<ObjectIdentifier> = []
+    /// Panes in a pass or resting after one, and whether another was asked for meanwhile.
+    private var busy: [ObjectIdentifier: (pty: RealPty, asked: Bool)] = [:]
+    private var running = 0
+
+    init(width: Int) {
+        self.width = width
+    }
+
+    func request(_ pty: RealPty) {
+        let id = ObjectIdentifier(pty)
+        lock.lock()
+        if busy[id] != nil {
+            busy[id]?.asked = true
+            lock.unlock()
+            return
+        }
+        guard queued.insert(id).inserted else {
+            lock.unlock()
+            return
+        }
+        pending.append(pty)
+        let start = running < width
+        if start { running += 1 }
+        lock.unlock()
+        if start { DispatchQueue.global(qos: .utility).async { self.drain() } }
+    }
+
+    /// One worker: warm queued panes until none are left. A request that arrives during a
+    /// pane's pass or rest is held, and queues it again once the rest is over.
+    private func drain() {
+        while true {
+            lock.lock()
+            guard !pending.isEmpty else {
+                running -= 1
+                lock.unlock()
+                return
+            }
+            let pty = pending.removeFirst()
+            let id = ObjectIdentifier(pty)
+            queued.remove(id)
+            busy[id] = (pty, false)
+            lock.unlock()
+            let started = DispatchTime.now().uptimeNanoseconds
+            pty.warmScreen()
+            let elapsed = DispatchTime.now().uptimeNanoseconds &- started
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .nanoseconds(Int(elapsed * 9))) {
+                self.lock.lock()
+                let rested = self.busy.removeValue(forKey: id)
+                self.lock.unlock()
+                if let rested, rested.asked { self.request(rested.pty) }
+            }
+        }
     }
 }

@@ -458,6 +458,77 @@ final class PerformanceBenchmarks: XCTestCase {
         printBenchmark("attach_screen_first_paint_8mib", nanos: paintNanos, fields: [("bytes", "\(screen.count)")])
     }
 
+    /// The daemon side of that first paint: an attach to a pane that filled its 8 MiB ring with a
+    /// scrolling log while no client watched. Without a screen kept ready, the attach parsed the
+    /// whole ring first (~760 ms at 160x48). Also reports how long the background catch-up took.
+    func testAttachToAnUnwatchedPane8MiB() throws {
+        try skipUnlessEnabled()
+        let pty = try unwatchedPane(ring: 8 << 20, output: scrollingLog(bytes: 8 << 20))
+        defer { pty.close() }
+        let warmNanos = timedNanos { waitForScreen(pty) }
+        var attach: AttachHistory?
+        let attachNanos = timedNanos { attach = pty.attachHistory(fromSequence: nil) }
+        XCTAssertNotNil(attach?.screen)
+        printBenchmark("attach_unwatched_pane_8mib", nanos: attachNanos, fields: [("ring", "\(pty.scrollbackByteCount)")])
+        printBenchmark("unwatched_pane_background_catch_up_8mib", nanos: warmNanos)
+    }
+
+    /// Daemon heap for 20 unwatched 160x48 panes with full 1 MiB rings, screens included, and the
+    /// time to read all 20 screens.
+    func testTwentyUnwatchedPanesHeapAndScreens() throws {
+        try skipUnlessEnabled()
+        let output = scrollingLog(bytes: 1 << 20)
+        let before = heapInUse()
+        let panes = try (0 ..< 20).map { _ in try unwatchedPane(ring: 1 << 20, output: output) }
+        defer { panes.forEach { $0.close() } }
+        panes.forEach(waitForScreen)
+        let heap = heapInUse() - before
+        let nanos = timedNanos {
+            for pty in panes { XCTAssertNotNil(pty.attachHistory(history: false, fromSequence: nil).screen) }
+        }
+        printBenchmark("unwatched_panes_20x1mib_screens", nanos: nanos, fields: [("heap_bytes", "\(heap)")])
+    }
+
+    private func heapInUse() -> Int {
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(nil, &stats)
+        return stats.size_in_use
+    }
+
+    /// A build log: colored lines that scroll, with no clears, so all of it passes through history.
+    private func scrollingLog(bytes: Int) -> Data {
+        var s = ""
+        var i = 0
+        while s.utf8.count < bytes {
+            s += "\u{1b}[\(31 + i % 7);1mline \(i)\u{1b}[0m: the quick brown fox — café ☕ 0123456789\r\n"
+            i += 1
+        }
+        return Data(s.utf8)
+    }
+
+    /// A 160x48 pane that took `output` with no client attached, in PTY-sized pieces.
+    private func unwatchedPane(ring: Int, output: Data) throws -> RealPty {
+        let pty = try RealPty(
+            id: UUID().uuidString, cwd: NSTemporaryDirectory(), shell: "/bin/cat",
+            rows: 48, cols: 160, scrollbackBytes: ring
+        )
+        pty.start()
+        var offset = 0
+        while offset < output.count {
+            let end = min(offset + 16 * 1024, output.count)
+            pty.injectSyntheticOutput(output.subdata(in: offset ..< end))
+            offset = end
+        }
+        let deadline = Date().addingTimeInterval(30)
+        while pty.ringEnd < UInt64(output.count) + 1, Date() < deadline { usleep(1_000) }
+        return pty
+    }
+
+    private func waitForScreen(_ pty: RealPty) {
+        let deadline = Date().addingTimeInterval(30)
+        while pty.screenGrid.fedThrough != pty.ringEnd, Date() < deadline { usleep(1_000) }
+    }
+
     @MainActor
     func testSurfaceMainThreadStall4MiB() throws {
         try skipUnlessEnabled()
