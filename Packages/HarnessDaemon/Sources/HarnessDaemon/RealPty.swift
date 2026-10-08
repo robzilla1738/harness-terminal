@@ -707,14 +707,17 @@ public final class RealPty: @unchecked Sendable {
 
     /// Like `currentWorkingDirectory()`, but also returns the PID the cwd was computed for so the
     /// caller can detect a respawn between the (off-lock) probe and its commit. The PID is the
-    /// child generation snapshotted at probe time; `currentChildPID` may differ later.
-    public func probeWorkingDirectory() -> (pid: pid_t, cwd: String)? {
+    /// child generation snapshotted at probe time; `currentChildPID` may differ later. A periodic
+    /// scan passes its tick's shared `parents` map so each pane doesn't re-walk every system PID.
+    public func probeWorkingDirectory(parents: [pid_t: pid_t]? = nil) -> (pid: pid_t, cwd: String)? {
         // `childPID` is `lifecycleLock`-guarded (class doc); snapshot it under the lock,
         // then run the proc scan OUTSIDE the lock (it walks every system PID).
         lifecycleLock.lock()
         let pid = childPID
         lifecycleLock.unlock()
-        guard pid > 0, let cwd = Self.cwd(for: deepestReadableDescendant(of: pid) ?? pid) else { return nil }
+        guard pid > 0,
+              let cwd = Self.cwd(for: deepestReadableDescendant(of: pid, parents: parents ?? ProcessScan.parentMap()) ?? pid)
+        else { return nil }
         return (pid, cwd)
     }
 
@@ -1708,14 +1711,9 @@ public final class RealPty: @unchecked Sendable {
         }
     }
 
-    private func deepestReadableDescendant(of pid: pid_t) -> pid_t? {
-        let all = ProcessScan.livePIDs()
-        guard !all.isEmpty else { return nil }
-        var parents: [pid_t: pid_t] = [:]
-        for candidate in all { parents[candidate] = ProcessScan.parentPID(candidate) }
-
+    private func deepestReadableDescendant(of pid: pid_t, parents: [pid_t: pid_t]) -> pid_t? {
         var best: (pid: pid_t, depth: Int)?
-        for candidate in all where candidate != pid {
+        for candidate in parents.keys where candidate != pid {
             var cursor = candidate
             var depth = 0
             while let parent = parents[cursor], parent != 0, depth < 32 {

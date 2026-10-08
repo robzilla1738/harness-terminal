@@ -85,13 +85,20 @@ Copy-mode is rebindable: `bind-key -T copy-mode <key> <command>` (or `-T copy-mo
 
 ## Global menu shortcuts
 
-These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefix-table entries and not rebindable via `keybindings.json`.
+These are `NSMenuItem` bindings defined in `MainMenuBuilder`, not prefix-table entries. Every menu command is also in the command palette (⌘K), where right-click ▸ Change Shortcut… gives it a shortcut of your own. Help ▸ Keyboard Shortcuts (`⌘/`) lists every key from every source, searchable.
 
 | Action | Shortcut |
 |--------|----------|
 | New window (a new session in it) | `⌘N` |
 | New tab | `⌘T` |
-| Close tab | `⌘W` |
+| Close the focused pane (the tab when it's the only pane); asks only when a program other than the shell is running | `⌘W` |
+| Close the whole tab | `⌥⌘W` |
+| Select pane left / right / above / below | `⌥⌘←` `⌥⌘→` `⌥⌘↑` `⌥⌘↓` |
+| Previous / next pane | `⌘[` / `⌘]` |
+| Zoom pane | `⇧⌘↩` |
+| Equalize splits | `⌃⌘=` |
+| Find / next / previous | `⌘F` / `⌘G` / `⇧⌘G` |
+| Keyboard Shortcuts (everything, searchable) | `⌘/` |
 | Split horizontal / vertical | `⌘D` / `⌘⇧D` |
 | Command palette | `⌘K` |
 | Command prompt | `⌘;` |
@@ -119,19 +126,21 @@ These are fixed `NSMenuItem` bindings defined in `MainMenuBuilder` — not prefi
 ## Customizing
 
 ```bash
-# Bind C-x q to detach
-harness-cli bind-key C-x q detach-client
+# Prefix then d detaches (keys are bound in the prefix table by default)
+harness-cli bind-key d detach-client
 
-# Move "kill pane" off `x` to `C-x x`
+# Move "kill pane" off `x` to `X`
 harness-cli unbind-key x
-harness-cli bind-key C-x x kill-pane
+harness-cli bind-key X kill-pane
 
 # Multi-step: split + immediately enter copy mode
-harness-cli bind-key C-x s "split-window -h ; copy-mode"
+harness-cli bind-key s "split-window -h ; copy-mode"
 
-# Apply immediately in the running app
-harness-cli display-message "reload"  # (the app polls keybindings.json on `reload-keybindings`)
+# A key without the prefix: the root table
+harness-cli bind-key -T root M-Left select-pane -L
 ```
+
+The running app picks up keybindings.json changes on its own.
 
 In the app, the `:` prompt accepts the same syntax:
 

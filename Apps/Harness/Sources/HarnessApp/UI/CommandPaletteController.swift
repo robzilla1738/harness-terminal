@@ -558,7 +558,66 @@ enum CommandPaletteController {
             )
         }
 
+        // Every menu command the palette doesn't already have, so anything in the menu bar can
+        // be found here and given a shortcut (Change Shortcut… keys on the stable menu path).
+        let titles = Set(actions.map { $0.title.lowercased() })
+        actions += menuActions().filter { !titles.contains($0.title.lowercased()) }
         return actions
+    }
+
+    /// The menu bar's commands that have their own target (responder-chain items like Copy act
+    /// on whatever is focused, which from the palette would be the palette itself).
+    private static func menuActions() -> [PaletteAction] {
+        var found: [PaletteAction] = []
+        func walk(_ menu: NSMenu, path: [String]) {
+            menu.update()
+            for item in menu.items where !item.isSeparatorItem && !item.isHidden && !item.title.isEmpty {
+                if let submenu = item.submenu {
+                    walk(submenu, path: path + [item.title])
+                    continue
+                }
+                guard let action = item.action, let target = item.target, item.isEnabled,
+                      action != #selector(NSWindow.makeKeyAndOrderFront(_:))
+                else { continue }
+                let menuPath = path.joined(separator: " ▸ ")
+                found.append(PaletteAction(
+                    id: "menu.\(menuPath).\(item.title)",
+                    title: item.title,
+                    subtitle: menuPath,
+                    symbol: "filemenu.and.selection",
+                    shortcut: shortcutText(item),
+                    section: .commands
+                ) { [weak item] in
+                    guard let item else { return }
+                    NSApp.sendAction(action, to: target, from: item)
+                })
+            }
+        }
+        for top in NSApp.mainMenu?.items ?? [] {
+            guard let submenu = top.submenu else { continue }
+            walk(submenu, path: [submenu.title])
+        }
+        return found
+    }
+
+    static func shortcutText(_ item: NSMenuItem) -> String {
+        guard !item.keyEquivalent.isEmpty else { return "" }
+        var text = ""
+        let mask = item.keyEquivalentModifierMask
+        if mask.contains(.control) { text += "⌃" }
+        if mask.contains(.option) { text += "⌥" }
+        let key = item.keyEquivalent
+        if mask.contains(.shift) || (key.uppercased() == key && key.lowercased() != key) { text += "⇧" }
+        if mask.contains(.command) { text += "⌘" }
+        switch key.unicodeScalars.first.map({ Int($0.value) }) {
+        case NSLeftArrowFunctionKey: text += "←"
+        case NSRightArrowFunctionKey: text += "→"
+        case NSUpArrowFunctionKey: text += "↑"
+        case NSDownArrowFunctionKey: text += "↓"
+        case 13: text += "↩"
+        default: text += key.uppercased()
+        }
+        return text
     }
 
 }

@@ -717,11 +717,16 @@ public final class TerminalHostView: NSView {
         applyNativeAppearance()
     }
 
+    private var appliedTriggers: [TriggerRule]?
+
     public func applySettings(_ settings: HarnessSettings) {
         cachedSettings = settings
         applyNativeAppearance()
-        // Output triggers: recompiled per settings push (reload-on-save applies them live).
-        nativeView.applyTriggerRules(settings.triggers)
+        // Output triggers: recompiled when they change (reload-on-save applies them live).
+        if appliedTriggers != settings.triggers {
+            appliedTriggers = settings.triggers
+            nativeView.applyTriggerRules(settings.triggers)
+        }
     }
 
     public override func viewDidChangeEffectiveAppearance() {
@@ -827,6 +832,18 @@ public final class TerminalHostView: NSView {
     /// the shell); closing clears highlights and returns focus to the terminal.
     public func toggleFind() {
         if findBar != nil { hideFind() } else { showFind() }
+    }
+
+    /// ⌘G / ⇧⌘G from anywhere in the pane: the next or previous match, opening the find
+    /// bar when it's closed.
+    public func findNext() {
+        guard findBar != nil else { return showFind() }
+        nativeView.findNext()
+    }
+
+    public func findPrevious() {
+        guard findBar != nil else { return showFind() }
+        nativeView.findPrevious()
     }
 
     private func showFind() {
@@ -1098,6 +1115,7 @@ public final class TerminalHostView: NSView {
                     guard let self else { return }
                     self.sizeOwnership = ownership
                     self.nativeView.sizeOwner = ownership.owner
+                    self.nativeView.answersQueries = ownership.responder ?? ownership.owner
                     if !ownership.owner {
                         self.nativeView.adoptOwnerSize(cols: Int(ownership.cols), rows: Int(ownership.rows))
                     }

@@ -3,9 +3,8 @@ import Foundation
 /// Kitty graphics Unicode placeholders (`U=1`): instead of the terminal drawing an image at the
 /// cursor, the program prints U+10EEEE cells. Each cell's foreground color is the image id, and
 /// its first and second combining marks are the row and column of the image cell it shows,
-/// taken from Kitty's diacritic table. (A cell keeps two marks, so the optional third one, an
-/// id's high byte, is dropped: ids up to 2^24 work.) A cell without marks
-/// continues the cell to its left. Because the image is ordinary text, it scrolls, reflows,
+/// taken from Kitty's diacritic table; an optional third mark is the id's high byte. Marks a
+/// cell leaves out continue the cell to its left. Because the image is ordinary text, it scrolls, reflows,
 /// and survives tmux, editors, and reattaching like any other output.
 public enum KittyPlaceholders {
     public static let character: UInt32 = 0x10EEEE
@@ -48,9 +47,17 @@ public enum KittyPlaceholders {
     /// to their virtual placements; `textureID` becomes the quad's (negative) image id.
     public static func placements(in grid: TerminalGridSnapshot, virtuals: [Int: Virtual]) -> [ImagePlacementSnapshot] {
         guard !virtuals.isEmpty else { return [] }
+        // Without a high-byte mark an id is ambiguous; Kitty lets the terminal pick the one
+        // virtual placement whose low 24 bits match.
+        let byLowBits = Dictionary(grouping: virtuals.keys) { $0 & 0xFFFFFF }
+        func resolve(_ low: Int, high: Int?) -> Int {
+            if let high { return high << 24 | low }
+            if virtuals[low] == nil, let ids = byLowBits[low], ids.count == 1 { return ids[0] }
+            return low
+        }
         var out: [ImagePlacementSnapshot] = []
         for row in 0 ..< grid.rows {
-            var previous: (id: Int, imageRow: Int, imageCol: Int)?
+            var previous: (low: Int, high: Int?, imageRow: Int, imageCol: Int)?
             var run: (start: Int, id: Int, imageRow: Int, firstCol: Int, count: Int)?
             func flush() {
                 guard let current = run, let placement = virtuals[current.id] else { run = nil; return }
@@ -64,19 +71,16 @@ public enum KittyPlaceholders {
             }
             for col in 0 ..< grid.cols {
                 let cell = grid.cells[row * grid.cols + col]
-                guard cell.codepoint == character, let id = imageID(cell.foreground) else {
+                guard cell.codepoint == character, let low = imageID(cell.foreground) else {
                     flush(); previous = nil; continue
                 }
-                let marks = [cell.combining0, cell.combining1].map { $0 == 0 ? nil : diacriticIndex[$0] }
-                var imageRow: Int, imageCol: Int
-                if let r = marks[0] {
-                    imageRow = r
-                    imageCol = marks[1] ?? (previous.map { $0.id == id && $0.imageRow == r ? $0.imageCol + 1 : 0 } ?? 0)
-                } else if let previous, previous.id == id {
-                    (imageRow, imageCol) = (previous.imageRow, previous.imageCol + 1)
-                } else {
-                    (imageRow, imageCol) = (0, 0)
-                }
+                let marks = [cell.combining0, cell.combining1, UInt32(cell.placeholderMark)].map { $0 == 0 ? nil : diacriticIndex[$0] }
+                // The cell to the left, when it continues into this one (same id, same row).
+                let left = previous.flatMap { $0.low == low && $0.imageRow == (marks[0] ?? $0.imageRow) ? $0 : nil }
+                let imageRow = marks[0] ?? left?.imageRow ?? 0
+                let imageCol = marks[1] ?? left.map { $0.imageCol + 1 } ?? 0
+                let high = marks[2] ?? left.flatMap { marks[1] == nil || marks[1] == $0.imageCol + 1 ? $0.high : nil }
+                let id = resolve(low, high: high)
                 if let current = run, current.id == id, current.imageRow == imageRow,
                    current.firstCol + current.count == imageCol, current.start + current.count == col {
                     run?.count += 1
@@ -84,7 +88,7 @@ public enum KittyPlaceholders {
                     flush()
                     run = (col, id, imageRow, imageCol, 1)
                 }
-                previous = (id, imageRow, imageCol)
+                previous = (low, high, imageRow, imageCol)
             }
             flush()
         }

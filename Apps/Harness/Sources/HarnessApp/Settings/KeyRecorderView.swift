@@ -117,6 +117,7 @@ final class KeyRecorderView: NSView {
         recording = true
         refresh()
         PrefixKeymap.shared.setShortcutRecordingActive(true)
+        PaletteShortcuts.shared.setPaused(true, by: self)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             if event.keyCode == 53 { self.stopRecording(); return nil }
@@ -129,6 +130,7 @@ final class KeyRecorderView: NSView {
         monitor = nil
         recording = false
         PrefixKeymap.shared.setShortcutRecordingActive(false)
+        PaletteShortcuts.shared.setPaused(false, by: self)
         refresh()
     }
 
@@ -164,6 +166,7 @@ final class KeyRecorderView: NSView {
 
     private func record(_ event: NSEvent) -> Bool {
         guard let serialized = ShortcutRecorderSerializer.serialize(
+            keyCode: event.keyCode,
             raw: event.charactersIgnoringModifiers,
             modifiers: Self.keyModifiers(from: event.modifierFlags)
         ) else { return false }

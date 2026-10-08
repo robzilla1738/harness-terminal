@@ -129,25 +129,50 @@ extension SessionEditor {
         }
     }
 
-    @discardableResult
-    func adjustRatio(_ node: inout PaneNode, target: PaneID, delta: CGFloat) -> Bool {
+    enum DividerMove { case notFound, inside, moved }
+
+    /// Move the divider of the nearest ancestor split on `axis` by `cells` (negative: left/up).
+    func moveDivider(
+        _ node: inout PaneNode,
+        target: PaneID,
+        axis: SplitDirection,
+        cells: Double,
+        size: ((SurfaceID) -> (rows: Int, cols: Int)?)?
+    ) -> DividerMove {
         switch node {
-        case let .leaf(leaf) where leaf.id == target:
-            return true
+        case let .leaf(leaf):
+            return leaf.id == target ? .inside : .notFound
         case .branch(let direction, var ratio, var first, var second):
-            if adjustRatio(&first, target: target, delta: delta) {
+            var result = moveDivider(&first, target: target, axis: axis, cells: cells, size: size)
+            if result == .notFound { result = moveDivider(&second, target: target, axis: axis, cells: cells, size: size) }
+            switch result {
+            case .notFound:
+                return .notFound
+            case .moved:
+                node = .branch(direction: direction, ratio: ratio, first: first, second: second)
+                return .moved
+            case .inside:
+                guard direction == axis else { return .inside }
+                let extent = size.map { Self.extent(of: node, along: axis, size: $0) } ?? 0
+                let delta = extent > 0 ? cells / Double(extent) : cells * 0.05
                 ratio = min(0.9, max(0.1, ratio + delta))
                 node = .branch(direction: direction, ratio: ratio, first: first, second: second)
-                return true
+                return .moved
             }
-            if adjustRatio(&second, target: target, delta: delta) {
-                ratio = min(0.9, max(0.1, ratio - delta))
-                node = .branch(direction: direction, ratio: ratio, first: first, second: second)
-                return true
-            }
-            return false
-        default:
-            return false
+        }
+    }
+
+    /// Cells a subtree spans along `axis`: panes side by side on that axis add up, panes
+    /// stacked across it share the widest.
+    static func extent(of node: PaneNode, along axis: SplitDirection, size: (SurfaceID) -> (rows: Int, cols: Int)?) -> Int {
+        switch node {
+        case let .leaf(leaf):
+            guard let grid = size(leaf.surfaceID) else { return 0 }
+            return axis == .horizontal ? grid.cols : grid.rows
+        case let .branch(direction, _, first, second):
+            let a = extent(of: first, along: axis, size: size)
+            let b = extent(of: second, along: axis, size: size)
+            return direction == axis ? a + b : max(a, b)
         }
     }
 
@@ -204,7 +229,9 @@ extension SessionEditor {
         let wantNegativeSide: Bool = direction == .left || direction == .up
         for i in (0..<ancestors.count).reversed() {
             let ancestor = ancestors[i]
-            let isHorizontal = ancestor.direction == .vertical // .vertical divider → side-by-side
+            // The layout-tree invariant (`PaneRectSolver`, the app's split views): a `.horizontal`
+            // branch lays its panes side by side.
+            let isHorizontal = ancestor.direction == .horizontal
             if isHorizontal == wantHorizontalAxis {
                 // We need to have come from the side opposite the target side.
                 let cameFromHigh = ancestor.came == 1
@@ -273,25 +300,27 @@ extension SessionEditor {
 
     func build(layout: LayoutTemplate, leaves: [PaneLeaf]) -> PaneNode {
         switch layout {
+        // Layout-tree directions (`PaneRectSolver`): `.horizontal` lays panes side by side,
+        // `.vertical` stacks them, so tmux's even-horizontal is a row of `.horizontal` splits.
         case .evenHorizontal:
             // panes side-by-side (vertical dividers between them)
-            return buildEven(leaves: leaves, direction: .vertical)
-        case .evenVertical:
             return buildEven(leaves: leaves, direction: .horizontal)
+        case .evenVertical:
+            return buildEven(leaves: leaves, direction: .vertical)
         case .mainHorizontal:
             // main pane on top (full width), the rest tiled side-by-side underneath
             guard let main = leaves.first else { return .leaf(PaneLeaf()) }
             let rest = Array(leaves.dropFirst())
             if rest.isEmpty { return .leaf(main) }
-            let bottom = buildEven(leaves: rest, direction: .vertical)
-            return .branch(direction: .horizontal, ratio: 0.5, first: .leaf(main), second: bottom)
+            let bottom = buildEven(leaves: rest, direction: .horizontal)
+            return .branch(direction: .vertical, ratio: 0.5, first: .leaf(main), second: bottom)
         case .mainVertical:
             // main pane on left (full height), rest stacked top/bottom on right
             guard let main = leaves.first else { return .leaf(PaneLeaf()) }
             let rest = Array(leaves.dropFirst())
             if rest.isEmpty { return .leaf(main) }
-            let right = buildEven(leaves: rest, direction: .horizontal)
-            return .branch(direction: .vertical, ratio: 0.5, first: .leaf(main), second: right)
+            let right = buildEven(leaves: rest, direction: .vertical)
+            return .branch(direction: .horizontal, ratio: 0.5, first: .leaf(main), second: right)
         case .tiled:
             return buildTiled(leaves: leaves)
         }
@@ -327,8 +356,8 @@ extension SessionEditor {
             rows.append(Array(leaves[i..<end]))
             i = end
         }
-        let rowNodes = rows.map { buildEven(leaves: $0, direction: .vertical) }
-        return buildEvenNodes(rowNodes, direction: .horizontal)
+        let rowNodes = rows.map { buildEven(leaves: $0, direction: .horizontal) }
+        return buildEvenNodes(rowNodes, direction: .vertical)
     }
 
     func buildEvenNodes(_ nodes: [PaneNode], direction: SplitDirection) -> PaneNode {

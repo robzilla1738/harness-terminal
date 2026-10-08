@@ -12,6 +12,10 @@ import Foundation
 public enum AgentDetector {
     /// Process-table snapshot updated on each scan.
     nonisolated(unsafe) private static var lastSurfaceSnapshots: [String: AgentSnapshot] = [:]
+    /// What `scan` last reported as a change, per surface (guarded by `snapshotsLock`). Change
+    /// detection diffs against this, not `lastSurfaceSnapshots`, because `recordActivity` flips
+    /// that one to `.working` between scans and would otherwise hide the idle → working edge.
+    nonisolated(unsafe) private static var publishedSnapshots: [String: AgentSnapshot] = [:]
     private static let snapshotsLock = NSLock()
 
     /// PID of the shell that owns each surface (set by the daemon when it
@@ -40,6 +44,7 @@ public enum AgentDetector {
 
         snapshotsLock.lock()
         lastSurfaceSnapshots.removeValue(forKey: key)
+        publishedSnapshots.removeValue(forKey: key)
         snapshotsLock.unlock()
 
         hintsLock.lock()
@@ -93,11 +98,13 @@ public enum AgentDetector {
 
     /// Run a scan of every surface's child process tree. The daemon calls this
     /// every ~1.5s. Returns the surfaces whose agent detection changed (so the
-    /// caller can post a single batched IPC update).
+    /// caller can post a single batched IPC update). `parents` lets the caller share
+    /// one tick's `ProcessScan.parentMap()` with its other process walks.
     @discardableResult
     public static func scan(
         table: AgentTable = .default,
-        workingWindow: TimeInterval = AgentDetector.workingWindow
+        workingWindow: TimeInterval = AgentDetector.workingWindow,
+        parents: [Int32: Int32]? = nil
     ) -> [String: AgentSnapshot?] {
         rootsLock.lock()
         let roots = surfaceRoots
@@ -105,7 +112,7 @@ public enum AgentDetector {
         // The `pid → ppid` map is identical for every surface this tick, so build it ONCE and
         // reuse it across all roots — collapsing the per-tick cost from O(surfaces × processes)
         // syscalls to O(processes). Previously each `detect` rebuilt the whole map from scratch.
-        let parents = ProcessScan.parentMap()
+        let parents = parents ?? ProcessScan.parentMap()
         var changes: [String: AgentSnapshot?] = [:]
         for (key, rootPID) in roots {
             let detected = detect(pid: rootPID, table: table, parents: parents)
@@ -132,13 +139,24 @@ public enum AgentDetector {
                 }
                 resolved = r
             }
-            if resolved != prior {
+            if !isSameState(resolved, publishedSnapshots[key]) {
                 changes[key] = resolved
+                publishedSnapshots[key] = resolved
             }
             lastSurfaceSnapshots[key] = resolved
             snapshotsLock.unlock()
         }
         return changes
+    }
+
+    /// Equal for change reporting. While an agent stays `.working`, `lastActivityAt` tracks the
+    /// latest output and moves on nearly every scan; reporting that would commit a revision and
+    /// push a full snapshot to every client each ~1.5s of steady streaming. Activity transitions
+    /// (and the timestamp they carry) still compare exactly, so they report immediately.
+    private static func isSameState(_ lhs: AgentSnapshot?, _ rhs: AgentSnapshot?) -> Bool {
+        guard var lhs, let rhs else { return lhs == nil && rhs == nil }
+        if lhs.activity == .working, rhs.activity == .working { lhs.lastActivityAt = rhs.lastActivityAt }
+        return lhs == rhs
     }
 
     /// Walks descendants of `pid` looking for a process whose resolved binary,
@@ -429,12 +447,21 @@ public struct AgentTable: Codable, Sendable {
         AgentTableEntry(kind: .goose, executables: ["goose"]),
     ])
 
+    /// Last decoded `agents.json`, keyed by its modification date, so the ~1.5s scan
+    /// re-reads and re-decodes the file only when it actually changes.
+    nonisolated(unsafe) private static var cached: (modified: Date, table: AgentTable)?
+    private static let cacheLock = NSLock()
+
     public static func loadFromDisk() -> AgentTable {
         let path = HarnessPaths.applicationSupport.appendingPathComponent("agents.json")
-        guard FileManager.default.fileExists(atPath: path.path),
-              let data = try? Data(contentsOf: path),
-              let table = try? JSONDecoder().decode(AgentTable.self, from: data)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path.path),
+              let modified = attributes[.modificationDate] as? Date
         else { return .default }
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cached, cached.modified == modified { return cached.table }
+        let table = (try? Data(contentsOf: path)).flatMap { try? JSONDecoder().decode(AgentTable.self, from: $0) } ?? .default
+        cached = (modified, table)
         return table
     }
 }

@@ -174,6 +174,55 @@ final class KittyGraphicsProtocolTests: XCTestCase {
         XCTAssertTrue(term.readGrid().images.isEmpty, "deleting the image removes its virtual placement")
     }
 
+    /// An id above 2^24: the foreground carries its low 24 bits and a third mark its high byte.
+    /// Without that mark, the one virtual placement whose low bits match is drawn.
+    func testUnicodePlaceholdersResolveAnIDsHighByte() {
+        let (term, _) = makeTerm()
+        let id = 5 << 24 | 7
+        term.feed("\u{1b}_Ga=T,U=1,f=32,s=1,v=1,i=\(id),c=2,r=2;\(pixel)\u{1b}\\")
+        let p = "\u{10EEEE}", mark = { (i: Int) in String(Character(Unicode.Scalar(KittyPlaceholders.diacritics[i])!)) }
+        // Row 0 names the high byte (the second cell inherits it); row 1 leaves it out.
+        term.feed("\u{1b}[38;2;0;0;7m\(p)\(mark(0))\(mark(0))\(mark(5))\(p)\r\n\(p)\(mark(1))\(mark(0))\(p)\u{1b}[0m")
+        var images = term.readGrid().images.sorted { $0.row < $1.row }
+        XCTAssertEqual(images.map(\.row), [0, 1], "both rows draw image \(id)")
+        XCTAssertEqual(images.map(\.cols), [2, 2])
+        XCTAssertEqual(images[1].sourceY, 0.5)
+
+        // A second image with the same low 24 bits: the row with the high byte still resolves,
+        // the row without it is ambiguous and draws nothing.
+        term.feed("\u{1b}_Ga=T,U=1,f=32,s=1,v=1,i=\(6 << 24 | 7),c=2,r=2;\(pixel)\u{1b}\\")
+        images = term.readGrid().images
+        XCTAssertEqual(images.map(\.row), [0])
+        XCTAssertEqual(term.readGrid().cells[0].placeholderMark, UInt16(KittyPlaceholders.diacritics[5]))
+    }
+
+    /// Deleting by id range or by number takes virtual placements too, and the uppercase forms
+    /// forget the image even when only a virtual placement held it.
+    func testDeleteByRangeAndNumberRemovesVirtualPlacements() {
+        let (term, responses) = makeTerm()
+        let p = "\u{10EEEE}"
+        term.feed("\u{1b}_Ga=T,U=1,f=32,s=1,v=1,i=3,c=1,r=1;\(pixel)\u{1b}\\")
+        term.feed("\u{1b}[38;5;3m\(p)\u{1b}[0m")
+        XCTAssertEqual(placementCount(term), 1)
+        term.feed("\u{1b}_Ga=d,d=r,x=1,y=5\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 0, "d=r removes the virtual placement")
+        term.feed("\u{1b}_Ga=p,U=1,i=3,c=1,r=1\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 1, "lowercase keeps the image")
+        term.feed("\u{1b}_Ga=d,d=R,x=1,y=5\u{1b}\\")
+        term.feed("\u{1b}_Ga=p,U=1,i=3,c=1,r=1\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 0, "d=R forgets it")
+        XCTAssertTrue(responses().joined().contains("\u{1b}_Gi=3;ENOENT"))
+
+        // An image number's id is 2^30 + n: its low 24 bits name it with no high-byte mark.
+        term.feed("\u{1b}[2J\u{1b}[H\u{1b}_Ga=T,U=1,f=32,s=1,v=1,I=9,c=1,r=1;\(pixel)\u{1b}\\")
+        term.feed("\u{1b}[38;5;1m\(p)\u{1b}[0m")
+        XCTAssertEqual(placementCount(term), 1, "the numbered image's virtual placement draws")
+        term.feed("\u{1b}_Ga=d,d=N,I=9\u{1b}\\")
+        XCTAssertEqual(placementCount(term), 0, "d=N removes the virtual placement")
+        term.feed("\u{1b}_Ga=p,U=1,I=9,c=1,r=1\u{1b}\\")
+        XCTAssertTrue(responses().joined().contains("\u{1b}_GI=9;ENOENT"), "d=N forgets the image")
+    }
+
     func testDeleteByPositionAndZAndLowercaseKeepsData() {
         let (term, _) = makeTerm()
         term.feed("\u{1b}_Ga=T,f=32,s=1,v=1,i=1,z=5;\(pixel)\u{1b}\\")   // row 1 (0-based 0)

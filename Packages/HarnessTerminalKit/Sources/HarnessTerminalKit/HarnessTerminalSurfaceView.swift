@@ -363,6 +363,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Whether this client sets the PTY size. A non-owner reflows locally instead; becoming
     /// the owner again re-commits the grid to the view and votes that size, since the window
     /// may have been resized while its votes didn't count.
+    /// This client answers the program's terminal queries (the daemon picks exactly one per
+    /// pane); the others stay quiet so a query gets one reply.
+    public var answersQueries = true
+
     public var sizeOwner = true {
         didSet {
             guard sizeOwner, !oldValue else { return }
@@ -1092,6 +1096,44 @@ public final class HarnessTerminalSurfaceView: NSView {
     ///   "apply theme to output" is on, otherwise the untouched default palette.
     /// - `canvasOpacity` < 1 makes the canvas translucent for the window blur.
     /// Rebuilds the renderer/atlas (font/colorspace) and the color resolver.
+    /// Everything `configureAppearance` was last called with. A sync re-applies settings and
+    /// theme to every pane; when nothing changed, the renderer (pipelines, glyph atlas) stays.
+    private struct AppearanceInputs: Equatable {
+        var fontFamily: String
+        var fontSize: CGFloat
+        var vivid: Bool
+        var colorRendering: TerminalColorRenderingMode?
+        var colorGamut: TerminalColorGamut
+        var canvasBackgroundHex: String
+        var canvasForegroundHex: String
+        var cursorHex: String
+        var outputPaletteHex: [String?]
+        var oscPaletteHex: [String?]?
+        var canvasOpacity: Float
+        var cursorStyle: String
+        var cursorBlink: Bool
+        var paddingX: CGFloat
+        var paddingY: CGFloat
+        var paddingBalance: Bool
+        var selectionBackgroundHex: String?
+        var selectionForegroundHex: String?
+        var cursorTextHex: String?
+        var copyOnSelect: Bool
+        var pasteProtection: Bool
+        var scrollbackLines: Int
+        var linearBlending: Bool
+        var textRendering: TerminalTextRenderingMode?
+        var ligatures: Bool
+        var minimumContrast: Double
+        var themeFit: Bool
+        var boldIsBright: Bool
+        var promptGutter: Bool
+        var offMainParserFramePipeline: Bool
+        var liveResizeReflow: Bool
+    }
+
+    private var appliedAppearance: AppearanceInputs?
+
     public func configureAppearance(
         fontFamily: String,
         fontSize: CGFloat,
@@ -1125,6 +1167,9 @@ public final class HarnessTerminalSurfaceView: NSView {
         offMainParserFramePipeline: Bool = true,
         liveResizeReflow: Bool = true
     ) {
+        let inputs = AppearanceInputs(fontFamily: fontFamily, fontSize: fontSize, vivid: vivid, colorRendering: colorRendering, colorGamut: colorGamut, canvasBackgroundHex: canvasBackgroundHex, canvasForegroundHex: canvasForegroundHex, cursorHex: cursorHex, outputPaletteHex: outputPaletteHex, oscPaletteHex: oscPaletteHex, canvasOpacity: canvasOpacity, cursorStyle: cursorStyle, cursorBlink: cursorBlink, paddingX: paddingX, paddingY: paddingY, paddingBalance: paddingBalance, selectionBackgroundHex: selectionBackgroundHex, selectionForegroundHex: selectionForegroundHex, cursorTextHex: cursorTextHex, copyOnSelect: copyOnSelect, pasteProtection: pasteProtection, scrollbackLines: scrollbackLines, linearBlending: linearBlending, textRendering: textRendering, ligatures: ligatures, minimumContrast: minimumContrast, themeFit: themeFit, boldIsBright: boldIsBright, promptGutter: promptGutter, offMainParserFramePipeline: offMainParserFramePipeline, liveResizeReflow: liveResizeReflow)
+        guard inputs != appliedAppearance else { return }
+        appliedAppearance = inputs
         liveResizeReflowEnabled = liveResizeReflow
         // `scrollbackLines == 0` stays the unlimited sentinel on the wire. `historyLineCap`
         // turns that 0-byte budget into the daemon's finite safety ceiling.
@@ -1395,18 +1440,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         // so several attached clients don't each reply to one question.
         emulator.onResponse = { [weak self] data in
             if Thread.isMainThread {
-                guard let self, self.sizeOwner else { return }
+                guard let self, self.answersQueries else { return }
                 self.onInput?(data)
             } else {
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, self.sizeOwner else { return }
+                    guard let self, self.answersQueries else { return }
                     self.onInput?(data)
                 }
             }
         }
         emulator.onClipboardRead = { [weak self] selection in
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.allowProgramClipboardRead, self.sizeOwner,
+                guard let self, self.allowProgramClipboardRead, self.answersQueries,
                       let text = NSPasteboard.general.string(forType: .string)
                 else { return }
                 self.onInput?(TerminalEmulator.clipboardReply(selection: selection, text: text))
@@ -1554,10 +1599,14 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
+    /// The backing scale the current renderer was built for.
+    private var rendererScale: CGFloat?
+
     private func buildRenderer() {
         guard let device = metalLayer.device ?? MTLCreateSystemDefaultDevice() else { return }
         metalLayer.device = device
         let scale = window?.backingScaleFactor ?? 2.0
+        rendererScale = scale
         renderer = TerminalMetalRenderer(
             device: device,
             fontFamily: fontFamily,
@@ -1589,7 +1638,13 @@ public final class HarnessTerminalSurfaceView: NSView {
         windowKeyObservers.removeAll()
         if let window {
             StartupMetrics.shared.mark(.firstSurfaceAttached) // idempotent: first surface in a window
-            buildRenderer() // pick up the real backing scale
+            // Pick up the real backing scale. A pane remounted in the same kind of window (a
+            // layout rebuild, a tab moved between windows) keeps its renderer and glyph atlas.
+            if renderer == nil || rendererScale != window.backingScaleFactor {
+                buildRenderer()
+            } else {
+                invalidateRenderGeneration()
+            }
             startDisplayLink()
             updateGridSize()
             scheduleRender()

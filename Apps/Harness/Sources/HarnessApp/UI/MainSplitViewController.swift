@@ -155,6 +155,7 @@ final class MainSplitViewController: NSViewController {
     /// "here" follow what you're looking at.
     @objc private func windowDidBecomeKey() {
         let coordinator = SessionCoordinator.shared
+        WindowContexts.lastKey = context
         if context.owner != coordinator.activeOwner {
             coordinator.activate(owner: context.owner, selecting: context.sessionID)
         }
@@ -162,8 +163,10 @@ final class MainSplitViewController: NSViewController {
               let workspace = context.workspace,
               coordinator.snapshot.activeWorkspace?.activeSessionID != session || coordinator.snapshot.activeWorkspaceID != workspace.id
         else { return }
-        if coordinator.snapshot.activeWorkspaceID != workspace.id { coordinator.selectWorkspace(workspace.id) }
+        // The session first: selecting the workspace first would make this window follow that
+        // workspace's active session for a moment (mounting its panes, resizing its PTYs).
         coordinator.selectSession(workspaceID: workspace.id, sessionID: session)
+        if coordinator.snapshot.activeWorkspaceID != workspace.id { coordinator.selectWorkspace(workspace.id) }
     }
 
     /// A custom divider color is an overlaid hairline. With no custom color the
@@ -215,11 +218,13 @@ final class MainSplitViewController: NSViewController {
         }
         if metadataOnly {
             sidebar.refreshMetadata()
-            content.refreshTabBarMetadata()
         } else {
             sidebar.reload()
-            content.reloadTabBar()
         }
+        content.snapshotChanged(
+            structureChanged: note.userInfo?["structureChanged"] as? Bool ?? true,
+            metadataOnly: metadataOnly
+        )
         applyStatusPosition()
         updateWindowTitle()
     }

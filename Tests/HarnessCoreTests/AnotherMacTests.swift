@@ -189,4 +189,18 @@ final class AnotherMacTests: XCTestCase {
         XCTAssertFalse(RemoteControlPolicy.allowsGUI(tunnel: true, enabled: false))
         XCTAssertTrue(RemoteControlPolicy.allowsGUI(tunnel: true, enabled: true))
     }
+
+    func testExactlyOneClientAnswersQueriesInEitherMode() {
+        var smallest = SurfaceSizeArbiter(mode: .smallest)
+        _ = smallest.vote(client: 1, surface: "s", rows: 40, cols: 120)
+        _ = smallest.vote(client: 2, surface: "s", rows: 30, cols: 90)
+        XCTAssertEqual(smallest.responder(of: "s"), 2, "the most recent voter answers")
+        _ = smallest.disconnect(client: 2)
+        XCTAssertEqual(smallest.responder(of: "s"), 1)
+
+        var owner = SurfaceSizeArbiter(mode: .owner)
+        _ = owner.vote(client: 1, surface: "s", rows: 40, cols: 120)
+        _ = owner.vote(client: 2, surface: "s", rows: 30, cols: 90)
+        XCTAssertEqual(owner.responder(of: "s"), 1, "the owner answers")
+    }
 }

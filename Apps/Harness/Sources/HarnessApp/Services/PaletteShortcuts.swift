@@ -10,10 +10,15 @@ final class PaletteShortcuts {
 
     private var monitor: Any?
     private var bindings: [(shortcut: ParsedShortcut, actionID: String)] = []
-    /// Off while the recorder panel listens, so the key being recorded isn't run.
-    var paused = false
+    /// Whoever is recording a chord right now (the recorder panel, a Settings key recorder);
+    /// shortcuts are off while any is, so the key being recorded isn't run.
+    private var pausedBy: Set<ObjectIdentifier> = []
 
-    /// Re-read settings and install or remove the monitor to match.
+    func setPaused(_ paused: Bool, by owner: AnyObject) {
+        if paused { pausedBy.insert(ObjectIdentifier(owner)) } else { pausedBy.remove(ObjectIdentifier(owner)) }
+    }
+
+    /// Re-read settings and install or remove the monitor to match. Call after settings change.
     func reload() {
         bindings = SessionCoordinator.shared.settings.paletteShortcuts.compactMap { id, raw in
             ParsedShortcut.parse(raw).map { ($0, id) }
@@ -44,12 +49,32 @@ final class PaletteShortcuts {
         reload()
     }
 
-    /// What else answers `shortcut` already: a menu item, or another palette action.
+    /// What else answers `shortcut` already: another palette action, the prefix key, a
+    /// no-prefix (`bind -n`) binding, or a menu item.
     func conflict(for shortcut: ParsedShortcut, excluding actionID: String) -> String? {
         if let other = bindings.first(where: { $0.shortcut == shortcut && $0.actionID != actionID }) {
             return CommandPaletteController.title(ofAction: other.actionID).map { "the palette action “\($0)”" }
         }
+        if let prefix = SessionCoordinator.shared.settings.effectivePrefixKey, ParsedShortcut.parse(prefix) == shortcut {
+            return "the prefix key"
+        }
+        if let root = KeybindingsService.shared.bindings(in: .root).first(where: { Self.rootSpec($0.spec, matches: shortcut) }) {
+            return "the no-prefix binding “\(root.note ?? root.command.shortDescription)”"
+        }
         return menuItem(matching: shortcut, in: NSApp.mainMenu).map { "the menu item “\($0)”" }
+    }
+
+    /// Root-table specs are built from the typed character, so Shift lives in the key (`C`,
+    /// `+`) rather than in the modifiers; compare on that footing.
+    private static func rootSpec(_ spec: KeySpec, matches shortcut: ParsedShortcut) -> Bool {
+        guard let key = ShortcutRecorderSerializer.canonicalKey(spec.key) else { return false }
+        var root = ParsedShortcut(spec: KeySpec(key: key, modifiers: spec.modifiers))
+        var chord = shortcut
+        if spec.key.count == 1, !ShortcutRecorderSerializer.isNamedKey(key) {
+            if spec.key != key { root.modifiers.insert(.shift) } // an uppercase letter
+            else if key.lowercased() == key.uppercased() { chord.modifiers.remove(.shift) } // a symbol
+        }
+        return root == chord
     }
 
     private func menuItem(matching shortcut: ParsedShortcut, in menu: NSMenu?) -> String? {
@@ -58,7 +83,8 @@ final class PaletteShortcuts {
                 // An uppercase key equivalent means Shift.
                 var modifiers = item.keyEquivalentModifierMask.intersection([.command, .control, .option, .shift])
                 if item.keyEquivalent != item.keyEquivalent.lowercased() { modifiers.insert(.shift) }
-                if item.keyEquivalent.lowercased() == shortcut.key, modifiers == shortcut.modifiers { return item.title }
+                if ShortcutRecorderSerializer.keyName(forCharacters: item.keyEquivalent.lowercased()) == shortcut.key,
+                   modifiers == shortcut.modifiers { return item.title }
             }
             if let title = menuItem(matching: shortcut, in: item.submenu) { return title }
         }
@@ -66,7 +92,7 @@ final class PaletteShortcuts {
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
-        guard !paused, let match = bindings.first(where: { $0.shortcut.matches(event) }) else { return event }
+        guard pausedBy.isEmpty, let match = bindings.first(where: { $0.shortcut.matches(event) }) else { return event }
         CommandPaletteController.run(actionID: match.actionID)
         return nil
     }
@@ -75,7 +101,7 @@ final class PaletteShortcuts {
 /// "Press the new shortcut for …": records one chord for a palette action. Escape cancels;
 /// Remove clears it. Warns before taking a chord something else uses.
 @MainActor
-final class ShortcutRecorderPanel: NSObject {
+final class ShortcutRecorderPanel: NSObject, NSWindowDelegate {
     private static var current: ShortcutRecorderPanel?
 
     static func present(actionID: String, title: String, over window: NSWindow?) {
@@ -97,6 +123,7 @@ final class ShortcutRecorderPanel: NSObject {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
+        panel.delegate = self
         let heading = NSTextField(labelWithString: "Shortcut for “\(title)”")
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
         chord.font = .systemFont(ofSize: 22, weight: .medium)
@@ -123,7 +150,8 @@ final class ShortcutRecorderPanel: NSObject {
             panel.center()
         }
         panel.makeKeyAndOrderFront(nil)
-        PaletteShortcuts.shared.paused = true
+        PaletteShortcuts.shared.setPaused(true, by: self)
+        PrefixKeymap.shared.setShortcutRecordingActive(true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.record(event) ?? event
         }
@@ -141,7 +169,7 @@ final class ShortcutRecorderPanel: NSObject {
         }
         let modifiers = KeyRecorderView.keyModifiers(from: event.modifierFlags)
         guard !modifiers.isDisjoint(with: [.command, .control, .option]),
-              let raw = ShortcutRecorderSerializer.serialize(raw: event.charactersIgnoringModifiers, modifiers: modifiers),
+              let raw = ShortcutRecorderSerializer.serialize(keyCode: event.keyCode, raw: event.charactersIgnoringModifiers, modifiers: modifiers),
               let parsed = ParsedShortcut.parse(raw)
         else {
             note.stringValue = "Use ⌘, ⌃, or ⌥ with a key, so typing isn't caught."
@@ -163,10 +191,18 @@ final class ShortcutRecorderPanel: NSObject {
         close()
     }
 
+    /// Clicking back into another window abandons the recording rather than leaving every
+    /// palette shortcut off behind a panel that's now out of sight.
+    func windowDidResignKey(_ notification: Notification) {
+        close()
+    }
+
     private func close() {
+        panel.delegate = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-        PaletteShortcuts.shared.paused = false
+        PaletteShortcuts.shared.setPaused(false, by: self)
+        PrefixKeymap.shared.setShortcutRecordingActive(false)
         panel.orderOut(nil)
         if Self.current === self { Self.current = nil }
     }

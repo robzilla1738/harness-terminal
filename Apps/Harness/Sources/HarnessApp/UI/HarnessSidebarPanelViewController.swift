@@ -84,13 +84,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         setupSessionList()
         reload()
         applyChromeColors()
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(reload),
-            name: NotificationBus.shared.snapshotChanged,
-            object: nil
-        )
+        // The window's split controller reloads this once per snapshot, after its context is current.
     }
 
     override func viewDidLayout() {
@@ -1572,7 +1566,8 @@ final class SidebarTabRowView: NSView {
         label.stringValue = TabChip.title(base: base, app: tab.programMark?.app)
         tile.apply(IconTileView.content(for: tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)))
         let activity = TabActivity.of(tab)
-        status.apply(selected && (activity == .working || activity == .done) ? .none : activity, tint: HarnessChrome.current.accent)
+        status.apply(selected && (activity == .working || activity == .done) ? .none : activity,
+                     tint: HarnessChrome.current.accent, progress: TabActivity.progress(of: tab))
         var parts = [label.stringValue]
         if let state = TabStatusView.label(activity) { parts.append(state) }
         setAccessibilityElement(true)

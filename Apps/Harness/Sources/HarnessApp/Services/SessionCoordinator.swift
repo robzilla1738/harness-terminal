@@ -122,6 +122,8 @@ final class SessionCoordinator: NSObject {
                 guard fresh != self.settings else { return }
                 self.settings = fresh
                 self.applySettingsToHosts()
+                // Palette shortcuts live in settings.json too (`harness-cli keymap` already reads them).
+                PaletteShortcuts.shared.reload()
                 // An external toggle of `secureKeyboardEntry` must re-sync the process-global
                 // secure-input lock, exactly as `setSecureKeyboardEntry` does — otherwise the
                 // lock can stay held after the setting is turned off via an editor / harness-cli.
@@ -200,6 +202,11 @@ final class SessionCoordinator: NSObject {
     private func endpoint(forSurface surfaceID: SurfaceID) -> Endpoint {
         guard !Self.surfaces(in: snapshot).contains(surfaceID) else { return activeEndpoint }
         return links.values.first { Self.surfaces(in: $0.snapshot).contains(surfaceID) }?.endpoint ?? activeEndpoint
+    }
+
+    /// Two panes on one machine: a pane can move next to the other (panes never cross daemons).
+    func sameMachine(_ a: SurfaceID, _ b: SurfaceID) -> Bool {
+        endpoint(forSurface: a) == endpoint(forSurface: b)
     }
 
     private static func surfaces(in snapshot: SessionSnapshot) -> Set<SurfaceID> {
@@ -478,7 +485,20 @@ final class SessionCoordinator: NSObject {
             noteDaemonError(error)
             return false
         }
+        applySnapshot(remote, metadataOnly: metadataOnly)
+        return true
+    }
+
+    /// Bumped by every applied snapshot, so an off-main fetch that started earlier can tell a
+    /// newer sync already landed and drop its (possibly older) answer.
+    private var appliedSnapshots = 0
+
+    private func applySnapshot(_ remote: SessionSnapshot, metadataOnly: Bool) {
         StartupMetrics.shared.mark(.firstSnapshot) // idempotent: records the first hydration only
+        appliedSnapshots += 1
+        // Nothing moved (the safety poll, a sync after an action that changed nothing): no
+        // window needs to hear about it.
+        if metadataOnly, remote == snapshot, lastRevision == remote.revision { return }
         let structureChanged = structureFingerprint(remote) != structureFingerprint(snapshot)
         // A CLI-driven theme change arrives by push (metadata-only), so it must force the
         // chrome path itself — recurring syncs otherwise never rebuild renderers.
@@ -502,9 +522,11 @@ final class SessionCoordinator: NSObject {
             pruneHosts()
         }
         pushAgentNotifications()
-        if !metadataOnly || themeChanged {
-            applyThemeToAllHosts()
-        }
+        // Hosts only need re-skinning when the theme moved (settings changes re-apply on their
+        // own path, and new hosts are themed when they're made). Options a command may have
+        // changed (synchronize-panes, the marked pane, profiles) still re-adopt on full syncs.
+        if themeChanged { updateChromeAndHosts() }
+        if !metadataOnly || themeChanged { adoptHostOptions() }
         updateDockBadge(from: remote)
         reflectRemoteActivePane()
         NotificationCenter.default.post(
@@ -513,11 +535,10 @@ final class SessionCoordinator: NSObject {
             userInfo: [
                 "revision": remote.revision,
                 "structureChanged": structureChanged,
-                "chromeChanged": !metadataOnly || themeChanged,
+                "chromeChanged": themeChanged,
                 "metadataOnly": metadataOnly,
             ]
         )
-        return true
     }
 
     /// Clean-quit reap of ephemeral (Plain-mode, unpinned) sessions. Best-effort but *reliable*: the
@@ -564,11 +585,10 @@ final class SessionCoordinator: NSObject {
         return hasher.finalize()
     }
 
-    private func applyThemeToAllHosts() {
-        updateChromeAndHosts()
-        // applyThemeToAllHosts is called after a full snapshot sync and needs to adopt
-        // any synchronize-panes changes that arrived with the snapshot, rebuild the sibling
-        // lists for input mirroring, and re-assert the marked-pane border.
+    /// After a full snapshot sync: adopt any synchronize-panes changes that arrived with the
+    /// snapshot, rebuild the sibling lists for input mirroring, and re-assert the marked-pane
+    /// border and per-pane profiles.
+    private func adoptHostOptions() {
         adoptSynchronizeOptions()
         refreshSyncSiblings()
         reassertMarkedPane()
@@ -929,8 +949,11 @@ final class SessionCoordinator: NSObject {
             settings.clearThemeColorOverrides()
             try? settings.save()
         }
+        let unchanged = snapshot.themeName == name
         requestDaemon(.setTheme(name: name))
         syncFromDaemon()
+        // Re-picking the current theme resets its colors: the sync alone doesn't re-skin.
+        if unchanged { applySettingsToHosts() }
     }
 
     /// Apply an imported `.harnesstheme` document. Custom themes aren't in the static catalog,
@@ -977,6 +1000,8 @@ final class SessionCoordinator: NSObject {
         try? settings.save()
         requestDaemon(.setTheme(name: document.name))
         syncFromDaemon()
+        // The document may carry new colors under the theme name already in use.
+        applySettingsToHosts()
     }
 
     func addWorkspace(name: String) {
@@ -1219,10 +1244,83 @@ final class SessionCoordinator: NSObject {
         host.toggleFind()
     }
 
+    func findInActivePane(forward: Bool) {
+        guard let surfaceID = activeSurfaceID, let host = terminalHosts.host(for: surfaceID) else { return }
+        if forward { host.findNext() } else { host.findPrevious() }
+    }
+
+    /// ⌘W: the focused pane when the tab is split, else the tab (or, for the last tab, its
+    /// session or window). Asks first only when something other than a shell is running.
+    func closeFocusedPaneOrTab() {
+        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
+        let leaves = tab.rootPane.allLeaves()
+        guard leaves.count > 1 else {
+            closeActiveTabWithConfirmation()
+            return
+        }
+        let leaf = leaves.first { $0.surfaceID == activeSurfaceID } ?? leaves.first { $0.id == tab.activePaneID } ?? leaves[0]
+        let identity = PaneIdentity.of(leaf: leaf, in: tab)
+        guard identity.isBusy else {
+            killPane(surfaceID: leaf.surfaceID)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Close this pane?"
+        alert.informativeText = "\(identity.agent?.displayName ?? identity.program ?? "A program") is still running in it."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Pane")
+        alert.addButton(withTitle: "Cancel")
+        let surfaceID = leaf.surfaceID
+        let apply: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.killPane(surfaceID: surfaceID) }
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window, completionHandler: apply)
+        } else {
+            apply(alert.runModal())
+        }
+    }
+
+    /// Spread the active tab's splits evenly: each divider sits where its panes get equal room
+    /// along its axis (three side-by-side panes get a third each).
+    func equalizeActiveSplits() {
+        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
+        func weight(_ node: PaneNode, along direction: SplitDirection) -> Double {
+            guard case let .branch(d, _, first, second) = node, d == direction else { return 1 }
+            return weight(first, along: direction) + weight(second, along: direction)
+        }
+        func firstLeaf(_ node: PaneNode) -> PaneID? {
+            switch node {
+            case let .leaf(leaf): return leaf.id
+            case let .branch(_, _, first, _): return firstLeaf(first)
+            }
+        }
+        var changed = false
+        func visit(_ node: PaneNode) {
+            guard case let .branch(direction, ratio, first, second) = node else { return }
+            let a = weight(first, along: direction), b = weight(second, along: direction)
+            let even = a / (a + b)
+            if abs(even - ratio) > 0.001, let firstID = firstLeaf(first), let secondID = firstLeaf(second) {
+                requestDaemon(.resizePaneRatio(tabID: tab.id, firstPaneID: firstID, secondPaneID: secondID, ratio: even))
+                changed = true
+            }
+            visit(first)
+            visit(second)
+        }
+        visit(tab.rootPane)
+        if changed { syncFromDaemon() }
+    }
+
     func closeActiveTabWithConfirmation() {
         guard let disposition = activeTabCloseDisposition(),
               let copy = closeConfirmationCopy(for: disposition)
         else { return }
+        // Nothing but shells at their prompts: close without asking.
+        if let tab = snapshot.activeWorkspace?.activeTab,
+           !tab.rootPane.allLeaves().contains(where: { PaneIdentity.of(leaf: $0, in: tab).isBusy }) {
+            performClose(disposition, closingWindow: NSApp.keyWindow)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = copy.message
         alert.informativeText = copy.informative
@@ -1408,13 +1506,15 @@ final class SessionCoordinator: NSObject {
         SurfaceShellTracker.shared.noteUserInteraction()
         // Refresh `window-style`/`pane-style` before the border toggle so each host has the
         // current base before it re-resolves active vs inactive on the focus change.
-        refreshPaneStyles()
+        // One read of options.json serves both.
+        let options = OptionStore()
+        refreshPaneStyles(options)
         let showBorder = surfaceID.map { paneCount(forSurface: $0) > 1 } ?? false
         for host in terminalHosts.allHosts() {
             host.showsActiveBorder = showBorder && host.surfaceID == surfaceID
         }
         // pane-border labels re-evaluate per host (active state just changed above).
-        refreshPaneBorders()
+        refreshPaneBorders(options)
         NotificationCenter.default.post(name: .harnessActiveSurfaceDidChange, object: self)
         // Push focus to the daemon (single source of truth) so other clients —
         // attach-window compositors, target-less CLI commands — agree on the active
@@ -1428,8 +1528,7 @@ final class SessionCoordinator: NSObject {
     /// `options.json`, so a CLI `set-option` lands without an app restart) and push the
     /// resolved set to every host. Each host dims itself when inactive via its own
     /// `showsActiveBorder`. Called on focus changes — the moment dimming matters.
-    func refreshPaneStyles() {
-        let opts = OptionStore()
+    func refreshPaneStyles(_ opts: OptionStore = OptionStore()) {
         func value(_ key: String) -> String { opts.get(key, scope: .global)?.stringValue ?? "" }
         let styles = PaneStyleSet(
             window: value("window-style"),
@@ -1446,8 +1545,7 @@ final class SessionCoordinator: NSObject {
 
     /// Evaluate `pane-border-format` per host and push the label (or hide it when
     /// `pane-border-status off`). Read fresh from the daemon-authored `options.json`.
-    func refreshPaneBorders() {
-        let opts = OptionStore()
+    func refreshPaneBorders(_ opts: OptionStore = OptionStore()) {
         let status = PaneBorderStatus(option: opts.get("pane-border-status", scope: .global)?.stringValue ?? "off")
         let atTop = status == .top
         let format = opts.get("pane-border-format", scope: .global)?.stringValue ?? ""
@@ -1810,8 +1908,31 @@ final class SessionCoordinator: NSObject {
         selectWorkspace(snapshot.workspaces[index].id)
     }
 
+    /// Rename the active tab in a sheet on its window. The name sticks: the program's own
+    /// title no longer replaces it.
     func beginRenameActiveTab() {
-        NotificationCenter.default.post(name: NotificationBus.shared.snapshotChanged, object: nil, userInfo: ["beginRenameActiveTab": true])
+        guard let tab = snapshot.activeWorkspace?.activeTab else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename Tab"
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(string: tab.title)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        field.placeholderString = "Tab name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        let tabID = tab.id
+        let apply: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard response == .alertFirstButtonReturn, !name.isEmpty, let self else { return }
+            self.requestDaemon(.renameTab(tabID: tabID, name: name))
+            self.syncFromDaemon(metadataOnly: true)
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window, completionHandler: apply)
+        } else {
+            apply(alert.runModal())
+        }
     }
 
     func reimportTerminalConfig() {
@@ -2148,15 +2269,44 @@ final class SessionCoordinator: NSObject {
         if snapshotSubscription != nil { snapshotResubscribeDelay = 1 }
     }
 
+    /// A pushed-revision fetch is in flight / another push landed while it was.
+    private var pushFetchInFlight = false
+    private var pushRefetch = false
+
     private func handlePushedRevision(_ revision: Int) {
         // Echo guard: our own mutations sync synchronously, so the push for a revision we
         // already hold must not trigger a second fetch.
         guard revision != lastRevision else { return }
-        // metadataOnly: a pushed revision must never rebuild every pane's renderer — the
-        // daemon commits at ~1.5 s cadence while an agent streams. Structure changes still
-        // remount (structureChanged is computed independently) and a CLI theme change still
-        // applies (themeChanged forces the chrome path inside syncFromDaemon).
-        syncFromDaemon(metadataOnly: true)
+        guard !pushFetchInFlight else {
+            pushRefetch = true
+            return
+        }
+        // Fetched off the main thread (a remote daemon answers over SSH). metadataOnly: a
+        // pushed revision never rebuilds every pane's renderer — the daemon commits often while
+        // an agent streams. Structure changes still remount (structureChanged is computed
+        // independently) and a CLI theme change still applies (themeChanged forces the chrome path).
+        pushFetchInFlight = true
+        pushRefetch = false
+        let service = daemon
+        let owner = activeOwner
+        let applied = appliedSnapshots
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fresh = try? service.fetchSnapshot()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.pushFetchInFlight = false
+                    // Another daemon became active, or a synchronous sync landed meanwhile (it is
+                    // at least as new): this answer is stale.
+                    if let fresh, owner == self.activeOwner, applied == self.appliedSnapshots {
+                        self.applySnapshot(fresh, metadataOnly: true)
+                    }
+                    if self.pushRefetch {
+                        self.pushRefetch = false
+                        self.syncFromDaemon(metadataOnly: true)
+                    }
+                }
+            }
+        }
     }
 
     /// The daemon went away (restart, backlog eviction, socket death): retry with capped

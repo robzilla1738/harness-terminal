@@ -13,6 +13,9 @@ public final class DaemonServer: @unchecked Sendable {
     private var listener: DispatchSourceRead?
     private let queue = DispatchQueue(label: "com.robert.harness.daemon")
     private var clientBuffers: [Int32: IPCReadBuffer] = [:]
+    /// `read(2)` destination reused by every `readClient` — reads all run on the serial `queue`,
+    /// so one buffer is never shared, and a fresh zero-filled 64 KiB per read was pure waste.
+    private var readScratch = [UInt8](repeating: 0, count: 65_536)
     private var clientSources: [Int32: DispatchSourceRead] = [:]
     /// Unsent reply bytes per client, flushed by a writable `DispatchSource` when the socket
     /// was full. Client FDs are non-blocking, so a slow/stuck client buffers here instead of
@@ -306,8 +309,8 @@ public final class DaemonServer: @unchecked Sendable {
     }
 
     private func readClient(fd: Int32, source: DispatchSourceRead) {
-        var buffer = [UInt8](repeating: 0, count: 65_536)
-        let count = read(fd, &buffer, buffer.count)
+        let capacity = readScratch.count
+        let count = read(fd, &readScratch, capacity)
         if count == 0 { source.cancel(); return } // EOF — peer closed
         if count < 0 {
             // Non-blocking fd: a transient EAGAIN/EINTR is not a disconnect.
@@ -315,9 +318,10 @@ public final class DaemonServer: @unchecked Sendable {
             source.cancel()
             return
         }
-        var data = clientBuffers[fd] ?? IPCReadBuffer()
-        data.append(buffer, count: count)
-        clientBuffers[fd] = data
+        // Take the buffer out of the map so the append mutates uniquely-owned storage instead of
+        // copy-on-writing the whole unconsumed backlog on every read.
+        var data = clientBuffers.removeValue(forKey: fd) ?? IPCReadBuffer()
+        data.append(readScratch, count: count)
 
         while true {
             let frame: IPCCodec.DecodedRequestFrame?
@@ -642,12 +646,9 @@ public final class DaemonServer: @unchecked Sendable {
     /// cap, and flush what the non-blocking socket takes now. The single owner of `writeBuffers`
     /// growth — both JSON replies and binary frames go through here.
     private func enqueue(_ data: Data, to fd: Int32) {
-        if var pending = writeBuffers[fd] {
-            pending.data.append(data) // amortized O(1) (Data grows by doubling)
-            writeBuffers[fd] = pending
-        } else {
-            writeBuffers[fd] = PendingWrite(data: data)
-        }
+        // Mutate in place through the subscript: copying the entry out would copy-on-write the
+        // whole backlog per frame (quadratic once a client falls behind).
+        writeBuffers[fd, default: PendingWrite(data: Data())].data.append(data) // amortized O(1)
         let backlog = writeBuffers[fd]?.remaining ?? 0
         // Read-only instrumentation of the peak backlog (the cap/flush/drop logic below is
         // unchanged); captured here so a client that's about to be dropped still registers its high.
@@ -667,8 +668,9 @@ public final class DaemonServer: @unchecked Sendable {
     /// `DispatchSource` finishes them later; a hard socket error drops the client. Runs on the
     /// serial queue, never blocks it.
     private func flushWrites(fd: Int32) {
-        guard var pending = writeBuffers[fd], pending.remaining > 0 else {
-            writeBuffers[fd] = nil
+        // Moved out of the map (not copied) so the compaction below mutates unique storage; every
+        // path re-inserts it or leaves it removed.
+        guard var pending = writeBuffers.removeValue(forKey: fd), pending.remaining > 0 else {
             suspendWriteSource(fd: fd)
             return
         }
@@ -687,7 +689,6 @@ public final class DaemonServer: @unchecked Sendable {
         pending.consumed = newConsumed
         switch outcome {
         case .complete:
-            writeBuffers[fd] = nil
             suspendWriteSource(fd: fd)
         case .wouldBlock:
             // Compact the consumed prefix in one batch once it dominates the buffer (≈O(1)
@@ -699,7 +700,6 @@ public final class DaemonServer: @unchecked Sendable {
             writeBuffers[fd] = pending
             ensureWriteSource(fd: fd) // resume when the socket drains
         case .failed:
-            writeBuffers[fd] = nil
             suspendWriteSource(fd: fd)
             clientSources[fd]?.cancel() // EPIPE / peer gone
         }
@@ -914,11 +914,13 @@ public final class DaemonServer: @unchecked Sendable {
     private func pushOwnership(_ surfaceID: String) {
         guard let size = sizeArbiter.effectiveSize(surfaceID) else { return }
         let owner = sizeArbiter.owner(of: surfaceID)
+        let responder = sizeArbiter.responder(of: surfaceID)
         for (fd, subscriptions) in outputSubscriptions where streamClients.contains(fd) && subscriptions.contains(where: { $0.surfaceID == surfaceID }) {
             let state = SizeOwnership(
                 surfaceID: surfaceID,
                 owner: sizeArbiter.mode == .smallest || owner == nil || owner == fd,
-                rows: size.rows, cols: size.cols, mode: sizeArbiter.mode, clientID: clients[fd]?.id
+                rows: size.rows, cols: size.cols, mode: sizeArbiter.mode, clientID: clients[fd]?.id,
+                responder: responder == nil || responder == fd
             )
             guard sentOwnership[fd]?[surfaceID] != state else { continue }
             sentOwnership[fd, default: [:]][surfaceID] = state

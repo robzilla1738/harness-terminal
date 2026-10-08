@@ -23,10 +23,25 @@ final class WindowContext {
     /// Whether this window speaks for the active daemon's active session: it's on the active
     /// daemon and it's key, or it's the only window (no key status yet, at launch or behind
     /// another app). A window not yet on screen keeps the session it was opened for.
+    /// While the app is in the background no window is key; the one that was key last keeps
+    /// following, so an outside `select-session` isn't undone when the app comes back.
     var followsActiveSession: Bool {
         guard owner == SessionCoordinator.shared.activeOwner else { return false }
         guard let window else { return sessionID == nil }
-        return window.isKeyWindow || WindowContexts.all.count <= 1
+        if window.isKeyWindow || WindowContexts.all.count <= 1 { return true }
+        return !NSApp.isActive && WindowContexts.lastKey === self
+    }
+
+    /// Whether this window shows `session`, or a session grouped with it: grouped sessions
+    /// share their panes, and a pane can only be in one window.
+    func shows(_ session: SessionID) -> Bool {
+        guard let sessionID else { return false }
+        if sessionID == session { return true }
+        let sessions = snapshot.workspaces.flatMap(\.sessions)
+        guard let mine = sessions.first(where: { $0.id == sessionID }),
+              let theirs = sessions.first(where: { $0.id == session })
+        else { return false }
+        return !Set(mine.tabs.map(\.id)).isDisjoint(with: theirs.tabs.map(\.id))
     }
 
     /// The latest snapshot of this window's daemon.
@@ -67,8 +82,13 @@ final class WindowContext {
         let snapshot = snapshot
         if followsActiveSession || (sessionID == nil && owner == coordinator.activeOwner),
            let active = snapshot.activeWorkspace?.activeSessionID {
-            // Never take a session another window is showing (it was just opened there).
-            if WindowContexts.all.contains(where: { $0 !== self && $0.sessionID == active }) {
+            // Never take a session another window is showing (it was just opened there, or
+            // a tab was just moved into it): that window comes forward instead, so the window
+            // in front still speaks for the active session.
+            if let other = WindowContexts.all.first(where: { $0 !== self && $0.shows(active) }) {
+                if let window, window.isKeyWindow, let otherWindow = other.window, other.sessionID != sessionID {
+                    DispatchQueue.main.async { otherWindow.makeKeyAndOrderFront(nil) }
+                }
                 return sessionID == nil || session != nil
             }
             sessionID = active
@@ -88,6 +108,9 @@ final class WindowContext {
 enum WindowContexts {
     private static var contexts: [WeakContext] = []
 
+    /// The window that was key most recently (it keeps following while the app is inactive).
+    static weak var lastKey: WindowContext?
+
     private struct WeakContext { weak var context: WindowContext? }
 
     static var all: [WindowContext] {
@@ -101,6 +124,14 @@ enum WindowContexts {
 
     /// The window already showing `session`, if any.
     static func window(showing session: SessionID) -> NSWindow? {
-        all.first { $0.sessionID == session && $0.window != nil }?.window
+        all.first { $0.window != nil && $0.shows(session) }?.window
+    }
+
+    /// The front-most Harness window under `point` (screen coordinates), by stacking order.
+    static func frontmost(at point: NSPoint, excluding excluded: NSWindow? = nil) -> WindowContext? {
+        for window in NSApp.orderedWindows where window !== excluded && window.isVisible && window.frame.contains(point) {
+            if let context = all.first(where: { $0.window === window }) { return context }
+        }
+        return nil
     }
 }

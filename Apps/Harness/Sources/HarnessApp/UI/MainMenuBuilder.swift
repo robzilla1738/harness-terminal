@@ -68,7 +68,12 @@ enum MainMenuBuilder {
         let newTabItem = NSMenuItem(title: "New Tab", action: #selector(MenuTarget.newTab), keyEquivalent: "t")
         newTabItem.target = MenuTarget.shared
         workspace.submenu?.addItem(newTabItem)
+        // ⌘W closes the focused pane first (Ghostty, iTerm); ⌥⌘W closes the whole tab.
+        let close = NSMenuItem(title: "Close", action: #selector(MenuTarget.closePaneOrTab), keyEquivalent: "w")
+        close.target = MenuTarget.shared
+        workspace.submenu?.addItem(close)
         let closeTab = NSMenuItem(title: "Close Tab", action: #selector(MenuTarget.closeTab), keyEquivalent: "w")
+        closeTab.keyEquivalentModifierMask = [.command, .option]
         closeTab.target = MenuTarget.shared
         workspace.submenu?.addItem(closeTab)
         let reopenTab = NSMenuItem(title: "Reopen Closed Tab", action: #selector(MenuTarget.reopenClosedTab), keyEquivalent: "T")
@@ -129,6 +134,34 @@ enum MainMenuBuilder {
         splitVItem.keyEquivalentModifierMask = [.command, .shift]
         splitVItem.target = MenuTarget.shared
         view.submenu?.addItem(splitVItem)
+        // Panes from the keyboard, without the prefix key.
+        let arrows: [(String, String, String)] = [
+            ("Select Pane Left", String(UnicodeScalar(NSLeftArrowFunctionKey)!), "left"),
+            ("Select Pane Right", String(UnicodeScalar(NSRightArrowFunctionKey)!), "right"),
+            ("Select Pane Above", String(UnicodeScalar(NSUpArrowFunctionKey)!), "up"),
+            ("Select Pane Below", String(UnicodeScalar(NSDownArrowFunctionKey)!), "down"),
+        ]
+        for (title, key, direction) in arrows {
+            let item = NSMenuItem(title: title, action: #selector(MenuTarget.selectPaneInDirection(_:)), keyEquivalent: key)
+            item.keyEquivalentModifierMask = [.command, .option]
+            item.representedObject = direction
+            item.target = MenuTarget.shared
+            view.submenu?.addItem(item)
+        }
+        let previousPane = NSMenuItem(title: "Previous Pane", action: #selector(MenuTarget.previousPane), keyEquivalent: "[")
+        previousPane.target = MenuTarget.shared
+        view.submenu?.addItem(previousPane)
+        let nextPane = NSMenuItem(title: "Next Pane", action: #selector(MenuTarget.nextPane), keyEquivalent: "]")
+        nextPane.target = MenuTarget.shared
+        view.submenu?.addItem(nextPane)
+        let zoomPane = NSMenuItem(title: "Zoom Pane", action: #selector(MenuTarget.zoomPane), keyEquivalent: "\r")
+        zoomPane.keyEquivalentModifierMask = [.command, .shift]
+        zoomPane.target = MenuTarget.shared
+        view.submenu?.addItem(zoomPane)
+        let equalize = NSMenuItem(title: "Equalize Splits", action: #selector(MenuTarget.equalizeSplits), keyEquivalent: "=")
+        equalize.keyEquivalentModifierMask = [.command, .control]
+        equalize.target = MenuTarget.shared
+        view.submenu?.addItem(equalize)
         view.submenu?.addItem(.separator())
         let detachItem = NSMenuItem(title: "Detach Pane", action: #selector(MenuTarget.detachPane), keyEquivalent: "")
         detachItem.target = MenuTarget.shared
@@ -152,6 +185,13 @@ enum MainMenuBuilder {
         findItem.keyEquivalentModifierMask = [.command]
         findItem.target = MenuTarget.shared
         view.submenu?.addItem(findItem)
+        let findNext = NSMenuItem(title: "Find Next", action: #selector(MenuTarget.findNext), keyEquivalent: "g")
+        findNext.target = MenuTarget.shared
+        view.submenu?.addItem(findNext)
+        let findPrevious = NSMenuItem(title: "Find Previous", action: #selector(MenuTarget.findPrevious), keyEquivalent: "G")
+        findPrevious.keyEquivalentModifierMask = [.command, .shift]
+        findPrevious.target = MenuTarget.shared
+        view.submenu?.addItem(findPrevious)
         let goToDirectory = NSMenuItem(title: "Go to Directory…", action: #selector(MenuTarget.goToDirectory), keyEquivalent: "g")
         goToDirectory.keyEquivalentModifierMask = [.command, .option]
         goToDirectory.target = MenuTarget.shared
@@ -470,6 +510,45 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         SessionCoordinator.shared.closeActiveTabWithConfirmation()
     }
 
+    @objc func findNext() {
+        SessionCoordinator.shared.findInActivePane(forward: true)
+    }
+
+    @objc func findPrevious() {
+        SessionCoordinator.shared.findInActivePane(forward: false)
+    }
+
+    @objc func closePaneOrTab() {
+        SessionCoordinator.shared.closeFocusedPaneOrTab()
+    }
+
+    @objc func selectPaneInDirection(_ sender: NSMenuItem) {
+        let target: Command.PaneTarget
+        switch sender.representedObject as? String {
+        case "left": target = .left
+        case "right": target = .right
+        case "up": target = .up
+        default: target = .down
+        }
+        MainExecutor.shared.executeSurfacingErrors(.selectPane(target: target))
+    }
+
+    @objc func previousPane() {
+        SessionCoordinator.shared.cycleActivePane(forward: false)
+    }
+
+    @objc func nextPane() {
+        SessionCoordinator.shared.cycleActivePane(forward: true)
+    }
+
+    @objc func zoomPane() {
+        SessionCoordinator.shared.zoomActivePane()
+    }
+
+    @objc func equalizeSplits() {
+        SessionCoordinator.shared.equalizeActiveSplits()
+    }
+
     @objc func reopenClosedTab() {
         SessionCoordinator.shared.reopenLastClosedTab()
     }
@@ -542,7 +621,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
 
     @objc func showShortcuts() {
-        PrefixCheatsheetWindow.shared.toggle()
+        KeyboardShortcutsWindow.shared.toggle()
     }
 
     @objc func commandPalette() {

@@ -27,6 +27,22 @@ final class ScrollbackFileTests: XCTestCase {
         HarnessPaths.scrollbackFileURL(forSurfaceID: id)
     }
 
+    /// The flush timer is armed once per batch (not re-armed per chunk) and still fires on its
+    /// own — including after a `reset()` cancelled the previously armed timer.
+    func testDebouncedFlushFiresWithoutExplicitFlushAfterReset() throws {
+        let fileURL = url()
+        let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        file.append(Data("stale".utf8))
+        file.reset() // cancels the armed timer
+        file.append(Data("one ".utf8))
+        file.append(Data("two".utf8))
+        let deadline = Date().addingTimeInterval(3)
+        while ScrollbackFile.loadTail(url: fileURL, maxBytes: 4096).isEmpty, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertEqual(String(decoding: ScrollbackFile.loadTail(url: fileURL, maxBytes: 4096), as: UTF8.self), "one two")
+    }
+
     func testAppendThenLoadTailRoundTrips() throws {
         let fileURL = url()
         let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)

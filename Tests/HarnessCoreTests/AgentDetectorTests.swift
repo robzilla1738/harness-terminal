@@ -32,12 +32,19 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
 
         AgentDetector.recordActivity(forSurfaceKey: surfaceKey)
-        _ = AgentDetector.scan(table: table, workingWindow: window)
+        // The idle → working edge is reported, even though `recordActivity` already flipped the
+        // stored snapshot to `.working` before the scan ran.
+        XCTAssertEqual(AgentDetector.scan(table: table, workingWindow: window)[surfaceKey]??.activity, .working)
         XCTAssertEqual(AgentDetector.snapshot(forSurfaceKey: surfaceKey)?.activity, .working)
         XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
 
+        // Steady streaming moves `lastActivityAt` but is not a change.
+        Thread.sleep(forTimeInterval: 0.05)
+        AgentDetector.recordActivity(forSurfaceKey: surfaceKey)
+        XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
+
         Thread.sleep(forTimeInterval: 1.2)
-        _ = AgentDetector.scan(table: table, workingWindow: window)
+        XCTAssertEqual(AgentDetector.scan(table: table, workingWindow: window)[surfaceKey]??.activity, .idle)
         XCTAssertEqual(AgentDetector.snapshot(forSurfaceKey: surfaceKey)?.activity, .idle)
         XCTAssertTrue(AgentDetector.scan(table: table, workingWindow: window).isEmpty)
     }

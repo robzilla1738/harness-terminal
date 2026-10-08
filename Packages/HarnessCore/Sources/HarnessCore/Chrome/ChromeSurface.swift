@@ -143,6 +143,14 @@ public struct PaneIdentity: Equatable, Sendable {
             agent: byCommand ?? (isActive ? tab.agent?.kind : nil)
         )
     }
+
+    /// Something other than a shell is running there (an editor, a build, an agent): closing
+    /// it should ask first. A shell at its prompt closes without asking.
+    public var isBusy: Bool {
+        if agent != nil { return true }
+        guard let program, !program.isEmpty else { return false }
+        return !SurfaceIdentity.isShell(program)
+    }
 }
 
 /// One identity line for tabs, sidebar rows, pane headers, and the session switcher.
@@ -198,7 +206,7 @@ public enum SurfaceIdentity {
             .contains(name.lowercased())
     }
 
-    private static func isShell(_ name: String) -> Bool {
+    public static func isShell(_ name: String) -> Bool {
         let base = (name as NSString).lastPathComponent.lowercased()
         return ["fish", "zsh", "bash", "sh", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"]
             .contains(base)

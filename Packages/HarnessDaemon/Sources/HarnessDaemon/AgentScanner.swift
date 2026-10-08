@@ -44,9 +44,11 @@ public final class AgentScanner: @unchecked Sendable {
         guard !scanInFlight else { return }
         scanInFlight = true
         defer { scanInFlight = false }
-        registry?.refreshSurfaceMetadata()
+        // One `pid → ppid` walk per tick, shared by the cwd probe and the agent scan.
+        let parents = ProcessScan.parentMap()
+        registry?.refreshSurfaceMetadata(parents: parents)
         let table = AgentTable.loadFromDisk()
-        let changes = AgentDetector.scan(table: table)
+        let changes = AgentDetector.scan(table: table, parents: parents)
         guard !changes.isEmpty, let registry else { return }
         registry.applyAgentChanges(changes)
     }

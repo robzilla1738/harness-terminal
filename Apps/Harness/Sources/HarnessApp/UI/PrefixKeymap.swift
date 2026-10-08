@@ -246,53 +246,59 @@ final class PrefixKeymap {
     }
 }
 
+/// A chord in the shared `ctrl-a` / `cmd--` / `opt-up` format (`ShortcutRecorderSerializer`),
+/// matched against key events: named keys (arrows, space, F-keys…) by key code, everything
+/// else by the event's characters.
 struct ParsedShortcut: Equatable {
     var modifiers: NSEvent.ModifierFlags
+    /// Canonical key: a lowercased character or a named key (`up`, `space`, `f5`).
     var key: String
 
     static let controlA = ParsedShortcut(modifiers: .control, key: "a")
 
     static func parse(_ raw: String) -> ParsedShortcut? {
-        let parts = raw.lowercased().split(separator: "-").map(String.init)
-        guard let last = parts.last else { return nil }
+        ShortcutRecorderSerializer.parse(raw).map(ParsedShortcut.init(spec:))
+    }
+
+    init(modifiers: NSEvent.ModifierFlags, key: String) {
+        self.modifiers = modifiers
+        self.key = key
+    }
+
+    init(spec: KeySpec) {
         var modifiers: NSEvent.ModifierFlags = []
-        for component in parts.dropLast() {
-            switch component {
-            case "ctrl", "control": modifiers.insert(.control)
-            case "cmd", "command": modifiers.insert(.command)
-            case "opt", "alt", "option": modifiers.insert(.option)
-            case "shift": modifiers.insert(.shift)
-            default: return nil
-            }
-        }
-        let key = ControlKeyNormalizer.normalizedKey(
-            from: last,
-            controlPressed: modifiers.contains(.control)
-        )
-        return ParsedShortcut(modifiers: modifiers, key: key)
+        if spec.modifiers.contains(.control) { modifiers.insert(.control) }
+        if spec.modifiers.contains(.option) { modifiers.insert(.option) }
+        if spec.modifiers.contains(.shift) { modifiers.insert(.shift) }
+        if spec.modifiers.contains(.command) { modifiers.insert(.command) }
+        self.init(modifiers: modifiers, key: spec.key)
+    }
+
+    var spec: KeySpec {
+        var mods: KeySpec.Modifiers = []
+        if modifiers.contains(.control) { mods.insert(.control) }
+        if modifiers.contains(.option) { mods.insert(.option) }
+        if modifiers.contains(.shift) { mods.insert(.shift) }
+        if modifiers.contains(.command) { mods.insert(.command) }
+        return KeySpec(key: key, modifiers: mods)
     }
 
     func matches(_ event: NSEvent) -> Bool {
+        // Mask out caps lock, fn and numeric-pad noise — only the four real modifiers count.
+        let actualModifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard actualModifiers == modifiers else { return false }
+        if ShortcutRecorderSerializer.isNamedKey(key) {
+            return ShortcutRecorderSerializer.namedKey(forKeyCode: event.keyCode) == key
+        }
         guard let raw = event.charactersIgnoringModifiers else { return false }
-        // Mask out caps lock + numeric noise — only the four real modifiers count.
-        let mask: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
-        let actualModifiers = event.modifierFlags.intersection(mask)
-        let chars = ControlKeyNormalizer.normalizedKey(
+        return ShortcutRecorderSerializer.keyName(forCharacters: ControlKeyNormalizer.normalizedKey(
             from: raw,
             controlPressed: actualModifiers.contains(.control)
-        ).lowercased()
-        return actualModifiers == modifiers && chars == key
+        )) == key
     }
 
-    /// Human-readable glyph form, e.g. `⌃A`, for the prefix indicator.
-    var displayString: String {
-        var glyphs = ""
-        if modifiers.contains(.control) { glyphs += "⌃" }
-        if modifiers.contains(.option) { glyphs += "⌥" }
-        if modifiers.contains(.shift) { glyphs += "⇧" }
-        if modifiers.contains(.command) { glyphs += "⌘" }
-        return glyphs + key.uppercased()
-    }
+    /// Human-readable glyph form, e.g. `⌃A`, `⌥↑`, for the prefix indicator and palette.
+    var displayString: String { ShortcutRecorderSerializer.glyphString(for: spec) }
 }
 
 @MainActor

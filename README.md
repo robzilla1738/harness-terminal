@@ -48,7 +48,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Every pane is an inset card with a header (identity, split-right / split-down; double-click to zoom), horizontal / vertical splits, and grouped sessions with shared window lists
 - Workspace Overview (`⌘⇧O`): every tab as a live tile, the ones waiting on you first; type to filter, arrows and ↩ to jump
 - Session layout persists across quits (daemon-owned, attach from the CLI or over SSH); if the daemon restarts under a pane, a quiet "Reconnecting…" chip rides the ~1-minute automatic backoff before the click-to-re-grab overlay takes over
-- Persistent scrollback: a pane's history is written to disk per surface and restored when the daemon restarts — set the scrollback limit to 0 for unlimited history (disk-capped only)
+- Persistent scrollback: a pane's history is written to disk per surface and restored when the daemon restarts — set the scrollback limit to 0 for effectively unlimited history (capped at 512 MiB per pane)
 - Remote & headless daemon: run `HarnessDaemon` on a headless or remote box (Linux included) and drive it with `harness-cli --host <name>` over your own SSH. Add Remote Host… needs only the SSH destination: it detects the daemon socket and tests the connection, and a dropped tunnel reconnects itself
 - `harness-cli` for automation and agent hooks: `run --wait -- make test` exits with the command's status, targets take names, positions, or ID fragments (`--surface 2`, `--tab logs`), and exit statuses are documented (3 = no such target, 4 = daemon unreachable)
 - Color/theme diagnostics from the CLI: `harness-cli color-check` and `harness-cli theme-preview --theme <name>` print deterministic SGR pages for eyeballing fidelity in Harness itself
@@ -144,17 +144,25 @@ Per-agent setup lives in [docs/agent-hooks/README.md](docs/agent-hooks/README.md
 | New window | `Cmd+N` |
 | New tab | `Cmd+T` |
 | New session | `Cmd+Shift+N` |
-| Close tab | `Cmd+W` |
+| Close pane (the tab when it's the only pane) / close tab | `Cmd+W` / `Option+Cmd+W` |
 | Split horizontal / vertical | `Cmd+D` / `Cmd+Shift+D` |
+| Select pane by direction | `Option+Cmd+Arrow` |
+| Previous / next pane | `Cmd+[` / `Cmd+]` |
+| Zoom pane / equalize splits | `Shift+Cmd+Return` / `Ctrl+Cmd+=` |
 | Switch to tab 1–9 | `Cmd+1` … `Cmd+9` |
 | Previous / next tab | `Cmd+Shift+[` / `Cmd+Shift+]` |
 | Jump to waiting agent | `Cmd+Shift+U` |
-| Tab peek | `Ctrl+Cmd+P` |
+| Tab peek / Workspace Overview | `Ctrl+Cmd+P` / `Cmd+Shift+O` |
+| Switch session | `Ctrl+Cmd+S` |
+| Find / next / previous | `Cmd+F` / `Cmd+G` / `Cmd+Shift+G` |
+| Reopen closed tab | `Cmd+Shift+T` |
+| Go to directory | `Option+Cmd+G` |
+| Every shortcut, searchable | `Cmd+/` |
 | Command palette | `Cmd+K` |
 | Settings | `Cmd+,` |
 | Toggle sidebar | `Cmd+\` |
 
-The command prefix (default `Ctrl-A`) adds the full pane / session keymap on top — press prefix then `?` for the cheatsheet.
+The command prefix (default `Ctrl-A`, on in the Full preset) adds the full tmux-style pane / session keymap on top — press prefix then `?` for its cheatsheet.
 
 ## Build from source
 

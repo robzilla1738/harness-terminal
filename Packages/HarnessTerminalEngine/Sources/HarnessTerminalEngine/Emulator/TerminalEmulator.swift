@@ -787,32 +787,35 @@ public final class TerminalEmulator: VTParserHandler {
     private func deleteKittyImages(_ command: KittyGraphicsCommand) {
         let target = command.deleteTarget
         let (row, col) = (command.y - 1, command.x - 1)
-        let removed: Set<Int>
+        // The images a target names by id rather than by where they sit: their virtual placements
+        // go too, and uppercase forgets them even when nothing was placed.
+        let named: (Int) -> Bool
         switch Character(target.lowercased()) {
-        case "i": removed = current.deleteImages { command.imageID != 0 && $0.kittyID == command.imageID }
+        case "a": named = { _ in true }
+        case "i": named = { command.imageID != 0 && $0 == command.imageID }
         case "n":
             let id = kittyNumbers[command.imageNumber]
-            removed = current.deleteImages { id != nil && $0.kittyID == id }
+            named = { $0 == id }
+        case "r": named = { $0 >= command.x && $0 <= command.y }
+        default: named = { _ in false }
+        }
+        let removed: Set<Int>
+        switch Character(target.lowercased()) {
+        case "i", "n", "r": removed = current.deleteImages { $0.kittyID.map(named) ?? false }
         case "c": removed = current.deleteImages { $0.covers(row: self.current.cursorRow, col: self.current.cursorCol) }
         case "p": removed = current.deleteImages { $0.covers(row: row, col: col) }
         case "q": removed = current.deleteImages { $0.covers(row: row, col: col) && $0.z == command.z }
         case "x": removed = current.deleteImages { col >= $0.col && col < $0.col + $0.cols }
         case "y": removed = current.deleteImages { row >= $0.row && row < $0.row + $0.rows }
         case "z": removed = current.deleteImages { $0.z == command.z }
-        case "r": removed = current.deleteImages { ($0.kittyID ?? 0) >= command.x && ($0.kittyID ?? 0) <= command.y }
         default: removed = current.deleteImages { _ in true }
         }
-        // Virtual placements go with the images they name (all of them for `a`).
-        switch Character(target.lowercased()) {
-        case "a": kittyVirtuals.removeAll()
-        case "i" where command.imageID != 0: kittyVirtuals[command.imageID] = nil
-        case "n": if let id = kittyNumbers[command.imageNumber] { kittyVirtuals[id] = nil }
-        default: break
-        }
+        let virtualCount = kittyVirtuals.count
+        kittyVirtuals = kittyVirtuals.filter { !named($0.key) }
+        if kittyVirtuals.count != virtualCount { current.markAllDirty() }
         guard target.isUppercase else { return }
-        let forget = Character(target.lowercased()) == "a" ? nil : removed.union(command.imageID != 0 ? [command.imageID] : [])
         kittyTransmitted.removeAll { entry in
-            guard forget?.contains(entry.id) ?? true else { return false }
+            guard named(entry.id) || removed.contains(entry.id) else { return false }
             kittyTransmittedBytes -= entry.image.byteCount
             return true
         }

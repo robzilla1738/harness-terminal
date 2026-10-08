@@ -123,8 +123,14 @@ final class TerminalTabBarView: NSView {
         return orderedPills.first { !$0.isHidden && $0.frame.contains(point) }
     }
 
+    /// A pane from a window on another machine can't land here: panes never cross daemons.
+    private func acceptsPane(_ surface: SurfaceID) -> Bool {
+        guard let here = tabs.first?.rootPane.allSurfaceIDs().first else { return true }
+        return SessionCoordinator.shared.sameMachine(surface, here)
+    }
+
     private func trackPaneDrag(_ info: NSDraggingInfo) -> NSDragOperation {
-        guard PaneDrag.surfaceID(in: info) != nil else { return [] }
+        guard let surface = PaneDrag.surfaceID(in: info), acceptsPane(surface) else { return [] }
         let hovered = pill(at: info)?.tabID
         if hovered != dropHoverTab {
             dropHoverWork?.cancel()
@@ -150,7 +156,7 @@ final class TerminalTabBarView: NSView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         defer { endPaneDrag() }
-        guard let surface = PaneDrag.surfaceID(in: sender) else { return false }
+        guard let surface = PaneDrag.surfaceID(in: sender), acceptsPane(surface) else { return false }
         delegate?.tabBarDidReceivePane(surface, onTab: pill(at: sender)?.tabID)
         return true
     }
@@ -582,6 +588,7 @@ private final class TabPillView: NSView {
     /// Whether this tab is pinned to survive a clean quit — drives the context-menu checkmark.
     private var isPersistent = false
     private var activity: TabActivity = .none
+    private var progress: Int?
 
     // Drag detection.
     private var mouseDownLocation: NSPoint?
@@ -704,6 +711,7 @@ private final class TabPillView: NSView {
         iconTile.apply(IconTileView.content(for: tabAgentKind(for: tab)))
         setPersistentIndicator(tab.persistent)
         activity = TabActivity.of(tab)
+        progress = TabActivity.progress(of: tab)
         setAccessibilityLabel(Self.accessibilityLabel(tab))
         applyChrome(isActive: isActive)
     }
@@ -866,6 +874,7 @@ private final class TabPillView: NSView {
         iconTile.apply(IconTileView.content(for: tabAgentKind(for: tab)))
         setPersistentIndicator(tab.persistent)
         activity = TabActivity.of(tab)
+        progress = TabActivity.progress(of: tab)
         setAccessibilityLabel(Self.accessibilityLabel(tab))
         applyChrome(isActive: isActive)
     }
@@ -947,7 +956,7 @@ private final class TabPillView: NSView {
         iconTile.applyChrome()
         // The active tab is in front of you; it only flags something that needs you.
         let shown: TabActivity = isActive && (activity == .working || activity == .done) ? .none : activity
-        statusView.apply(shown, tint: c.accent)
+        statusView.apply(shown, tint: c.accent, progress: progress)
         statusWidth.constant = shown == .none ? 0 : Self.statusSide
         statusGap.constant = shown == .none ? 0 : -HarnessDesign.Spacing.sm
         closeButton.contentTintColor = c.textTertiary

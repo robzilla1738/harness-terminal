@@ -84,6 +84,8 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
     private var items: [SwitcherItem] = []
     private var sessions: [SwitcherSession] = []
     private var currentID: String?
+    /// Each session's most urgent tab mark (needs you, error, done, working), on any machine.
+    private var statuses: [String: TabActivity] = [:]
     private var selectedIndex: Int?
     /// The session being renamed in the filter field (⌘R or a right-click), else nil.
     private var renaming: SwitcherSession?
@@ -188,6 +190,14 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
         let here = RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID
         let hereTitle = here == DaemonSidebar.localID ? "This Mac" : here
         currentID = workspace?.activeSessionID?.uuidString
+        statuses = [:]
+        let urgency: [TabActivity] = [.blocked, .error, .done, .working]
+        for owner in coordinator.connectedOwners {
+            for session in coordinator.snapshot(for: owner).workspaces.flatMap(\.sessions) {
+                let marks = Set(session.tabs.map(TabActivity.of))
+                statuses[session.id.uuidString] = urgency.first(where: marks.contains) ?? TabActivity.none
+            }
+        }
         var list = (workspace?.sessions ?? []).map { session in
             SwitcherSession(id: session.id.uuidString, title: workspace.map { SessionDisplayName.title(of: session, in: $0) } ?? session.name, owner: here, ownerTitle: hereTitle)
         }
@@ -226,7 +236,8 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
                 view = SwitcherSeparatorView()
             case let .row(row, owner):
                 height = rowHeight
-                let rowView = SwitcherRowView(row: row, symbol: Self.symbol(for: row.id, isSession: owner != nil), selected: index == selectedIndex)
+                let rowView = SwitcherRowView(row: row, symbol: Self.symbol(for: row.id, isSession: owner != nil),
+                                              selected: index == selectedIndex, status: statuses[row.id] ?? .none)
                 rowView.onHover = { [weak self] in self?.select(index) }
                 rowView.onClick = { [weak self] in self?.activate(index) }
                 rowView.onRename = { [weak self] in
@@ -385,10 +396,11 @@ private final class SwitcherRowView: NSView {
     private let label = NSTextField(labelWithString: "")
     private let shortcut = NSTextField(labelWithString: "")
     private let icon = NSImageView()
+    private let status = TabStatusView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
     private var selected: Bool
     private let isCurrent: Bool
 
-    init(row: ChromeMenuRow, symbol: String?, selected: Bool) {
+    init(row: ChromeMenuRow, symbol: String?, selected: Bool, status activity: TabActivity = .none) {
         self.selected = selected
         isCurrent = row.current
         super.init(frame: .zero)
@@ -410,7 +422,8 @@ private final class SwitcherRowView: NSView {
         shortcut.font = HarnessDesign.Typography.sidebarLabel
         shortcut.alignment = .right
         shortcut.setContentCompressionResistancePriority(.required, for: .horizontal)
-        for view in [check, icon, label, shortcut] {
+        status.apply(activity, tint: HarnessChrome.current.accent)
+        for view in [check, icon, label, status, shortcut] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -424,13 +437,18 @@ private final class SwitcherRowView: NSView {
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: HarnessDesign.Spacing.sm),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: shortcut.leadingAnchor, constant: -HarnessDesign.Spacing.md),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: status.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
+            status.trailingAnchor.constraint(equalTo: shortcut.leadingAnchor, constant: -HarnessDesign.Spacing.sm),
+            status.centerYAnchor.constraint(equalTo: centerYAnchor),
+            status.widthAnchor.constraint(equalToConstant: activity == .none ? 0 : 12),
+            status.heightAnchor.constraint(equalToConstant: 12),
             shortcut.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -leading),
             shortcut.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel(row.current ? "\(row.title), current session" : row.title)
+        let state = TabStatusView.label(activity).map { ", \($0)" } ?? ""
+        setAccessibilityLabel((row.current ? "\(row.title), current session" : row.title) + state)
         applyColors()
     }
 

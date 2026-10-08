@@ -370,10 +370,23 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             return .ok
         case let .moveTab(tabID, toSessionID, index):
+            let source = editor.snapshot.workspaces.flatMap(\.sessions).first { $0.tabs.contains { $0.id == tabID } }
+            // Moving a session's only tab dissolves it: capture its hook context first, as a close does.
+            let closedContext = source?.tabs.count == 1
+                ? buildFormatContext(surfaceKey: source?.tabs.first?.rootPane.allSurfaceIDs().first?.uuidString)
+                : nil
             guard let session = editor.moveTab(tabID, toSessionID: toSessionID, index: index) else {
-                return .error("Cannot move that tab (not found, or shared with a grouped session)")
+                return .error("Cannot move that tab (not found, or shared with or into a grouped session)")
             }
+            let dissolved = source.map { source in
+                !editor.snapshot.workspaces.contains { $0.sessions.contains { $0.id == source.id } }
+            } ?? false
+            if dissolved, let source { environmentStore.clearSession(source.id.uuidString) }
+            // A workspace emptied by the move gets a fresh session, which needs its shell.
+            ensureAllSnapshotSurfaces()
             commit()
+            if dissolved, let closedContext { fireHookLocked(.sessionClosed, context: closedContext) }
+            if toSessionID == nil, session != source?.id { fireHookLocked(.sessionCreated) }
             return .sessionID(session)
         case let .reorderTab(workspaceID, tabID, toIndex):
             guard editor.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex) else {
@@ -658,7 +671,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
             commit()
             return .ok
         case let .resizePane(paneID, direction, amount):
-            guard editor.resizePane(paneID, direction: direction, amount: amount) else {
+            let live = sessions
+            guard editor.resizePane(paneID, direction: direction, amount: amount, size: { live[$0.uuidString]?.currentSize() }) else {
                 return .error("Pane not found")
             }
             commit()
@@ -1167,7 +1181,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
             .agent?.activity.rawValue
     }
 
-    public func refreshSurfaceMetadata() {
+    /// `parents` is the scan tick's shared `ProcessScan.parentMap()` (the agent scan reuses it);
+    /// without one, a single map is built here for every surface.
+    public func refreshSurfaceMetadata(parents: [Int32: Int32]? = nil) {
         // `currentWorkingDirectory()` runs `ProcessScan.livePIDs()` (a `proc_listpids` of EVERY
         // system PID) per surface — measured 6.2ms@10 panes / 11.7ms@20 — and was previously
         // computed while holding `lock`, blocking ALL IPC (keystroke `sendData`, snapshots) for
@@ -1177,6 +1193,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
         lock.lock()
         let snap = Array(sessions)  // [(key, RealPty)] — strong refs keep PTYs alive off-lock
         lock.unlock()
+        guard !snap.isEmpty else { return }
+        let parents = parents ?? ProcessScan.parentMap()
 
         // Off-lock: walk every surface's process tree without contending with IPC. Keep the
         // exact `session` instance alongside its probed cwd so the re-acquire below can confirm
@@ -1184,7 +1202,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         // the cwd was computed for so a respawn during the probe (same RealPty, new child) can't
         // commit the OLD child's cwd for the NEW one.
         let probed: [(key: String, session: RealPty, uuid: UUID, pid: pid_t, cwd: String, command: String?)] = snap.compactMap { key, session in
-            guard let uuid = UUID(uuidString: key), let result = session.probeWorkingDirectory() else {
+            guard let uuid = UUID(uuidString: key), let result = session.probeWorkingDirectory(parents: parents) else {
                 return nil
             }
             // Foreground command rides the same probe cycle (one extra ioctl + name lookup).
@@ -1613,8 +1631,18 @@ public final class SurfaceRegistry: @unchecked Sendable {
         guard let match = editor.tab(forSurfaceKey: surfaceID),
               editor.tabIsCurrent(workspaceID: match.workspaceID, tabID: match.tabID) else { return }
         monitorLock.lock()
-        guard monitors[surfaceID] != nil else { monitorLock.unlock(); return }
+        guard let status = monitors[surfaceID]?.programStatus else { monitorLock.unlock(); return }
         let previous = monitors[surfaceID]?.lastPresentation
+        // Runs per keystroke under the registry lock. With no records and no real report the
+        // publish below decides "no mark, no status, no banner", so it is a no-op unless the tab
+        // still carries a mark (e.g. restored from disk) that it would clear. Skip it otherwise.
+        if status.records.isEmpty, !status.acceptedRealReport,
+           editor.snapshot.workspaces.first(where: { $0.id == match.workspaceID })?
+               .sessions.flatMap(\.tabs).first(where: { $0.id == match.tabID })?.programMark == nil
+        {
+            monitorLock.unlock()
+            return
+        }
         let lastNotified = monitors[surfaceID]?.lastNotifiedAt
         monitors[surfaceID]?.programStatus.acknowledgeVisible()
         let book = monitors[surfaceID]?.programStatus ?? ProgramStatusBook()

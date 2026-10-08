@@ -60,6 +60,10 @@ public struct TerminalGridCell: Equatable, Sendable {
     public var strikethrough: Bool
     public var overline: Bool
     public var width: TerminalCellWidth
+    /// A third mark, kept only on a Kitty image placeholder cell, where it is the image id's high
+    /// byte (`KittyPlaceholders`). Those marks are all in the BMP, so 16 bits fit them, in what
+    /// would otherwise be padding before `hyperlinkID`. 0 = none. Not part of `cluster`.
+    public var placeholderMark: UInt16
     /// OSC 8 hyperlink id (0 = none). Resolved to a URL via `TerminalEmulator.hyperlinkURL(id:)`.
     /// Survives SGR reset (it's not a pen attribute) — only OSC 8 changes it.
     public var hyperlinkID: UInt32
@@ -81,6 +85,7 @@ public struct TerminalGridCell: Equatable, Sendable {
         strikethrough: Bool = false,
         overline: Bool = false,
         width: TerminalCellWidth = .normal,
+        placeholderMark: UInt16 = 0,
         hyperlinkID: UInt32 = 0
     ) {
         self.codepoint = codepoint
@@ -99,6 +104,7 @@ public struct TerminalGridCell: Equatable, Sendable {
         self.strikethrough = strikethrough
         self.overline = overline
         self.width = width
+        self.placeholderMark = placeholderMark
         self.hyperlinkID = hyperlinkID
     }
 
@@ -120,10 +126,15 @@ public struct TerminalGridCell: Equatable, Sendable {
     /// Stack a combining (width-0) scalar onto this cell's grapheme. Returns `false` if both
     /// inline slots are full (>2 marks): the MVP drops the excess. A Thai syllable never needs
     /// more than two, so this only loses coverage for emoji ZWJ / deep Indic (a Phase 3 concern).
+    /// A Kitty image placeholder keeps a third mark in `placeholderMark`.
     @discardableResult
     public mutating func appendCombining(_ scalar: UInt32) -> Bool {
         if combining0 == 0 { combining0 = scalar; return true }
         if combining1 == 0 { combining1 = scalar; return true }
+        if codepoint == KittyPlaceholders.character, placeholderMark == 0, scalar <= 0xFFFF {
+            placeholderMark = UInt16(scalar)
+            return true
+        }
         return false
     }
 }

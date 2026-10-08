@@ -130,7 +130,9 @@ extension SurfaceRegistry {
     @discardableResult
     func noteSurfaceOutput(surfaceKey: String, data: Data) -> Data? {
         monitorLock.lock()
-        var m = monitors[surfaceKey] ?? SurfaceMonitor()
+        // Moved out (not copied) so mutating its scanner/status containers doesn't copy-on-write
+        // them per chunk; re-inserted below before the lock drops.
+        var m = monitors.removeValue(forKey: surfaceKey) ?? SurfaceMonitor()
         m.sawOutput = true
         m.lastOutput = Date()
         // Parser-aware bell: a raw `data.contains(0x07)` mistakes the OSC-terminator BEL that shell

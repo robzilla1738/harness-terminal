@@ -255,6 +255,7 @@
 		92C279BDB914554A462FEDAE /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDDF46E038BBABC664D2CB1A /* MenuBarController.swift */; };
 		935E07FA27015FDA59C248B3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D745FE112DC4440236DABA22 /* Assets.xcassets */; };
 		9381321CBE76633A2FD7A46C /* ScrollbackFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 135BA5816F037C2624D17443 /* ScrollbackFileTests.swift */; };
+		93B83C2214333B47CBCEB4E0 /* KeyboardShortcutsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D0F256CBDC4814FB9CE1DA0 /* KeyboardShortcutsWindow.swift */; };
 		943AD084AA6FBB7491B4F789 /* TargetSpecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 198091B7F721046BA174F52D /* TargetSpecTests.swift */; };
 		95ADF9B271EEF36CA231A195 /* erased_gap_wrapped__12x5__to__13x5.golden in Resources */ = {isa = PBXBuildFile; fileRef = BC65420154DE5A8F5B25FA60 /* erased_gap_wrapped__12x5__to__13x5.golden */; };
 		969DF05AF1093B44B62120CD /* TerminalTabBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB39A88BC9BC722B53472CB4 /* TerminalTabBarView.swift */; };
@@ -531,6 +532,7 @@
 		3B8FC0FD6D5ABED5380D45C5 /* GitHEADReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHEADReaderTests.swift; sourceTree = "<group>"; };
 		3B96E6248BC7810AA9E168EB /* FluidityBenchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidityBenchmarks.swift; sourceTree = "<group>"; };
 		3BAD54046F4C80A9A61D33AC /* HarnessAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessAPITests.swift; sourceTree = "<group>"; };
+		3D0F256CBDC4814FB9CE1DA0 /* KeyboardShortcutsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcutsWindow.swift; sourceTree = "<group>"; };
 		3E18DFB7649906F46802FE40 /* RemoteSocketDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSocketDetectorTests.swift; sourceTree = "<group>"; };
 		3FEB6A1125BED162AF834697 /* QuickTerminalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickTerminalController.swift; sourceTree = "<group>"; };
 		405DBFEE8FED9A0BA41A3F5D /* RemoteHostsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHostsService.swift; sourceTree = "<group>"; };
@@ -1039,6 +1041,7 @@
 				E904CB45A4390E27C46DA0BA /* HarnessSidebarPanelViewController.swift */,
 				F2D0040632889D6C4FA624B3 /* IconTileView.swift */,
 				20228E44A7837E2A0080928C /* KeyablePanel.swift */,
+				3D0F256CBDC4814FB9CE1DA0 /* KeyboardShortcutsWindow.swift */,
 				48EBC3C7A2C25776245FBF88 /* MainMenuBuilder.swift */,
 				828CC6240A158B83682E2A30 /* MainSplitViewController.swift */,
 				D798A050D3824B4FEA80EA3A /* MainWindowController.swift */,
@@ -2113,6 +2116,7 @@
 				A51A188E5E8ECAED8981811C /* KeyRecorderView.swift in Sources */,
 				2C8E828A2434ED6760C63ED7 /* KeyablePanel.swift in Sources */,
 				41E1858FBC7BF6CBB35D113B /* KeybindingsService.swift in Sources */,
+				93B83C2214333B47CBCEB4E0 /* KeyboardShortcutsWindow.swift in Sources */,
 				462BFDEBB8E6FFEFF10D6894 /* MainExecutor.swift in Sources */,
 				A284F16041A5DCFDB4AD94F4 /* MainMenuBuilder.swift in Sources */,
 				65F2B3A9B42810F01F1D7E85 /* MainSplitViewController.swift in Sources */,

@@ -11,12 +11,10 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     /// session; anywhere else it becomes a session of its own in a new window there.
     func tabBarDidTearOff(tabID: TabID, at screenPoint: NSPoint) {
         let coordinator = SessionCoordinator.shared
-        let owner = context.owner
-        let target = WindowContexts.all.first { context in
-            guard context.owner == owner, let window = context.window, window !== view.window, window.isVisible else { return false }
-            return window.frame.contains(screenPoint)
-        }
-        if let target, let session = target.sessionID {
+        let target = WindowContexts.frontmost(at: screenPoint)
+        // Let go over its own window: the tab stays.
+        if target === context { return }
+        if let target, target.owner == context.owner, let session = target.sessionID {
             if coordinator.moveTab(tabID, toSession: session) != nil { target.window?.makeKeyAndOrderFront(nil) }
             return
         }
@@ -128,12 +126,6 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         ])
         applyTabRowConstraints()
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(snapshotChanged(_:)),
-            name: NotificationBus.shared.snapshotChanged,
-            object: nil
-        )
         installCopySelectionToast()
         reloadTabBar()
     }
@@ -169,15 +161,20 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         reloadIfNeeded(force: force)
     }
 
-    @objc private func snapshotChanged(_ note: Notification) {
-        let structureChanged = note.userInfo?["structureChanged"] as? Bool ?? true
-        let metadataOnly = note.userInfo?["metadataOnly"] as? Bool ?? false
+    /// The window's split controller calls this once per snapshot, after its context is
+    /// current. Panes remount only when this window's own layout changed (the structure key),
+    /// so a change in another window or on another machine leaves them alone.
+    func snapshotChanged(structureChanged: Bool, metadataOnly: Bool) {
         if metadataOnly && !structureChanged {
             refreshTabBarMetadata()
+            // A layout or ratio set elsewhere (`select-layout`, `rotate-window`, `resize-pane`)
+            // keeps the same panes, so it arrives as metadata: the structure key (cheap to
+            // build) remounts on a new arrangement and moves dividers in place otherwise.
+            reloadIfNeeded(force: false)
             return
         }
         reloadTabBar()
-        reloadIfNeeded(force: structureChanged)
+        reloadIfNeeded(force: false)
     }
 
     func reloadTabBar() {
@@ -284,9 +281,11 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
         let density = "\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)|\(tabRowHidden)"
-        let key = "\(coordinator.structureRevision)|\(density)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
+        let key = "\(density)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
         guard force || key != lastStructureKey else {
-            // No per-pane chrome work needed on the fast path (structure unchanged).
+            // Same layout: only a ratio set elsewhere (`resize-pane`, Equalize Splits) can
+            // differ, and it moves the dividers in place.
+            paneContainer?.applyRatios(from: displayNode)
             return
         }
         // Only a pane added to or removed from the tab on screen animates; switching tabs or
@@ -592,6 +591,28 @@ final class PaneContainerView: NSView {
         }
     }
 
+    /// Move dividers whose ratio changed outside this window, without a remount. A split
+    /// being dragged, or with its own drag still saving, is left alone.
+    func applyRatios(from node: PaneNode) {
+        var wanted: [String: Double] = [:]
+        func collect(_ node: PaneNode) {
+            guard case let .branch(_, ratio, first, second) = node else { return }
+            if let a = firstLeafID(first), let b = firstLeafID(second) { wanted["\(a)|\(b)"] = ratio }
+            collect(first)
+            collect(second)
+        }
+        collect(node)
+        guard NSEvent.pressedMouseButtons == 0 else { return }
+        func visit(_ view: NSView) {
+            if let split = view as? HarnessSplitView, !split.isSavingRatio,
+               let a = split.firstPaneID, let b = split.secondPaneID, let ratio = wanted["\(a)|\(b)"] {
+                split.adopt(ratio: CGFloat(ratio))
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(self)
+    }
+
     /// Representative leaf of a subtree (its first leaf in traversal order). Paired
     /// across both children, it uniquely identifies a branch for ratio persistence.
     private func firstLeafID(_ node: PaneNode) -> PaneID? {
@@ -649,7 +670,9 @@ final class PaneIslandView: NSView {
     private var dropHighlight: PaneDropHighlightView?
 
     private func dropZone(_ info: NSDraggingInfo) -> PaneDropZone? {
-        guard let source = PaneDrag.surfaceID(in: info), source != surfaceID else { return nil }
+        guard let source = PaneDrag.surfaceID(in: info), source != surfaceID,
+              SessionCoordinator.shared.sameMachine(source, surfaceID)
+        else { return nil }
         return PaneDropZone.at(convert(info.draggingLocation, from: nil), in: bounds)
     }
 
@@ -754,6 +777,20 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
     private var ratioDebounce: DispatchWorkItem?
     private var tiling = false
 
+    /// A drag's ratio is on its way to the daemon: the snapshot may still hold the old one.
+    var isSavingRatio: Bool { ratioDebounce != nil }
+
+    /// Move the divider to `ratio` when it's visibly elsewhere.
+    func adopt(ratio: CGFloat) {
+        guard subviews.count >= 2 else { return }
+        let length = isVertical ? bounds.width : bounds.height
+        guard length > 50 else { return }
+        let current = (isVertical ? subviews[0].frame.width : subviews[0].frame.height) / length
+        guard abs(current - ratio) > 0.01 else { return }
+        preferredRatio = ratio
+        setPosition(length * ratio, ofDividerAt: 0)
+    }
+
     override var dividerColor: NSColor { .clear }
 
     /// AppKit can leave a 0-pt divider's panes at their fitting size, which shows
@@ -834,8 +871,9 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
         let ratio = Double(firstSize / total)
         // Coalesce the stream of drag events into one write after the drag settles.
         ratioDebounce?.cancel()
-        let work = DispatchWorkItem {
+        let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
+                self?.ratioDebounce = nil
                 SessionCoordinator.shared.setSplitRatio(
                     tabID: tabID,
                     firstPaneID: firstPaneID,

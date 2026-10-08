@@ -268,14 +268,18 @@ public struct SizeOwnership: Codable, Equatable, Sendable {
     public var mode: SurfaceSizeMode
     /// This connection's client id, for `takeSurface(clientID:)` from another socket.
     public var clientID: UUID?
+    /// This client answers the program's terminal queries (DA, DSR, Kitty acks): exactly one
+    /// client per pane does, in either mode. Absent from older daemons: fall back to `owner`.
+    public var responder: Bool?
 
-    public init(surfaceID: String, owner: Bool, rows: UInt16, cols: UInt16, mode: SurfaceSizeMode, clientID: UUID?) {
+    public init(surfaceID: String, owner: Bool, rows: UInt16, cols: UInt16, mode: SurfaceSizeMode, clientID: UUID?, responder: Bool? = nil) {
         self.surfaceID = surfaceID
         self.owner = owner
         self.rows = rows
         self.cols = cols
         self.mode = mode
         self.clientID = clientID
+        self.responder = responder
     }
 }
 

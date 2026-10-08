@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appearanceObservation: NSKeyValueObservation?
     private var externalOpenReady = false
     private var contextClickMonitor: Any?
+    /// Each window's notification observers, removed when it closes.
+    private var windowObservers: [ObjectIdentifier: [NSObjectProtocol]] = [:]
     private var queuedExternalOpens: [QueuedExternalOpen] = []
 
     private struct QueuedExternalOpen {
@@ -157,21 +159,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setFrameTopLeftPoint(window.cascadeTopLeft(from: NSPoint(x: key.frame.minX, y: key.frame.maxY)))
         }
         windowControllers.append(controller)
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self, weak controller] _ in
-            MainActor.assumeIsolated {
-                self?.windowControllers.removeAll { $0 === controller }
-                self?.saveWindows()
+        let center = NotificationCenter.default
+        var observers = [NSWindow.didMoveNotification, NSWindow.didEndLiveResizeNotification].map { name in
+            center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.saveWindows() }
             }
         }
+        observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self, weak controller] _ in
+            MainActor.assumeIsolated {
+                self?.windowControllers.removeAll { $0 === controller }
+                self?.windowObservers.removeValue(forKey: ObjectIdentifier(window))?.forEach(center.removeObserver(_:))
+                self?.saveWindows()
+            }
+        })
+        windowObservers[ObjectIdentifier(window)] = observers
         controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
         // Becoming key does this too; a window that opens behind another app isn't key yet.
         if session != nil { SessionCoordinator.shared.activate(owner: owner, selecting: session) }
-        for name in [NSWindow.didMoveNotification, NSWindow.didEndLiveResizeNotification] {
-            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.saveWindows() }
-            }
-        }
         saveWindows()
         return window
     }

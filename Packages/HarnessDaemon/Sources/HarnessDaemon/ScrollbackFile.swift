@@ -154,7 +154,8 @@ final class ScrollbackFile: @unchecked Sendable {
     }
 
     /// Queue a chunk of output for persistence. Cheap on the caller (the PTY read loop): append
-    /// to the pending buffer and (re)arm the debounce. The actual disk write happens on `queue`.
+    /// to the pending buffer and arm the flush timer if none is pending. The actual disk write
+    /// happens on `queue`.
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
         queue.async { [weak self] in
@@ -164,8 +165,6 @@ final class ScrollbackFile: @unchecked Sendable {
             // synchronously rather than re-arming the debounce (which a gapless stream would
             // otherwise never let fire). Normal bursts stay batched off the hot path.
             if self.pending.count >= self.maxPendingBytes {
-                self.pendingFlush?.cancel()
-                self.pendingFlush = nil
                 self.flushPending()
             } else {
                 self.scheduleFlush()
@@ -174,10 +173,12 @@ final class ScrollbackFile: @unchecked Sendable {
     }
 
     private func scheduleFlush() {
-        pendingFlush?.cancel()
+        // One timer per batch: a live (not cancelled) flush already covers these bytes, so don't
+        // cancel and re-arm a work item for every PTY chunk. `reset`/`setSuspended` cancel without
+        // clearing it, hence the `isCancelled` check.
+        if let pendingFlush, !pendingFlush.isCancelled { return }
         // Anchor the max-wait ceiling at the first byte of this batch, then never schedule
-        // later than it — so a continuous trickle that keeps re-arming still flushes within
-        // `maxFlushDelay` instead of being deferred forever.
+        // later than it, so a batch always flushes within `maxFlushDelay`.
         let ceiling = flushDeadline ?? (.now() + maxFlushDelay)
         flushDeadline = ceiling
         let deadline = min(DispatchTime.now() + debounceInterval, ceiling)
@@ -241,8 +242,10 @@ final class ScrollbackFile: @unchecked Sendable {
     // MARK: - queue-confined
 
     private func flushPending() {
-        // The batch is being drained (or there's nothing to drain) — re-anchor the max-wait
-        // window so the next byte starts a fresh ceiling.
+        // The batch is being drained (or there's nothing to drain) — drop its timer and re-anchor
+        // the max-wait window so the next byte arms a fresh one.
+        pendingFlush?.cancel()
+        pendingFlush = nil
         flushDeadline = nil
         guard !closed, !pending.isEmpty else { return }
         let chunk = pending

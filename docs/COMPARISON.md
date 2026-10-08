@@ -12,7 +12,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | Resume after a dropped connection | Yes: by daemon epoch and byte sequence, sending only what was missed. A restarted daemon or evicted bytes resync. | Yes |
 | Per-client viewports | Each client scrolls on its own. | Same |
 | Multi-client sizing | `smallest` (tmux) or `owner`; non-owners reflow locally, see "Viewing at C×R · Take", and can take the size. | Owner/advisory sizing, take, local reflow (designed) |
-| Only one client answers terminal queries | The size owner. | Same |
+| Only one client answers terminal queries | Yes, in both size modes: the size owner, or in `smallest` mode the most recent client to size the pane. | Same |
 | Read-only watching | `attach --read-only`; Copy Watch Command in the app. | Built in from the start (stated) |
 | Idle cost | A pane quiet for a minute has its history held LZ4-compressed; reads decompress a copy. | LZ4 online grid compression, encrypted snapshots |
 | Evented PTY I/O | Reads and writes: a pane frozen with Ctrl-S holds a buffer, not a thread. | Yes |
@@ -45,7 +45,8 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | VoiceOver | Tabs, panes, focus announcements. | VoiceOver in SuperSplit |
 | Kitty graphics | Direct, file, temp-file, and shared-memory transmission; place-many; every delete target; Unicode placeholders (images that live in text, so they survive tmux and editors). Not yet: animation. | 100% (libghostty) |
 | Kitty keyboard, OSC 52 | Yes; clipboard reads opt-in (`allow-clipboard-read`). | Yes |
-| Rebind from the palette | Right-click any action ▸ Change Shortcut…; conflicts with menu items and other actions are flagged. | — |
+| Rebind from the palette | Right-click any action or menu command ▸ Change Shortcut…; conflicts with menu items, other actions, the prefix, and key tables are flagged. ⌘/ lists every key. | — |
+| Panes without learning a prefix | ⌘D splits, ⌥⌘arrows move, ⌘[ ⌘] cycle, ⇧⌘↩ zooms, ⌃⌘= equalizes, ⌘W closes the pane. | The pitch: "the multiplexer you don't have to learn" |
 
 ## Remote
 

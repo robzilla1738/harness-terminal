@@ -136,6 +136,12 @@ public struct SurfaceSizeArbiter: Equatable, Sendable {
 
     public func owner(of surface: String) -> Int32? { owners[surface] }
 
+    /// The one client that answers terminal queries: the owner, or in `smallest` mode (where
+    /// every client sizes) the most recent voter. Two answers to one DA query confuse programs.
+    public func responder(of surface: String) -> Int32? {
+        mode == .owner ? owners[surface] : mostRecentClient(surface)
+    }
+
     /// Whether `client`'s resize may change the PTY. `smallest` lets every voter
     /// contribute. In `owner` mode an existing owner is the only claim; the first
     /// voter claims when nobody owns the surface yet.

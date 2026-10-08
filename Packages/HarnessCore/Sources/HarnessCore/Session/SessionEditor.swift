@@ -186,9 +186,12 @@ public struct SessionEditor: Sendable {
 
     /// Move a tab into another session at `index` (default: the end), or with `toSessionID`
     /// nil into a new session of its own in the same workspace (a tab torn off into a window).
-    /// Moving a session's only tab elsewhere dissolves that session; tearing it off is a no-op
-    /// that returns its own session. Tabs shared with grouped sessions don't move. Returns the
-    /// session the tab is now in, focused on it.
+    /// Moving a session's only tab elsewhere dissolves that session (a workspace's last session
+    /// is replaced by a fresh one, as in `closeSession`); tearing it off is a no-op that returns
+    /// its own session. Tabs don't cross group boundaries: a tab shared with grouped sessions
+    /// doesn't move, and a grouped session (one with live peers) accepts no tabs — the same
+    /// refusal `joinPane` applies to lone grouped tabs. Returns the session the tab is now in,
+    /// focused on it.
     @discardableResult
     public mutating func moveTab(_ tabID: TabID, toSessionID: SessionID?, index: Int? = nil) -> SessionID? {
         guard let source = tabIndex(tabID: tabID), groupCounterparts(of: tabID).isEmpty else { return nil }
@@ -198,7 +201,7 @@ public struct SessionEditor: Sendable {
             return reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: index ?? sourceSession.tabs.count - 1) ? sourceSession.id : nil
         }
         if toSessionID == nil, sourceSession.tabs.count == 1 { return sourceSession.id }
-        if let toSessionID, sessionIndex(sessionID: toSessionID) == nil { return nil }
+        if let toSessionID, sessionIndex(sessionID: toSessionID) == nil || !groupPeers(of: toSessionID).isEmpty { return nil }
 
         var session = sourceSession
         let tab = session.tabs.remove(at: source.tabIndex)
@@ -207,6 +210,7 @@ public struct SessionEditor: Sendable {
             snapshot.workspaces[workspaceIndex].sessions.remove(at: source.sessionIndex)
         } else {
             if session.activeTabID == tabID { session.activeTabID = session.tabs[min(source.tabIndex, session.tabs.count - 1)].id }
+            if session.lastActiveTabID == tabID || session.lastActiveTabID == session.activeTabID { session.lastActiveTabID = nil }
             snapshot.workspaces[workspaceIndex].sessions[source.sessionIndex] = session
         }
 
@@ -214,8 +218,7 @@ public struct SessionEditor: Sendable {
         if let toSessionID, let destination = sessionIndex(sessionID: toSessionID) {
             var target = snapshot.workspaces[destination.workspaceIndex].sessions[destination.sessionIndex]
             target.tabs.insert(tab, at: max(0, min(target.tabs.count, index ?? target.tabs.count)))
-            target.lastActiveTabID = target.activeTabID
-            target.activeTabID = tab.id
+            target.setActiveTab(tab.id)
             snapshot.workspaces[destination.workspaceIndex].sessions[destination.sessionIndex] = target
             snapshot.workspaces[destination.workspaceIndex].activeSessionID = toSessionID
             destinationID = toSessionID
@@ -229,9 +232,13 @@ public struct SessionEditor: Sendable {
             snapshot.workspaces[workspaceIndex].activeSessionID = created.id
             destinationID = created.id
         }
+        // Only a move into another workspace can empty this one; keep it valid like closeSession.
+        if snapshot.workspaces[workspaceIndex].sessions.isEmpty {
+            snapshot.workspaces[workspaceIndex].sessions = [SessionGroup(sortOrder: 0)]
+        }
         let workspace = snapshot.workspaces[workspaceIndex]
         if !workspace.sessions.contains(where: { $0.id == workspace.activeSessionID }) {
-            snapshot.workspaces[workspaceIndex].activeSessionID = workspace.sessions.first?.id
+            snapshot.workspaces[workspaceIndex].activeSessionID = workspace.sessions[min(source.sessionIndex, workspace.sessions.count - 1)].id
         }
         bumpRevision()
         return destinationID
@@ -830,19 +837,23 @@ public struct SessionEditor: Sendable {
         return false
     }
 
-    public mutating func resizePane(_ paneID: PaneID, direction: ResizeDirection, amount: Int) -> Bool {
+    /// tmux `resize-pane -L/-R/-U/-D N`: move the pane's nearest divider on that axis N cells
+    /// that way (the same divider whichever side of it the pane is on). `size` gives each
+    /// pane's grid so N is in cells; without it, a step is 5% of the split.
+    public mutating func resizePane(
+        _ paneID: PaneID,
+        direction: ResizeDirection,
+        amount: Int,
+        size: ((SurfaceID) -> (rows: Int, cols: Int)?)? = nil
+    ) -> Bool {
         for workspaceIndex in snapshot.workspaces.indices {
             for sessionIndex in snapshot.workspaces[workspaceIndex].sessions.indices {
                 for tabIndex in snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs.indices {
                     var tab = snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex]
                     guard tab.rootPane.allPaneIDs().contains(paneID) else { continue }
-                    let delta = CGFloat(amount) * 0.05
-                    let signed: CGFloat
-                    switch direction {
-                    case .left, .up: signed = -delta
-                    case .right, .down: signed = delta
-                    }
-                    _ = adjustRatio(&tab.rootPane, target: paneID, delta: signed)
+                    let axis: SplitDirection = direction == .left || direction == .right ? .horizontal : .vertical
+                    let sign: Double = direction == .left || direction == .up ? -1 : 1
+                    _ = moveDivider(&tab.rootPane, target: paneID, axis: axis, cells: Double(amount) * sign, size: size)
                     snapshot.workspaces[workspaceIndex].sessions[sessionIndex].tabs[tabIndex] = tab
                     bumpRevision()
                     return true
