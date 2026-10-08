@@ -6,11 +6,12 @@
 extension ReleaseNotes {
     public static let current = ReleaseNotes(
         version: "1.13.0",
-        changelogDigest: "ada11a763f9a5cff",
+        changelogDigest: "3051cef1cc2d654e",
         sections: [
             Section(title: "Added", items: [
                 "Several machines at once",
                 "Multiple windows",
+                "Notifications replace the notch",
                 "Kitty graphics animation",
                 "Live Overview and peek thumbnails",
                 "Panes from the keyboard, no prefix needed",
@@ -30,6 +31,10 @@ extension ReleaseNotes {
             ]),
             Section(title: "Changed", items: [
                 "Reattaching paints the screen first",
+                "Every pane paints at once when the app comes back",
+                "Settings, polished",
+                "A first-run tour that's about Harness",
+                "Thumbnails cost almost nothing",
                 "Faster everywhere it counts",
                 "Workspace Overview is a live grid",
                 "Idle panes cost a fraction of their scrollback",
@@ -46,7 +51,7 @@ extension ReleaseNotes {
                 "Title-bar tabs, reworked",
                 "Every comfortable pane is an inset card with a header",
                 "Panes keep their own cwd and command",
-                "Navy is the default look",
+                "Harness Navy",
                 "One radius scale",
                 "Fresh installs start in Persistent mode",
                 "One chrome surface",
