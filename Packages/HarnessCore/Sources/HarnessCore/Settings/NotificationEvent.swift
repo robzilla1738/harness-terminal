@@ -9,11 +9,14 @@ import Foundation
 /// `rawValue` is the persisted key in `HarnessSettings.notificationEvents`, so the spellings
 /// below are part of the on-disk format — don't rename them without a migration.
 public enum NotificationEvent: String, CaseIterable, Codable, Sendable {
-    /// An agent asked for approval or is otherwise waiting on the user (the explicit
-    /// `harness-cli notify` path and tabs that transition to `.waiting`).
+    /// An agent or program is blocked on the user: an OSC 7501 `blocked` report, the explicit
+    /// `harness-cli notify` path, or a program's own desktop-notification request.
     case agentWaiting
-    /// A detected agent stopped producing output (the working → idle/awaiting edge).
+    /// Work finished: an OSC 7501 `done` report, or a detected agent going quiet (the
+    /// working → idle/awaiting edge).
     case agentFinished
+    /// A program reported an error (OSC 7501 `error`).
+    case failed
     /// A program rang the terminal bell (`\a`).
     case bell
     /// A foreground command that ran past `commandFinishedThresholdSeconds` finished in a
@@ -23,28 +26,30 @@ public enum NotificationEvent: String, CaseIterable, Codable, Sendable {
     /// Settings-row label.
     public var title: String {
         switch self {
-        case .agentWaiting: return "Agent needs input"
-        case .agentFinished: return "Agent finished"
-        case .bell: return "Terminal bell"
-        case .commandFinished: return "Command finished"
+        case .agentWaiting: return "Needs you"
+        case .agentFinished: return "Finished"
+        case .failed: return "Failed"
+        case .bell: return "Bell"
+        case .commandFinished: return "Long command finished"
         }
     }
 
     /// Settings-row hint shown under the label.
     public var detail: String {
         switch self {
-        case .agentWaiting: return "When an agent asks for approval or is waiting on you."
-        case .agentFinished: return "When a detected agent stops producing output."
-        case .bell: return "When a program rings the terminal bell."
-        case .commandFinished: return "When a long command finishes in a background pane."
+        case .agentWaiting: return "An agent or program is waiting for your input or approval."
+        case .agentFinished: return "An agent stops working, or a program reports it's done."
+        case .failed: return "A program reports an error."
+        case .bell: return "A program rings the terminal bell."
+        case .commandFinished: return "A command that ran longer than the threshold finishes."
         }
     }
 
-    /// Default when the user hasn't made an explicit choice. Mirrors the pre-existing
-    /// behavior: agent/bell events were on by default; command-finished was opt-in.
+    /// Default when the user hasn't made an explicit choice. Agent, failure, and bell events
+    /// are on; command-finished is opt-in.
     public var defaultEnabled: Bool {
         switch self {
-        case .agentWaiting, .agentFinished, .bell: return true
+        case .agentWaiting, .agentFinished, .failed, .bell: return true
         case .commandFinished: return false
         }
     }

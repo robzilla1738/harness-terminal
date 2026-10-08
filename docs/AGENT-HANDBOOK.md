@@ -230,8 +230,7 @@ harness/
 │       ├── Settings/              # SettingsViewController, KeyRecorderView, LiveTerminalPreview
 │       └── UI/                    # MainSplit, sidebar, tabs, PrefixKeymap, CommandPrompt,
 │                                  # CopyMode, StatusLine, notifications, CommandPalette, Chrome,
-│                                  # DisplayPanesOverlay, AboutPanelController, HarnessControls,
-│                                  # Notch/ (Agent Notch HUD)
+│                                  # DisplayPanesOverlay, AboutPanelController, HarnessControls
 ├── Packages/
 │   ├── CHarnessSys/               # C ioctl shim (variadic PTY sizing on Linux)
 │   ├── CHarnessBase64/            # Strict OSC 52 base64. Images stay on Foundation
@@ -475,9 +474,7 @@ harness-cli notify --surface "$HARNESS_SURFACE" --body "Approval required"
 
 Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.json`): `after-new-tab`, `after-new-session`, `after-kill-tab`, `after-split-pane`, `after-kill-pane`, `after-resize-pane`, `pane-exited`, `client-attached`, `client-detached`, `agent-state-changed`, `notification-posted` (full list in [docs/COMMANDS.md](docs/COMMANDS.md)).
 
-**UI:** `SessionCardRowView`, `TabPillView`, **`AgentChipView`** in sidebar/session rows when agent kind is detected or inferred (static chip, not activity-gated), `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated per-event by `notificationEvents` then by `systemNotificationsEnabled`, and presented even in-foreground via `DesktopNotifier`'s `ForegroundPresenter` (`UNUserNotificationCenterDelegate`).
-
-**Agent Notch HUD:** `NotchPanelController` + `AgentNotchRootView` (`UI/Notch/`) show at-a-glance agent rows on Macs with a notch; data from `AgentNotchProjection` in `HarnessCore/Notch/`. Click a row → `SessionCoordinator` focuses that session/tab.
+**UI:** `SessionCardRowView`, `TabPillView`, **`AgentChipView`** in sidebar/session rows when agent kind is detected or inferred (static chip, not activity-gated), `NotificationBellButton` / `NotificationDropdownPanelView`, `Cmd+Shift+U` jump to notification (skips still-`working` agents). OS banners gated per-event by `notificationEvents` then by `systemNotificationsEnabled`, and presented even in-foreground via `DesktopNotifier`'s `ForegroundPresenter` (`UNUserNotificationCenterDelegate`). Notifications are the attention channel: a program's own OSC 7501 `blocked`/`done`/`error` report becomes a banner through `ProgramStatusAlerts` (HarnessCore), detector edges through `pushAgentActivityNotifications`; both skip the pane you're looking at, and several alerts in one snapshot share one banner.
 
 **Quick terminal (v1.9):** `QuickTerminalController` — a Quake-style dropdown panel on a global hotkey (`quickTerminalEnabled`/`quickTerminalHotkey` settings); slides over the frontmost app, hosts a normal daemon-owned session, hides on focus loss. **Bell feedback (v1.9):** `terminalHostDidRingBell` → `BellFeedback` (audible/visual per `bellMode`), tab badge for background bells, bridged to tmux `visual-bell`/`bell-action` options.
 
@@ -516,7 +513,6 @@ Per-agent guides: [docs/agent-hooks/](docs/agent-hooks/). Daemon hooks (`hooks.j
 | Copy mode | `HarnessCopyMode`, `TerminalHostView` / `HarnessTerminalSurfaceView` | Shared reducer over engine grids; vim/emacs tables; yank to pasteboard + buffer |
 | Status line | `StatusLineView` | `OptionStore` + `FormatString` |
 | Notifications | `NotificationBellButton`, `NotificationDropdownPanelView` | Waiting-tab badge + dropdown |
-| Agent Notch HUD | `NotchPanelController`, `AgentNotchViewModel`, `AgentNotchRootView` | macOS notch overlay; `AgentNotchProjection` in HarnessCore |
 | Title strip | `WindowTitleStripView` | Draggable strip above the tab bar (30 pt); shows active tab's `folder · basename` (Ghostty-style); hidden while an agent owns the pane; traffic-light leading inset slides in via `setLeadingInset` when sidebar collapses; hosted by `ContentAreaViewController` |
 | Window edge border | `WindowBorderOverlayView` | Click-through hairline overlay on the window's inner edge; color/opacity from `windowBorderHex` / `windowBorderOpacity` settings; auto-hidden in fullscreen |
 | Scrollbar | `TerminalScrollbarView` | Transient auto-hide overlay scrollbar in `TerminalHostView`; purely decorative (click-through, no track chrome); shares debounced-fade timing with `ResizeHUDView` |
@@ -574,7 +570,7 @@ launchctl kickstart -k gui/$(id -u)/com.robert.harness.daemon
 
 App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The launchd plist points at the build it was installed from (often DerivedData Debug); `make release` users run `harness-cli install` once to repoint it at the release bundle, else the old binary keeps running.
 
-**HarnessCoreTests:** `SessionEditor`, `SessionEditorPhase4`, `IPCCodec`, `KeyTokenParser`, `KeyTable`, `FormatString`, `CommandParser`, `CommandIPCTranslator`, `PasteBufferStore`, `LaunchAgentInstaller`, `HarnessSettings`, `AgentDetector`, `AgentNotchProjectionTests`, `DaemonClient`, `HarnessPaths`, `TerminalConfigImporter`, `PaneRectSolver`, `JSONMerge`, `AgentHookInstaller`, `ShellIntegration`, `EnvironmentStore`, targeting, options, alerts, and tmux migration.
+**HarnessCoreTests:** `SessionEditor`, `SessionEditorPhase4`, `IPCCodec`, `KeyTokenParser`, `KeyTable`, `FormatString`, `CommandParser`, `CommandIPCTranslator`, `PasteBufferStore`, `LaunchAgentInstaller`, `HarnessSettings`, `AgentDetector`, `ProgramStatusAlertsTests`, `DaemonClient`, `HarnessPaths`, `TerminalConfigImporter`, `PaneRectSolver`, `JSONMerge`, `AgentHookInstaller`, `ShellIntegration`, `EnvironmentStore`, targeting, options, alerts, and tmux migration.
 
 **HarnessDaemonTests:** `SurfaceRegistry`, `ShellLaunchProfile`, `ScrollbackFileTests`, `DaemonRoundTrip`, `RealPtyLifecycle` (`DaemonRoundTrip` and `RealPtyLifecycle` opt-in via `HARNESS_LIVE_DAEMON_TESTS=1`).
 

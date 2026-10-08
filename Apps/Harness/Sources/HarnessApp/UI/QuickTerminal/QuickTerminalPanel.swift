@@ -1,7 +1,7 @@
 import AppKit
 
 /// The Quake-style dropdown window: borderless, floats above everything, and joins all Spaces.
-/// Unlike `NotchPanel`, it **can become key** so the hosted terminal surface receives keystrokes.
+/// It **can become key** so the hosted terminal surface receives keystrokes.
 @MainActor
 final class QuickTerminalPanel: NSPanel {
     init(contentRect: NSRect) {

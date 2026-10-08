@@ -2,7 +2,7 @@ import Foundation
 
 /// The one order for "what needs me": an explicit request (a hook or `notify` asking for you)
 /// → blocked (an agent or program waiting on you) → error → done and unseen → working → idle,
-/// ties broken by the most recent activity. The notch, the menu-bar agent
+/// ties broken by the most recent activity. Notifications, the menu-bar agent
 /// list, the Dock badge, and the overview all ask here so they never disagree.
 public enum AttentionRank: Int, Comparable, Sendable {
     case idle = 0

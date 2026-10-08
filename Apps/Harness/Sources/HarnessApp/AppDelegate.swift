@@ -8,7 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Every open window; each shows one session (see `WindowContext`).
     private var windowControllers: [MainWindowController] = []
     private var menuBarController: MenuBarController?
-    private var notchController: NotchPanelController?
     private var terminalServicesProvider: TerminalServicesProvider?
     /// Observes the macOS system appearance so auto light/dark theme switching can follow it.
     private var appearanceObservation: NSKeyValueObservation?
@@ -44,8 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Menu-bar status item: workspaces + active agents, read from the daemon
         // (shell-agnostic). Lives for the app's lifetime.
         menuBarController = MenuBarController()
-        notchController = NotchPanelController.shared
-        notchController?.start()
         PrefixKeymap.shared.install()
         installContextClickFocus()
         PaletteShortcuts.shared.reload()

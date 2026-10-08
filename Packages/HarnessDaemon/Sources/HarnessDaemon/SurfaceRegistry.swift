@@ -2230,7 +2230,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
         if keep {
             // The retained dead pane must not keep live-looking metadata: the detector was just
             // unregistered, so no later scanner pass can emit a nil change for this surface —
-            // without these clears, list-agents/the notch/tab chips keep showing the old agent
+            // without these clears, list-agents/notifications/tab chips keep showing the old agent
             // and any waiting-notification on a dead pane until respawn.
             editor.setAgent(nil, forSurfaceKey: surfaceID)
             if let sid = UUID(uuidString: surfaceID) {

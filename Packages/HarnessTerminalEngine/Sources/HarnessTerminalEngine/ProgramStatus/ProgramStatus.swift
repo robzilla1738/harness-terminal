@@ -375,7 +375,7 @@ public struct ProgramStatusPresentation: Equatable, Sendable {
     public var joinsWaitingQueue: Bool { mark == .blocked }
 }
 
-/// One decision for the tab, the session row, the notch, and the waiting queue.
+/// One decision for the tab, the session row, notifications, and the waiting queue.
 public enum ProgramStatusPresenter {
     public static func decide(
         book: ProgramStatusBook,

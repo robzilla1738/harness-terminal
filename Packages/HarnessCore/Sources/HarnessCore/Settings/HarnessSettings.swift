@@ -189,10 +189,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// is on, the banner carries the sound; when banners are off but this is on, Harness
     /// plays an in-app chime so an agent stopping / needing input is still audible.
     public var notificationSoundEnabled: Bool
-    /// Controls the top-center Agent Notch HUD. `.automatic` shows it only for Agent Workspace.
-    public var notchVisibilityMode: NotchVisibilityMode
-    /// Open the Agent Notch HUD when the pointer intentionally hovers over it.
-    public var notchOpenOnHover: Bool
     /// Terminal color interpretation. `.accurate` is the authored sRGB identity path.
     /// `.vivid` opts into Display-P3 conversion plus a capped saturation lift.
     ///
@@ -429,8 +425,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowBorderOpacity: Float = 0.25,
         systemNotificationsEnabled: Bool = true,
         notificationSoundEnabled: Bool = true,
-        notchVisibilityMode: NotchVisibilityMode = .automatic,
-        notchOpenOnHover: Bool = true,
         colorRendering: TerminalColorRenderingMode? = nil,
         colorGamut: TerminalColorGamut = .auto,
         textRendering: TerminalTextRenderingMode? = nil,
@@ -508,8 +502,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.windowBorderOpacity = max(0, min(1, windowBorderOpacity))
         self.systemNotificationsEnabled = systemNotificationsEnabled
         self.notificationSoundEnabled = notificationSoundEnabled
-        self.notchVisibilityMode = notchVisibilityMode
-        self.notchOpenOnHover = notchOpenOnHover
         let resolvedColorRendering = colorRendering ?? (vividColors ? .vivid : .accurate)
         let resolvedTextRendering = textRendering ?? (linearBlending ? .crisp : .native)
         self.colorRendering = resolvedColorRendering
@@ -770,9 +762,6 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowBorderOpacity = max(0, min(1, try fields.decode(.windowBorderOpacity, \.windowBorderOpacity)))
         systemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .systemNotificationsEnabled) ?? true
         notificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationSoundEnabled) ?? true
-        notchVisibilityMode = (try container.decodeIfPresent(String.self, forKey: .notchVisibilityMode))
-            .flatMap(NotchVisibilityMode.init(rawValue:)) ?? .automatic
-        notchOpenOnHover = try container.decodeIfPresent(Bool.self, forKey: .notchOpenOnHover) ?? true
         let legacyVivid = try container.decodeIfPresent(Bool.self, forKey: .vividColors)
         let decodedColorRendering = (try container.decodeIfPresent(String.self, forKey: .colorRendering))
             .flatMap(TerminalColorRenderingMode.init(rawValue:))

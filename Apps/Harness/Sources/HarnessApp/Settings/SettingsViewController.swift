@@ -73,8 +73,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let windowBorderOpacityLabel = NSTextField(labelWithString: "")
     private let systemNotificationsToggle = HarnessToggle(title: "Show a macOS banner")
     private let notificationSoundToggle = HarnessToggle(title: "Play a sound")
-    private let notchModeSegment = HarnessSegmented(frame: .zero)
-    private let notchOpenOnHoverToggle = HarnessToggle(title: "Open when I hover near the macOS notch")
     /// One toggle per `NotificationEvent` ("which events notify me"). Built from the enum so a
     /// new case automatically gets a wired row. Lazy so its (main-actor) `HarnessToggle`
     /// construction runs at first access inside a method, not in a stored-property initializer.
@@ -86,7 +84,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return toggles
     }()
     private let commandFinishedThresholdField = HarnessTextField()
-    private let notchSummaryLabel = NSTextField(wrappingLabelWithString: "")
     // QoL additions: resize overlay (T1), balanced padding (T2), minimum contrast (T5),
     // auto light/dark (T6), paste protection (E).
     private let resizeOverlaySegment = HarnessSegmented(frame: .zero)
@@ -108,8 +105,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let notificationPermissionButton = NSButton(title: "Open System Settings…", target: nil, action: nil)
     private let notificationStatusField = NSTextField(labelWithString: "")
     private let pageContainer = NSView()
-    private var pages: [Int: NSView] = [:]
-    private var currentPage: Int = 0
+    private var pages: [SettingsPane: NSView] = [:]
+    /// The pane shown first; `SettingsWindowController.show(pane:)` sets it before the view loads.
+    var initialPane: SettingsPane = .appearance
     /// Group-card surfaces + hairline dividers, tracked so a live theme change can
     /// re-skin them (they're created inline by the `settingsGroup`/`groupDivider`
     /// factories rather than stored individually).
@@ -187,7 +185,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         super.viewDidLoad()
         configureControls()
         layoutShell()
-        showPage(0)
+        showPage(initialPane)
         observeChromeChanges()
     }
 
@@ -560,22 +558,23 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             pageContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        pages[0] = buildAppearancePage()
-        pages[1] = buildColorsPage()
-        pages[2] = buildTerminalPage()
-        pages[3] = buildKeysPage()
-        pages[4] = buildAgentsPage()
-        pages[5] = buildAdvancedPage()
+        pages[.appearance] = buildAppearancePage()
+        pages[.colors] = buildColorsPage()
+        pages[.terminal] = buildTerminalPage()
+        pages[.keys] = buildKeysPage()
+        pages[.notifications] = buildNotificationsPage()
+        pages[.agents] = buildAgentsPage()
+        pages[.advanced] = buildAdvancedPage()
     }
 
-    private func showPage(_ index: Int) {
-        for button in sidebarButtons { button.isSelected = (button.tag == index) }
+    func showPage(_ pane: SettingsPane) {
+        for button in sidebarButtons { button.isSelected = (button.tag == pane.rawValue) }
         for subview in pageContainer.subviews { subview.removeFromSuperview() }
         // Rebuild the Advanced page each time it's shown so it re-checks daemon reachability (and
         // re-fetches live option values): a daemon that was down when Settings opened may be back,
         // and vice-versa. The other pages are static enough to stay cached.
-        if index == 5 { pages[5] = buildAdvancedPage() }
-        guard let page = pages[index] else { return }
+        if pane == .advanced { pages[.advanced] = buildAdvancedPage() }
+        guard let page = pages[pane] else { return }
         page.translatesAutoresizingMaskIntoConstraints = false
         pageContainer.addSubview(page)
         NSLayoutConstraint.activate([
@@ -584,7 +583,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             page.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
             page.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
         ])
-        currentPage = index
     }
 
     // MARK: - Live theme re-skin
@@ -670,15 +668,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private var sidebarButtons: [SettingsSidebarButton] = []
     private let settingsSearch = HarnessSearchField()
     private let sidebarTitleLabel = NSTextField(labelWithString: "Settings")
-    private static let sectionKeywords: [Int: [String]] = [
-        0: ["appearance", "theme", "system", "macos", "opacity", "blur", "padding", "window", "transparent", "titlebar", "sidebar", "restore", "remember", "size"],
-        1: ["colors", "color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status", "soft", "native", "crisp", "rendering", "gamma"],
-        2: ["terminal", "font", "shell", "directory", "scrollback", "blink", "copy", "session", "harness", "controls", "experience"],
-        3: ["keys", "prefix", "binding", "keybinding", "shortcut", "option", "meta", "alt", "compose", "accent", "esc"],
-        4: ["agents", "agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "notification", "notify", "banner", "bell", "sound", "detection"],
-        5: ["advanced", "options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"],
-    ]
-
     private func buildSidebar() -> NSView {
         // A plain layer-backed view carrying the same themed sidebar chrome (vibrancy +
         // tint) the main window's sidebar uses — never the system `.sidebar` material,
@@ -703,18 +692,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         buttons.translatesAutoresizingMaskIntoConstraints = false
 
         sidebarButtons.removeAll()
-        let entries: [(String, String)] = [
-            ("Appearance", "paintbrush"),
-            ("Colors", "paintpalette"),
-            ("Terminal", "terminal"),
-            ("Keys", "keyboard"),
-            ("Agents", "sparkles"),
-            ("Advanced", "slider.horizontal.3"),
-        ]
-        for (index, entry) in entries.enumerated() {
-            let button = SettingsSidebarButton(title: entry.0, symbol: entry.1)
-            button.tag = index
-            button.isSelected = index == 0
+        for pane in SettingsPane.allCases {
+            let button = SettingsSidebarButton(title: pane.title, symbol: pane.symbol)
+            button.tag = pane.rawValue
             button.target = self
             button.action = #selector(sidebarItemClicked(_:))
             buttons.addArrangedSubview(button)
@@ -746,7 +726,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
                 continue
             }
             let title = button.buttonTitle.lowercased()
-            let keywords = Self.sectionKeywords[button.tag] ?? []
+            let keywords = SettingsPane(rawValue: button.tag)?.keywords ?? []
             let hits = title.contains(query) || keywords.contains(where: { $0.contains(query) })
             button.isHidden = !hits
         }
@@ -754,7 +734,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
 
     @objc private func sidebarItemClicked(_ sender: SettingsSidebarButton) {
-        showPage(sender.tag)
+        if let pane = SettingsPane(rawValue: sender.tag) { showPage(pane) }
     }
 
     // MARK: - Page: Appearance
@@ -1111,10 +1091,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return scrollWrap(stack)
     }
 
-    // MARK: - Page: Agents
+    // MARK: - Page: Notifications
 
-    private func buildAgentsPage() -> NSView {
-        let header = pageHeader(title: "Agents", trailing: nil)
+    private func buildNotificationsPage() -> NSView {
+        let header = pageHeader(title: "Notifications", trailing: nil)
 
         systemNotificationsToggle.state = SessionCoordinator.shared.settings.systemNotificationsEnabled ? .on : .off
         systemNotificationsToggle.target = self
@@ -1122,16 +1102,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         notificationSoundToggle.state = SessionCoordinator.shared.settings.notificationSoundEnabled ? .on : .off
         notificationSoundToggle.target = self
         notificationSoundToggle.action = #selector(appearanceTextDidCommit)
-        notchModeSegment.setSegments(NotchVisibilityMode.allCases.map(notchModeTitle))
-        notchModeSegment.selectItem(withTitle: notchModeTitle(SessionCoordinator.shared.settings.notchVisibilityMode))
-        notchModeSegment.target = self
-        notchModeSegment.action = #selector(notchSettingsChanged)
-        notchOpenOnHoverToggle.state = SessionCoordinator.shared.settings.notchOpenOnHover ? .on : .off
-        notchOpenOnHoverToggle.target = self
-        notchOpenOnHoverToggle.action = #selector(notchSettingsChanged)
-        notchSummaryLabel.font = .systemFont(ofSize: 11)
-        notchSummaryLabel.textColor = .secondaryLabelColor
-        notchSummaryLabel.stringValue = notchSummary(for: SessionCoordinator.shared.settings.notchVisibilityMode)
 
         notificationStatusField.font = .systemFont(ofSize: 11)
         notificationStatusField.textColor = .secondaryLabelColor
@@ -1167,18 +1137,26 @@ final class SettingsViewController: NSViewController, NSFontChanging {
                                              hint: "Only commands that ran at least this long trigger the notification."))
             }
         }
-        let notifyGroup = settingsGroup("Notify me about", eventRows)
+        let notifyGroup = settingsGroup("Notify me when", eventRows)
         // "How notifications are delivered" — the two global channel toggles + permission status.
         let deliveryGroup = settingsGroup("Delivery", [
             settingsToggleRow("macOS banner", systemNotificationsToggle),
             settingsToggleRow("Sound", notificationSoundToggle),
             notifStatusBlock,
         ])
-        let notchGroup = settingsGroup("Notch HUD", [
-            settingsRow("Visibility", notchModeSegment, hint: "Automatic shows the notch in Agent Workspace only."),
-            settingsToggleRow("Hover", notchOpenOnHoverToggle),
-            notchSummaryLabel,
-        ])
+
+        let stack = NSStackView(views: [header, notifyGroup, deliveryGroup])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return scrollWrap(stack)
+    }
+
+    // MARK: - Page: Agents
+
+    private func buildAgentsPage() -> NSView {
+        let header = pageHeader(title: "Agents", trailing: nil)
 
         let detectionCaption = settingsCaption("Harness identifies agents by walking each pane's process tree and matching the executables shown below — it works for any shell, no setup. Install hooks so an agent can ping you the moment it stops or needs input (the config is merged into the agent's own file and backed up first). Customize matching in agents.json.")
         let editAgents = makeRoundedButton("Edit agents.json…", action: #selector(openAgentsJSON))
@@ -1202,9 +1180,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         let stack = NSStackView(views: [
             header,
-            notifyGroup,
-            deliveryGroup,
-            notchGroup,
             settingsGroup("Detection & hooks", [detectionBox]),
             settingsGroup("Set up via your IDE", [promptBox]),
             settingsGroup("Agents", Self.agentColorKinds.map(agentRow) + [leadingRow(reset)]),
@@ -2240,36 +2215,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return cases.indices.contains(i) ? cases[i] : .plain
     }
 
-    private var selectedNotchVisibilityMode: NotchVisibilityMode {
-        let cases = NotchVisibilityMode.allCases
-        let i = notchModeSegment.selectedSegment
-        return cases.indices.contains(i) ? cases[i] : .automatic
-    }
-
-    private func notchModeTitle(_ mode: NotchVisibilityMode) -> String {
-        switch mode {
-        case .automatic: return "Automatic"
-        case .on: return "On"
-        case .off: return "Off"
-        }
-    }
-
-    private func notchSummary(for mode: NotchVisibilityMode) -> String {
-        switch mode {
-        case .automatic:
-            return "Automatic shows the top-center Agent HUD only in Agent Workspace. It passively summarizes sessions, agents, and hook-driven waiting state."
-        case .on:
-            return "The Agent HUD is always available at the top center of the main display as a session overview."
-        case .off:
-            return "The Agent HUD is disabled. Menu-bar sessions and normal notifications still work."
-        }
-    }
-
-    @objc private func notchSettingsChanged() {
-        notchSummaryLabel.stringValue = notchSummary(for: selectedNotchVisibilityMode)
-        flushAndApply()
-    }
-
     /// Switching mode re-gates the chrome (prefix + status line), sets the default
     /// session-persistence policy on the daemon, and refreshes the live surfaces — all on the
     /// one session core. `flushAndApply` persists the setting and posts the chrome-changed
@@ -2522,9 +2467,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         statusLineControlSegment.selectItem(withTitle: harnessControlsTitle(settings.statusLineEnabled))
         systemNotificationsToggle.state = settings.systemNotificationsEnabled ? .on : .off
         notificationSoundToggle.state = settings.notificationSoundEnabled ? .on : .off
-        notchModeSegment.selectItem(withTitle: notchModeTitle(settings.notchVisibilityMode))
-        notchOpenOnHoverToggle.state = settings.notchOpenOnHover ? .on : .off
-        notchSummaryLabel.stringValue = notchSummary(for: settings.notchVisibilityMode)
         for binding in colorBindings {
             binding.field.stringValue = settings[keyPath: binding.keyPath] ?? ""
             refreshColorBinding(binding)
@@ -2647,8 +2589,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         write(\.copyOnSelect, copyOnSelectToggle.state == .on)
         write(\.systemNotificationsEnabled, systemNotificationsToggle.state == .on)
         write(\.notificationSoundEnabled, notificationSoundToggle.state == .on)
-        write(\.notchVisibilityMode, selectedNotchVisibilityMode)
-        write(\.notchOpenOnHover, notchOpenOnHoverToggle.state == .on)
         write(\.colorRendering, vividColorsToggle.state == .on ? .vivid : .accurate)
         write(\.textRendering, textRenderingValue(textRenderingSegment.titleOfSelectedItem))
         write(\.applyThemeToTerminalOutput, themeTerminalOutputToggle.state == .on)
@@ -2694,7 +2634,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // pushes the current settings to the live surfaces — scrubbing a slider never fires a
         // setTheme IPC. Persistence is the caller's job (`flushAndApply` saves; drag ticks don't).
         coordinator.applySettingsToHosts()
-        NotchPanelController.shared.refreshVisibility()
         QuickTerminalController.shared.rebuildFromSettings()
         updateFontReadout()
     }
@@ -2877,9 +2816,10 @@ enum SettingsWindowController {
         (window?.contentViewController as? SettingsViewController)?.adoptExternalSettingsWrite()
     }
 
-    static func show() {
+    static func show(pane: SettingsPane = .appearance) {
         window?.close()
         let controller = SettingsViewController()
+        controller.initialPane = pane
         let win = NSWindow(contentViewController: controller)
         win.title = "Settings"
         win.styleMask = [.titled, .closable, .resizable]
@@ -2916,4 +2856,53 @@ final class SettingsWindowCloseProxy: NSObject, NSWindowDelegate {
     private let onWillClose: () -> Void
     init(onWillClose: @escaping () -> Void) { self.onWillClose = onWillClose }
     func windowWillClose(_ notification: Notification) { onWillClose() }
+}
+
+/// The Settings window's sidebar panes, in sidebar order.
+enum SettingsPane: Int, CaseIterable {
+    case appearance, colors, terminal, keys, notifications, agents, advanced
+
+    var title: String {
+        switch self {
+        case .appearance: return "Appearance"
+        case .colors: return "Colors"
+        case .terminal: return "Terminal"
+        case .keys: return "Keys"
+        case .notifications: return "Notifications"
+        case .agents: return "Agents"
+        case .advanced: return "Advanced"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .appearance: return "paintbrush"
+        case .colors: return "paintpalette"
+        case .terminal: return "terminal"
+        case .keys: return "keyboard"
+        case .notifications: return "bell.badge"
+        case .agents: return "sparkles"
+        case .advanced: return "slider.horizontal.3"
+        }
+    }
+
+    /// Extra words the sidebar search matches besides the title.
+    var keywords: [String] {
+        switch self {
+        case .appearance:
+            return ["theme", "system", "macos", "opacity", "blur", "padding", "window", "transparent", "titlebar", "sidebar", "restore", "remember", "size"]
+        case .colors:
+            return ["color", "background", "foreground", "cursor", "selection", "palette", "ansi", "vivid", "ligatures", "divider", "status", "soft", "native", "crisp", "rendering", "gamma"]
+        case .terminal:
+            return ["font", "shell", "directory", "scrollback", "blink", "copy", "session", "harness", "controls", "experience"]
+        case .keys:
+            return ["prefix", "binding", "keybinding", "shortcut", "option", "meta", "alt", "compose", "accent", "esc"]
+        case .notifications:
+            return ["notify", "banner", "alert", "bell", "sound", "blocked", "failed", "error", "done", "finished", "permission"]
+        case .agents:
+            return ["agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "detection"]
+        case .advanced:
+            return ["options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"]
+        }
+    }
 }

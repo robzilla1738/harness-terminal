@@ -3,8 +3,7 @@ import HarnessCore
 import HarnessTerminalKit
 
 /// Owns the quick terminal: a Quake-style dropdown panel hosting a dedicated daemon-backed terminal
-/// surface, summoned by a global hotkey. Mirrors `NotchPanelController`'s singleton lifecycle; the
-/// surface is keyed by a fixed ID (see `surfaceID`) and reattached via `TerminalHostView`'s own
+/// surface, summoned by a global hotkey. A singleton started at launch; the surface is keyed by a fixed ID (see `surfaceID`) and reattached via `TerminalHostView`'s own
 /// idempotent `.ensureSurface`, so one surface is reused for the app's lifetime.
 @MainActor
 final class QuickTerminalController: NSObject {

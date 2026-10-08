@@ -74,7 +74,6 @@ final class HarnessSettingsTests: XCTestCase {
         s.setEventEnabled(.commandFinished, true)
         s.colorRendering = .vivid
         s.experienceMode = .full
-        s.notchVisibilityMode = .on
         s.resizeOverlay = .always
         s.bellMode = .both
         s.scrollMultiplier = 2.5
@@ -125,7 +124,6 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertTrue(d.isEventEnabled(.commandFinished))
         XCTAssertEqual(d.colorRendering, .vivid)
         XCTAssertEqual(d.experienceMode, .full)
-        XCTAssertEqual(d.notchVisibilityMode, .on)
         XCTAssertEqual(d.resizeOverlay, .always)
         XCTAssertEqual(d.bellMode, .both)
         XCTAssertEqual(d.scrollMultiplier, 2.5)
@@ -437,34 +435,17 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertTrue(decoded.secureKeyboardEntry)
     }
 
-    func testNotchSettingsDefaultAndLegacyDecode() throws {
-        XCTAssertEqual(HarnessSettings().notchVisibilityMode, .automatic)
-        XCTAssertTrue(HarnessSettings().notchOpenOnHover)
-
+    func testRetiredNotchKeysStillDecode() throws {
+        // The agent notch is gone; a settings file that still carries its keys must load
+        // without error (and without tripping the corrupt-file backup).
         let legacy = Data("""
-        { "fontSize": 14, "customBackgroundHex": "#000000" }
+        { "fontSize": 14, "notchVisibilityMode": "on", "notchOpenOnHover": false, "bellMode": "both" }
         """.utf8)
-        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
-        XCTAssertEqual(migrated.notchVisibilityMode, .automatic)
-        XCTAssertTrue(migrated.notchOpenOnHover)
-    }
-
-    func testNotchSettingsRoundTripAndAutomaticResolution() throws {
-        var settings = HarnessSettings()
-        settings.notchVisibilityMode = .off
-        settings.notchOpenOnHover = false
-
-        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: try JSONEncoder().encode(settings))
-
-        XCTAssertEqual(decoded.notchVisibilityMode, .off)
-        XCTAssertFalse(decoded.notchOpenOnHover)
-
-        XCTAssertFalse(NotchVisibilityMode.automatic.isEnabled(for: .plain))
-        XCTAssertFalse(NotchVisibilityMode.automatic.isEnabled(for: .persistent))
-        XCTAssertFalse(NotchVisibilityMode.automatic.isEnabled(for: .full))
-        XCTAssertTrue(NotchVisibilityMode.automatic.isEnabled(for: .agent))
-        XCTAssertTrue(NotchVisibilityMode.on.isEnabled(for: .plain))
-        XCTAssertFalse(NotchVisibilityMode.off.isEnabled(for: .agent))
+        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
+        XCTAssertEqual(decoded.fontSize, 14)
+        XCTAssertEqual(decoded.bellMode, .both)
+        let reencoded = String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self)
+        XCTAssertFalse(reencoded.contains("notchVisibilityMode"))
     }
 
     func testOffMainParserFramePipelineDefaultsOnAndRoundTrips() throws {
@@ -979,7 +960,7 @@ final class HarnessSettingsTests: XCTestCase {
         // Harness's value, a hand-edit) falls back per-field; the file keeps decoding.
         let json = #"""
         {
-          "appearanceMode": "??", "notchVisibilityMode": "??", "colorRendering": "??",
+          "appearanceMode": "??", "colorRendering": "??",
           "textRendering": "??", "experienceMode": "??", "resizeOverlay": "??",
           "resizeOverlayPosition": "??", "bellMode": "??", "colorGamut": "??",
           "optionAsMeta": "??", "fontSize": 18
@@ -989,7 +970,6 @@ final class HarnessSettingsTests: XCTestCase {
         let defaults = HarnessSettings.makeDefaults(imported: TerminalConfigImporter.load())
         XCTAssertEqual(decoded.fontSize, 18, "the rest of the file still decodes")
         XCTAssertEqual(decoded.appearanceMode, HarnessSettings().appearanceMode)
-        XCTAssertEqual(decoded.notchVisibilityMode, .automatic)
         XCTAssertEqual(decoded.experienceMode, .full, "unknown keeps the upgrade semantic, like absent")
         XCTAssertEqual(decoded.resizeOverlay, defaults.resizeOverlay)
         XCTAssertEqual(decoded.resizeOverlayPosition, defaults.resizeOverlayPosition)

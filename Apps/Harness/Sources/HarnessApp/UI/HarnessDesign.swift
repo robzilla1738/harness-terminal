@@ -893,7 +893,7 @@ final class StatusDotView: NSView {
         applyStyle()
         // Re-evaluate the breathing pulse when the user toggles Reduce Motion mid-session, so the
         // dot matches the live setting even while an agent keeps working (the style — and thus
-        // applyStyle — would otherwise not change). Mirrors the notch's environment reactivity.
+        // applyStyle — would otherwise not change).
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(reduceMotionDidChange),

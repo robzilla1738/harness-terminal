@@ -59,7 +59,6 @@ final class CraftSliceTests: XCTestCase {
             "fontSize", "fontFamily", "defaultShell", "defaultCWD",
             "scrollbackLines", "cursorStyle", "cursorBlink", "copyOnSelect",
             "systemNotificationsEnabled", "notificationSoundEnabled",
-            "notchVisibilityMode", "notchOpenOnHover",
             "colorRendering", "textRendering",
             "applyThemeToTerminalOutput", "ligatures", "showPromptGutter",
             "offMainParserFramePipeline", "liveResizeReflow",

@@ -752,7 +752,41 @@ final class SessionCoordinator: NSObject {
         let workspaces = connectedOwners.flatMap { snapshot(for: $0).workspaces }
         pushNewRemoteNotifications(from: workspaces)
         pushAgentActivityNotifications(from: workspaces)
+        pushProgramStatusNotifications(from: workspaces)
         announceAttentionChanges(in: workspaces)
+    }
+
+    private var programStatusAlerts = ProgramStatusAlerts()
+
+    /// What a program reports about itself (OSC 7501 blocked / done / error) becomes a banner
+    /// when the pane isn't the one in front of you. Alerts landing in one snapshot share one
+    /// banner, so a session finishing several tabs at once doesn't stack a pile of them.
+    private func pushProgramStatusNotifications(from workspaces: [Workspace]) {
+        let tabs = workspaces.flatMap { $0.sessions.flatMap(\.tabs) }
+        let byID = Dictionary(tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let alerts = programStatusAlerts.alerts(for: tabs).filter { alert in
+            guard settings.isEventEnabled(alert.event), let tab = byID[alert.tabID] else { return false }
+            if NSApp.isActive, let active = activeSurfaceID, tab.rootPane.allSurfaceIDs().contains(active) { return false }
+            return true
+        }
+        guard !alerts.isEmpty else { return }
+        if alerts.count > 2 {
+            let event = alerts.contains { $0.event == .agentWaiting } ? NotificationEvent.agentWaiting : alerts[0].event
+            deliverAgentAlert(event: event, title: "Harness", body: ProgramStatusAlerts.summary(of: alerts))
+            return
+        }
+        for alert in alerts {
+            guard let tab = byID[alert.tabID] else { continue }
+            let source = effectiveAgentKind(for: tab)?.displayName ?? tab.programMark?.app ?? "Harness"
+            let name = tab.title.isEmpty ? HarnessDesign.pathDisplayName(tab.cwd) : tab.title
+            let fallback: String
+            switch alert.event {
+            case .agentWaiting: fallback = "Needs your input"
+            case .failed: fallback = "Failed"
+            default: fallback = "Done"
+            }
+            deliverAgentAlert(event: alert.event, title: "\(source) · \(name)", body: alert.message ?? fallback)
+        }
     }
 
     /// Each tab's mark at the last snapshot, so VoiceOver hears when one starts needing you.
@@ -792,13 +826,15 @@ final class SessionCoordinator: NSObject {
         for workspace in workspaces {
             for session in workspace.sessions {
                 for tab in session.tabs where tab.status == .waiting {
+                    // A program's own `blocked` report goes through the program-status path.
+                    if let mark = tab.programMark, mark.fromRealReport, mark.attention == .blocked { continue }
                     guard let text = tab.notificationText, !text.isEmpty,
                           let surfaceID = tab.rootPane.allSurfaceIDs().first
                     else { continue }
                     let key = "\(surfaceID.uuidString)|\(text)"
                     guard !pushedNotificationKeys.contains(key) else { continue }
                     // Gate on the per-event preference *before* marking the key pushed, so toggling
-                    // "Agent needs input" off then back on during the same waiting episode still
+                    // "Needs you" off then back on during the same waiting episode still
                     // fires once — a disabled event must not consume the dedup key. (Same reason as
                     // the watched-pane deferral below: don't mark pushed when we aren't delivering.)
                     guard settings.isEventEnabled(.agentWaiting) else { continue }
@@ -860,7 +896,7 @@ final class SessionCoordinator: NSObject {
                     // Don't nag for the pane you're already watching.
                     if NSApp.isActive, surfaceID == activeSurfaceID { continue }
                     // Gate on the per-event preference *before* the cooldown, so a disabled
-                    // "Agent finished" doesn't arm the 30s window and suppress a later
+                    // "Finished" doesn't arm the 30s window and suppress a later
                     // (re-enabled) stop. `lastAgentActivity` above still tracks the edge.
                     guard settings.isEventEnabled(.agentFinished) else { continue }
                     // Cooldown so a flapping stream can't spam.

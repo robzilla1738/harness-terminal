@@ -28,7 +28,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 | Self-describing API | `api list/describe/call`, JSON Schema, ~35 methods plus every bindable command. | `rex api` |
 | Event stream | `events --follow`; `domain.verb` names. | `rex events` |
 | Lua | `init.lua`: bindings, key modes, sequences, actions, function bindings. Scripts: `harness.on/wait/stop`, `harness.call` and a function per API method, `harness.layout`, `harness.args`, `harness.log`. | `init.lua`, key modes, sequences, actions, events |
-| Program Status (OSC 7501) | Yes: tab spinners, blocked marks, the notch, `terminal.program_status`. | Yes (Rex published it) |
+| Program Status (OSC 7501) | Yes: tab spinners, blocked marks, notifications, `terminal.program_status`. | Yes (Rex published it) |
 
 ## The app
 

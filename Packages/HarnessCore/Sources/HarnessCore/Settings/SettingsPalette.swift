@@ -108,8 +108,6 @@ public enum SettingsPalette {
         toggle("copyOnSelect", "Copy on select", \.copyOnSelect)
         toggle("systemNotificationsEnabled", "System notifications", \.systemNotificationsEnabled)
         toggle("notificationSoundEnabled", "Notification sound", \.notificationSoundEnabled)
-        cycle("notchVisibilityMode", "Notch", NotchVisibilityMode.allCases, \.notchVisibilityMode)
-        toggle("notchOpenOnHover", "Notch opens on hover", \.notchOpenOnHover)
         add("colorRendering", "Color rendering", detail: { $0.colorRendering.rawValue }) { settings in
             let next: TerminalColorRenderingMode = settings.colorRendering == .accurate ? .vivid : .accurate
             SettingsEditor.applyFromPalette(\.colorRendering, next, on: &settings)
@@ -161,7 +159,7 @@ public enum SettingsPalette {
             SettingsEditor.applyFromPalette(\.paneHeaders, !settings.paneHeaders, on: &settings)
         }
         for event in NotificationEvent.allCases {
-            add("notify.\(event.rawValue)", "Notify \(event.rawValue)", detail: { $0.isEventEnabled(event) ? "On" : "Off" }) { settings in
+            add("notify.\(event.rawValue)", "Notify: \(event.title)", detail: { $0.isEventEnabled(event) ? "On" : "Off" }) { settings in
                 SettingsEditor.setEvent(event, !settings.isEventEnabled(event), on: &settings)
             }
         }

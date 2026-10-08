@@ -153,8 +153,7 @@ public enum AgentHookInstaller {
 
         return """
         Set up Harness terminal notifications for the coding agent you are running inside (macOS). \
-        Goal: when you finish a turn or need my input, call Harness so it surfaces you in its \
-        menu-bar notch.
+        Goal: when you finish a turn or need my input, call Harness so it notifies me.
 
         Preferred — Harness ships a CLI at "$HOME/Library/Application Support/Harness/bin/harness-cli". \
         If it exists, run its installer for whichever tool you are (it writes the correct hook \

@@ -132,7 +132,7 @@ public struct Tab: Codable, Sendable, Identifiable, Equatable {
 }
 
 /// The presented program-status mark for a tab. The decision lives in the engine;
-/// this is the value the snapshot carries to the tab, the session row, and the notch.
+/// this is the value the snapshot carries to the tab, the session row, and notifications.
 public struct ProgramMark: Codable, Equatable, Sendable {
     public enum Attention: String, Codable, Sendable {
         case working, blocked, done, error
