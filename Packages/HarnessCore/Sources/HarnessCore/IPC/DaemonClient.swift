@@ -122,11 +122,13 @@ public final class DaemonClient: @unchecked Sendable {
     /// How an attach starts. With `resync` the caller resets its terminal before the bytes
     /// that follow; otherwise they continue where `resume` left off. Bytes below `historyEnd`
     /// are history (feed them as a replay: no bells or notifications); `point` is nil on a
-    /// daemon that can't resume.
+    /// daemon that can't resume. A resync from a current daemon carries `screen`, the visible
+    /// screen at `historyEnd` as VT bytes, to paint before the history.
     public struct AttachStart: Equatable, Sendable {
         public var resync: Bool
         public var historyEnd: UInt64
         public var point: AttachPoint?
+        public var screen: Data?
     }
 
     /// Attach to a surface's output with its history. On a daemon with `attach-stream` this
@@ -163,7 +165,7 @@ public final class DaemonClient: @unchecked Sendable {
         return try attachStream(request, onAttached: { reply in
             onStart(AttachStart(
                 resync: reply.resync, historyEnd: reply.endSequence,
-                point: AttachPoint(epoch: reply.epoch, sequence: reply.endSequence)
+                point: AttachPoint(epoch: reply.epoch, sequence: reply.endSequence), screen: reply.screen
             ))
         }, onData: onData, onOwnership: onOwnership, onEnd: onEnd)
     }

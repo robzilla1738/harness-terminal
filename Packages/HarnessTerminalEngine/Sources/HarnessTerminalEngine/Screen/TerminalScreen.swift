@@ -33,7 +33,6 @@ final class TerminalScreen {
     private struct ImagePlacement { var id: Int; var absRow: Int; var col: Int; var cols: Int; var rows: Int; var z: Int; var kittyID: Int? }
     private var placements: [ImagePlacement] = []
     private var imageStore: [Int: DecodedImage] = [:]
-    private var nextImageID = 1
     private var imageByteTotal = 0
     /// Pixel size of one cell, set by the host renderer; used to size an image's cell footprint
     /// and advance the cursor below it. A deterministic headless default keeps engine tests stable.
@@ -317,7 +316,7 @@ final class TerminalScreen {
     func placeImage(_ image: DecodedImage, cols: Int = 0, rows: Int = 0, z: Int = 0, kittyID: Int? = nil) {
         let fCols = cols > 0 ? cols : max(1, Int((Double(image.pixelWidth) / Double(max(1, cellPixelWidth))).rounded(.up)))
         let fRows = rows > 0 ? rows : max(1, Int((Double(image.pixelHeight) / Double(max(1, cellPixelHeight))).rounded(.up)))
-        let id = nextImageID; nextImageID += 1
+        let id = ImageIDs.next()
         imageStore[id] = image
         imageByteTotal += image.byteCount
         placements.append(ImagePlacement(id: id, absRow: history.count + cursorRow, col: cursorCol, cols: fCols, rows: fRows, z: z, kittyID: kittyID))

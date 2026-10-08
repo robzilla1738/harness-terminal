@@ -265,6 +265,43 @@ final class DaemonRoundTripTests: XCTestCase {
         XCTAssertTrue(String(decoding: screen.value ?? Data(), as: UTF8.self).contains("STREAM_MISSED"))
     }
 
+    /// A resync while output keeps coming: the reply carries the screen, and the history and live
+    /// frames after it are one unbroken run of sequences (nothing missed, nothing twice) even
+    /// though the daemon reads the history off its queue while live frames are held.
+    func testResyncAttachCarriesTheScreenAndStaysGapFreeUnderOutput() throws {
+        let client = DaemonClient()
+        let sid = UUID().uuidString
+        _ = try client.request(.ensureSurface(surfaceID: sid, cwd: nil, shell: "/bin/sh", rows: 24, cols: 80, scrollbackBytes: nil))
+        _ = try client.request(.sendData(surfaceID: sid, data: Data("PS1=''; stty -echo\n".utf8)))
+        usleep(300_000)
+        let count = 20_000
+        _ = try client.request(.sendData(surfaceID: sid, data: Data(
+            "i=0; while [ $i -lt \(count) ]; do echo FLOOD_$i; i=$((i+1)); done; echo FLOOD_DONE\n".utf8
+        )))
+        usleep(50_000)
+
+        let output = OutputAccumulator()
+        let start = AtomicBox<DaemonClient.AttachStart>()
+        let spans = AtomicBox<[(sequence: UInt64, end: UInt64)]>()
+        let subscription = try client.attach(surfaceID: sid, label: "flood-test", onStart: { start.set($0) }, onData: { data, sequence in
+            _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "")
+            spans.set((spans.value ?? []) + [(sequence, sequence + UInt64(data.count))])
+        })
+        defer { subscription.cancel() }
+        XCTAssertTrue(waitUntil(timeout: 15) { output.contains("FLOOD_DONE") })
+
+        let reply = try XCTUnwrap(start.value)
+        XCTAssertTrue(reply.resync)
+        XCTAssertTrue(String(decoding: try XCTUnwrap(reply.screen), as: UTF8.self).contains("FLOOD_"), "the screen comes first")
+        let run = try XCTUnwrap(spans.value)
+        for (previous, next) in zip(run, run.dropFirst()) {
+            XCTAssertEqual(next.sequence, previous.end, "frames continue exactly where the last one ended")
+        }
+        XCTAssertTrue(run.contains { $0.sequence < reply.historyEnd } && run.contains { $0.sequence >= reply.historyEnd })
+        let lines = output.snapshot.components(separatedBy: "\r\n")
+        XCTAssertEqual(lines.compactMap { $0.hasPrefix("FLOOD_") ? Int($0.dropFirst(6)) : nil }, Array(0 ..< count), "every line once, in order")
+    }
+
     /// `owner` mode end to end: the second client learns it doesn't own the size, takes it by
     /// client id from another socket, and both clients hear the change.
     func testOwnershipFramesTellEachClientAndTakeMovesTheSize() throws {

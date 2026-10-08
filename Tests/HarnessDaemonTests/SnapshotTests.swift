@@ -88,6 +88,26 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(joined(small), joined(full) + joined(resumed), "chunking keeps every byte in order")
     }
 
+    func testAResyncCarriesTheScreenAtTheHistoryEndAndLeavesNoGridBehind() throws {
+        let pty = try catPty()
+        pty.start()
+        defer { pty.close() }
+        pty.injectSyntheticOutput(Data("\u{1b}]2;t\u{07}on screen\r\n\u{1b}[?2004h".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("on screen") })
+
+        let full = pty.attachHistory(fromSequence: nil)
+        let screen = try XCTUnwrap(full.screen)
+        XCTAssertEqual(screen.sequence, full.endSequence, "the screen is the history's last state")
+        XCTAssertTrue(screenText(screen).contains("on screen"))
+        XCTAssertTrue(String(decoding: screen.vt, as: UTF8.self).contains("\u{1b}[?2004h"), "with the program's modes")
+        XCTAssertFalse(pty.gridIsResident, "the grid parsed for the screen is let go")
+        XCTAssertNil(pty.attachHistory(fromSequence: full.endSequence).screen, "a resume continues what the client shows")
+
+        let screenOnly = pty.attachHistory(history: false, fromSequence: nil)
+        XCTAssertTrue(screenOnly.chunks.isEmpty)
+        XCTAssertEqual(screenOnly.screen, screen)
+    }
+
     func testParkedRingCompressesTerminalOutputAndRoundTrips() {
         let output = Data((0 ..< 2_000).map { "\u{1b}[32mline \($0) of a long build log\u{1b}[0m\r\n" }.joined().utf8)
         let ring = ParkedRing(sequence: 7, bytes: output)

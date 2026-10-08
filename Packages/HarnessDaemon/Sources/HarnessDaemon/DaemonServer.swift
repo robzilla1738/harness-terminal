@@ -718,57 +718,64 @@ public final class DaemonServer: @unchecked Sendable {
     }
 
     private func handleSubscribe(surfaceID: String, label: String?, fd: Int32) {
-        guard addOutputSubscription(surfaceID: surfaceID, label: label, fd: fd, floor: nil) else {
+        guard addOutputSubscription(surfaceID: surfaceID, label: label, fd: fd, gate: nil) != nil else {
             send(.error("Surface not found"), to: fd)
             return
         }
         send(.ok, to: fd)
     }
 
-    /// `attachStream`: the reply, then the history as ordinary output frames, then live
-    /// output. Everything goes out on this queue, and live frames queued while the history is
-    /// sent are dropped below `endSequence` (the history has them), so nothing is missed or
-    /// sent twice. History is binary frames, so its size is bounded by the ring, not the
-    /// JSON frame cap.
+    /// `attachStream`: the reply (with the screen on a resync), then the history as ordinary
+    /// output frames, then live output. The history and screen are read off the server queue,
+    /// since a cold pane's screen is a parse of its ring and no other client should wait on it,
+    /// while this client's live frames are held. Back on the queue the reply and history go
+    /// out, then the held frames the history doesn't cover: nothing is missed or sent twice.
+    /// History is binary frames, so its size is bounded by the ring, not the JSON frame cap.
     private func handleAttach(_ attach: AttachRequest, fd: Int32) {
         if attach.readOnly { readOnlyClients.insert(fd) } else { readOnlyClients.remove(fd) }
         streamClients.insert(fd)
-        let floor = SequenceFloor()
-        guard addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, floor: floor) else {
+        let gate = AttachGate()
+        guard let token = addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, gate: gate) else {
             send(.error("Surface not found"), to: fd)
-            return
-        }
-        guard attach.history else {
-            let screen = registry.screenFrame(surfaceID: attach.surfaceID)
-            floor.value = screen?.sequence ?? 0
-            send(.attached(AttachReply(epoch: epoch, resync: true, endSequence: floor.value, screen: screen?.vt)), to: fd)
             return
         }
         let resumeFrom = attach.epoch == epoch ? attach.fromSequence : nil
-        guard let history = registry.attachHistory(surfaceID: attach.surfaceID, fromSequence: resumeFrom) else {
-            send(.error("Surface not found"), to: fd)
-            return
-        }
-        floor.value = history.endSequence
-        send(.attached(AttachReply(epoch: epoch, resync: history.resync, endSequence: history.endSequence)), to: fd)
-        for chunk in history.chunks {
-            sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, registry] in
+            let start = registry.attachHistory(surfaceID: attach.surfaceID, history: attach.history, fromSequence: resumeFrom)
+            self?.queue.async { [weak self] in
+                // The client may have gone, and its fd been reused, while the history was read.
+                guard let self, self.outputSubscriptions[fd]?.contains(where: { $0.token == token }) == true else { return }
+                guard let start else {
+                    self.send(.error("Surface not found"), to: fd)
+                    return
+                }
+                self.send(.attached(AttachReply(
+                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt
+                )), to: fd)
+                for chunk in start.chunks {
+                    self.sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)
+                }
+                for frame in gate.open(floor: start.endSequence) {
+                    self.sendDataFrame(frame.data, sequence: frame.sequence, to: fd)
+                }
+            }
         }
     }
 
-    /// Streams `surfaceID`'s output to `fd` and registers `fd` as a client. `floor` drops live
-    /// frames an attach's history already covered. False when the surface doesn't exist.
-    private func addOutputSubscription(surfaceID: String, label: String?, fd: Int32, floor: SequenceFloor?) -> Bool {
+    /// Streams `surfaceID`'s output to `fd` and registers `fd` as a client. `gate` holds live
+    /// frames until an attach's history is out. The subscription's token, or nil when the
+    /// surface doesn't exist.
+    private func addOutputSubscription(surfaceID: String, label: String?, fd: Int32, gate: AttachGate?) -> UUID? {
         guard let token = registry.subscribe(surfaceID: surfaceID, handler: { [weak self] data, sequence in
             guard let server = self else { return }
             server.queue.async { [weak server] in
                 guard let server else { return }
-                if let floor, sequence < floor.value { return }
+                if let gate, !gate.admits(data, sequence: sequence) { return }
                 server.registry.metrics.recordOutputNotification()
                 server.sendDataFrame(data, sequence: sequence, to: fd)
             }
         }) else {
-            return false
+            return nil
         }
         outputSubscriptions[fd, default: []].append((surfaceID, token))
         // A subscription connection is long-lived and identifies a real client
@@ -793,7 +800,7 @@ public final class DaemonServer: @unchecked Sendable {
             // GUI/attach clients register here, never through identifyClient.
             registeredClientCount.update(clients.count)
         }
-        return true
+        return token
     }
 
     /// Record this client's requested size. In `smallest` mode the PTY becomes the
@@ -988,7 +995,25 @@ public enum DaemonError: Error, CustomStringConvertible {
     }
 }
 
-/// The first sequence an attach's live frames may carry. Set and read on the server queue.
-private final class SequenceFloor: @unchecked Sendable {
-    var value: UInt64 = .max
+/// An attach's live frames: held while its history is read, then sent from where the history
+/// ends. Touched only on the server queue.
+private final class AttachGate: @unchecked Sendable {
+    private var held: [(data: Data, sequence: UInt64)]? = []
+    private var floor: UInt64 = 0
+
+    /// Whether a frame goes out now. One that arrives before `open` is kept for it.
+    func admits(_ data: Data, sequence: UInt64) -> Bool {
+        guard held == nil else {
+            held?.append((data, sequence))
+            return false
+        }
+        return sequence >= floor
+    }
+
+    /// Stop holding: the held frames at or past `floor`, in order.
+    func open(floor: UInt64) -> [(data: Data, sequence: UInt64)] {
+        self.floor = floor
+        defer { held = nil }
+        return (held ?? []).filter { $0.sequence >= floor }
+    }
 }

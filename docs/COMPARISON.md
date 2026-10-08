@@ -8,7 +8,7 @@ An honest feature-by-feature comparison with Superlogical's Rex, based on its pu
 |---|---|---|
 | Programs keep running when the app quits | Yes. HarnessDaemon owns every PTY; the app reattaches. | Yes |
 | Restore after a reboot | Layout, scrollback, and a shell in each pane's last directory (the program itself is gone). | Same, stated |
-| Attach | One request: the screen first for `harness-cli attach` (VT-encoded, modes included), history streamed as binary frames for the app. | Screen first, then history newest-first |
+| Attach | One request, screen first (VT-encoded, modes included). The app paints it at once, then rebuilds scrollback off the main thread from history streamed as binary frames (oldest first) and swaps it in. | Screen first, then history newest-first |
 | Resume after a dropped connection | Yes: by daemon epoch and byte sequence, sending only what was missed. A restarted daemon or evicted bytes resync. | Yes |
 | Per-client viewports | Each client scrolls on its own. | Same |
 | Multi-client sizing | `smallest` (tmux) or `owner`; non-owners reflow locally, see "Viewing at C×R · Take", and can take the size. | Owner/advisory sizing, take, local reflow (designed) |

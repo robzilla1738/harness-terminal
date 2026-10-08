@@ -248,7 +248,8 @@ public struct AttachReply: Codable, Equatable, Sendable {
     public var resync: Bool
     /// The sequence live output starts at; a client resumes from the last byte it saw.
     public var endSequence: UInt64
-    /// The visible screen as VT bytes, for a screen-only attach.
+    /// The visible screen at `endSequence` as VT bytes: for a screen-only attach, and ahead
+    /// of the history on a resync. Absent from older daemons on a resync.
     public var screen: Data?
 
     public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil) {

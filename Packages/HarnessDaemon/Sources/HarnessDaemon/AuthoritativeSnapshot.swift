@@ -46,6 +46,8 @@ struct AttachHistory: Equatable {
     var endSequence: UInt64
     /// The client's `fromSequence` was evicted or absent: it must reset before painting.
     var resync: Bool
+    /// On a resync, the screen at `endSequence`, painted before the history.
+    var screen: ScreenFrame?
 }
 
 /// Bytes the snapshot has not applied yet. Nil means the ring no longer holds
@@ -186,7 +188,8 @@ final class AuthoritativeParser {
             bytesFed += gap.count
         }
         if let last = ring.last {
-            fedThrough = last.sequence &+ UInt64(last.data.count)
+            // A ring copied before another reader's must not move the mark backwards.
+            fedThrough = max(fedThrough, last.sequence &+ UInt64(last.data.count))
         }
     }
 

@@ -97,7 +97,7 @@ private final class SurfaceColorProviderState: @unchecked Sendable {
 private final class SurfaceEmulatorState: @unchecked Sendable {
     private let specific = DispatchSpecificKey<Void>()
 
-    let emulator: TerminalEmulator
+    private(set) var emulator: TerminalEmulator
     let queue: DispatchQueue
     var lastPlainFrame: TerminalFrame?
     /// The `renderGeneration` the cached `lastPlainFrame` was built against. The worker refuses to
@@ -276,6 +276,43 @@ private final class SurfaceEmulatorState: @unchecked Sendable {
             lastOverlayKeys = [:]
         }
     }
+
+    /// Make `next` the emulator. Called where the emulator lives: on `queue`, or on main when
+    /// the pipeline is main-confined. The reuse caches describe the old grid, so they go too.
+    func replaceEmulator(with next: TerminalEmulator) {
+        emulator = next
+        lastPlainFrame = nil
+        lastViewportFrame = nil
+        lastOverlayKeys = [:]
+    }
+}
+
+/// A resync's scrollback, rebuilt off to the side: the history parses into a replacement
+/// emulator on this queue while the pane shows the daemon's screen, live output feeds both in
+/// the same order, and the view swaps the replacement in once the history is parsed.
+private final class HistoryRestore: @unchecked Sendable {
+    let emulator: TerminalEmulator
+    let queue = DispatchQueue(label: "com.robert.harness.terminal-surface.history-restore", qos: .userInitiated)
+    /// Main-confined: any history arrived. A restore without any has nothing to add.
+    var receivedHistory = false
+
+    init(emulator: TerminalEmulator) {
+        self.emulator = emulator
+    }
+
+    func feed(_ data: Data) {
+        queue.async { [self] in emulator.feed(data) }
+    }
+
+    func resize(cols: Int, rows: Int, localOnly: Bool) {
+        queue.async { [self] in
+            if localOnly {
+                _ = emulator.resizePrimaryLocally(cols: cols, rows: rows)
+            } else {
+                emulator.resize(cols: cols, rows: rows)
+            }
+        }
+    }
 }
 
 /// The native, self-contained terminal surface: a `CAMetalLayer`-backed `NSView` that
@@ -386,6 +423,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         columns = cols
         rows = newRows
         invalidateRenderGeneration()
+        historyRestore?.resize(cols: cols, rows: newRows, localOnly: false)
         if offMainParserFramePipelineEnabled {
             emulatorState.setPendingResize((cols, newRows), localOnly: false)
             renderNowOffMain()
@@ -449,6 +487,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     public var allowProgramClipboardRead = false
 
     private let emulatorState: SurfaceEmulatorState
+    /// The scrollback a resync is rebuilding behind the screen (`beginHistoryRestore`).
+    private var historyRestore: HistoryRestore?
     private let colorProviderState = SurfaceColorProviderState()
     private let inputEncoder = InputEncoder()
     private let metalLayer = CAMetalLayer()
@@ -818,6 +858,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// clipboard writes — see `TerminalEmulator.isReplaying`). The flag brackets exactly this
     /// chunk's `feed` on the emulator's serialized context.
     public func receive(_ data: Data, replay: Bool) {
+        historyRestore?.feed(data)
         if offMainParserFramePipelineEnabled {
             receiveOffMain(data, replay: replay)
             return
@@ -954,6 +995,93 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     public func receive(_ text: String, replay: Bool) { receive(Data(text.utf8), replay: replay) }
 
+    /// A resync: reset the terminal and paint `screen` (the daemon's visible screen as VT bytes)
+    /// now, then rebuild the scrollback off the main thread from the history that follows
+    /// (`receiveHistory`) and swap it in once parsed (`finishHistoryRestore`). The history never
+    /// scrolls past on screen. Without a screen (an older daemon) the pane is blank until then.
+    public func beginHistoryRestore(screen: Data?) {
+        receive(Data("\u{1b}c".utf8) + (screen ?? Data()), replay: true)
+        let (cols, rows) = (columns, rows)
+        historyRestore = HistoryRestore(emulator: emulatorSync { $0.makeReplacement(cols: cols, rows: rows) })
+    }
+
+    /// History for the restore `beginHistoryRestore` started, oldest first.
+    public func receiveHistory(_ data: Data) {
+        guard let restore = historyRestore else { return }
+        restore.receivedHistory = true
+        restore.feed(data)
+    }
+
+    /// The history has all arrived. Once the replacement has parsed it, it becomes the pane's
+    /// emulator; a restore that got no history is dropped, since the screen is all there is.
+    public func finishHistoryRestore() {
+        guard let restore = historyRestore else { return }
+        guard restore.receivedHistory else {
+            historyRestore = nil
+            return
+        }
+        restore.queue.async { [weak self] in
+            DispatchQueue.main.async { self?.swapInHistoryRestore(restore) }
+        }
+    }
+
+    /// Swap the replacement in where the emulator lives. Live output went to both emulators in
+    /// one order, so once the replacement has parsed what it was sent the two agree on everything
+    /// since the screen, and the replacement adds the history above it. Content-anchored state
+    /// (scroll position from the bottom, selection, matches) stays on the same text.
+    private func swapInHistoryRestore(_ restore: HistoryRestore) {
+        guard historyRestore === restore else { return } // a newer attach began its own
+        historyRestore = nil
+        invalidateRenderGeneration()
+        let state = emulatorState
+        let scanState = triggerScanState
+        let swap: @Sendable (TerminalEmulator) -> Int = { previous in
+            restore.queue.sync {}
+            let next = restore.emulator
+            next.takeOver(from: previous)
+            state.replaceEmulator(with: next)
+            let added = next.historyCount - previous.historyCount
+            scanState.nextLine += added
+            return added
+        }
+        guard offMainParserFramePipelineEnabled else {
+            shiftBufferLines(by: swap(emulatorState.emulator))
+            scheduler.forceRender()
+            return
+        }
+        emulatorState.async { [weak self] previous in
+            let added = swap(previous)
+            let next = state.emulator
+            _ = state.stageMainHop(
+                addedHistory: 0, historyCount: next.historyCount,
+                modes: next.modes, altScreen: next.isAlternateScreenActive
+            )
+            DispatchQueue.main.async { [weak self] in
+                self?.shiftBufferLines(by: added)
+                self?.applyPendingMainHop()
+            }
+        }
+    }
+
+    /// Move everything anchored to absolute buffer lines down by `added` lines of history.
+    private func shiftBufferLines(by added: Int) {
+        guard added != 0 else { return }
+        selectionAnchor?.line += added
+        selectionHead?.line += added
+        findMatches = findMatches.map { TerminalBufferMatch(bufferLine: $0.bufferLine + added, columns: $0.columns) }
+        triggerHighlightMatches = triggerHighlightMatches.map {
+            TerminalBufferMatch(bufferLine: $0.bufferLine + added, columns: $0.columns)
+        }
+        if var mode = copyMode {
+            mode.cursor.line += added
+            mode.anchor?.line += added
+            mode.viewTop += added
+            for index in mode.search.matches.indices { mode.search.matches[index].line += added }
+            copyMode = mode
+        }
+        scheduleRender()
+    }
+
     func testingReadGridSnapshot() -> TerminalGridSnapshot {
         emulatorSync { $0.readGrid() }
     }
@@ -969,6 +1097,8 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     func testingInputModes() -> TerminalModes { inputModes() }
+
+    var testingHistoryRestorePending: Bool { historyRestore != nil }
 
     /// Test seam: drive the window-key half of `effectivelyFocused` (the real value comes from
     /// `NSWindow` key-state notifications, which are awkward to trigger headlessly). Mirrors the
@@ -2073,6 +2203,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
         onGridSizeWillChange?(cols, newRows, true) // settled size for the HUD
         previewCols = 0; previewRows = 0           // force the next drag to rebuild a fresh preview
+        historyRestore?.resize(cols: cols, rows: newRows, localOnly: localOnly)
         if offMainParserFramePipelineEnabled {
             // Off-main pipeline: stage the settled size and let the next build materialize it on
             // the emulator's serial queue (serialized with the output feed) — `setPendingResize`
@@ -2165,6 +2296,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         previewCols = 0; previewRows = 0
         // Stage the reflow target on the queue (whichever build runs next materializes it — see
         // `pendingResize`) and present the result within an explicit CA transaction.
+        historyRestore?.resize(cols: cols, rows: newRows, localOnly: localOnly)
         emulatorState.setPendingResize((cols, newRows), localOnly: localOnly)
         renderNowOffMain(flushTransaction: true)
     }

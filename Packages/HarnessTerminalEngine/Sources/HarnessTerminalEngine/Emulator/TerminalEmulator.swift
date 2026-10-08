@@ -42,6 +42,8 @@ public final class TerminalEmulator: VTParserHandler {
     public var onTitleChange: ((String) -> Void)?
     /// Reported working directory (OSC 7).
     public var onWorkingDirectoryChange: ((String) -> Void)?
+    /// The working directory last reported (OSC 7 or OSC 1337 `CurrentDir=`).
+    public private(set) var workingDirectory: String?
     /// The hostname component of an OSC 7 report, when it CHANGES — `file://host/path`
     /// carries the reporting shell's host, so an ssh session's integration flips it to the
     /// remote and the local shell flips it back on exit (drives per-host profiles). nil = the
@@ -164,8 +166,6 @@ public final class TerminalEmulator: VTParserHandler {
     /// plugins use — and animated by `a=f` / `a=a` / `a=c`. Bounded by count + total bytes,
     /// frames included; oldest evicted on overflow.
     private var kittyImages: [KittyImage] = []
-    /// Names frame pixels to the renderer: a fresh id whenever they change, never reused.
-    private var nextKittyTextureID = 0
     /// Virtual placements (`U=1`) by Kitty image id, drawn wherever placeholder cells name them,
     /// and the cells each spans.
     private var kittyVirtuals: [Int: (cols: Int, rows: Int)] = [:]
@@ -182,6 +182,55 @@ public final class TerminalEmulator: VTParserHandler {
         alternate = TerminalScreen(cols: c, rows: r)
         current = primary
         parser = VTParser(handler: self)
+    }
+
+    // MARK: - Replacement
+
+    /// A blank emulator with this one's settings but no callbacks. A host rebuilds history
+    /// into it off to the side, then swaps it in with `takeOver(from:)`.
+    public func makeReplacement(cols: Int, rows: Int) -> TerminalEmulator {
+        let replacement = TerminalEmulator(cols: cols, rows: rows)
+        replacement.copySettings(from: self)
+        return replacement
+    }
+
+    /// Become the emulator a host drives in place of `previous`: take its callbacks and
+    /// settings, then report the state a replay would have (title, working directory, remote
+    /// host, user variables, pointer shape, program status), since none of it fired while this
+    /// emulator had no callbacks.
+    public func takeOver(from previous: TerminalEmulator) {
+        copySettings(from: previous)
+        onTitleChange = previous.onTitleChange
+        onWorkingDirectoryChange = previous.onWorkingDirectoryChange
+        onRemoteHostChange = previous.onRemoteHostChange
+        onBell = previous.onBell
+        onCommandFinished = previous.onCommandFinished
+        onSetClipboard = previous.onSetClipboard
+        onResponse = previous.onResponse
+        onClipboardRead = previous.onClipboardRead
+        onNotification = previous.onNotification
+        onProgress = previous.onProgress
+        onProgramStatus = previous.onProgramStatus
+        onPointerShapeChange = previous.onPointerShapeChange
+        onUserVariableChange = previous.onUserVariableChange
+        onUserVariablesCleared = previous.onUserVariablesCleared
+        if !currentTitle.isEmpty { onTitleChange?(currentTitle) }
+        if let workingDirectory { onWorkingDirectoryChange?(workingDirectory) }
+        if hasReportedRemoteHost { onRemoteHostChange?(reportedRemoteHost) }
+        for (name, value) in userVariables.sorted(by: { $0.key < $1.key }) { onUserVariableChange?(name, value) }
+        if pointerShape != nil { onPointerShapeChange?(pointerShape) }
+        if !programStatus.records.isEmpty { onProgramStatus?(programStatus) }
+    }
+
+    private func copySettings(from other: TerminalEmulator) {
+        maxScrollbackLines = other.maxScrollbackLines
+        let cell = other.primary.cellPixelSize
+        setCellPixelSize(width: cell.width, height: cell.height)
+        readsGraphicsFiles = other.readsGraphicsFiles
+        terminalName = other.terminalName
+        terminalVersion = other.terminalVersion
+        secondaryDAVersion = other.secondaryDAVersion
+        colorProvider = other.colorProvider
     }
 
     /// Scrollback lines available on the current screen (0 on the alternate screen).
@@ -647,11 +696,6 @@ public final class TerminalEmulator: VTParserHandler {
         kittyImages.firstIndex { $0.id == id }
     }
 
-    private func nextKittyTexture() -> Int {
-        nextKittyTextureID += 1
-        return nextKittyTextureID
-    }
-
     /// Emit the Kitty graphics ack `APC G <i|I>=<id> ; <message> ST`. Per spec it's sent only when
     /// the client gave an addressable id (`i=`) or number (`I=`), and is suppressed by quietness:
     /// `q=1` silences the OK reply, `q=2` silences errors too.
@@ -716,7 +760,7 @@ public final class TerminalEmulator: VTParserHandler {
             let loaded = kittyImage(base, payload: payload)
             guard let image = loaded.image else { return ack(loaded.error) }
             let id = kittyID(for: base, assigning: true)
-            if let id { storeKittyImage(KittyImage(id: id, image: image, textureID: nextKittyTexture())) }
+            if let id { storeKittyImage(KittyImage(id: id, image: image, textureID: ImageIDs.next())) }
             if base.action == "T" {
                 if base.unicodePlaceholder {
                     if let id { placeVirtually(id: id, image: image, command: base) }
@@ -752,7 +796,7 @@ public final class TerminalEmulator: VTParserHandler {
             let loaded = kittyImage(base, payload: payload)
             guard let frame = loaded.image else { return ack(loaded.error) }
             var image = kittyImages[index]
-            if let error = image.loadFrame(frame, base, textureID: nextKittyTexture()) { return ack(error) }
+            if let error = image.loadFrame(frame, base, textureID: ImageIDs.next()) { return ack(error) }
             guard image.byteCount <= ImageLimits.maxBytesPerScreen else {
                 return ack("ENOSPC:too many frames for the image storage quota")
             }
@@ -771,7 +815,7 @@ public final class TerminalEmulator: VTParserHandler {
             guard let id = kittyID(for: base, assigning: false), let index = kittyImageIndex(id) else {
                 return ack("ENOENT:image not found")
             }
-            ack(kittyImages[index].compose(base, textureID: nextKittyTexture()))
+            ack(kittyImages[index].compose(base, textureID: ImageIDs.next()))
 
         default:
             break // unknown actions are ignored
@@ -922,6 +966,7 @@ public final class TerminalEmulator: VTParserHandler {
         if payload.hasPrefix("CurrentDir=") {
             let path = String(payload.dropFirst("CurrentDir=".count))
             guard path.hasPrefix("/") else { return }
+            workingDirectory = path
             onWorkingDirectoryChange?(path)
             return
         }
@@ -1505,6 +1550,7 @@ public final class TerminalEmulator: VTParserHandler {
             reportedRemoteHost = host
             onRemoteHostChange?(host)
         }
+        workingDirectory = path
         onWorkingDirectoryChange?(path)
     }
 

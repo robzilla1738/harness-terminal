@@ -1112,20 +1112,12 @@ public final class SurfaceRegistry: @unchecked Sendable {
         return session?.subscribe(handler)
     }
 
-    /// The ring an attaching client is sent (`RealPty.attachHistory`).
-    func attachHistory(surfaceID: String, fromSequence: UInt64?) -> AttachHistory? {
+    /// What an attaching client is sent (`RealPty.attachHistory`).
+    func attachHistory(surfaceID: String, history: Bool, fromSequence: UInt64?) -> AttachHistory? {
         lock.lock()
         let session = sessions[surfaceID]
         lock.unlock()
-        return session?.attachHistory(fromSequence: fromSequence)
-    }
-
-    /// The visible screen as VT bytes, for a screen-only attach.
-    func screenFrame(surfaceID: String) -> ScreenFrame? {
-        lock.lock()
-        let session = sessions[surfaceID]
-        lock.unlock()
-        return session?.screenFrame()
+        return session?.attachHistory(history: history, fromSequence: fromSequence)
     }
 
     public func cancelSubscription(surfaceID: String, token: UUID) {

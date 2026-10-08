@@ -85,6 +85,9 @@ public final class TerminalHostView: NSView {
     private var attachPoint: DaemonClient.AttachPoint?
     /// Bumped for every attach, so callbacks from a superseded one change nothing.
     private var attachGeneration = 0
+    /// Where the history a resync is restoring ends (`beginHistoryRestore`). Bytes below it go
+    /// to the restore, including the rest of it after a reconnect resumes mid-history.
+    private var restoreEnd: UInt64?
     /// The daemon's latest word on who sizes this pane. Nil until this client has voted.
     public private(set) var sizeOwnership: SizeOwnership?
     private var isActiveBorder = false
@@ -1080,8 +1083,9 @@ public final class TerminalHostView: NSView {
     /// on the subscription's read thread and hop to main IN ORDER: the read loop is serial and
     /// `DispatchQueue.main.async` is strict FIFO, so the emulator sees the daemon's byte order.
     /// (An unstructured `Task { @MainActor in }` is not order-preserving and scrambled
-    /// cursor-positioned redraws under bursty output.) A resync resets the terminal first;
-    /// history bytes are fed as a replay so old bells and queries don't fire again (#168).
+    /// cursor-positioned redraws under bursty output.) A resync paints the daemon's screen at
+    /// once and rebuilds the history behind it; the bytes a resume missed are fed as a replay
+    /// so old bells and queries don't fire again (#168).
     private func makeAttachHandlers() -> (
         onStart: @Sendable (DaemonClient.AttachStart) -> Void,
         onData: @Sendable (Data, UInt64) -> Void
@@ -1095,7 +1099,10 @@ public final class TerminalHostView: NSView {
                 MainActor.assumeIsolated {
                     guard let self, generation == self.attachGeneration, !self.intentionallyDetached else { return }
                     self.attachPoint = start.point
-                    if start.resync { self.nativeView.receive("\u{1b}c") }
+                    if start.resync {
+                        self.restoreEnd = start.historyEnd
+                        self.nativeView.beginHistoryRestore(screen: start.screen)
+                    }
                 }
             }
         }
@@ -1104,12 +1111,25 @@ public final class TerminalHostView: NSView {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, generation == self.attachGeneration else { return }
-                    self.nativeView.receive(data, replay: replay)
-                    self.attachPoint?.sequence = sequence &+ UInt64(data.count)
+                    let end = sequence &+ UInt64(data.count)
+                    if let restoreEnd = self.restoreEnd, sequence < restoreEnd {
+                        self.nativeView.receiveHistory(data)
+                        if end >= restoreEnd { self.finishHistoryRestore() }
+                    } else {
+                        self.finishHistoryRestore()
+                        self.nativeView.receive(data, replay: replay)
+                    }
+                    self.attachPoint?.sequence = end
                 }
             }
         }
         return (onStart, onData)
+    }
+
+    private func finishHistoryRestore() {
+        guard restoreEnd != nil else { return }
+        restoreEnd = nil
+        nativeView.finishHistoryRestore()
     }
 
     /// Ownership frames: a non-owner stops resizing the PTY (it reflows locally, or shows the

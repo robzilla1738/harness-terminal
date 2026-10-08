@@ -438,6 +438,26 @@ final class PerformanceBenchmarks: XCTestCase {
         }
     }
 
+    /// Reattaching to a pane with a large ring: the old path showed the screen only after the
+    /// whole ring parsed; the screen-first path paints the daemon's screen bytes, and the ring
+    /// parses into a replacement emulator behind it (the full-replay number, off the main thread).
+    func testAttachFirstPaintVersusFullReplay8MiB() throws {
+        try skipUnlessEnabled()
+        let ring = syntheticStream(targetBytes: 8 * 1024 * 1024)
+        var screen = Data()
+        let replayNanos = timedNanos {
+            let term = TerminalEmulator(cols: 160, rows: 48)
+            term.feed(ring)
+            screen = PaneCapture.screen(term)
+        }
+        let paintNanos = timedNanos {
+            let term = TerminalEmulator(cols: 160, rows: 48)
+            term.feed(screen)
+        }
+        printBenchmark("attach_full_replay_8mib", nanos: replayNanos, fields: [("bytes", "\(ring.count)")])
+        printBenchmark("attach_screen_first_paint_8mib", nanos: paintNanos, fields: [("bytes", "\(screen.count)")])
+    }
+
     @MainActor
     func testSurfaceMainThreadStall4MiB() throws {
         try skipUnlessEnabled()

@@ -1207,44 +1207,55 @@ public final class RealPty: @unchecked Sendable {
         scrollbackPersistenceEnabled = true
     }
 
-    /// The screen a new client paints. A parked pane serves its sealed snapshot and does not
-    /// put the grid back in the heap.
+    /// The screen a new client paints.
     func screenFrame() -> ScreenFrame? {
         scrollbackLock.lock()
         let parked = idleGrid.parked
+        let ring = ringLocked()
         scrollbackLock.unlock()
+        return screenFrame(ring: ring, parked: parked)
+    }
+
+    /// The screen after `ring`. A parked pane serves its sealed snapshot, and a pane whose grid
+    /// was not in the heap parses one for the frame and lets it go: attaching doesn't leave a
+    /// grid behind.
+    private func screenFrame(ring: [SnapshotByteSpan], parked: Bool) -> ScreenFrame? {
         if parked, let url = parkFileURL(),
            let sealed = try? Data(contentsOf: url),
            let plain = SnapshotCipher.open(sealed: sealed, key: parkKey()),
            let frame = ScreenFrame.decode(plain) {
             return frame
         }
-        let ring = copyRing()
         let size = currentWinsize()
         snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        let resident = authoritative.gridResident
         authoritative.catchUp(ring: ring, cols: size.cols, rows: size.rows)
         let frame = authoritative.frame()
-        snapshotLock.unlock()
+        if !resident { authoritative.releaseGrid() }
         return frame
     }
 
     /// What an attaching client needs from the ring: the bytes after `fromSequence` when the
-    /// ring still holds them (a resume), else all of it (`resync`: the client starts over).
-    /// `endSequence` is where live output takes over. Chunks keep their ring sequences.
-    func attachHistory(fromSequence: UInt64?, chunkLimit: Int = 1 << 20) -> AttachHistory {
+    /// ring still holds them (a resume), else the screen and, with `history`, all of the ring
+    /// (`resync`: the client starts over). `endSequence` is where live output takes over; the
+    /// screen is taken there, and left out if a concurrent reader moved the grid past it.
+    /// Chunks keep their ring sequences.
+    func attachHistory(history: Bool = true, fromSequence: UInt64?, chunkLimit: Int = 1 << 20) -> AttachHistory {
         scrollbackLock.lock()
-        let segments = replaySegmentsLocked()
+        let ring = ringLocked()
+        let parked = idleGrid.parked
         let end = nextSequence
         scrollbackLock.unlock()
-        let first = segments.first?.sequence ?? end
-        let resume = fromSequence.map { $0 >= first && $0 <= end } ?? false
+        let first = ring.first?.sequence ?? end
+        let resume = history && fromSequence.map { $0 >= first && $0 <= end } ?? false
         var chunks: [ScrollbackReplaySegment] = []
-        for segment in segments {
-            var data = segment.data
-            var sequence = segment.sequence
+        for span in ring where history {
+            var data = span.data
+            var sequence = span.sequence
             if resume, let from = fromSequence {
-                let segmentEnd = sequence &+ UInt64(data.count)
-                guard from < segmentEnd else { continue }
+                let spanEnd = sequence &+ UInt64(data.count)
+                guard from < spanEnd else { continue }
                 if from > sequence {
                     data = data.dropFirst(Int(from - sequence))
                     sequence = from
@@ -1257,7 +1268,8 @@ public final class RealPty: @unchecked Sendable {
                 data = data.dropFirst(piece.count)
             }
         }
-        return AttachHistory(chunks: chunks, endSequence: end, resync: !resume)
+        let screen = resume ? nil : screenFrame(ring: ring, parked: parked).flatMap { $0.sequence == end ? $0 : nil }
+        return AttachHistory(chunks: chunks, endSequence: end, resync: !resume, screen: screen)
     }
 
     private func ringLocked() -> [SnapshotByteSpan] {

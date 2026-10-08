@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// A decoded raster image (RGBA8, premultiplied not assumed) ready for placement + GPU upload.
 /// The common output of every image protocol decoder (Sixel, Kitty graphics, iTerm2).
@@ -29,5 +30,15 @@ public enum ImageLimits {
     public static func withinPixelCap(width: Int, height: Int) -> Bool {
         guard width > 0, height > 0, width <= 100_000, height <= 100_000 else { return false }
         return width * height <= maxPixels
+    }
+}
+
+/// Image ids, unique across every emulator in the process. The renderer caches textures by id,
+/// so two screens, or an emulator swapped in behind a pane, must never reuse one.
+enum ImageIDs {
+    private static let last = Atomic<Int>(0)
+
+    static func next() -> Int {
+        last.wrappingAdd(1, ordering: .relaxed).newValue
     }
 }
