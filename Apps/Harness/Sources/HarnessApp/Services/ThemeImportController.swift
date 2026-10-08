@@ -62,6 +62,7 @@ enum ThemeImportController {
     /// re-exported/shared. A write failure is non-fatal — the theme can still be applied in-memory.
     private static func install(_ document: ThemeDocument) {
         _ = try? fileService.install(document, into: HarnessPaths.themesDirectory)
+        ThemeLibrary.reload()
     }
 
     private static func presentInstallChoice(for document: ThemeDocument) -> InstallChoice {

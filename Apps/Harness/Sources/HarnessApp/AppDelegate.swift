@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         StartupMetrics.shared.mark(.launchStart)
+        ThemeLibrary.reload()
         // Build the UI immediately so launch never blocks on the daemon. The
         // coordinator starts from a default snapshot and repopulates the moment
         // the daemon answers (below) — no frozen window, no modal timeout dialog.

@@ -88,6 +88,7 @@
 		2F3246832ED742481B944224 /* wide_cjk__11x5__to__16x12.golden in Resources */ = {isa = PBXBuildFile; fileRef = 946497806ED0EC304E6D41A9 /* wide_cjk__11x5__to__16x12.golden */; };
 		2F6B93B6CC16391C6A75A035 /* RemoteSocketDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E18DFB7649906F46802FE40 /* RemoteSocketDetectorTests.swift */; };
 		309D6041940CA5663F7164C9 /* PasteBufferStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F913A1FD23783BAACAB189B6 /* PasteBufferStoreTests.swift */; };
+		32A02E23DDB79559BEB1ED1B /* DockTileRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CB5A241837F614062DD594B /* DockTileRenderer.swift */; };
 		3349C619D5F290BF256F642B /* SearchHighlightIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D316559854667DA2A5606E1E /* SearchHighlightIndexTests.swift */; };
 		33793AA12932033733C080C5 /* emoji_mixed__9x4__to__24x6.golden in Resources */ = {isa = PBXBuildFile; fileRef = 12C6FC531ECD539CE1E3E039 /* emoji_mixed__9x4__to__24x6.golden */; };
 		33D7298B1977A24D3D40D719 /* EchoRTTBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026F840277D2E897AD88C17F /* EchoRTTBenchmark.swift */; };
@@ -172,6 +173,7 @@
 		6797E23285486E1D4EDFA763 /* RecordClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1BA93151A72684AFF7A91A9 /* RecordClient.swift */; };
 		680FACAD583B3DB81E06FBFE /* HarnessOnboarding in Frameworks */ = {isa = PBXBuildFile; productRef = 7E706A4AB74864AAA577AE71 /* HarnessOnboarding */; };
 		6816E8641C9597BC3049EC05 /* hard_short__20x5__to__5x5.golden in Resources */ = {isa = PBXBuildFile; fileRef = 22D17A65977ED851453B5354 /* hard_short__20x5__to__5x5.golden */; };
+		69CFC06A5A77716038E58E74 /* ThemeLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90509DE8F3B7C7839C1EE4C /* ThemeLibrary.swift */; };
 		69E1E0B522D02B059CFE5F6A /* CommandPromptController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3912417CC3E06CEA28B664B /* CommandPromptController.swift */; };
 		6AC746D56E8522996DC5381F /* NotchPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0736359DE83EBAAC5A471E82 /* NotchPanel.swift */; };
 		6B30372B2DE8012F3A316CEE /* FrameBuilderCopyModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5682C78A6E653E4DD2C915FE /* FrameBuilderCopyModeTests.swift */; };
@@ -559,6 +561,7 @@
 		5A9C10A4B52FB83548EAC0F3 /* CLIInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIInstaller.swift; sourceTree = "<group>"; };
 		5AEF642B915422A4D0ABFD58 /* prose_softwrap__40x6__to__48x4.golden */ = {isa = PBXFileReference; path = prose_softwrap__40x6__to__48x4.golden; sourceTree = "<group>"; };
 		5B7B1A021E55C4A6011748BE /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		5CB5A241837F614062DD594B /* DockTileRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockTileRenderer.swift; sourceTree = "<group>"; };
 		5D03D1B79D7AB24A7C1F5761 /* HarnessTerminalKitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HarnessTerminalKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5D1ED5E4D8583716BF50A4FB /* wide_cjk__11x5__to__16x3.golden */ = {isa = PBXFileReference; path = wide_cjk__11x5__to__16x3.golden; sourceTree = "<group>"; };
 		5F6A35BEA359ACEF169811F7 /* prompt_marks__16x5__to__7x6.golden */ = {isa = PBXFileReference; path = prompt_marks__16x5__to__7x6.golden; sourceTree = "<group>"; };
@@ -672,6 +675,7 @@
 		A75A61F63B71608690269266 /* HarnessChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessChrome.swift; sourceTree = "<group>"; };
 		A7D5BB303ED12340A45F0F84 /* CompositorFixtureSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompositorFixtureSpec.swift; sourceTree = "<group>"; };
 		A85FF9109AACFB15B6F55C2A /* ControlKeyNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlKeyNormalizerTests.swift; sourceTree = "<group>"; };
+		A90509DE8F3B7C7839C1EE4C /* ThemeLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeLibrary.swift; sourceTree = "<group>"; };
 		A9905FB5F9DBFF60548107D5 /* InputEncoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputEncoderTests.swift; sourceTree = "<group>"; };
 		A9CD77EBDD8B1A13C0BA9273 /* NotchShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchShape.swift; sourceTree = "<group>"; };
 		AA141FB5D0A682E459A41536 /* AgentDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDetectorTests.swift; sourceTree = "<group>"; };
@@ -1005,6 +1009,7 @@
 				F3912417CC3E06CEA28B664B /* CommandPromptController.swift */,
 				5A0B5969E6A4582978144B11 /* ContentAreaViewController.swift */,
 				26F2AD1D92779527F2E5F14A /* DisplayPanesOverlay.swift */,
+				5CB5A241837F614062DD594B /* DockTileRenderer.swift */,
 				A75A61F63B71608690269266 /* HarnessChrome.swift */,
 				63791142526EFF43A6EA6B0D /* HarnessControls.swift */,
 				5844E35D84A5D77C31D27D62 /* HarnessDesign.swift */,
@@ -1453,6 +1458,7 @@
 				57E7B54FEAA7751D104044B8 /* TerminalPaneRegistryAccess.swift */,
 				3250876CFBA67ECE29C5E3E2 /* TerminalServicesProvider.swift */,
 				0695CA43B8988F678A99D89F /* ThemeImportController.swift */,
+				A90509DE8F3B7C7839C1EE4C /* ThemeLibrary.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -2061,6 +2067,7 @@
 				084B9F215A3A2B1600D90FDE /* DaemonLauncher.swift in Sources */,
 				3F8493C2DE63B3390B882B6E /* DefaultTerminalManager.swift in Sources */,
 				2A3B080F4B0F44733627AD4D /* DisplayPanesOverlay.swift in Sources */,
+				32A02E23DDB79559BEB1ED1B /* DockTileRenderer.swift in Sources */,
 				2AB847EDCA9FAAAC781CD332 /* FileWatcher.swift in Sources */,
 				A86D444BBF0FDB3C4D7C554A /* GitBranchMonitor.swift in Sources */,
 				24D64B6C7D5B7E0AA33F103B /* HarnessChrome.swift in Sources */,
@@ -2106,6 +2113,7 @@
 				11BD404F759FB4CEA5A5F6E0 /* TerminalServicesProvider.swift in Sources */,
 				969DF05AF1093B44B62120CD /* TerminalTabBarView.swift in Sources */,
 				2C06CA490C6FD11C4E891DE5 /* ThemeImportController.swift in Sources */,
+				69CFC06A5A77716038E58E74 /* ThemeLibrary.swift in Sources */,
 				9766BBA7CF5BF33018C0B13F /* Toast.swift in Sources */,
 				3C7E2A84108B690A43D2E6DB /* WindowBlur.swift in Sources */,
 				99D8B9AC1120BF2E99546FB4 /* WindowBorderOverlayView.swift in Sources */,

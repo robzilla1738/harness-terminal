@@ -362,27 +362,42 @@ final class PaneContainerView: NSView {
         )
     }
 
-    @objc private func activeSurfaceDidChange() { refreshHeaders() }
+    @objc private func activeSurfaceDidChange() {
+        refreshHeaders()
+        announceFocusedPane()
+    }
 
     private var showsHeaders = false
+    private var announcedSurface: SurfaceID?
 
-    /// Re-read each pane's identity and focus into its header.
+    /// Re-read each pane's identity and focus into its header and its VoiceOver label.
     func refreshHeaders() {
-        guard showsHeaders, let tab = coordinator.snapshot.activeWorkspace?.activeTab else { return }
+        guard let tab = coordinator.snapshot.activeWorkspace?.activeTab else { return }
         let leaves = tab.rootPane.allLeaves()
         let focused = coordinator.activeSurfaceID
         for island in islands {
-            guard let header = island.header,
-                  let leaf = leaves.first(where: { $0.surfaceID == island.surfaceID })
-            else { continue }
-            let identity = PaneIdentity.of(leaf: leaf, in: tab)
-            header.update(
-                title: SurfaceIdentity.label(directory: identity.directory, program: identity.program, agent: identity.agent?.commandToken),
-                agent: identity.agent,
-                focused: leaves.count == 1 || island.surfaceID == focused,
-                ownership: island.terminalHost?.sizeOwnership
+            guard let index = leaves.firstIndex(where: { $0.surfaceID == island.surfaceID }) else { continue }
+            let identity = PaneIdentity.of(leaf: leaves[index], in: tab)
+            let title = SurfaceIdentity.label(directory: identity.directory, program: identity.program, agent: identity.agent?.commandToken)
+            let isFocused = leaves.count == 1 || island.surfaceID == focused
+            island.terminalHost?.setAccessibilityLabel(
+                "Pane \(index + 1) of \(leaves.count), \(title)" + (isFocused && leaves.count > 1 ? ", focused" : "")
             )
+            guard showsHeaders, let header = island.header else { continue }
+            header.update(title: title, agent: identity.agent, focused: isFocused, ownership: island.terminalHost?.sizeOwnership)
         }
+    }
+
+    /// Tell VoiceOver which pane now has focus when it moves between split panes.
+    private func announceFocusedPane() {
+        guard let focused = coordinator.activeSurfaceID, focused != announcedSurface,
+              let host = islands.first(where: { $0.surfaceID == focused })?.terminalHost,
+              let label = host.accessibilityLabel(), islands.count > 1
+        else { return }
+        announcedSurface = focused
+        NSAccessibility.post(element: host, notification: .announcementRequested, userInfo: [
+            .announcement: label, .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+        ])
     }
 
     /// Paints the gutter around the islands. When the window is translucent nothing else

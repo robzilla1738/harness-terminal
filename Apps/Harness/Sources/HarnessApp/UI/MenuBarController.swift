@@ -173,7 +173,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 for tab in session.tabs {
                     guard let kind = tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title) else { continue }
                     let activity = tab.agent?.activity ?? (tab.status == .waiting ? .awaiting : .idle)
-                    if best == nil || rank(activity) > rank(best!.1) { best = (kind, activity) }
+                    if best == nil || AttentionRank.of(activity: activity) > AttentionRank.of(activity: best!.1) { best = (kind, activity) }
                 }
                 if let best {
                     let name = session.name.isEmpty ? sessionFolder(session) : session.name
@@ -182,16 +182,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 }
             }
         }
-        return rows.sorted { rank($0.activity) > rank($1.activity) }
-    }
-
-    private func rank(_ activity: AgentActivity) -> Int {
-        switch activity {
-        case .awaiting: return 3
-        case .errored: return 2
-        case .working: return 1
-        case .idle: return 0
-        }
+        return AttentionRank.sorted(rows, rank: { AttentionRank.of(activity: $0.activity) }, lastActivity: { _ in nil })
     }
 
     private func stateLabel(_ activity: AgentActivity) -> String? {

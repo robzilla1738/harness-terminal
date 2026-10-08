@@ -1,6 +1,8 @@
 import AppKit
 import HarnessCore
 import HarnessTerminalKit
+import HarnessTheme
+import UniformTypeIdentifiers
 import UserNotifications
 
 @MainActor
@@ -858,7 +860,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     // MARK: - Page: Colors
 
     private func buildColorsPage() -> NSView {
-        let header = pageHeader(title: "Colors", trailing: nil)
+        let header = pageHeader(title: "Colors", trailing: themeFileMenu())
 
         // colorBindings 0–6 are the terminal colors; 7–8 are the chrome accents. The
         // selected theme seeds every one; the user can then edit any swatch.
@@ -917,6 +919,56 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
         return scrollWrap(stack)
+    }
+
+    /// "Theme" ▸ Save as Theme… / Export Theme…: keep the colors on screen as a named theme
+    /// in the theme menu, or write them to a `.harnesstheme` file to share.
+    private func themeFileMenu() -> NSPopUpButton {
+        let menu = NSPopUpButton(frame: .zero, pullsDown: true)
+        menu.bezelStyle = .rounded
+        menu.addItem(withTitle: "Theme")
+        for (title, action) in [("Save as Theme…", #selector(saveAsTheme)), ("Export Theme…", #selector(exportTheme))] {
+            menu.addItem(withTitle: title)
+            menu.lastItem?.target = self
+            menu.lastItem?.action = action
+        }
+        return menu
+    }
+
+    @objc private func saveAsTheme() {
+        let alert = NSAlert()
+        alert.messageText = "Save these colors as a theme"
+        alert.informativeText = "It joins the theme menu and is saved in your themes folder."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "Theme name"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        do {
+            try ThemeLibrary.saveCurrent(as: name)
+            populateThemePopup(themePopup, selectedThemeName: name)
+            Toast.show("Saved theme “\(name)”", in: view)
+        } catch {
+            Toast.show("Couldn't save the theme", in: view)
+        }
+    }
+
+    @objc private func exportTheme() {
+        let name = SessionCoordinator.shared.snapshot.themeName
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = ThemeFileService.fileName(for: name)
+        panel.allowedContentTypes = [UTType(filenameExtension: ThemeDocument.fileExtension) ?? .json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try ThemeLibrary.exportCurrent(to: url, named: url.deletingPathExtension().lastPathComponent)
+            Toast.show("Exported \(url.lastPathComponent)", in: view)
+        } catch {
+            Toast.show("Couldn't export the theme", in: view)
+        }
     }
 
     private func makeLinkButton(_ title: String, action: Selector) -> NSButton {

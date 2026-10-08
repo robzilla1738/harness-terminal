@@ -712,13 +712,7 @@ final class SessionCoordinator: NSObject {
     }
 
     private func updateDockBadge(from snapshot: SessionSnapshot) {
-        let waiting = snapshot.workspaces.reduce(into: 0) { count, workspace in
-            count += workspace.sessions
-                .flatMap(\.tabs)
-                .filter { $0.status == .waiting }
-                .count
-        }
-        NSApp.dockTile.badgeLabel = waiting > 0 ? "\(waiting)" : nil
+        DockTileRenderer.shared.update(from: snapshot)
     }
 
     func saveImmediately() {

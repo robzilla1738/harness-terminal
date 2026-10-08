@@ -34,8 +34,9 @@ public struct SessionEditor: Sendable {
             return nil
         }
         let tab = Tab(cwd: existingWorkingDirectory(cwd))
+        let taken = Set(snapshot.workspaces.flatMap(\.sessions).map(\.name))
         let session = SessionGroup(
-            name: name ?? "",
+            name: name ?? SessionNames.generate(avoiding: taken),
             tabs: [tab],
             activeTabID: tab.id,
             sortOrder: snapshot.workspaces[workspaceIndex].sessions.count

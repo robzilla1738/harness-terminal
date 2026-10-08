@@ -818,6 +818,18 @@ private final class TabPillView: NSView {
         glassView = glass
     }
 
+    // VoiceOver: each pill is a radio button in the tab group, selected when active, and
+    // pressing it selects the tab.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .radioButton }
+    override func accessibilityRoleDescription() -> String? { "tab" }
+    override func accessibilityValue() -> Any? { NSNumber(value: isActive) }
+    override func isAccessibilitySelected() -> Bool { isActive }
+    override func accessibilityPerformPress() -> Bool {
+        onSelect?(tabID)
+        return true
+    }
+
     func applyChrome(isActive: Bool) {
         self.isActive = isActive
         let c = HarnessDesign.chrome

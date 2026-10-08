@@ -38,8 +38,25 @@ public enum HarnessThemeCatalog {
         let lowered = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let lookupName = legacyThemeAliases[lowered] ?? lowered
         if let builtin = builtins.first(where: { $0.name.lowercased() == lookupName }) { return builtin }
+        if let saved = userThemes.first(where: { $0.name.lowercased() == lookupName }) { return saved }
         return all.first { $0.name.lowercased() == lookupName }
     }
+
+    /// Themes the user saved or imported (the themes folder). The app sets them at launch and
+    /// after each save; they list after the featured ones and win over a bundled theme of the
+    /// same name, but never over a builtin.
+    public static var userThemes: [HarnessThemeDefinition] {
+        get { userThemesLock.lock(); defer { userThemesLock.unlock() }; return storedUserThemes }
+        set {
+            let builtinNames = Set(builtins.map { $0.name.lowercased() })
+            userThemesLock.lock()
+            storedUserThemes = newValue.filter { !builtinNames.contains($0.name.lowercased()) }
+            userThemesLock.unlock()
+        }
+    }
+
+    private static let userThemesLock = NSLock()
+    nonisolated(unsafe) private static var storedUserThemes: [HarnessThemeDefinition] = []
 
     /// Fuzzy-ish search: empty query returns all (featured first); otherwise themes whose
     /// name contains the query, case-insensitive.
@@ -51,7 +68,11 @@ public enum HarnessThemeCatalog {
 
     /// Every known theme, featured ones first (in `featuredNames` order), then the rest
     /// alphabetically.
-    public static var allThemes: [HarnessThemeDefinition] { all }
+    public static var allThemes: [HarnessThemeDefinition] {
+        let saved = userThemes
+        let savedNames = Set(saved.map { $0.name.lowercased() })
+        return builtins + saved + all.dropFirst(builtins.count).filter { !savedNames.contains($0.name.lowercased()) }
+    }
 
     // MARK: - Storage
 

@@ -43,6 +43,17 @@ public struct HarnessThemeDefinition: Equatable, Sendable, Codable {
 
     public var isDark: Bool { background.isDark }
 
+    /// A saved or imported `.harnesstheme` as a catalog entry.
+    public init(document: ThemeDocument) {
+        let colors = document.colors
+        self.init(
+            name: document.name, background: colors.background, foreground: colors.foreground,
+            cursor: colors.cursor, cursorText: colors.cursorText,
+            selectionBackground: colors.selectionBackground, selectionForeground: colors.selectionForeground,
+            bold: colors.bold, palette: colors.palette
+        )
+    }
+
     // MARK: - Hex accessors (parity with the previous the theme model API)
 
     public var backgroundHex: String { background.hexString }

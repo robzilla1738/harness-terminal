@@ -124,3 +124,55 @@ final class ShellJoinTests: XCTestCase {
         XCTAssertEqual(ControlPlane.shellJoin(["echo", "it's"]), #"echo 'it'\''s'"#)
     }
 }
+
+final class SessionNamesTests: XCTestCase {
+    private struct Sequence: RandomNumberGenerator {
+        var state: UInt64
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
+    func testNamesAreTwoWordsAndAvoidTakenOnes() {
+        var generator = Sequence(state: 1)
+        let first = SessionNames.generate(avoiding: [], using: &generator)
+        XCTAssertEqual(first.split(separator: " ").count, 2)
+        var again = Sequence(state: 1)
+        XCTAssertNotEqual(SessionNames.generate(avoiding: [first.uppercased()], using: &again), first, "taken names are skipped, ignoring case")
+        let everything = Set(SessionNames.adjectives.flatMap { a in SessionNames.nouns.map { "\(a) \($0)" } })
+        var exhausted = Sequence(state: 9)
+        XCTAssertTrue(SessionNames.generate(avoiding: everything, using: &exhausted).hasSuffix(" 2"))
+    }
+
+    func testANewSessionGetsAFriendlyName() {
+        var editor = SessionEditor(snapshot: SessionSnapshot())
+        let workspace = editor.snapshot.workspaces[0].id
+        let id = editor.addSession(to: workspace)
+        let session = editor.snapshot.workspaces[0].sessions.first { $0.id == id }
+        XCTAssertEqual(session?.name.split(separator: " ").count, 2)
+        XCTAssertEqual(editor.addSession(to: workspace, name: "api").flatMap { id in editor.snapshot.workspaces[0].sessions.first { $0.id == id }?.name }, "api")
+    }
+}
+
+final class AttentionRankTests: XCTestCase {
+    func testOneOrderForWhatNeedsYou() {
+        XCTAssertEqual(AttentionRank.of(waiting: true), .waiting)
+        XCTAssertEqual(AttentionRank.of(activity: .awaiting), .blocked)
+        XCTAssertEqual(AttentionRank.of(mark: .error), .error)
+        XCTAssertEqual(AttentionRank.of(mark: .done), .done)
+        XCTAssertEqual(AttentionRank.of(activity: .working), .working)
+        XCTAssertEqual(AttentionRank.of(), .idle)
+        XCTAssertTrue(AttentionRank.error.needsYou)
+        XCTAssertFalse(AttentionRank.done.needsYou)
+        let now = Date()
+        let rows: [(String, AttentionRank, Date?)] = [
+            ("idle", .idle, now), ("old-working", .working, now.addingTimeInterval(-60)),
+            ("blocked", .blocked, nil), ("new-working", .working, now),
+        ]
+        XCTAssertEqual(AttentionRank.sorted(rows, rank: \.1, lastActivity: \.2).map(\.0), ["blocked", "new-working", "old-working", "idle"])
+    }
+}

@@ -85,6 +85,8 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
     private var sessions: [SwitcherSession] = []
     private var currentID: String?
     private var selectedIndex: Int?
+    /// The session being renamed in the filter field (⌘R or a right-click), else nil.
+    private var renaming: SwitcherSession?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -227,6 +229,10 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
                 let rowView = SwitcherRowView(row: row, symbol: Self.symbol(for: row.id, isSession: owner != nil), selected: index == selectedIndex)
                 rowView.onHover = { [weak self] in self?.select(index) }
                 rowView.onClick = { [weak self] in self?.activate(index) }
+                rowView.onRename = { [weak self] in
+                    self?.select(index)
+                    self?.beginRename(index)
+                }
                 view = rowView
             }
             view.frame = NSRect(x: 0, y: y, width: width - HarnessDesign.Spacing.sm * 2, height: height)
@@ -287,13 +293,68 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
         }
     }
 
+    // MARK: - Rename
+
+    /// Rename a session on this daemon in place: the filter field holds its name until
+    /// Return saves it or Escape cancels.
+    private func beginRename(_ index: Int?) {
+        guard let index, case let .row(row, owner)? = items[safe: index], owner != nil,
+              let session = sessions.first(where: { $0.id == row.id }),
+              session.owner == (RemoteHostsService.shared.activeHostName ?? DaemonSidebar.localID)
+        else { return }
+        renaming = session
+        filterField.stringValue = session.title
+        setPlaceholder("Rename \(session.title)")
+        filterField.currentEditor()?.selectAll(nil)
+    }
+
+    private func commitRename() {
+        guard let session = renaming, let id = UUID(uuidString: session.id) else { return }
+        let name = filterField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty, name != session.title {
+            SessionCoordinator.shared.requestDaemon(.renameSession(sessionID: id, name: name))
+        }
+        onClose?()
+    }
+
+    private func cancelRename() {
+        renaming = nil
+        filterField.stringValue = ""
+        setPlaceholder("Filter or create…")
+        reload(resetSelection: true)
+    }
+
+    private func setPlaceholder(_ text: String) {
+        filterField.placeholderAttributedString = NSAttributedString(
+            string: text,
+            attributes: [.foregroundColor: HarnessChrome.current.textTertiary, .font: HarnessDesign.Typography.sidebarLabel]
+        )
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, event.charactersIgnoringModifiers == "r" {
+            beginRename(selectedIndex)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     // MARK: - Keys and dismissal
 
     func controlTextDidChange(_ obj: Notification) {
+        guard renaming == nil else { return }
         reload(resetSelection: true)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if renaming != nil {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)): commitRename()
+            case #selector(NSResponder.cancelOperation(_:)): cancelRename()
+            default: return false
+            }
+            return true
+        }
         switch selector {
         case #selector(NSResponder.moveUp(_:)): move(-1)
         case #selector(NSResponder.moveDown(_:)): move(1)
@@ -318,6 +379,8 @@ private final class FlippedView: NSView {
 private final class SwitcherRowView: NSView {
     var onHover: (() -> Void)?
     var onClick: (() -> Void)?
+    /// Right-click: rename this session in the filter field.
+    var onRename: (() -> Void)?
     private let check = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private let shortcut = NSTextField(labelWithString: "")
@@ -406,6 +469,7 @@ private final class SwitcherRowView: NSView {
     override func mouseEntered(with event: NSEvent) { onHover?() }
     override func mouseMoved(with event: NSEvent) { onHover?() }
     override func mouseUp(with event: NSEvent) { onClick?() }
+    override func rightMouseDown(with event: NSEvent) { onRename?() }
     override func accessibilityPerformPress() -> Bool { onClick?(); return true }
 }
 

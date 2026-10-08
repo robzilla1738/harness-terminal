@@ -192,12 +192,7 @@ public enum AgentNotchProjection {
     }
 
     public static func sortedAgents(_ agents: [AgentSessionSummary]) -> [AgentSessionSummary] {
-        agents.sorted { lhs, rhs in
-            let lhsRank = rank(agent: lhs)
-            let rhsRank = rank(agent: rhs)
-            if lhsRank != rhsRank { return lhsRank > rhsRank }
-            return lhs.lastActivityAt > rhs.lastActivityAt
-        }
+        AttentionRank.sorted(agents, rank: { AttentionRank.of(waiting: $0.waiting, activity: $0.activity) }, lastActivity: \.lastActivityAt)
     }
 
     private static func tabContexts(from snapshot: SessionSnapshot) -> [UUID: TabContext] {
@@ -213,36 +208,7 @@ public enum AgentNotchProjection {
     }
 
     public static func sortedRows(_ rows: [AgentNotchRowSummary]) -> [AgentNotchRowSummary] {
-        rows.enumerated().sorted { lhs, rhs in
-            let lhsRank = rank(row: lhs.element)
-            let rhsRank = rank(row: rhs.element)
-            if lhsRank != rhsRank { return lhsRank > rhsRank }
-            if let lhsDate = lhs.element.lastActivityAt, let rhsDate = rhs.element.lastActivityAt,
-               lhsDate != rhsDate {
-                return lhsDate > rhsDate
-            }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
-    }
-
-    private static func rank(agent: AgentSessionSummary) -> Int {
-        if agent.waiting { return 4 }
-        switch agent.activity {
-        case .awaiting: return 3
-        case .errored: return 2
-        case .working: return 1
-        case .idle: return 0
-        }
-    }
-
-    private static func rank(row: AgentNotchRowSummary) -> Int {
-        if row.waitingCount > 0 { return 4 }
-        switch row.agentActivity {
-        case .awaiting: return 3
-        case .errored: return 2
-        case .working: return 1
-        case .idle, .none: return 0
-        }
+        AttentionRank.sorted(rows, rank: { AttentionRank.of(waiting: $0.waitingCount > 0, activity: $0.agentActivity) }, lastActivity: \.lastActivityAt)
     }
 
     private static func sessionOrder(_ sessions: [SessionGroup]) -> [SessionGroup] {
