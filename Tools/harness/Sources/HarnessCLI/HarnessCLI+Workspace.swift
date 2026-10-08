@@ -138,7 +138,7 @@ extension HarnessCLI {
             } else if let line = try? event.jsonLine() {
                 print(line)
             }
-            fflush(stdout)
+            fflush(nil) // stdout; naming the C global trips Swift 6.0 strict concurrency on Linux
         }
     }
 

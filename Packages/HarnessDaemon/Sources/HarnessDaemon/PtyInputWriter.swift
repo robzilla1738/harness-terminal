@@ -82,10 +82,12 @@ final class PtyInputWriter: @unchecked Sendable {
     }
 
     /// Resume when the PTY can take more. The source owns `fd` and closes it when cancelled.
+    /// Its handler holds it until that cancel (cancelling releases the handler), which the first
+    /// event or `close()` always reaches.
     private func waitForRoom(_ fd: Int32) {
         let source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
-        source.setEventHandler { [weak self, weak source] in
-            source?.cancel()
+        source.setEventHandler { [weak self] in
+            source.cancel()
             guard let self else { return }
             self.waiting = nil
             self.drain()

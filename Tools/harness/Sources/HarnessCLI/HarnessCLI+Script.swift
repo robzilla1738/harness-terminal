@@ -159,7 +159,7 @@ extension HarnessCLI {
         guard !commands.isEmpty else { return }
         if origin == .key || origin == .palette {
             commands.forEach { print(ScriptActionRunner.queuedLine($0)) }
-            fflush(stdout)
+            fflush(nil) // stdout; naming the C global trips Swift 6.0 strict concurrency on Linux
             return
         }
         guard let client = try? makeClient(args) else { return }
