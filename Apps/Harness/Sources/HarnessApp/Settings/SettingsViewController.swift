@@ -660,7 +660,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Transparent title bar", transparentTitlebarToggle),
             settingsRow("Show sidebar", sidebarVisibleToggle,
                         hint: "Sessions in a sidebar instead of tabs in the title bar. ⌘\\ switches."),
-            settingsRow("Remember size and position", restoreWindowSizeToggle),
+            settingsRow("Remember size and position", restoreWindowSizeToggle,
+                        hint: "Reopen at your last size. When off, start at 100 columns × 30 rows."),
         ])
 
         paddingXField.widthAnchor.constraint(equalToConstant: Form.numberFieldWidth).isActive = true

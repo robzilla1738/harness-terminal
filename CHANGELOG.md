@@ -22,7 +22,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ### Changed
 
-- Cleaner title-bar spacing with separate tabs, compact badges, and a 960-point default window width sized for three tabs and surrounding controls. Saved window sizes remain respected.
+- Cleaner title-bar spacing with separate tabs, compact badges, and a 100-column × 30-row fresh-window default based on the configured font and padding. New settings remember window size and position; explicit preferences and saved sizes remain respected.
 
 - Recessed window chrome gives translucent terminal panes a lighter appearance against the tab bar, sidebar, and gutters while preserving terminal colors and one shared window blur.
 - Flat rectangular terminal and agent badges have balanced spacing, taller marks, and no drop shadow. Added sourced logos and detection for 23 coding CLIs across tabs, sidebar rows, Overview, and Agents settings. Removed agent color pickers and palette actions; legacy configuration values remain readable.

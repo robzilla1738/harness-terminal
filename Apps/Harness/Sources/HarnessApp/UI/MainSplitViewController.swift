@@ -33,6 +33,7 @@ final class MainSplitViewController: NSViewController {
         content.showSessionSwitcher()
     }
     private let statusLine = StatusLineView()
+    var statusLineHeight: CGFloat { statusLine.isHidden ? 0 : statusLine.frame.height }
     /// 1px hairline along the inner edge of the sidebar — adds quiet definition
     /// between sidebar/terminal without resorting to a draggable divider line.
     private let edgeDivider = NSView()

@@ -118,7 +118,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var defaultCWD: String
     public var transparentTitlebar: Bool
     public var sidebarVisible: Bool
-    /// Restore the main window's size + position across launches. When false (default),
+    /// Restore the main window's size + position across launches. When false,
     /// the window opens at its built-in default size, centered. Window-level only — the
     /// frame is persisted via `NSWindow.setFrameAutosaveName`.
     public var restoreWindowSize: Bool
@@ -398,7 +398,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
         transparentTitlebar: Bool = true,
         sidebarVisible: Bool = false,
-        restoreWindowSize: Bool = false,
+        restoreWindowSize: Bool = true,
         backgroundOpacity: Float = 0.63,
         backgroundBlur: Int = 16,
         windowPaddingX: Float = 14,

@@ -498,24 +498,16 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertFalse(decoded.liveResizeReflow)
     }
 
-    func testRestoreWindowSizeDefaultsOffAndRoundTrips() throws {
-        // New option: opt-in window frame persistence. Default off so existing users
-        // keep the centered default-size launch.
-        XCTAssertFalse(HarnessSettings().restoreWindowSize)
-
-        // A settings file predating the key decodes to the off default.
-        let legacy = Data("""
-        { "fontSize": 14, "customBackgroundHex": "#000000" }
-        """.utf8)
-        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
-        XCTAssertFalse(migrated.restoreWindowSize, "absent key defaults to off")
-
-        // An explicit value survives a save/load round-trip.
-        var settings = HarnessSettings()
-        settings.restoreWindowSize = true
-        let encoded = try JSONEncoder().encode(settings)
-        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: encoded)
-        XCTAssertTrue(decoded.restoreWindowSize)
+    func testRestoreWindowSizeDefaultsOnAndPreservesExplicitPreference() throws {
+        XCTAssertTrue(HarnessSettings().restoreWindowSize)
+        let legacy = Data("{ \"fontSize\": 14 }".utf8)
+        XCTAssertTrue(try JSONDecoder().decode(HarnessSettings.self, from: legacy).restoreWindowSize)
+        for preference in [false, true] {
+            var settings = HarnessSettings()
+            settings.restoreWindowSize = preference
+            let decoded = try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(settings))
+            XCTAssertEqual(decoded.restoreWindowSize, preference)
+        }
     }
 
     func testImportedDefaultsKeepFullColorSet() {

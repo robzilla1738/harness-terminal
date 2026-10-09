@@ -3,6 +3,7 @@ import Foundation
 import HarnessCore
 import HarnessTerminalEngine
 import HarnessTheme
+import HarnessTerminalRenderer
 
 @MainActor
 public protocol TerminalHostDelegate: AnyObject {
@@ -69,6 +70,19 @@ public struct TerminalHostResolvedAppearance: Equatable {
 /// back and fed to the surface. The pane border/ring/mark overlays are drawn here.
 @MainActor
 public final class TerminalHostView: NSView {
+    /// Uses the same font resolution and device-pixel rounding as the renderer.
+    /// No Metal resources or glyph atlas are allocated for window sizing.
+    public static func viewportSize(columns: Int, rows: Int, settings: HarnessSettings, scale: CGFloat) -> NSSize {
+        let scale = max(1, scale)
+        let metrics = GlyphRasterizer(fontFamily: settings.fontFamily, size: CGFloat(settings.fontSize), scale: scale).metrics()
+        let width = max(1, (metrics.width * scale).rounded())
+        let height = max(1, (metrics.height * scale).rounded())
+        let padX = (CGFloat(settings.windowPaddingX) * scale).rounded()
+        let padY = (CGFloat(settings.windowPaddingY) * scale).rounded()
+        return NSSize(width: (CGFloat(max(1, columns)) * width + 2 * padX) / scale,
+                      height: (CGFloat(max(1, rows)) * height + 2 * padY) / scale)
+    }
+
     public let surfaceID: SurfaceID
     public weak var hostDelegate: TerminalHostDelegate?
 

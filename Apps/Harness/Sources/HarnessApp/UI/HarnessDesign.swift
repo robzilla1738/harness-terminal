@@ -1,5 +1,6 @@
 import AppKit
 import HarnessCore
+import HarnessTerminalKit
 import QuartzCore
 
 /// Layout metrics and chrome helpers; colors come from `HarnessChrome.current`.
@@ -16,8 +17,23 @@ enum HarnessDesign {
     }
 
     static let sidebarWidth: CGFloat = 264
-    /// Three comfortable tabs plus window controls and the new-tab button.
+    /// Provisional size before the window has a display scale and measured title bar.
     static let defaultWindowSize = NSSize(width: 960, height: 640)
+    /// Size a single terminal canvas at 100×30, including the configured chrome.
+    static func defaultContentSize(settings: HarnessSettings, scale: CGFloat, statusHeight: CGFloat) -> NSSize {
+        let viewport = TerminalHostView.viewportSize(columns: 100, rows: 30, settings: settings, scale: scale)
+        let separated = settings.paneDensity.separatedIslands
+        let card = ChromeLayout.cardInsets(separated: separated, gap: settings.paneSpacing)
+        let outer = ChromeLayout.containerPadding(separated: separated, padsTop: settings.sidebarVisible, gap: settings.paneSpacing)
+        let leading = settings.sidebarVisible ? -card.leading : outer.leading
+        let width = viewport.width + CGFloat(leading + card.leading + card.trailing + outer.trailing)
+            + (settings.sidebarVisible ? sidebarWidth : 0)
+        let height = viewport.height + CGFloat(outer.top + card.top + card.bottom + outer.bottom)
+            + (settings.sidebarVisible ? 0 : tabBarHeight)
+            + (separated && settings.paneHeaders ? paneHeaderHeight : 0) + statusHeight
+        return NSSize(width: width, height: height)
+    }
+
     /// Distance from the window top to the traffic lights' center, measured from the real
     /// window when it's built (`MainWindowController`). The tab row and the sidebar's top
     /// controls center on this line so they sit level with the lights.

@@ -29,6 +29,7 @@ final class MainWindowController: NSWindowController {
             cursorHex: SessionCoordinator.shared.settings.customCursorHex
         )
 
+        let previousWindow = NSApp.orderedWindows.first { $0.contentViewController is MainSplitViewController }
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: HarnessDesign.defaultWindowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -62,6 +63,16 @@ final class MainWindowController: NSWindowController {
         // otherwise the window opens tiny (previously `minSize` masked this; lowering
         // the floor exposed it).
         window.setContentSize(HarnessDesign.defaultWindowSize)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let settings = SessionCoordinator.shared.settings
+        let defaultSize = HarnessDesign.defaultContentSize(
+            settings: settings, scale: window.backingScaleFactor,
+            statusHeight: (window.contentViewController as? MainSplitViewController)?.statusLineHeight ?? 0
+        )
+        let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let maxContent = visibleFrame.map { window.contentRect(forFrameRect: $0).size } ?? defaultSize
+        window.setContentSize(NSSize(width: min(defaultSize.width, maxContent.width),
+                                     height: min(defaultSize.height, maxContent.height)))
         self.init(window: window)
         // A content controller can resize the window; the lights stay put relative to the top.
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
@@ -77,11 +88,14 @@ final class MainWindowController: NSWindowController {
                 borderOverlay.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             ])
         }
-        // Opt-in window frame persistence: when enabled, restore the saved frame (size +
+        // Window frame persistence: when enabled, restore the saved frame (size +
         // position) and keep it updated automatically; otherwise open centered at the
         // default size. Window-level only — no effect on sessions or the terminal.
         // Only the first window restores the saved frame; later ones cascade from the key window.
         if WindowContexts.all.count > 1 {
+            if settings.restoreWindowSize, let previousWindow {
+                window.setContentSize(previousWindow.contentView?.bounds.size ?? defaultSize)
+            }
             window.center()
         } else if SessionCoordinator.shared.settings.restoreWindowSize {
             window.setFrameAutosaveName(Self.frameAutosaveName)

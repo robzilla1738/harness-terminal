@@ -379,7 +379,8 @@ The final consumer check covers the added output-subscription identity guard.
 
 ## Tab-strip proportions follow-up
 
-- New windows default to 960×640 points: room for three 240-point tabs plus the
+- The initial 960×640-point default (superseded by the grid default below) provided
+  room for three 240-point tabs plus the
   traffic lights, Sessions control, and New Tab control. Saved window frames still
   take precedence. Tabs compress to 160 points before using the existing overflow.
 - Removed the enclosing tab-group capsule and divider layers. Only the selected
@@ -406,6 +407,22 @@ The final consumer check covers the added output-subscription identity guard.
 - Verification: release build passed and both packages passed strict signature
   verification. Visually inspected the live Claude pane header. No broad test
   rerun for this appearance-only adjustment.
+
+## Grid-based default window sizing
+
+- Fresh windows target 100 columns × 30 rows using the renderer's font fallback,
+  cell rounding, display scale, and configured padding. Chrome, pane headers,
+  sidebar, gutters, and the visible status bar are added around that canvas.
+  Available screen space caps the result; restored split layouts share the canvas.
+- Remember size and position defaults on for new/legacy settings without the key.
+  Explicit true/false values survive decoding and saving. Saved frames take
+  precedence; subsequent windows inherit the existing window's size when enabled.
+- Settings explains that disabling memory returns to the 100×30 default.
+- Verification: two focused regression checks passed (grid round-trip across fonts,
+  fallback, padding, and display scales; default and explicit preferences). Release
+  build and strict signatures passed. The live preview reported 100×30 with its
+  sidebar enabled. Enabled size memory in that isolated preview and verified both
+  the saved setting and AppKit frame (1200×674 points).
 
 ## Completion disposition
 
