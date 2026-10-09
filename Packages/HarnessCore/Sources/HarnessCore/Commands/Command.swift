@@ -80,6 +80,7 @@ public indirect enum Command: Codable, Sendable, Equatable {
 
     // MARK: Diagnostics
     case showCheatsheet
+    case connectMobile
 
     // MARK: Phase 4 — layouts and advanced pane ops
     case selectLayout(name: String)                // select-layout tiled / main-vertical / …
@@ -233,6 +234,7 @@ extension Command {
         case .reloadKeybindings: return "reload-keybindings"
         case let .sequence(commands): return commands.map(\.shortDescription).joined(separator: " ; ")
         case .showCheatsheet: return "show-cheatsheet"
+        case .connectMobile: return "remote"
         case let .selectLayout(name): return "select-layout \(name)"
         case .nextLayout: return "next-layout"
         case .previousLayout: return "previous-layout"

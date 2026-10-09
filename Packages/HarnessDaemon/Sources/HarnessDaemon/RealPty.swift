@@ -1240,7 +1240,7 @@ public final class RealPty: @unchecked Sendable {
         // screen: sealed to disk when the surface persists, else (or if the write fails) as VT
         // bytes in memory, a few KiB.
         screen.catchUp(ring: ring, cols: size.cols, rows: size.rows, sizes: sizes)
-        let frame = screen.frame()
+        let frame = screen.frame(includeCheckpoint: true)
         screen.releaseGrid()
         if !scrollbackPersistenceEnabled { deleteParkFile() }
         parkedScreen = scrollbackPersistenceEnabled && frame.map(writeParkFile) == true ? nil : frame
@@ -1372,11 +1372,15 @@ public final class RealPty: @unchecked Sendable {
     /// The screen after `ring`: the one kept at the park, else the screen grid caught up, which
     /// parses only what it hasn't seen unless the grid was let go, resized, or fell out of the
     /// ring. The grid stays for the next attach. Caller holds `screenLock`.
-    private func screenFrameLocked(ring: [SnapshotByteSpan], parked: Bool, size: (cols: Int, rows: Int), sizes: [ReplaySize]) -> ScreenFrame? {
-        if parked { return parkedScreenLocked() }
+    private func screenFrameLocked(ring: [SnapshotByteSpan], parked: Bool, size: (cols: Int, rows: Int), sizes: [ReplaySize], includeCheckpoint: Bool = false) -> ScreenFrame? {
+        if parked {
+            if let frame = parkedScreenLocked(), !includeCheckpoint || frame.checkpoint != nil { return frame }
+            // Older parks carried VT only. Reconstruct from the retained ring before serving
+            // a checkpoint; never label the lossy VT projection as complete engine state.
+        }
         parkedScreen = nil
         screen.catchUp(ring: ring, cols: size.cols, rows: size.rows, sizes: sizes)
-        return screen.frame()
+        return screen.frame(includeCheckpoint: includeCheckpoint)
     }
 
     /// The screen kept at the park: in memory, or sealed in the park file. Caller holds
@@ -1393,7 +1397,7 @@ public final class RealPty: @unchecked Sendable {
     /// (`resync`: the client starts over). `endSequence` is where live output takes over and
     /// where the screen stands: the ring is copied and the screen read under `screenLock`, so
     /// no other reader moves the grid in between. Chunks keep their ring sequences.
-    func attachHistory(history: Bool = true, fromSequence: UInt64?, chunkLimit: Int = 1 << 20) -> AttachHistory {
+    func attachHistory(history: Bool = true, fromSequence: UInt64?, chunkLimit: Int = 1 << 20, screenOnResync: Bool = false, includeCheckpoint: Bool = false) -> AttachHistory {
         if history, let fromSequence {
             scrollbackLock.lock()
             let ring = ringLocked()
@@ -1412,10 +1416,10 @@ public final class RealPty: @unchecked Sendable {
         let parked = idleGrid.parked
         let end = nextSequence
         scrollbackLock.unlock()
-        let screen = screenFrameLocked(ring: ring, parked: parked, size: size, sizes: sizes)
+        let screen = screenFrameLocked(ring: ring, parked: parked, size: size, sizes: sizes, includeCheckpoint: includeCheckpoint)
         screenLock.unlock()
         return AttachHistory(
-            chunks: history ? Self.chunks(ring, from: nil, limit: chunkLimit) : [],
+            chunks: history && !screenOnResync ? Self.chunks(ring, from: nil, limit: chunkLimit) : [],
             endSequence: end, resync: true, screen: screen.flatMap { $0.sequence == end ? $0 : nil },
             replaySizes: sizes
         )
@@ -1475,6 +1479,10 @@ public final class RealPty: @unchecked Sendable {
         let size = replaySizes.last
         scrollbackLock.unlock()
         return "\(gen):\(first):\(end):\(size?.cols ?? 80):\(size?.rows ?? 24)"
+    }
+
+    func withMobileHistory<T>(_ body: (TerminalEmulator) -> T?) -> T? {
+        withAuthoritative(body) ?? nil
     }
 
     private func withAuthoritative<T>(_ body: (TerminalEmulator) -> T) -> T? {

@@ -2,6 +2,12 @@ import XCTest
 @testable import HarnessCore
 
 final class CommandParserTests: XCTestCase {
+    func testRemotePairingIsAnExplicitAppCommand() throws {
+        XCTAssertEqual(try CommandParser.parse("/remote"), .connectMobile)
+        XCTAssertEqual(try CommandParser.parse("remote"), .connectMobile)
+        XCTAssertThrowsError(try CommandParser.parse("/remote extra"))
+    }
+
     func testParsesPaneActions() throws {
         XCTAssertEqual(try CommandParser.parse("kill-pane"), .killPane)
         XCTAssertEqual(try CommandParser.parse("zoom-pane"), .zoomPane)

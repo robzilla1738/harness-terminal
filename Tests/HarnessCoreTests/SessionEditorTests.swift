@@ -2,6 +2,24 @@ import XCTest
 @testable import HarnessCore
 
 final class SessionEditorTests: XCTestCase {
+    func testMoveSessionPreservesProcessesAndDestinationFocus() throws {
+        var editor = SessionEditor()
+        let source = try XCTUnwrap(editor.snapshot.workspaces.first)
+        let moved = try XCTUnwrap(source.sessions.first)
+        let destinationID = editor.addWorkspace(name: "Destination")
+        let destinationFocus = editor.snapshot.workspaces.last?.activeSessionID
+        XCTAssertTrue(editor.moveSession(moved.id, toWorkspaceID: destinationID))
+        let destination = try XCTUnwrap(editor.snapshot.workspaces.first { $0.id == destinationID })
+        XCTAssertEqual(destination.activeSessionID, destinationFocus)
+        XCTAssertEqual(destination.sessions.last?.tabs, moved.tabs)
+        let repaired = try XCTUnwrap(editor.snapshot.workspaces.first { $0.id == source.id })
+        XCTAssertEqual(repaired.sessions.count, 1)
+        XCTAssertNotEqual(repaired.activeSessionID, moved.id)
+        let beforeInvalidMove = editor.snapshot
+        XCTAssertFalse(editor.moveSession(moved.id, toWorkspaceID: UUID()))
+        XCTAssertEqual(editor.snapshot, beforeInvalidMove)
+    }
+
     func testAddTabStaysInsideActiveSession() throws {
         var editor = SessionEditor()
         let workspace = try XCTUnwrap(editor.snapshot.activeWorkspace)

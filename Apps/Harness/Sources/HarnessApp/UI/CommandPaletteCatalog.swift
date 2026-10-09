@@ -24,7 +24,7 @@ enum CommandPaletteCatalog {
     /// a catalog row for them would just be a duplicate. Keep in sync with `buildActions()`.
     static let curatedVerbs: Set<String> = [
         "split-window", "kill-pane", "zoom-pane", "copy-mode",
-        "new-window", "new-tab", "new-session", "rename-window", "rename-tab",
+        "new-window", "new-tab", "new-session", "rename-window", "rename-tab", "remote",
     ]
 
     /// Verbs that PARSE bare but to empty-argument forms that would silently no-op (empty

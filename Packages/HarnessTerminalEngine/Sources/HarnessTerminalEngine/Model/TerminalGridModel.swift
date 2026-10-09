@@ -11,14 +11,14 @@ import Foundation
 /// fits in one byte: this keeps `TerminalGridColor` tiny and, with three colors per cell, shrinks
 /// `TerminalGridCell` enough to roughly halve the per-cell copy / snapshot / `==` cost on the
 /// throughput hot paths.
-public enum TerminalGridColor: Equatable, Sendable {
+public enum TerminalGridColor: Equatable, Sendable, Codable {
     case none
     case palette(UInt8)
     case rgb(r: UInt8, g: UInt8, b: UInt8)
 }
 
 /// Underline style (ECMA-48 SGR 4 plus the `4:N` substyles modern terminals understand).
-public enum TerminalGridUnderline: UInt16, Sendable {
+public enum TerminalGridUnderline: UInt16, Sendable, Codable {
     case none
     case single
     case double
@@ -192,7 +192,7 @@ public enum TerminalColorRole: Sendable, Equatable {
 
 /// Program-requested cursor shape (DECSCUSR `CSI Ps SP q`). `.default` honors the user's
 /// `cursorStyle` setting; the others override it (so vim/nvim/fish can switch shape per mode).
-public enum TerminalCursorShape: Sendable, Equatable {
+public enum TerminalCursorShape: Sendable, Equatable, Codable {
     case `default`
     case block
     case underline
@@ -283,7 +283,7 @@ public struct TerminalGridSnapshot: Equatable, Sendable {
 /// presence identifies a shell *prompt* line (OSC 133;A); `exit` is populated when the command
 /// that ran from that prompt reports completion (OSC 133;D;<code>) — `nil` until then, `0` for
 /// success, non-zero for failure. Marks ride scrollback and reflow with the line they tag.
-public struct SemanticMark: Equatable, Sendable {
+public struct SemanticMark: Equatable, Sendable, Codable {
     public var exit: Int?
     public init(exit: Int? = nil) { self.exit = exit }
 }

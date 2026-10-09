@@ -2,6 +2,9 @@ import Foundation
 
 public enum IPCRequest: Codable, Sendable {
     case ping
+    /// Immutable, bounded styled history pages for companion clients.
+    case mobileHistory(surfaceID: String, token: String?, before: Int?, count: Int)
+    case mobileHistoryMatch(match: OutputSearchMatch, epoch: String, revision: Int)
     case listWorkspaces
     case listSurfaces
     /// List every running agent (one row per tab carrying a detected `Tab.agent`)
@@ -35,6 +38,7 @@ public enum IPCRequest: Codable, Sendable {
     case swapTab(workspaceID: UUID, tabID: UUID, withIndex: Int)
     case renumberWindows(sessionID: UUID)
     case reorderSession(workspaceID: UUID, sessionID: UUID, toIndex: Int)
+    case moveSession(sessionID: UUID, toWorkspaceID: UUID)
     case closeTab(tabID: UUID)
     case closeSession(sessionID: UUID)
     case closeWorkspace(id: UUID)
@@ -242,8 +246,11 @@ public struct AttachRequest: Codable, Equatable, Sendable {
     public var fromSequence: UInt64?
     public var epoch: String?
     public var inputErrors: Bool?
+    /// Resume retained deltas, but send only current state when a resync is required.
+    public var screenOnResync: Bool?
+    public var checkpoint: Bool?
 
-    public init(surfaceID: String, label: String? = nil, readOnly: Bool = false, history: Bool = true, fromSequence: UInt64? = nil, epoch: String? = nil, inputErrors: Bool? = nil) {
+    public init(surfaceID: String, label: String? = nil, readOnly: Bool = false, history: Bool = true, fromSequence: UInt64? = nil, epoch: String? = nil, inputErrors: Bool? = nil, screenOnResync: Bool? = nil, checkpoint: Bool? = nil) {
         self.surfaceID = surfaceID
         self.label = label
         self.readOnly = readOnly
@@ -251,6 +258,8 @@ public struct AttachRequest: Codable, Equatable, Sendable {
         self.fromSequence = fromSequence
         self.epoch = epoch
         self.inputErrors = inputErrors
+        self.screenOnResync = screenOnResync
+        self.checkpoint = checkpoint
     }
 }
 
@@ -264,14 +273,16 @@ public struct AttachReply: Codable, Equatable, Sendable {
     /// The visible screen at `endSequence` as VT bytes: for a screen-only attach, and ahead
     /// of the history on a resync. Absent from older daemons on a resync.
     public var screen: Data?
+    public var checkpoint: Data?
     public var inputErrors: Bool?
     public var replaySizes: [ReplaySize]?
 
-    public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil, inputErrors: Bool? = nil, replaySizes: [ReplaySize]? = nil) {
+    public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil, inputErrors: Bool? = nil, replaySizes: [ReplaySize]? = nil, checkpoint: Data? = nil) {
         self.epoch = epoch
         self.resync = resync
         self.endSequence = endSequence
         self.screen = screen
+        self.checkpoint = checkpoint
         self.inputErrors = inputErrors
         self.replaySizes = replaySizes
     }

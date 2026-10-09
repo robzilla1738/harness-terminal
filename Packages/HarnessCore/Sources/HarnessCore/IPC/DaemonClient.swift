@@ -183,7 +183,8 @@ public final class DaemonClient: @unchecked Sendable {
         onAttached: @escaping @Sendable (AttachReply) -> Void,
         onData: @escaping @Sendable (Data, UInt64) -> Void,
         onOwnership: (@Sendable (SizeOwnership) -> Void)? = nil,
-        onEnd: (@Sendable () -> Void)? = nil
+        onEnd: (@Sendable () -> Void)? = nil,
+        onError: (@Sendable (String) -> Void)? = nil
     ) throws -> DaemonSubscription {
         let deadline = SocketDeadline(timeout: 2)
         let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
@@ -197,6 +198,7 @@ public final class DaemonClient: @unchecked Sendable {
                 onAttached(reply)
             case let .data(data, sequence): onData(data, sequence)
             case let .sizeOwnership(ownership): onOwnership?(ownership)
+            case let .error(message): onError?(message)
             default: break
             }
         }, onEnd: onEnd)

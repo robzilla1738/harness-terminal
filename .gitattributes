@@ -4,3 +4,7 @@ Packages/CLua51/** linguist-vendored
 Packages/HarnessTheme/Sources/HarnessTheme/BundledThemesData.swift linguist-generated
 Packages/HarnessCore/Sources/HarnessCore/ReleaseNotes/GeneratedReleaseNotes.swift linguist-generated
 Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine/Width/CharacterWidthTable.swift linguist-generated
+
+# Preserve the pinned, unmodified upstream QR encoder formatting.
+Packages/CHarnessQR/qrcodegen.c -whitespace
+Packages/CHarnessQR/include/qrcodegen.h -whitespace

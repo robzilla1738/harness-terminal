@@ -2,6 +2,7 @@ import Foundation
 
 /// Snapshot of daemon health used by `harness-cli daemon-stats` and support tooling.
 public struct DaemonStats: Codable, Sendable {
+    public var epoch: String?
     public var pid: Int32
     public var uptimeSeconds: Double
     public var surfaceCount: Int
@@ -39,8 +40,10 @@ public struct DaemonStats: Codable, Sendable {
         parkedSurfaceCount: Int? = nil,
         parkedStoredBytes: Int? = nil,
         parkedRawBytes: Int? = nil,
-        startupMillis: [String: Double]? = nil
+        startupMillis: [String: Double]? = nil,
+        epoch: String? = nil
     ) {
+        self.epoch = epoch
         self.pid = pid
         self.uptimeSeconds = uptimeSeconds
         self.surfaceCount = surfaceCount
@@ -59,6 +62,7 @@ public struct DaemonStats: Codable, Sendable {
 }
 
 public extension DaemonStats {
+    static let mobileCompanion = "mobile-companion-v1"
     static let attachStream = "attach-stream"
     static let paneAttention = "pane-attention"
     static let sessionLibrary = "session-library"

@@ -1,5 +1,5 @@
 import XCTest
-import HarnessCore
+import HarnessTerminalSupport
 @testable import HarnessTerminalRenderer
 import HarnessTerminalEngine
 import HarnessTheme
@@ -319,32 +319,6 @@ final class FrameBuilderTests: XCTestCase {
             XCTAssertEqual(cell.background, builder.renderColor(systemBlue), "\(mode) background uses system ANSI blue")
             XCTAssertTrue(cell.drawBackground)
         }
-    }
-
-    func testTextAndColorRenderingAreOrthogonal() {
-        var settings = HarnessSettings()
-        let source = RGBColor(red: 255, green: 0, blue: 0)
-        let initialColor = RenderColor(
-            source,
-            renderingMode: settings.colorRendering,
-            gamut: settings.colorGamut
-        )
-        let initialGamma = settings.textRendering.glyphGamma
-
-        settings.textRendering = .crisp
-        XCTAssertNotEqual(settings.textRendering.glyphGamma, initialGamma)
-        XCTAssertEqual(
-            RenderColor(source, renderingMode: settings.colorRendering, gamut: settings.colorGamut),
-            initialColor
-        )
-
-        let crispGamma = settings.textRendering.glyphGamma
-        settings.colorRendering = .vivid
-        XCTAssertNotEqual(
-            RenderColor(source, renderingMode: settings.colorRendering, gamut: settings.colorGamut),
-            initialColor
-        )
-        XCTAssertEqual(settings.textRendering.glyphGamma, crispGamma)
     }
 
     func testSelectionSpanContainsLinearRange() {

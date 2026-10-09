@@ -1,0 +1,4 @@
+module CHarnessQR {
+    header "HarnessQR.h"
+    export *
+}

@@ -1,5 +1,5 @@
 import Darwin
-import HarnessCore
+import HarnessTerminalSupport
 import HarnessTheme
 
 private enum RenderColorConversion {

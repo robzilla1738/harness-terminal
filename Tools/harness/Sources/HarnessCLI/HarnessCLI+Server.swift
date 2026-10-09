@@ -54,6 +54,9 @@ extension HarnessCLI {
         let store = RemoteHostStore()
         let sub = args.count > 1 ? args[1] : "list"
         switch sub {
+        case "pair":
+            try handleMobilePair(Array(args.dropFirst()))
+            return 0
         case "list":
             let hosts = store.load()
             if args.contains("--json") {
@@ -118,7 +121,7 @@ extension HarnessCLI {
             print("Removed remote '\(name)'")
             return 0
         default:
-            fputs("Usage: harness-cli remote <list|add|remove> ...\n", harnessStderr)
+            fputs("Usage: harness-cli remote <list|add|remove|pair> ...\n", harnessStderr)
             return 64
         }
     }

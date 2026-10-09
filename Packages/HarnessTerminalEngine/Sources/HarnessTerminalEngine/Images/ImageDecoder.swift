@@ -2,10 +2,12 @@ import Foundation
 #if canImport(ImageIO)
 import CoreGraphics
 import ImageIO
+#elseif os(Linux)
+import CHarnessImage
 #endif
 
 /// Decodes standard image formats (PNG, JPEG, …) to RGBA8 via the system ImageIO/CoreGraphics
-/// frameworks. Shared by the Kitty graphics protocol (format 100 = PNG) and iTerm2 inline images
+/// frameworks, with a memory-bounded PNG/JPEG fallback on Linux. Shared by the Kitty graphics protocol (format 100 = PNG) and iTerm2 inline images
 /// (OSC 1337, any format). Returns nil on undecodable data or an over-cap size.
 public enum ImageDecoder {
     public static func decode(_ data: Data) -> DecodedImage? {
@@ -21,6 +23,16 @@ public enum ImageDecoder {
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
         return rasterize(cgImage)
+        #elseif os(Linux)
+        return data.withUnsafeBytes { raw in
+            var width: Int32 = 0, height: Int32 = 0
+            guard let bytes = raw.bindMemory(to: UInt8.self).baseAddress,
+                  let pixels = harness_image_decode(bytes, raw.count, &width, &height) else { return nil }
+            defer { harness_image_free(pixels) }
+            let count = Int(width) * Int(height) * 4
+            return DecodedImage(rgba: Array(UnsafeBufferPointer(start: pixels, count: count)),
+                                pixelWidth: Int(width), pixelHeight: Int(height))
+        }
         #else
         return nil
         #endif

@@ -80,6 +80,7 @@ public enum CommandParser {
     /// tmux command-name aliases (the short forms in muscle memory) → canonical
     /// Harness verb, so `neww`, `splitw`, `killp`, `selectp`, `resizep`, … all work.
     private static let aliases: [String: String] = [
+        "/remote": "remote",
         "neww": "new-window", "splitw": "split-window", "killp": "kill-pane",
         "killw": "kill-window", "selectp": "select-pane", "selectw": "select-window",
         "resizep": "resize-pane", "swapp": "swap-pane", "swapw": "swap-window",
@@ -126,12 +127,15 @@ public enum CommandParser {
         "set-environment", "show-environment",
         "set-buffer", "paste-buffer", "delete-buffer", "list-buffers", "show-buffer",
         "set-hook", "show-hooks", "unbind-hook", "find-window",
-        "refresh-client", "respawn-window", "show-messages",
+        "refresh-client", "respawn-window", "show-messages", "remote",
     ]
 
     private static func buildCommand(name rawName: String, tokens: [String]) throws -> Command {
         let name = resolveAlias(rawName) ?? rawName
         switch name {
+        case "remote":
+            guard tokens.isEmpty else { throw CommandParseError.unknownCommand("Use /remote without arguments to connect a phone") }
+            return .connectMobile
         case "split-window":
             // Convention here mirrors the rest of Harness: `.vertical` means
             // a vertical divider → panes sit side by side; `.horizontal` means

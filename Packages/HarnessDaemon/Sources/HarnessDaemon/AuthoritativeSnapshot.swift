@@ -25,17 +25,38 @@ struct SnapshotByteSpan: Equatable, Sendable {
 struct ScreenFrame: Equatable, Sendable {
     var vt: Data
     var sequence: UInt64
+    var checkpoint: Data? = nil
+    private static let checkpointMagic = Data("HARCP001".utf8)
 
-    /// `[sequence: 8 bytes BE][vt]`, the plaintext of a `.park` file.
+    /// Original `[sequence][vt]` park files remain readable. New files preserve a full
+    /// checkpoint so parking does not lose parser continuation, images or inactive screens.
     func encoded() -> Data {
-        var out = Data(capacity: 8 + vt.count)
-        withUnsafeBytes(of: sequence.bigEndian) { out.append(contentsOf: $0) }
-        out.append(vt)
+        var out = Data()
+        if let checkpoint {
+            out.append(Self.checkpointMagic)
+            withUnsafeBytes(of: sequence.bigEndian) { out.append(contentsOf: $0) }
+            withUnsafeBytes(of: UInt32(vt.count).bigEndian) { out.append(contentsOf: $0) }
+            withUnsafeBytes(of: UInt32(checkpoint.count).bigEndian) { out.append(contentsOf: $0) }
+            out.append(vt); out.append(checkpoint)
+        } else {
+            withUnsafeBytes(of: sequence.bigEndian) { out.append(contentsOf: $0) }
+            out.append(vt)
+        }
         return out
     }
 
     static func decode(_ data: Data) -> ScreenFrame? {
         guard data.count >= 8 else { return nil }
+        if data.prefix(8) == checkpointMagic {
+            guard data.count >= 24 else { return nil }
+            let sequence = data[8..<16].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+            let vtCount = data[16..<20].reduce(0) { $0 << 8 | Int($1) }
+            let checkpointCount = data[20..<24].reduce(0) { $0 << 8 | Int($1) }
+            guard vtCount <= 16 * 1024 * 1024, checkpointCount <= 8 * 1024 * 1024,
+                  vtCount + checkpointCount == data.count - 24 else { return nil }
+            return ScreenFrame(vt: Data(data[24..<(24 + vtCount)]), sequence: sequence,
+                               checkpoint: Data(data[(24 + vtCount)...]))
+        }
         let sequence = data.prefix(8).reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
         return ScreenFrame(vt: Data(data.dropFirst(8)), sequence: sequence)
     }
@@ -176,7 +197,9 @@ final class AuthoritativeParser {
             created.readsGraphicsFiles = false
             created.isReplaying = true
             term = created
-            fedThrough = ring.first?.sequence ?? 0
+            // A fresh PTY starts at sequence 1 even before its first output byte.
+            // Its launch/resize marker is the boundary for an empty screen.
+            fedThrough = ring.first?.sequence ?? sizes.last?.sequence ?? 0
         }
         guard let term else { return }
         var low = 0
@@ -201,9 +224,17 @@ final class AuthoritativeParser {
         if term.cols != cols || term.rows != rows { term.resize(cols: cols, rows: rows) }
     }
 
-    func frame() -> ScreenFrame? {
+    func frame(includeCheckpoint: Bool = false) -> ScreenFrame? {
         guard let term else { return nil }
-        return ScreenFrame(vt: PaneCapture.screen(term), sequence: fedThrough)
+        var checkpoint: Data?
+        if includeCheckpoint {
+            let encoder = PropertyListEncoder()
+            encoder.outputFormat = .binary
+            if let state = try? term.checkpoint(), let encoded = try? encoder.encode(state), encoded.count <= 8 * 1024 * 1024 {
+                checkpoint = encoded
+            }
+        }
+        return ScreenFrame(vt: PaneCapture.screen(term), sequence: fedThrough, checkpoint: checkpoint)
     }
 
     func releaseGrid() {

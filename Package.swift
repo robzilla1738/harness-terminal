@@ -36,14 +36,14 @@ let platformProducts: [Product] = [
 // single-pane `attach` — is headless.
 let cliDependencies: [Target.Dependency] = [
     "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTerminalKit", "HarnessTheme",
-    "CHarnessSys", "HarnessScript",
+    "CHarnessSys", "HarnessScript", "HarnessRemoteProtocol", "CHarnessQR",
 ]
 let cliExclude: [String] = []
 let platformTargets: [Target] = [
     // Native renderer — first-party frame building, CoreText glyph atlas, and Metal drawing.
     .target(
         name: "HarnessTerminalRenderer",
-        dependencies: ["HarnessCore", "HarnessTerminalEngine", "HarnessTheme"],
+        dependencies: ["HarnessTerminalSupport", "HarnessTerminalEngine", "HarnessTheme"],
         path: "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer"
     ),
     .target(
@@ -70,6 +70,7 @@ let platformTargets: [Target] = [
             "HarnessTerminalKit",
             "HarnessTheme",
             "HarnessOnboarding",
+            "HarnessRemoteProtocol",
             .product(name: "Sparkle", package: "Sparkle"),
         ],
         path: "Apps/Harness/Sources/HarnessApp",
@@ -145,7 +146,7 @@ let platformDependencies: [Package.Dependency] = []
 let platformProducts: [Product] = []
 let cliDependencies: [Target.Dependency] = [
     "HarnessCore", "HarnessTerminalEngine", "HarnessCopyMode", "HarnessTheme", "CHarnessSys",
-    "HarnessScript",
+    "HarnessScript", "HarnessRemoteProtocol", "CHarnessQR",
 ]
 let cliExclude: [String] = ["WindowAttachClient.swift"]
 let platformTargets: [Target] = []
@@ -157,6 +158,9 @@ let package = Package(
     platforms: [.macOS(.v15), .iOS(.v17)],
     products: [
         .library(name: "HarnessCore", targets: ["HarnessCore"]),
+        .library(name: "HarnessTerminalSupport", targets: ["HarnessTerminalSupport"]),
+        .library(name: "HarnessRemoteProtocol", targets: ["HarnessRemoteProtocol"]),
+        .library(name: "CHarnessQR", targets: ["CHarnessQR"]),
         // Self-contained native terminal engine (VT parser + screen/grid model). Pure
         // Swift, no Metal/AppKit.
         .library(name: "HarnessTerminalEngine", targets: ["HarnessTerminalEngine"]),
@@ -176,8 +180,13 @@ let package = Package(
     ] + platformProducts,
     dependencies: platformDependencies,
     targets: [
+        .target(name: "CHarnessQR", path: "Packages/CHarnessQR", exclude: ["README.md"]),
+        .target(name: "HarnessTerminalSupport", path: "Packages/HarnessTerminalSupport/Sources/HarnessTerminalSupport"),
+        .target(name: "HarnessRemoteProtocol", path: "Packages/HarnessRemoteProtocol/Sources/HarnessRemoteProtocol"),
+        .testTarget(name: "HarnessRemoteProtocolTests", dependencies: ["HarnessRemoteProtocol"], path: "Tests/HarnessRemoteProtocolTests"),
         .target(
             name: "HarnessCore",
+            dependencies: ["HarnessTerminalSupport"],
             path: "Packages/HarnessCore/Sources/HarnessCore",
             swiftSettings: strictFoundationSettings
         ),
@@ -189,9 +198,11 @@ let package = Package(
         ),
         // Terminal engine. Foundation, plus the private C helpers above.
         // No external packages, so it links for headless CLI use and unit tests without a GPU.
+        .target(name: "CHarnessImage", path: "Packages/CHarnessImage",
+                exclude: ["LICENSE", "upstream.json"], publicHeadersPath: "include"),
         .target(
             name: "HarnessTerminalEngine",
-            dependencies: ["CHarnessBase64"],
+            dependencies: ["CHarnessBase64", .target(name: "CHarnessImage", condition: .when(platforms: [.linux]))],
             path: "Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine",
             swiftSettings: strictFoundationSettings
         ),
@@ -245,7 +256,7 @@ let package = Package(
             name: "HarnessDaemonCore",
             // Depends on the engine so `capture-pane` reconstructs the on-screen grid
             // (faithful overwrites/clears + soft-wrap join), exactly like tmux.
-            dependencies: ["HarnessCore", "HarnessTerminalEngine", "CHarnessSys"],
+            dependencies: ["HarnessCore", "HarnessTerminalEngine", "CHarnessSys", "HarnessRemoteProtocol"],
             path: "Packages/HarnessDaemon/Sources/HarnessDaemon"
         ),
         .executableTarget(
@@ -296,7 +307,7 @@ let package = Package(
         ),
         .testTarget(
             name: "HarnessDaemonTests",
-            dependencies: ["HarnessDaemonCore", "HarnessCore", "HarnessTerminalEngine"],
+            dependencies: ["HarnessDaemonCore", "HarnessRemoteProtocol", "HarnessCore", "HarnessTerminalEngine"],
             path: "Tests/HarnessDaemonTests"
         ),
     ] + platformTargets + platformTestTargets

@@ -294,6 +294,31 @@ public struct SessionEditor: Sendable {
         return true
     }
 
+    /// Move an intact session between workspaces. Its processes, pane ids, group membership
+    /// and focus are unchanged; repair only the source workspace if its active session left.
+    @discardableResult
+    public mutating func moveSession(_ sessionID: SessionID, toWorkspaceID: WorkspaceID) -> Bool {
+        guard let destination = snapshot.workspaces.firstIndex(where: { $0.id == toWorkspaceID }),
+              let source = sessionIndex(sessionID: sessionID) else { return false }
+        guard source.workspaceIndex != destination else { return true }
+        let session = snapshot.workspaces[source.workspaceIndex].sessions.remove(at: source.sessionIndex)
+        if snapshot.workspaces[source.workspaceIndex].sessions.isEmpty {
+            snapshot.workspaces[source.workspaceIndex].sessions = [SessionGroup(sortOrder: 0)]
+        }
+        if snapshot.workspaces[source.workspaceIndex].activeSessionID == sessionID {
+            let sessions = snapshot.workspaces[source.workspaceIndex].sessions
+            snapshot.workspaces[source.workspaceIndex].activeSessionID = sessions[min(source.sessionIndex, sessions.count - 1)].id
+        }
+        snapshot.workspaces[destination].sessions.append(session)
+        for workspaceIndex in [source.workspaceIndex, destination] {
+            for index in snapshot.workspaces[workspaceIndex].sessions.indices {
+                snapshot.workspaces[workspaceIndex].sessions[index].sortOrder = index
+            }
+        }
+        bumpRevision()
+        return true
+    }
+
     public mutating func setTheme(_ name: String) {
         guard snapshot.themeName != name else { return }
         snapshot.themeName = name

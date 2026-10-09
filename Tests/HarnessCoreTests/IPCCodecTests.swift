@@ -625,7 +625,7 @@ final class IPCCodecTests: XCTestCase {
     /// runtime; its value is the exhaustiveness check the Swift compiler performs on it.
     private func requestExhaustivenessTripwire(_ request: IPCRequest) {
         switch request {
-        case .listAttention, .acknowledgeAttention, .snoozeAttention, .library, .newTabInSession, .searchOutput, .searchPaths, .cancelSearch, .validateOutputMatch:
+        case .moveSession, .mobileHistory, .mobileHistoryMatch, .listAttention, .acknowledgeAttention, .snoozeAttention, .library, .newTabInSession, .searchOutput, .searchPaths, .cancelSearch, .validateOutputMatch:
             break
         case .ping, .listWorkspaces, .listSurfaces, .listAgents, .getSnapshot, .listClients,
              .daemonStats, .listBuffers, .closeEphemeralSessions, .showMessages:

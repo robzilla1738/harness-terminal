@@ -27,8 +27,8 @@ import Dispatch // DispatchTime: a monotonic clock for command-duration timing (
 /// use-after-free; `VTParser` carries a debug-only tripwire that traps on violations.
 public final class TerminalEmulator: VTParserHandler {
     private var parser: VTParser!
-    private let primary: TerminalScreen
-    private let alternate: TerminalScreen
+    private var primary: TerminalScreen
+    private var alternate: TerminalScreen
     private var current: TerminalScreen
     private var onAlternateScreen = false
 
@@ -151,7 +151,7 @@ public final class TerminalEmulator: VTParserHandler {
     /// Active character set per designation slot (`ESC ( …` / `ESC ) …`). DEC special graphics
     /// turns letters into line-drawing glyphs; ASCII is the default. `glUsesG1` is toggled by
     /// SO (invoke G1) / SI (invoke G0).
-    private enum Charset { case ascii, decSpecialGraphics }
+    private enum Charset: String { case ascii, decSpecialGraphics }
     private var g0: Charset = .ascii
     private var g1: Charset = .ascii
     private var glUsesG1 = false
@@ -687,6 +687,8 @@ public final class TerminalEmulator: VTParserHandler {
         return kittyImages.lazy.compactMap { $0.frames.first { $0.textureID == -id }?.image }.first
     }
 
+    public var cellPixelSize: (width: Int, height: Int) { current.cellPixelSize }
+
     /// Set by the host so an image's cell footprint + cursor advance match the real cell size.
     public func setCellPixelSize(width: Int, height: Int) {
         for screen in [primary, alternate] {
@@ -1216,7 +1218,7 @@ public final class TerminalEmulator: VTParserHandler {
     }
 
     // OSC 8 hyperlink registry: cell `hyperlinkID` → URL. Global across both screens.
-    private struct HyperlinkKey: Hashable {
+    private struct HyperlinkKey: Hashable, Codable {
         let explicitID: String?
         let uri: String
     }
@@ -1640,7 +1642,7 @@ public final class TerminalEmulator: VTParserHandler {
 
 /// Terminal mode flags that govern how the host encodes keyboard/mouse input. Read by
 /// the NSView host's input encoder (Phase 6); set here by DECSET/DECRST.
-public struct TerminalModes: Sendable, Equatable {
+public struct TerminalModes: Sendable, Equatable, Codable {
     public var cursorKeysApplication = false
     public var keypadApplication = false
     public var bracketedPaste = false
@@ -1678,4 +1680,166 @@ public struct TerminalModes: Sendable, Equatable {
 
     /// Any mouse-tracking mode is active.
     public var mouseTrackingEnabled: Bool { mouseClick || mouseDrag || mouseAny }
+}
+
+extension TerminalEmulator {
+    private struct PendingImage: Codable { var keys: [String: String]; var payload: Data }
+    private struct VirtualImage: Codable { var cols: Int; var rows: Int }
+    private struct HyperlinkEntry: Codable { var key: HyperlinkKey; var id: UInt32 }
+    private struct CheckpointState: Codable {
+        var primary: TerminalScreen.CheckpointState
+        var alternate: TerminalScreen.CheckpointState
+        var parser: VTParser.CheckpointState
+        var onAlternateScreen: Bool
+        var modes: TerminalModes
+        var workingDirectory: String?
+        var reportedRemoteHost: String?
+        var hasReportedRemoteHost: Bool
+        var terminalName: String
+        var terminalVersion: String
+        var secondaryDAVersion: Int
+        var currentTitle: String
+        var titleStack: [String]
+        var mode1048Saved: Bool
+        var programStatus: ProgramStatusBook
+        var userVariables: [String: String]
+        var pointerShape: String?
+        var commandElapsedNanos: UInt64?
+        var g0: String
+        var g1: String
+        var glUsesG1: Bool
+        var kittyPending: [Int: PendingImage]
+        var kittyLoadingKey: Int?
+        var kittyImages: [KittyImage]
+        var kittyVirtuals: [Int: VirtualImage]
+        var kittyNumbers: [Int: Int]
+        var nextKittyAssignedID: Int
+        var hyperlinks: [UInt32: String]
+        var hyperlinkKeys: [HyperlinkEntry]
+        var nextHyperlinkID: UInt32
+    }
+
+    /// Export continuation state at the host's current output sequence. Call on the same
+    /// serialized context as feed/resize. No callbacks or older history are serialized.
+    public func checkpoint() throws -> TerminalCheckpoint {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let elapsed = commandStartedAt.map { now >= $0.uptimeNanoseconds ? now - $0.uptimeNanoseconds : 0 }
+        let state = CheckpointState(
+            primary: primary.checkpointState(),
+            alternate: alternate.checkpointState(),
+            parser: try parser.checkpointState(),
+            onAlternateScreen: onAlternateScreen,
+            modes: modes,
+            workingDirectory: workingDirectory,
+            reportedRemoteHost: reportedRemoteHost,
+            hasReportedRemoteHost: hasReportedRemoteHost,
+            terminalName: terminalName,
+            terminalVersion: terminalVersion,
+            secondaryDAVersion: secondaryDAVersion,
+            currentTitle: currentTitle,
+            titleStack: titleStack,
+            mode1048Saved: mode1048Saved,
+            programStatus: programStatus,
+            userVariables: userVariables,
+            pointerShape: pointerShape,
+            commandElapsedNanos: elapsed,
+            g0: g0.rawValue,
+            g1: g1.rawValue,
+            glUsesG1: glUsesG1,
+            kittyPending: kittyPending.mapValues { PendingImage(keys: $0.command.keys, payload: Data($0.payload)) },
+            kittyLoadingKey: kittyLoadingKey,
+            kittyImages: kittyImages,
+            kittyVirtuals: kittyVirtuals.mapValues { VirtualImage(cols: $0.cols, rows: $0.rows) },
+            kittyNumbers: kittyNumbers,
+            nextKittyAssignedID: nextKittyAssignedID,
+            hyperlinks: hyperlinks,
+            hyperlinkKeys: hyperlinkKeys.map { HyperlinkEntry(key: $0.key, id: $0.value) },
+            nextHyperlinkID: nextHyperlinkID
+        )
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return try TerminalCheckpoint(payload: encoder.encode(state))
+    }
+
+    /// Restore atomically without firing historical clipboard, query or notification effects.
+    /// Settings controlling local file access and existing callbacks remain client-owned.
+    public func restore(_ checkpoint: TerminalCheckpoint) throws {
+        guard checkpoint.version == TerminalCheckpoint.currentVersion else { throw TerminalCheckpointError.unsupportedVersion }
+        guard checkpoint.payload.count <= TerminalCheckpoint.maxPayloadBytes else { throw TerminalCheckpointError.tooLarge }
+        let state = try PropertyListDecoder().decode(CheckpointState.self, from: checkpoint.payload)
+        guard state.primary.recordsHistory, !state.alternate.recordsHistory,
+              state.primary.cols == state.alternate.cols, state.primary.rows == state.alternate.rows,
+              let charset0 = Charset(rawValue: state.g0), let charset1 = Charset(rawValue: state.g1),
+              state.titleStack.count <= Self.titleStackLimit, state.userVariables.count <= Self.maxUserVariables,
+              state.programStatus.records.count <= ProgramStatusRevision.maxRecords,
+              state.modes.kittyKeyboardStack.count <= 64, (0...2).contains(state.modes.modifyOtherKeys),
+              state.kittyPending.count <= maxKittyPendingImages, state.kittyImages.count <= maxKittyImages,
+              state.kittyPending.values.reduce(0, { $0 + $1.payload.count }) <= maxKittyPendingBytes,
+              state.kittyVirtuals.count <= 4096, state.kittyNumbers.count <= 4096,
+              state.kittyVirtuals.values.allSatisfy({ $0.cols >= 0 && $0.cols <= 100_000 && $0.rows >= 0 && $0.rows <= 100_000 }),
+              state.kittyImages.allSatisfy({ image in
+                  !image.frames.isEmpty && image.frames.count <= 4096 && image.current >= 0 && image.current < image.frames.count &&
+                  image.frames.allSatisfy({ $0.textureID > 0 && $0.gap >= 0 && $0.gap <= Int(Int32.max) }) &&
+                  image.maxLoops >= 0 && image.loops >= 0
+              }),
+              Set(state.kittyImages.map(\.id)).count == state.kittyImages.count,
+              state.nextKittyAssignedID > 0 && state.nextKittyAssignedID < Int.max,
+              state.hyperlinks.count <= 16_384, state.hyperlinkKeys.count <= 16_384,
+              state.hyperlinks.keys.allSatisfy({ $0 > 0 && $0 < state.nextHyperlinkID }),
+              state.hyperlinkKeys.allSatisfy({ state.hyperlinks[$0.id] == $0.key.uri }),
+              Set(state.hyperlinkKeys.map(\.key)).count == state.hyperlinkKeys.count
+        else { throw TerminalCheckpointError.invalidState }
+        // Remap host texture IDs into the local allocator so subsequent images cannot reuse an
+        // imported ID and display stale cached pixels. Kitty logical protocol IDs stay intact.
+        var imageIDs: [Int: Int] = [:]
+        func remap(_ id: Int) -> Int {
+            if let mapped = imageIDs[id] { return mapped }
+            let mapped = ImageIDs.next(); imageIDs[id] = mapped; return mapped
+        }
+        let restoredPrimary = try TerminalScreen.restored(from: state.primary, remapImage: remap)
+        let restoredAlternate = try TerminalScreen.restored(from: state.alternate, remapImage: remap)
+        restoredPrimary.maxHistoryLines = primary.maxHistoryLines
+        restoredPrimary.maxHistoryBytes = primary.maxHistoryBytes
+        let restoredParser = VTParser(handler: self)
+        try restoredParser.restore(state.parser)
+        var restoredImages = state.kittyImages
+        for index in restoredImages.indices {
+            restoredImages[index].shownAt = nil // monotonic clocks belong to their process
+            for frame in restoredImages[index].frames.indices {
+                restoredImages[index].frames[frame].textureID = remap(restoredImages[index].frames[frame].textureID)
+            }
+        }
+        primary = restoredPrimary
+        alternate = restoredAlternate
+        parser = restoredParser
+        current = state.onAlternateScreen ? alternate : primary
+        onAlternateScreen = state.onAlternateScreen
+        modes = state.modes
+        workingDirectory = state.workingDirectory
+        reportedRemoteHost = state.reportedRemoteHost
+        hasReportedRemoteHost = state.hasReportedRemoteHost
+        terminalName = state.terminalName
+        terminalVersion = state.terminalVersion
+        secondaryDAVersion = state.secondaryDAVersion
+        currentTitle = state.currentTitle
+        titleStack = state.titleStack
+        mode1048Saved = state.mode1048Saved
+        programStatus = state.programStatus
+        userVariables = state.userVariables
+        pointerShape = state.pointerShape
+        glUsesG1 = state.glUsesG1
+        kittyLoadingKey = state.kittyLoadingKey
+        kittyNumbers = state.kittyNumbers
+        nextKittyAssignedID = state.nextKittyAssignedID
+        hyperlinks = state.hyperlinks
+        nextHyperlinkID = state.nextHyperlinkID
+        g0 = charset0; g1 = charset1
+        kittyImages = restoredImages
+        kittyImageBytes = kittyImages.reduce(0) { $0 + $1.byteCount }
+        kittyPending = state.kittyPending.mapValues { (KittyGraphicsCommand(keys: $0.keys, payload: []), Array($0.payload)) }
+        kittyVirtuals = state.kittyVirtuals.mapValues { ($0.cols, $0.rows) }
+        hyperlinkKeys = Dictionary(uniqueKeysWithValues: state.hyperlinkKeys.map { ($0.key, $0.id) })
+        let now = DispatchTime.now().uptimeNanoseconds
+        commandStartedAt = state.commandElapsedNanos.map { DispatchTime(uptimeNanoseconds: now - min(now, $0)) }
+    }
 }

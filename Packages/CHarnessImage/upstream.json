@@ -1,0 +1,17 @@
+{
+  "commit": "013ac3beddff3dbffafd5177e7972067cd2b5083",
+  "configuration": [
+    "PNG",
+    "JPEG",
+    "memory-only",
+    "192 MiB temporary allocation cap",
+    "32 MiB compressed input cap",
+    "16,777,216 pixel cap"
+  ],
+  "files": {
+    "LICENSE": "bebfe904b14301657e4e5d655c811d51fd31b97c455b9cc2d8600d6bac6cff63",
+    "stb_image.h": "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3"
+  },
+  "repository": "https://github.com/nothings/stb",
+  "version": "stb_image 2.30"
+}

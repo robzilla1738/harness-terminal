@@ -19,6 +19,7 @@ enum MainMenuBuilder {
             #selector(MenuTarget.toggleMachineIndicator))
         add("Command Palette…", #selector(MenuTarget.commandPalette))
         menu.addItem(.separator())
+        add("Connect a Phone or iPad…", #selector(MenuTarget.connectMobile))
         add("Settings…", #selector(MenuTarget.openSettings))
         return menu
     }
@@ -43,6 +44,9 @@ enum MainMenuBuilder {
         let prefs = NSMenuItem(title: "Settings…", action: #selector(MenuTarget.openSettings), keyEquivalent: ",")
         prefs.target = MenuTarget.shared
         app.submenu?.addItem(prefs)
+        let mobile = NSMenuItem(title: "Connect a Phone or iPad…", action: #selector(MenuTarget.connectMobile), keyEquivalent: "")
+        mobile.target = MenuTarget.shared
+        app.submenu?.addItem(mobile)
         for (title, action) in [("Import Terminal Settings…", #selector(MenuTarget.importSettings)), ("Undo Last Settings Import", #selector(MenuTarget.undoSettingsImport))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = MenuTarget.shared
@@ -741,6 +745,8 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func importSettings() { SettingsImportController.present() }
     @objc func undoSettingsImport() { SettingsImportController.undo() }
+
+    @objc func connectMobile() { MobilePairingController.shared.present() }
 
     @objc func openSettings() {
         SettingsWindowController.show()

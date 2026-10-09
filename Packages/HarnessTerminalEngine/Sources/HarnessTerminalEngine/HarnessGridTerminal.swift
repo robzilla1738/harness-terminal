@@ -32,6 +32,32 @@ public final class HarnessGridTerminal {
         set { emulator.onResponse = newValue }
     }
 
+    /// Remote streams must disable host-local Kitty file/shared-memory transports.
+    public var readsGraphicsFiles: Bool {
+        get { emulator.readsGraphicsFiles }
+        set { emulator.readsGraphicsFiles = newValue }
+    }
+
+    /// Replay restores terminal state without repeating clipboard, bell or query effects.
+    public var isReplaying: Bool {
+        get { emulator.isReplaying }
+        set { emulator.isReplaying = newValue }
+    }
+
+    public func image(for id: Int) -> DecodedImage? { emulator.image(for: id) }
+
+    public func animateImages(in grid: TerminalGridSnapshot, now: UInt64) -> (grid: TerminalGridSnapshot, nextFrameAt: UInt64?) {
+        emulator.animateImages(in: grid, now: now)
+    }
+
+    public var maxDecodedHistoryBytes: Int {
+        get { emulator.maxDecodedHistoryBytes }
+        set { emulator.maxDecodedHistoryBytes = newValue }
+    }
+
+    public func checkpoint() throws -> TerminalCheckpoint { try emulator.checkpoint() }
+    public func restore(_ checkpoint: TerminalCheckpoint) throws { try emulator.restore(checkpoint) }
+
     public func feed(_ data: Data) { emulator.feed(data) }
     public func feed(_ text: String) { emulator.feed(text) }
     public func feed(_ bytes: [UInt8]) { emulator.feed(bytes) }

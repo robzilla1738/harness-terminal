@@ -84,7 +84,7 @@ final class TerminalScreen {
     /// (the same coordinate space as `bufferLine` and prompt marks), so an image rides scrollback
     /// and reflow with the line it sits on instead of being dropped. Pixels live in `imageStore`
     /// keyed by id.
-    private struct ImagePlacement { var id: Int; var absRow: Int; var col: Int; var cols: Int; var rows: Int; var z: Int; var kittyID: Int? }
+    struct ImagePlacement: Codable { var id: Int; var absRow: Int; var col: Int; var cols: Int; var rows: Int; var z: Int; var kittyID: Int? }
     private var placements: [ImagePlacement] = []
     private var imageStore: [Int: DecodedImage] = [:]
     private var imageByteTotal = 0
@@ -2408,7 +2408,7 @@ final class TerminalScreen {
 }
 
 /// Saved cursor + rendition for DECSC/DECRC and alternate-screen switching.
-private struct SavedCursor {
+struct SavedCursor: Codable {
     var row: Int
     var col: Int
     var pen: Pen
@@ -2416,7 +2416,7 @@ private struct SavedCursor {
 }
 
 /// Current graphic rendition (SGR) state applied to printed cells.
-private struct Pen {
+struct Pen: Codable {
     var foreground: TerminalGridColor = .none
     var background: TerminalGridColor = .none
     var underlineColor: TerminalGridColor = .none
@@ -2429,4 +2429,142 @@ private struct Pen {
     var invisible = false
     var strikethrough = false
     var overline = false
+}
+
+// The cold-attach continuation excludes old history, which has an independent paged API.
+extension TerminalScreen {
+    struct CheckpointState: Codable {
+        var cols: Int
+        var rows: Int
+        var cells: Data
+        var clusters: [UInt32: String]
+        var nextClusterID: UInt32
+        var cursorRow: Int
+        var cursorCol: Int
+        var pendingWrap: Bool
+        var tabStops: [Bool]
+        var placements: [ImagePlacement]
+        var imageStore: [Int: DecodedImage]
+        var cellPixelWidth: Int
+        var cellPixelHeight: Int
+        var cursorVisible: Bool
+        var cursorShape: TerminalCursorShape
+        var cursorBlinking: Bool?
+        var autowrap: Bool
+        var insertMode: Bool
+        var originMode: Bool
+        var lastGraphicChar: UInt32
+        var scrollTop: Int
+        var scrollBottom: Int
+        var pen: Pen
+        var currentHyperlink: UInt32
+        var rowWrapped: [Bool]
+        var rowMarks: [SemanticMark?]
+        var recordsHistory: Bool
+        var savedCursor: SavedCursor?
+    }
+
+    func checkpointState() -> CheckpointState {
+        let visible = placements.filter { $0.absRow + $0.rows > history.count && $0.absRow < history.count + rows }
+            .map { placement in
+                var placement = placement
+                placement.absRow -= history.count
+                return placement
+            }
+        let imageIDs = Set(visible.map(\.id))
+        return CheckpointState(
+            cols: cols,
+            rows: rows,
+            cells: CheckpointCells.encode(snapshot().cells),
+            clusters: clusters,
+            nextClusterID: nextClusterID,
+            cursorRow: cursorRow,
+            cursorCol: cursorCol,
+            pendingWrap: pendingWrap,
+            tabStops: tabStops,
+            placements: visible,
+            imageStore: imageStore.filter { imageIDs.contains($0.key) },
+            cellPixelWidth: cellPixelWidth,
+            cellPixelHeight: cellPixelHeight,
+            cursorVisible: cursorVisible,
+            cursorShape: cursorShape,
+            cursorBlinking: cursorBlinking,
+            autowrap: autowrap,
+            insertMode: insertMode,
+            originMode: originMode,
+            lastGraphicChar: lastGraphicChar,
+            scrollTop: scrollTop,
+            scrollBottom: scrollBottom,
+            pen: pen,
+            currentHyperlink: currentHyperlink,
+            rowWrapped: rowWrapped,
+            rowMarks: rowMarks,
+            recordsHistory: recordsHistory,
+            savedCursor: savedCursor
+        )
+    }
+
+    static func restored(from state: CheckpointState, remapImage: (Int) -> Int) throws -> TerminalScreen {
+        guard TerminalGeometry.isValid(cols: state.cols, rows: state.rows),
+              state.cells.count == state.cols * state.rows * 32,
+              state.tabStops.count == state.cols, state.rowWrapped.count == state.rows,
+              state.rowMarks.count == state.rows,
+              (0..<state.rows).contains(state.cursorRow), (0..<state.cols).contains(state.cursorCol),
+              state.scrollTop >= 0, state.scrollBottom >= state.scrollTop, state.scrollBottom < state.rows,
+              state.clusters.count <= 65_536, state.clusters.values.reduce(0, { $0 + $1.utf8.count }) <= clusterByteLimit,
+              Set(state.clusters.values).count == state.clusters.count,
+              state.clusters.keys.allSatisfy({ $0 > 0 && $0 < 0x8000_0000 && $0 < state.nextClusterID }),
+              state.nextClusterID <= 0x8000_0000,
+              state.imageStore.count <= 4096, state.placements.count <= 4096,
+              state.cellPixelWidth > 0, state.cellPixelWidth <= 100_000,
+              state.cellPixelHeight > 0, state.cellPixelHeight <= 100_000,
+              state.imageStore.keys.allSatisfy({ $0 > 0 }),
+              state.placements.allSatisfy({ $0.id > 0 && state.imageStore[$0.id] != nil &&
+                  $0.absRow >= -100_000 && $0.absRow <= 100_000 && $0.col >= -100_000 && $0.col <= 100_000 &&
+                  $0.cols > 0 && $0.cols <= 100_000 && $0.rows > 0 && $0.rows <= 100_000 })
+        else { throw TerminalCheckpointError.invalidState }
+        let decoded = try CheckpointCells.decode(state.cells)
+        guard decoded.allSatisfy({ $0.clusterID == 0 || state.clusters[$0.clusterID] != nil }) else {
+            throw TerminalCheckpointError.invalidState
+        }
+        if let saved = state.savedCursor {
+            guard saved.row >= 0, saved.row < TerminalGeometry.maxDimension,
+                  saved.col >= 0, saved.col < TerminalGeometry.maxDimension else {
+                throw TerminalCheckpointError.invalidState
+            }
+        }
+        let screen = TerminalScreen(cols: state.cols, rows: state.rows, recordsHistory: state.recordsHistory)
+        screen.clusters = state.clusters
+        screen.nextClusterID = state.nextClusterID
+        screen.cursorRow = state.cursorRow
+        screen.cursorCol = state.cursorCol
+        screen.pendingWrap = state.pendingWrap
+        screen.tabStops = state.tabStops
+        screen.cellPixelWidth = state.cellPixelWidth
+        screen.cellPixelHeight = state.cellPixelHeight
+        screen.cursorVisible = state.cursorVisible
+        screen.cursorShape = state.cursorShape
+        screen.cursorBlinking = state.cursorBlinking
+        screen.autowrap = state.autowrap
+        screen.insertMode = state.insertMode
+        screen.originMode = state.originMode
+        screen.lastGraphicChar = state.lastGraphicChar
+        screen.scrollTop = state.scrollTop
+        screen.scrollBottom = state.scrollBottom
+        screen.pen = state.pen
+        screen.currentHyperlink = state.currentHyperlink
+        screen.rowWrapped = state.rowWrapped
+        screen.rowMarks = state.rowMarks
+        screen.savedCursor = state.savedCursor
+        screen.cells = decoded
+        screen.placements = state.placements.map { placement in
+            var placement = placement; placement.id = remapImage(placement.id); return placement
+        }
+        screen.imageStore = Dictionary(uniqueKeysWithValues: state.imageStore.map { (remapImage($0.key), $0.value) })
+        screen.imageByteTotal = screen.imageStore.values.reduce(0) { $0 + $1.byteCount }
+        screen.clusterIDs = Dictionary(uniqueKeysWithValues: state.clusters.map { ($0.value, $0.key) })
+        screen.clusterBytes = state.clusters.values.reduce(0) { $0 + $1.utf8.count + 128 }
+        screen.markFullyDirty()
+        return screen
+    }
 }

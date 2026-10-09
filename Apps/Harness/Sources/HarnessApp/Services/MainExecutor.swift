@@ -49,6 +49,8 @@ final class MainExecutor: CommandExecutor {
     private func dispatch(_ command: Command) throws {
         let coordinator = SessionCoordinator.shared
         switch command {
+        case .connectMobile:
+            MobilePairingController.shared.present()
         case .splitWindow(let direction):
             // `Command.SplitDirection` is divider-orientation (`.vertical` =
             // side-by-side, the CommandParser convention); `splitActivePane`

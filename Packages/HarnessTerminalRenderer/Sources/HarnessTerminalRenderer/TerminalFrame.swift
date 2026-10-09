@@ -1,5 +1,5 @@
 import Foundation
-import HarnessCore
+import HarnessTerminalSupport
 import HarnessTerminalEngine
 import HarnessTheme
 

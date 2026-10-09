@@ -51,7 +51,11 @@ final class ImageTextureCache {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: false)
         descriptor.usage = .shaderRead
+        #if os(macOS)
         descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
+        #else
+        descriptor.storageMode = .shared
+        #endif
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
         rgba.withUnsafeBytes { raw in
             texture.replace(

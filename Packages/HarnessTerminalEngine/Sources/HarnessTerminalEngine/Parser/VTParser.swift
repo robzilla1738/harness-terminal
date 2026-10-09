@@ -105,7 +105,7 @@ extension VTParserHandler {
 /// DCS/PM/APC/SOS string *consumption* (their payloads are skipped until the string
 /// terminator). Acting on DCS device-control payloads is tracked as a follow-up.
 final class VTParser {
-    private enum State {
+    private enum State: String {
         case ground
         case escape
         case escapeIntermediate
@@ -118,7 +118,7 @@ final class VTParser {
         case stringCapture // DCS/APC: capture payload (Sixel, Kitty graphics) until ST
     }
 
-    private enum StringKind { case dcs, apc }
+    private enum StringKind: String { case dcs, apc }
 
     /// The event sink. Held `unowned` (not `weak`): the emulator owns the parser and is the only
     /// `VTParserHandler`, so the handler always outlives every `feed`. `unowned` drops the per-emit
@@ -846,5 +846,81 @@ final class VTParser {
     private func feedFromGround(_ byte: UInt8) {
         state = .ground
         feed(byte)
+    }
+}
+
+extension VTParser {
+    struct CheckpointState: Codable {
+        var state: String
+        var paramValues: [Int]
+        var groupStarts: [Int]
+        var currentNumber: Int?
+        var intermediates: [UInt8]
+        var csiPrivate: Bool
+        var csiPrivateMarker: UInt8?
+        var csiOverflow: Bool
+        var oscBuffer: Data
+        var sawESCInString: Bool
+        var utf8Remaining: Int
+        var utf8Accumulator: UInt32
+        var utf8Min: UInt32
+        var stringKind: String
+        var stringBuffer: Data
+    }
+
+    func checkpointState() throws -> CheckpointState {
+        // Borrowed views are valid only inside feed; checkpointing reentrantly is unsupported.
+        guard borrowedOSC == nil else { throw TerminalCheckpointError.parserBusy }
+        #if DEBUG
+        guard !isFeeding else { throw TerminalCheckpointError.parserBusy }
+        #endif
+        return CheckpointState(
+            state: state.rawValue,
+            paramValues: paramValues,
+            groupStarts: groupStarts,
+            currentNumber: currentNumber,
+            intermediates: intermediates,
+            csiPrivate: csiPrivate,
+            csiPrivateMarker: csiPrivateMarker,
+            csiOverflow: csiOverflow,
+            oscBuffer: Data(oscBuffer),
+            sawESCInString: sawESCInString,
+            utf8Remaining: utf8Remaining,
+            utf8Accumulator: utf8Accumulator,
+            utf8Min: utf8Min,
+            stringKind: stringKind.rawValue,
+            stringBuffer: Data(stringBuffer)
+        )
+    }
+
+    func restore(_ saved: CheckpointState) throws {
+        guard let savedState = State(rawValue: saved.state), let savedKind = StringKind(rawValue: saved.stringKind),
+              saved.paramValues.count <= maxParamValues, saved.groupStarts.count <= maxParams,
+              saved.paramValues.allSatisfy({ $0 >= -1 && $0 <= Int(Int32.max) }),
+              saved.currentNumber == nil || (saved.currentNumber! >= 0 && saved.currentNumber! <= Int(Int32.max)),
+              saved.groupStarts.allSatisfy({ $0 >= 0 && $0 <= saved.paramValues.count }),
+              zip(saved.groupStarts, saved.groupStarts.dropFirst()).allSatisfy({ $0 <= $1 }),
+              saved.intermediates.count <= maxIntermediates, (0...3).contains(saved.utf8Remaining),
+              saved.utf8Accumulator <= 0x1f_ffff,
+              [UInt32(0), 0x80, 0x800, 0x1_0000].contains(saved.utf8Min),
+              saved.oscBuffer.count <= maxOSCImageBytes, saved.stringBuffer.count <= maxImageStringBytes
+        else { throw TerminalCheckpointError.invalidState }
+        state = savedState
+        stringKind = savedKind
+        paramValues = saved.paramValues
+        groupStarts = saved.groupStarts
+        currentNumber = saved.currentNumber
+        intermediates = saved.intermediates
+        csiPrivate = saved.csiPrivate
+        csiPrivateMarker = saved.csiPrivateMarker
+        csiOverflow = saved.csiOverflow
+        oscBuffer = Array(saved.oscBuffer)
+        sawESCInString = saved.sawESCInString
+        utf8Remaining = saved.utf8Remaining
+        utf8Accumulator = saved.utf8Accumulator
+        utf8Min = saved.utf8Min
+        stringBuffer = Array(saved.stringBuffer)
+        borrowedOSC = nil
+        codepointScratch.removeAll(keepingCapacity: true)
     }
 }

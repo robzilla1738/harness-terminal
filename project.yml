@@ -37,6 +37,8 @@ targets:
       - path: Apps/Harness/Resources/Fonts
         type: folder
     dependencies:
+      - package: Harness
+        product: HarnessRemoteProtocol
       - target: HarnessDaemon
         embed: false
       - target: harness-cli
@@ -85,6 +87,8 @@ targets:
       - Packages/HarnessDaemon/Sources/HarnessDaemon
     dependencies:
       - package: Harness
+        product: HarnessRemoteProtocol
+      - package: Harness
         product: HarnessCore
       - package: Harness
         product: HarnessTerminalEngine
@@ -107,6 +111,8 @@ targets:
     dependencies:
       - target: HarnessDaemonCore
       - package: Harness
+        product: HarnessRemoteProtocol
+      - package: Harness
         product: HarnessCore
       - package: Harness
         product: HarnessTerminalEngine
@@ -124,6 +130,8 @@ targets:
       - Tools/harness/Sources/HarnessCLI
     dependencies:
       - package: Harness
+        product: HarnessRemoteProtocol
+      - package: Harness
         product: HarnessCore
       - package: Harness
         product: HarnessTerminalEngine
@@ -135,6 +143,8 @@ targets:
         product: CHarnessSys
       - package: Harness
         product: HarnessScript
+      - package: Harness
+        product: CHarnessQR
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.cli
       PRODUCT_NAME: harness-cli
@@ -161,6 +171,8 @@ targets:
       - Tests/HarnessDaemonTests
     dependencies:
       - target: HarnessDaemonCore
+      - package: Harness
+        product: HarnessRemoteProtocol
       - package: Harness
         product: HarnessCore
       - package: Harness

@@ -14,11 +14,11 @@ public enum ProgramStatusRevision {
     public static let maxRecords = 256
 }
 
-public enum ProgramStatusState: String, Equatable, Sendable {
+public enum ProgramStatusState: String, Equatable, Sendable, Codable {
     case idle, working, done, blocked, error, clear
 }
 
-public enum ProgramStatusKind: String, Equatable, Sendable {
+public enum ProgramStatusKind: String, Equatable, Sendable, Codable {
     case permission, question, auth
 
     public var glyph: String {
@@ -30,7 +30,7 @@ public enum ProgramStatusKind: String, Equatable, Sendable {
     }
 }
 
-public struct ProgramStatusRecord: Equatable, Sendable {
+public struct ProgramStatusRecord: Equatable, Sendable, Codable {
     public var state: ProgramStatusState
     public var kind: ProgramStatusKind?
     public var progress: Int?
@@ -49,7 +49,7 @@ public enum ProgramStatusApply: Equatable, Sendable {
 }
 
 /// One terminal's program-status records. Pure: no clock, no I/O.
-public struct ProgramStatusBook: Equatable, Sendable {
+public struct ProgramStatusBook: Equatable, Sendable, Codable {
     public private(set) var records: [String: ProgramStatusRecord] = [:]
     public private(set) var acceptedRealReport = false
     private var generation: UInt64 = 0
@@ -358,7 +358,7 @@ public struct ProgramStatusNotification: Equatable, Sendable {
 }
 
 public struct ProgramStatusPresentation: Equatable, Sendable {
-    public enum Mark: String, Equatable, Sendable {
+    public enum Mark: String, Equatable, Sendable, Codable {
         case none, working, blocked, done, error
     }
 

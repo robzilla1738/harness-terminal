@@ -3,17 +3,17 @@ import Foundation
 /// A transmitted Kitty image: its frames, and how far its animation has played. The first frame
 /// is the root the transmit sent. Animation frames (`a=f`) are whole canvases the root's size,
 /// composed when they arrive, so showing one is a lookup.
-struct KittyImage {
+struct KittyImage: Codable {
     /// One frame. `textureID` names its pixels to the renderer and changes whenever they do;
     /// `gap` is how long it shows, in milliseconds (0: playback skips it).
-    struct Frame {
+    struct Frame: Codable {
         var image: DecodedImage
         var gap: Int
         var textureID: Int
     }
 
     /// `s=1`, `s=2`, `s=3`.
-    enum Playback { case stopped, loading, running }
+    enum Playback: String, Codable { case stopped, loading, running }
 
     static let defaultGap = 40
 

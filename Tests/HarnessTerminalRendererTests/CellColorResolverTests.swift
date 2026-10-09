@@ -1,5 +1,5 @@
 import XCTest
-import HarnessCore
+import HarnessTerminalSupport
 @testable import HarnessTerminalRenderer
 import HarnessTerminalEngine
 import HarnessTheme

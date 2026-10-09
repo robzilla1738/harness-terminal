@@ -105,6 +105,7 @@ public final class DaemonServer: @unchecked Sendable {
         return queue
     }()
     private var cancelledSearches: [UUID: Date] = [:]
+    private let mobileHistory = MobileHistoryStore()
     private var searches: [UUID: (fd: Int32, cancellation: SurfaceRegistry.FlagBox)] = [:]
     /// Startup phases the server itself times (`listen`); the registry times the rest.
     private var startupMillis: [String: Double] = [:]
@@ -481,6 +482,23 @@ public final class DaemonServer: @unchecked Sendable {
                 send(.ok, to: fd)
                 continue
             }
+            if case let .mobileHistory(surfaceID, token, before, count) = request {
+                scheduleSearch(id: UUID(), fd: fd) { [registry, mobileHistory, epoch] cancellation in
+                    guard !cancellation.read() else { return .error("Cancelled") }
+                    return mobileHistory.page(surfaceID: surfaceID, token: token, before: before, count: count,
+                                              epoch: epoch, load: { registry.mobileHistorySnapshot(surfaceID: surfaceID) })
+                }
+                continue
+            }
+            if case let .mobileHistoryMatch(match, expectedEpoch, revision) = request {
+                guard expectedEpoch == epoch else { send(.error("This daemon restarted. Search again."), to: fd); continue }
+                scheduleSearch(id: UUID(), fd: fd) { [registry, mobileHistory, epoch] cancellation in
+                    mobileHistory.matchedPage(match, epoch: epoch, load: {
+                        registry.matchedMobileHistorySnapshot(match, revision: revision, cancelled: cancellation)
+                    })
+                }
+                continue
+            }
             if case let .searchOutput(id, query, caseSensitive, sessionID, offset, generation) = request {
                 scheduleSearch(id: id, fd: fd) { [registry, epoch] cancellation in
                     registry.searchOutput(query: query, caseSensitive: caseSensitive, sessionID: sessionID,
@@ -649,11 +667,12 @@ public final class DaemonServer: @unchecked Sendable {
                 snapshotRevision: registry.revision,
                 version: HarnessVersion.short,
                 build: HarnessVersion.build,
-                capabilities: [DaemonStats.attachStream, DaemonStats.paneAttention, DaemonStats.sessionLibrary, DaemonStats.outputSearch, DaemonStats.pathSearch],
+                capabilities: [DaemonStats.mobileCompanion, DaemonStats.attachStream, DaemonStats.paneAttention, DaemonStats.sessionLibrary, DaemonStats.outputSearch, DaemonStats.pathSearch],
                 parkedSurfaceCount: parked.count,
                 parkedStoredBytes: parked.stored,
                 parkedRawBytes: parked.raw,
-                startupMillis: registry.startupMillis.merging(startupMillis) { $1 }
+                startupMillis: registry.startupMillis.merging(startupMillis) { $1 },
+                epoch: epoch
             )
             return .daemonStats(stats)
         default:
@@ -799,7 +818,7 @@ public final class DaemonServer: @unchecked Sendable {
         }
         let resumeFrom = attach.epoch == epoch ? attach.fromSequence : nil
         DispatchQueue.global(qos: .userInitiated).async { [weak self, registry] in
-            let start = registry.attachHistory(surfaceID: attach.surfaceID, history: attach.history, fromSequence: resumeFrom)
+            let start = registry.attachHistory(surfaceID: attach.surfaceID, history: attach.history, fromSequence: resumeFrom, screenOnResync: attach.screenOnResync == true, includeCheckpoint: attach.checkpoint == true)
             self?.queue.async { [weak self] in
                 // The client may have gone, and its fd been reused, while the history was read.
                 guard let self, self.outputSubscriptions[fd]?.contains(where: { $0.token == token }) == true else { return }
@@ -807,9 +826,13 @@ public final class DaemonServer: @unchecked Sendable {
                     self.send(.error("Surface not found"), to: fd)
                     return
                 }
+                if attach.checkpoint == true, start.resync, start.screen?.checkpoint == nil {
+                    self.send(.error("Terminal checkpoint unavailable or exceeds the 8 MiB limit. Reduce pane graphics or geometry and reconnect."), to: fd)
+                    return
+                }
                 self.send(.attached(AttachReply(
-                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt, inputErrors: attach.inputErrors == true ? true : nil,
-                    replaySizes: start.replaySizes
+                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: attach.checkpoint == true ? nil : start.screen?.vt, inputErrors: attach.inputErrors == true ? true : nil,
+                    replaySizes: start.replaySizes, checkpoint: attach.checkpoint == true ? start.screen?.checkpoint : nil
                 )), to: fd)
                 for chunk in start.chunks {
                     self.sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)

@@ -452,6 +452,13 @@ public final class SurfaceRegistry: @unchecked Sendable {
             }
             commit()
             return .ok
+        case let .moveSession(sessionID, workspaceID):
+            guard editor.moveSession(sessionID, toWorkspaceID: workspaceID) else {
+                return .error("Session or destination workspace not found")
+            }
+            ensureAllSnapshotSurfaces()
+            commit()
+            return .ok
         case let .reorderSession(workspaceID, sessionID, toIndex):
             guard editor.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex) else {
                 return .error("Session not found")
@@ -1120,7 +1127,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             case let .success(path): return .text(path)
             case let .failure(error): return .error(error.message)
             }
-        case .paneWait, .subscribeEvents, .publishKeymap, .noteHostsChanged, .presentClient, .attachStream,
+        case .mobileHistory, .mobileHistoryMatch, .paneWait, .subscribeEvents, .publishKeymap, .noteHostsChanged, .presentClient, .attachStream,
              .noteClientConnection, .noteTailscaleStatus:
             return .error("handled by the daemon server")
         case let .surfaceContext(surfaceID):
@@ -1187,11 +1194,11 @@ public final class SurfaceRegistry: @unchecked Sendable {
     }
 
     /// What an attaching client is sent (`RealPty.attachHistory`).
-    func attachHistory(surfaceID: String, history: Bool, fromSequence: UInt64?) -> AttachHistory? {
+    func attachHistory(surfaceID: String, history: Bool, fromSequence: UInt64?, screenOnResync: Bool = false, includeCheckpoint: Bool = false) -> AttachHistory? {
         lock.lock()
         let session = sessions[surfaceID]
         lock.unlock()
-        return session?.attachHistory(history: history, fromSequence: fromSequence)
+        return session?.attachHistory(history: history, fromSequence: fromSequence, screenOnResync: screenOnResync, includeCheckpoint: includeCheckpoint)
     }
 
     public func cancelSubscription(surfaceID: String, token: UUID) {

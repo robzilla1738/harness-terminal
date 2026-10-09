@@ -163,7 +163,7 @@ public final class GlyphRasterizer {
     /// (PostScript name `SymbolsNFM`) rather than silently substituting. `nil` when the font isn't
     /// available to this process (headless tests / the CLI compositor).
     private static func resolveSymbolFallback(size: CGFloat) -> CTFont? {
-        let font = CTFontCreateWithName("Symbols Nerd Font Mono" as CFString, size, nil)
+        let font = CTFontCreateWithName("SymbolsNFM" as CFString, size, nil)
         return (CTFontCopyPostScriptName(font) as String) == "SymbolsNFM" ? font : nil
     }
 

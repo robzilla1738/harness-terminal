@@ -111,7 +111,11 @@ final class GlyphAtlasPages {
         descriptor.textureType = .type2DArray
         descriptor.arrayLength = pages
         descriptor.usage = [.shaderRead]
+        #if os(macOS)
         descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
+        #else
+        descriptor.storageMode = .shared
+        #endif
         return device.makeTexture(descriptor: descriptor)
     }
 }

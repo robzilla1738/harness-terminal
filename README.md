@@ -146,6 +146,10 @@ harness-cli remote remove --name devbox
 Pass extra SSH options (port, identity file, jump host) with `--ssh-arg`, e.g.
 `--ssh-arg -p --ssh-arg 2222 --ssh-arg -i --ssh-arg ~/.ssh/devbox`.
 
+### Connect an iPhone or iPad
+
+With SSH enabled and the companion-ready host installed, enter `/remote` in Harness’s command prompt or choose **Connect Phone or iPad** in the command palette. Scan its QR code in the iOS app and enter your account password once to install a device key. In a shell, run `harness-cli pair`; use `--host` for a reachable LAN or Tailscale address and `--port` for a custom SSH port. The code contains public metadata only. See [mobile connection details](docs/MOBILE-BRIDGE.md#pairing-and-files).
+
 ## Agent hooks
 
 `HARNESS_SURFACE` is set in every Harness pane, so an agent can ping the exact tab it's running in:

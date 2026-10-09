@@ -445,7 +445,7 @@ public enum CommandIPCTranslator {
         case .markPane, .synchronizePanes, .displayPanes, .copyMode, .copyModeCommand, .detachClient,
              .reattachSurface, .jumpToPreviousPrompt, .jumpToNextPrompt, .selectLastCommandOutput,
              .displayMessage, .displayMessagePrint, .runShell, .ifShell, .bindKey, .unbindKey, .listKeys,
-             .sourceConfig, .reloadKeybindings, .showCheatsheet, .sequence,
+             .sourceConfig, .reloadKeybindings, .showCheatsheet, .connectMobile, .sequence,
              .sendPrefix, .sourceFile, .commandPrompt, .confirmBefore, .choose,
              .lockClient, .clockMode, .switchClientTable, .displayPopup, .displayMenu:
             return .clientLocal(command)

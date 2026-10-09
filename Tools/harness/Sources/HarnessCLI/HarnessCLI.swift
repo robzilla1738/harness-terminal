@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import HarnessCore
+import HarnessRemoteProtocol
 import HarnessTerminalEngine
 import HarnessTheme
 
@@ -27,6 +28,15 @@ struct HarnessCLI {
                 return
             case "remote":
                 exit(try handleRemote(args))
+            case "mobile-bridge":
+                try handleMobileBridge(args)
+                return
+            case "mobile-setup":
+                try handleMobileSetup(args)
+                return
+            case "pair", "/remote":
+                try handleMobilePair(args)
+                return
             case "socket-path":
                 // What `remote add --socket` wants for this machine; needs no running daemon.
                 print(HarnessPaths.socketURL.path)
@@ -310,6 +320,9 @@ struct HarnessCLI {
                 printUsage()
                 exit(1)
             }
+        } catch let error as RemoteFailure {
+            fputs("harness-cli: \(error.message)\n", harnessStderr)
+            exit(1)
         } catch {
             fputs("harness-cli: \(unreachableReason(error) ?? "\(error)")\n", harnessStderr)
             exit(unreachableReason(error) == nil ? CLIExit.failed : CLIExit.unreachable)

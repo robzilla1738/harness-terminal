@@ -126,6 +126,10 @@ enum CommandPaletteController {
         let snapshot = coordinator.snapshot
 
         var actions: [PaletteAction] = []
+        actions.append(PaletteAction(id: "action.connectMobile", title: "Connect Phone or iPad",
+            subtitle: "/remote · Scan a QR code to connect", symbol: "qrcode", shortcut: "", section: .actions) {
+            MobilePairingController.shared.present()
+        })
 
         // MARK: - Actions
         actions.append(contentsOf: [
