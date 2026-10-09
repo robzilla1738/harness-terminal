@@ -45,7 +45,8 @@ public enum TerminalBanner {
             lines += wrappedStep(number: index + 1, key: step.key, what: step.what, inner: inner)
         }
         lines.append([])
-        lines.append([Run("Docs: thebestterminal.com"), Run("  ·  ", sgr: dim), Run("Settings: ⌘,")])
+        lines.append([Run("Docs: thebestterminal.com")])
+        lines.append([Run("Settings: ⌘,", sgr: dim)])
         lines += wrappedText("One-time tour — it won't print again.", sgr: dim, inner: inner)
         return render(lines: lines, columns: columns)
     }
