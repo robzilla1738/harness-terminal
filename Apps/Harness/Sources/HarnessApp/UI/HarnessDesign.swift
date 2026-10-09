@@ -769,7 +769,7 @@ final class ChromeBackdrop: NSView {
     func update(role: HarnessDesign.ChromeRole) {
         self.role = role
         let chrome = HarnessDesign.chrome
-        let opacity = HarnessChrome.paintOpacity
+        let opacity = HarnessChrome.framePaintOpacity
 
         if Self.crossfadeNextUpdate {
             HarnessMotion.crossfade(layer, duration: HarnessDesign.Motion.fast)
@@ -782,8 +782,8 @@ final class ChromeBackdrop: NSView {
         }
 
         // One tint over the window blur. Glass stays hidden while the window is
-        // translucent so the sidebar and the terminal share one opacity.
-        let translucent = opacity < 0.999
+        // translucent so every surface shares the same blurred backdrop.
+        let translucent = HarnessChrome.paintOpacity < 0.999
         if RuntimeGlassEffectView.isGlass(backdrop) {
             backdrop.isHidden = translucent
         } else if let vibrancy = backdrop as? NSVisualEffectView {
@@ -793,7 +793,7 @@ final class ChromeBackdrop: NSView {
         tint.layer?.backgroundColor = baseColor.withAlphaComponent(opacity).cgColor
 
         // No drawn hairline anywhere: the tab strip / sidebar / status line now read
-        // as distinct from the terminal purely by their elevated chrome background
+        // as distinct from the terminal purely by their recessed chrome background
         // (see HarnessChromePalette.build), so a hard divider line is redundant noise.
         hairline.isHidden = true
         hairline.backgroundColor = chrome.border.withAlphaComponent(chrome.isDark ? 0.55 : 0.75).cgColor

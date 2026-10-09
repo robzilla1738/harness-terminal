@@ -362,6 +362,19 @@ The final consumer check covers the added output-subscription identity guard.
   tabs survived. Cause is unverified; do not treat reconnect rendering as cleared
   by this icon review.
 
+## Recessed glass frame follow-up
+
+- Darker theme-derived chrome and a slightly denser dark-mode tint separate the
+  tab bar, sidebar, and gutters from the terminal panes. Terminal backgrounds,
+  foregrounds, ANSI colors, pane headers, and stored opacity remain unchanged.
+- Uses the existing shared window blur. No new blur instances, shadows, rendering
+  passes, or per-frame work. Clear/opaque opacity endpoints remain unchanged;
+  fully opaque pure-black themes naturally have no darker tone available.
+- Verification: release build passed; both local packages passed strict ad-hoc
+  signature verification. The running dark preview was visually inspected at the
+  existing 85% opacity, and its tabs reattached. No broad test suite was repeated
+  for this appearance-only change.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named

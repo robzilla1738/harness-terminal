@@ -528,7 +528,7 @@ final class PaneContainerView: NSView {
     }
 
     /// Fill = the container minus each island's rounded rect, in the chrome color at the
-    /// window's paint opacity, so the gutter matches the tab row and the sidebar.
+    /// frame paint opacity, so the gutter matches the tab row and the sidebar.
     func updateGapFill() {
         guard let layer else { return }
         if gapFill.superlayer !== layer {
@@ -551,7 +551,7 @@ final class PaneContainerView: NSView {
         gapFill.path = path
         gapFill.fillRule = .evenOdd
         let c = HarnessChrome.current
-        gapFill.fillColor = c.sidebarBackground.withAlphaComponent(HarnessChrome.paintOpacity).cgColor
+        gapFill.fillColor = c.sidebarBackground.withAlphaComponent(HarnessChrome.framePaintOpacity).cgColor
         CATransaction.commit()
     }
 
