@@ -124,6 +124,7 @@ public enum APIExecutor {
     private static func reply(_ response: IPCResponse) throws -> APIResult {
         switch response {
         case .ok: return .ok(try encode(["ok": true]))
+        case let .text(json): return .ok(json)
         case let .tabID(id): return .ok(try encode(["tab": id.uuidString]))
         case let .paneID(id): return .ok(try encode(["pane": id.uuidString]))
         case let .sessionID(id): return .ok(try encode(["session": id.uuidString]))

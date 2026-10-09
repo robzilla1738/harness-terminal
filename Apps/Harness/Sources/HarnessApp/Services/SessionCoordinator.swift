@@ -31,15 +31,6 @@ final class SessionCoordinator: NSObject {
     /// backlog exceeds its cap, and a dropped fd silently stops pushes. Runs only while
     /// the app is active.
     private var safetyPollTimer: Timer?
-    private var pushedNotificationKeys: Set<String> = []
-    /// Last-seen agent activity per surface key, so we can fire a notification the
-    /// moment an agent transitions out of `working` (i.e. stopped producing output —
-    /// finished its turn or is blocked on you). This is hook-independent, so it works
-    /// for any detected agent under any shell.
-    private var lastAgentActivity: [String: AgentActivity] = [:]
-    /// Cooldown timestamp per surface so a streaming agent that briefly flips
-    /// working→idle→working mid-task can't spam "stopped" pings.
-    private var lastStopNotifyAt: [String: Date] = [:]
     var settings = HarnessSettings.load()
     /// Hot-reload watchers for `settings.json` / `keybindings.json` (Ghostty config-reload-on-save).
     /// Held for the coordinator's lifetime.
@@ -62,12 +53,6 @@ final class SessionCoordinator: NSObject {
     /// Tabs with `synchronize-panes` on — input typed in any pane mirrors to all.
     private var synchronizedTabIDs: Set<TabID> = []
     var structureRevision = 0
-
-    /// The most recently closed tab's directory + title, captured so ⇧⌘T can
-    /// reopen a fresh tab in the same place. Holds only the last one (the common
-    /// "undo an accidental close" case); the underlying pty is gone, so this
-    /// spawns a new shell rather than resurrecting the process.
-    private var lastClosedTab: (cwd: String, title: String)?
 
     /// The active tab's live working directory (kept current by `SurfaceShellTracker`),
     /// used as the default for new tabs/sessions so they open where the user is
@@ -118,7 +103,13 @@ final class SessionCoordinator: NSObject {
         let settingsWatcher = FileWatcher(url: HarnessPaths.settingsURL) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let fresh = HarnessSettings.load()
+                let fresh: HarnessSettings
+                do { fresh = try HarnessSettings.reload() }
+                catch {
+                    DisplayMessage.show("Could not reload settings.json. Your working settings are unchanged. Fix the file and save again.")
+                    fputs("Harness: settings reload failed — \(error)\n", harnessStderr)
+                    return
+                }
                 guard fresh != self.settings else { return }
                 self.settings = fresh
                 self.applySettingsToHosts()
@@ -157,7 +148,7 @@ final class SessionCoordinator: NSObject {
     @objc private func snapshotChangedNotification(_ note: Notification) {
         let revision = note.userInfo?["revision"] as? Int ?? -1
         guard revision != lastRevision else { return }
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     @objc private func notificationPosted(_ note: Notification) {
@@ -177,9 +168,22 @@ final class SessionCoordinator: NSObject {
     private var links: [String: DaemonLink] = [:]
     /// Hosts with a reconnect chain running, so drops during it don't start another.
     private var reconnectingHosts: Set<String> = []
+    private var disconnectedHosts: Set<String> = []
 
     /// Every attached daemon, the active one first.
     var connectedOwners: [String] { [activeOwner] + links.keys.sorted() }
+
+    func connectionDescription(for owner: String) -> String {
+        if reconnectingHosts.contains(owner) { return "Reconnecting…" }
+        if disconnectedHosts.contains(owner) || !isConnected(owner) { return "Disconnected" }
+        return "Connected"
+    }
+
+    func retryConnection(_ owner: String) {
+        guard owner != DaemonSidebar.localID else { return }
+        if isConnected(owner) { remoteTunnelDropped(owner) }
+        else { connectToRemote(named: owner) }
+    }
 
     func isConnected(_ owner: String) -> Bool { owner == activeOwner || links[owner] != nil }
 
@@ -202,6 +206,39 @@ final class SessionCoordinator: NSObject {
     private func endpoint(forSurface surfaceID: SurfaceID) -> Endpoint {
         guard !Self.surfaces(in: snapshot).contains(surfaceID) else { return activeEndpoint }
         return links.values.first { Self.surfaces(in: $0.snapshot).contains(surfaceID) }?.endpoint ?? activeEndpoint
+    }
+
+    func endpoint(forOwner owner: String) -> Endpoint? {
+        owner == activeOwner ? activeEndpoint : links[owner]?.endpoint
+    }
+
+    func performLibrary(_ operation: LibraryOperation, owner: String,
+                        completion: @escaping @MainActor @Sendable (Result<IPCResponse, Error>) -> Void) {
+        guard let endpoint = endpoint(forOwner: owner) else {
+            completion(.failure(SetupError.invalid("Reconnect to \(owner) first.")))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result<(IPCResponse, SessionSnapshot), Error> {
+                let client = DaemonClient(endpoint: endpoint)
+                guard case let .daemonStats(stats) = try client.request(.daemonStats),
+                      stats.capabilities?.contains(DaemonStats.sessionLibrary) == true else {
+                    throw SetupError.invalid("Update the daemon on this host to use Saved Setups and Recently Closed.")
+                }
+                let response = try client.request(.library(operation), timeout: 10)
+                if case let .error(message) = response { throw SetupError.invalid(message) }
+                return (response, try DaemonSessionService(endpoint: endpoint).fetchSnapshot())
+            }
+            DispatchQueue.main.async {
+                switch result {
+                case let .success((response, fresh)):
+                    if owner == self.activeOwner { self.applySnapshot(fresh, metadataOnly: false) }
+                    else { self.links[owner]?.accept(fresh) }
+                    completion(.success(response))
+                case let .failure(error): completion(.failure(error))
+                }
+            }
+        }
     }
 
     /// Two panes on one machine: a pane can move next to the other (panes never cross daemons).
@@ -281,11 +318,19 @@ final class SessionCoordinator: NSObject {
     /// Attach to a saved remote daemon in the background, then call back on the main actor
     /// with whether it's attached. Bringing up the SSH tunnel blocks, so it runs off-main;
     /// failures show and change nothing.
+    private var pendingRemoteAttachments: [String: (id: UUID, callbacks: [@MainActor @Sendable (Bool) -> Void])] = [:]
+
     func attachRemote(named name: String, then done: @escaping @MainActor @Sendable (Bool) -> Void) {
         if isConnected(name) {
             done(true)
             return
         }
+        if pendingRemoteAttachments[name] != nil {
+            pendingRemoteAttachments[name]?.callbacks.append(done)
+            return
+        }
+        let id = UUID()
+        pendingRemoteAttachments[name] = (id, [done])
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Carry Sendable values (an endpoint, a snapshot, a message) back to the main actor.
             var resolved: Endpoint?
@@ -301,15 +346,23 @@ final class SessionCoordinator: NSObject {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    guard self.pendingRemoteAttachments[name]?.id == id else {
+                        if self.pendingRemoteAttachments[name] == nil, !self.isConnected(name) {
+                            RemoteHostsService.shared.disconnect(named: name)
+                        }
+                        return
+                    }
+                    let callbacks = self.pendingRemoteAttachments.removeValue(forKey: name)?.callbacks ?? []
                     guard let endpoint, let first else {
                         self.noteDaemonError(DaemonSessionError.daemonError(message))
-                        done(false)
+                        callbacks.forEach { $0(false) }
                         return
                     }
                     if !self.isConnected(name) {
                         self.attachLink(DaemonLink(owner: name, endpoint: endpoint, snapshot: first))
                     }
-                    done(true)
+                    self.disconnectedHosts.remove(name)
+                    callbacks.forEach { $0(true) }
                 }
             }
         }
@@ -341,6 +394,8 @@ final class SessionCoordinator: NSObject {
         // One reconnect chain per host: a retry's own short-lived ssh also reports a drop.
         guard isConnected(name), !reconnectingHosts.contains(name) else { return }
         reconnectingHosts.insert(name)
+        disconnectedHosts.insert(name)
+        NotificationCenter.default.post(name: NotificationBus.shared.snapshotChanged, object: self)
         DisplayMessage.show("Lost the connection to \(name). Reconnecting…")
         scheduleRemoteReconnect(name, attempt: 0)
     }
@@ -362,6 +417,7 @@ final class SessionCoordinator: NSObject {
                                 return
                             }
                             if let endpoint {
+                                self.disconnectedHosts.remove(name)
                                 self.reconnectingHosts.remove(name)
                                 if self.activeOwner == name {
                                     self.switchActiveDaemon(to: name, endpoint: endpoint)
@@ -373,7 +429,8 @@ final class SessionCoordinator: NSObject {
                                 self.scheduleRemoteReconnect(name, attempt: attempt + 1)
                             } else {
                                 self.reconnectingHosts.remove(name)
-                                DisplayMessage.show("Couldn't reach \(name). Use Remote ▸ \(name) ▸ Connect to try again.")
+                                NotificationCenter.default.post(name: NotificationBus.shared.snapshotChanged, object: self)
+                                DisplayMessage.show("Couldn't reach \(name). Use Remote ▸ \(name) ▸ Retry Connection to try again.")
                             }
                         }
                     }
@@ -385,7 +442,13 @@ final class SessionCoordinator: NSObject {
     /// Detach from a remote daemon: its windows close (the last one moves to this Mac), and
     /// its tunnel goes down. Its sessions keep running there.
     func disconnectRemote(named name: String) {
-        guard name != DaemonSidebar.localID, isConnected(name) else { return }
+        guard name != DaemonSidebar.localID else { return }
+        let callbacks = pendingRemoteAttachments.removeValue(forKey: name)?.callbacks ?? []
+        callbacks.forEach { $0(false) }
+        guard isConnected(name) else {
+            RemoteHostsService.shared.disconnect(named: name)
+            return
+        }
         if activeOwner == name {
             // This Mac is attached whenever a remote is active.
             guard let local = links.removeValue(forKey: DaemonSidebar.localID) else { return }
@@ -418,7 +481,11 @@ final class SessionCoordinator: NSObject {
             sessions: rows,
             remoteHosts: connectedOwners.filter { $0 != DaemonSidebar.localID }.sorted(),
             remoteDetail: RemoteAttach.explanation
-        )
+        ).map { group in
+            var group = group
+            if !group.local { group.detail = connectionDescription(for: group.id) }
+            return group
+        }
     }
 
     /// A session row from another daemon: show it in a window (connecting first if needed).
@@ -432,41 +499,12 @@ final class SessionCoordinator: NSObject {
         }
     }
 
-    /// Palette insert-path. The names come from `pane.list_dir` on the owning daemon.
     func insertListedPath() {
-        presentDirectoryChoice(title: "Insert Path", verb: "Insert") { _, path in
-            self.writeToActivePane(PaneDirectory.insertion([path]))
-        }
+        DirectoryBrowserController.present(over: NSApp.keyWindow ?? NSApp.mainWindow, mode: .insert)
     }
 
-    /// Go to Directory (⌥⌘G and the palette): the folder browser for the focused pane.
     func goToListedDirectory() {
         DirectoryBrowserController.present(over: NSApp.keyWindow ?? NSApp.mainWindow)
-    }
-
-    private func writeToActivePane(_ text: String) {
-        guard let surface = activeSurfaceID?.uuidString else { return }
-        requestDaemon(.send(surfaceID: surface, text: text))
-    }
-
-    private func presentDirectoryChoice(title: String, verb: String, apply: (PaneDirListing, String) -> Void) {
-        guard let surface = activeSurfaceID?.uuidString,
-              case let .text(body)? = requestDaemon(.listDir(surfaceID: surface, path: nil)),
-              let listing = PaneDirectory.decode(body)
-        else { return }
-        let directories = listing.entries.filter(\.directory)
-        let choices = directories.isEmpty ? [listing.root] : directories.map(\.path)
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = RemoteAttach.explanation
-        alert.addButton(withTitle: verb)
-        alert.addButton(withTitle: "Cancel")
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
-        popup.addItems(withTitles: choices)
-        alert.accessoryView = popup
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let path = choices[popup.indexOfSelectedItem]
-        apply(listing, path)
     }
 
     /// Point commands, new panes, and the push channel at `owner`'s daemon and sync from it.
@@ -489,7 +527,6 @@ final class SessionCoordinator: NSObject {
         // (its onEnd is invalidated by the generation bump inside). A failed attempt has
         // no onEnd to retry from, so back off explicitly.
         startSnapshotSubscription()
-        if snapshotSubscription == nil { scheduleSnapshotResubscribe() }
         refreshSnapshot()
     }
 
@@ -501,20 +538,12 @@ final class SessionCoordinator: NSObject {
         lastCommandDurations = lastCommandDurations.filter { live.contains($0.key) }
     }
 
-    @discardableResult
-    func syncFromDaemon(metadataOnly: Bool = false) -> Bool {
-        let remote: SessionSnapshot
-        do {
-            remote = try selections(for: activeEndpoint).sync { try daemon.fetchSnapshot() }
-        } catch {
-            // Don't silently no-op: a failed hydration leaves the UI showing stale layout/metadata.
-            // Log + throttled toast (`noteDaemonError`); the app self-heals on the next sync.
-            fputs("Harness: snapshot fetch failed: \(error)\n", harnessStderr)
-            noteDaemonError(error)
-            return false
+    func syncFromDaemon(completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        requestDaemonAsync(.getSnapshot, refresh: false) { [weak self] response in
+            guard let self, case let .snapshot(snapshot)? = response else { completion(false); return }
+            self.applySnapshot(snapshot, metadataOnly: false)
+            completion(true)
         }
-        applySnapshot(remote, metadataOnly: metadataOnly)
-        return true
     }
 
     /// Bumped by every applied snapshot, so an off-main fetch that started earlier can tell a
@@ -531,6 +560,9 @@ final class SessionCoordinator: NSObject {
         // A CLI-driven theme change arrives by push (metadata-only), so it must force the
         // chrome path itself — recurring syncs otherwise never rebuild renderers.
         let themeChanged = remote.themeName != snapshot.themeName
+        if let error = remote.persistenceError, error != snapshot.persistenceError {
+            DisplayMessage.show("Sessions could not be saved: \(error)")
+        }
         snapshot = remote
         lastRevision = remote.revision
         // The daemon answered: bring up the push channel if it isn't already, and reconcile
@@ -746,47 +778,22 @@ final class SessionCoordinator: NSObject {
     // per-host waiting indicator is needed in the future, add an `applyWaiting(_:)` API to
     // TerminalHostView and re-introduce the loop at that point.
 
-    /// Agent banners for every attached daemon at once: the dedup keys and activity edges are
-    /// pruned against all of them, so one daemon's push never re-arms another's banner.
+    private var attentionAlerts: [String: PaneAttentionAlerts] = [:]
+
     private func pushAgentNotifications() {
-        let workspaces = connectedOwners.flatMap { snapshot(for: $0).workspaces }
-        pushNewRemoteNotifications(from: workspaces)
-        pushAgentActivityNotifications(from: workspaces)
-        pushProgramStatusNotifications(from: workspaces)
-        announceAttentionChanges(in: workspaces)
-    }
-
-    private var programStatusAlerts = ProgramStatusAlerts()
-
-    /// What a program reports about itself (OSC 7501 blocked / done / error) becomes a banner
-    /// when the pane isn't the one in front of you. Alerts landing in one snapshot share one
-    /// banner, so a session finishing several tabs at once doesn't stack a pile of them.
-    private func pushProgramStatusNotifications(from workspaces: [Workspace]) {
-        let tabs = workspaces.flatMap { $0.sessions.flatMap(\.tabs) }
-        let byID = Dictionary(tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let alerts = programStatusAlerts.alerts(for: tabs).filter { alert in
-            guard settings.isEventEnabled(alert.event), let tab = byID[alert.tabID] else { return false }
-            if NSApp.isActive, let active = activeSurfaceID, tab.rootPane.allSurfaceIDs().contains(active) { return false }
-            return true
-        }
-        guard !alerts.isEmpty else { return }
-        if alerts.count > 2 {
-            let event = alerts.contains { $0.event == .agentWaiting } ? NotificationEvent.agentWaiting : alerts[0].event
-            deliverAgentAlert(event: event, title: "Harness", body: ProgramStatusAlerts.summary(of: alerts))
-            return
-        }
-        for alert in alerts {
-            guard let tab = byID[alert.tabID] else { continue }
-            let source = effectiveAgentKind(for: tab)?.displayName ?? tab.programMark?.app ?? "Harness"
-            let name = tab.title.isEmpty ? HarnessDesign.pathDisplayName(tab.cwd) : tab.title
-            let fallback: String
-            switch alert.event {
-            case .agentWaiting: fallback = "Needs your input"
-            case .failed: fallback = "Failed"
-            default: fallback = "Done"
+        let items = attentionList()
+        for owner in connectedOwners where !disconnectedHosts.contains(owner) {
+            var tracker = attentionAlerts[owner] ?? PaneAttentionAlerts()
+            let alerts = tracker.alerts(for: items.filter { $0.owner == owner }.map(\.entry))
+            attentionAlerts[owner] = tracker
+            for alert in alerts {
+                if NSApp.isActive, owner == activeOwner, alert.entry.surfaceID == activeSurfaceID { continue }
+                let name = alert.entry.activity.mark?.app ?? alert.entry.activity.agent?.kind.displayName ?? "Harness"
+                deliverAgentAlert(event: alert.event, title: "\(name) · \(alert.entry.tabTitle)", body: alert.message, owner: owner, surfaceID: alert.entry.surfaceID)
             }
-            deliverAgentAlert(event: alert.event, title: "\(source) · \(name)", body: alert.message ?? fallback)
         }
+        attentionAlerts = attentionAlerts.filter { connectedOwners.contains($0.key) }
+        announceAttentionChanges(in: connectedOwners.flatMap { snapshot(for: $0).workspaces })
     }
 
     /// Each tab's mark at the last snapshot, so VoiceOver hears when one starts needing you.
@@ -822,116 +829,21 @@ final class SessionCoordinator: NSObject {
         )
     }
 
-    private func pushNewRemoteNotifications(from workspaces: [Workspace]) {
-        for workspace in workspaces {
-            for session in workspace.sessions {
-                for tab in session.tabs where tab.status == .waiting {
-                    // A program's own `blocked` report goes through the program-status path.
-                    if let mark = tab.programMark, mark.fromRealReport, mark.attention == .blocked { continue }
-                    guard let text = tab.notificationText, !text.isEmpty,
-                          let surfaceID = tab.rootPane.allSurfaceIDs().first
-                    else { continue }
-                    let key = "\(surfaceID.uuidString)|\(text)"
-                    guard !pushedNotificationKeys.contains(key) else { continue }
-                    // Gate on the per-event preference *before* marking the key pushed, so toggling
-                    // "Needs you" off then back on during the same waiting episode still
-                    // fires once — a disabled event must not consume the dedup key. (Same reason as
-                    // the watched-pane deferral below: don't mark pushed when we aren't delivering.)
-                    guard settings.isEventEnabled(.agentWaiting) else { continue }
-                    // Always surface the waiting ring; but don't fire a banner for the pane you're
-                    // actively watching — its output + the ring already show it. Defer (don't mark
-                    // pushed) so it still fires once you look away, matching the activity path.
-                    if NSApp.isActive, surfaceID == activeSurfaceID { continue }
-                    pushedNotificationKeys.insert(key)
-                    let agentLabel = effectiveAgentKind(for: tab)?.displayName ?? "Harness"
-                    let title = "\(agentLabel) · \(tab.title.isEmpty ? "Terminal" : tab.title)"
-                    deliverAgentAlert(event: .agentWaiting, title: title, body: text)
-                }
-            }
-        }
-        // Snapshot also clears keys whose notification has been dismissed remotely
-        // so a re-arming of the same tab+text can fire a new notification later.
-        let live = Set(workspaces.flatMap { ws in
-            ws.sessions.flatMap { ses in
-                ses.tabs.compactMap { tab -> String? in
-                    guard tab.status == .waiting, let text = tab.notificationText, !text.isEmpty,
-                          let surfaceID = tab.rootPane.allSurfaceIDs().first
-                    else { return nil }
-                    return "\(surfaceID.uuidString)|\(text)"
-                }
-            }
-        })
-        pushedNotificationKeys = pushedNotificationKeys.intersection(live)
-    }
-
-    /// Hook-independent agent alerts: ping the moment a *detected* agent stops
-    /// producing output (transitions out of `working`). The daemon's `AgentDetector`
-    /// flips an agent to `idle`/`awaiting` after a few seconds of PTY silence, which is
-    /// exactly "the AI stopped or is waiting on you" — so this works for any agent under
-    /// any shell, with no hook install required. The explicit `harness-cli notify` path
-    /// (richer message) still fires via `pushNewRemoteNotifications`; we skip here when a
-    /// tab is already `.waiting` so the two paths never double-ping.
-    private func pushAgentActivityNotifications(from workspaces: [Workspace]) {
-        var live: Set<String> = []
-        for workspace in workspaces {
-            for session in workspace.sessions {
-                for tab in session.tabs {
-                    guard let agent = tab.agent,
-                          let surfaceID = tab.rootPane.allSurfaceIDs().first
-                    else { continue }
-                    let key = surfaceID.uuidString
-                    live.insert(key)
-                    let previous = lastAgentActivity[key]
-                    lastAgentActivity[key] = agent.activity
-
-                    // Only the working → (idle|awaiting) edge counts as "stopped".
-                    let stopped = previous == .working
-                        && (agent.activity == .idle || agent.activity == .awaiting)
-                    guard stopped else { continue }
-                    // The explicit notify path owns `.waiting` tabs (it carries the real
-                    // message); don't double-fire.
-                    if tab.status == .waiting { continue }
-                    // A real OSC 7501 record owns the banner. The detector must not add another.
-                    if tab.programMark?.fromRealReport == true { continue }
-                    // Don't nag for the pane you're already watching.
-                    if NSApp.isActive, surfaceID == activeSurfaceID { continue }
-                    // Gate on the per-event preference *before* the cooldown, so a disabled
-                    // "Finished" doesn't arm the 30s window and suppress a later
-                    // (re-enabled) stop. `lastAgentActivity` above still tracks the edge.
-                    guard settings.isEventEnabled(.agentFinished) else { continue }
-                    // Cooldown so a flapping stream can't spam.
-                    if let last = lastStopNotifyAt[key], Date().timeIntervalSince(last) < 30 { continue }
-                    lastStopNotifyAt[key] = Date()
-
-                    let folder = HarnessDesign.pathDisplayName(tab.cwd)
-                    let title = "\(agent.kind.displayName) · \(folder)"
-                    deliverAgentAlert(event: .agentFinished, title: title, body: "Finished — waiting for you")
-                }
-            }
-        }
-        lastAgentActivity = lastAgentActivity.filter { live.contains($0.key) }
-        lastStopNotifyAt = lastStopNotifyAt.filter { live.contains($0.key) }
-    }
-
     /// Single delivery point for agent alerts. First gates on the per-event "which events
     /// notify me" choice (`isEventEnabled`); then honors the two delivery toggles:
     /// `systemNotificationsEnabled` (push banner) and `notificationSoundEnabled` (chime).
     /// Banner-on carries the sound; banner-off-but-chime-on still plays an in-app chime,
     /// so an enabled event is audible even when banners are suppressed.
-    private func deliverAgentAlert(event: NotificationEvent, title: String, body: String) {
+    private func deliverAgentAlert(event: NotificationEvent, title: String, body: String, owner: String? = nil, surfaceID: SurfaceID? = nil) {
         guard settings.isEventEnabled(event) else { return }
         let wantBanner = settings.systemNotificationsEnabled
         let wantChime = settings.notificationSoundEnabled
         guard wantBanner || wantChime else { return }
         if wantBanner {
-            DesktopNotifier.show(title: title, body: body, withSound: wantChime)
+            DesktopNotifier.show(title: title, body: body, withSound: wantChime, owner: owner, surfaceID: surfaceID?.uuidString)
         } else if wantChime {
             NSSound(named: "Glass")?.play()
         }
-    }
-
-    private func effectiveAgentKind(for tab: Tab) -> AgentKind? {
-        tab.agent?.kind ?? AgentTitleInference.kind(from: tab.title)
     }
 
     private func updateDockBadge(from snapshot: SessionSnapshot) {
@@ -939,7 +851,7 @@ final class SessionCoordinator: NSObject {
     }
 
     func saveImmediately() {
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     /// Switch appearance and repaint. Light uses the configured light theme even when the
@@ -956,7 +868,7 @@ final class SessionCoordinator: NSObject {
                 settings.systemDarkThemeName = ThemeManager.defaultSystemDarkThemeName
             }
         }
-        try? settings.save()
+        saveSettings()
         applySettingsToHosts()
     }
 
@@ -985,6 +897,7 @@ final class SessionCoordinator: NSObject {
     /// `refreshChromePalette()` so `.macOSSystem` resolution applies on every path.
     private func updateChromeAndHosts(systemAppearance: HarnessSystemAppearance? = nil) {
         refreshChromePalette(systemAppearance: systemAppearance)
+        QuickTerminalController.shared.applyTransparency()
         let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
         let allowClipboardRead = HarnessOptions.shared.get("allow-clipboard-read")?.boolValue ?? false
         for host in terminalHosts.allHosts() {
@@ -1045,11 +958,11 @@ final class SessionCoordinator: NSObject {
     func setTheme(_ name: String, seedColors: Bool = true) {
         if seedColors {
             settings.clearThemeColorOverrides()
-            try? settings.save()
+            saveSettings()
         }
         let unchanged = snapshot.themeName == name
-        requestDaemon(.setTheme(name: name))
-        syncFromDaemon()
+        requestDaemonAsync(.setTheme(name: name))
+        refreshSnapshot()
         // Re-picking the current theme resets its colors: the sync alone doesn't re-skin.
         if unchanged { applySettingsToHosts() }
     }
@@ -1095,21 +1008,21 @@ final class SessionCoordinator: NSObject {
                 settings.applyThemeToTerminalOutput = applyToOutput
             }
         }
-        try? settings.save()
-        requestDaemon(.setTheme(name: document.name))
-        syncFromDaemon()
+        saveSettings()
+        requestDaemonAsync(.setTheme(name: document.name))
+        refreshSnapshot()
         // The document may carry new colors under the theme name already in use.
         applySettingsToHosts()
     }
 
     func addWorkspace(name: String) {
-        requestDaemon(.newWorkspace(name: name))
-        syncFromDaemon()
+        requestDaemonAsync(.newWorkspace(name: name))
+        refreshSnapshot()
     }
 
     func addSession(to workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) {
         createSession(in: workspaceID, cwd: cwd, name: name)
-        syncFromDaemon()
+        refreshSnapshot()
         // Kick the cwd tracker immediately after session creation so the shell's working
         // directory lights up as early as possible.  A second kick follows the daemon's next
         // snapshotChanged notification (which arrives once the PTY/surface is live), so there
@@ -1120,17 +1033,18 @@ final class SessionCoordinator: NSObject {
 
     /// Ask the daemon for a session without syncing, so a caller can open its window before
     /// the snapshot that makes it active arrives.
-    @discardableResult
-    func createSession(in workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) -> SessionID? {
+    func createSession(in workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil,
+                       completion: @escaping @MainActor @Sendable (SessionID?) -> Void = { _ in }) {
         let cwd = cwd ?? activeTabCWD ?? settings.defaultCWD
-        guard case let .sessionID(id)? = requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd, name: name, shell: settings.defaultShell))
-        else { return nil }
-        return id
+        requestDaemonAsync(.newSession(workspaceID: workspaceID, cwd: cwd, name: name, shell: settings.defaultShell)) {
+            guard case let .sessionID(id)? = $0 else { completion(nil); return }
+            completion(id)
+        }
     }
 
     func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) {
-        requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, shell: settings.defaultShell))
-        syncFromDaemon()
+        requestDaemonAsync(.newTab(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, shell: settings.defaultShell))
+        refreshSnapshot()
         // Kick the cwd tracker immediately so the new tab's path lights up without waiting
         // for the next 500ms tick.  When the daemon posts snapshotChanged for the new PTY
         // surface, syncFromDaemon is called again and SurfaceShellTracker's next tick picks
@@ -1140,20 +1054,26 @@ final class SessionCoordinator: NSObject {
 
     func openDefaultTerminalLaunch(_ launch: DefaultTerminalLaunchRequest) {
         guard let workspaceID = snapshot.activeWorkspace?.id ?? snapshot.workspaces.first?.id else { return }
-        let cwd = launch.cwd ?? settings.defaultCWD
-        guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd, shell: settings.defaultShell)) else {
-            syncFromDaemon()
-            return
-        }
-        if let title = launch.title, !title.isEmpty {
-            requestDaemon(.renameTab(tabID: tabID, name: title))
-        }
-        syncFromDaemon()
-        guard let surfaceID = firstSurfaceID(forTab: tabID) else { return }
-        setActiveSurface(surfaceID)
-        terminalHosts.host(for: surfaceID)?.focusTerminal()
-        if let command = launch.command, !command.isEmpty {
-            requestDaemon(.sendData(surfaceID: surfaceID.uuidString, data: Data((command + "\r").utf8)))
+        let cwd = launch.cwd ?? settings.defaultCWD, shell = settings.defaultShell
+        let owner = activeOwner
+        performDaemonOperation(operation: { service in
+            guard case let .tabID(tabID) = try service.request(.newTab(workspaceID: workspaceID, cwd: cwd, shell: shell)) else {
+                throw DaemonSessionError.unexpectedResponse
+            }
+            if let title = launch.title, !title.isEmpty { try service.request(.renameTab(tabID: tabID, name: title)) }
+            let snapshot = try service.fetchSnapshot()
+            guard let surfaceID = snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+                .first(where: { $0.id == tabID })?.rootPane.allSurfaceIDs().first else {
+                throw DaemonSessionError.unexpectedResponse
+            }
+            if let command = launch.command, !command.isEmpty {
+                try service.request(.sendData(surfaceID: surfaceID.uuidString, data: Data((command + "\r").utf8)))
+            }
+            return .surfaceID(surfaceID.uuidString)
+        }) { [weak self] response in
+            guard let self, self.activeOwner == owner,
+                  case let .surfaceID(raw)? = response, let surfaceID = UUID(uuidString: raw) else { return }
+            self.setActiveSurface(surfaceID)
         }
     }
 
@@ -1163,24 +1083,18 @@ final class SessionCoordinator: NSObject {
               let paneID = activeSurfaceID.flatMap({ paneID(for: $0, in: tab.rootPane) })
                 ?? tab.rootPane.allPaneIDs().last
         else { return }
-        requestDaemon(.newSplit(tabID: tab.id, paneID: paneID, direction: direction, shell: settings.defaultShell))
-        syncFromDaemon()
+        requestDaemonAsync(.newSplit(tabID: tab.id, paneID: paneID, direction: direction, shell: settings.defaultShell))
+        refreshSnapshot()
     }
 
     /// Move a tab into `session` (at `index`, else the end), or with nil into a new session of
     /// its own. Returns where it went. Moving into a new session doesn't sync, so the caller can
     /// open its window before the snapshot that makes it active arrives.
-    @discardableResult
-    func moveTab(_ tabID: TabID, toSession session: SessionID?, index: Int? = nil) -> SessionID? {
-        switch requestDaemon(.moveTab(tabID: tabID, toSessionID: session, index: index)) {
-        case let .sessionID(id)?:
-            if session != nil { syncFromDaemon() }
-            return id
-        case let .error(message)?:
-            DisplayMessage.show(message)
-            return nil
-        default:
-            return nil
+    func moveTab(_ tabID: TabID, toSession session: SessionID?, index: Int? = nil,
+                 completion: @escaping @MainActor @Sendable (SessionID?) -> Void = { _ in }) {
+        requestDaemonAsync(.moveTab(tabID: tabID, toSessionID: session, index: index)) {
+            guard case let .sessionID(id)? = $0 else { completion(nil); return }
+            completion(id)
         }
     }
 
@@ -1194,8 +1108,8 @@ final class SessionCoordinator: NSObject {
         let request: IPCRequest = zone.direction.map {
             .joinPane(sourcePaneID: sourcePane, destPaneID: targetPane, direction: $0, placement: zone.placement)
         } ?? .swapPanes(srcPaneID: sourcePane, dstPaneID: targetPane)
-        if case let .error(message)? = requestDaemon(request) { DisplayMessage.show(message) }
-        syncFromDaemon()
+        requestDaemonAsync(request)
+        refreshSnapshot()
     }
 
     /// A pane dropped on a tab moves into it, beside that tab's focused pane; dropped on empty
@@ -1210,8 +1124,8 @@ final class SessionCoordinator: NSObject {
         } else {
             request = .breakPane(paneID: sourcePane)
         }
-        if case let .error(message)? = requestDaemon(request) { DisplayMessage.show(message) }
-        syncFromDaemon()
+        requestDaemonAsync(request)
+        refreshSnapshot()
     }
 
     private func paneID(for surfaceID: SurfaceID, in node: PaneNode) -> PaneID? {
@@ -1237,11 +1151,13 @@ final class SessionCoordinator: NSObject {
     }
 
     func selectWorkspace(_ id: WorkspaceID) {
-        requestDaemon(.selectWorkspace(id: id))
-        syncFromDaemon()
+        selectionsSent += 1
+        requestDaemonAsync(.selectWorkspace(id: id))
+        refreshSnapshot()
     }
 
     func selectSession(workspaceID: WorkspaceID, sessionID: SessionID) {
+        selectionsSent += 1
         // A session already showing in another window: go to that window (becoming key
         // selects it there) rather than pulling its panes into this one.
         if let window = WindowContexts.window(showing: sessionID), window !== NSApp.keyWindow {
@@ -1253,18 +1169,19 @@ final class SessionCoordinator: NSObject {
         {
             return
         }
-        requestDaemon(.selectSession(workspaceID: workspaceID, sessionID: sessionID))
-        syncFromDaemon()
+        requestDaemonAsync(.selectSession(workspaceID: workspaceID, sessionID: sessionID))
+        refreshSnapshot()
     }
 
     func selectTab(workspaceID: WorkspaceID, tabID: TabID) {
+        selectionsSent += 1
         if snapshot.activeWorkspaceID == workspaceID,
            snapshot.activeWorkspace?.activeTabID == tabID
         {
             return
         }
-        requestDaemon(.selectTab(workspaceID: workspaceID, tabID: tabID))
-        syncFromDaemon()
+        requestDaemonAsync(.selectTab(workspaceID: workspaceID, tabID: tabID))
+        refreshSnapshot()
     }
 
     func selectAdjacentTab(offset: Int) {
@@ -1292,51 +1209,32 @@ final class SessionCoordinator: NSObject {
         performClose(disposition)
     }
 
-    private func rememberTabForReopen(_ tab: Tab) {
-        lastClosedTab = (cwd: tab.cwd, title: tab.title)
-    }
-
     private func closeActiveTabOnly() {
         guard let tab = snapshot.activeWorkspace?.activeTab else { return }
-        // Remember where this tab lived so ⇧⌘T can reopen a shell there.
-        rememberTabForReopen(tab)
         let surfaces = tab.rootPane.allSurfaceIDs()
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
-        requestDaemon(.closeTab(tabID: tab.id))
-        syncFromDaemon()
+        requestDaemonAsync(.closeTab(tabID: tab.id))
+        refreshSnapshot()
     }
 
-    /// Whether ⇧⌘T has a tab to reopen (drives the menu item's enabled state).
-    var canReopenClosedTab: Bool { lastClosedTab != nil }
+    var canReopenClosedTab: Bool { !snapshot.library.recentlyClosed.isEmpty }
 
-    /// Reopen the most recently closed tab: spawn a fresh tab in its directory and
-    /// restore a custom title if it had one. Consumes the stored entry so repeated
-    /// presses don't keep cloning the same tab.
     func reopenLastClosedTab() {
-        guard let workspace = snapshot.activeWorkspace, let closed = lastClosedTab else { return }
-        let cwd = closed.cwd.isEmpty ? settings.defaultCWD : closed.cwd
-        guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspace.id, cwd: cwd, shell: settings.defaultShell)) else {
-            syncFromDaemon()
-            return
+        guard let closed = snapshot.library.recentlyClosed.first else { return }
+        let owner = activeOwner
+        performLibrary(.restoreClosed(closed.id), owner: owner) { result in
+            switch result {
+            case let .success(.sessionID(id)):
+                self.refreshSnapshot()
+                self.showDaemon(owner, session: id)
+            case let .failure(error): DisplayMessage.show(error.localizedDescription)
+            default: break
+            }
         }
-        lastClosedTab = nil
-        // Only re-apply a deliberately customized title (skip the default "Shell").
-        if !closed.title.isEmpty, closed.title != "Shell" {
-            requestDaemon(.renameTab(tabID: tabID, name: closed.title))
-        }
-        syncFromDaemon()
-        if let surfaceID = firstSurfaceID(forTab: tabID) {
-            setActiveSurface(surfaceID)
-            terminalHosts.host(for: surfaceID)?.focusTerminal()
-        }
-        // Same rationale as addTab: kick immediately, rely on the daemon's snapshotChanged
-        // for any follow-up scan once the new PTY surface is live.
-        SurfaceShellTracker.shared.bumpScan()
     }
 
-    /// Toggle the find bar (⌘F) on the active pane's terminal surface.
     func toggleFindBar() {
         guard let surfaceID = activeSurfaceID, let host = terminalHosts.host(for: surfaceID) else { return }
         host.toggleFind()
@@ -1399,14 +1297,14 @@ final class SessionCoordinator: NSObject {
             let a = weight(first, along: direction), b = weight(second, along: direction)
             let even = a / (a + b)
             if abs(even - ratio) > 0.001, let firstID = firstLeaf(first), let secondID = firstLeaf(second) {
-                requestDaemon(.resizePaneRatio(tabID: tab.id, firstPaneID: firstID, secondPaneID: secondID, ratio: even))
+                requestDaemonAsync(.resizePaneRatio(tabID: tab.id, firstPaneID: firstID, secondPaneID: secondID, ratio: even))
                 changed = true
             }
             visit(first)
             visit(second)
         }
         visit(tab.rootPane)
-        if changed { syncFromDaemon() }
+        if changed { refreshSnapshot() }
     }
 
     func closeActiveTabWithConfirmation() {
@@ -1508,13 +1406,12 @@ final class SessionCoordinator: NSObject {
     /// select-first dance, so a failed/raced selection can never close a different
     /// session than the one the user confirmed.
     func closeSession(_ session: SessionGroup) {
-        if let tab = session.activeTab { rememberTabForReopen(tab) }
         let surfaces = session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
-        requestDaemon(.closeSession(sessionID: session.id))
-        syncFromDaemon()
+        requestDaemonAsync(.closeSession(sessionID: session.id))
+        refreshSnapshot()
     }
 
     func openTabInActiveWorkspace() {
@@ -1532,10 +1429,10 @@ final class SessionCoordinator: NSObject {
             for surfaceID in tab.rootPane.allSurfaceIDs() {
                 terminalHosts.removeHost(for: surfaceID)
             }
-            requestDaemon(.closeTab(tabID: tab.id))
+            requestDaemonAsync(.closeTab(tabID: tab.id))
         }
         selectTab(workspaceID: workspace.id, tabID: keepID)
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     /// Select a tab, then split its active pane — used by the tab context menu so the
@@ -1551,8 +1448,8 @@ final class SessionCoordinator: NSObject {
               let paneID = activeSurfaceID.flatMap({ paneID(for: $0, in: tab.rootPane) })
                 ?? tab.rootPane.allPaneIDs().last
         else { return }
-        requestDaemon(.killPane(paneID: paneID))
-        syncFromDaemon()
+        requestDaemonAsync(.killPane(paneID: paneID))
+        refreshSnapshot()
     }
 
     func zoomActivePane() {
@@ -1561,8 +1458,8 @@ final class SessionCoordinator: NSObject {
               let paneID = activeSurfaceID.flatMap({ paneID(for: $0, in: tab.rootPane) })
                 ?? tab.rootPane.allPaneIDs().last
         else { return }
-        requestDaemon(.zoomPane(paneID: paneID))
-        syncFromDaemon()
+        requestDaemonAsync(.zoomPane(paneID: paneID))
+        refreshSnapshot()
     }
 
     func cycleActivePane(forward: Bool) {
@@ -1801,7 +1698,7 @@ final class SessionCoordinator: NSObject {
         // Write the per-tab option through (tmux: synchronize-panes IS a window
         // option), so `setw -t <tab> synchronize-panes` and the GUI toggle are one
         // state — the compositor honors the same option for the same tab.
-        requestDaemon(.setOption(
+        requestDaemonAsync(.setOption(
             scope: "tab", target: tab.id.uuidString,
             key: "synchronize-panes", rawValue: nowOn ? "on" : "off"
         ))
@@ -1813,7 +1710,7 @@ final class SessionCoordinator: NSObject {
     /// the compositor toggle) into the local mirror. Called from full syncs, so it asks off the
     /// main thread: a window coming forward never waits on a (remote) daemon for it.
     private func adoptSynchronizeOptions() {
-        let service = daemon
+        let service = DaemonSessionService(endpoint: activeEndpoint)
         let owner = activeOwner
         DispatchQueue.global(qos: .userInitiated).async {
             guard case let .options(entries)? = try? service.request(.showOptions(scope: "tab")) else { return }
@@ -1872,9 +1769,9 @@ final class SessionCoordinator: NSObject {
             DisplayMessage.show("join-pane: invalid mark")
             return
         }
-        _ = requestDaemon(.joinPane(sourcePaneID: sourcePane, destPaneID: destPane, direction: direction))
+        requestDaemonAsync(.joinPane(sourcePaneID: sourcePane, destPaneID: destPane, direction: direction))
         setMarkedPane(false)
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     /// Re-assert the active-pane border after a (re)mount of `tab`'s panes. If the
@@ -1899,24 +1796,24 @@ final class SessionCoordinator: NSObject {
     func setSplitRatio(tabID: TabID, firstPaneID: PaneID, secondPaneID: PaneID, ratio: Double) {
         let request = IPCRequest.resizePaneRatio(tabID: tabID, firstPaneID: firstPaneID, secondPaneID: secondPaneID, ratio: ratio)
         logIfFailed(request, surface: tab(tabID)?.rootPane.allSurfaceIDs().first)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     /// Commit a tab drag-reorder. Full sync so the tab bar rebuilds in the new order
     /// (the metadata path updates pills in place by ID and wouldn't reflect a reorder).
     func reorderSession(workspaceID: WorkspaceID, sessionID: SessionID, toIndex: Int) {
-        requestDaemon(.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex))
-        syncFromDaemon()
+        requestDaemonAsync(.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex))
+        refreshSnapshot()
     }
 
     func renameWorkspace(id: WorkspaceID, name: String) {
-        requestDaemon(.renameWorkspace(workspaceID: id, name: name))
-        syncFromDaemon()
+        requestDaemonAsync(.renameWorkspace(workspaceID: id, name: name))
+        refreshSnapshot()
     }
 
     func reorderTab(workspaceID: WorkspaceID, tabID: TabID, toIndex: Int) {
-        requestDaemon(.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex))
-        syncFromDaemon()
+        requestDaemonAsync(.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex))
+        refreshSnapshot()
     }
 
     private func surfaceID(forPane paneID: PaneID, in node: PaneNode) -> SurfaceID? {
@@ -2034,8 +1931,8 @@ final class SessionCoordinator: NSObject {
         let apply: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard response == .alertFirstButtonReturn, !name.isEmpty, let self else { return }
-            self.requestDaemon(.renameTab(tabID: tabID, name: name))
-            self.syncFromDaemon(metadataOnly: true)
+            self.requestDaemonAsync(.renameTab(tabID: tabID, name: name))
+            refreshSnapshot()
         }
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
             alert.beginSheetModal(for: window, completionHandler: apply)
@@ -2045,26 +1942,15 @@ final class SessionCoordinator: NSObject {
     }
 
     func reimportTerminalConfig() {
-        if let imported = TerminalConfigImporter.load() {
-            // `makeDefaults` baselines to defaults + imported VISUALS, so it would drop
-            // Harness-owned behavioral config. Preserve the user's output triggers and
-            // per-host profiles across the re-import — they describe Harness behavior, not
-            // anything the source terminal config could carry.
-            let savedProfiles = settings.profiles
-            let savedTriggers = settings.triggers
-            settings = HarnessSettings.makeDefaults(imported: imported)
-            settings.profiles = savedProfiles
-            settings.triggers = savedTriggers
-            try? settings.save()
-            // Colors were just seeded from the imported terminal config above;
-            // don't let the theme preset overwrite the user's explicit config.
-            if let displayTheme = imported.themeName ?? imported.systemDarkThemeName {
-                setTheme(displayTheme, seedColors: false)
-            } else {
-                setTheme(ThemeManager.defaultDisplayName, seedColors: false)
-            }
-            applySettingsToHosts()
-        }
+        SettingsImportController.present()
+    }
+
+    func applyImportedSettings(_ imported: HarnessSettings) throws {
+        try imported.save()
+        settings = imported
+        PaletteShortcuts.shared.reload()
+        applySettingsToHosts()
+        NotificationCenter.default.post(name: NotificationBus.shared.snapshotChanged, object: self)
     }
 
     func closeActiveWorkspace() {
@@ -2075,17 +1961,14 @@ final class SessionCoordinator: NSObject {
     func closeWorkspace(id: WorkspaceID) {
         guard snapshot.workspaces.count > 1 else { return }
         guard let workspace = snapshot.workspaces.first(where: { $0.id == id }) else { return }
-        if let session = workspace.activeSession, let tab = session.activeTab {
-            rememberTabForReopen(tab)
-        }
         let surfaces = workspace.sessions.flatMap { session in
             session.tabs.flatMap { $0.rootPane.allSurfaceIDs() }
         }
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
-        requestDaemon(.closeWorkspace(id: id))
-        syncFromDaemon()
+        requestDaemonAsync(.closeWorkspace(id: id))
+        refreshSnapshot()
     }
 
     func terminalHostIfExists(for surfaceID: SurfaceID) -> TerminalHostView? {
@@ -2102,7 +1985,8 @@ final class SessionCoordinator: NSObject {
             harnessSurfaceEnv: surfaceID.uuidString,
             settings: settings,
             themeName: snapshot.themeName,
-            endpoint: endpoint(forSurface: surfaceID)
+            endpoint: endpoint(forSurface: surfaceID),
+            requiresSessionLayout: connectedOwners.contains { Self.surfaces(in: snapshot(for: $0)).contains(surfaceID) }
         )
         host.hostDelegate = self
         host.applyTheme(named: snapshot.themeName)
@@ -2124,8 +2008,8 @@ final class SessionCoordinator: NSObject {
             for session in workspace.sessions {
                 for tab in session.tabs {
                     guard let paneID = paneID(for: surfaceID, in: tab.rootPane) else { continue }
-                    requestDaemon(.killPane(paneID: paneID))
-                    syncFromDaemon()
+                    requestDaemonAsync(.killPane(paneID: paneID))
+                    refreshSnapshot()
                     return
                 }
             }
@@ -2133,77 +2017,71 @@ final class SessionCoordinator: NSObject {
     }
 
     func jumpToLatestNotification() {
-        guard let waiting = firstWaitingTab() else { return }
-        selectWorkspace(waiting.workspaceID)
-        selectTab(workspaceID: waiting.workspaceID, tabID: waiting.tabID)
+        guard let item = attentionList().first(where: { $0.connected && $0.entry.activity.rank.needsYou }) else { return }
+        openAttention(item)
     }
 
     /// All tabs currently `.waiting` plus enough context to render a notification
     /// dropdown row (workspace name, tab title, agent kind, notification body).
-    func notificationsList() -> [NotificationEntry] {
-        var entries: [NotificationEntry] = []
-        for workspace in snapshot.workspaces {
-            for session in workspace.sessions {
-                for tab in session.tabs where tab.status == .waiting {
-                    guard let surfaceID = tab.rootPane.allSurfaceIDs().first else { continue }
-                    entries.append(NotificationEntry(
-                        workspaceID: workspace.id,
-                        workspaceName: workspace.name,
-                        sessionID: session.id,
-                        tabID: tab.id,
-                        tabTitle: tab.title.isEmpty ? (session.name.isEmpty ? "Terminal" : session.name) : tab.title,
-                        surfaceID: surfaceID,
-                        agentKind: effectiveAgentKind(for: tab),
-                        body: tab.notificationText ?? "Needs attention"
-                    ))
-                }
+    func attentionList() -> [HostedAttention] {
+        let entries = connectedOwners.flatMap { owner in
+            SessionEditor(snapshot: snapshot(for: owner)).listAttention().map {
+                HostedAttention(owner: owner, entry: $0, connected: !disconnectedHosts.contains(owner))
             }
         }
-        return entries
+        return AttentionRank.sorted(entries, rank: { $0.entry.activity.rank }, lastActivity: { $0.entry.activity.updatedAt })
     }
 
-    /// Every running agent (one row per tab carrying a detected agent), waiting
-    /// agents first, for the Agent Inbox panel. Reuses `SessionEditor.listAgents()`
-    /// so the GUI and CLI derive the exact same view from the snapshot.
-    func agentsList() -> [AgentSessionSummary] {
-        SessionEditor(snapshot: snapshot).listAgents()
-            .sorted { lhs, rhs in
-                if lhs.waiting != rhs.waiting { return lhs.waiting }   // waiting first
-                return lhs.lastActivityAt > rhs.lastActivityAt          // most recent next
-            }
-    }
-
-    /// Jump to the tab backing an agent row (Agent Inbox). Mirrors
-    /// `openNotification` but does not clear the notification — viewing the agent
-    /// list shouldn't dismiss a pending alert.
-    func openAgent(_ agent: AgentSessionSummary) {
-        guard let workspace = snapshot.workspaces.first(where: { ws in
-            ws.sessions.contains { $0.id == agent.sessionID }
-        }) else { return }
-        selectWorkspace(workspace.id)
-        selectTab(workspaceID: workspace.id, tabID: agent.tabID)
-    }
-
-    func openNotification(_ entry: NotificationEntry) {
-        selectWorkspace(entry.workspaceID)
+    func openAttention(_ item: HostedAttention) {
+        guard isConnected(item.owner), !disconnectedHosts.contains(item.owner) else {
+            DisplayMessage.show("Reconnect to \(item.owner) to open this pane.")
+            return
+        }
+        let entry = item.entry
+        guard Self.surfaces(in: snapshot(for: item.owner)).contains(entry.surfaceID) else {
+            DisplayMessage.show("This pane has closed.")
+            return
+        }
+        showDaemon(item.owner, session: entry.sessionID)
+        activate(owner: item.owner, selecting: entry.sessionID)
         selectTab(workspaceID: entry.workspaceID, tabID: entry.tabID)
-        // Focus the target pane so the keyboard is live immediately on arrival (mirrors
-        // ensureActivePane/setActiveSurface) — selectTab alone leaves focus on the prior pane.
+        setActiveSurface(entry.surfaceID)
         terminalHosts.host(for: entry.surfaceID)?.focusTerminal()
-        clearNotification(surfaceID: entry.surfaceID)
+        markAttentionRead(item)
     }
 
-    func clearNotification(surfaceID: SurfaceID) {
-        requestDaemon(.clearNotification(surfaceID: surfaceID.uuidString), forSurface: surfaceID)
-        syncFromDaemon()
+    func openSearchResult(_ match: OutputSearchMatch, owner: String, query: String, caseSensitive: Bool) -> Bool {
+        guard isConnected(owner), Self.surfaces(in: snapshot(for: owner)).contains(match.surfaceID) else { return false }
+        showDaemon(owner, session: match.sessionID)
+        activate(owner: owner, selecting: match.sessionID)
+        selectTab(workspaceID: match.workspaceID, tabID: match.tabID)
+        setActiveSurface(match.surfaceID)
+        guard let host = terminalHosts.host(for: match.surfaceID) else { return false }
+        return host.revealSearchResult(match, query: query, caseSensitive: caseSensitive)
     }
 
-    func clearAllNotifications() {
-        for entry in notificationsList() {
-            requestDaemon(.clearNotification(surfaceID: entry.surfaceID.uuidString))
+    func markAttentionRead(_ item: HostedAttention) {
+        updateAttention(.acknowledgeAttention(surfaceID: item.entry.surfaceID.uuidString), item: item)
+    }
+
+    func snoozeAttention(_ item: HostedAttention, minutes: Int) {
+        updateAttention(.snoozeAttention(surfaceID: item.entry.surfaceID.uuidString, minutes: minutes), item: item)
+    }
+
+    private func updateAttention(_ request: IPCRequest, item: HostedAttention) {
+        guard item.connected, let endpoint = endpoint(forOwner: item.owner) else { DisplayMessage.show("Reconnect to this host first."); return }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let response = try DaemonClient(endpoint: endpoint).request(request)
+                if case let .error(message) = response { throw SetupError.invalid(message) }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async { DisplayMessage.show(message) }
+            }
         }
-        syncFromDaemon()
     }
+
+
 
     private func firstWaitingTab() -> (workspaceID: WorkspaceID, tabID: TabID)? {
         // Prefer panes whose agent is awaiting input (or a tab is .waiting and
@@ -2232,47 +2110,16 @@ final class SessionCoordinator: NSObject {
         return nil
     }
 
-    /// The tab-canonical surface used to key a notification's dedup entry: the first leaf of the
-    /// tab owning `surfaceID`. `pushNewRemoteNotifications` (insert + prune) keys every entry by a
-    /// waiting tab's `allSurfaceIDs().first`, so `handleNotification` must use the same anchor —
-    /// keying by the raw ringing surface meant a bell in any non-first split pane produced a key the
-    /// prune dropped on the very next snapshot, defeating the spam guard for that pane.
-    private func canonicalNotificationSurface(for surfaceID: SurfaceID) -> SurfaceID {
-        for workspace in connectedOwners.flatMap({ snapshot(for: $0).workspaces }) {
-            for session in workspace.sessions {
-                for tab in session.tabs where tab.rootPane.allSurfaceIDs().contains(surfaceID) {
-                    return tab.rootPane.allSurfaceIDs().first ?? surfaceID
-                }
-            }
-        }
-        return surfaceID
-    }
-
+    /// Store the report on its source pane; the unified activity stream delivers alerts.
     func handleNotification(for surfaceID: SurfaceID, event: NotificationEvent, title: String, body: String) {
-        let key = "\(canonicalNotificationSurface(for: surfaceID).uuidString)|\(body)"
-        // Already pinged for this exact tab+message and it's still pending: just re-assert the
-        // ring and return. A program spamming the bell (body is the constant "Bell") would
-        // otherwise drive a full daemon notify + snapshot round-trip per `\a` on the main thread.
-        // The key is cleared once the tab stops being `.waiting` (see `pushNewRemoteNotifications`),
-        // so a genuinely new alert after dismissal still fires.
-        guard !pushedNotificationKeys.contains(key) else {
-            return
-        }
-        requestDaemon(.notify(
-            surfaceID: surfaceID.uuidString,
-            title: title,
-            body: body
-        ), forSurface: surfaceID)
-        pushedNotificationKeys.insert(key)
-        if NSApp.isActive == false {
-            deliverAgentAlert(event: event, title: title, body: body)
-        }
-        syncFromDaemon()
+        guard !attentionList().contains(where: { $0.entry.surfaceID == surfaceID && $0.entry.activity.notification == body }) else { return }
+        requestDaemonBatch([.notify(surfaceID: surfaceID.uuidString, title: title, body: body)], endpoint: endpoint(forSurface: surfaceID))
+        refreshSnapshot()
     }
 
     func clearNotification(for surfaceID: SurfaceID) {
-        requestDaemon(.clearNotification(surfaceID: surfaceID.uuidString))
-        syncFromDaemon()
+        requestDaemonBatch([.clearNotification(surfaceID: surfaceID.uuidString)], endpoint: endpoint(forSurface: surfaceID))
+        refreshSnapshot()
     }
 
     func updateFontSize(delta: Float) {
@@ -2286,7 +2133,7 @@ final class SessionCoordinator: NSObject {
 
     private func applyFontSize(_ size: Float) {
         settings.fontSize = max(8, min(32, size))
-        try? settings.save()
+        saveSettings()
         for host in terminalHosts.allHosts() {
             host.applySettings(settings)
         }
@@ -2294,10 +2141,15 @@ final class SessionCoordinator: NSObject {
 
     /// Persist the secure-keyboard-entry setting and apply it immediately (takes/releases the
     /// process-global secure-input lock based on the new value + current app-active state).
+    func saveSettings() {
+        do { try settings.save() }
+        catch { DisplayMessage.show("Settings could not be saved: \(error.localizedDescription)") }
+    }
+
     func setSecureKeyboardEntry(_ enabled: Bool) {
         guard settings.secureKeyboardEntry != enabled else { return }
         settings.secureKeyboardEntry = enabled
-        try? settings.save()
+        saveSettings()
         SecureKeyboardEntry.shared.settingChanged()
     }
 
@@ -2316,6 +2168,9 @@ final class SessionCoordinator: NSObject {
     /// The active workspace's tabs, shaped for the branch monitor. Matches the old poll's
     /// scope: background workspaces refresh when they become active.
     private func gitBranchRecords(from snapshot: SessionSnapshot) -> [GitBranchMonitor.TabRecord] {
+        // A remote cwd belongs to the remote filesystem. A local lookup could erase its
+        // real branch or substitute a different repository at the same path on this Mac.
+        guard activeOwner == DaemonSidebar.localID else { return [] }
         guard let workspace = snapshot.activeWorkspace else { return [] }
         return workspace.sessions.flatMap(\.tabs).map { tab in
             GitBranchMonitor.TabRecord(
@@ -2331,49 +2186,61 @@ final class SessionCoordinator: NSObject {
     /// every successful sync, so the channel comes up as soon as the daemon answers; the
     /// follow-up background fetch closes the fetch→subscribe race (a revision committed
     /// between the snapshot we just fetched and the subscription registering).
+    private var snapshotSubscriptionPending = false
+
     private func startSnapshotSubscriptionIfNeeded() {
-        guard snapshotSubscription == nil else { return }
+        guard snapshotSubscription == nil, !snapshotSubscriptionPending else { return }
         startSnapshotSubscription()
-        guard snapshotSubscription != nil else {
-            // The subscribe attempt failed (daemon briefly down): without this, recovery
-            // would degrade to the 30 s safety poll — onEnd never fires for a channel
-            // that never came up.
-            scheduleSnapshotResubscribe()
-            return
-        }
-        refreshSnapshot()
     }
 
     private func startSnapshotSubscription() {
         snapshotSubscriptionGeneration += 1
         let generation = snapshotSubscriptionGeneration
         snapshotSubscription?.cancel()
-        snapshotSubscription = try? daemon.subscribeSnapshot(
-            label: "harness-app",
-            onRevision: { [weak self] revision in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
+        snapshotSubscription = nil
+        snapshotSubscriptionPending = true
+        let service = DaemonSessionService(endpoint: activeEndpoint)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let subscription = try? service.subscribeSnapshot(
+                label: "harness-app",
+                onRevision: { [weak self] revision in
+                    DispatchQueue.main.async {
                         guard let self, generation == self.snapshotSubscriptionGeneration else { return }
                         self.handlePushedRevision(revision)
                     }
-                }
-            },
-            onDirective: { [weak self] directive in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { self?.handleDirective(directive) }
-                }
-            },
-            onEnd: { [weak self] in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
+                },
+                onDirective: { [weak self] directive in
+                    DispatchQueue.main.async {
                         guard let self, generation == self.snapshotSubscriptionGeneration else { return }
+                        self.handleDirective(directive)
+                    }
+                },
+                onEnd: { [weak self] in
+                    DispatchQueue.main.async {
+                        guard let self, generation == self.snapshotSubscriptionGeneration else { return }
+                        // Invalidate an attachment completion still on its way to main.
+                        self.snapshotSubscriptionGeneration += 1
+                        self.snapshotSubscriptionPending = false
                         self.snapshotSubscription = nil
                         self.scheduleSnapshotResubscribe()
                     }
                 }
+            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.snapshotSubscriptionGeneration else {
+                    subscription?.cancel()
+                    return
+                }
+                self.snapshotSubscriptionPending = false
+                self.snapshotSubscription = subscription
+                if subscription != nil {
+                    self.snapshotResubscribeDelay = 1
+                    self.refreshSnapshot() // Close the fetch-to-subscribe revision gap.
+                } else {
+                    self.scheduleSnapshotResubscribe()
+                }
             }
-        )
-        if snapshotSubscription != nil { snapshotResubscribeDelay = 1 }
+        }
     }
 
     private func handlePushedRevision(_ revision: Int) {
@@ -2407,14 +2274,15 @@ final class SessionCoordinator: NSObject {
     /// daemon commits often while an agent streams. Structure changes still remount
     /// (structureChanged is computed independently) and a CLI theme change still applies
     /// (themeChanged forces the chrome path).
-    private func refreshSnapshot() {
+    func refreshSnapshot() {
+        guard pendingDaemonOperations[activeEndpoint, default: 0] == 0 else { refetch = true; return }
         guard !fetchInFlight else {
             refetch = true
             return
         }
         fetchInFlight = true
         refetch = false
-        let service = daemon
+        let service = DaemonSessionService(endpoint: activeEndpoint)
         let owner = activeOwner
         let applied = appliedSnapshots
         let sent = selectionsSent
@@ -2445,24 +2313,19 @@ final class SessionCoordinator: NSObject {
     /// gap were lost with the socket.
     private func scheduleSnapshotResubscribe() {
         let delay = snapshotResubscribeDelay
+        let generation = snapshotSubscriptionGeneration
         snapshotResubscribeDelay = min(delay * 2, 8)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.snapshotSubscription == nil else { return }
-                self.startSnapshotSubscription()
-                if self.snapshotSubscription != nil {
-                    self.refreshSnapshot()
-                } else {
-                    self.scheduleSnapshotResubscribe()
-                }
-            }
+            guard let self, generation == self.snapshotSubscriptionGeneration,
+                  self.snapshotSubscription == nil, !self.snapshotSubscriptionPending else { return }
+            self.startSnapshotSubscription()
         }
     }
 
     private func startSafetyPoll() {
         safetyPollTimer?.invalidate()
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.syncFromDaemon(metadataOnly: true) }
+            Task { @MainActor in self?.refreshSnapshot() }
         }
         timer.tolerance = 5
         RunLoop.main.add(timer, forMode: .common)
@@ -2512,18 +2375,59 @@ final class SessionCoordinator: NSObject {
     private var userVariableFlushScheduled = false
     private static let maxUserVariablesPerSurface = 64
 
-    @discardableResult
-    func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
-        do {
-            return try selections(for: activeEndpoint).sync { try daemon.request(request) }
-        } catch {
-            // Never block the UI with a modal: a transient miss (e.g. the daemon
-            // is still spawning at launch) must degrade gracefully. Log always,
-            // and surface a non-blocking, throttled toast so the user isn't left
-            // wondering — but the app keeps running and self-heals on the next sync.
-            fputs("Harness daemon request failed: \(error)\n", harnessStderr)
-            noteDaemonError(error)
-            return nil
+    func afterDaemonOperations(_ completion: @escaping @MainActor @Sendable () -> Void) {
+        selections(for: activeEndpoint).perform { DispatchQueue.main.async { completion() } }
+    }
+
+    /// GUI operations are ordered per captured endpoint, independently of the input streams.
+    /// A failed mutation is never retried; only a subsequent snapshot may reconcile its outcome.
+    func requestDaemonAsync(_ request: IPCRequest, refresh: Bool = true, deliverStaleResult: Bool = false,
+                            completion: @escaping @MainActor @Sendable (IPCResponse?) -> Void = { _ in }) {
+        requestDaemonBatch([request], refresh: refresh, deliverStaleResult: deliverStaleResult, completion: completion)
+    }
+
+    func requestDaemonBatch(_ requests: [IPCRequest], refresh: Bool = true,
+                            endpoint: Endpoint? = nil, deliverStaleResult: Bool = false,
+                            completion: @escaping @MainActor @Sendable (IPCResponse?) -> Void = { _ in }) {
+        performDaemonOperation(endpoint: endpoint, refresh: refresh, deliverStaleResult: deliverStaleResult, operation: { service in
+            var response = IPCResponse.ok
+            for request in requests { response = try service.request(request) }
+            return response
+        }, completion: completion)
+    }
+
+    private var pendingDaemonOperations: [Endpoint: Int] = [:]
+    private(set) var daemonFailureRevision = 0
+
+    func performDaemonOperation(endpoint: Endpoint? = nil, refresh: Bool = true, deliverStaleResult: Bool = false,
+                                operation: @escaping @Sendable (DaemonSessionService) throws -> IPCResponse,
+                                completion: @escaping @MainActor @Sendable (IPCResponse?) -> Void = { _ in }) {
+        let endpoint = endpoint ?? activeEndpoint
+        let owner = activeOwner, sent = selectionsSent
+        let service = DaemonSessionService(endpoint: endpoint)
+        pendingDaemonOperations[endpoint, default: 0] += 1
+        selections(for: endpoint).perform { [weak self] in
+            let result = Result { try operation(service) }
+            let fresh = refresh ? try? service.fetchSnapshot() : nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pendingDaemonOperations[endpoint, default: 1] -= 1
+                let current = owner == self.activeOwner && endpoint == self.activeEndpoint && sent == self.selectionsSent
+                switch result {
+                case let .success(response): completion(current || deliverStaleResult ? response : nil)
+                case let .failure(error):
+                    self.daemonFailureRevision += 1
+                    fputs("Harness daemon operation failed: \(error)\n", harnessStderr)
+                    if current { DisplayMessage.show("\(error). Check the current state before trying again.") }
+                    completion(nil)
+                }
+                if current, let fresh, fresh.revision >= self.snapshot.revision {
+                    self.applySnapshot(fresh, metadataOnly: false)
+                    self.refetch = false
+                }
+                if endpoint == self.activeEndpoint, self.refetch,
+                   self.pendingDaemonOperations[endpoint, default: 0] == 0 { self.refreshSnapshot() }
+            }
         }
     }
 
@@ -2542,44 +2446,21 @@ final class SessionCoordinator: NSObject {
     /// What a pane reports goes to that pane's own daemon: a window behind may be on another
     /// machine. That daemon's next push refreshes whichever snapshot holds the pane.
     /// A request about one pane, sent to that pane's own daemon (errors show like any request).
-    @discardableResult
-    private func requestDaemon(_ request: IPCRequest, forSurface surfaceID: SurfaceID) -> IPCResponse? {
-        let endpoint = endpoint(forSurface: surfaceID)
-        guard endpoint != activeEndpoint else { return requestDaemon(request) }
-        do {
-            return try DaemonClient(endpoint: endpoint).request(request, timeout: 2)
-        } catch {
-            fputs("Harness daemon request failed: \(error)\n", harnessStderr)
-            noteDaemonError(error)
-            return nil
+    private func logIfFailed(_ request: IPCRequest, surface surfaceID: SurfaceID? = nil) {
+        let endpoint = surfaceID.map(endpoint(forSurface:)) ?? activeEndpoint
+        let service = DaemonSessionService(endpoint: endpoint)
+        selections(for: endpoint).perform {
+            do { try service.request(request) }
+            catch { fputs("Harness daemon metadata update failed: \(error)\n", harnessStderr) }
         }
     }
 
-    private func logIfFailed(_ request: IPCRequest, surface surfaceID: SurfaceID? = nil) {
-        let endpoint = surfaceID.map(endpoint(forSurface:)) ?? activeEndpoint
-        guard endpoint == activeEndpoint else {
-            // Another machine answers over SSH: never hold the main thread for it.
-            DispatchQueue.global(qos: .utility).async {
-                do {
-                    _ = try DaemonClient(endpoint: endpoint).request(request, timeout: 2)
-                } catch {
-                    fputs("Harness daemon metadata update failed: \(error)\n", harnessStderr)
-                }
-            }
-            return
-        }
-        do {
-            _ = try daemon.request(request)
-        } catch {
-            fputs("Harness daemon metadata update failed: \(error)\n", harnessStderr)
-        }
-    }
 }
 
 extension SessionCoordinator: TerminalHostDelegate {
     func terminalHostDidChangeTitle(_ title: String, surfaceID: SurfaceID) {
         logIfFailed(.updateTabTitle(surfaceID: surfaceID.uuidString, title: title), surface: surfaceID)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     /// OSC 9;4 progress — ephemeral GUI state (Ghostty parity), deliberately NOT mirrored
@@ -2591,7 +2472,7 @@ extension SessionCoordinator: TerminalHostDelegate {
 
     func terminalHostDidChangeWorkingDirectory(_ path: String, surfaceID: SurfaceID) {
         logIfFailed(.updateTabCwd(surfaceID: surfaceID.uuidString, path: path), surface: surfaceID)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     /// OSC 1337 `SetUserVar=` → a pane-scoped `@name` user option, so `#{@name}` format
@@ -2651,7 +2532,7 @@ extension SessionCoordinator: TerminalHostDelegate {
             .first { $0.rootPane.allSurfaceIDs().contains(surfaceID) }?.cwd
         if current == cwd { return }
         logIfFailed(.updateTabCwd(surfaceID: surfaceID.uuidString, path: cwd), surface: surfaceID)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     func terminalHostDidChangeFocus(_ focused: Bool, surfaceID: SurfaceID) {
@@ -2775,35 +2656,20 @@ extension SessionCoordinator: TerminalHostDelegate {
     }
 }
 
-struct NotificationEntry: Identifiable, Equatable {
-    let workspaceID: WorkspaceID
-    let workspaceName: String
-    let sessionID: SessionID
-    let tabID: TabID
-    let tabTitle: String
-    let surfaceID: SurfaceID
-    let agentKind: AgentKind?
-    let body: String
-    var id: TabID { tabID }
-}
-
 enum DesktopNotifier {
-    /// Call once at app launch. macOS only shows the system prompt the first
-    /// time; subsequent calls are no-ops, so it's safe to call eagerly. Also
-    /// installs the foreground-presentation delegate (see `ForegroundPresenter`).
-    static func requestAuthorizationIfNeeded() {
+    /// Register foreground delivery without asking for permission before the user chooses setup.
+    static func configurePresentation() {
         let center = UNUserNotificationCenter.current()
         // Without a delegate that opts in, macOS suppresses banners while Harness is
         // the *frontmost* app — so an agent notification fired while you're looking at
         // another tab would silently no-op. The presenter forces banner + sound + list
         // even in the foreground, so agent alerts always land.
         center.delegate = ForegroundPresenter.shared
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
-    static func show(title: String, body: String, withSound: Bool = true) {
+    static func show(title: String, body: String, withSound: Bool = true, owner: String? = nil, surfaceID: String? = nil) {
         let center = UNUserNotificationCenter.current()
-        // The delegate is set once in `requestAuthorizationIfNeeded` (called at app launch
+        // The delegate is set once in `configurePresentation` (called at app launch
         // before any notification can fire) and in `requestOrOpenSettings` / `sendTest`.
         // Re-setting it here on every banner delivery was redundant and slightly wasteful
         // (UNUserNotificationCenter retains the delegate strongly per Apple docs, so it can
@@ -2811,27 +2677,20 @@ enum DesktopNotifier {
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:
-                add(title: title, body: body, withSound: withSound)
-            case .notDetermined:
-                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-                    if granted {
-                        add(title: title, body: body, withSound: withSound)
-                    } else if withSound {
-                        DispatchQueue.main.async { NSSound(named: "Glass")?.play() }
-                    }
-                }
-            case .denied:
+                add(title: title, body: body, withSound: withSound, owner: owner, surfaceID: surfaceID)
+            case .notDetermined, .denied:
                 if withSound {
                     DispatchQueue.main.async { NSSound(named: "Glass")?.play() }
                 }
             @unknown default:
-                add(title: title, body: body, withSound: withSound)
+                add(title: title, body: body, withSound: withSound, owner: owner, surfaceID: surfaceID)
             }
         }
     }
 
-    private static func add(title: String, body: String, withSound: Bool) {
+    private static func add(title: String, body: String, withSound: Bool, owner: String?, surfaceID: String?) {
         let content = UNMutableNotificationContent()
+        if let owner, let surfaceID { content.userInfo = ["owner": owner, "surfaceID": surfaceID] }
         content.title = title
         content.body = body
         content.sound = withSound ? .default : nil
@@ -2915,6 +2774,23 @@ enum DesktopNotifier {
 /// default is to swallow them). Retained for the process lifetime as the UN delegate.
 private final class ForegroundPresenter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     static let shared = ForegroundPresenter()
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        let owner = info["owner"] as? String
+        let surface = (info["surfaceID"] as? String).flatMap(UUID.init(uuidString:))
+        DispatchQueue.main.async {
+            guard let owner, let surface else { return }
+            let coordinator = SessionCoordinator.shared
+            if let item = coordinator.attentionList().first(where: { $0.owner == owner && $0.entry.surfaceID == surface }) {
+                NSApp.activate(ignoringOtherApps: true)
+                coordinator.openAttention(item)
+            } else { DisplayMessage.show("This pane has closed or its host is disconnected.") }
+        }
+        completionHandler()
+    }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,

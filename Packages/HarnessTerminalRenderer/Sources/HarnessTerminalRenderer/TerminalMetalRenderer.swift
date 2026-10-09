@@ -1257,6 +1257,9 @@ public final class TerminalMetalRenderer {
             if c.blink { rowHasBlink = true }
             mixContentKey(&h, UInt64(c.codepoint) | (UInt64(c.combining0) << 32))
             mixContentKey(&h, UInt64(c.combining1))
+            if c.combining1 & 0x8000_0000 != 0 {
+                for byte in frame.cluster(for: c).utf8 { mixContentKey(&h, UInt64(byte)) }
+            }
             mixContentKey(&h, UInt64(c.foreground.red.bitPattern) | (UInt64(c.foreground.green.bitPattern) << 32))
             mixContentKey(&h, UInt64(c.foreground.blue.bitPattern) | (UInt64(c.foreground.alpha.bitPattern) << 32))
             mixContentKey(&h, UInt64(c.background.red.bitPattern) | (UInt64(c.background.green.bitPattern) << 32))
@@ -1641,7 +1644,7 @@ public final class TerminalMetalRenderer {
             // A cell carrying combining marks composes as one CoreText cluster bitmap; otherwise the
             // plain per-codepoint atlas entry (unchanged for ASCII/CJK).
             let entry = cell.combining0 != 0
-                ? atlas.entry(forCluster: cell.cluster, bold: cell.bold, italic: cell.italic)
+                ? atlas.entry(forCluster: frame.cluster(for: cell), bold: cell.bold, italic: cell.italic)
                 : atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
             guard let entry else { continue }
             let isCursor = cursorCell.map { $0.row == cell.row && $0.column == cell.column } ?? false
@@ -1683,7 +1686,7 @@ public final class TerminalMetalRenderer {
                 continue
             }
             if let cur = cursorCell, cur.row == row, cur.column == col {
-                emitSingleGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                emitSingleGlyph(cell, frame: frame, row: row, col: col, ox: ox, oy: oy,
                                 color: vector(cursorTextColor), into: &glyphs)
                 col += 1
                 continue
@@ -1691,7 +1694,7 @@ public final class TerminalMetalRenderer {
             // Box-drawing chars use a procedural cell-sized sprite — never shape them into
             // a ligature run (that would render the font glyph and reintroduce seams).
             if BoxDrawing.supported(cell.codepoint) {
-                emitSingleGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                emitSingleGlyph(cell, frame: frame, row: row, col: col, ox: ox, oy: oy,
                                 color: vector(cell.foreground), into: &glyphs)
                 col += 1
                 continue
@@ -1700,7 +1703,7 @@ public final class TerminalMetalRenderer {
             // them CoreText substitutes a LastResort "missing glyph" box (the tofu bug, #37).
             // Emit per-cell so they route through the rasterizer's bundled symbol-font fallback.
             if GlyphRasterizer.isNerdFontCodepoint(cell.codepoint) {
-                emitSingleGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                emitSingleGlyph(cell, frame: frame, row: row, col: col, ox: ox, oy: oy,
                                 color: vector(cell.foreground), into: &glyphs)
                 col += 1
                 continue
@@ -1714,7 +1717,7 @@ public final class TerminalMetalRenderer {
             if cell.combining0 != 0 {
                 let isCursor = cursorCell.map { $0.row == row && $0.column == col } ?? false
                 let color = isCursor ? vector(cursorTextColor) : vector(cell.foreground)
-                emitClusterGlyph(cell, row: row, col: col, ox: ox, oy: oy,
+                emitClusterGlyph(cell, frame: frame, row: row, col: col, ox: ox, oy: oy,
                                  color: color, into: &glyphs)
                 col += 1
                 continue
@@ -1757,12 +1760,12 @@ public final class TerminalMetalRenderer {
     }
 
     private func emitSingleGlyph(
-        _ cell: RenderCell, row: Int, col: Int, ox: Float, oy: Float,
+        _ cell: RenderCell, frame: TerminalFrame, row: Int, col: Int, ox: Float, oy: Float,
         color: SIMD4<Float>, into glyphs: inout [GlyphInstance]
     ) {
         guard cell.hasGlyph || cell.combining0 != 0, !Self.isBlockElement(cell.codepoint) else { return }
         if cell.combining0 != 0 {
-            emitClusterGlyph(cell, row: row, col: col, ox: ox, oy: oy, color: color, into: &glyphs)
+            emitClusterGlyph(cell, frame: frame, row: row, col: col, ox: ox, oy: oy, color: color, into: &glyphs)
             return
         }
         guard let entry = atlas.entry(for: GlyphKey(codepoint: cell.codepoint, bold: cell.bold, italic: cell.italic))
@@ -1779,10 +1782,10 @@ public final class TerminalMetalRenderer {
     /// The mark overhang (above the cap, slightly left) is carried by the entry's bearings and is
     /// drawn outside the cell box without clipping — the same as a tall single glyph.
     private func emitClusterGlyph(
-        _ cell: RenderCell, row: Int, col: Int, ox: Float, oy: Float,
+        _ cell: RenderCell, frame: TerminalFrame, row: Int, col: Int, ox: Float, oy: Float,
         color: SIMD4<Float>, into glyphs: inout [GlyphInstance]
     ) {
-        guard let entry = atlas.entry(forCluster: cell.cluster, bold: cell.bold, italic: cell.italic)
+        guard let entry = atlas.entry(forCluster: frame.cluster(for: cell), bold: cell.bold, italic: cell.italic)
         else { return }
         glyphs.append(glyphInstance(
             entry,

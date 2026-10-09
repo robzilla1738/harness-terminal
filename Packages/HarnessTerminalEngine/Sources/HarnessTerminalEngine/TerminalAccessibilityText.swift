@@ -5,7 +5,7 @@ import Foundation
 /// answers the line / character / range questions the accessibility protocol asks — in **UTF-16**
 /// offsets, matching AppKit/NSString semantics — so the AppKit view is a thin delegating shell and
 /// the fiddly offset math is unit-tested headlessly (no GUI).
-public struct TerminalAccessibilityText: Equatable, Sendable {
+public struct TerminalAccessibilityText: Sendable {
     /// The accessible lines, top to bottom.
     public let lines: [String]
     /// The full accessible value: lines joined by "\n".
@@ -17,6 +17,7 @@ public struct TerminalAccessibilityText: Equatable, Sendable {
     // newline separator is not part of any line's length).
     private let lineStarts: [Int]
     private let lineLengths: [Int]
+    private var mappings: [TerminalMappedText] = []
 
     public init(lines: [String]) {
         self.lines = lines
@@ -36,6 +37,11 @@ public struct TerminalAccessibilityText: Equatable, Sendable {
         }
         lineStarts = starts
         lineLengths = lengths
+    }
+
+    public init(mappedLines: [TerminalMappedText]) {
+        self.init(lines: mappedLines.map(\.text))
+        mappings = mappedLines
     }
 
     public var lineCount: Int { lines.count }
@@ -80,12 +86,16 @@ public struct TerminalAccessibilityText: Equatable, Sendable {
 
     /// The UTF-16 character index of the cursor at (`line`, `column`), where `column` is a cell
     /// column. Clamped into the line, so a cursor parked past end-of-text lands at the line end.
-    /// (Cell-to-character mapping is approximate for wide glyphs, which is acceptable for an
-    /// insertion-point hint.)
+    /// Mapped terminal lines preserve exact wide-glyph and grapheme offsets.
     public func characterIndex(line: Int, column: Int) -> Int {
         guard !lines.isEmpty else { return 0 }
         let clampedLine = max(0, min(line, lines.count - 1))
-        let col = max(0, min(column, lineLengths[clampedLine]))
+        let col = mappings.isEmpty ? max(0, min(column, lineLengths[clampedLine]))
+            : mappings[clampedLine].offset(atColumn: max(0, column))
         return lineStarts[clampedLine] + col
     }
+}
+
+extension TerminalAccessibilityText: Equatable {
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.lines == rhs.lines }
 }

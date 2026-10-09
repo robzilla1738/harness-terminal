@@ -15,9 +15,9 @@ public enum PaneCapture {
     public static func render(term: TerminalEmulator, format: String, trim: Bool, unwrap: Bool, history: Bool = true) -> String {
         switch format {
         case "html":
-            return html(term.captureCellLines(joinWrapped: unwrap, history: history), trim: trim)
+            return html(term.captureCellLines(joinWrapped: unwrap, history: history), trim: trim, clusters: term.clusters)
         case "vt":
-            return vt(term.captureCellLines(joinWrapped: unwrap, history: history), trim: trim)
+            return vt(term.captureCellLines(joinWrapped: unwrap, history: history), trim: trim, clusters: term.clusters)
         default:
             var lines = term.captureLines(joinWrapped: unwrap, history: history)
             if trim { lines = trimLines(lines) }
@@ -31,7 +31,7 @@ public enum PaneCapture {
         return trimmed
     }
 
-    static func html(_ lines: [[TerminalGridCell]], trim: Bool) -> String {
+    static func html(_ lines: [[TerminalGridCell]], trim: Bool, clusters: [UInt32: String] = [:]) -> String {
         var rows = lines
         if trim {
             rows = rows.map(trimCells)
@@ -40,18 +40,18 @@ public enum PaneCapture {
         var body = ""
         for (index, row) in rows.enumerated() {
             if index > 0 { body += "\n" }
-            body += htmlRow(row)
+            body += htmlRow(row, clusters: clusters)
         }
         return "<pre>\(body)</pre>"
     }
 
-    static func vt(_ lines: [[TerminalGridCell]], trim: Bool) -> String {
+    static func vt(_ lines: [[TerminalGridCell]], trim: Bool, clusters: [UInt32: String] = [:]) -> String {
         var rows = lines
         if trim {
             rows = rows.map(trimCells)
             while rows.last?.isEmpty == true { rows.removeLast() }
         }
-        return rows.map(vtRow).joined(separator: "\n")
+        return rows.map { vtRow($0, clusters: clusters) }.joined(separator: "\n")
     }
 
     private static func trimCells(_ cells: [TerminalGridCell]) -> [TerminalGridCell] {
@@ -64,14 +64,14 @@ public enum PaneCapture {
         cell.codepoint == 0 || cell.codepoint == 32
     }
 
-    private static func htmlRow(_ cells: [TerminalGridCell]) -> String {
+    private static func htmlRow(_ cells: [TerminalGridCell], clusters: [UInt32: String]) -> String {
         var out = ""
         var index = 0
         while index < cells.count {
             let cell = cells[index]
             if cell.width == .spacerTail { index += 1; continue }
             let style = htmlStyle(cell)
-            let text = escape(cell.codepoint == 0 ? " " : cell.cluster)
+            let text = escape(cell.codepoint == 0 ? " " : cell.resolvedCluster(in: clusters))
             if style.isEmpty {
                 out += text
             } else {
@@ -114,9 +114,9 @@ public enum PaneCapture {
             }
             if continues {
                 // An emptied continuation still needs a character to wrap onto it, erased after.
-                out += cells.isEmpty ? " \u{1b}[1K" : vtRow(cells)
+                out += cells.isEmpty ? " \u{1b}[1K" : vtRow(cells, clusters: grid.clusters)
             } else if !cells.isEmpty {
-                out += "\u{1b}[\(row + 1);1H" + vtRow(cells)
+                out += "\u{1b}[\(row + 1);1H" + vtRow(cells, clusters: grid.clusters)
             }
             continues = wraps
         }
@@ -149,7 +149,7 @@ public enum PaneCapture {
         return plain == .blank
     }
 
-    private static func vtRow(_ cells: [TerminalGridCell]) -> String {
+    private static func vtRow(_ cells: [TerminalGridCell], clusters: [UInt32: String]) -> String {
         var out = ""
         var previous = ""
         for cell in cells where cell.width != .spacerTail {
@@ -159,7 +159,7 @@ public enum PaneCapture {
                 out += style.isEmpty ? "\u{1b}[0m" : "\u{1b}[0;\(style)m"
                 previous = style
             }
-            out += cell.codepoint == 0 ? " " : cell.cluster
+            out += cell.codepoint == 0 ? " " : cell.resolvedCluster(in: clusters)
         }
         if !previous.isEmpty { out += "\u{1b}[0m" }
         return out

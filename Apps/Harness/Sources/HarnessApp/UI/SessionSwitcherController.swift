@@ -323,7 +323,7 @@ private final class SessionSwitcherView: NSView, NSTextFieldDelegate, NSWindowDe
         guard let session = renaming, let id = UUID(uuidString: session.id) else { return }
         let name = filterField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty, name != session.title {
-            SessionCoordinator.shared.requestDaemon(.renameSession(sessionID: id, name: name))
+            SessionCoordinator.shared.requestDaemonAsync(.renameSession(sessionID: id, name: name))
         }
         onClose?()
     }

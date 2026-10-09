@@ -1,5 +1,6 @@
 import AppKit
 import HarnessCore
+import HarnessTerminalKit
 import QuartzCore
 
 /// Layout metrics and chrome helpers; colors come from `HarnessChrome.current`.
@@ -16,14 +17,31 @@ enum HarnessDesign {
     }
 
     static let sidebarWidth: CGFloat = 264
+    /// Provisional size before the window has a display scale and measured title bar.
+    static let defaultWindowSize = NSSize(width: 960, height: 640)
+    /// Size a single terminal canvas at 100×30, including the configured chrome.
+    static func defaultContentSize(settings: HarnessSettings, scale: CGFloat, statusHeight: CGFloat) -> NSSize {
+        let viewport = TerminalHostView.viewportSize(columns: 100, rows: 30, settings: settings, scale: scale)
+        let separated = settings.paneDensity.separatedIslands
+        let card = ChromeLayout.cardInsets(separated: separated, gap: settings.paneSpacing)
+        let outer = ChromeLayout.containerPadding(separated: separated, padsTop: settings.sidebarVisible, gap: settings.paneSpacing)
+        let leading = settings.sidebarVisible ? -card.leading : outer.leading
+        let width = viewport.width + CGFloat(leading + card.leading + card.trailing + outer.trailing)
+            + (settings.sidebarVisible ? sidebarWidth : 0)
+        let height = viewport.height + CGFloat(outer.top + card.top + card.bottom + outer.bottom)
+            + (settings.sidebarVisible ? 0 : tabBarHeight)
+            + (separated && settings.paneHeaders ? paneHeaderHeight : 0) + statusHeight
+        return NSSize(width: width, height: height)
+    }
+
     /// Distance from the window top to the traffic lights' center, measured from the real
     /// window when it's built (`MainWindowController`). The tab row and the sidebar's top
     /// controls center on this line so they sit level with the lights.
     static var titleRowCenter: CGFloat = 26
-    /// Tall enough to center the tabs on the lights and leave the same gap to the card
-    /// below as every other card edge (`ChromeLayout.islandGap`; the card insets half).
+    /// The pane border meets this row's bottom. Keep the tabs centered between that
+    /// border and the window top, independently of the configurable pane gutters.
     static var tabBarHeight: CGFloat {
-        titleRowCenter + tabPillHeight / 2 + CGFloat(ChromeLayout.islandGap / 2)
+        titleRowCenter * 2
     }
     /// One size for every icon on the tab row, including the sidebar bell.
     static let chromeIconPointSize: CGFloat = 14
@@ -33,17 +51,17 @@ enum HarnessDesign {
     static let footerHeight: CGFloat = 40
     static let tabPillHeight: CGFloat = 30
     /// Leading app tile in sidebar rows.
-    static let iconTileSize: CGFloat = 20
-    /// The tab's app tile is smaller than the pill by the same margin on every side, so it
-    /// sits in the capsule's rounded end with even space above, below, and before it.
-    static let tabIconTileSize: CGFloat = 18
-    static var tabIconTileInset: CGFloat { (tabPillHeight - tabIconTileSize) / 2 }
-    static let sidebarTabRowHeight: CGFloat = 34
+    static let iconTileSize = NSSize(width: 28, height: 23)
+    /// A lower rectangle, with enough leading room inside the pill's curved end.
+    static let tabIconTileSize = NSSize(width: 20, height: 16)
+    static let tabIconTileInset: CGFloat = 12
+    static var sidebarTabRowHeight: CGFloat { tabPillHeight + 2 * Spacing.xxs }
     static let sidebarSessionHeaderHeight: CGFloat = 30
     /// Leading space the traffic lights take on a full-size-content window's top row.
-    static let trafficLightClearance: CGFloat = 76
+    static let trafficLightClearance: CGFloat = 94
+    static let paneHeaderIconSize: CGFloat = 12
     static let paneHeaderHeight: CGFloat = 30
-    static let paneHeaderButtonSize: CGFloat = 24
+    static let paneHeaderButtonSize: CGFloat = 28
 
     static let horizontalInset: CGFloat = Spacing.lg
     static let rowSpacing: CGFloat = Spacing.xxs
@@ -282,6 +300,26 @@ enum HarnessDesign {
             : NSColor.white.withAlphaComponent(0.22)
     }
 
+    static var activeTabGlassTint: NSColor {
+        let c = chrome
+        return c.isDark && SessionCoordinator.shared.snapshot.themeName == "Default"
+            ? NSColor.black.withAlphaComponent(0.18)
+            : activeGlassTint(isDark: c.isDark, textPrimary: c.textPrimary)
+    }
+
+    static var activeTabFill: NSColor {
+        let c = chrome
+        return c.isDark && SessionCoordinator.shared.snapshot.themeName == "Default"
+            ? c.activePillFill.blended(withFraction: 0.25, of: .black) ?? c.activePillFill
+            : c.activePillFill
+    }
+
+    static func pointerIsInside(_ view: NSView) -> Bool {
+        guard NSApp.isActive, let window = view.window, window.isVisible,
+              !view.isHiddenOrHasHiddenAncestor else { return false }
+        return view.visibleRect.contains(view.convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    }
+
     static func activeGlassBorderAlpha(isDark: Bool) -> CGFloat {
         isDark ? 0.22 : 0.10
     }
@@ -356,7 +394,7 @@ enum HarnessMotion {
         completion: (@MainActor () -> Void)? = nil
     ) {
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = duration
+            ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
             ctx.timingFunction = timing
             body(ctx)
         }, completionHandler: completion.map { handler in
@@ -368,7 +406,7 @@ enum HarnessMotion {
     /// remount). Soft transition instead of a hard cut; the swap itself is the
     /// caller's responsibility — this only schedules the fade.
     static func crossfade(_ layer: CALayer?, duration: TimeInterval = HarnessDesign.Motion.fast) {
-        guard let layer else { return }
+        guard let layer, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let transition = CATransition()
         transition.type = .fade
         transition.duration = duration
@@ -429,7 +467,7 @@ final class ChromeLabelCell: NSTextFieldCell {
 /// the tab strip uses it so the sidebar toggle and new-tab control match the pills.
 @MainActor
 final class SoftIconButton: NSButton {
-    enum Style { case disc, glyph }
+    enum Style { case disc, glyph, plainGlyph }
 
     var style: Style = .disc { didSet { applyChrome() } }
 
@@ -476,16 +514,24 @@ final class SoftIconButton: NSButton {
         if let trackingArea { removeTrackingArea(trackingArea) }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .enabledDuringMouseDrag, .activeInActiveApp, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(area)
         trackingArea = area
+        isHovered = HarnessDesign.pointerIsInside(self)
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func mouseDown(with event: NSEvent) {
+        // NSButton and popup menus run nested event tracking; mouseExited can be
+        // consumed there, or the action can hide/move this button entirely.
+        defer { isHovered = HarnessDesign.pointerIsInside(self) }
+        super.mouseDown(with: event)
+    }
 
     override func layout() {
         super.layout()
@@ -509,8 +555,8 @@ final class SoftIconButton: NSButton {
         case .disc:
             HarnessDesign.applyIconButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
             iconView.imageScaling = .scaleProportionallyUpOrDown
-        case .glyph:
-            HarnessDesign.applyGlyphButtonChrome(to: layer, bounds: bounds, isHovered: isHovered)
+        case .glyph, .plainGlyph:
+            HarnessDesign.applyGlyphButtonChrome(to: layer, bounds: bounds, isHovered: style == .glyph && isHovered)
             // Never scale a symbol up into the hit target — that softens the stroke.
             iconView.imageScaling = .scaleProportionallyDown
         }
@@ -580,20 +626,24 @@ final class HarnessPillButton: NSButton {
         if let trackingArea { removeTrackingArea(trackingArea) }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .enabledDuringMouseDrag, .activeInActiveApp, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(area)
         trackingArea = area
+        isHovered = HarnessDesign.pointerIsInside(self)
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false; isPressed = false }
     override func mouseDown(with event: NSEvent) {
         isPressed = true
+        defer {
+            isPressed = false
+            isHovered = HarnessDesign.pointerIsInside(self)
+        }
         super.mouseDown(with: event)
-        isPressed = false
     }
 
     private func applyChrome() {
@@ -738,7 +788,7 @@ final class ChromeBackdrop: NSView {
     func update(role: HarnessDesign.ChromeRole) {
         self.role = role
         let chrome = HarnessDesign.chrome
-        let opacity = HarnessChrome.paintOpacity
+        let opacity = HarnessChrome.framePaintOpacity
 
         if Self.crossfadeNextUpdate {
             HarnessMotion.crossfade(layer, duration: HarnessDesign.Motion.fast)
@@ -751,8 +801,8 @@ final class ChromeBackdrop: NSView {
         }
 
         // One tint over the window blur. Glass stays hidden while the window is
-        // translucent so the sidebar and the terminal share one opacity.
-        let translucent = opacity < 0.999
+        // translucent so every surface shares the same blurred backdrop.
+        let translucent = HarnessChrome.paintOpacity < 0.999
         if RuntimeGlassEffectView.isGlass(backdrop) {
             backdrop.isHidden = translucent
         } else if let vibrancy = backdrop as? NSVisualEffectView {
@@ -762,7 +812,7 @@ final class ChromeBackdrop: NSView {
         tint.layer?.backgroundColor = baseColor.withAlphaComponent(opacity).cgColor
 
         // No drawn hairline anywhere: the tab strip / sidebar / status line now read
-        // as distinct from the terminal purely by their elevated chrome background
+        // as distinct from the terminal purely by their recessed chrome background
         // (see HarnessChromePalette.build), so a hard divider line is redundant noise.
         hairline.isHidden = true
         hairline.backgroundColor = chrome.border.withAlphaComponent(chrome.isDark ? 0.55 : 0.75).cgColor
@@ -790,12 +840,14 @@ final class ChromeBackdrop: NSView {
 @MainActor
 final class HarnessOverlayBackground: NSView {
     let contentView = NSView()
+    private let usesOpaqueSurface: Bool
     private let backdrop: NSView
     private let tint = NSView()
     /// Top-edge inner highlight — emulates the "rim light" on macOS popovers/menus.
     private let topHighlight = CALayer()
 
-    init() {
+    init(opaque: Bool = false) {
+        self.usesOpaqueSurface = opaque
         self.backdrop = HarnessOverlayBackground.makeBackdrop()
         super.init(frame: .zero)
         wantsLayer = true
@@ -843,8 +895,15 @@ final class HarnessOverlayBackground: NSView {
 
     func applyTheme() {
         let c = HarnessDesign.chrome
-        layer?.borderColor = c.border.cgColor
-        if RuntimeGlassEffectView.isGlass(backdrop) {
+        layer?.borderColor = (usesOpaqueSurface ? c.textPrimary.withAlphaComponent(0.22) : c.border).cgColor
+        backdrop.isHidden = usesOpaqueSurface
+        if usesOpaqueSurface {
+            // Command text needs a stable surface, independent of the desktop,
+            // terminal opacity, or the system glass compositor.
+            let surface = c.sidebarBackground.blended(withFraction: c.isDark ? 0.085 : 0.025, of: c.textPrimary)
+                ?? c.surfaceElevated
+            tint.layer?.backgroundColor = surface.withAlphaComponent(1).cgColor
+        } else if RuntimeGlassEffectView.isGlass(backdrop) {
             // Tint the glass so it reads as an elevated dark surface while keeping blur.
             RuntimeGlassEffectView.setTintColor(c.sidebarBackground, on: backdrop)
             tint.layer?.backgroundColor = NSColor.clear.cgColor

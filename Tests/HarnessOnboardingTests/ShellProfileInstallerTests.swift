@@ -119,4 +119,54 @@ final class ShellProfileInstallerTests: XCTestCase {
         // An unknown login shell falls back to zsh, the macOS default.
         XCTAssertEqual(ShellProfileInstaller.relevantProfiles(home: home, loginShell: "/bin/tcsh").map(\.shell), [.zsh, .bash])
     }
+    func testUnreadableTextNeverReplacesExistingProfile() throws {
+        let home = try makeHome()
+        let profile = home.appendingPathComponent(".zshrc")
+        let original = Data([0xff, 0xfe, 0xff])
+        try original.write(to: profile)
+        XCTAssertThrowsError(try ShellProfileInstaller.install(.zsh, home: home, environment: [:]))
+        XCTAssertEqual(try Data(contentsOf: profile), original)
+    }
+
+    func testCommentMentioningBinDirectoryIsNotConfigured() {
+        let bin = URL(fileURLWithPath: "/example/Harness/bin")
+        XCTAssertFalse(ShellProfileInstaller.contentHasPath("# export PATH=\"/example/Harness/bin:$PATH\"", binDirectory: bin))
+        XCTAssertTrue(ShellProfileInstaller.contentHasPath(ShellProfileInstaller.pathLine(for: .zsh, binDirectory: bin), binDirectory: bin))
+    }
+
+    func testCustomShellConfigLocationsMatchInstallation() throws {
+        let home = try makeHome()
+        let zsh = home.appendingPathComponent("custom-zsh")
+        let xdg = home.appendingPathComponent("custom-config")
+        let environment = ["ZDOTDIR": zsh.path, "XDG_CONFIG_HOME": xdg.path]
+        let profiles = ShellProfileInstaller.profiles(home: home, environment: environment)
+        XCTAssertEqual(profiles.first { $0.shell == .zsh }?.profileURL, zsh.appendingPathComponent(".zshrc"))
+        XCTAssertEqual(profiles.first { $0.shell == .fish }?.profileURL, xdg.appendingPathComponent("fish/config.fish"))
+        let result = try ShellProfileInstaller.install(.fish, home: home, environment: environment)
+        XCTAssertEqual(result.profileURL, xdg.appendingPathComponent("fish/config.fish"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".config/fish/config.fish").path))
+    }
+
+    func testBashUsesExistingLoginProfileWithoutShadowingIt() throws {
+        let home = try makeHome()
+        let profile = home.appendingPathComponent(".profile")
+        try "export MY_SETTING=yes\n".write(to: profile, atomically: true, encoding: .utf8)
+        let result = try ShellProfileInstaller.install(.bash, home: home, environment: [:])
+        XCTAssertEqual(result.profileURL, profile)
+        XCTAssertTrue(read(profile).contains("export MY_SETTING=yes"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".bash_profile").path))
+    }
+
+    func testSymlinkedProfileKeepsItsLinkAndUpdatesTarget() throws {
+        let home = try makeHome()
+        let target = home.appendingPathComponent("dotfiles-zshrc")
+        try "alias ll='ls -la'\n".write(to: target, atomically: true, encoding: .utf8)
+        let profile = home.appendingPathComponent(".zshrc")
+        try FileManager.default.createSymbolicLink(at: profile, withDestinationURL: target)
+        _ = try ShellProfileInstaller.install(.zsh, home: home, environment: [:])
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: profile.path), target.path)
+        XCTAssertTrue(read(target).contains("Harness CLI PATH"))
+        XCTAssertTrue(read(target).contains("alias ll="))
+    }
+
 }

@@ -6,6 +6,28 @@ import XCTest
 
 final class TerminalHostViewTests: XCTestCase {
     @MainActor
+    func testWindowViewportSizingProducesRequestedGridAcrossFontsAndScales() {
+        for scale: CGFloat in [1, 2] {
+            for font in ["Menlo", "Monaco", "missing-font-for-fallback"] {
+                var settings = HarnessSettings(fontSize: 15, fontFamily: font)
+                settings.windowPaddingX = 13.25
+                settings.windowPaddingY = 7.5
+                let size = TerminalHostView.viewportSize(columns: 100, rows: 30, settings: settings, scale: scale)
+                let metrics = GlyphRasterizer(fontFamily: font, size: 15, scale: scale).metrics()
+                let grid = HarnessTerminalSurfaceView.computeGridGeometry(
+                    pixelWidth: Int((size.width * scale).rounded()), pixelHeight: Int((size.height * scale).rounded()),
+                    basePadX: Int((CGFloat(settings.windowPaddingX) * scale).rounded()),
+                    basePadY: Int((CGFloat(settings.windowPaddingY) * scale).rounded()),
+                    cellWidth: max(1, Int((metrics.width * scale).rounded())),
+                    cellHeight: max(1, Int((metrics.height * scale).rounded())), balanced: true, frozenOrigin: nil
+                )
+                XCTAssertEqual(grid.cols, 100)
+                XCTAssertEqual(grid.rows, 30)
+            }
+        }
+    }
+
+    @MainActor
     func testTerminalOverlayIndicatorsUseQuietMacPaneRadius() {
         XCTAssertEqual(TerminalHostView.terminalOverlayCornerRadius, 10)
     }

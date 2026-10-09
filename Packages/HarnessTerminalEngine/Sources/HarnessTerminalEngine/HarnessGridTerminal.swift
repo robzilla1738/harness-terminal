@@ -65,6 +65,7 @@ public final class HarnessGridTerminal {
 
     /// Total lines addressable by copy-mode (history + viewport) and a single virtual line.
     public var bufferLineCount: Int { emulator.bufferLineCount }
+    public func cluster(for cell: TerminalGridCell) -> String { emulator.cluster(for: cell) }
     public func bufferLine(_ index: Int) -> [TerminalGridCell] { emulator.bufferLine(index) }
 
     /// OSC 133 shell-prompt rows (copy-mode view space), oldest first.

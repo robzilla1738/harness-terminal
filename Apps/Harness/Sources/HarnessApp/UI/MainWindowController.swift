@@ -29,8 +29,9 @@ final class MainWindowController: NSWindowController {
             cursorHex: SessionCoordinator.shared.settings.customCursorHex
         )
 
+        let previousWindow = NSApp.orderedWindows.first { $0.contentViewController is MainSplitViewController }
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
+            contentRect: NSRect(origin: .zero, size: HarnessDesign.defaultWindowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -61,7 +62,17 @@ final class MainWindowController: NSWindowController {
         // fitting size (~sidebar width). Re-assert the intended default explicitly —
         // otherwise the window opens tiny (previously `minSize` masked this; lowering
         // the floor exposed it).
-        window.setContentSize(NSSize(width: 1280, height: 820))
+        window.setContentSize(HarnessDesign.defaultWindowSize)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let settings = SessionCoordinator.shared.settings
+        let defaultSize = HarnessDesign.defaultContentSize(
+            settings: settings, scale: window.backingScaleFactor,
+            statusHeight: (window.contentViewController as? MainSplitViewController)?.statusLineHeight ?? 0
+        )
+        let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let maxContent = visibleFrame.map { window.contentRect(forFrameRect: $0).size } ?? defaultSize
+        window.setContentSize(NSSize(width: min(defaultSize.width, maxContent.width),
+                                     height: min(defaultSize.height, maxContent.height)))
         self.init(window: window)
         // A content controller can resize the window; the lights stay put relative to the top.
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
@@ -77,11 +88,14 @@ final class MainWindowController: NSWindowController {
                 borderOverlay.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             ])
         }
-        // Opt-in window frame persistence: when enabled, restore the saved frame (size +
+        // Window frame persistence: when enabled, restore the saved frame (size +
         // position) and keep it updated automatically; otherwise open centered at the
         // default size. Window-level only — no effect on sessions or the terminal.
         // Only the first window restores the saved frame; later ones cascade from the key window.
         if WindowContexts.all.count > 1 {
+            if settings.restoreWindowSize, let previousWindow {
+                window.setContentSize(previousWindow.contentView?.bounds.size ?? defaultSize)
+            }
             window.center()
         } else if SessionCoordinator.shared.settings.restoreWindowSize {
             window.setFrameAutosaveName(Self.frameAutosaveName)
@@ -149,24 +163,8 @@ final class MainWindowController: NSWindowController {
     func applyTransparency() {
         guard let window else { return }
         let settings = SessionCoordinator.shared.settings
-        let opacity = max(0, min(1, settings.backgroundOpacity))
-        let isOpaque = opacity >= 0.999
 
         window.titlebarAppearsTransparent = settings.transparentTitlebar
-        window.isOpaque = isOpaque
-        window.backgroundColor = isOpaque ? HarnessChrome.current.terminalBackground : .clear
-
-        // Drop the window shadow while translucent. macOS computes the drop shadow from the
-        // window's content alpha (a rectangle), so on a translucent window it renders as a
-        // dark band hugging the rounded frame. With blur high the blurred backdrop hides it;
-        // as blur drops it sharpens into the "hard dark edge at the corners that won't go
-        // away." A translucent canvas already reads as glass (and the one window-wide blur
-        // gives separation), so no shadow is the clean look; opaque windows keep theirs.
-        // `invalidateShadow` forces an immediate recompute (toggling blur via the private CGS
-        // API doesn't notify AppKit, which is why a stale shadow lingered).
-        window.hasShadow = isOpaque
-        window.invalidateShadow()
-
         // Do NOT force the window's `contentView` to be a layer-backed, clear rectangle.
         // Forcing `wantsLayer` on the contentView makes the whole window layer-backed, and a
         // layer-backed window clips the private CGS background blur to the contentView's
@@ -193,7 +191,12 @@ final class MainWindowController: NSWindowController {
         // chrome hides its vibrancy material when translucent, so terminal and chrome
         // share exactly one blurred backdrop. (the renderer's own `background-blur` is a
         // no-op in embedded mode since it doesn't own this NSWindow.) Opaque → no blur.
-        WindowBlur.apply(radius: isOpaque ? 0 : settings.backgroundBlur, to: window)
+        WindowAppearance.applyTransparency(
+            opacity: settings.backgroundOpacity,
+            blur: settings.backgroundBlur,
+            opaqueBackground: HarnessChrome.current.terminalBackground,
+            to: window
+        )
     }
 
     /// Distance from the window's top edge to the close button's center.

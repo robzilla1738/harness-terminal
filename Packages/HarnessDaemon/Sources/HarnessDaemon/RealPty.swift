@@ -23,6 +23,16 @@ private func stripInheritedColorSuppression(_ environment: inout [String: String
     }
 }
 
+/// Finder/launchd do not supply a locale. macOS's UTF-8 character locale lets TUIs
+/// interpret terminal text without changing language, sorting, or explicit shell preferences.
+func ensureTerminalCharacterLocale(_ environment: inout [String: String]) {
+    #if canImport(Darwin)
+    if ["LC_ALL", "LC_CTYPE", "LANG"].allSatisfy({ environment[$0]?.isEmpty != false }) {
+        environment["LC_CTYPE"] = "UTF-8"
+    }
+    #endif
+}
+
 public struct ShellLaunchProfile: Sendable, Equatable {
     public var executable: String
     public var arguments: [String]
@@ -292,7 +302,8 @@ public final class RealPty: @unchecked Sendable {
         // can't OOM the session-authority daemon or fill the disk. The GUI line cap uses the same
         // ceiling. Mapping the sentinel here keeps the eviction loop + `loadTail` (which would
         // otherwise treat a 0 `maxBytes` as "keep nothing") working unchanged.
-        let requestedScrollbackBytes = scrollbackBytes == 0 ? ScrollbackFile.unlimitedSafetyCap : scrollbackBytes
+        let requestedScrollbackBytes = scrollbackBytes <= 0 ? ScrollbackFile.unlimitedSafetyCap
+            : min(scrollbackBytes, ScrollbackFile.unlimitedSafetyCap)
         self.maxScrollbackBytes = scrollbackURL == nil
             ? requestedScrollbackBytes
             : max(requestedScrollbackBytes, ScrollbackFile.minimumRetentionCap)
@@ -347,6 +358,7 @@ public final class RealPty: @unchecked Sendable {
 
         var environment = ProcessInfo.processInfo.environment
         stripInheritedColorSuppression(&environment)
+        ensureTerminalCharacterLocale(&environment)
         environment["TERM"] = "xterm-256color"
         // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
         // downgrading to the muted 256-color cube. The renderer passes truecolor through
@@ -427,13 +439,14 @@ public final class RealPty: @unchecked Sendable {
     }
 
     /// Input to the shell, in order, never blocking a thread (see `PtyInputWriter`).
-    public func write(_ data: Data) {
-        inputWriter.write(data) { [weak self] in self?.dupMaster() }
+    @discardableResult
+    public func write(_ data: Data) -> Bool {
+        inputWriter.write(data, master: dupMaster())
     }
 
-    public func write(_ text: String) {
-        guard let data = text.data(using: .utf8) else { return }
-        write(data)
+    @discardableResult
+    public func write(_ text: String) -> Bool {
+        write(Data(text.utf8))
     }
 
     /// Clear the scrollback ring + the persisted file **without** respawning the shell — the tmux
@@ -483,6 +496,7 @@ public final class RealPty: @unchecked Sendable {
         // pre-bump value the SIGTERM'd child was tagged with — used by the SIGKILL
         // escalation so a TERM-ignoring old shell can't leak its blocked waitpid thread.
         let dyingGeneration = generation
+        inputWriter.reset()
         generation &+= 1
         readSource = nil
         master = -1
@@ -532,6 +546,7 @@ public final class RealPty: @unchecked Sendable {
 
         var environment = ProcessInfo.processInfo.environment
         stripInheritedColorSuppression(&environment)
+        ensureTerminalCharacterLocale(&environment)
         environment["TERM"] = "xterm-256color"
         // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
         // downgrading to the muted 256-color cube. The renderer passes truecolor through
@@ -1389,6 +1404,21 @@ public final class RealPty: @unchecked Sendable {
         return ringLocked()
     }
 
+    func searchSnapshot() -> TerminalTextSnapshot? { withAuthoritative { $0.textSnapshot() } }
+
+    /// Changes when output arrives, history is cleared, or the shell is replaced.
+    var searchRevision: String {
+        lifecycleLock.lock()
+        let gen = generation
+        lifecycleLock.unlock()
+        scrollbackLock.lock()
+        let first = scrollbackHead < scrollback.count ? scrollback[scrollbackHead].sequence : nextSequence
+        let end = nextSequence
+        scrollbackLock.unlock()
+        let size = currentWinsize()
+        return "\(gen):\(first):\(end):\(size.cols):\(size.rows)"
+    }
+
     private func withAuthoritative<T>(_ body: (TerminalEmulator) -> T) -> T? {
         let ring = copyRing()
         let size = currentWinsize()
@@ -1589,6 +1619,26 @@ public final class RealPty: @unchecked Sendable {
             lifecycleLock.unlock()
             source.cancel()
         }
+    }
+
+    /// Changing replay retention does not resize or respawn the shell. Evict whole ordered
+    /// chunks, as on the read path; increasing the budget cannot recover already evicted data.
+    public func setScrollbackBytes(_ requested: Int) {
+        let cap = requested <= 0 ? ScrollbackFile.unlimitedSafetyCap
+            : min(requested, ScrollbackFile.unlimitedSafetyCap)
+        scrollbackLock.lock()
+        let effective = scrollbackFile == nil ? cap : max(cap, ScrollbackFile.minimumRetentionCap)
+        guard effective != maxScrollbackBytes else { scrollbackLock.unlock(); return }
+        if idleGrid.parked { mergeParkedHistoryLocked() }
+        maxScrollbackBytes = effective
+        while scrollbackBytes > effective, scrollbackHead < scrollback.count {
+            scrollbackBytes -= scrollback[scrollbackHead].data.count
+            scrollbackHead += 1
+        }
+        if scrollbackHead > 0 { scrollback.removeFirst(scrollbackHead); scrollbackHead = 0 }
+        scrollbackLock.unlock()
+        releaseAuthoritativeGrid()
+        scrollbackFile?.setRetentionCap(effective)
     }
 
     private func handleOutput(_ data: Data) {

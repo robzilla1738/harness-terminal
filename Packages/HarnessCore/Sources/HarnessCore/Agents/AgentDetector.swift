@@ -310,17 +310,40 @@ public struct AgentTableEntry: Codable, Sendable {
            let launchSearchStart = launchArgumentSearchStart(arguments: arguments, wrapperName: wrapperName),
            let launchIndex = firstLaunchArgumentIndex(in: arguments, startIndex: launchSearchStart, wrapperName: wrapperName)
         {
-            insertProcessName(arguments[launchIndex], into: &names)
+            insertLaunchTarget(arguments[launchIndex], into: &names)
             if wrapperName == "env",
                let nestedName = processName(arguments[launchIndex]),
                isWrapperExecutable(nestedName),
                let nestedIndex = firstLaunchArgumentIndex(in: arguments, startIndex: launchIndex + 1, wrapperName: nestedName)
             {
-                insertProcessName(arguments[nestedIndex], into: &names)
+                insertLaunchTarget(arguments[nestedIndex], into: &names)
             }
         }
 
         return names
+    }
+
+    /// Match only published package entry points, not arbitrary package files or
+    /// user arguments. Node resolves npm symlinks before exposing its argv.
+    private static let packageEntrypoints: [String: String] = [
+        "@github/copilot/npm-loader.js": "copilot",
+        "@github/copilot/index.js": "copilot",
+        "@qwen-code/qwen-code/cli-entry.js": "qwen",
+        "@qwen-code/qwen-code/dist/index.js": "qwen",
+        "@augmentcode/auggie/augment.mjs": "auggie",
+        "@moonshot-ai/kimi-code/dist/main.mjs": "kimi",
+        "@google/gemini-cli/bundle/gemini.js": "gemini",
+        "@google/gemini-cli/dist/index.js": "gemini",
+        "@earendil-works/pi-coding-agent/dist/bundle/cli.js": "pi",
+        "@mariozechner/pi-coding-agent/dist/cli.js": "pi",
+        "@anthropic-ai/claude-code/cli.js": "claude",
+    ]
+
+    private static func insertLaunchTarget(_ raw: String, into names: inout Set<String>) {
+        insertProcessName(raw, into: &names)
+        for (suffix, executable) in packageEntrypoints where raw.hasSuffix("/node_modules/" + suffix) {
+            names.insert(executable)
+        }
     }
 
     /// Returns where wrapper-target scanning should begin. When argv[0] is the
@@ -445,6 +468,18 @@ public struct AgentTable: Codable, Sendable {
         AgentTableEntry(kind: .aider, executables: ["aider"]),
         AgentTableEntry(kind: .gemini, executables: ["gemini", "gemini-cli"]),
         AgentTableEntry(kind: .goose, executables: ["goose"]),
+        AgentTableEntry(kind: .copilot, executables: ["copilot"]),
+        AgentTableEntry(kind: .cline, executables: ["cline"]),
+        AgentTableEntry(kind: .kilo, executables: ["kilo", "kilocode"]),
+        AgentTableEntry(kind: .qwen, executables: ["qwen"]),
+        AgentTableEntry(kind: .amp, executables: ["amp"]),
+        AgentTableEntry(kind: .droid, executables: ["droid"]),
+        AgentTableEntry(kind: .crush, executables: ["crush"]),
+        AgentTableEntry(kind: .kiro, executables: ["kiro", "kiro-cli", "kiro-cli-chat"]),
+        AgentTableEntry(kind: .vibe, executables: ["vibe"]),
+        AgentTableEntry(kind: .openhands, executables: ["openhands"]),
+        AgentTableEntry(kind: .auggie, executables: ["auggie"]),
+        AgentTableEntry(kind: .kimi, executables: ["kimi", "kimi-cli", "kimi-code"]),
     ])
 
     /// Last decoded `agents.json`, keyed by its modification date, so the ~1.5s scan

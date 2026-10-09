@@ -3,6 +3,21 @@ import XCTest
 @testable import HarnessDaemonCore
 
 final class RealPtyReplayTests: XCTestCase {
+    func testIncreasingReplayBudgetRetainsOutputAndDecreasingItEvictsOldestChunks() throws {
+        let pty = try RealPty(id: UUID().uuidString, cwd: NSTemporaryDirectory(), shell: "/bin/cat",
+                              rows: 8, cols: 80, scrollbackBytes: 1024)
+        defer { pty.close() }
+        pty.setScrollbackBytes(8192)
+        pty.injectSyntheticOutput(Data(repeating: 65, count: 2048))
+        pty.injectSyntheticOutput(Data(repeating: 66, count: 2048))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).utf8.count == 4096 })
+        pty.setScrollbackBytes(2048)
+        XCTAssertEqual(pty.replay(fromSequence: nil), String(repeating: "B", count: 2048))
+        pty.setScrollbackBytes(Int.max)
+        pty.injectSyntheticOutput(Data(repeating: 67, count: 2048))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).hasSuffix(String(repeating: "C", count: 2048)) })
+    }
+
     func testParkedHistoryComesBackOnSequencedReplayAndTheNextRead() throws {
         let pty = try RealPty(
             id: UUID().uuidString,

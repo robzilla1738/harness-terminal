@@ -1,207 +1,166 @@
 import AppKit
 import HarnessCore
 
-/// Popover-style panel listing **every running agent** (not just the ones that
-/// have pinged you), waiting agents first. Clicking a row jumps to that agent's
-/// pane. A minimal read-only "Agent Inbox" built on the same row/panel idiom as
-/// `NotificationDropdownPanelView`, fed by `SessionCoordinator.agentsList()`.
-///
-/// Distinct from the notification bell + dropdown, which only surfaces tabs in
-/// `.waiting` state and clears the alert on open; this inbox is a passive roster
-/// and never clears notifications.
 @MainActor
 final class AgentInboxPanelView: NSView {
-    private let agents: [AgentSessionSummary]
-    private let onSelect: (AgentSessionSummary) -> Void
-    let preferredHeight: CGFloat
+    let preferredHeight: CGFloat = 380
+    private let filter = NSSegmentedControl(labels: ["Needs Attention", "All Activity"], trackingMode: .selectOne, target: nil, action: nil)
+    private let rows = NSStackView()
+    private var renderedRows: [String: [String]] = [:]
+    private var renderedFilter = -1
+    private var renderedColors = ""
+    private let onSelect: (HostedAttention) -> Void
 
-    init(
-        agents: [AgentSessionSummary],
-        onSelect: @escaping (AgentSessionSummary) -> Void
-    ) {
-        self.agents = agents
+    init(needsAttention: Bool = false, onSelect: @escaping (HostedAttention) -> Void) {
         self.onSelect = onSelect
-        // Header (28) + rows (52 each, max 6 shown then scrolls) + a slim footer (12).
-        let visibleRowCount = min(agents.count, 6)
-        let bodyHeight = agents.isEmpty ? 64 : CGFloat(visibleRowCount * 52 + 10)
-        self.preferredHeight = 28 + bodyHeight + 12
         super.init(frame: .zero)
-
         wantsLayer = true
+        let chrome = HarnessDesign.chrome
         layer?.cornerRadius = HarnessDesign.Radius.overlay
-        layer?.cornerCurve = .continuous
-        layer?.masksToBounds = false
-        let c = HarnessDesign.chrome
-        layer?.backgroundColor = (c.terminalBackground.blended(withFraction: c.isDark ? 0.06 : 0.04, of: c.textPrimary) ?? c.sidebarBackground).cgColor
+        layer?.backgroundColor = (chrome.terminalBackground.blended(withFraction: chrome.isDark ? 0.12 : 0.04, of: chrome.textPrimary) ?? chrome.sidebarBackground).cgColor
         layer?.borderWidth = 1
-        layer?.borderColor = c.textPrimary.withAlphaComponent(c.isDark ? 0.11 : 0.14).cgColor
+        layer?.borderColor = chrome.textSecondary.withAlphaComponent(0.4).cgColor
         HarnessDesign.applyShadow(.overlay, to: layer)
-
-        setupContent()
+        filter.selectedSegment = needsAttention ? 0 : 1
+        filter.target = self
+        filter.action = #selector(refresh)
+        filter.translatesAutoresizingMaskIntoConstraints = false
+        rows.orientation = .vertical
+        rows.alignment = .width
+        rows.spacing = 4
+        rows.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 8, right: 8)
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        let document = FlippedStackHost()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(rows)
+        scroll.documentView = document
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(filter)
+        addSubview(scroll)
+        NSLayoutConstraint.activate([
+            filter.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            filter.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            filter.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            scroll.topAnchor.constraint(equalTo: filter.bottomAnchor, constant: 10),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            rows.topAnchor.constraint(equalTo: document.topAnchor),
+            rows.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            rows.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+        ])
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NotificationBus.shared.snapshotChanged, object: nil)
+        refresh()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private func setupContent() {
-        let header = NSTextField(labelWithString: "Agents")
-        header.font = .systemFont(ofSize: 11, weight: .semibold)
-        header.textColor = HarnessDesign.chrome.textTertiary
-        header.translatesAutoresizingMaskIntoConstraints = false
-
-        let bodyContainer = NSView()
-        bodyContainer.translatesAutoresizingMaskIntoConstraints = false
-
-        if agents.isEmpty {
-            let empty = NSTextField(labelWithString: "No agents running.")
-            empty.font = .systemFont(ofSize: 12)
-            empty.textColor = HarnessDesign.chrome.textSecondary
-            empty.translatesAutoresizingMaskIntoConstraints = false
-            bodyContainer.addSubview(empty)
-            NSLayoutConstraint.activate([
-                empty.centerXAnchor.constraint(equalTo: bodyContainer.centerXAnchor),
-                empty.centerYAnchor.constraint(equalTo: bodyContainer.centerYAnchor),
-            ])
-        } else {
-            let stack = NSStackView()
-            stack.orientation = .vertical
-            stack.alignment = .width
-            stack.spacing = 2
-            stack.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
-            stack.translatesAutoresizingMaskIntoConstraints = false
-            for agent in agents {
-                let row = AgentInboxRowView(agent: agent)
-                row.onClick = { [onSelect] in
-                    onSelect(agent)
-                }
-                stack.addArrangedSubview(row)
-            }
-            let scroll = NSScrollView()
-            scroll.drawsBackground = false
-            scroll.hasVerticalScroller = true
-            scroll.autohidesScrollers = true
-            scroll.scrollerStyle = .overlay
-            scroll.documentView = stack
-            scroll.translatesAutoresizingMaskIntoConstraints = false
-            bodyContainer.addSubview(scroll)
-            NSLayoutConstraint.activate([
-                scroll.topAnchor.constraint(equalTo: bodyContainer.topAnchor),
-                scroll.leadingAnchor.constraint(equalTo: bodyContainer.leadingAnchor),
-                scroll.trailingAnchor.constraint(equalTo: bodyContainer.trailingAnchor),
-                scroll.bottomAnchor.constraint(equalTo: bodyContainer.bottomAnchor),
-                stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            ])
+    @objc private func refresh() {
+        let chrome = HarnessDesign.chrome
+        appearance = NSAppearance(named: chrome.isDark ? .darkAqua : .aqua)
+        layer?.backgroundColor = (chrome.terminalBackground.blended(withFraction: chrome.isDark ? 0.12 : 0.04, of: chrome.textPrimary) ?? chrome.sidebarBackground).cgColor
+        layer?.borderColor = chrome.textSecondary.withAlphaComponent(0.4).cgColor
+        let items = SessionCoordinator.shared.attentionList().filter {
+            filter.selectedSegment == 1 || $0.entry.activity.rank.needsYou || ($0.entry.activity.unread && $0.entry.activity.rank == .done)
         }
-
-        addSubview(header)
-        addSubview(bodyContainer)
-
-        NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            header.heightAnchor.constraint(equalToConstant: 20),
-
-            bodyContainer.topAnchor.constraint(equalTo: header.bottomAnchor),
-            bodyContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            bodyContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
-            bodyContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-        ])
+        let coordinator = SessionCoordinator.shared
+        let legacyHosts = coordinator.connectedOwners.filter { owner in
+            coordinator.snapshot(for: owner).workspaces.flatMap(\.sessions).flatMap(\.tabs).contains {
+                ($0.agent != nil || $0.notificationText != nil) && $0.rootPane.allLeaves().allSatisfy { $0.activity == nil }
+            }
+        }
+        var signatures = Dictionary(uniqueKeysWithValues: items.map { item in
+            let activity = item.entry.activity
+            return (item.id, [item.entry.sessionName, item.entry.tabTitle, String(describing: activity.rank),
+                             activity.message ?? "", activity.mark?.app ?? "", activity.agent?.kind.rawValue ?? "",
+                             String(activity.unread), String(activity.isSnoozed), String(item.connected)])
+        })
+        signatures["legacy"] = legacyHosts
+        let colors = chrome.textPrimary.description + chrome.textSecondary.description
+        guard signatures != renderedRows || renderedFilter != filter.selectedSegment || renderedColors != colors else { return }
+        renderedRows = signatures; renderedFilter = filter.selectedSegment; renderedColors = colors
+        let focused = (window?.firstResponder as? ActivityRowButton)?.item.id
+        rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        if !legacyHosts.isEmpty {
+            let notice = NSTextField(wrappingLabelWithString: "Update the daemon on \(legacyHosts.joined(separator: ", ")) for per-pane activity.")
+            notice.textColor = chrome.textSecondary
+            rows.addArrangedSubview(notice)
+        }
+        if items.isEmpty {
+            let empty = NSTextField(wrappingLabelWithString: filter.selectedSegment == 0 ? "Nothing needs your attention." : "Agent activity and program reports will appear here.")
+            empty.textColor = HarnessDesign.chrome.textSecondary
+            rows.addArrangedSubview(empty)
+        }
+        for item in items {
+            let row = ActivityRowButton(item: item, onSelect: onSelect)
+            rows.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: rows.widthAnchor, constant: -16).isActive = true
+            if item.id == focused { window?.makeFirstResponder(row) }
+        }
     }
 }
 
 @MainActor
-private final class AgentInboxRowView: NSView {
-    var onClick: (() -> Void)?
+private final class ActivityRowButton: NSButton {
+    let item: HostedAttention
+    private let onSelect: (HostedAttention) -> Void
 
-    private let agent: AgentSessionSummary
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false { didSet { applyChrome() } }
-
-    init(agent: AgentSessionSummary) {
-        self.agent = agent
+    init(item: HostedAttention, onSelect: @escaping (HostedAttention) -> Void) {
+        self.item = item
+        self.onSelect = onSelect
         super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = HarnessDesign.Radius.card
-        layer?.cornerCurve = .continuous
-        translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 50).isActive = true
-
-        let coordinator = SessionCoordinator.shared
-
-        let dot = StatusDotView()
-        if agent.waiting {
-            dot.style = .waiting
-        } else {
-            dot.style = .agent(hex: coordinator.settings.agentColorHex(for: agent.kind))
-        }
-        dot.applyStyle()
-        dot.translatesAutoresizingMaskIntoConstraints = false
-
-        let titleText = agent.tabTitle.isEmpty
-            ? (agent.sessionName.isEmpty ? "Terminal" : agent.sessionName)
-            : agent.tabTitle
-        let title = NSTextField(labelWithString: titleText)
-        title.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        title.textColor = HarnessDesign.chrome.textPrimary
-        title.lineBreakMode = .byTruncatingTail
-        title.translatesAutoresizingMaskIntoConstraints = false
-
-        // "Claude Code · waiting · 3m" — name, state (waiting overrides activity), age.
-        let state = agent.waiting ? "waiting" : agent.activity.rawValue
-        let age = AgentListFormatter.age(from: agent.lastActivityAt)
-        let bodyLabel = NSTextField(labelWithString: "\(agent.agentName) · \(state) · \(age)")
-        bodyLabel.font = .systemFont(ofSize: 11)
-        bodyLabel.textColor = HarnessDesign.chrome.textTertiary
-        bodyLabel.lineBreakMode = .byTruncatingTail
-        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let textStack = NSStackView(views: [title, bodyLabel])
-        textStack.orientation = .vertical
-        textStack.alignment = .leading
-        textStack.spacing = 1
-        textStack.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(dot)
-        addSubview(textStack)
-        NSLayoutConstraint.activate([
-            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
-            textStack.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 10),
-            textStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
-            textStack.centerYAnchor.constraint(equalTo: centerYAnchor),
+        let activity = item.entry.activity
+        let name = activity.mark?.app ?? activity.agent?.kind.displayName ?? item.entry.tabTitle
+        let labels: [AttentionRank: String] = [.idle: "Idle", .working: "Working", .done: "Finished", .error: "Failed", .blocked: "Blocked", .waiting: "Needs input"]
+        let status = item.connected ? labels[activity.rank] ?? "Idle" : "Disconnected · last known activity"
+        let origin = activity.mark?.fromRealReport == true ? "Reported by program" : (activity.notification != nil ? "Notification" : "Inferred activity")
+        let detail = activity.message ?? origin
+        let context = "\(item.hostName) · \(item.entry.sessionName) · \(item.entry.tabTitle)"
+        let text = NSMutableAttributedString(string: "\(activity.unread ? "• " : "")\(name) · \(status)\n", attributes: [
+            .font: NSFont.systemFont(ofSize: 12.5, weight: .semibold), .foregroundColor: HarnessDesign.chrome.textPrimary,
         ])
-        applyChrome()
+        text.append(NSAttributedString(string: "\(detail)\n\(context)\(activity.isSnoozed ? " · Snoozed" : "")", attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: HarnessDesign.chrome.textSecondary,
+        ]))
+        attributedTitle = text
+        alignment = .left
+        isBordered = false
+        cell?.wraps = true
+        cell?.lineBreakMode = .byTruncatingTail
+        toolTip = "\(detail)\n\(context)\n\(origin) · \(AgentListFormatter.age(from: activity.updatedAt))\nRight-click for notification options"
+        setAccessibilityLabel("\(name), \(status), \(context)")
+        target = self
+        action = #selector(openPane)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 70).isActive = true
+        let menu = NSMenu()
+        for (title, selector, tag) in [
+            ("Open Pane", #selector(openPane), 0),
+            ("Mark Read", #selector(markRead), 0),
+            ("Snooze for 15 Minutes", #selector(snooze(_:)), 15),
+            ("Snooze for One Hour", #selector(snooze(_:)), 60),
+            ("Resume Notifications", #selector(snooze(_:)), 0),
+        ] {
+            let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+            entry.target = self
+            entry.tag = tag
+            menu.addItem(entry)
+        }
+        self.menu = menu
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-    override func mouseDown(with event: NSEvent) {}
-
-    override func mouseUp(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if bounds.contains(point) { onClick?() }
-    }
-
-    private func applyChrome() {
-        let c = HarnessDesign.chrome
-        layer?.backgroundColor = isHovered
-            ? c.textPrimary.withAlphaComponent(0.06).cgColor
-            : NSColor.clear.cgColor
-    }
+    @objc private func openPane() { onSelect(item) }
+    @objc private func markRead() { SessionCoordinator.shared.markAttentionRead(item) }
+    @objc private func snooze(_ sender: NSMenuItem) { SessionCoordinator.shared.snoozeAttention(item, minutes: sender.tag) }
 }

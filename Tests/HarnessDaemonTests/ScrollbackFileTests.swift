@@ -27,6 +27,19 @@ final class ScrollbackFileTests: XCTestCase {
         HarnessPaths.scrollbackFileURL(forSurfaceID: id)
     }
 
+    func testLiveRetentionChangeKeepsNewBudgetAndCompactsWhenReduced() throws {
+        let fileURL = url()
+        let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        file.setRetentionCap(512 * 1024)
+        file.append(Data(repeating: 65, count: 256 * 1024))
+        file.flush()
+        XCTAssertEqual(try Data(contentsOf: fileURL).count, 256 * 1024)
+        file.setRetentionCap(64 * 1024)
+        file.flush()
+        XCTAssertEqual(try Data(contentsOf: fileURL).count, 64 * 1024)
+        XCTAssertLessThanOrEqual(ScrollbackBudget.rawBytes(forLines: Int.max), ScrollbackBudget.unlimitedSafetyCapBytes)
+    }
+
     /// The flush timer is armed once per batch (not re-armed per chunk) and still fires on its
     /// own — including after a `reset()` cancelled the previously armed timer.
     func testDebouncedFlushFiresWithoutExplicitFlushAfterReset() throws {

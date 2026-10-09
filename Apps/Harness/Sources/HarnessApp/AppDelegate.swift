@@ -70,32 +70,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 (NSApp.delegate as? AppDelegate)?.windowControllers.forEach { $0.effectiveAppearanceDidChange() }
             }
         }
-        // Request notification authorization once at launch instead of on every
-        // notification post. macOS only shows the system prompt the first time
-        // and silently denies after; doing it eagerly means notifications can
-        // start arriving as soon as the first agent transitions to `waiting`.
-        DesktopNotifier.requestAuthorizationIfNeeded()
+        // Present banners when allowed; onboarding or Settings owns the permission prompt.
+        DesktopNotifier.configurePresentation()
 
         // Locate/spawn the daemon off the main thread, then sync from real state.
         DaemonLauncher.shared.ensureRunning { ok in
             if ok { StartupMetrics.shared.mark(.daemonConnected) }
-            let synced = SessionCoordinator.shared.syncFromDaemon()
-            if !ok || !synced {
-                SessionCoordinator.shared.noteDaemonError(DaemonClientError.timeout)
-            }
-            // Refresh the window chrome after the daemon is hydrated so it matches the effective theme.
-            self.windowControllers.forEach { $0.effectiveAppearanceDidChange() }
-            if synced { self.restoreWindows() }
-            Self.reconcileSessionPersistenceWithMode()
-            OnboardingController.presentIfNeeded()
-            self.externalOpenReady = true
-            if synced {
-                self.drainQueuedExternalOpenURLs()
-            } else if !self.queuedExternalOpens.isEmpty {
-                // Daemon wasn't hydrated yet: opening a queued URL/.command now would create its tab
-                // against a not-ready daemon and be dropped. Retry the drain on a bounded backoff
-                // until a sync succeeds, instead of losing the open.
-                self.retryQueuedExternalOpenDrain(attempt: 0)
+            SessionCoordinator.shared.syncFromDaemon { synced in
+                if !ok || !synced {
+                    SessionCoordinator.shared.noteDaemonError(DaemonClientError.timeout)
+                }
+                // Refresh the window chrome after the daemon is hydrated so it matches the effective theme.
+                self.windowControllers.forEach { $0.effectiveAppearanceDidChange() }
+                if synced { self.restoreWindows() }
+                Self.reconcileSessionPersistenceWithMode()
+                OnboardingController.presentIfNeeded()
+                self.externalOpenReady = true
+                if synced {
+                    self.drainQueuedExternalOpenURLs()
+                } else if !self.queuedExternalOpens.isEmpty {
+                    // Daemon wasn't hydrated yet: opening a queued URL/.command now would create its tab
+                    // against a not-ready daemon and be dropped. Retry the drain on a bounded backoff
+                    // until a sync succeeds, instead of losing the open.
+                    self.retryQueuedExternalOpenDrain(attempt: 0)
+                }
             }
         }
     }
@@ -135,8 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Record the applied mode ONLY after the daemon accepts the default. A launch while the
         // daemon is still spawning would otherwise burn the key without ever applying the mode's
         // keep-on-quit default — leaving a fresh Plain install wrongly persistent forever.
-        guard SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep)) != nil else { return }
-        recordModePersistenceApplied(mode)
+        SessionCoordinator.shared.requestDaemonAsync(.setKeepSessionsOnQuit(keep)) { response in
+            if response != nil { recordModePersistenceApplied(mode) }
+        }
     }
 
     // MARK: - Windows
@@ -190,21 +189,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// switches to it.
     func newWindow(cwd: String? = nil, name: String? = nil) {
         let coordinator = SessionCoordinator.shared
-        guard let workspace = coordinator.snapshot.activeWorkspaceID ?? coordinator.snapshot.workspaces.first?.id,
-              let session = coordinator.createSession(in: workspace, cwd: cwd, name: name)
-        else { return }
-        openWindow(showing: session, owner: coordinator.activeOwner)
-        coordinator.syncFromDaemon()
-        SurfaceShellTracker.shared.bumpScan()
+        guard let workspace = coordinator.snapshot.activeWorkspaceID ?? coordinator.snapshot.workspaces.first?.id else { return }
+        let owner = coordinator.activeOwner
+        coordinator.createSession(in: workspace, cwd: cwd, name: name) { [weak self] session in
+            guard let session else { return }
+            self?.openWindow(showing: session, owner: owner)
+            SurfaceShellTracker.shared.bumpScan()
+        }
     }
 
-    /// Move a tab into a session of its own in a new window (placed at `origin` when given).
-    /// A session's only tab already has its window, which comes forward instead.
+    /// Move a tab into its own session, preserving the machine selected at the start.
     func moveTabToNewWindow(_ tabID: TabID, at origin: NSPoint? = nil) {
         let coordinator = SessionCoordinator.shared
-        guard let session = coordinator.moveTab(tabID, toSession: nil) else { return }
-        openWindow(showing: session, owner: coordinator.activeOwner, at: origin)
-        coordinator.syncFromDaemon()
+        let owner = coordinator.activeOwner
+        coordinator.moveTab(tabID, toSession: nil) { [weak self] session in
+            guard let session else { return }
+            self?.openWindow(showing: session, owner: owner, at: origin)
+        }
     }
 
     /// A right-click (or control-click) doesn't make a window key, but its menus act on "the
@@ -377,10 +378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !queuedExternalOpens.isEmpty, attempt < 20 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, !self.queuedExternalOpens.isEmpty else { return }
-            if SessionCoordinator.shared.syncFromDaemon() {
-                self.drainQueuedExternalOpenURLs()
-            } else {
-                self.retryQueuedExternalOpenDrain(attempt: attempt + 1)
+            SessionCoordinator.shared.syncFromDaemon { [weak self] synced in
+                guard let self else { return }
+                if synced { self.drainQueuedExternalOpenURLs() }
+                else { self.retryQueuedExternalOpenDrain(attempt: attempt + 1) }
             }
         }
     }

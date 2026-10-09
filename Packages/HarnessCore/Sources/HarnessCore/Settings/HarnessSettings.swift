@@ -118,7 +118,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var defaultCWD: String
     public var transparentTitlebar: Bool
     public var sidebarVisible: Bool
-    /// Restore the main window's size + position across launches. When false (default),
+    public var showMachineIndicator: Bool
+    /// Restore the main window's size + position across launches. When false,
     /// the window opens at its built-in default size, centered. Window-level only — the
     /// frame is persisted via `NSWindow.setFrameAutosaveName`.
     public var restoreWindowSize: Bool
@@ -164,8 +165,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// 16 ANSI palette overrides (`palette N=#hex`). `nil` slots fall back to the
     /// active theme preset. Seeded from a theme, importable from terminal config.
     public var paletteHex: [String?]
-    /// Per-agent brand color overrides keyed by `AgentKind.rawValue`.
-    /// Missing keys use the built-in agent default.
+    /// Legacy agent colors are retained for configuration round-tripping; UI identities are fixed.
     public var agentColorOverrides: [String: String]
     /// Shortcuts assigned from the command palette: action id → `cmd-shift-z` style chord.
     public var paletteShortcuts: [String: String]
@@ -315,6 +315,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// of `minimumContrast` and of `applyThemeToTerminalOutput`. `nil` follows the
     /// appearance: on for light, off for dark. A stored bool is the user's choice.
     public var themeFit: Bool?
+    /// Space around and between comfortable pane cards, in points.
+    public var paneSpacing: Double
+    public static let defaultPaneSpacing = 8.0
+    public static func clampedPaneSpacing(_ value: Double) -> Double {
+        value.isFinite ? min(24, max(0, value)) : defaultPaneSpacing
+    }
+
     /// Comfortable pane islands or a single-pixel split border.
     public var paneDensity: PaneDensity
     /// A title row (icon, identity, split buttons) atop each comfortable pane.
@@ -392,7 +399,8 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
         transparentTitlebar: Bool = true,
         sidebarVisible: Bool = false,
-        restoreWindowSize: Bool = false,
+        showMachineIndicator: Bool = false,
+        restoreWindowSize: Bool = true,
         backgroundOpacity: Float = 0.63,
         backgroundBlur: Int = 16,
         windowPaddingX: Float = 14,
@@ -454,6 +462,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowPaddingBalance: Bool = true,
         minimumContrast: Double = 1,
         themeFit: Bool? = nil,
+        paneSpacing: Double = HarnessSettings.defaultPaneSpacing,
         paneDensity: PaneDensity = .comfortable,
         paneHeaders: Bool = true,
         pasteProtection: Bool = true,
@@ -472,6 +481,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.defaultCWD = defaultCWD
         self.transparentTitlebar = transparentTitlebar
         self.sidebarVisible = sidebarVisible
+        self.showMachineIndicator = showMachineIndicator
         self.restoreWindowSize = restoreWindowSize
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
@@ -530,6 +540,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.windowPaddingBalance = windowPaddingBalance
         self.minimumContrast = HarnessSettings.clampedContrast(minimumContrast)
         self.themeFit = themeFit
+        self.paneSpacing = Self.clampedPaneSpacing(paneSpacing)
         self.paneDensity = paneDensity
         self.paneHeaders = paneHeaders
         self.lightDefaultMigrated = true
@@ -574,7 +585,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     }
 
     public func agentColorHex(for kind: AgentKind) -> String {
-        agentColorOverrides[kind.rawValue] ?? "#\(kind.dotHex.uppercased())"
+        "#\(kind.dotHex.uppercased())"
     }
 
     /// Whether `event` is allowed to fire a notification. Falls back to the event's
@@ -679,7 +690,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // Consume the cached import result when decode is called from load() — that caller
         // already ran TerminalConfigImporter.load() and stashed the result here so we don't
         // invoke the importer twice on every first-run or migration path.
-        let imported = HarnessSettings.pendingImportedConfig ?? TerminalConfigImporter.load()
+        let imported = (decoder.userInfo[Self.importContextKey] as? ImportContext).map { $0.config } ?? TerminalConfigImporter.load()
         let fallback = HarnessSettings.makeDefaults(imported: imported)
         let fields = FieldDecoder(container: container, fallback: fallback)
 
@@ -689,6 +700,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD = try fields.decode(.defaultCWD, \.defaultCWD)
         transparentTitlebar = try fields.decode(.transparentTitlebar, \.transparentTitlebar)
         sidebarVisible = try fields.decode(.sidebarVisible, \.sidebarVisible)
+        showMachineIndicator = try fields.decode(.showMachineIndicator, \.showMachineIndicator)
         restoreWindowSize = try fields.decode(.restoreWindowSize, \.restoreWindowSize)
         backgroundOpacity = try fields.decode(.backgroundOpacity, \.backgroundOpacity)
         backgroundBlur = try fields.decode(.backgroundBlur, \.backgroundBlur)
@@ -815,6 +827,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         minimumContrast = HarnessSettings.clampedContrast(try fields.decode(.minimumContrast, \.minimumContrast))
         // Absent key follows appearance (light on, dark off). An explicit bool sticks.
         themeFit = try container.decodeIfPresent(Bool.self, forKey: .themeFit)
+        paneSpacing = Self.clampedPaneSpacing(try fields.decode(.paneSpacing, \.paneSpacing))
         paneDensity = try fields.decodeEnum(.paneDensity, \.paneDensity)
         paneHeaders = try fields.decode(.paneHeaders, \.paneHeaders)
         lightDefaultMigrated = true
@@ -842,23 +855,37 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         remoteControl = try fields.decode(.remoteControl, \.remoteControl)
     }
 
-    /// Thread-unsafe scratch slot used exclusively within `load()` to pass the already-computed
-    /// import result into `init(from decoder:)` without running `TerminalConfigImporter.load()`
-    /// a second time. Set immediately before `JSONDecoder().decode(…)`, cleared immediately after.
-    /// Only valid on the calling thread; `load()` is always called from a single context
-    /// (app start / settings save+reload), never concurrently.
-    nonisolated(unsafe) private static var pendingImportedConfig: ImportedTerminalConfig??
+    private struct ImportContext { let config: ImportedTerminalConfig? }
+    private static let importContextKey = CodingUserInfoKey(rawValue: "Harness.importedConfig")!
+
+    private static func decode(_ data: Data, imported: ImportedTerminalConfig?) throws -> HarnessSettings {
+        let decoder = JSONDecoder()
+        decoder.userInfo[importContextKey] = ImportContext(config: imported)
+        return try decoder.decode(HarnessSettings.self, from: data)
+    }
+
+    /// Live reload never migrates, replaces, or backs up the user's file. The caller keeps
+    /// its last working settings when an editor is between writes or the JSON is invalid.
+    public static func reload(from url: URL = HarnessPaths.settingsURL) throws -> HarnessSettings {
+        var settings = try decode(Data(contentsOf: url), imported: nil)
+        settings.backgroundOpacity = clampedOpacity(settings.backgroundOpacity)
+        settings.backgroundBlur = clampedBlur(settings.backgroundBlur)
+        settings.fontSize = clampedFontSize(settings.fontSize)
+        settings.windowPaddingX = clampedPadding(settings.windowPaddingX)
+        settings.windowPaddingY = clampedPadding(settings.windowPaddingY)
+        return settings
+    }
 
     /// `imported` defaults to the live terminal-config import; tests inject a fixture so
     /// migration behavior doesn't depend on the machine's source-terminal config.
     public static func load(imported: ImportedTerminalConfig? = TerminalConfigImporter.load()) -> HarnessSettings {
         let url = HarnessPaths.settingsURL
-        if FileManager.default.fileExists(atPath: url.path), let data = try? Data(contentsOf: url) {
-            // Stash the already-loaded import result so init(from:) can reuse it rather than
-            // calling TerminalConfigImporter.load() a second time.
-            pendingImportedConfig = imported
-            defer { pendingImportedConfig = nil }
-            guard var settings = try? JSONDecoder().decode(HarnessSettings.self, from: data) else {
+        if FileManager.default.fileExists(atPath: url.path) {
+            guard let data = try? Data(contentsOf: url) else {
+                fputs("Harness: could not read settings.json; original left untouched\n", harnessStderr)
+                return makeDefaults(imported: imported)
+            }
+            guard var settings = try? decode(data, imported: imported) else {
                 // Present but unreadable: preserve it as `.corrupt` for recovery rather than
                 // silently overwriting it with defaults (which would discard the user's settings).
                 // Mirrors SessionStore/OptionStore — return defaults WITHOUT rewriting the file.
@@ -1036,6 +1063,14 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         return settings
     }
 
+    public mutating func applyImportedConfig(_ imported: ImportedTerminalConfig) {
+        applyImportedDefaults(imported)
+        for (action, shortcut) in imported.paletteShortcuts {
+            paletteShortcuts = paletteShortcuts.filter { $0.value != shortcut }
+            paletteShortcuts[action] = shortcut
+        }
+    }
+
     private mutating func applyImportedDefaults(_ imported: ImportedTerminalConfig) {
         if let value = imported.fontFamily { fontFamily = value }
         // Font size is Harness-owned (see makeDefaults) — import the face, not the size.
@@ -1058,11 +1093,15 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         if let value = imported.optionAsMeta { optionAsMeta = value }
         if let value = imported.minimumContrast { minimumContrast = HarnessSettings.clampedContrast(value) }
         if let value = imported.boldIsBright { boldIsBright = value }
-        selectionBackgroundHex = imported.selectionBackgroundHex
-        selectionForegroundHex = imported.selectionForegroundHex
-        boldColorHex = imported.boldColorHex
-        cursorTextHex = imported.cursorTextHex
-        paletteHex = HarnessSettings.normalizedPalette(imported.paletteHex)
+        if let value = imported.selectionBackgroundHex { selectionBackgroundHex = value }
+        if let value = imported.selectionForegroundHex { selectionForegroundHex = value }
+        if let value = imported.boldColorHex { boldColorHex = value }
+        if let value = imported.cursorTextHex { cursorTextHex = value }
+        let importedPalette = HarnessSettings.normalizedPalette(imported.paletteHex)
+        paletteHex = HarnessSettings.normalizedPalette(paletteHex)
+        for index in importedPalette.indices {
+            if let value = importedPalette[index] { paletteHex[index] = value }
+        }
         importedConfigSignature = imported.signature
     }
 }

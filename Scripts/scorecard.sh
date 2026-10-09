@@ -313,7 +313,7 @@ PY
 input_latency() {
     [ "$(uname)" = "Darwin" ] || die "input-latency runs on macOS only"
     mkdir -p "$OUT_DIR"
-    note "input-to-photon: Harness-side FrameSignposter percentiles (PREVIEW_SIGNPOSTS=1 make preview first)"
+    note "internal presentation timing: Harness-side FrameSignposter percentiles (PREVIEW_SIGNPOSTS=1 make preview first)"
     note "Ghostty exposes no equivalent probe — use a camera/typometer for a cross-terminal number."
     "$REPO_ROOT/Scripts/measure-fluidity.sh" "${1:-4}" | tee "$OUT_DIR/input-latency-harness.txt"
 }

@@ -85,6 +85,8 @@ public struct PaneLeaf: Codable, Sendable, Equatable {
     public var cwd: String?
     /// This pane's foreground command (`#{pane_current_command}`), nil until first probed.
     public var command: String?
+    public var activity: PaneActivity?
+    public var shell: String?
 
     public init(
         id: PaneID = UUID(),

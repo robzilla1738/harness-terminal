@@ -315,22 +315,22 @@ public enum ChromeLayout {
     }
 
     /// Space between two islands, and between an island and the window edge.
-    public static let islandGap = 8.0
+    public static let islandGap = HarnessSettings.defaultPaneSpacing
 
     /// Comfortable density makes every pane, a lone one included, an inset card. Each
     /// island takes half the gap on every side and the container pads by the other half
     /// (see `containerPadding`), so the edge gap and the gap between panes are the same.
     /// Compact panes stay flush.
-    public static func cardInsets(separated: Bool) -> CardInsets {
-        let half = separated ? islandGap / 2 : 0
+    public static func cardInsets(separated: Bool, gap: Double = islandGap) -> CardInsets {
+        let half = separated ? HarnessSettings.clampedPaneSpacing(gap) / 2 : 0
         return CardInsets(top: half, leading: half, bottom: half, trailing: half)
     }
 
-    /// The pane container's own padding. No top padding under the tab row, which already
-    /// leaves room; with no tab row above (sidebar mode) the top matches the other sides.
-    public static func containerPadding(separated: Bool, padsTop: Bool = false) -> CardInsets {
-        let half = separated ? islandGap / 2 : 0
-        return CardInsets(top: padsTop ? half : 0, leading: half, bottom: half, trailing: half)
+    /// Under the tab row, cancel the card's top inset so its border meets the bottom
+    /// of the centered title row at every spacing. In sidebar mode, pad all edges equally.
+    public static func containerPadding(separated: Bool, padsTop: Bool = false, gap: Double = islandGap) -> CardInsets {
+        let half = separated ? HarnessSettings.clampedPaneSpacing(gap) / 2 : 0
+        return CardInsets(top: padsTop ? half : -half, leading: half, bottom: half, trailing: half)
     }
 
     /// Space from the window top to the tab pill, and from the pill to the card border.

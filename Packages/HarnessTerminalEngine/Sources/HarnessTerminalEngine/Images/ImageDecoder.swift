@@ -13,7 +13,11 @@ public enum ImageDecoder {
         // ImageIO's first look at a multi-megabyte non-image loads plugins and scans the
         // buffer. A terminal feed must not pay that for ASCII that will never be a bitmap.
         guard looksLikeImage(data),
-              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+              ImageLimits.withinPixelCap(width: width.intValue, height: height.intValue),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
         return rasterize(cgImage)

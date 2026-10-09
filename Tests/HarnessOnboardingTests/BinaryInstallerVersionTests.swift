@@ -5,6 +5,15 @@ import XCTest
 /// silently downgrade a newer installed daemon/CLI. These tests pin the version-aware overwrite
 /// decision in `BinaryInstaller.copyReplacing`.
 final class BinaryInstallerVersionTests: XCTestCase {
+    @MainActor
+    func testFailedCopyPreservesInstalledBinary() throws {
+        let dir = try makeDir()
+        let destination = dir.appendingPathComponent("installed")
+        try write("working", to: destination)
+        XCTAssertThrowsError(try BinaryInstaller.copyReplacing(src: dir.appendingPathComponent("missing"), dest: destination, executable: false))
+        XCTAssertEqual(read(destination), "working")
+    }
+
     private func makeDir() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("harness-binaryinstaller-\(UUID().uuidString)", isDirectory: true)

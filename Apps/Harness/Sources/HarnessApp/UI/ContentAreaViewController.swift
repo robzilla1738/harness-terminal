@@ -15,7 +15,9 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         // Let go over its own window: the tab stays.
         if target === context { return }
         if let target, target.owner == context.owner, let session = target.sessionID {
-            if coordinator.moveTab(tabID, toSession: session) != nil { target.window?.makeKeyAndOrderFront(nil) }
+            coordinator.moveTab(tabID, toSession: session) { id in
+                if id != nil { target.window?.makeKeyAndOrderFront(nil) }
+            }
             return
         }
         (NSApp.delegate as? AppDelegate)?.moveTabToNewWindow(tabID, at: screenPoint)
@@ -28,6 +30,9 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     private let tabBar = TerminalTabBarView()
     private let terminalHost = NSView()
     private var paneContainer: PaneContainerView?
+    private let connectionNotice = NSStackView()
+    private let connectionLabel = NSTextField(labelWithString: "")
+    private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
     private var lastStructureKey = ""
     private var pendingReload: Bool?
     /// Pasteboard change counter captured at left-mouse-down. On mouse-up, if it
@@ -125,6 +130,23 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
             terminalHost.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         applyTabRowConstraints()
+        connectionNotice.orientation = .horizontal
+        connectionNotice.spacing = 12
+        connectionNotice.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        connectionNotice.wantsLayer = true
+        connectionNotice.layer?.cornerRadius = 10
+        connectionNotice.addArrangedSubview(connectionLabel)
+        connectionNotice.addArrangedSubview(retryButton)
+        connectionLabel.font = .systemFont(ofSize: 12)
+        retryButton.target = self; retryButton.action = #selector(retryRemote)
+        connectionNotice.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(connectionNotice)
+        NSLayoutConstraint.activate([
+            connectionNotice.topAnchor.constraint(equalTo: terminalHost.topAnchor, constant: 10),
+            connectionNotice.centerXAnchor.constraint(equalTo: terminalHost.centerXAnchor),
+            connectionNotice.widthAnchor.constraint(lessThanOrEqualTo: terminalHost.widthAnchor, constant: -24),
+        ])
+        refreshConnectionNotice()
 
         installCopySelectionToast()
         reloadTabBar()
@@ -164,7 +186,21 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     /// The window's split controller calls this once per snapshot, after its context is
     /// current. Panes remount only when this window's own layout changed (the structure key),
     /// so a change in another window or on another machine leaves them alone.
+    @objc private func retryRemote() { SessionCoordinator.shared.retryConnection(context.owner) }
+
+    private func refreshConnectionNotice() {
+        tabBar.updateMachine(owner: context.owner)
+        let state = SessionCoordinator.shared.connectionDescription(for: context.owner)
+        connectionNotice.isHidden = context.owner == DaemonSidebar.localID || state == "Connected"
+        connectionLabel.stringValue = "\(context.owner) · \(state) · Showing last output"
+        connectionLabel.lineBreakMode = .byTruncatingTail
+        retryButton.isEnabled = state == "Disconnected"
+        connectionNotice.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
+        connectionNotice.layer?.backgroundColor = HarnessChrome.current.surfaceElevated.cgColor
+    }
+
     func snapshotChanged(structureChanged: Bool, metadataOnly: Bool) {
+        refreshConnectionNotice()
         if metadataOnly && !structureChanged {
             refreshTabBarMetadata()
             // A layout or ratio set elsewhere (`select-layout`, `rotate-window`, `resize-pane`)
@@ -178,6 +214,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func reloadTabBar() {
+        tabBar.updateMachine(owner: context.owner)
         let session = context.session
         tabBar.reload(tabs: session?.tabs ?? [], activeTabID: session?.activeTabID)
     }
@@ -259,7 +296,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         let current = coordinator.snapshot.workspaces
             .flatMap(\.sessions).flatMap(\.tabs)
             .first(where: { $0.id == tabID })?.persistent ?? false
-        coordinator.requestDaemon(.setTabPersistent(tabID: tabID, persistent: !current))
+        coordinator.requestDaemonAsync(.setTabPersistent(tabID: tabID, persistent: !current))
     }
 
     private func reloadAll(force: Bool) {
@@ -280,7 +317,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         guard let workspace = context.workspace, let tab = context.tab else { return }
 
         let displayNode = zoomedNode(for: tab) ?? tab.rootPane
-        let density = "\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)|\(tabRowHidden)"
+        let density = "\(coordinator.settings.paneSpacing)|\(coordinator.settings.paneDensity.rawValue)|\(coordinator.settings.paneHeaders)|\(tabRowHidden)"
         let key = "\(density)|\(workspace.id)|\(tab.id)|\(tab.zoomedPaneID?.uuidString ?? "all")|\(paneKey(displayNode))"
         guard force || key != lastStructureKey else {
             // Same layout: only a ratio set elsewhere (`resize-pane`, Equalize Splits) can
@@ -298,7 +335,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         paneContainer?.removeFromSuperview()
         let container = PaneContainerView(
             tabID: tab.id,
-            padsTop: tabRowHidden,
+            sidebarVisible: tabRowHidden,
             node: displayNode,
             cwd: tab.cwd,
             program: tab.currentCommand,
@@ -363,7 +400,7 @@ final class PaneContainerView: NSView {
     private let tabID: TabID?
     private var islands: [PaneIslandView] = []
 
-    init(tabID: TabID, padsTop: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
+    init(tabID: TabID, sidebarVisible: Bool = false, node: PaneNode, cwd: String, program: String?, agent: String? = nil, themeName: String) {
         self.tabID = tabID
         super.init(frame: .zero)
         HarnessDesign.makeClear(self)
@@ -371,13 +408,18 @@ final class PaneContainerView: NSView {
         let separated = settings.paneDensity.separatedIslands
         showsHeaders = separated && settings.paneHeaders
         // The root pads by half the gap; each island insets by the other half.
-        let pad = ChromeLayout.containerPadding(separated: separated, padsTop: padsTop)
+        let pad = ChromeLayout.containerPadding(separated: separated, padsTop: sidebarVisible, gap: settings.paneSpacing)
+        // The sidebar supplies its own trailing spacing. Cancel the island's
+        // leading inset here so its border meets the sidebar without a second gap.
+        let leadingPadding = sidebarVisible
+            ? -ChromeLayout.cardInsets(separated: separated, gap: coordinator.settings.paneSpacing).leading
+            : pad.leading
         let content = NSView()
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)
         NSLayoutConstraint.activate([
             content.topAnchor.constraint(equalTo: topAnchor, constant: CGFloat(pad.top)),
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: CGFloat(pad.leading)),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: CGFloat(leadingPadding)),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -CGFloat(pad.trailing)),
             content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -CGFloat(pad.bottom)),
         ])
@@ -488,7 +530,7 @@ final class PaneContainerView: NSView {
     }
 
     /// Fill = the container minus each island's rounded rect, in the chrome color at the
-    /// window's paint opacity, so the gutter matches the tab row and the sidebar.
+    /// frame paint opacity, so the gutter matches the tab row and the sidebar.
     func updateGapFill() {
         guard let layer else { return }
         if gapFill.superlayer !== layer {
@@ -511,7 +553,7 @@ final class PaneContainerView: NSView {
         gapFill.path = path
         gapFill.fillRule = .evenOdd
         let c = HarnessChrome.current
-        gapFill.fillColor = c.sidebarBackground.withAlphaComponent(HarnessChrome.paintOpacity).cgColor
+        gapFill.fillColor = c.sidebarBackground.withAlphaComponent(HarnessChrome.framePaintOpacity).cgColor
         CATransaction.commit()
     }
 
@@ -532,7 +574,7 @@ final class PaneContainerView: NSView {
             let island = PaneIslandView(surfaceID: leaf.surfaceID, separated: separated, showsHeader: showsHeaders)
             island.translatesAutoresizingMaskIntoConstraints = false
             parent.addSubview(island)
-            let insets = ChromeLayout.cardInsets(separated: separated)
+            let insets = ChromeLayout.cardInsets(separated: separated, gap: coordinator.settings.paneSpacing)
             NSLayoutConstraint.activate([
                 island.topAnchor.constraint(equalTo: parent.topAnchor, constant: CGFloat(insets.top)),
                 island.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: CGFloat(insets.leading)),
@@ -843,12 +885,19 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
         forDrawnRect drawnRect: NSRect,
         ofDividerAt dividerIndex: Int
     ) -> NSRect {
-        // Widen the interactive/cursor zone past the 1px thin divider. NSSplitView
-        // shows the resize cursor over the effective rect, so this covers the cursor.
-        var rect = proposedEffectiveRect
+        // A zero-width comfortable divider can have an empty proposed rect. Derive the
+        // full-length hit area from pane geometry, centered on the visible gap, so both
+        // sides remain draggable without adding a drawn separator.
+        guard subviews.indices.contains(dividerIndex) else { return proposedEffectiveRect }
+        let first = subviews[dividerIndex].frame
         let hit = max(dividerThickness, 8)
-        if isVertical { rect.size.width = hit } else { rect.size.height = hit }
-        return rect
+        if isVertical {
+            return NSRect(x: first.maxX + dividerThickness / 2 - hit / 2,
+                          y: bounds.minY, width: hit, height: bounds.height)
+        }
+        let edge = isFlipped ? first.maxY : first.minY - dividerThickness
+        return NSRect(x: bounds.minX, y: edge + dividerThickness / 2 - hit / 2,
+                      width: bounds.width, height: hit)
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {

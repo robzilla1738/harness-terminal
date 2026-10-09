@@ -18,9 +18,11 @@ final class AgentHookInstallerTests: XCTestCase {
     }
 
     func testInstallCreatesFileAndIsDetected() throws {
+        XCTAssertEqual(AgentHookInstaller.health(agent: .claudeCode, homeOverride: home), .missing)
         XCTAssertFalse(AgentHookInstaller.isInstalled(agent: .claudeCode, homeOverride: home))
         let result = try AgentHookInstaller.install(agent: .claudeCode, homeOverride: home)
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.path.path))
+        XCTAssertEqual(AgentHookInstaller.health(agent: .claudeCode, homeOverride: home), .current)
         XCTAssertNil(result.backedUp)
         XCTAssertFalse(result.replacedInvalidJSON)
         XCTAssertTrue(AgentHookInstaller.isInstalled(agent: .claudeCode, homeOverride: home))

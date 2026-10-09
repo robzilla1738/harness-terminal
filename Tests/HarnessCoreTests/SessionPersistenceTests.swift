@@ -248,6 +248,31 @@ final class SessionPersistenceTests: XCTestCase {
             "a since-changed HARNESS_HOME must not capture the pinned write")
     }
 
+    func testImmediateSaveSupersedesOlderDebounce() throws {
+        let store = SessionStore()
+        var older = SessionSnapshot()
+        older.revision = 1
+        var newer = older
+        newer.revision = 2
+        store.save(older)
+        try store.saveImmediately(newer)
+        Thread.sleep(forTimeInterval: 0.65)
+        XCTAssertEqual(store.load().revision, 2)
+    }
+
+    func testDebouncedSaveReportsFailure() throws {
+        let error = expectation(description: "save failure reported")
+        let store = SessionStore(onSaveError: { message in
+            XCTAssertTrue(message.contains("layout.json"))
+            error.fulfill()
+        })
+        let directory = HarnessPaths.snapshotURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: directory)
+        store.save(SessionSnapshot())
+        wait(for: [error], timeout: 2)
+    }
+
     /// Spin until `url` exists (the debounced write lands asynchronously on the store's queue),
     /// failing on timeout. A plain poll keeps the helper free of `@Sendable` closure capture.
     private func waitForFile(at url: URL, message: String) {

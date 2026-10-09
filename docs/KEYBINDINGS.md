@@ -124,6 +124,7 @@ These are `NSMenuItem` bindings defined in `MainMenuBuilder`, not prefix-table e
 | Jump to notification | `⌘⇧U` |
 | Tab peek | `⌃⌘P` |
 | Give a palette action its own shortcut | right-click it in the palette ▸ Change Shortcut… |
+| Insert Path (cursor popup: fuzzy search, ↩ insert, →/Tab open folder, ← parent, Esc dismiss) | `⌥⌘I` |
 | Go to Directory (folder browser on the pane's daemon: ↩ cd, ⌘↩ new tab, ⌥↩ insert path, → open, ← up) | `⌥⌘G` |
 | Increase / decrease / reset font size | `⌘+` (or `⌘=`) / `⌘-` / `⌘0` |
 | Settings | `⌘,` |

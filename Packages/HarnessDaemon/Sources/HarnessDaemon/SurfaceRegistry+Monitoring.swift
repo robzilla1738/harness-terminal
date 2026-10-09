@@ -44,29 +44,31 @@ extension SurfaceRegistry {
     /// seen. Static + pure so it is unit-testable.
     static func scanForBell(_ data: Data, state: inout BellScanState) -> Bool {
         var sawBell = false
-        for byte in data {
-            switch state {
-            case .normal:
-                if byte == 0x1B { state = .esc }
-                else if byte == 0x07 { sawBell = true }
-            case .esc:
-                switch byte {
-                case 0x5D, 0x50, 0x5F, 0x5E, 0x58: state = .string   // OSC ] / DCS P / APC _ / PM ^ / SOS X
-                case 0x1B: state = .esc                              // ESC restarts escape parsing
-                case 0x07: sawBell = true; state = .normal           // BEL after a non-string ESC: real
-                default: state = .normal                             // CSI, ST, other escapes
+        data.withUnsafeBytes { raw in
+            for byte in raw.bindMemory(to: UInt8.self) {
+                switch state {
+                case .normal:
+                    if byte == 0x1B { state = .esc }
+                    else if byte == 0x07 { sawBell = true }
+                case .esc:
+                    switch byte {
+                    case 0x5D, 0x50, 0x5F, 0x5E, 0x58: state = .string   // OSC ] / DCS P / APC _ / PM ^ / SOS X
+                    case 0x1B: state = .esc                              // ESC restarts escape parsing
+                    case 0x07: sawBell = true; state = .normal           // BEL after a non-string ESC: real
+                    default: state = .normal                             // CSI, ST, other escapes
+                    }
+                case .string:
+                    // A BEL terminates an OSC (xterm) and is data inside the others — never a bell.
+                    // CAN/SUB abort a string sequence (as the VT parser does), so an unterminated string
+                    // can't pin the scanner and swallow every later bell.
+                    if byte == 0x07 { state = .normal }
+                    else if byte == 0x18 || byte == 0x1A { state = .normal } // CAN / SUB abort
+                    else if byte == 0x1B { state = .stringEsc }
+                case .stringEsc:
+                    if byte == 0x5C { state = .normal }                  // ST (ESC \) terminates the string
+                    else if byte == 0x1B { state = .stringEsc }          // another ESC; keep waiting
+                    else { state = .string }                             // ESC was data; stay in the string
                 }
-            case .string:
-                // A BEL terminates an OSC (xterm) and is data inside the others — never a bell.
-                // CAN/SUB abort a string sequence (as the VT parser does), so an unterminated string
-                // can't pin the scanner and swallow every later bell.
-                if byte == 0x07 { state = .normal }
-                else if byte == 0x18 || byte == 0x1A { state = .normal } // CAN / SUB abort
-                else if byte == 0x1B { state = .stringEsc }
-            case .stringEsc:
-                if byte == 0x5C { state = .normal }                  // ST (ESC \) terminates the string
-                else if byte == 0x1B { state = .stringEsc }          // another ESC; keep waiting
-                else { state = .string }                             // ESC was data; stay in the string
             }
         }
         return sawBell
@@ -360,7 +362,7 @@ extension SurfaceRegistry {
     ) {
         guard let uuid = UUID(uuidString: surfaceKey) else { return }
         let tab = tabForSurfaceLocked(uuid)
-        let detector = tab?.agent.map {
+        let detector = tab?.rootPane.allLeaves().first(where: { $0.surfaceID == uuid })?.activity?.agent.map {
             ProgramStatusDetectorFill(app: $0.kind.rawValue, silent: $0.activity != .working)
         }
         let paneName = (tab?.title.isEmpty == false ? tab?.title : nil) ?? "Terminal"
@@ -375,16 +377,11 @@ extension SurfaceRegistry {
         )
         let markChanged = editor.setProgramMark(surfaceID: uuid, mark: Self.programMark(from: presentation))
         var statusChanged = false
-        if presentation.fromRealReport, let tab, let match = editor.tab(forSurfaceKey: surfaceKey) {
-            let (status, text) = Self.desiredStatus(presentation)
-            if tab.status != status || tab.notificationText != text {
-                editor.setTabStatus(
-                    workspaceID: match.workspaceID,
-                    tabID: match.tabID,
-                    status: status,
-                    notificationText: text
-                )
-                statusChanged = true
+        if presentation.fromRealReport {
+            let (_, text) = Self.desiredStatus(presentation)
+            statusChanged = editor.updatePaneActivity(surfaceID: uuid) {
+                if $0.notification != text, text != nil { $0.unread = true }
+                $0.notification = text
             }
         }
         if markChanged || statusChanged { commit() }
@@ -395,7 +392,8 @@ extension SurfaceRegistry {
             monitors[surfaceKey]?.lastNotifiedAt = Date().timeIntervalSinceReferenceDate
         }
         monitorLock.unlock()
-        if let notified {
+        let snoozed = editor.listAttention().first { $0.surfaceID == uuid }?.activity.isSnoozed ?? false
+        if let notified, !snoozed {
             NotificationBus.shared.post(AgentNotification(
                 surfaceID: uuid,
                 daemonSurfaceID: surfaceKey,

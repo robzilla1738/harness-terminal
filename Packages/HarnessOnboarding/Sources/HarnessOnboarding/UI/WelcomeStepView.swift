@@ -25,7 +25,7 @@ struct WelcomeStepView: View {
                 .accessibilityAddTraits(.isHeader)
                 .padding(.bottom, 14)
 
-            Text("The Mac terminal that keeps your sessions running and tells you the moment an agent needs you.")
+            Text("Your shell, with persistent sessions, connected workspaces, and optional agent notifications.")
                 .font(.system(size: 16))
                 .foregroundStyle(ImmersivePalette.SUI.textSecondary)
                 .multilineTextAlignment(.center)

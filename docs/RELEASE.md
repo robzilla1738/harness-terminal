@@ -10,6 +10,18 @@ It runs on the `macos-26` runner with Xcode 26.6, the same runner and pinned
 `XCODE_VERSION` as CI, so a release is built by the toolchain CI tested. Bump
 `XCODE_VERSION` in `release.yml` and `ci.yml` together.
 
+## Current development status
+
+The terminal-excellence work in [#185](https://github.com/robzilla1738/harness-terminal/pull/185)
+is unreleased. Integrating it into `main` does not authorize publication. The latest
+published release remains v1.13.0; no version bump, tag, DMG, appcast, or release workflow
+is part of this integration. Keep changes under **Unreleased** in the changelog.
+
+Before preparing another release, resolve the [screen-restoration defect (#186)](https://github.com/robzilla1738/harness-terminal/issues/186)
+and review the [remaining acceptance checklist (#187)](https://github.com/robzilla1738/harness-terminal/issues/187).
+Performance gaps remain tracked in [#27](https://github.com/robzilla1738/harness-terminal/issues/27)
+and the [scorecard](SCORECARD.md). Passing CI does not close those observed or unverified gaps.
+
 ## One-time GitHub setup
 
 Create a protected GitHub Environment named `release` and add required reviewers

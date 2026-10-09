@@ -18,7 +18,7 @@ public enum TerminalGridColor: Equatable, Sendable {
 }
 
 /// Underline style (ECMA-48 SGR 4 plus the `4:N` substyles modern terminals understand).
-public enum TerminalGridUnderline: Equatable, Sendable {
+public enum TerminalGridUnderline: UInt16, Sendable {
     case none
     case single
     case double
@@ -30,7 +30,7 @@ public enum TerminalGridUnderline: Equatable, Sendable {
 /// How many columns a cell occupies. `wide` is the leading cell of a double-width
 /// glyph (e.g. CJK); `spacerTail` is the empty trailing column it reserves — renderers
 /// and the compositor skip it because the wide glyph already spans both columns.
-public enum TerminalCellWidth: Equatable, Sendable {
+public enum TerminalCellWidth: UInt16, Sendable {
     case normal
     case wide
     case spacerTail
@@ -50,16 +50,49 @@ public struct TerminalGridCell: Equatable, Sendable {
     public var foreground: TerminalGridColor
     public var background: TerminalGridColor
     public var underlineColor: TerminalGridColor
-    public var bold: Bool
-    public var faint: Bool
-    public var italic: Bool
-    public var underline: TerminalGridUnderline
-    public var blink: Bool
-    public var inverse: Bool
-    public var invisible: Bool
-    public var strikethrough: Bool
-    public var overline: Bool
-    public var width: TerminalCellWidth
+    // The eight switches, underline style and width fit in 13 bits. Keeping them in
+    // one word preserves the POD representation and brings each hot-path cell to 32 bytes.
+    @usableFromInline var attributes: UInt16 = 0
+    @inlinable public var bold: Bool {
+        get { attributes & 1 != 0 }
+        set { attributes = newValue ? attributes | 1 : attributes & ~1 }
+    }
+    @inlinable public var faint: Bool {
+        get { attributes & 2 != 0 }
+        set { attributes = newValue ? attributes | 2 : attributes & ~2 }
+    }
+    @inlinable public var italic: Bool {
+        get { attributes & 4 != 0 }
+        set { attributes = newValue ? attributes | 4 : attributes & ~4 }
+    }
+    @inlinable public var blink: Bool {
+        get { attributes & 8 != 0 }
+        set { attributes = newValue ? attributes | 8 : attributes & ~8 }
+    }
+    @inlinable public var inverse: Bool {
+        get { attributes & 16 != 0 }
+        set { attributes = newValue ? attributes | 16 : attributes & ~16 }
+    }
+    @inlinable public var invisible: Bool {
+        get { attributes & 32 != 0 }
+        set { attributes = newValue ? attributes | 32 : attributes & ~32 }
+    }
+    @inlinable public var strikethrough: Bool {
+        get { attributes & 64 != 0 }
+        set { attributes = newValue ? attributes | 64 : attributes & ~64 }
+    }
+    @inlinable public var overline: Bool {
+        get { attributes & 128 != 0 }
+        set { attributes = newValue ? attributes | 128 : attributes & ~128 }
+    }
+    @inlinable public var underline: TerminalGridUnderline {
+        get { TerminalGridUnderline(rawValue: (attributes >> 8) & 7)! }
+        set { attributes = (attributes & ~0x0700) | (newValue.rawValue << 8) }
+    }
+    @inlinable public var width: TerminalCellWidth {
+        get { TerminalCellWidth(rawValue: (attributes >> 11) & 3)! }
+        set { attributes = (attributes & ~0x1800) | (newValue.rawValue << 11) }
+    }
     /// A third mark, kept only on a Kitty image placeholder cell, where it is the image id's high
     /// byte (`KittyPlaceholders`). Those marks are all in the BMP, so 16 bits fit them, in what
     /// would otherwise be padding before `hyperlinkID`. 0 = none. Not part of `cluster`.
@@ -94,6 +127,8 @@ public struct TerminalGridCell: Equatable, Sendable {
         self.foreground = foreground
         self.background = background
         self.underlineColor = underlineColor
+        self.placeholderMark = placeholderMark
+        self.hyperlinkID = hyperlinkID
         self.bold = bold
         self.faint = faint
         self.italic = italic
@@ -104,8 +139,6 @@ public struct TerminalGridCell: Equatable, Sendable {
         self.strikethrough = strikethrough
         self.overline = overline
         self.width = width
-        self.placeholderMark = placeholderMark
-        self.hyperlinkID = hyperlinkID
     }
 
     /// An empty default-styled cell (a space-equivalent with no attributes).
@@ -123,10 +156,20 @@ public struct TerminalGridCell: Equatable, Sendable {
         return s
     }
 
-    /// Stack a combining (width-0) scalar onto this cell's grapheme. Returns `false` if both
-    /// inline slots are full (>2 marks): the MVP drops the excess. A Thai syllable never needs
-    /// more than two, so this only loses coverage for emoji ZWJ / deep Indic (a Phase 3 concern).
-    /// A Kitty image placeholder keeps a third mark in `placeholderMark`.
+    /// Exceptional clusters use the unused high bit of the second scalar slot. Cells remain
+    /// trivially copyable and exactly the same size; ordinary ASCII and two-mark cells stay inline.
+    public var clusterID: UInt32 {
+        get { combining1 & 0x8000_0000 == 0 ? 0 : combining1 & 0x7fff_ffff }
+        set { combining1 = newValue == 0 ? 0 : newValue | 0x8000_0000 }
+    }
+
+    public func resolvedCluster(in clusters: [UInt32: String]) -> String {
+        clusterID == 0 ? cluster : clusters[clusterID] ?? cluster
+    }
+
+    /// Stack a combining scalar into the inline slots. Returns `false` when the screen must
+    /// promote the cell into its exceptional-cluster pool. A Kitty image placeholder keeps
+    /// a third protocol mark in `placeholderMark`.
     @discardableResult
     public mutating func appendCombining(_ scalar: UInt32) -> Bool {
         if combining0 == 0 { combining0 = scalar; return true }
@@ -214,15 +257,18 @@ public struct TerminalGridSnapshot: Equatable, Sendable {
     /// row. Empty when the program emits no shell integration. A row's presence marks a shell
     /// prompt; its `exit` is filled in once the command launched from it finishes.
     public let marks: [Int: SemanticMark]
+    public let clusters: [UInt32: String]
 
     public init(cols: Int, rows: Int, cells: [TerminalGridCell], cursor: TerminalCursor,
-                images: [ImagePlacementSnapshot] = [], marks: [Int: SemanticMark] = [:]) {
+                images: [ImagePlacementSnapshot] = [], marks: [Int: SemanticMark] = [:],
+                clusters: [UInt32: String] = [:]) {
         self.cols = cols
         self.rows = rows
         self.cells = cells
         self.cursor = cursor
         self.images = images
         self.marks = marks
+        self.clusters = clusters
     }
 
     /// The cell at (`row`, `col`), or `nil` if out of bounds. Bounds-checked so callers
@@ -240,4 +286,20 @@ public struct TerminalGridSnapshot: Equatable, Sendable {
 public struct SemanticMark: Equatable, Sendable {
     public var exit: Int?
     public init(exit: Int? = nil) { self.exit = exit }
+}
+
+/// Bound allocation before multiplying dimensions supplied by a client or embedding application.
+public enum TerminalGeometry {
+    public static let maxDimension = 4096
+    public static let maxCells = 1_048_576
+
+    public static func clamped(cols: Int, rows: Int) -> (cols: Int, rows: Int) {
+        let columns = min(maxDimension, max(1, cols))
+        return (columns, min(maxDimension, maxCells / columns, max(1, rows)))
+    }
+
+    public static func isValid(cols: Int, rows: Int) -> Bool {
+        let size = clamped(cols: cols, rows: rows)
+        return cols == size.cols && rows == size.rows
+    }
 }

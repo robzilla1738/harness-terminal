@@ -54,6 +54,7 @@ enum CommandPaletteController {
         panel.isRestorable = false
         panel.isFloatingPanel = true
         panel.level = .floating
+        panel.appearance = NSAppearance(named: HarnessChrome.current.isDark ? .darkAqua : .aqua)
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
@@ -195,7 +196,7 @@ enum CommandPaletteController {
                 title: "Insert Path",
                 subtitle: "Insert a shell-quoted path from this daemon",
                 symbol: "doc.on.clipboard",
-                shortcut: "",
+                shortcut: "⌥⌘I",
                 section: .actions
             ) {
                 coordinator.insertListedPath()
@@ -513,7 +514,7 @@ enum CommandPaletteController {
                     }
                 }
                 coordinator.settings = settings
-                try? settings.save()
+                SessionCoordinator.shared.saveSettings()
                 coordinator.applySettingsToHosts()
                 SettingsWindowController.reloadIfOpen()
             })
@@ -536,7 +537,7 @@ enum CommandPaletteController {
                 } else {
                     next = current
                 }
-                coordinator.requestDaemon(DaemonSettingsControls.request(key: daemon.key, rawValue: next))
+                coordinator.requestDaemonAsync(DaemonSettingsControls.request(key: daemon.key, rawValue: next))
                 HarnessOptions.reloadFromDisk()
             })
         }
@@ -710,7 +711,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        let overlay = HarnessOverlayBackground()
+        let overlay = HarnessOverlayBackground(opaque: true)
         overlay.frame = NSRect(x: 0, y: 0, width: 620, height: 440)
         view = overlay
     }
@@ -723,7 +724,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         searchField.placeholderAttributedString = NSAttributedString(
             string: "Filter commands and sessions",
             attributes: [
-                .foregroundColor: c.textTertiary,
+                .foregroundColor: c.textSecondary,
                 .font: NSFont.systemFont(ofSize: 15),
             ]
         )
@@ -741,13 +742,8 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         filterWell.layer?.cornerCurve = .continuous
         filterWell.layer?.backgroundColor = c.rowHoverFill.cgColor
         filterWell.layer?.borderWidth = 1
-        filterWell.layer?.borderColor = c.borderStrong.cgColor
+        filterWell.layer?.borderColor = c.textPrimary.withAlphaComponent(0.35).cgColor
         filterWell.translatesAutoresizingMaskIntoConstraints = false
-
-        let separator = NSView()
-        separator.wantsLayer = true
-        separator.layer?.backgroundColor = c.border.cgColor
-        separator.translatesAutoresizingMaskIntoConstraints = false
 
         let column = NSTableColumn(identifier: .init("action"))
         tableView.addTableColumn(column)
@@ -775,7 +771,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
         scrollView.contentInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
 
         emptyLabel.font = .systemFont(ofSize: 13)
-        emptyLabel.textColor = c.textTertiary
+        emptyLabel.textColor = c.textSecondary
         emptyLabel.alignment = .center
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyLabel.isHidden = true
@@ -793,7 +789,6 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
 
         content.addSubview(filterWell)
         content.addSubview(searchField)
-        content.addSubview(separator)
         content.addSubview(scrollView)
         content.addSubview(emptyLabel)
         content.addSubview(footer)
@@ -802,19 +797,14 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
             filterWell.topAnchor.constraint(equalTo: content.topAnchor, constant: HarnessDesign.Spacing.md),
             filterWell.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: HarnessDesign.Spacing.md),
             filterWell.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -HarnessDesign.Spacing.md),
-            filterWell.heightAnchor.constraint(equalToConstant: 36),
+            filterWell.heightAnchor.constraint(equalToConstant: 40),
 
             searchField.leadingAnchor.constraint(equalTo: filterWell.leadingAnchor, constant: HarnessDesign.Spacing.md),
             searchField.trailingAnchor.constraint(equalTo: filterWell.trailingAnchor, constant: -HarnessDesign.Spacing.md),
             searchField.centerYAnchor.constraint(equalTo: filterWell.centerYAnchor),
             searchField.heightAnchor.constraint(equalToConstant: 22),
 
-            separator.topAnchor.constraint(equalTo: filterWell.bottomAnchor, constant: HarnessDesign.Spacing.md),
-            separator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 1),
-
-            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            scrollView.topAnchor.constraint(equalTo: filterWell.bottomAnchor, constant: HarnessDesign.Spacing.md),
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: footer.topAnchor),
@@ -825,7 +815,7 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
             footer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            footer.heightAnchor.constraint(equalToConstant: 28),
+            footer.heightAnchor.constraint(equalToConstant: 32),
         ])
 
         tableView.reloadData()
@@ -875,8 +865,8 @@ final class PaletteViewController: NSViewController, NSTableViewDataSource, NSTa
             row.addArrangedSubview(wrap)
 
             let text = NSTextField(labelWithString: label)
-            text.font = .systemFont(ofSize: 11, weight: .regular)
-            text.textColor = c.textTertiary
+            text.font = .systemFont(ofSize: 12, weight: .regular)
+            text.textColor = c.textSecondary
             row.addArrangedSubview(text)
             return row
         }
@@ -1121,8 +1111,13 @@ final class PaletteRowView: NSTableRowView {
     private func paintSelectedPill() {
         let rect = bounds.insetBy(dx: HarnessDesign.Spacing.md, dy: 3)
         let path = NSBezierPath(roundedRect: rect, xRadius: HarnessDesign.Radius.control, yRadius: HarnessDesign.Radius.control)
-        HarnessChrome.current.activePillFill.setFill()
+        let c = HarnessChrome.current
+        let fill = c.sidebarBackground.blended(withFraction: c.isDark ? 0.20 : 0.12, of: c.textPrimary) ?? c.activePillFill
+        fill.setFill()
         path.fill()
+        c.textPrimary.withAlphaComponent(0.18).setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 }
 
@@ -1131,8 +1126,8 @@ private final class PaletteSectionHeaderView: NSView {
     init(title: String) {
         super.init(frame: .zero)
         let label = NSTextField(labelWithString: title)
-        label.font = HarnessDesign.Typography.paletteHeader
-        label.textColor = HarnessChrome.current.textTertiary
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = HarnessChrome.current.textSecondary
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
@@ -1167,7 +1162,7 @@ private final class PaletteItemView: NSView {
 
         let title = NSTextField(labelWithString: action.title)
         title.font = HarnessDesign.Typography.paletteTitle
-        title.textColor = c.activePillLabel
+        title.textColor = c.textPrimary
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
         if !query.isEmpty {
@@ -1175,14 +1170,14 @@ private final class PaletteItemView: NSView {
         }
 
         let subtitle = NSTextField(labelWithString: action.subtitle)
-        subtitle.font = .systemFont(ofSize: 11.5, weight: .regular)
-        subtitle.textColor = c.textTertiary
+        subtitle.font = .systemFont(ofSize: 12.5, weight: .regular)
+        subtitle.textColor = c.textSecondary
         subtitle.lineBreakMode = .byTruncatingTail
         subtitle.translatesAutoresizingMaskIntoConstraints = false
 
         let shortcut = NSTextField(labelWithString: action.shortcut)
         shortcut.font = HarnessDesign.Typography.kbd
-        shortcut.textColor = c.textTertiary
+        shortcut.textColor = c.textSecondary
         shortcut.alignment = .right
         shortcut.translatesAutoresizingMaskIntoConstraints = false
         shortcut.setContentHuggingPriority(.required, for: .horizontal)

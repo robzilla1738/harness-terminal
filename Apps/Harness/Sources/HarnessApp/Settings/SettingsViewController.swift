@@ -24,10 +24,12 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let windowBorderOpacitySlider = HarnessSlider(frame: .zero)
     private let windowBorderOpacityLabel = NSTextField(labelWithString: "")
     private let transparentTitlebarToggle = HarnessToggle(frame: .zero)
+    private let machineIndicatorToggle = HarnessToggle(frame: .zero)
     private let sidebarVisibleToggle = HarnessToggle(frame: .zero)
     private let restoreWindowSizeToggle = HarnessToggle(frame: .zero)
     private let paneDensitySegment = HarnessSegmented(frame: .zero)
     private let paneHeadersToggle = HarnessToggle(frame: .zero)
+    private let paneSpacingField = HarnessTextField()
     private let paddingXField = HarnessTextField()
     private let paddingYField = HarnessTextField()
     private let paddingBalanceToggle = HarnessToggle(frame: .zero)
@@ -133,8 +135,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private var paletteWells: [HarnessSwatchWell] = []
     private var paletteNote: NSTextField?
     private var paletteHexValues: [String?] = Array(repeating: nil, count: 16)
-    private var agentColorWells: [AgentKind: HarnessSwatchWell] = [:]
-    private var agentIconViews: [AgentKind: NSImageView] = [:]
     private var colorBindings: [ColorBinding] = []
     /// Live "Install Hooks / Reinstall Hooks" buttons keyed by agent (Agents page).
     private var hookButtons: [AgentKind: NSButton] = [:]
@@ -153,10 +153,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         "Bright Black", "Bright Red", "Bright Green", "Bright Yellow",
         "Bright Blue", "Bright Magenta", "Bright Cyan", "Bright White",
     ]
-    private static let agentColorKinds: [AgentKind] = [
-        .codex, .claudeCode, .cursor, .grok, .pi, .hermes,
-        .openClaw, .openCode, .aider, .gemini, .goose,
-    ]
+    private static let agentKinds = AgentKind.allCases.filter { $0 != .generic }
 
     deinit {
         // A fresh controller is built on each open and the previous one is torn down; drop
@@ -215,6 +212,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         updateScrollMultiplierLabel()
 
         for (field, value) in [
+            (paneSpacingField, String(format: "%.0f", settings.paneSpacing)),
             (paddingXField, String(format: "%.0f", settings.windowPaddingX)),
             (paddingYField, String(format: "%.0f", settings.windowPaddingY)),
             (fontSizeField, String(format: "%.0f", settings.fontSize)),
@@ -302,7 +300,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         paletteHexValues = HarnessSettings.normalizedPalette(settings.paletteHex)
         buildPaletteWells()
-        buildAgentColorWells(settings: settings)
 
         experienceSegment.setSegments(ExperienceMode.allCases.map(Self.experienceTitle))
         experienceSegment.selectedSegment = ExperienceMode.allCases.firstIndex(of: settings.experienceMode) ?? 0
@@ -310,7 +307,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         experienceSegment.action = #selector(experienceModeChanged)
         experienceSummaryLabel.font = .systemFont(ofSize: 11.5)
         experienceSummaryLabel.textColor = .secondaryLabelColor
-        experienceSummaryLabel.stringValue = settings.experienceMode.summary
+        experienceSummaryLabel.stringValue = settings.experienceMode.summary(keepSessionsOnQuit: SessionCoordinator.shared.snapshot.keepSessionsOnQuit)
 
         // Optional Harness controls without switching experience mode, as two independent
         // tri-states. Auto follows the preset; On/Off pin each via `prefixKeyEnabled` /
@@ -337,7 +334,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
 
         // Toggles that write straight through `applySettingsLive`.
-        for toggle in [cursorBlinkToggle, copyOnSelectToggle, vividColorsToggle, themeTerminalOutputToggle,
+        for toggle in [machineIndicatorToggle, cursorBlinkToggle, copyOnSelectToggle, vividColorsToggle, themeTerminalOutputToggle,
                        ligaturesToggle, promptGutterToggle, transparentTitlebarToggle, offMainPipelineToggle,
                        liveResizeReflowToggle, paddingBalanceToggle, mouseHideToggle, pasteProtectionToggle,
                        remoteControlToggle, boldIsBrightToggle, themeFitToggle, paneHeadersToggle,
@@ -373,13 +370,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             // Empty = disable the prefix entirely (honored via `effectivePrefixKey`); don't
             // silently snap back to Ctrl-A the way the old code did.
             SettingsEditor.applyFromWindow(\.prefixKey, value, on: &SessionCoordinator.shared.settings)
-            try? SessionCoordinator.shared.settings.save()
+            self.saveSettings()
             PrefixKeymap.shared.rebuildFromSettings()
         }
         quickTerminalHotkeyRecorder = KeyRecorderView(initial: settings.quickTerminalHotkey)
         quickTerminalHotkeyRecorder.onChange = { value in
             SettingsEditor.applyFromWindow(\.quickTerminalHotkey, value, on: &SessionCoordinator.shared.settings)
-            try? SessionCoordinator.shared.settings.save()
+            self.saveSettings()
             QuickTerminalController.shared.rebuildFromSettings()
         }
 
@@ -437,13 +434,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         updateDependentRows()
     }
 
-    func showPage(_ pane: SettingsPane) {
+    func showPage(_ pane: SettingsPane, refresh: Bool = true) {
         for button in sidebarButtons { button.isSelected = (button.tag == pane.rawValue) }
         for subview in pageContainer.subviews { subview.removeFromSuperview() }
         // Rebuild the Advanced page each time it's shown so it re-checks daemon reachability (and
         // re-fetches live option values): a daemon that was down when Settings opened may be back,
         // and vice-versa. The other pages are static enough to stay cached.
-        if pane == .advanced { pages[.advanced] = buildAdvancedPage() }
+        if pane == .advanced, refresh { pages[.advanced] = buildAdvancedPage() }
         if pane == .notifications { refreshNotificationStatus() }
         guard let page = pages[pane] else { return }
         page.translatesAutoresizingMaskIntoConstraints = false
@@ -475,6 +472,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func chromeDidChange(_ note: Notification) {
         guard note.userInfo?["chromeChanged"] as? Bool == true else { return }
+        HarnessDesign.applySidebarChrome(to: sidebarContainer)
         // `flushAndApply` posts `chromeChanged` on every control action (including
         // continuous opacity/blur drags), but the palette only actually changes on a
         // theme or bg/fg/cursor edit. Skip the re-skin walk when the colors are identical
@@ -526,6 +524,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             case let v as HarnessToggle: v.applyChrome()
             case let v as HarnessSlider: v.applyChrome()
             case let v as HarnessSwatchWell: v.applyChrome()
+            case let v as IconTileView: v.applyChrome()
             case let v as HarnessSegmented: v.applyChrome()
             case let v as HarnessSelect: v.applyChrome()
             case let v as KeyRecorderView: v.applyChrome()
@@ -538,6 +537,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     // MARK: - Sidebar
 
+    private let sidebarContainer = NSView()
     private var sidebarButtons: [SettingsSidebarButton] = []
     private let settingsSearch = HarnessSearchField()
     private let sidebarTitleLabel = NSTextField(labelWithString: "Settings")
@@ -547,7 +547,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // A plain layer-backed view carrying the same themed sidebar chrome (vibrancy +
         // tint) the main window's sidebar uses — never the system `.sidebar` material,
         // which adds the system tint on top of the theme.
-        let container = NSView()
+        let container = sidebarContainer
         container.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.applySidebarChrome(to: container)
 
@@ -661,7 +661,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Transparent title bar", transparentTitlebarToggle),
             settingsRow("Show sidebar", sidebarVisibleToggle,
                         hint: "Sessions in a sidebar instead of tabs in the title bar. ⌘\\ switches."),
-            settingsRow("Remember size and position", restoreWindowSizeToggle),
+            settingsRow("Show machine indicator", machineIndicatorToggle,
+                        hint: "Show this Mac or the remote host in the window controls."),
+            settingsRow("Remember size and position", restoreWindowSizeToggle,
+                        hint: "Reopen at your last size. When off, start at 100 columns × 30 rows."),
         ])
 
         paddingXField.widthAnchor.constraint(equalToConstant: Form.numberFieldWidth).isActive = true
@@ -669,9 +672,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         paddingXField.setAccessibilityLabel("Horizontal padding")
         paddingYField.setAccessibilityLabel("Vertical padding")
         let paddingRow = hstack([paddingXField, unitLabel("×"), paddingYField, unitLabel("pt")], spacing: 6)
+        paneSpacingField.widthAnchor.constraint(equalToConstant: Form.numberFieldWidth).isActive = true
+        paneSpacingField.setAccessibilityLabel("Pane spacing")
         let panesGroup = settingsGroup("Panes", [
             settingsRow("Density", paneDensitySegment,
                         hint: "Comfortable sets panes apart as cards. Compact keeps them flush."),
+            settingsRow("Pane spacing", hstack([paneSpacingField, unitLabel("pt")], spacing: 6),
+                        hint: "Gap around and between panes. 0–24 pt; default \(Int(HarnessSettings.defaultPaneSpacing)). Comfortable only."),
             settingsRow("Pane headers", paneHeadersToggle,
                         hint: "Program, directory, and split buttons atop each pane. Comfortable only."),
             settingsRow("Padding", paddingRow, hint: "Space between the text and the pane edge."),
@@ -871,7 +878,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         scrollbackField.widthAnchor.constraint(equalToConstant: Form.wideNumberFieldWidth).isActive = true
         let scrollGroup = settingsGroup("Scrolling", [
             settingsRow("Scrollback", hstack([scrollbackField, unitLabel("lines")], spacing: 6),
-                        hint: "0 keeps everything, up to 512 MiB a pane."),
+                        hint: "0 removes the line cap. Decoded history and raw output each retain up to 512 MiB per pane."),
             settingsRow("Scroll speed", sliderRow(scrollMultiplierSlider, scrollMultiplierLabel)),
         ])
 
@@ -1011,10 +1018,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     // MARK: - Page: Agents
 
     private func buildAgentsPage() -> NSView {
-        let resetColors = makeLinkButton("Reset Colors", action: #selector(resetAgentColors))
         let agentsGroup = settingsGroup(
-            "Agents", Self.agentColorKinds.map(agentRow), accessory: resetColors,
-            footer: "Harness spots an agent by the program running in a pane, in any shell. Hooks let it tell you the moment it stops or needs input; installing merges them into the agent's own config and backs that file up first."
+            "Agents", Self.agentKinds.map(agentRow),
+            footer: "Harness identifies these tools when you run them in a pane. Install each CLI separately. Where available, optional hooks report when the agent stops or needs input; Harness backs up existing hook configuration before changing it."
         )
 
         let detectionGroup = settingsGroup("Setup", [
@@ -1027,21 +1033,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return page("Agents", [agentsGroup, detectionGroup])
     }
 
-    /// One per-agent row: brand icon + name + the executables it matches + a color-override
-    /// swatch + a one-click "Install hooks" button (with installed status) where supported.
+    /// The same designed badge used by tabs, plus detection details and hook setup.
     private func agentRow(_ kind: AgentKind) -> NSView {
-        let c = HarnessChrome.current
-        let colorHex = SessionCoordinator.shared.settings.agentColorHex(for: kind)
-
-        let icon = NSImageView()
+        let icon = IconTileView()
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        // Brand mark when one exists, else a tinted monogram (e.g. Aider) — never a blank slot.
-        icon.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: 18)
-        icon.contentTintColor = NSColor.fromHex(colorHex) ?? c.textSecondary
-        icon.widthAnchor.constraint(equalToConstant: 20).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
-        agentIconViews[kind] = icon
+        icon.apply(.agent(kind))
 
         let name = NSTextField(labelWithString: kind.displayName)
         name.font = .systemFont(ofSize: 13)
@@ -1063,15 +1059,16 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         trailing.spacing = 10
         trailing.setHuggingPriority(.required, for: .vertical)
         if AgentHookInstaller.canInstall(kind) {
-            let installed = AgentHookInstaller.isInstalled(agent: kind)
-            let button = NSButton(title: installed ? "Reinstall Hooks" : "Install Hooks", target: self, action: #selector(installHooksClicked(_:)))
+            let health = AgentHookInstaller.health(agent: kind)
+            let installed = health == .current || health == .outdated
+            let button = NSButton(title: health == .outdated ? "Update Hooks" : installed ? "Reinstall Hooks" : "Install Hooks", target: self, action: #selector(installHooksClicked(_:)))
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.setAccessibilityLabel("\(installed ? "Reinstall" : "Install") \(kind.displayName) hooks")
+            button.toolTip = health.rawValue
             hookButtons[kind] = button
             trailing.addArrangedSubview(button)
         }
-        if let well = agentColorWells[kind] { trailing.addArrangedSubview(well) }
 
         let row = NSStackView(views: [icon, textCol, spacer(), trailing])
         row.orientation = .horizontal
@@ -1083,11 +1080,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func executablesString(for kind: AgentKind) -> String {
         let execs = AgentTable.default.entries.first { $0.kind == kind }?.executables ?? []
         return execs.isEmpty ? "—" : execs.joined(separator: ", ")
-    }
-
-    private func retintAgentIcon(_ kind: AgentKind) {
-        let hex = SessionCoordinator.shared.settings.agentColorHex(for: kind)
-        agentIconViews[kind]?.contentTintColor = NSColor.fromHex(hex) ?? HarnessChrome.current.textSecondary
     }
 
     @objc private func copySetupPrompt() {
@@ -1131,18 +1123,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// Whether the last `loadAdvancedValues` reached the daemon. False = the overlaid values are
     /// builtin defaults, NOT the live daemon state — so the page warns and disables its controls
     /// (a change couldn't be applied) instead of silently presenting defaults as if real.
-    private var advDaemonReachable = true
+    private var advDaemonReachable = false
+    private var advLoading = false
     /// The daemon-backed controls (set-option surface), disabled when the daemon is unreachable.
     /// Excludes the performance toggles, which write local settings and stay usable offline.
     private var advDaemonControls: [NSControl] = []
 
-    private func buildAdvancedPage() -> NSView {
+    private func buildAdvancedPage(refresh: Bool = true) -> NSView {
         advDaemonControls.removeAll() // repopulated by the adv* factories below
         // The adv* controls are rebuilt on every Advanced-page show, so the prior batch's identifiers
         // are stale (keyed by ObjectIdentifier of freed controls). Clear the map alongside the control
         // list, otherwise it grows unbounded across reopens.
         advOptKeys.removeAll()
-        loadAdvancedValues()
+        if refresh { loadAdvancedValues() }
         // The performance toggles are member controls (not rebuilt by the adv* factories), so unlike
         // the daemon-backed controls they don't get refreshed by `loadAdvancedValues`. Re-read their
         // state from settings here so a rebuilt page reflects changes made since the last build.
@@ -1247,16 +1240,20 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     }
 
     private func loadAdvancedValues() {
-        advValues.removeAll()
-        for (key, value) in OptionStore.builtinDefaults { advValues[key] = value.stringValue }
-        // `requestDaemon` returns nil when the daemon is unreachable. Distinguish that from a real
-        // empty-options reply: only overlay (and mark reachable) on an actual `.options` response,
-        // so an unreachable daemon renders builtin defaults that the page flags as not-live.
-        if case let .options(entries)? = SessionCoordinator.shared.requestDaemon(.showOptions(scope: nil)) {
-            for entry in entries where entry.scope == "global" { advValues[entry.key] = entry.value }
-            advDaemonReachable = true
-        } else {
-            advDaemonReachable = false
+        guard !advLoading else { return }
+        if advValues.isEmpty {
+            for (key, value) in OptionStore.builtinDefaults { advValues[key] = value.stringValue }
+        }
+        advLoading = true
+        SessionCoordinator.shared.requestDaemonAsync(.showOptions(scope: nil), refresh: false) { [weak self] response in
+            guard let self else { return }
+            self.advLoading = false
+            if case let .options(entries)? = response {
+                for entry in entries where entry.scope == "global" { self.advValues[entry.key] = entry.value }
+                self.advDaemonReachable = true
+            } else { self.advDaemonReachable = false }
+            self.pages[.advanced] = self.buildAdvancedPage(refresh: false)
+            if self.currentPane == .advanced { self.showPage(.advanced, refresh: false) }
         }
     }
 
@@ -1306,7 +1303,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     }
 
     private func setDaemonOption(key: String, rawValue: String) {
-        SessionCoordinator.shared.requestDaemon(DaemonSettingsControls.request(key: key, rawValue: rawValue))
+        SessionCoordinator.shared.requestDaemonAsync(DaemonSettingsControls.request(key: key, rawValue: rawValue))
         advValues[key] = rawValue
         HarnessOptions.reloadFromDisk()
         // Nudge the status line + chrome to re-read the new option value.
@@ -1703,22 +1700,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         paletteNote?.isHidden = editable
     }
 
-    private func buildAgentColorWells(settings: HarnessSettings) {
-        agentColorWells.removeAll()
-        for kind in Self.agentColorKinds {
-            let well = HarnessSwatchWell(frame: .zero)
-            well.translatesAutoresizingMaskIntoConstraints = false
-            well.widthAnchor.constraint(equalToConstant: Form.swatchWidth).isActive = true
-            well.heightAnchor.constraint(equalToConstant: Form.swatchHeight).isActive = true
-            well.color = NSColor.fromHex(settings.agentColorHex(for: kind)) ?? .gray
-            well.target = self
-            well.action = #selector(agentColorWellChanged(_:))
-            well.toolTip = kind.displayName
-            well.setAccessibilityLabel("\(kind.displayName) color")
-            agentColorWells[kind] = well
-        }
-    }
-
     // MARK: - Formatting / utilities
 
     private func formatPercent(_ value: Float) -> String {
@@ -1923,7 +1904,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let coordinator = SessionCoordinator.shared
         coordinator.settings.systemLightThemeName = theme
         coordinator.settings.clearThemeColorOverrides()
-        try? coordinator.settings.save()
+        saveSettings()
         coordinator.applySettingsToHosts()
         syncAppearanceControlsFromSettings()
         refreshColorPlaceholders()
@@ -1934,7 +1915,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let coordinator = SessionCoordinator.shared
         coordinator.settings.systemDarkThemeName = theme
         coordinator.settings.clearThemeColorOverrides()
-        try? coordinator.settings.save()
+        saveSettings()
         coordinator.applySettingsToHosts()
         syncAppearanceControlsFromSettings()
         refreshColorPlaceholders()
@@ -1950,7 +1931,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func toggleKeepSessions() {
         let keep = keepSessionsToggle.state == .on
-        SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep))
+        keepSessionsToggle.isEnabled = false
+        SessionCoordinator.shared.requestDaemonAsync(.setKeepSessionsOnQuit(keep)) { [weak self] response in
+            guard let self else { return }
+            let effective = response == nil ? SessionCoordinator.shared.snapshot.keepSessionsOnQuit : keep
+            self.keepSessionsToggle.isEnabled = true
+            self.keepSessionsToggle.state = effective ? .on : .off
+            self.experienceSummaryLabel.stringValue = SessionCoordinator.shared.settings.experienceMode.summary(keepSessionsOnQuit: effective)
+        }
     }
 
     @objc private func setDefaultTerminalClicked() {
@@ -2014,6 +2002,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func updateDependentRows() {
         updateSystemThemePickerAvailability()
         setRow(resizeOverlayPositionRow, hidden: resizeOverlaySegment.titleOfSelectedItem == "Never")
+        paneSpacingField.isEnabled = paneDensitySegment.titleOfSelectedItem != "Compact"
         paneHeadersToggle.isEnabled = paneDensitySegment.titleOfSelectedItem != "Compact"
         commandFinishedThresholdField.isEnabled = eventToggles[.commandFinished]?.state == .on
         quickTerminalHotkeyRecorder?.alphaValue = quickTerminalToggle.state == .on ? 1 : 0.45
@@ -2058,7 +2047,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// notification the status line + prefix react to.
     @objc private func experienceModeChanged() {
         let mode = selectedExperienceMode
-        experienceSummaryLabel.stringValue = mode.summary
+        experienceSummaryLabel.stringValue = mode.summary(keepSessionsOnQuit: mode.persistsSessionsByDefault)
         flushAndApply()
         PrefixKeymap.shared.rebuildFromSettings()
         // Mode sets the default persistence: Plain is ephemeral (a clean quit closes its
@@ -2066,13 +2055,15 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // "Keep sessions running" toggle. Mirror the snapshot truth into that toggle so the
         // two controls stay consistent while the window is open.
         let keep = mode.persistsSessionsByDefault
-        if SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep)) != nil {
-            // Record the live apply so the launch-time reconcile sees this mode as settled —
-            // otherwise the next launch would treat the switch as a cross-launch mode change and
-            // re-impose the default over any keep-on-quit override made after switching.
-            AppDelegate.recordModePersistenceApplied(mode)
+        keepSessionsToggle.isEnabled = false
+        SessionCoordinator.shared.requestDaemonAsync(.setKeepSessionsOnQuit(keep)) { [weak self] response in
+            guard let self else { return }
+            if response != nil { AppDelegate.recordModePersistenceApplied(mode) }
+            let effective = response == nil ? SessionCoordinator.shared.snapshot.keepSessionsOnQuit : keep
+            self.keepSessionsToggle.isEnabled = true
+            self.keepSessionsToggle.state = effective ? .on : .off
+            self.experienceSummaryLabel.stringValue = self.selectedExperienceMode.summary(keepSessionsOnQuit: effective)
         }
-        keepSessionsToggle.state = keep ? .on : .off
     }
 
     /// The per-component prefix override re-gates the prefix key independently of the status line
@@ -2209,21 +2200,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         flushAndApply()
     }
 
-    @objc private func agentColorWellChanged(_ sender: HarnessSwatchWell) {
-        guard let kind = agentColorWells.first(where: { $0.value === sender })?.key else { return }
-        let coordinator = SessionCoordinator.shared
-        var overrides = coordinator.settings.agentColorOverrides
-        overrides[kind.rawValue] = hexString(sender.color)
-        SettingsEditor.applyFromWindow(
-            \.agentColorOverrides,
-            HarnessSettings.normalizedAgentColorOverrides(overrides),
-            on: &coordinator.settings
-        )
-        retintAgentIcon(kind)
-        try? coordinator.settings.save()
-        coordinator.applySettingsToHosts()
-    }
-
     /// Modal confirm for a destructive, instantly-applied reset. Mirrors the sidebar's delete/close
     /// alerts. Returns true only when the user explicitly confirms.
     private func confirmDestructive(message: String, info: String, confirmTitle: String) -> Bool {
@@ -2234,22 +2210,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         alert.addButton(withTitle: confirmTitle)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    @objc private func resetAgentColors() {
-        guard confirmDestructive(
-            message: "Reset agent colors?",
-            info: "All custom agent color overrides will be removed. This can't be undone.",
-            confirmTitle: "Reset"
-        ) else { return }
-        let coordinator = SessionCoordinator.shared
-        coordinator.settings.agentColorOverrides.removeAll()
-        for (kind, well) in agentColorWells {
-            well.color = NSColor.fromHex(coordinator.settings.agentColorHex(for: kind)) ?? .gray
-            retintAgentIcon(kind)
-        }
-        try? coordinator.settings.save()
-        coordinator.applySettingsToHosts()
     }
 
     @objc private func resetPalette() {
@@ -2269,6 +2229,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         blurLabel.stringValue = formatBlur(settings.backgroundBlur)
         windowBorderOpacitySlider.doubleValue = Double(settings.windowBorderOpacity)
         windowBorderOpacityLabel.stringValue = formatPercent(settings.windowBorderOpacity)
+        paneSpacingField.stringValue = String(format: "%.0f", settings.paneSpacing)
         paddingXField.stringValue = String(Int(settings.windowPaddingX.rounded()))
         paddingYField.stringValue = String(Int(settings.windowPaddingY.rounded()))
         fontFamilyField.stringValue = settings.fontFamily
@@ -2280,7 +2241,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         appearanceModeSegment.selectItem(withTitle: Self.appearanceModeTitle(settings.appearanceMode))
         syncSystemThemePickersFromSettings()
         experienceSegment.selectedSegment = ExperienceMode.allCases.firstIndex(of: settings.experienceMode) ?? 0
-        experienceSummaryLabel.stringValue = settings.experienceMode.summary
+        experienceSummaryLabel.stringValue = settings.experienceMode.summary(keepSessionsOnQuit: SessionCoordinator.shared.snapshot.keepSessionsOnQuit)
         prefixControlSegment.selectItem(withTitle: harnessControlsTitle(settings.prefixKeyEnabled))
         // The older `showStatusLine` switch hides the band on its own; show that as Off here.
         statusLineControlSegment.selectItem(withTitle: settings.showStatusLine ? harnessControlsTitle(settings.statusLineEnabled) : "Off")
@@ -2320,6 +2281,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         commandFinishedThresholdField.stringValue = String(settings.commandFinishedThresholdSeconds)
         transparentTitlebarToggle.state = on(settings.transparentTitlebar)
         sidebarVisibleToggle.state = on(settings.sidebarVisible)
+        machineIndicatorToggle.state = on(settings.showMachineIndicator)
         restoreWindowSizeToggle.state = on(settings.restoreWindowSize)
         systemNotificationsToggle.state = on(settings.systemNotificationsEnabled)
         notificationSoundToggle.state = on(settings.notificationSoundEnabled)
@@ -2371,9 +2333,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// Single flush — push every field into HarnessSettings, save, and apply
     /// to the live terminal/window. Called from every control's action so the
     /// settings window behaves entirely live.
+    private func saveSettings() {
+        do { try SessionCoordinator.shared.settings.save() }
+        catch { DisplayMessage.show("Could not save settings.json: \(error.localizedDescription). Check disk space and permissions.") }
+    }
+
     private func flushAndApply() {
         applySettingsLive()
-        try? SessionCoordinator.shared.settings.save()
+        saveSettings()
     }
 
     /// Settings window path into the shared writer. The palette calls `applyFromPalette`.
@@ -2404,7 +2371,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         write(\.paletteHex, HarnessSettings.normalizedPalette(paletteHexValues))
         write(\.transparentTitlebar, transparentTitlebarToggle.state == .on)
         write(\.sidebarVisible, sidebarVisibleToggle.state == .on)
+        write(\.showMachineIndicator, machineIndicatorToggle.state == .on)
         write(\.restoreWindowSize, restoreWindowSizeToggle.state == .on)
+        write(\.paneSpacing, HarnessSettings.clampedPaneSpacing(Double(paneSpacingField.stringValue) ?? 4))
         write(\.windowPaddingX, HarnessSettings.clampedPadding(Float(paddingXField.stringValue) ?? 12))
         write(\.windowPaddingY, HarnessSettings.clampedPadding(Float(paddingYField.stringValue) ?? 12))
         let previousAppearanceMode = coordinator.settings.appearanceMode
@@ -2474,6 +2443,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // reset to the persisted value the same way.
         reflectClamped(commandFinishedThresholdField, String(coordinator.settings.commandFinishedThresholdSeconds))
         reflectClamped(fontSizeField, String(format: "%.0f", coordinator.settings.fontSize))
+        reflectClamped(paneSpacingField, String(format: "%.0f", coordinator.settings.paneSpacing))
         reflectClamped(paddingXField, String(format: "%.0f", coordinator.settings.windowPaddingX))
         reflectClamped(paddingYField, String(format: "%.0f", coordinator.settings.windowPaddingY))
         reflectClamped(scrollbackField, String(coordinator.settings.scrollbackLines))
@@ -2928,7 +2898,7 @@ enum SettingsPane: Int, CaseIterable {
         case .notifications:
             return ["notify", "banner", "alert", "bell", "sound", "blocked", "failed", "error", "done", "finished", "permission"]
         case .agents:
-            return ["agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "detection"]
+            return ["agent", "icons", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "detection"]
         case .advanced:
             return ["options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"]
         }

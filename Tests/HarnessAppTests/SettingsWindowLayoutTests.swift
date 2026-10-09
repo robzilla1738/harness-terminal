@@ -40,6 +40,27 @@ final class SettingsWindowLayoutTests: XCTestCase {
         }
     }
 
+    func testLiveLightThemeRefreshesSidebarBackground() throws {
+        var settings = HarnessSettings()
+        settings.appearanceMode = .theme
+        SessionCoordinator.shared.settings = settings
+        SessionCoordinator.shared.applySettingsToHosts()
+        let controller = SettingsViewController()
+        let root = controller.view
+        let backdrop = try XCTUnwrap(root.subviews.flatMap(\.subviews).first { $0 is ChromeBackdrop })
+        let tint = try XCTUnwrap(backdrop.subviews.last)
+        let darkColor = try XCTUnwrap(tint.layer?.backgroundColor)
+        settings.appearanceMode = .light
+        SessionCoordinator.shared.settings = settings
+        SessionCoordinator.shared.applySettingsToHosts()
+        NotificationCenter.default.post(name: NotificationBus.shared.snapshotChanged,
+                                        object: nil, userInfo: ["chromeChanged": true])
+        let lightColor = try XCTUnwrap(tint.layer?.backgroundColor)
+        XCTAssertNotEqual(darkColor, lightColor, "sidebar background must follow its label colors")
+        let color = try XCTUnwrap(NSColor(cgColor: lightColor)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(color.redComponent, 0.8)
+    }
+
     func testToggleAndSegmentAnswerTheKeyboardAndVoiceOver() {
         let target = ActionCounter()
         let toggle = HarnessToggle(frame: .zero)

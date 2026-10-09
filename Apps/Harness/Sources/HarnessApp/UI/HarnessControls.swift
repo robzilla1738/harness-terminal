@@ -672,6 +672,18 @@ private final class HarnessColorPanelCoordinator: NSObject {
 /// popup-compatible shim (`titleOfSelectedItem` / `selectItem(withTitle:)`).
 @MainActor
 final class HarnessSegmented: NSControl {
+    enum Style { case standard, tabs }
+    var style: Style = .standard {
+        didSet { needsLayout = true; applyChrome() }
+    }
+    override var font: NSFont? {
+        didSet {
+            for label in labels { label.font = font ?? .systemFont(ofSize: 11.5, weight: .medium) }
+            invalidateIntrinsicContentSize()
+            needsLayout = true
+        }
+    }
+
     private var titles: [String] = []
     private var labels: [NSTextField] = []
     private var fills: [CALayer] = []
@@ -722,7 +734,7 @@ final class HarnessSegmented: NSControl {
         for fill in fills { layer?.addSublayer(fill) }
         labels = values.map { title in
             let label = NSTextField(labelWithString: title)
-            label.font = .systemFont(ofSize: 11.5, weight: .medium)
+            label.font = font ?? .systemFont(ofSize: 11.5, weight: .medium)
             label.alignment = .center
             label.lineBreakMode = .byTruncatingTail
             addSubview(label)
@@ -751,9 +763,11 @@ final class HarnessSegmented: NSControl {
         super.layout()
         guard !titles.isEmpty else { return }
         let w = bounds.width / CGFloat(titles.count)
+        layer?.cornerRadius = style == .tabs ? bounds.height / 2 : HarnessDesign.Radius.control
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for i in titles.indices {
             fills[i].frame = NSRect(x: CGFloat(i) * w, y: 0, width: w, height: bounds.height).insetBy(dx: 3, dy: 3)
+            fills[i].cornerRadius = style == .tabs ? fills[i].bounds.height / 2 : HarnessDesign.Radius.control - 2
         }
         CATransaction.commit()
         let textHeight: CGFloat = 16
@@ -761,7 +775,7 @@ final class HarnessSegmented: NSControl {
             labels[i].frame = NSRect(x: CGFloat(i) * w + 4, y: (bounds.height - textHeight) / 2,
                                      width: max(0, w - 8), height: textHeight)
         }
-        focusRing.update(rect: bounds, radius: HarnessDesign.Radius.control, visible: isFocused)
+        focusRing.update(rect: bounds, radius: layer?.cornerRadius ?? HarnessDesign.Radius.control, visible: isFocused)
         // Hover/selection changes bypass this guard via their own applyChrome() calls.
         let token = HarnessChrome.current.surfaceElevated
         guard token != lastChromeToken else { return }
@@ -822,8 +836,12 @@ final class HarnessSegmented: NSControl {
         layer?.backgroundColor = c.surfaceElevated.cgColor
         layer?.borderColor = c.border.cgColor
         for (i, fill) in fills.enumerated() {
+            let activeTab = style == .tabs && i == selectedIndex
+            fill.borderWidth = activeTab ? 1 : 0
+            fill.borderColor = activeTab ? c.textPrimary.withAlphaComponent(HarnessDesign.activeGlassBorderAlpha(isDark: c.isDark)).cgColor : nil
+            HarnessDesign.applyShadow(activeTab && c.isDark ? .elevation1 : .none, to: fill)
             if i == selectedIndex {
-                fill.backgroundColor = c.rowSelectedFill.cgColor
+                fill.backgroundColor = (style == .tabs ? HarnessDesign.activeTabFill : c.rowSelectedFill).cgColor
             } else if i == hoverIndex {
                 fill.backgroundColor = c.rowHoverFill.cgColor
             } else {
@@ -832,7 +850,7 @@ final class HarnessSegmented: NSControl {
         }
         CATransaction.commit()
         for (i, label) in labels.enumerated() {
-            label.textColor = (i == selectedIndex ? c.textPrimary : c.textSecondary)
+            label.textColor = (i == selectedIndex ? (style == .tabs ? c.activePillLabel : c.textPrimary) : c.textSecondary)
         }
         alphaValue = isEnabled ? 1 : 0.45
     }
@@ -1141,7 +1159,7 @@ final class HarnessSelectPopover: NSObject {
 }
 
 @MainActor
-private final class FlippedStackHost: NSView {
+final class FlippedStackHost: NSView {
     override var isFlipped: Bool { true }
 }
 

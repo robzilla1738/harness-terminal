@@ -33,6 +33,7 @@ final class MainSplitViewController: NSViewController {
         content.showSessionSwitcher()
     }
     private let statusLine = StatusLineView()
+    var statusLineHeight: CGFloat { statusLine.isHidden ? 0 : statusLine.frame.height }
     /// 1px hairline along the inner edge of the sidebar — adds quiet definition
     /// between sidebar/terminal without resorting to a draggable divider line.
     private let edgeDivider = NSView()
@@ -259,7 +260,7 @@ final class MainSplitViewController: NSViewController {
     /// sidebar to an unusable sliver — but a programmatic collapse must reach 0).
     func setSidebarVisible(_ visible: Bool, animated: Bool) {
         SessionCoordinator.shared.settings.sidebarVisible = visible
-        try? SessionCoordinator.shared.settings.save()
+        SessionCoordinator.shared.saveSettings()
         // Sidebar mode lists tabs in the sidebar; title-bar mode shows the tab row.
         content.setTabRowHidden(visible)
         sidebarAnimToken &+= 1
@@ -329,7 +330,7 @@ final class MainSplitViewController: NSViewController {
     /// Leading inset the title strip's path readout needs to clear the macOS traffic lights
     /// when the sidebar is fully collapsed (content shifts to x=0 under `.fullSizeContentView`).
     /// The tab bar itself sits below the lights and never needs one.
-    private let trafficLightInset: CGFloat = 72
+    private let trafficLightInset = HarnessDesign.trafficLightClearance
 
     /// Inset the strip readout proportionally to how collapsed the sidebar is: full inset
     /// at width 0, none once the sidebar is wide enough to cover the traffic lights.

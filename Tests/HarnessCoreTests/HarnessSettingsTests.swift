@@ -498,24 +498,25 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertFalse(decoded.liveResizeReflow)
     }
 
-    func testRestoreWindowSizeDefaultsOffAndRoundTrips() throws {
-        // New option: opt-in window frame persistence. Default off so existing users
-        // keep the centered default-size launch.
-        XCTAssertFalse(HarnessSettings().restoreWindowSize)
+    func testMachineIndicatorDefaultsOffAndPreservesExplicitPreference() throws {
+        XCTAssertFalse(try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8)).showMachineIndicator)
+        for enabled in [false, true] {
+            var settings = HarnessSettings()
+            settings.showMachineIndicator = enabled
+            XCTAssertEqual(try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(settings)).showMachineIndicator, enabled)
+        }
+    }
 
-        // A settings file predating the key decodes to the off default.
-        let legacy = Data("""
-        { "fontSize": 14, "customBackgroundHex": "#000000" }
-        """.utf8)
-        let migrated = try JSONDecoder().decode(HarnessSettings.self, from: legacy)
-        XCTAssertFalse(migrated.restoreWindowSize, "absent key defaults to off")
-
-        // An explicit value survives a save/load round-trip.
-        var settings = HarnessSettings()
-        settings.restoreWindowSize = true
-        let encoded = try JSONEncoder().encode(settings)
-        let decoded = try JSONDecoder().decode(HarnessSettings.self, from: encoded)
-        XCTAssertTrue(decoded.restoreWindowSize)
+    func testRestoreWindowSizeDefaultsOnAndPreservesExplicitPreference() throws {
+        XCTAssertTrue(HarnessSettings().restoreWindowSize)
+        let legacy = Data("{ \"fontSize\": 14 }".utf8)
+        XCTAssertTrue(try JSONDecoder().decode(HarnessSettings.self, from: legacy).restoreWindowSize)
+        for preference in [false, true] {
+            var settings = HarnessSettings()
+            settings.restoreWindowSize = preference
+            let decoded = try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(settings))
+            XCTAssertEqual(decoded.restoreWindowSize, preference)
+        }
     }
 
     func testImportedDefaultsKeepFullColorSet() {
@@ -779,7 +780,7 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(HarnessSettings(windowPaddingX: -5, windowPaddingY: -1).windowPaddingX, 0, accuracy: 0.001)
     }
 
-    func testAgentColorOverridesNormalizeAndFallbackToDefaults() throws {
+    func testLegacyAgentColorsRoundTripWhileIdentityUsesFixedDefaults() throws {
         let data = Data("""
         {
           "agentColorOverrides": {
@@ -793,8 +794,9 @@ final class HarnessSettingsTests: XCTestCase {
 
         let settings = try JSONDecoder().decode(HarnessSettings.self, from: data)
 
-        XCTAssertEqual(settings.agentColorHex(for: .codex), "#12ABEF")
-        XCTAssertEqual(settings.agentColorHex(for: .claudeCode), "#FFEEDD")
+        XCTAssertEqual(settings.agentColorHex(for: .codex), "#10A37F")
+        XCTAssertEqual(settings.agentColorOverrides["codex"], "#12ABEF")
+        XCTAssertEqual(settings.agentColorHex(for: .claudeCode), "#D97757")
         XCTAssertEqual(settings.agentColorHex(for: .cursor), "#5CC8FF")
         XCTAssertNil(settings.agentColorOverrides["unknown"])
     }
@@ -863,6 +865,22 @@ final class HarnessSettingsTests: XCTestCase {
             systemLightThemeName: "Tango Adapted",
             systemDarkThemeName: "TokyoNight Storm"
         )
+    }
+
+    func testLiveReloadLeavesInvalidOriginalUntouched() throws {
+        try withTemporaryHarnessHome { root in
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let url = root.appendingPathComponent("settings.json")
+            let partial = Data("{\"fontSize\":".utf8)
+            try partial.write(to: url)
+            XCTAssertThrowsError(try HarnessSettings.reload())
+            XCTAssertEqual(try Data(contentsOf: url), partial)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["settings.json"])
+            try Data("{\"fontSize\": 999, \"fontFamily\": \"Menlo\"}".utf8).write(to: url)
+            let fresh = try HarnessSettings.reload()
+            XCTAssertEqual(fresh.fontSize, 32)
+            XCTAssertEqual(fresh.fontFamily, "Menlo")
+        }
     }
 
     private func withTemporaryHarnessHome(_ body: (URL) throws -> Void) throws {

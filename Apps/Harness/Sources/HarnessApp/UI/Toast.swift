@@ -16,7 +16,7 @@ enum Toast {
             label.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -28),
         ])
 
-        let fade = 0.18
+        let fade = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.18
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = fade
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)

@@ -1,14 +1,16 @@
 import SwiftUI
+import AppKit
 
 /// The full-screen field behind the wizard: Harness's black canvas with a few soft pools of light
 /// drifting across it and a fine grain, so the takeover feels alive without competing with the panel.
 /// Reduce Motion freezes the field.
 struct AmbientBackground: View {
     var reduceMotion: Bool = false
+    @State private var isActive = NSApp.isActive
 
     var body: some View {
         ZStack {
-            if reduceMotion {
+            if reduceMotion || !isActive {
                 Canvas { ctx, size in Self.drawField(ctx, size, t: 0) }
             } else {
                 // The drift is a few points a second, so 20 fps reads as smooth.
@@ -26,6 +28,8 @@ struct AmbientBackground: View {
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in isActive = true }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in isActive = false }
     }
 
     private static func drawField(_ ctx: GraphicsContext, _ size: CGSize, t: TimeInterval) {

@@ -1,0 +1,1429 @@
+{
+  "date": "2026-10-08",
+  "environment": {
+    "machine": "Apple M5, 32 GiB",
+    "os": "macOS 27.2",
+    "swift": "6.4, Xcode beta",
+    "architecture": "arm64",
+    "configuration": "release",
+    "ghostty": "1.3.1 ReleaseFast, Metal/CoreText",
+    "grid": "150x45 for GUI probes",
+    "font": "Menlo 14",
+    "opacity": 1,
+    "blur": 0,
+    "padding": 0,
+    "cursor_blink": false
+  },
+  "sources": {
+    "candidate": "08e4fba",
+    "previous_candidate": "7dbebe7",
+    "baseline": "56edc52",
+    "ghostty_memory": "same-day preceding receipt, same 100000-row workload and retention",
+    "packaged_candidate": "b41b325",
+    "final_consumer_check": "b41b325; includes subscription identity guard, Settings contrast and divider corrections",
+    "unicode_pair_prior": "b855e74; same measured engine/presentation paths as 08e4fba"
+  },
+  "notes": [
+    "One warm-up and three measured samples for consumer, engine and startup. Each memory/idle state is a single observation.",
+    "Consumer fence is CSI 6n: parser consumption and reply transport, not GPU completion or physical input-to-photon. Full app, with daemon cost included.",
+    "GUI probes use fresh homes and a verified 150x45 grid, Menlo 14, opacity 1, blur/padding 0, cursor blink off. One exclusive local Mac measurement slot.",
+    "History is losslessly compacted; all 4.70 MB raw bytes and 100000 rows are retained. ps RSS totals may double-count shared pages.",
+    "Startup has a 1376 ms outlier; retain it. Median is not a guarantee. Idle CPU is a coarse eight-second ps sample, not power or wakeups.",
+    "Full-history reflow is slower than the prior candidate (11.31 vs 6.07 ms); compact history trades decode/repack work for memory. Interactive preview remains bounded and full reflow stays off main.",
+    "Literal search improves over the previous candidate but both literal and regex remain above the original, incorrect search baseline.",
+    "No font, glyph atlas, color quality, image protocol, history content, display synchronization or feature was disabled for these optimizations.",
+    "Final b41b325 consumer medians (ms): ASCII 51.807, SGR 41.402, Unicode 30.330, attributes 43.185, gradient 17.698, redraw 10.606, scrollback 58.964. A paired Unicode-only check returned 26.605 prior / 28.362 final; possible Unicode slowdown remains unresolved amid sample variation. All raw samples, including the final scrollback outlier, are retained."
+  ],
+  "consumer_ack": {
+    "harness": [
+      {
+        "variant": "harness",
+        "sample": 0,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 65.300042,
+        "consumer_ms": 65.432042
+      },
+      {
+        "variant": "harness",
+        "sample": 0,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 41.221084,
+        "consumer_ms": 41.372125
+      },
+      {
+        "variant": "harness",
+        "sample": 0,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 26.184208,
+        "consumer_ms": 28.506708
+      },
+      {
+        "variant": "harness",
+        "sample": 0,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 42.623583,
+        "consumer_ms": 42.759083
+      },
+      {
+        "variant": "harness",
+        "sample": 0,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 17.399666,
+        "consumer_ms": 17.518
+      },
+      {
+        "variant": "harness",
+        "sample": 0,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 10.520875,
+        "consumer_ms": 11.36675
+      },
+      {
+        "variant": "harness",
+        "sample": 0,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 59.183167,
+        "consumer_ms": 59.307167
+      },
+      {
+        "variant": "harness",
+        "sample": 1,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 51.968375,
+        "consumer_ms": 52.091917
+      },
+      {
+        "variant": "harness",
+        "sample": 1,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 40.784709,
+        "consumer_ms": 40.927375
+      },
+      {
+        "variant": "harness",
+        "sample": 1,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 26.733292,
+        "consumer_ms": 26.837334
+      },
+      {
+        "variant": "harness",
+        "sample": 1,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 42.271042,
+        "consumer_ms": 42.382375
+      },
+      {
+        "variant": "harness",
+        "sample": 1,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 17.683458,
+        "consumer_ms": 17.789208
+      },
+      {
+        "variant": "harness",
+        "sample": 1,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 10.754375,
+        "consumer_ms": 10.864417
+      },
+      {
+        "variant": "harness",
+        "sample": 1,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 58.793584,
+        "consumer_ms": 58.933584
+      },
+      {
+        "variant": "harness",
+        "sample": 2,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 52.63675,
+        "consumer_ms": 52.7595
+      },
+      {
+        "variant": "harness",
+        "sample": 2,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 40.632125,
+        "consumer_ms": 40.751792
+      },
+      {
+        "variant": "harness",
+        "sample": 2,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 26.699375,
+        "consumer_ms": 27.49775
+      },
+      {
+        "variant": "harness",
+        "sample": 2,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 42.443042,
+        "consumer_ms": 42.551125
+      },
+      {
+        "variant": "harness",
+        "sample": 2,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 17.599416,
+        "consumer_ms": 17.703666
+      },
+      {
+        "variant": "harness",
+        "sample": 2,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 10.927208,
+        "consumer_ms": 11.012041
+      },
+      {
+        "variant": "harness",
+        "sample": 2,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 60.7725,
+        "consumer_ms": 60.944208
+      },
+      {
+        "variant": "harness",
+        "sample": 3,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 51.813458,
+        "consumer_ms": 51.937333
+      },
+      {
+        "variant": "harness",
+        "sample": 3,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 40.815458,
+        "consumer_ms": 40.952292
+      },
+      {
+        "variant": "harness",
+        "sample": 3,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 26.366458,
+        "consumer_ms": 26.491042
+      },
+      {
+        "variant": "harness",
+        "sample": 3,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 44.857167,
+        "consumer_ms": 44.994375
+      },
+      {
+        "variant": "harness",
+        "sample": 3,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 17.552667,
+        "consumer_ms": 17.6595
+      },
+      {
+        "variant": "harness",
+        "sample": 3,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 11.332167,
+        "consumer_ms": 11.438084
+      },
+      {
+        "variant": "harness",
+        "sample": 3,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 58.672584,
+        "consumer_ms": 58.801542
+      }
+    ],
+    "ghostty": [
+      {
+        "variant": "ghostty",
+        "sample": 0,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 51.019208,
+        "consumer_ms": 51.087708
+      },
+      {
+        "variant": "ghostty",
+        "sample": 0,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 33.115084,
+        "consumer_ms": 33.178417
+      },
+      {
+        "variant": "ghostty",
+        "sample": 0,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 18.841708,
+        "consumer_ms": 18.898708
+      },
+      {
+        "variant": "ghostty",
+        "sample": 0,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 35.241833,
+        "consumer_ms": 35.304292
+      },
+      {
+        "variant": "ghostty",
+        "sample": 0,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 19.562333,
+        "consumer_ms": 19.621875
+      },
+      {
+        "variant": "ghostty",
+        "sample": 0,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 7.399208,
+        "consumer_ms": 7.434542
+      },
+      {
+        "variant": "ghostty",
+        "sample": 0,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 48.635167,
+        "consumer_ms": 48.6935
+      },
+      {
+        "variant": "ghostty",
+        "sample": 1,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 42.5015,
+        "consumer_ms": 42.555166
+      },
+      {
+        "variant": "ghostty",
+        "sample": 1,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 32.6815,
+        "consumer_ms": 32.73125
+      },
+      {
+        "variant": "ghostty",
+        "sample": 1,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 18.827125,
+        "consumer_ms": 18.866916
+      },
+      {
+        "variant": "ghostty",
+        "sample": 1,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 35.16075,
+        "consumer_ms": 35.225625
+      },
+      {
+        "variant": "ghostty",
+        "sample": 1,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 19.349417,
+        "consumer_ms": 19.409417
+      },
+      {
+        "variant": "ghostty",
+        "sample": 1,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 7.349,
+        "consumer_ms": 7.383291
+      },
+      {
+        "variant": "ghostty",
+        "sample": 1,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 48.923792,
+        "consumer_ms": 48.981709
+      },
+      {
+        "variant": "ghostty",
+        "sample": 2,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 42.555042,
+        "consumer_ms": 42.598042
+      },
+      {
+        "variant": "ghostty",
+        "sample": 2,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 32.827709,
+        "consumer_ms": 32.876417
+      },
+      {
+        "variant": "ghostty",
+        "sample": 2,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 18.889667,
+        "consumer_ms": 18.919375
+      },
+      {
+        "variant": "ghostty",
+        "sample": 2,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 35.434583,
+        "consumer_ms": 35.482833
+      },
+      {
+        "variant": "ghostty",
+        "sample": 2,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 19.211458,
+        "consumer_ms": 19.279958
+      },
+      {
+        "variant": "ghostty",
+        "sample": 2,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 7.346792,
+        "consumer_ms": 7.377208
+      },
+      {
+        "variant": "ghostty",
+        "sample": 2,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 48.90525,
+        "consumer_ms": 48.95975
+      },
+      {
+        "variant": "ghostty",
+        "sample": 3,
+        "case": "plain_ascii",
+        "bytes": 1048544,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 42.610125,
+        "consumer_ms": 42.656583
+      },
+      {
+        "variant": "ghostty",
+        "sample": 3,
+        "case": "ansi_sgr",
+        "bytes": 1048626,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 32.9275,
+        "consumer_ms": 32.977167
+      },
+      {
+        "variant": "ghostty",
+        "sample": 3,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 20.634875,
+        "consumer_ms": 20.696875
+      },
+      {
+        "variant": "ghostty",
+        "sample": 3,
+        "case": "attributes",
+        "bytes": 1048618,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 35.537,
+        "consumer_ms": 35.596041
+      },
+      {
+        "variant": "ghostty",
+        "sample": 3,
+        "case": "truecolor_gradient",
+        "bytes": 843750,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 19.268708,
+        "consumer_ms": 19.330708
+      },
+      {
+        "variant": "ghostty",
+        "sample": 3,
+        "case": "redraw",
+        "bytes": 869760,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 7.350167,
+        "consumer_ms": 7.383542
+      },
+      {
+        "variant": "ghostty",
+        "sample": 3,
+        "case": "scrollback",
+        "bytes": 860000,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 48.944958,
+        "consumer_ms": 49.007833
+      }
+    ]
+  },
+  "engine_cpu": [
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17692500,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 0
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 74073833,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 0
+    },
+    {
+      "benchmark": "consumer_plain_ascii",
+      "nanos": 22372375,
+      "bytes": 1048600,
+      "mbps": 46.87,
+      "feedNanos": 22276041,
+      "frameBuildNanos": 95958,
+      "sample": 0
+    },
+    {
+      "benchmark": "consumer_ansi_sgr",
+      "nanos": 20614208,
+      "bytes": 1048626,
+      "mbps": 50.869,
+      "feedNanos": 20540125,
+      "frameBuildNanos": 73833,
+      "sample": 0
+    },
+    {
+      "benchmark": "consumer_unicode_mixed",
+      "nanos": 20684166,
+      "bytes": 1048619,
+      "mbps": 50.697,
+      "feedNanos": 20617959,
+      "frameBuildNanos": 65916,
+      "sample": 0
+    },
+    {
+      "benchmark": "consumer_attributes",
+      "nanos": 19415084,
+      "bytes": 1048618,
+      "mbps": 54.01,
+      "feedNanos": 19349875,
+      "frameBuildNanos": 65125,
+      "sample": 0
+    },
+    {
+      "benchmark": "consumer_truecolor_gradient",
+      "nanos": 9848291,
+      "bytes": 899700,
+      "mbps": 91.356,
+      "feedNanos": 9791750,
+      "frameBuildNanos": 56500,
+      "sample": 0
+    },
+    {
+      "benchmark": "consumer_redraw",
+      "nanos": 8045459,
+      "bytes": 2463300,
+      "mbps": 306.173,
+      "feedNanos": 7987625,
+      "frameBuildNanos": 57834,
+      "sample": 0
+    },
+    {
+      "benchmark": "consumer_scrollback",
+      "nanos": 25233583,
+      "bytes": 1280000,
+      "mbps": 50.726,
+      "feedNanos": 25152750,
+      "frameBuildNanos": 80708,
+      "sample": 0
+    },
+    {
+      "benchmark": "width_reflow_10k_prose",
+      "nanos": 11036566,
+      "lines": 10000,
+      "iterations": 10,
+      "sample": 0
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 18021000,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 1
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 74040000,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 1
+    },
+    {
+      "benchmark": "consumer_plain_ascii",
+      "nanos": 22207584,
+      "bytes": 1048600,
+      "mbps": 47.218,
+      "feedNanos": 22127208,
+      "frameBuildNanos": 80208,
+      "sample": 1
+    },
+    {
+      "benchmark": "consumer_ansi_sgr",
+      "nanos": 20038042,
+      "bytes": 1048626,
+      "mbps": 52.332,
+      "feedNanos": 19962083,
+      "frameBuildNanos": 73209,
+      "sample": 1
+    },
+    {
+      "benchmark": "consumer_unicode_mixed",
+      "nanos": 20206167,
+      "bytes": 1048619,
+      "mbps": 51.896,
+      "feedNanos": 20136250,
+      "frameBuildNanos": 69750,
+      "sample": 1
+    },
+    {
+      "benchmark": "consumer_attributes",
+      "nanos": 19656167,
+      "bytes": 1048618,
+      "mbps": 53.348,
+      "feedNanos": 19589375,
+      "frameBuildNanos": 66625,
+      "sample": 1
+    },
+    {
+      "benchmark": "consumer_truecolor_gradient",
+      "nanos": 10246375,
+      "bytes": 899700,
+      "mbps": 87.807,
+      "feedNanos": 10181917,
+      "frameBuildNanos": 64125,
+      "sample": 1
+    },
+    {
+      "benchmark": "consumer_redraw",
+      "nanos": 7868375,
+      "bytes": 2463300,
+      "mbps": 313.063,
+      "feedNanos": 7808250,
+      "frameBuildNanos": 60041,
+      "sample": 1
+    },
+    {
+      "benchmark": "consumer_scrollback",
+      "nanos": 24790792,
+      "bytes": 1280000,
+      "mbps": 51.632,
+      "feedNanos": 24725458,
+      "frameBuildNanos": 64917,
+      "sample": 1
+    },
+    {
+      "benchmark": "width_reflow_10k_prose",
+      "nanos": 11350016,
+      "lines": 10000,
+      "iterations": 10,
+      "sample": 1
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17648959,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 2
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 73697042,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 2
+    },
+    {
+      "benchmark": "consumer_plain_ascii",
+      "nanos": 22316084,
+      "bytes": 1048600,
+      "mbps": 46.989,
+      "feedNanos": 22234291,
+      "frameBuildNanos": 81500,
+      "sample": 2
+    },
+    {
+      "benchmark": "consumer_ansi_sgr",
+      "nanos": 20547083,
+      "bytes": 1048626,
+      "mbps": 51.035,
+      "feedNanos": 20476000,
+      "frameBuildNanos": 70875,
+      "sample": 2
+    },
+    {
+      "benchmark": "consumer_unicode_mixed",
+      "nanos": 20405875,
+      "bytes": 1048619,
+      "mbps": 51.388,
+      "feedNanos": 20340333,
+      "frameBuildNanos": 65208,
+      "sample": 2
+    },
+    {
+      "benchmark": "consumer_attributes",
+      "nanos": 19804000,
+      "bytes": 1048618,
+      "mbps": 52.95,
+      "feedNanos": 19742083,
+      "frameBuildNanos": 61792,
+      "sample": 2
+    },
+    {
+      "benchmark": "consumer_truecolor_gradient",
+      "nanos": 10616750,
+      "bytes": 899700,
+      "mbps": 84.743,
+      "feedNanos": 10558458,
+      "frameBuildNanos": 58167,
+      "sample": 2
+    },
+    {
+      "benchmark": "consumer_redraw",
+      "nanos": 8070625,
+      "bytes": 2463300,
+      "mbps": 305.218,
+      "feedNanos": 8012709,
+      "frameBuildNanos": 57834,
+      "sample": 2
+    },
+    {
+      "benchmark": "consumer_scrollback",
+      "nanos": 23851375,
+      "bytes": 1280000,
+      "mbps": 53.666,
+      "feedNanos": 23792500,
+      "frameBuildNanos": 58834,
+      "sample": 2
+    },
+    {
+      "benchmark": "width_reflow_10k_prose",
+      "nanos": 11308362,
+      "lines": 10000,
+      "iterations": 10,
+      "sample": 2
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17629125,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 3
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 73311958,
+      "lines": 20001,
+      "hits": 20000,
+      "sample": 3
+    },
+    {
+      "benchmark": "consumer_plain_ascii",
+      "nanos": 22653833,
+      "bytes": 1048600,
+      "mbps": 46.288,
+      "feedNanos": 22571542,
+      "frameBuildNanos": 82042,
+      "sample": 3
+    },
+    {
+      "benchmark": "consumer_ansi_sgr",
+      "nanos": 20079541,
+      "bytes": 1048626,
+      "mbps": 52.224,
+      "feedNanos": 20005625,
+      "frameBuildNanos": 73666,
+      "sample": 3
+    },
+    {
+      "benchmark": "consumer_unicode_mixed",
+      "nanos": 20109416,
+      "bytes": 1048619,
+      "mbps": 52.146,
+      "feedNanos": 20038709,
+      "frameBuildNanos": 70583,
+      "sample": 3
+    },
+    {
+      "benchmark": "consumer_attributes",
+      "nanos": 19920417,
+      "bytes": 1048618,
+      "mbps": 52.64,
+      "feedNanos": 19852792,
+      "frameBuildNanos": 67500,
+      "sample": 3
+    },
+    {
+      "benchmark": "consumer_truecolor_gradient",
+      "nanos": 9830417,
+      "bytes": 899700,
+      "mbps": 91.522,
+      "feedNanos": 9775000,
+      "frameBuildNanos": 55250,
+      "sample": 3
+    },
+    {
+      "benchmark": "consumer_redraw",
+      "nanos": 7738375,
+      "bytes": 2463300,
+      "mbps": 318.323,
+      "feedNanos": 7681875,
+      "frameBuildNanos": 56458,
+      "sample": 3
+    },
+    {
+      "benchmark": "consumer_scrollback",
+      "nanos": 24154083,
+      "bytes": 1280000,
+      "mbps": 52.993,
+      "feedNanos": 24092584,
+      "frameBuildNanos": 61417,
+      "sample": 3
+    },
+    {
+      "benchmark": "width_reflow_10k_prose",
+      "nanos": 11274245,
+      "lines": 10000,
+      "iterations": 10,
+      "sample": 3
+    }
+  ],
+  "startup_ack": [
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 504.814375,
+      "variant": "candidate",
+      "sample": 0
+    },
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 298.145042,
+      "variant": "ghostty",
+      "sample": 0
+    },
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 1375.772125,
+      "variant": "candidate",
+      "sample": 1
+    },
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 379.163125,
+      "variant": "ghostty",
+      "sample": 1
+    },
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 395.873541,
+      "variant": "candidate",
+      "sample": 2
+    },
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 303.346875,
+      "variant": "ghostty",
+      "sample": 2
+    },
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 395.700208,
+      "variant": "candidate",
+      "sample": 3
+    },
+    {
+      "columns": 150,
+      "rows": 45,
+      "elapsed_ms": 305.84375,
+      "variant": "ghostty",
+      "sample": 3
+    }
+  ],
+  "memory_and_idle": [
+    {
+      "variant": "final",
+      "sample": 5,
+      "phases_ms": {
+        "launchStart": 0.0,
+        "firstSurfaceAttached": 70.5,
+        "firstDrawablePresented": 76.1,
+        "firstWindow": 90.1,
+        "daemonConnected": 1172.4,
+        "firstSnapshot": 1177.4
+      },
+      "all_phases_observed_wall_ms": 1279.5067080005538,
+      "capture_has_prompt": false,
+      "idle": {
+        "app": {
+          "rss_mib": 112.046875,
+          "cpu_seconds": 0.3
+        },
+        "daemon": {
+          "rss_mib": 17.609375,
+          "cpu_seconds": 0.04
+        },
+        "seconds": 8.013613791001262,
+        "app_cpu_percent": 0.24957529176734955,
+        "daemon_cpu_percent": 0.12478764588367504
+      },
+      "history": {
+        "app": {
+          "rss_mib": 154.96875,
+          "cpu_seconds": 0.5
+        },
+        "daemon": {
+          "rss_mib": 23.5625,
+          "cpu_seconds": 0.14
+        },
+        "grid": "45 150",
+        "output_done": true,
+        "raw_bytes": 4703520
+      }
+    }
+  ],
+  "final_consumer_check": [
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 52.992667,
+      "consumer_ms": 53.134625
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 41.777625,
+      "consumer_ms": 42.319958
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 27.993208,
+      "consumer_ms": 29.354375
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.898375,
+      "consumer_ms": 43.0255
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.418833,
+      "consumer_ms": 17.52925
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.711959,
+      "consumer_ms": 10.808542
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 60.622417,
+      "consumer_ms": 60.748625
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 51.689167,
+      "consumer_ms": 51.8735
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 41.2675,
+      "consumer_ms": 41.402125
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 26.749292,
+      "consumer_ms": 30.852167
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.523292,
+      "consumer_ms": 43.185125
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.63525,
+      "consumer_ms": 17.751375
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.613792,
+      "consumer_ms": 10.707667
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 58.727041,
+      "consumer_ms": 58.843041
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 51.686458,
+      "consumer_ms": 51.806833
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 40.18725,
+      "consumer_ms": 40.306833
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 26.637458,
+      "consumer_ms": 30.330167
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 44.69025,
+      "consumer_ms": 44.806042
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.574666,
+      "consumer_ms": 17.69775
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.499458,
+      "consumer_ms": 10.606166
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 58.836708,
+      "consumer_ms": 58.964167
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 51.187125,
+      "consumer_ms": 51.312333
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.089125,
+      "consumer_ms": 42.204125
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 26.299125,
+      "consumer_ms": 27.175958
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.495791,
+      "consumer_ms": 42.604916
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.531042,
+      "consumer_ms": 17.645917
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.493166,
+      "consumer_ms": 10.59575
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 86.844917,
+      "consumer_ms": 87.053833
+    }
+  ],
+  "final_unicode_pair": {
+    "prior": [
+      {
+        "variant": "prior",
+        "sample": 0,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 36.295791,
+        "consumer_ms": 38.785166
+      },
+      {
+        "variant": "prior",
+        "sample": 1,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 28.087166,
+        "consumer_ms": 28.267875
+      },
+      {
+        "variant": "prior",
+        "sample": 2,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 25.981959,
+        "consumer_ms": 26.093542
+      },
+      {
+        "variant": "prior",
+        "sample": 3,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 26.464291,
+        "consumer_ms": 26.604666
+      }
+    ],
+    "current": [
+      {
+        "variant": "current",
+        "sample": 0,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 35.172292,
+        "consumer_ms": 37.683792
+      },
+      {
+        "variant": "current",
+        "sample": 1,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 28.23925,
+        "consumer_ms": 28.362167
+      },
+      {
+        "variant": "current",
+        "sample": 2,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 32.5365,
+        "consumer_ms": 33.05025
+      },
+      {
+        "variant": "current",
+        "sample": 3,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 28.223709,
+        "consumer_ms": 28.351292
+      }
+    ]
+  },
+  "final_verification": {
+    "source": "b41b325041c985cb6829cd003fbf1fe6a9e11b3c",
+    "ci": "https://github.com/robzilla1738/harness-terminal/actions/runs/37871847760",
+    "macos": {
+      "tests": 2265,
+      "skipped": 58,
+      "failures": 0
+    },
+    "linux": {
+      "tests": 1723,
+      "skipped": 2,
+      "failures": 0
+    },
+    "packaging": "release arm64 macOS 15+, strict ad-hoc signature verified, isolated home, automatic updates disabled",
+    "packaged_binary_sha256": {
+      "Contents/MacOS/Harness": "558bbe6fba3663d560116253d286fb8b6a2858f0db66e2f84c78b5d8b08c8a62",
+      "Contents/MacOS/HarnessDaemon": "cb1fcb21b432a171a2240a01bc1e493f5180cb64cd7e6ba619c0ad89c1c9860c",
+      "Contents/MacOS/harness-cli": "ff6b7a4a97fb7ccd4f8c30d331fd283f3b8db3152d869841086a6f7580be5cec"
+    }
+  }
+}

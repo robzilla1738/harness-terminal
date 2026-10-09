@@ -32,21 +32,15 @@ enum NotificationPermission {
     }
 
     /// Prompt when undecided; open System Settings ▸ Notifications when already denied.
-    static func request(_ completion: @escaping @MainActor @Sendable (State) -> Void) {
-        guard isAvailable else { return deliver(.undetermined, to: completion) }
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
-            switch settings.authorizationStatus {
-            case .denied:
-                Task { @MainActor in
-                    openSystemSettings()
-                    completion(.denied)
-                }
-            case .authorized, .provisional, .ephemeral:
-                deliver(.granted, to: completion)
-            default:
-                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-                    deliver(granted ? .granted : .denied, to: completion)
-                }
+    static func request(_ completion: @escaping @MainActor @Sendable (Result<State, Error>) -> Void) {
+        guard isAvailable else {
+            Task { @MainActor in completion(.failure(CocoaError(.featureUnsupported))) }
+            return
+        }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            Task { @MainActor in
+                if let error { completion(.failure(error)) }
+                else { completion(.success(granted ? .granted : .denied)) }
             }
         }
     }

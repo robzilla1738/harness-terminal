@@ -41,39 +41,44 @@ final class DaemonLink {
         generation += 1
         let generation = generation
         subscription?.cancel()
-        subscription = try? service.subscribeSnapshot(
-            label: "harness-app",
-            onRevision: { [weak self] revision in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        guard let self, generation == self.generation, revision != self.snapshot.revision else { return }
-                        self.refresh()
+        subscription = nil
+        let service = service
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let attached = try? service.subscribeSnapshot(
+                label: "harness-app",
+                onRevision: { [weak self] revision in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, generation == self.generation, revision != self.snapshot.revision else { return }
+                            self.refresh()
+                        }
+                    }
+                },
+                onDirective: { [weak self] directive in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, generation == self.generation else { return }
+                            self.onDirective?(directive)
+                        }
+                    }
+                },
+                onEnd: { [weak self] in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, generation == self.generation else { return }
+                            self.generation += 1
+                            self.subscription = nil
+                            self.scheduleRetry()
+                        }
                     }
                 }
-            },
-            onDirective: { [weak self] directive in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        guard let self, generation == self.generation else { return }
-                        self.onDirective?(directive)
-                    }
-                }
-            },
-            onEnd: { [weak self] in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        guard let self, generation == self.generation else { return }
-                        self.subscription = nil
-                        self.scheduleRetry()
-                    }
-                }
+            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.generation else { attached?.cancel(); return }
+                self.subscription = attached
+                if attached == nil { self.scheduleRetry() }
+                else { self.retryDelay = 1; self.refresh() }
             }
-        )
-        if subscription == nil {
-            scheduleRetry()
-        } else {
-            retryDelay = 1
-            refresh()
         }
     }
 
@@ -81,6 +86,12 @@ final class DaemonLink {
         generation += 1
         subscription?.cancel()
         subscription = nil
+    }
+
+    func accept(_ fresh: SessionSnapshot) {
+        guard fresh.revision >= snapshot.revision else { return }
+        snapshot = fresh
+        onChange?(self)
     }
 
     /// Fetch the snapshot off the main thread (a remote daemon answers over SSH).

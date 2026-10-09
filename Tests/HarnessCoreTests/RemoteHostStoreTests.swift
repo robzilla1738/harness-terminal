@@ -46,6 +46,21 @@ final class RemoteHostStoreTests: XCTestCase {
         XCTAssertEqual(result.hosts.count, 1)
     }
 
+    func testRenamePreservesOtherHostsAndRejectsNameCollisions() {
+        let store = RemoteHostStore()
+        let first = RemoteHost(name: "dev", sshTarget: "dev", remoteSocketPath: "/tmp/dev.sock")
+        let other = RemoteHost(name: "build", sshTarget: "build", remoteSocketPath: "/tmp/build.sock")
+        XCTAssertTrue(store.save([first, other]))
+        var renamed = first
+        renamed.name = "work"
+        XCTAssertTrue(store.upsert(renamed, replacing: first.name).saved)
+        XCTAssertEqual(store.load(), [renamed, other])
+        renamed.name = "build"
+        XCTAssertFalse(store.upsert(renamed, replacing: "work").saved)
+        XCTAssertEqual(store.load().map(\.name), ["work", "build"])
+        XCTAssertEqual(store.host(named: "build"), other)
+    }
+
     func testUpsertReportsSavedFalseWhenWriteFails() throws {
         // Force the on-disk write to fail in a way that holds even when tests run as root (the
         // Linux CI container — root ignores permission bits, so a chmod-based setup passes the

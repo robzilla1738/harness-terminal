@@ -4,11 +4,18 @@
 
 The native macOS terminal that keeps your sessions running and tells you the moment a coding agent needs you.
 
-Every pane renders on Harness's own GPU engine. Your splits and sessions live in a background daemon, so they survive quitting the app — and their scrollback survives a daemon restart. You can drive or attach to them from the command line, including a headless or remote daemon over SSH. And Harness watches the agents you run inside it (Claude Code, Codex, Cursor, and more), so an approval prompt never sits unseen behind another tab.
+Every pane renders on Harness's own GPU engine. Your splits and sessions live in a background daemon, so they can survive quitting the app when persistence is enabled — and retained scrollback can be replayed after a daemon restart. You can drive or attach to them from the command line, including a headless or remote daemon over SSH. And Harness watches the agents you run inside it (Claude Code, Codex, Cursor, and more), with optional hooks and program reports to surface requests for attention behind other tabs.
 
 One self-contained app. The terminal engine, daemon, and CLI are first-party Swift. Sparkle is the only Swift package dependency, and only the GUI links it. Lua 5.1 is vendored and linked by the CLI alone. The daemon does not link Lua.
 
 ## Download
+
+**Development status:** `main` includes unreleased terminal, workspace, and Mac usability
+improvements from [#185](https://github.com/robzilla1738/harness-terminal/pull/185).
+The latest published release remains **v1.13.0**; the download below does not include these
+changes. Screen restoration has a known [reattachment defect](https://github.com/robzilla1738/harness-terminal/issues/186).
+See the [audit](docs/TERMINAL-EXCELLENCE-PLAN.md), [performance results](docs/SCORECARD.md),
+and [remaining acceptance work](https://github.com/robzilla1738/harness-terminal/issues/187).
 
 **[Download Harness for macOS →](https://github.com/robzilla1738/harness-terminal/releases/latest/download/Harness.dmg)**
 
@@ -21,7 +28,7 @@ Prefer to build it yourself? Jump to [Build from source](#build-from-source).
 ## Why Harness
 
 - **It's a real terminal first.** GPU rendering, accurate sRGB color by default, opt-in converted Display-P3 vivid color, ligatures, inline images (Sixel / Kitty / iTerm2), and 492 built-in themes with black and light Harness defaults. Block and box-drawing glyphs are drawn procedurally, so borders tile without seams at any font.
-- **Your work outlives the window.** Sessions, tabs, and splits are owned by a daemon. Quit and reopen and everything is exactly where you left it, scrollback included — history is persisted to disk and restored even if the daemon restarts. Attach the same session from a second window or another machine.
+- **Your work outlives the window.** Sessions, tabs, and splits are owned by a daemon. Quit and reopen to resume them, scrollback included. Retained output is persisted to disk and replayed after a daemon restart; restoration can currently duplicate or overprint prompt/redraw text (tracked in [#186](https://github.com/robzilla1738/harness-terminal/issues/186)). Attach the same session from a second window or another machine.
 - **It's scriptable, locally or remotely.** `harness-cli` drives the whole thing — open tabs, send keys, capture a pane, resize, swap, zoom — so your tooling can build the layout it needs. Point any command at a headless or remote daemon with `--host <name>`; the daemon and CLI run on Linux too, so a remote box can host your sessions.
 - **It watches your agents.** Harness detects Claude Code, Codex, Cursor, and others by their process tree, shows which session is running what, and pings you when an agent stops or asks for approval. `Cmd+Shift+U` jumps you to the one that's waiting and skips the ones still thinking.
 
@@ -29,12 +36,18 @@ Prefer to build it yourself? Jump to [Build from source](#build-from-source).
 
 Harness ranges from a plain, get-out-of-your-way terminal to a full session manager. Pick the level in **Settings → Terminal → Experience**:
 
-- **Plain Terminal** — fast and quiet. No command prefix, no status bar. Sessions close when you quit, like any terminal.
+- **Plain Terminal** — fast and quiet. No command prefix, no status bar. The preset turns off global persistence; unpinned sessions close on a clean quit unless you enable Keep sessions running.
 - **Persistent Terminal** — the same clean look, but sessions survive quitting and you can attach to them from the CLI.
 - **Full Terminal** — everything: command prefix, status line, copy mode, paste buffers, panes, and the full `harness-cli` command set.
 - **Agent Workspace** — persistent project workspaces with agent detection and notifications turned up front.
 
+These are presets: the **Keep sessions running** setting and per-session pins determine actual quit behavior. See [Experience modes](docs/MODES.md).
+
 New installs start in Persistent: the quiet look, and sessions survive quitting. An existing settings file that never stored a mode stays Full, so an upgrade does not hide the prefix or the status line. Moving over from another setup? See [docs/MIGRATION.md](docs/MIGRATION.md) — Harness can import an existing terminal config (colors, font, padding) on first run.
+
+## Workspace workflows
+
+**Session → Activity**, **Saved Setups**, **Recently Closed**, and **Search All Sessions** bring ongoing work together across attached hosts. The command palette also exposes these actions. See [Workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for behavior, limits, and CLI examples.
 
 ## Features
 
@@ -48,26 +61,27 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Every pane is an inset card with a header (identity, split-right / split-down; double-click to zoom), horizontal / vertical splits, and grouped sessions with shared window lists
 - Workspace Overview (`⌘⇧O`): every tab as a live tile, the ones waiting on you first; type to filter, arrows and ↩ to jump
 - Session layout persists across quits (daemon-owned, attach from the CLI or over SSH); if the daemon restarts under a pane, a quiet "Reconnecting…" chip rides the ~1-minute automatic backoff before the click-to-re-grab overlay takes over
-- Persistent scrollback: a pane's history is written to disk per surface and restored when the daemon restarts — set the scrollback limit to 0 for effectively unlimited history (capped at 512 MiB per pane)
+- Persistent scrollback: a pane's history is written to disk per surface and restored when the daemon restarts — set the scrollback limit to 0 to remove the line cap. Raw output and decoded history each have a separate 512 MiB ceiling; active grids, snapshots, and rendering caches are additional memory. Wide rows may reach the decoded ceiling sooner
 - Remote & headless daemon: run `HarnessDaemon` on a headless or remote box (Linux included) and drive it with `harness-cli --host <name>` over your own SSH. Add Remote Host… needs only the SSH destination: it detects the daemon socket and tests the connection, and a dropped tunnel reconnects itself
 - `harness-cli` for automation and agent hooks: `run --wait -- make test` exits with the command's status, targets take names, positions, or ID fragments (`--surface 2`, `--tab logs`), and exit statuses are documented (3 = no such target, 4 = daemon unreachable)
 - Color/theme diagnostics from the CLI: `harness-cli color-check` and `harness-cli theme-preview --theme <name>` print deterministic SGR pages for eyeballing fidelity in Harness itself
 - Command set: `send-keys`, `capture-pane`, `kill-pane`, `resize-pane`, `zoom-pane`, `swap-pane`, `rename-tab`, `attach`, `find-window`, `kill-server`, `start-server`, `respawn-window`, `refresh-client`, and more
 - Command prefix keymap (default `Ctrl-A`) with a live cheatsheet (prefix `?`)
-- Agent detection for Claude Code, Codex, Cursor, Grok, Pi, Hermes, OpenClaw, OpenCode, Aider, Gemini, and Goose — each with a brand color and a sidebar chip
+- Detection and sourced identities for 23 coding CLIs, including Claude Code, Codex, Cursor, Gemini, Copilot, Amp, Aider, OpenCode, Pi, and more. Compact fixed-brand badges replace agent color customization; see the [complete identity catalog and source notices](Apps/Harness/Resources/AgentLogos/README.md). Detection is separate from per-tool hook support
 - Agent alerts as desktop notifications and a notification bell, with a switch per event in Settings ▸ Notifications (needs you, finished, failed, bell, long command finished); `Cmd+Shift+U` jumps to whoever is waiting
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`) and a native macOS Settings window (`Cmd+,`)
 - 492 built-in color themes with a pure-black Harness default, a deep Harness Navy, and a crisp Harness Light, plus `.harnesstheme` export / import for sharing — double-click (or Open With) a theme file to install it, optionally applying its colors immediately. Settings ▸ Colors ▸ Theme saves the colors on screen as a named theme or exports them; saved and imported themes list in the theme menu
 - Shell integration (OSC 133), auto-injected at spawn for bash / zsh / fish: prompt marks for jump-to-prompt and a command success / failure gutter, no install step (opt out with `set-option shell-integration off`; manual snippets remain in [docs/shell-integration/](docs/shell-integration/README.md))
 - Inline images that stay put across reflow and scroll into history
-- Drag file-backed folders or images into a pane to insert shell-quoted paths
+- Cursor-anchored Insert Path popup (`⌥⌘I`) with Folder/Project fuzzy search, keyboard navigation, and shell-quoted insertion; drag file-backed folders or images into a pane to insert paths
 - Set Harness as the default terminal for SSH/Telnet/man-page links and `.command` / `.tool` files from Settings > Terminal
 - Automatic, signed background updates (Sparkle + EdDSA)
 - Program status (OSC 7501): a pane can report working, blocked, done, or error, and that mark shows on the tab, the session row, and ⌘⇧U. See [docs/PROGRAM-STATUS.md](docs/PROGRAM-STATUS.md)
 - `harness-cli api` for a JSON method list, schemas, and calls, plus `events --follow` for a live event stream
 - Lua 5.1 config at `~/.config/harness/init.lua` (`HARNESS_CONFIG` overrides the path). It runs in the CLI. The daemon does not run it
-- Two pane densities (comfortable cards with headers, or compact 1-point borders) and automatic contrast correction on a light canvas
+- Two pane densities (comfortable cards with headers, or compact 1-point borders), lighter translucent panes against darker chrome, and automatic contrast correction on a light canvas
+- Fresh windows target 100 columns × 30 rows using the configured font and padding. Size/position memory defaults on and preserves saved sizes. An optional machine indicator defaults off in Settings → Appearance
 - Several machines at once: each remote host opens in its own window next to your local ones, all live, and the sidebar groups every machine's sessions. Each attach is your SSH tunnel to that daemon
 
 ## harness-cli
@@ -99,12 +113,16 @@ export PATH="$HOME/Library/Application Support/Harness/bin:$PATH"
 
 On a fresh install, `Harness.app` opens a one-shot first-run tour (Welcome → Overview →
 Notifications → Command line → Ready; reopen it from Help ▸ Welcome to Harness). Its
-Notifications step asks for notification permission and installs hooks for the agents it
-detects in one click. Its optional Command line step performs the same local installation:
+Notifications step offers permission and agent-hook installation as separate optional
+actions. Skipping setup never prompts later just because an agent event arrives. Its optional Command line step performs the same local installation:
 it copies `harness-cli` and `HarnessDaemon`, registers the LaunchAgent only when none is
 working (so the daemon your sessions run in keeps running), adds a PATH block with a backup
 to the shells you use (your login shell plus any shell that already has a profile), and
-writes fish completions when fish is one of them. After an update, Harness shows release
+writes fish completions when fish is one of them. It respects `ZDOTDIR` and
+`XDG_CONFIG_HOME`, preserves existing bash login profiles and dotfile symlinks, and reports
+unreadable profiles without replacing them. Isolated preview builds leave system
+permissions, shell profiles, agent settings, and the regular installation unchanged.
+After an update, Harness shows release
 highlights (suppressible via the `update-banner` option).
 
 ## Remote & headless daemons

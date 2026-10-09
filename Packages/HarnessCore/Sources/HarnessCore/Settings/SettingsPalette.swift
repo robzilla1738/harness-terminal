@@ -71,6 +71,7 @@ public enum SettingsPalette {
         toggle("transparentTitlebar", "Transparent titlebar", \.transparentTitlebar)
         toggle("showStatusLine", "Status line", \.showStatusLine)
         toggle("sidebarVisible", "Sidebar", \.sidebarVisible)
+        toggle("showMachineIndicator", "Machine indicator", \.showMachineIndicator)
         toggle("restoreWindowSize", "Remember window size", \.restoreWindowSize)
         add("windowPaddingX", "Horizontal padding", detail: { String($0.windowPaddingX) }) { settings in
             SettingsEditor.applyFromPalette(\.windowPaddingX, HarnessSettings.clampedPadding(settings.windowPaddingX + 1), on: &settings)
@@ -176,17 +177,6 @@ public enum SettingsPalette {
         }
         add("prefixKey", "Prefix key", detail: { $0.prefixKey }) { settings in
             SettingsEditor.applyFromPalette(\.prefixKey, settings.prefixKey, on: &settings)
-        }
-        for kind in AgentKind.allCases {
-            add("agentColor.\(kind.rawValue)", "\(kind.rawValue) color", detail: { $0.agentColorHex(for: kind) }) { settings in
-                var overrides = settings.agentColorOverrides
-                overrides[kind.rawValue] = settings.agentColorHex(for: kind)
-                SettingsEditor.applyFromPalette(
-                    \.agentColorOverrides,
-                    HarnessSettings.normalizedAgentColorOverrides(overrides),
-                    on: &settings
-                )
-            }
         }
         return rows
     }

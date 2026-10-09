@@ -7,11 +7,20 @@ public enum IPCRequest: Codable, Sendable {
     /// List every running agent (one row per tab carrying a detected `Tab.agent`)
     /// with its workspace/session/tab/pane context, state, and `.waiting` signal.
     case listAgents
+    case searchOutput(id: UUID, query: String, caseSensitive: Bool, sessionID: SessionID?, offset: Int, generation: String? = nil)
+    case searchPaths(id: UUID, surfaceID: String, path: String?, query: String, project: Bool)
+    case validateOutputMatch(id: UUID, match: OutputSearchMatch, epoch: String, revision: Int)
+    case cancelSearch(id: UUID)
+    case library(LibraryOperation)
+    case listAttention
+    case acknowledgeAttention(surfaceID: String)
+    case snoozeAttention(surfaceID: String, minutes: Int)
     case newWorkspace(name: String)
     case newSession(workspaceID: UUID, cwd: String?, name: String?, shell: String? = nil)
     /// tmux `new-session -t <session>`: an independent session grouped with the target,
     /// sharing its window list (linked windows / shared surfaces).
     case newSessionInGroup(targetSessionID: UUID, name: String?)
+    case newTabInSession(sessionID: SessionID, cwd: String)
     case newTab(workspaceID: UUID, cwd: String?, shell: String? = nil)
     case newTabInWorkspace(named: String, cwd: String?, shell: String? = nil)
     case newSplit(tabID: UUID, paneID: UUID?, direction: SplitDirection, shell: String? = nil, cwd: String? = nil)
@@ -50,7 +59,7 @@ public enum IPCRequest: Codable, Sendable {
     case sendData(surfaceID: String, data: Data)
     case getSnapshot
     case createSurface(cwd: String?, shell: String?)
-    case ensureSurface(surfaceID: String, cwd: String?, shell: String?, rows: UInt16, cols: UInt16, scrollbackBytes: Int?)
+    case ensureSurface(surfaceID: String, cwd: String?, shell: String?, rows: UInt16, cols: UInt16, scrollbackBytes: Int?, requireInLayout: Bool? = nil)
     case attachSurface(surfaceID: String)
     /// Close a bare surface not owned by the layout (e.g. a `display-popup` shell).
     case closeSurface(surfaceID: String)
@@ -232,14 +241,16 @@ public struct AttachRequest: Codable, Equatable, Sendable {
     public var history: Bool
     public var fromSequence: UInt64?
     public var epoch: String?
+    public var inputErrors: Bool?
 
-    public init(surfaceID: String, label: String? = nil, readOnly: Bool = false, history: Bool = true, fromSequence: UInt64? = nil, epoch: String? = nil) {
+    public init(surfaceID: String, label: String? = nil, readOnly: Bool = false, history: Bool = true, fromSequence: UInt64? = nil, epoch: String? = nil, inputErrors: Bool? = nil) {
         self.surfaceID = surfaceID
         self.label = label
         self.readOnly = readOnly
         self.history = history
         self.fromSequence = fromSequence
         self.epoch = epoch
+        self.inputErrors = inputErrors
     }
 }
 
@@ -253,12 +264,14 @@ public struct AttachReply: Codable, Equatable, Sendable {
     /// The visible screen at `endSequence` as VT bytes: for a screen-only attach, and ahead
     /// of the history on a resync. Absent from older daemons on a resync.
     public var screen: Data?
+    public var inputErrors: Bool?
 
-    public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil) {
+    public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil, inputErrors: Bool? = nil) {
         self.epoch = epoch
         self.resync = resync
         self.endSequence = endSequence
         self.screen = screen
+        self.inputErrors = inputErrors
     }
 }
 
@@ -329,6 +342,7 @@ public enum IPCResponse: Codable, Sendable {
     case hooks([HookEntry])
     /// One NDJSON line on an `events --follow` subscription.
     case follow(String)
+    case inputRejected(String)
     case error(String)
 }
 

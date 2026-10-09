@@ -25,6 +25,12 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         TerminalBufferSearchOptions(isRegex: regexButton.state == .on, caseSensitive: caseButton.state == .on)
     }
 
+    func setQuery(_ query: String, caseSensitive: Bool) {
+        searchField.stringValue = query
+        regexButton.state = .off
+        caseButton.state = caseSensitive ? .on : .off
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
@@ -110,6 +116,13 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         nextButton.isEnabled = hasMatches
     }
 
+    func setStatus(_ message: String?) {
+        guard let message else { countLabel.toolTip = nil; return }
+        countLabel.stringValue = message.hasPrefix("Invalid pattern") ? "Invalid pattern" : message
+        countLabel.toolTip = message
+        countLabel.textColor = message.hasPrefix("Invalid pattern") ? .systemRed : .secondaryLabelColor
+    }
+
     // MARK: - Actions
 
     @objc private func previousTapped() { onPrevious?() }
@@ -127,6 +140,7 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard !textView.hasMarkedText() else { return false }
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
             // ⇧⏎ jumps to the previous match, ⏎ to the next.

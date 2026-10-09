@@ -22,6 +22,17 @@ final class TerminalBufferSearchTests: XCTestCase {
         XCTAssertEqual(matches, [TerminalBufferMatch(bufferLine: 0, columns: 6 ..< 11)])
     }
 
+    func testASCIIOptimizationPreservesDrawingOffsetsAndUnicodeCaseFolding() {
+        let (count, line) = lines(["█ LATENCY latency", "Kelvin"])
+        XCTAssertEqual(TerminalBufferSearch.matches(query: "latency", lineCount: count, line: line), [
+            TerminalBufferMatch(bufferLine: 0, columns: 2..<9),
+            TerminalBufferMatch(bufferLine: 0, columns: 10..<17),
+        ])
+        XCTAssertEqual(TerminalBufferSearch.matches(query: "kelvin", lineCount: count, line: line), [
+            TerminalBufferMatch(bufferLine: 1, columns: 0..<6),
+        ])
+    }
+
     func testMultipleNonOverlappingMatchesAcrossLines() {
         let (count, line) = lines(["aa aa", "no", "aaa"])
         let matches = TerminalBufferSearch.matches(query: "aa", lineCount: count, line: line)

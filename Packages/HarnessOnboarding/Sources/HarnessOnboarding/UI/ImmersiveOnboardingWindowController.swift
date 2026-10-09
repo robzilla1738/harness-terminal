@@ -20,6 +20,7 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
             backing: .buffered,
             defer: false
         )
+        panel.title = "Welcome to Harness"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.backgroundColor = .clear
@@ -113,14 +114,17 @@ private struct ImmersiveRootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            AmbientBackground(reduceMotion: reduceMotion)
+        GeometryReader { geometry in
+            ZStack {
+                AmbientBackground(reduceMotion: reduceMotion)
 
-            OnboardingWizardView(setup: setup, onFinish: onFinish)
-                .frame(maxWidth: 940)
-                .padding(40)
-                .scaleEffect(appeared || reduceMotion ? 1.0 : 0.97)
-                .opacity(appeared ? 1.0 : 0.0)
+                OnboardingWizardView(setup: setup, onFinish: onFinish)
+                    .frame(width: min(820, max(0, geometry.size.width - 48)),
+                           height: min(620, max(0, geometry.size.height - 48)))
+                    .scaleEffect(appeared || reduceMotion ? 1.0 : 0.97)
+                    .opacity(appeared ? 1.0 : 0.0)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {

@@ -42,7 +42,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // SessionCoordinator's IPC, tracked as a follow-up; this removes the user-visible
         // menu-open stall, which was the bug.
         Task { @MainActor [weak coordinator] in
-            coordinator?.syncFromDaemon(metadataOnly: true)
+            coordinator?.refreshSnapshot()
         }
         rebuild(menu, snapshot: coordinator.snapshot)
     }

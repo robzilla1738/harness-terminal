@@ -76,7 +76,7 @@ final class CraftSliceTests: XCTestCase {
             XCTAssertTrue(ids.contains("notify.\(event.rawValue)"))
         }
         for kind in AgentKind.allCases {
-            XCTAssertTrue(ids.contains("agentColor.\(kind.rawValue)"))
+            XCTAssertFalse(ids.contains("agentColor.\(kind.rawValue)"))
         }
         XCTAssertTrue(DaemonSettingsControls.rows.contains { $0.key == "word-separators" })
     }

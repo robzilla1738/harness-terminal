@@ -6,6 +6,7 @@ import Glibc
 import CHarnessSys
 import Foundation
 import HarnessCore
+import HarnessTerminalEngine
 
 /// @unchecked Sendable: socket-accept and subscription state are confined to the serial `queue`.
 public final class DaemonServer: @unchecked Sendable {
@@ -42,7 +43,7 @@ public final class DaemonServer: @unchecked Sendable {
     /// can never complete into a frame — defense in depth against codec drift or a misbehaving
     /// peer turning `clientBuffers` into a per-connection memory sink.
     private let maxPartialFrameBytes = IPCCodec.maxPayloadLength + 4096
-    private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
+    private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID, deliveryID: UUID)]] = [:]
     /// FDs subscribed to layout-change pushes (`subscribeSnapshot`).
     private var snapshotSubscribers: Set<Int32> = []
     /// FDs subscribed to `events --follow`.
@@ -63,6 +64,7 @@ public final class DaemonServer: @unchecked Sendable {
     /// Connections that attached with `attachStream`: they understand `.sizeOwnership`. An
     /// older client's decoder would choke on it and drop its stream.
     private var streamClients: Set<Int32> = []
+    private var inputErrorClients: Set<Int32> = []
     /// Snapshot subscribers that asked for client directives (older apps can't decode them).
     private var directiveSubscribers: Set<Int32> = []
 
@@ -96,6 +98,14 @@ public final class DaemonServer: @unchecked Sendable {
     /// This daemon's boot id. A client may resume an attach only within the same epoch:
     /// a restarted daemon numbers its ring afresh.
     private let epoch = UUID().uuidString
+    private let searchQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.robert.harness.search"
+        queue.maxConcurrentOperationCount = 2
+        return queue
+    }()
+    private var cancelledSearches: [UUID: Date] = [:]
+    private var searches: [UUID: (fd: Int32, cancellation: SurfaceRegistry.FlagBox)] = [:]
     /// Startup phases the server itself times (`listen`); the registry times the rest.
     private var startupMillis: [String: Double] = [:]
 
@@ -287,6 +297,10 @@ public final class DaemonServer: @unchecked Sendable {
         }
         source.setCancelHandler { [weak self] in
             guard let self else { close(clientFD); return }
+            for (id, search) in self.searches where search.fd == clientFD {
+                search.cancellation.update(true)
+                self.searches.removeValue(forKey: id)
+            }
             self.readOnlyClients.remove(clientFD)
             if let removed = self.clients.removeValue(forKey: clientFD) {
                 self.clientFDsByID.removeValue(forKey: removed.id)
@@ -346,7 +360,10 @@ public final class DaemonServer: @unchecked Sendable {
             // PTY, fire-and-forget — no reply (the echo comes back on the output stream).
             if case let .input(surfaceID, payload) = frame {
                 if !readOnlyClients.contains(fd) {
-                    _ = registry.handle(.sendData(surfaceID: surfaceID, data: payload))
+                    let response = registry.handle(.sendData(surfaceID: surfaceID, data: payload))
+                    if inputErrorClients.contains(fd), case let .error(message) = response {
+                        send(.inputRejected(message), to: fd)
+                    }
                 }
                 continue
             }
@@ -456,6 +473,34 @@ public final class DaemonServer: @unchecked Sendable {
                 handlePaneWait(surfaceID: surfaceID, until: until, timeout: timeout, fd: fd)
                 continue
             }
+            if case let .cancelSearch(id) = request {
+                searches[id]?.cancellation.update(true)
+                cancelledSearches = cancelledSearches.filter { Date().timeIntervalSince($0.value) < 30 }
+                if cancelledSearches.count >= 64, let oldest = cancelledSearches.min(by: { $0.value < $1.value })?.key { cancelledSearches.removeValue(forKey: oldest) }
+                cancelledSearches[id] = Date()
+                send(.ok, to: fd)
+                continue
+            }
+            if case let .searchOutput(id, query, caseSensitive, sessionID, offset, generation) = request {
+                scheduleSearch(id: id, fd: fd) { [registry, epoch] cancellation in
+                    registry.searchOutput(query: query, caseSensitive: caseSensitive, sessionID: sessionID,
+                                          offset: offset, epoch: epoch, cancelled: cancellation, generation: generation)
+                }
+                continue
+            }
+            if case let .validateOutputMatch(id, match, expectedEpoch, revision) = request {
+                guard expectedEpoch == epoch else { send(.error("This daemon restarted. Search again."), to: fd); continue }
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    registry.validateOutputMatch(match, revision: revision, cancelled: cancellation)
+                }
+                continue
+            }
+            if case let .searchPaths(id, surfaceID, path, query, project) = request {
+                scheduleSearch(id: id, fd: fd) { [registry] cancellation in
+                    registry.searchPaths(surfaceID: surfaceID, path: path, query: query, project: project, cancelled: cancellation)
+                }
+                continue
+            }
             if let intercepted = handleClientLifecycle(request, fd: fd) {
                 send(intercepted, to: fd)
                 continue
@@ -505,6 +550,27 @@ public final class DaemonServer: @unchecked Sendable {
 
     /// Requests the server owns (because they query/mutate the FD layer rather
     /// than session state). Returning `nil` falls through to `registry.handle`.
+    private func scheduleSearch(id: UUID, fd: Int32, work: @escaping @Sendable (SurfaceRegistry.FlagBox) -> IPCResponse) {
+        if let cancelled = cancelledSearches.removeValue(forKey: id), Date().timeIntervalSince(cancelled) < 30 {
+            send(.error("Search cancelled"), to: fd)
+            return
+        }
+        guard searches.count < 32, searches[id] == nil else {
+            send(.error("Too many searches are running. Try again shortly."), to: fd)
+            return
+        }
+        let cancellation = SurfaceRegistry.FlagBox()
+        searches[id] = (fd, cancellation)
+        searchQueue.addOperation { [weak self] in
+            let response = work(cancellation)
+            self?.queue.async { [weak self] in
+                guard let self, let search = self.searches[id], search.cancellation === cancellation else { return }
+                self.searches.removeValue(forKey: id)
+                self.send(response, to: search.fd)
+            }
+        }
+    }
+
     private func handleClientLifecycle(_ request: IPCRequest, fd: Int32) -> IPCResponse? {
         switch request {
         case let .identifyClient(label):
@@ -583,7 +649,7 @@ public final class DaemonServer: @unchecked Sendable {
                 snapshotRevision: registry.revision,
                 version: HarnessVersion.short,
                 build: HarnessVersion.build,
-                capabilities: [DaemonStats.attachStream],
+                capabilities: [DaemonStats.attachStream, DaemonStats.paneAttention, DaemonStats.sessionLibrary, DaemonStats.outputSearch, DaemonStats.pathSearch],
                 parkedSurfaceCount: parked.count,
                 parkedStoredBytes: parked.stored,
                 parkedRawBytes: parked.raw,
@@ -725,6 +791,7 @@ public final class DaemonServer: @unchecked Sendable {
     private func handleAttach(_ attach: AttachRequest, fd: Int32) {
         if attach.readOnly { readOnlyClients.insert(fd) } else { readOnlyClients.remove(fd) }
         streamClients.insert(fd)
+        if attach.inputErrors == true { inputErrorClients.insert(fd) }
         let gate = AttachGate()
         guard let token = addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, gate: gate) else {
             send(.error("Surface not found"), to: fd)
@@ -741,7 +808,7 @@ public final class DaemonServer: @unchecked Sendable {
                     return
                 }
                 self.send(.attached(AttachReply(
-                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt
+                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt, inputErrors: attach.inputErrors == true ? true : nil
                 )), to: fd)
                 for chunk in start.chunks {
                     self.sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)
@@ -757,10 +824,16 @@ public final class DaemonServer: @unchecked Sendable {
     /// frames until an attach's history is out. The subscription's token, or nil when the
     /// surface doesn't exist.
     private func addOutputSubscription(surfaceID: String, label: String?, fd: Int32, gate: AttachGate?) -> UUID? {
+        let deliveryID = UUID()
         guard let token = registry.subscribe(surfaceID: surfaceID, handler: { [weak self] data, sequence in
             guard let server = self else { return }
             server.queue.async { [weak server] in
-                guard let server else { return }
+                // Cancellation cannot retract a callback already captured by the PTY's
+                // delivery queue. The descriptor may now belong to an unrelated RPC or
+                // a new attachment, so validate this exact subscription before writing.
+                guard let server,
+                      server.outputSubscriptions[fd]?.contains(where: { $0.deliveryID == deliveryID }) == true
+                else { return }
                 if let gate, !gate.admits(data, sequence: sequence) { return }
                 server.registry.metrics.recordOutputNotification()
                 server.sendDataFrame(data, sequence: sequence, to: fd)
@@ -768,7 +841,7 @@ public final class DaemonServer: @unchecked Sendable {
         }) else {
             return nil
         }
-        outputSubscriptions[fd, default: []].append((surfaceID, token))
+        outputSubscriptions[fd, default: []].append((surfaceID, token, deliveryID))
         // A subscription connection is long-lived and identifies a real client
         // (Harness.app, harness-cli attach, etc.). Register it so `list-clients`
         // and `daemon-stats` reflect actual users, not ephemeral RPC sockets.
@@ -798,6 +871,10 @@ public final class DaemonServer: @unchecked Sendable {
     /// minimum vote. In `owner` mode only the owner's vote changes the PTY; a
     /// non-owner records an advisory size and this returns without resizing.
     private func handleResize(surfaceID: String, rows: UInt16, cols: UInt16, fd: Int32) {
+        guard TerminalGeometry.isValid(cols: Int(cols), rows: Int(rows)) else {
+            send(.error("Terminal dimensions exceed the supported grid limit."), to: fd)
+            return
+        }
         // A read-only watcher sees the pane at the size the writers chose.
         guard !readOnlyClients.contains(fd) else { return }
         guard let size = sizeArbiter.vote(client: fd, surface: surfaceID, rows: rows, cols: cols) else { return }
@@ -895,6 +972,7 @@ public final class DaemonServer: @unchecked Sendable {
             _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
         }
         streamClients.remove(fd)
+        inputErrorClients.remove(fd)
         directiveSubscribers.remove(fd)
         let surfaces = sentOwnership.removeValue(forKey: fd).map { Array($0.keys) } ?? []
         surfaces.forEach(pushOwnership)

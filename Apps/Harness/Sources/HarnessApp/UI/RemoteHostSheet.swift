@@ -26,13 +26,20 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     private let targetField = NSTextField()
     private let optionsField = NSTextField()
     private let socketField = NSTextField()
-    private let detectButton = NSButton(title: "Detect", target: nil, action: nil)
-    private let testButton = NSButton(title: "Test Connection", target: nil, action: nil)
-    private let saveButton = NSButton(title: "Save & Connect", target: nil, action: nil)
+    private let detectButton = HarnessPillButton(title: "Detect", kind: .secondary)
+    private let testButton = HarnessPillButton(title: "Test Connection", kind: .secondary)
+    private let saveButton = HarnessPillButton(title: "Save & Connect")
     private let status = NSTextField(wrappingLabelWithString: "")
     private let spinner = NSProgressIndicator()
     private let statusRow = NSStackView()
     private var nameEdited = false
+    private final class ProbeCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stopped = false
+        var isCancelled: Bool { lock.withLock { stopped } }
+        func cancel() { lock.withLock { stopped = true } }
+    }
+    private var probeCancellation: ProbeCancellation?
     private var busy = false { didSet { updateButtons() } }
 
     private init(editing: RemoteHost?, prefill: RemoteHost?) {
@@ -62,52 +69,88 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
 
     private func build() {
         guard let content = window?.contentView else { return }
-        let intro = NSTextField(wrappingLabelWithString: "Harness reaches the other machine's daemon through your own SSH (keys or agent, your ~/.ssh/config). Nothing new to sign in to.")
-        intro.font = .systemFont(ofSize: 12)
-        intro.textColor = .secondaryLabelColor
+        let chrome = HarnessChrome.current
+        window?.appearance = NSAppearance(named: chrome.isDark ? .darkAqua : .aqua)
+        window?.backgroundColor = chrome.sidebarBackground
+        content.wantsLayer = true
+        content.layer?.backgroundColor = chrome.sidebarBackground.cgColor
 
-        func field(_ field: NSTextField, placeholder: String) {
-            field.placeholderString = placeholder
+        let heading = NSTextField(labelWithString: editing == nil ? "Add remote host" : "Edit remote host")
+        heading.font = .systemFont(ofSize: 18, weight: .semibold)
+        heading.textColor = chrome.textPrimary
+        let intro = NSTextField(wrappingLabelWithString: "Connect with your existing SSH keys or configuration.")
+        intro.font = .systemFont(ofSize: 12)
+        intro.textColor = chrome.textSecondary
+
+        func field(_ field: NSTextField, placeholder: String) -> NSView {
             field.delegate = self
+            field.font = .systemFont(ofSize: 13)
+            field.textColor = chrome.textPrimary
+            field.isBordered = false
+            field.isBezeled = false
+            field.drawsBackground = false
+            field.focusRingType = .none
+            field.placeholderAttributedString = NSAttributedString(
+                string: placeholder,
+                attributes: [.foregroundColor: chrome.textTertiary, .font: field.font!]
+            )
             field.translatesAutoresizingMaskIntoConstraints = false
+            let container = NSView()
+            container.wantsLayer = true
+            container.layer?.backgroundColor = chrome.surfaceElevated.cgColor
+            container.layer?.borderColor = chrome.border.cgColor
+            container.layer?.borderWidth = 1
+            container.layer?.cornerRadius = HarnessDesign.Radius.card
+            container.layer?.cornerCurve = .continuous
+            container.addSubview(field)
+            NSLayoutConstraint.activate([
+                container.heightAnchor.constraint(equalToConstant: 34),
+                field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+                field.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+                field.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            ])
+            return container
         }
-        field(targetField, placeholder: "user@host or a ~/.ssh/config alias")
-        field(nameField, placeholder: "Shown in the sidebar and switcher")
-        field(optionsField, placeholder: "Optional, e.g. -p 2222 -J bastion")
-        field(socketField, placeholder: "Filled in by Detect")
+        let targetInput = field(targetField, placeholder: "user@host or SSH alias")
+        let nameInput = field(nameField, placeholder: "Name shown in the sidebar")
+        let optionsInput = field(optionsField, placeholder: "Optional, e.g. -p 2222 -J bastion")
+        let socketInput = field(socketField, placeholder: "Detect automatically")
 
         detectButton.target = self
         detectButton.action = #selector(detect)
-        detectButton.bezelStyle = .rounded
+        detectButton.setAccessibilityLabel("Detect daemon socket")
+        detectButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 76).isActive = true
         testButton.target = self
         testButton.action = #selector(test)
-        testButton.bezelStyle = .rounded
+        testButton.setAccessibilityLabel("Test Connection")
         saveButton.target = self
         saveButton.action = #selector(save)
-        saveButton.bezelStyle = .rounded
+        saveButton.setAccessibilityLabel("Save & Connect")
         saveButton.keyEquivalent = "\r"
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
-        cancel.bezelStyle = .rounded
+        let cancel = HarnessPillButton(title: "Cancel", kind: .secondary)
+        cancel.target = self
+        cancel.action = #selector(RemoteHostSheet.cancel)
+        cancel.setAccessibilityLabel("Cancel")
         cancel.keyEquivalent = "\u{1b}"
 
         status.font = .systemFont(ofSize: 12)
-        status.textColor = .secondaryLabelColor
+        status.textColor = HarnessChrome.current.textSecondary
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
 
-        let socketRow = NSStackView(views: [socketField, detectButton])
+        let socketRow = NSStackView(views: [socketInput, detectButton])
         socketRow.spacing = HarnessDesign.Spacing.sm
         let grid = NSGridView(views: [
-            [label("SSH destination"), targetField],
-            [label("Name"), nameField],
-            [label("SSH options"), optionsField],
+            [label("SSH destination"), targetInput],
+            [label("Name"), nameInput],
+            [label("SSH options"), optionsInput],
             [label("Daemon socket"), socketRow],
         ])
-        grid.rowSpacing = HarnessDesign.Spacing.md
+        grid.rowSpacing = HarnessDesign.Spacing.lg
         grid.columnSpacing = HarnessDesign.Spacing.md
         grid.column(at: 0).xPlacement = .trailing
-        grid.rowAlignment = .firstBaseline
+        grid.yPlacement = .center
 
         statusRow.setViews([spinner, status], in: .leading)
         statusRow.spacing = HarnessDesign.Spacing.sm
@@ -115,11 +158,11 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
         let buttons = NSStackView(views: [testButton, NSView(), cancel, saveButton])
         buttons.spacing = HarnessDesign.Spacing.md
 
-        let stack = NSStackView(views: [intro, grid, statusRow, buttons])
+        let stack = NSStackView(views: [heading, intro, grid, statusRow, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = HarnessDesign.Spacing.lg
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -127,10 +170,10 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            intro.widthAnchor.constraint(equalToConstant: 420),
-            targetField.widthAnchor.constraint(equalToConstant: 300),
+            intro.widthAnchor.constraint(equalToConstant: 460),
+            grid.widthAnchor.constraint(equalTo: intro.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: intro.widthAnchor),
-            status.widthAnchor.constraint(lessThanOrEqualToConstant: 396),
+            status.widthAnchor.constraint(lessThanOrEqualToConstant: 436),
         ])
         window?.initialFirstResponder = targetField
         statusRow.isHidden = true
@@ -147,10 +190,22 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     private func label(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.alignment = .right
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = HarnessChrome.current.textSecondary
         return label
     }
 
     // MARK: - Input
+
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField else { return }
+        field.superview?.layer?.borderColor = HarnessChrome.current.focusRing.cgColor
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField else { return }
+        field.superview?.layer?.borderColor = HarnessChrome.current.border.cgColor
+    }
 
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
@@ -175,6 +230,9 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
         detectButton.isEnabled = hasTarget && !busy
         testButton.isEnabled = hasTarget && !busy
         saveButton.isEnabled = hasTarget && !draft.trimmedName.isEmpty && !busy
+        for button in [detectButton, testButton, saveButton] {
+            button.alphaValue = button.isEnabled ? 1 : 0.4
+        }
         busy ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
     }
 
@@ -183,9 +241,9 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
         statusRow.isHidden = message.isEmpty
         fitWindow()
         switch tone {
-        case .neutral: status.textColor = .secondaryLabelColor
-        case .good: status.textColor = .systemGreen
-        case .bad: status.textColor = .systemRed
+        case .neutral: status.textColor = HarnessChrome.current.textSecondary
+        case .good: status.textColor = HarnessChrome.current.success
+        case .bad: status.textColor = HarnessChrome.current.danger
         }
     }
 
@@ -201,17 +259,21 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     /// Finds the socket over SSH, fills the field, then calls `next` with the result.
     private func runDetect(then next: @escaping @MainActor (Bool) -> Void) {
         let draft = self.draft
+        probeCancellation?.cancel()
+        let cancellation = ProbeCancellation()
+        probeCancellation = cancellation
         busy = true
-        show("Looking for the Harness daemon on \(draft.trimmedTarget)…")
+        show("Step 1 of 2 · Checking SSH and detecting the daemon on \(draft.trimmedTarget)…")
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome: DetectOutcome
             do {
-                outcome = .found(try RemoteSocketDetector.detect(target: draft.trimmedTarget, sshArgs: draft.sshArgs))
+                outcome = .found(try RemoteSocketDetector.detect(target: draft.trimmedTarget, sshArgs: draft.sshArgs, cancelled: { cancellation.isCancelled }))
             } catch {
                 outcome = .failed("\(error)")
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
+                    guard !cancellation.isCancelled else { return }
                     self.busy = false
                     switch outcome {
                     case let .found(path):
@@ -237,15 +299,20 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
             return
         }
         busy = true
-        show("Connecting to \(host.sshTarget)…")
+        show("Step 2 of 2 · Connecting to the daemon on \(host.sshTarget)…")
         let wasActive = SessionCoordinator.shared.isConnected(host.name)
         DispatchQueue.global(qos: .userInitiated).async {
             let message: String
             let ok: Bool
             do {
                 let endpoint = try RemoteHostsService.shared.probe(host)
-                let count = RemoteHostsService.sessionCount(at: endpoint)
-                message = "Connected. \(count) session\(count == 1 ? "" : "s") on \(host.sshTarget)."
+                let client = DaemonClient(endpoint: endpoint)
+                guard case let .snapshot(snapshot) = try client.request(.getSnapshot, timeout: 3),
+                      case let .daemonStats(stats) = try client.request(.daemonStats, timeout: 3) else {
+                    throw SetupError.invalid("SSH connected, but the daemon did not answer. Detect the socket again or check the daemon on the host.")
+                }
+                let count = snapshot.workspaces.reduce(0) { $0 + $1.sessions.count }
+                message = "Connected · Harness \(stats.version ?? "older version") · \(count) sessions.\nSurviving processes reconnect automatically. Local laptop sleep still pauses local work."
                 ok = true
             } catch {
                 message = "\(error)"
@@ -271,14 +338,12 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
             show("Check the SSH destination and options.", tone: .bad)
             return
         }
-        if let editing, editing.name != host.name {
-            RemoteHostsService.shared.removeHost(named: editing.name)
-        }
-        // Edited settings must not ride the old forward.
-        RemoteHostsService.shared.dropTunnelIfChanged(host)
-        guard RemoteHostsService.shared.addHost(host) else {
-            show("Couldn't write remote-hosts.json. Check disk space and permissions.", tone: .bad)
+        guard RemoteHostsService.shared.addHost(host, replacing: editing?.name) else {
+            show("Couldn’t save this host. Check that its name isn’t already used, and check disk space and permissions for remote-hosts.json.", tone: .bad)
             return
+        }
+        if let editing, editing.name != host.name {
+            SessionCoordinator.shared.disconnectRemote(named: editing.name)
         }
         finish()
         SessionCoordinator.shared.connectToRemote(named: host.name)
@@ -287,6 +352,7 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     @objc private func cancel() { finish() }
 
     private func finish() {
+        probeCancellation?.cancel()
         if let window, let parent = window.sheetParent {
             parent.endSheet(window)
         } else {

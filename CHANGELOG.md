@@ -6,6 +6,67 @@ All notable changes to Harness are documented here. The format is based on
 has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 [GitHub Releases](https://github.com/robzilla1738/harness-terminal/releases).
 
+## [Unreleased]
+
+### Added
+- Optional, off-by-default window-specific machine indicator and switching menu beside the tabs, with local/remote identity, SSH destination, connection status, and a compact sidebar control.
+- Cursor-anchored Insert Path popup (⌥⌘I), with themed file icons, fuzzy Folder/Project search, keyboard navigation, and focus restoration.
+- Common compound emoji and longer combining sequences retain their text through rendering, copy, capture, reflow, and reattachment. Emoji currently use the monochrome glyph atlas; color emoji rendering remains open.
+- Native scrollback thumb dragging and track clicks, honoring the macOS scrollbar preference.
+- Per-pane Activity across attached hosts, with exact-pane navigation, read state, notification snoozing, and hook installation health.
+- Saved Setups with editable layouts, optional startup commands, import/export, and explicit Open versus Open New Copy behavior.
+- Recently Closed layout recovery with fresh shells and up to 20 entries per host.
+- Literal output search across open sessions with case matching, pagination, and source validation before opening results.
+- Fuzzy file and directory selection, Git-aware project paths, and multi-path insertion.
+- Terminal settings import preview with conflicts, supported shortcut mappings, skipped settings, and undo that preserves later edits.
+- Configurable pane spacing in Appearance settings, retaining the 8-point default.
+
+### Changed
+
+- Global-search results separate excerpts from quieter location details, with consistent row spacing and reusable cells. Literal Find takes about 13% less CPU time in the recorded 20,001-row release workload.
+
+- Cleaner title-bar spacing with separate tabs, compact badges, and a 100-column × 30-row fresh-window default based on the configured font and padding. New settings remember window size and position; explicit preferences and saved sizes remain respected.
+
+- Recessed window chrome gives translucent terminal panes a lighter appearance against the tab bar, sidebar, and gutters while preserving terminal colors and one shared window blur.
+- Flat rectangular terminal and agent badges have balanced spacing, taller marks, and no drop shadow. Added sourced logos and detection for 23 coding CLIs across tabs, sidebar rows, Overview, and Agents settings. Removed agent color pickers and palette actions; legacy configuration values remain readable.
+- Onboarding explains persistence and optional notifications accurately, separates permission from agent-hook installation, accommodates smaller screens, and pauses ambient animation while inactive. Setup preserves unreadable and symlinked shell profiles, respects custom shell config locations, and keeps a working CLI intact if replacement fails.
+- Regular Metal drawable waits run off the UI thread, keeping typing and output delivery responsive under load while preserving display synchronization.
+- Viewport scrolling rotates rows instead of copying the entire grid. Lossless compact history and 32-byte cells substantially reduce retained-output memory.
+- Literal Find reuses its UTF-16 mapping buffer, and daemon output scanners avoid per-byte collection overhead.
+- GUI daemon commands and subscriptions run off the main thread, with captured targets, ordered operations, and stale-result protection.
+- Find uses cancellable background matching across soft wraps; global output search uses expiring pagination without repeatedly materializing whole histories.
+- Accessibility text is cached by content revision and exposes actual visible, cursor, and selection ranges.
+- Decoded history has its own memory ceiling alongside raw output retention; wide rows can reach the byte ceiling before the line limit.
+- Wider horizontal tabs share a rounded container; sidebar tabs use matching height and selected styling. Tab dragging starts on the first press.
+- More consistent sidebar spacing, contextual menus, circular hover controls within pills, and darker selected tabs in the default theme.
+- Improved command palette and remote-host sheet readability, slower activity spinners, and clearer connection retry and diagnostic controls.
+- Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
+
+### Fixed
+- Remote-host renames save atomically and reject name collisions; failed removal preserves the connection. Concurrent GUI attachment requests are coalesced, and disconnected requests cannot reopen a host.
+- Path insertion reports uncertain command outcomes without leaving Return ready to repeat them. File navigation preserves spaces; project discovery has bounded output, cancellation, and path counts.
+- Find and global output search respect IME composition. Global search refreshes its source when reopened, cancels result validation on dismissal, and prevents duplicate opens.
+- Image dimensions are checked before decoding. Cancelled discovery does not launch a subprocess, and compatible isolated previews avoid an unnecessary daemon-replacement wait.
+- Captured shell output is bounded and stays with the original host; delayed conditional actions cannot execute in a different pane.
+- Cancelled output subscriptions cannot send stale binary frames into a newly reused connection.
+- Coalesced reconnect output retains the sequence of its first byte, preventing skipped output after reattachment.
+- Comfortable pane dividers retain a full-length drag target even when AppKit proposes an empty hit rectangle.
+- Settings refreshes its sidebar background along with text when switching light/dark appearance; the pane-spacing hint reflects the actual default.
+- Input queue exhaustion is reported instead of silently dropping a paste; uncertain writes are never automatically retried.
+- Invalid live configuration retains the last working settings. Session-save failures reach the app, and shutdown saves cannot be overwritten by an older debounce.
+- Idle panes repaint after display invalidation; Quick Terminal uses the same appearance updates as normal windows.
+- Experience descriptions reflect effective session persistence. Remaining custom fades honor Reduce Motion.
+- Socket writes, discovery subprocesses, file-backed graphics reads, and trigger regex work have bounded resource/time behavior.
+- Isolated application homes no longer refresh the normal installed binaries or restart its launchd service.
+- The scrollback setting reaches new, restored, and already attached daemon surfaces instead of leaving their raw replay buffer at 1 MiB.
+- Shells launched without any locale inherit a UTF-8 character locale; explicit locale settings remain unchanged.
+- ⌘W closes the active utility window instead of closing a terminal pane behind Settings.
+- A delayed session-backed terminal reconnect can no longer recreate a surface after its pane closes.
+- Marking Activity read or changing snooze preserves the activity's timestamp and does not resolve a blocked process.
+- Path insertion and Go to Directory reject terminal control characters.
+
+The terminal candidate has passed focused checks and a compact Mac acceptance pass. Performance leadership is not established: Harness now leads the matched truecolor consumer and short-row memory workloads; Ghostty leads the other six consumer workloads and startup. Full-history reflow and regex CPU costs remain open tradeoffs. Real remote-host recovery, physical IME/display checks, and spoken VoiceOver quality still need hands-on verification. See the [execution ledger](docs/TERMINAL-EXCELLENCE-PLAN.md), [scorecard](docs/SCORECARD.md), and [workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for evidence and remaining limits.
+
 ## [1.13.0] - 2026-10-08
 
 The workspace release: several windows and several machines at once, a full JSON and Lua API, everyday CLI verbs, attach that paints the screen first, live Overview thumbnails, Kitty graphics animation, notifications in place of the notch, a reworked Settings window and first-run tour, a pure-black default again, and a long list of multiplexer fixes.

@@ -1,5 +1,10 @@
 import CHarnessBase64
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 import Dispatch // DispatchTime: a monotonic clock for command-duration timing (explicit for Linux)
 
 /// A headless terminal emulator: feed it PTY output bytes, query the screen via
@@ -224,6 +229,7 @@ public final class TerminalEmulator: VTParserHandler {
 
     private func copySettings(from other: TerminalEmulator) {
         maxScrollbackLines = other.maxScrollbackLines
+        maxDecodedHistoryBytes = other.maxDecodedHistoryBytes
         let cell = other.primary.cellPixelSize
         setCellPixelSize(width: cell.width, height: cell.height)
         readsGraphicsFiles = other.readsGraphicsFiles
@@ -247,12 +253,20 @@ public final class TerminalEmulator: VTParserHandler {
     /// The attributes the next printed character gets, as a blank cell.
     public var penCell: TerminalGridCell { current.penCell }
 
-    /// Cap on retained primary-screen scrollback. `0` means **unlimited** (history is never
-    /// trimmed); any positive value caps the ring. Negative inputs clamp to `0` (unlimited).
+    /// Cap on retained primary-screen scrollback. `0` disables the line cap, while the
+    /// decoded-byte cap still applies. Negative inputs clamp to `0`.
     public var maxScrollbackLines: Int {
         get { primary.maxHistoryLines }
         set { primary.maxHistoryLines = max(0, newValue) }
     }
+
+    /// A separate decoded-storage ceiling, including stored row widths and cluster storage.
+    /// The active screen is preserved even when no history fits. Zero does not disable this limit.
+    public var maxDecodedHistoryBytes: Int {
+        get { primary.maxHistoryBytes }
+        set { primary.maxHistoryBytes = min(512 * 1024 * 1024, max(0, newValue)) }
+    }
+    public var decodedHistoryBytes: Int { primary.historyBytes }
 
     /// Read the viewport scrolled `offset` lines up into scrollback (0 = live bottom).
     public func readGrid(scrollbackOffset offset: Int) -> TerminalGridSnapshot {
@@ -306,7 +320,7 @@ public final class TerminalEmulator: VTParserHandler {
             cols: max(1, cols), rows: max(1, rows), cells: preview.cells,
             // Honor DECTCEM — a program that hid its cursor must not see it flash
             // back during the drag preview.
-            cursor: TerminalCursor(row: preview.cursorRow, col: preview.cursorCol, visible: primary.cursorVisible)
+            cursor: TerminalCursor(row: preview.cursorRow, col: preview.cursorCol, visible: primary.cursorVisible), clusters: primary.clusters
         )
     }
 
@@ -334,7 +348,7 @@ public final class TerminalEmulator: VTParserHandler {
         })
         images += KittyPlaceholders.placements(in: grid, virtuals: virtuals)
         return TerminalGridSnapshot(cols: grid.cols, rows: grid.rows, cells: grid.cells, cursor: grid.cursor,
-                                    images: images, marks: grid.marks)
+                                    images: images, marks: grid.marks, clusters: grid.clusters)
     }
 
     /// Plays the Kitty animations `grid` draws: each running one whose current frame has shown
@@ -358,7 +372,7 @@ public final class TerminalEmulator: VTParserHandler {
             return placement
         }
         let animated = TerminalGridSnapshot(cols: grid.cols, rows: grid.rows, cells: grid.cells, cursor: grid.cursor,
-                                            images: images, marks: grid.marks)
+                                            images: images, marks: grid.marks, clusters: grid.clusters)
         return (animated, nextFrameAt)
     }
 
@@ -377,6 +391,9 @@ public final class TerminalEmulator: VTParserHandler {
 
     /// One line in copy-mode view space (`[history ++ viewport]`, 0 = oldest), padded to
     /// the current width. O(cols) random access — for copy-mode motion/search.
+    public func textSnapshot() -> TerminalTextSnapshot { current.textSnapshot() }
+    public var clusters: [UInt32: String] { current.clusters }
+    public func cluster(for cell: TerminalGridCell) -> String { current.cluster(for: cell) }
     public func bufferLine(_ index: Int) -> [TerminalGridCell] { current.bufferLine(index) }
 
     /// OSC 133 shell-prompt rows in copy-mode view space (`[history ++ viewport]`), oldest
@@ -844,14 +861,27 @@ public final class TerminalEmulator: VTParserHandler {
             else { return failed }
             // Resolve `..` and symlinks before reading, and before deciding what may be deleted.
             let url = URL(fileURLWithPath: name).resolvingSymlinksInPath().standardizedFileURL
-            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
-                  values.isRegularFile == true, (values.fileSize ?? 0) <= ImageLimits.maxBytesPerScreen,
-                  let handle = try? FileHandle(forReadingFrom: url)
-            else { return failed }
+            // Validate the opened descriptor, not a path that can change between stat and open.
+            let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+            guard fd >= 0 else { return failed }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
             defer { try? handle.close() }
-            if command.dataOffset > 0 { try? handle.seek(toOffset: UInt64(command.dataOffset)) }
-            let data = (command.dataSize > 0 ? try? handle.read(upToCount: command.dataSize) : try? handle.readToEnd()) ?? Data()
-            if command.medium == "t", Self.isKittyTempFile(url) { try? FileManager.default.removeItem(at: url) }
+            var info = stat()
+            guard fstat(fd, &info) == 0, info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+                  info.st_size >= 0, info.st_size <= ImageLimits.maxBytesPerScreen,
+                  command.dataSize <= ImageLimits.maxBytesPerScreen else { return failed }
+            do {
+                if command.dataOffset > 0 { try handle.seek(toOffset: UInt64(command.dataOffset)) }
+            } catch { return failed }
+            let limit = command.dataSize > 0 ? command.dataSize : ImageLimits.maxBytesPerScreen + 1
+            guard let data = try? handle.read(upToCount: limit), data.count <= ImageLimits.maxBytesPerScreen else { return failed }
+            if command.medium == "t", Self.isKittyTempFile(url) {
+                // Never unlink a replacement file installed while the read was in progress.
+                var current = stat()
+                if lstat(url.path, &current) == 0, current.st_dev == info.st_dev, current.st_ino == info.st_ino {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
             guard let image = command.decode(raw: data) else { return failed }
             return (image, "")
         case "s":

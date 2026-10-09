@@ -72,11 +72,22 @@ public final class RemoteHostStore: @unchecked Sendable {
     /// invocations from separate processes can't lose each other's writes. `saved` reports whether
     /// the write reached disk.
     @discardableResult
-    public func upsert(_ host: RemoteHost) -> MutationResult {
+    public func upsert(_ host: RemoteHost, replacing oldName: String? = nil) -> MutationResult {
         lock.lock()
         defer { lock.unlock() }
         return withFileLock {
             var hosts = loadLocked()
+            if let oldName, oldName != host.name {
+                // Renaming must be one write: never remove the original before saving its
+                // replacement, or silently overwrite a different saved host with that name.
+                guard !hosts.contains(where: { $0.name == host.name }) else {
+                    return MutationResult(hosts: hosts, saved: false)
+                }
+                if let index = hosts.firstIndex(where: { $0.name == oldName }) {
+                    hosts[index] = host
+                    return MutationResult(hosts: hosts, saved: saveLocked(hosts))
+                }
+            }
             if let idx = hosts.firstIndex(where: { $0.name == host.name }) {
                 hosts[idx] = host
             } else {

@@ -929,10 +929,8 @@ final class PerformanceBenchmarks: XCTestCase {
 
     // MARK: - Find-bar search (one keystroke = a full buffer scan)
 
-    /// `updateFind` re-runs the search over the whole buffer (history + viewport) on every
-    /// find-bar keystroke, on main, inside `emulatorSync` — so the per-cell unit derivation IS
-    /// the keystroke latency. Seeds ~20k lines of mixed scrollback and times one substring and
-    /// one regex pass.
+    /// Times the search worker's CPU work independently of the GUI debounce and parser queue.
+    /// Seeds ~20k lines of mixed scrollback and times one substring and one regex pass.
     func testBufferSearchKeystroke() throws {
         try skipUnlessEnabled()
         let term = TerminalEmulator(cols: 120, rows: 40)

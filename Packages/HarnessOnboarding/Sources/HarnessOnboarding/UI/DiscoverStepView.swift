@@ -7,9 +7,9 @@ struct DiscoverStepView: View {
 
     private let points: [(symbol: String, title: String, detail: String)] = [
         ("rectangle.stack", "Sessions that outlive the window",
-         "Tabs, splits, and scrollback live in a background daemon. Quit, relaunch, and pick up where you left off."),
+         "Session persistence is on by default. Quit and reopen Harness while your Mac stays running; change this behavior in Settings."),
         ("bell.badge", "Agents that tell you when they need you",
-         "Harness spots Claude Code, Codex, Cursor, and more, and notifies you when one wants approval, finishes, or fails."),
+         "See agent activity alongside your shells. Optional hooks report supported events; choose banners and sounds in Settings."),
         ("macwindow.on.rectangle", "Every window, every machine",
          "Open as many windows as you like, and connect to other Macs or Linux boxes over SSH, all live side by side."),
         ("chevron.left.forwardslash.chevron.right", "Scriptable to the core",
@@ -21,7 +21,7 @@ struct DiscoverStepView: View {
             StepIntro(
                 eyebrow: "Overview",
                 title: "A terminal built for long-running work.",
-                bodyText: "Your shells and agents keep going whether or not Harness is open."
+                bodyText: "Start with your usual shell. Add workspaces, remote hosts, and automation when you need them."
             )
 
             RowList {

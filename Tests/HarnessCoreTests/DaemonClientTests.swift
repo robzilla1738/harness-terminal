@@ -237,6 +237,7 @@ final class DaemonClientTests: XCTestCase {
         // The two kept frames (13: "bbb", 16: "ccc") are COALESCED into one ordered delivery — no
         // gap, no duplicate, byte order preserved.
         XCTAssertEqual(delivered.concatenatedBytes(), Data("bbbccc".utf8), "kept bytes in order")
+        XCTAssertEqual(delivered.sequences(), [13], "the combined frame starts at the first retained byte")
         XCTAssertEqual(delivered.deliveryCount, 1, "coalesced flush is a single onData call")
     }
 

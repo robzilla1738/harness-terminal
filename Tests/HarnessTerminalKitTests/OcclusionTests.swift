@@ -70,6 +70,35 @@ final class OcclusionTests: XCTestCase {
         XCTAssertTrue(presentedText(view).contains("HIDDENMARKER"))
     }
 
+    func testDisplayPassRepaintsIdleCachedFrame() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        view.receive("idle repaint\r\n")
+        view.testingWaitForEmulatorIdle()
+        view.testingForceRender()
+        guard view.testingLastPresentedFrame != nil else {
+            throw XCTSkip("no present happened (drawable unavailable)")
+        }
+        guard view.testingRepaintCacheCoherent else {
+            throw XCTSkip("no coherent cached frame")
+        }
+
+        var presents = 0
+        view.onRenderStats = { _ in presents += 1 }
+        view.needsDisplay = true
+        view.displayIfNeeded()
+
+        XCTAssertEqual(presents, 1, "AppKit display invalidation must repaint idle cached Metal contents")
+        guard let stats = view.testingLastRenderStats else { return XCTFail("missing stats") }
+        XCTAssertEqual(stats.encodedRows, 0, "idle display repaint should reuse cached rows")
+    }
+
     func testReattachDropsStaleOcclusion() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
         let window = NSWindow(
@@ -88,4 +117,42 @@ final class OcclusionTests: XCTestCase {
         XCTAssertFalse(view.testingIsOccluded,
                        "re-hosting must not inherit the old window's occlusion")
     }
+    func testWaitingForDrawableKeepsRepliesLiveAndPresentsLatestRows() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        view.receive("initial")
+        view.testingWaitForEmulatorIdle()
+        view.testingRenderNowOffMainAsync()
+        pump()
+        guard view.testingLastPresentedFrame != nil else {
+            throw XCTSkip("drawable unavailable")
+        }
+
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        view.testingBlockDrawableQueue { _ = release.wait(timeout: .now() + 2) }
+        view.receive("\u{1b}[1;1Hfirst")
+        view.testingWaitForEmulatorIdle()
+        view.testingRenderNowOffMainAsync()
+        pump()
+        var replied = false
+        view.onInput = { _ in replied = true }
+        view.receive("\u{1b}[2;1Hsecond\u{1b}[6n")
+        view.testingWaitForEmulatorIdle()
+        view.testingRenderNowOffMainAsync()
+        pump()
+        XCTAssertTrue(replied, "query replies must not wait for the display")
+        XCTAssertFalse(presentedText(view).contains("second"), "the drawable is still held")
+        release.signal()
+        pump(0.1)
+        XCTAssertTrue(presentedText(view).contains("first"), "coalescing preserves earlier row damage")
+        XCTAssertTrue(presentedText(view).contains("second"), "the newest frame reaches the display")
+    }
+
 }

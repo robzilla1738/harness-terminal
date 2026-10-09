@@ -287,7 +287,7 @@ private final class OverviewTileView: NSView {
 
     /// A tile's height at `width`: the header row, then a window-shaped preview.
     static func height(forWidth width: CGFloat) -> CGFloat {
-        (3 * inset + HarnessDesign.iconTileSize + (width - 2 * inset) * previewAspect).rounded()
+        (3 * inset + HarnessDesign.iconTileSize.height + (width - 2 * inset) * previewAspect).rounded()
     }
 
     init(tab: OverviewTab) {

@@ -4,6 +4,19 @@ import XCTest
 /// The child environment is the one `RealPty` builds at spawn. These cases set the
 /// parent process environment, then read `env` from the forked child.
 final class RealPtyColorEnvironmentTests: XCTestCase {
+    func testFinderLaunchUsesUTF8WithoutOverridingExplicitLocale() {
+        #if canImport(Darwin)
+        var empty: [String: String] = [:]
+        ensureTerminalCharacterLocale(&empty)
+        XCTAssertEqual(empty["LC_CTYPE"], "UTF-8")
+        for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
+            var explicit = [key: "C"]
+            ensureTerminalCharacterLocale(&explicit)
+            XCTAssertEqual(explicit, [key: "C"])
+        }
+        #endif
+    }
+
     private var savedNoColor: String?
     private var savedForce: String?
 

@@ -154,7 +154,7 @@ final class TabStatusView: NSView {
         let spin = CABasicAnimation(keyPath: "transform.rotation.z")
         spin.fromValue = 0
         spin.toValue = -2 * Double.pi
-        spin.duration = 0.9
+        spin.duration = 1.8
         spin.repeatCount = .infinity
         arc.add(spin, forKey: "spin")
     }

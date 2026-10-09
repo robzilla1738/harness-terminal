@@ -15,6 +15,18 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     case aider
     case gemini
     case goose
+    case copilot
+    case cline
+    case kilo
+    case qwen
+    case amp
+    case droid
+    case crush
+    case kiro
+    case vibe
+    case openhands
+    case auggie
+    case kimi
     case generic
 
     /// Short name used in a tab, without the marketing words.
@@ -31,6 +43,18 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .aider: return "aider"
         case .gemini: return "gemini"
         case .goose: return "goose"
+        case .copilot: return "copilot"
+        case .cline: return "cline"
+        case .kilo: return "kilo"
+        case .qwen: return "qwen"
+        case .amp: return "amp"
+        case .droid: return "droid"
+        case .crush: return "crush"
+        case .kiro: return "kiro"
+        case .vibe: return "vibe"
+        case .openhands: return "openhands"
+        case .auggie: return "auggie"
+        case .kimi: return "kimi"
         case .generic: return "agent"
         }
     }
@@ -48,6 +72,18 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .aider: return "Aider"
         case .gemini: return "Gemini"
         case .goose: return "Goose"
+        case .copilot: return "GitHub Copilot"
+        case .cline: return "Cline"
+        case .kilo: return "Kilo Code"
+        case .qwen: return "Qwen Code"
+        case .amp: return "Amp"
+        case .droid: return "Droid"
+        case .crush: return "Crush"
+        case .kiro: return "Kiro"
+        case .vibe: return "Mistral Vibe"
+        case .openhands: return "OpenHands"
+        case .auggie: return "Auggie"
+        case .kimi: return "Kimi Code"
         case .generic: return "Agent"
         }
     }
@@ -66,6 +102,18 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .aider: return "AI"
         case .gemini: return "GM"
         case .goose: return "GS"
+        case .copilot: return "CP"
+        case .cline: return "CL"
+        case .kilo: return "KL"
+        case .qwen: return "QW"
+        case .amp: return "AM"
+        case .droid: return "DR"
+        case .crush: return "CR"
+        case .kiro: return "KR"
+        case .vibe: return "MV"
+        case .openhands: return "OH"
+        case .auggie: return "AU"
+        case .kimi: return "KM"
         case .generic: return "AG"
         }
     }
@@ -84,6 +132,18 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .aider: return "6ee7b7"
         case .gemini: return "8ab4f8"
         case .goose: return "f4b400"
+        case .copilot: return "7C74D4"
+        case .cline: return "697585"
+        case .kilo: return "8A7B36"
+        case .qwen: return "7563BE"
+        case .amp: return "53725B"
+        case .droid: return "AC6541"
+        case .crush: return "9B438F"
+        case .kiro: return "7545B1"
+        case .vibe: return "AB6034"
+        case .openhands: return "996237"
+        case .auggie: return "556FA1"
+        case .kimi: return "4D67B3"
         case .generic: return "9aa0a6"
         }
     }
@@ -124,7 +184,7 @@ public enum AgentTitleInference {
         // First-word fallback for multi-word names (`Claude` / `Cursor`). Skip
         // single-word agents and `.generic` / `.pi` to avoid false positives
         // like "agent.swift" or "pip install" matching arbitrary content.
-        for kind in AgentKind.allCases where kind != .generic && kind != .pi {
+        for kind: AgentKind in [.claudeCode, .cursor] {
             let parts = kind.displayName.lowercased().split(separator: " ")
             guard parts.count > 1, let first = parts.first else { continue }
             if matches(trimmed, head: String(first)) { return kind }

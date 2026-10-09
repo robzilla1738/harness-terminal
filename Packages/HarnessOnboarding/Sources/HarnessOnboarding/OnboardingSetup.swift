@@ -20,12 +20,15 @@ final class OnboardingSetup {
     var notifications: NotificationPermission.State = .undetermined
     var agents: [OnboardingEnvironment.Agent] = []
     var isInstallingHooks = false
+    var isRequestingNotifications = false
+    @ObservationIgnored var notificationRequest: @MainActor (@escaping @MainActor @Sendable (Result<NotificationPermission.State, Error>) -> Void) -> Void = NotificationPermission.request
     var hooksError: String?
 
-    var isBusy: Bool { isInstallingCLI || isInstallingHooks }
+    var isBusy: Bool { isInstallingCLI || isInstallingHooks || isRequestingNotifications }
+    var allowsSystemSetup: Bool { !HarnessCLIPaths.hasHomeOverride }
 
-    var cliReady: Bool { cliInstalled && shells.allSatisfy(\.alreadyHas) }
-    var canInstallCLI: Bool { cliSource != nil || cliInstalled }
+    var cliReady: Bool { cliInstalled && cliError == nil && shells.allSatisfy(\.alreadyHas) }
+    var canInstallCLI: Bool { allowsSystemSetup && (cliSource != nil || cliInstalled) }
 
     var pendingHookAgents: [OnboardingEnvironment.Agent] { agents.filter { !$0.hooksInstalled } }
     var notificationsReady: Bool { notifications == .granted && pendingHookAgents.isEmpty }
@@ -40,24 +43,25 @@ final class OnboardingSetup {
 
     // MARK: - Notifications
 
-    /// Ask for notification permission when macOS hasn't asked yet, then wire up hooks for every
-    /// detected agent that lacks them. Hooks call the installed `harness-cli`, so its binary is
-    /// copied first when it isn't there yet (shell profiles are left to the Command Line step).
-    func setUpNotifications() {
-        guard !isBusy else { return }
-        if notifications == .undetermined {
-            NotificationPermission.request { [weak self] state in
-                self?.notifications = state
-                self?.installHooks()
+    /// Permission and agent configuration are separate, explicit choices.
+    func requestNotifications() {
+        guard !isBusy, allowsSystemSetup else { return }
+        isRequestingNotifications = true
+        hooksError = nil
+        notificationRequest { [weak self] result in
+            guard let self else { return }
+            self.isRequestingNotifications = false
+            switch result {
+            case let .success(state): self.notifications = state
+            case let .failure(error): self.hooksError = error.localizedDescription
             }
-        } else {
-            installHooks()
         }
     }
 
-    private func installHooks() {
+    func installHooks() {
+        guard !isBusy, allowsSystemSetup else { return }
         let pending = pendingHookAgents
-        guard !pending.isEmpty, !isInstallingHooks else { return }
+        guard !pending.isEmpty else { return }
         isInstallingHooks = true
         hooksError = nil
         Task {
@@ -70,10 +74,11 @@ final class OnboardingSetup {
                 }
                 cliInstalled = FileManager.default.isExecutableFile(atPath: HarnessCLIPaths.installedCLIPath.path)
             }
-            let failed = pending.filter { !OnboardingEnvironment.installHooks($0.id) }
-            finishHooks(error: failed.isEmpty
-                ? nil
-                : "Couldn't install hooks for \(failed.map(\.displayName).formatted()). Run harness-cli install-hooks \(failed[0].id) in a terminal to see why.")
+            let failures = pending.compactMap { agent -> String? in
+                do { try OnboardingEnvironment.installHooks(agent.id); return nil }
+                catch { return "\(agent.displayName): \(error.localizedDescription)" }
+            }
+            finishHooks(error: failures.isEmpty ? nil : failures.joined(separator: "\n"))
         }
     }
 
@@ -98,7 +103,6 @@ final class OnboardingSetup {
                     try ShellProfileInstaller.install(shell.shell)
                 }
                 if shells.contains(where: { $0.shell == .fish }) { try installFishCompletion() }
-                NSSound(named: "Glass")?.play()
             } catch {
                 cliError = error.localizedDescription
             }
@@ -117,8 +121,8 @@ final class OnboardingSetup {
     /// fish` prints), injected through `OnboardingEnvironment`; without a host there is nothing to write.
     private func installFishCompletion() throws {
         guard let script = OnboardingEnvironment.fishCompletionScript() else { return }
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/fish/completions", isDirectory: true)
+        guard let profile = shells.first(where: { $0.shell == .fish }) else { return }
+        let dir = profile.profileURL.deletingLastPathComponent().appendingPathComponent("completions", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try script.write(to: dir.appendingPathComponent("harness-cli.fish"), atomically: true, encoding: .utf8)
     }

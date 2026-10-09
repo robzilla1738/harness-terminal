@@ -256,7 +256,13 @@ final class SnapshotTests: XCTestCase {
         XCTAssertFalse(pty.screenGrid.resident, "parking lets the screen grid go too")
         let url = directory.appendingPathComponent("\(pty.id).park")
         let sealed = try Data(contentsOf: url)
+        #if canImport(CryptoKit)
         XCTAssertFalse(String(decoding: sealed, as: UTF8.self).contains("park-me"), "the file is ciphertext")
+        #else
+        XCTAssertTrue(String(decoding: sealed, as: UTF8.self).contains("park-me"), "Linux uses the documented plaintext fallback")
+        #endif
+        let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        XCTAssertEqual(permissions, 0o600)
         let frame = try XCTUnwrap(pty.screenFrame())
         XCTAssertTrue(screenText(frame).contains("park-me"))
         XCTAssertFalse(pty.screenGrid.resident, "serving the parked screen does not bring the grid back")
@@ -441,11 +447,11 @@ final class PtyInputWriterTests: XCTestCase {
         _ = fcntl(fds[1], F_SETFL, fcntl(fds[1], F_GETFL) | O_NONBLOCK)
         let writeEnd = fds[1]
         let writer = PtyInputWriter(queue: DispatchQueue(label: "test.writer"))
-        let master: PtyInputWriter.Master = { (dup(writeEnd), 1) }
+        let master = { (dup(writeEnd), UInt64(1)) }
         let chunk = Data(repeating: UInt8(ascii: "a"), count: 64 * 1024)
         let started = Date()
-        for _ in 0 ..< 4 { writer.write(chunk, master: master) }
-        writer.write(Data("END".utf8), master: master)
+        for _ in 0 ..< 4 { writer.write(chunk, master: master()) }
+        writer.write(Data("END".utf8), master: master())
         XCTAssertLessThan(Date().timeIntervalSince(started), 1, "write never blocks the caller")
 
         var received = Data()

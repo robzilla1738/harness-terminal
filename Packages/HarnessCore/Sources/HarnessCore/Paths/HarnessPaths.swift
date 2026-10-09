@@ -1,6 +1,8 @@
 import Foundation
 
 public enum HarnessPaths {
+    /// An explicit home must never update the normal installation or its launchd service.
+    public static var hasHomeOverride: Bool { overrideRoot != nil }
     private static var overrideRoot: URL? {
         guard let raw = ProcessInfo.processInfo.environment["HARNESS_HOME"], !raw.isEmpty else {
             if let bundled = Bundle.main.object(forInfoDictionaryKey: "HarnessPreviewHome") as? String,

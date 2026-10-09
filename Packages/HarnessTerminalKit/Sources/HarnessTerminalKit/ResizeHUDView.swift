@@ -54,7 +54,7 @@ final class ResizeHUDView: NSView {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.25
+                ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.25
                 self.animator().alphaValue = 0
             }, completionHandler: { [weak self] in
                 MainActor.assumeIsolated {

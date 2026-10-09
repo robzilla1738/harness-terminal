@@ -44,4 +44,51 @@ final class EndpointClientTests: XCTestCase {
         // DaemonClient() and DaemonClient(endpoint: .unix(socketPath)) are equivalent.
         XCTAssertEqual(Endpoint.localControlSocket, .unix(path: HarnessPaths.socketURL.path))
     }
+    func testOutputSearchPaginationExpiresAfterOutputChanges() throws {
+        let client = DaemonClient()
+        func request(_ message: IPCRequest) throws -> IPCResponse {
+            do { return try client.request(message, timeout: 10) }
+            catch { XCTFail("Fixture request failed: \(message): \(error)"); throw error }
+        }
+        guard case let .snapshot(initial) = try request(.getSnapshot), let workspace = initial.activeWorkspaceID,
+              case let .tabID(tabID) = try request(.newTab(workspaceID: workspace, cwd: "/tmp", shell: "/bin/sh")),
+              case let .snapshot(fresh) = try request(.getSnapshot),
+              let surfaceID = fresh.workspaces.flatMap(\.sessions).flatMap(\.tabs).first(where: { $0.id == tabID })?.rootPane.allSurfaceIDs().first?.uuidString else {
+            return XCTFail("No test shell")
+        }
+        _ = try request(.send(surfaceID: surfaceID,
+            text: "i=1; while [ \"$i\" -le 130 ]; do printf '__excel_%s\\n' \"$i\"; i=$((i+1)); done\n"))
+        let ready = waitUntil {
+            guard case let .text(text)? = try? request(.capturePane(surfaceID: surfaceID, includeScrollback: true)) else { return false }
+            return text.contains("__excel_130")
+        }
+        guard ready else {
+            let capture = try request(.capturePane(surfaceID: surfaceID, includeScrollback: true))
+            return XCTFail("Shell did not produce fixture: \(capture)")
+        }
+        func page(offset: Int, generation: String?) throws -> OutputSearchPage {
+            let reply = try request(.searchOutput(id: UUID(), query: "__excel_", caseSensitive: true,
+                sessionID: nil, offset: offset, generation: generation))
+            guard case let .text(json) = reply else { throw DaemonClientError.unexpectedResponse }
+            return try JSONDecoder().decode(OutputSearchPage.self, from: Data(json.utf8))
+        }
+        let first = try page(offset: 0, generation: nil)
+        XCTAssertEqual(first.matches.count, 100)
+        XCTAssertTrue(first.hasMore)
+        let token = try XCTUnwrap(first.generation)
+        let second = try page(offset: 100, generation: token)
+        XCTAssertFalse(second.matches.isEmpty)
+        XCTAssertTrue(Set(first.matches.map(\.line)).isDisjoint(with: second.matches.map(\.line)))
+        let beforeChange = try page(offset: 0, generation: nil)
+        _ = try request(.send(surfaceID: surfaceID, text: "printf '__changed__\\n'\n"))
+        XCTAssertTrue(waitUntil {
+            guard case let .text(text)? = try? request(.capturePane(surfaceID: surfaceID, includeScrollback: true)) else { return false }
+            return text.contains("__changed__")
+        })
+        let expired = try request(.searchOutput(id: UUID(), query: "__excel_", caseSensitive: true,
+            sessionID: nil, offset: 100, generation: beforeChange.generation))
+        guard case let .error(message) = expired else { return XCTFail("Expected expired generation") }
+        XCTAssertTrue(message.contains("expired"))
+    }
+
 }

@@ -32,7 +32,7 @@ final class ScrollbackFile: @unchecked Sendable {
     private let url: URL
     /// Retain roughly this many bytes on disk — sized to the surface's in-memory ring cap so
     /// "what survives a restart" matches "what was on screen".
-    private let retentionCap: Int
+    private var retentionCap: Int
     /// Let the log grow to 2× the cap before compacting, so compaction (a read + atomic rewrite)
     /// is amortized rather than firing on nearly every flush under a sustained output flood.
     private var highWater: Int { max(retentionCap * 2, retentionCap + 64 * 1024) }
@@ -67,13 +67,23 @@ final class ScrollbackFile: @unchecked Sendable {
         self.url = url
         // `0` = unlimited: keep effectively all history, bounded only by the large on-disk safety
         // ceiling so the log can't grow without limit. Any other value gets the normal floor.
-        self.retentionCap = retentionCap == 0
+        self.retentionCap = retentionCap <= 0
             ? Self.unlimitedSafetyCap
-            : max(retentionCap, Self.minimumRetentionCap)
+            : min(max(retentionCap, Self.minimumRetentionCap), Self.unlimitedSafetyCap)
         self.fileBytes = Self.compactExistingLogIfNeeded(url: url, retentionCap: self.retentionCap)
         // Re-assert owner-only on a pre-existing log too, so files created by builds that
         // predate the permission tightening are fixed on the first load after an upgrade.
         Self.restrictToOwner(url)
+    }
+
+    func setRetentionCap(_ bytes: Int) {
+        queue.async { [self] in
+            guard !closed else { return }
+            retentionCap = bytes <= 0 ? Self.unlimitedSafetyCap
+                : min(max(bytes, Self.minimumRetentionCap), Self.unlimitedSafetyCap)
+            flushPending()
+            if fileBytes > highWater { compact() }
+        }
     }
 
     /// `.scroll` logs hold raw PTY output — potentially echoed secrets — so they are

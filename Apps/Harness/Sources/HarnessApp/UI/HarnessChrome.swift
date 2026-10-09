@@ -83,12 +83,9 @@ struct HarnessChromePalette {
         idle: NSColor
     ) -> HarnessChromePalette {
         let isDark = spec.isDark
-        // One consistent surface: the chrome (sidebar, tab strip, status line, overlays)
-        // paints the *exact* terminal background — no lift — so the whole window reads as
-        // a single flat canvas with no seam around the terminal pane. Interaction states
-        // (active/hover tabs, selected rows) still stand out because they blend this base
-        // toward `foreground`; resting chrome is identical to the terminal.
-        let sidebar = background
+        // Recess the frame around the terminal, preserving the terminal's exact
+        // theme colors. The same window blur remains visible through both surfaces.
+        let sidebar = blend(background, toward: .black, fraction: isDark ? 0.34 : 0.035)
         // Light themes need firmer separation/fills — at the dark-mode alphas the
         // borders and hover states are effectively invisible on a bright surface.
         let elevated = foreground.withAlphaComponent(isDark ? 0.07 : 0.08)
@@ -178,6 +175,12 @@ enum HarnessChrome {
     /// Opacity the window actually paints. Light appearance may raise this above the stored
     /// setting so type stays readable; `backgroundOpacity` itself stays the stored value.
     static var paintOpacity: CGFloat = 1
+    /// A denser tint sets the frame behind the terminal without stacking materials.
+    /// Fully clear and fully opaque settings retain their endpoints.
+    static var framePaintOpacity: CGFloat {
+        let opacity = paintOpacity
+        return current.isDark ? opacity + 0.75 * opacity * (1 - opacity) : opacity
+    }
     /// Terminal backdrop blur (0…100) from settings; the renderer applies this on each
     /// terminal surface. Chrome uses this for optional vibrancy tuning only.
     static var backgroundBlur: Int = 0
@@ -188,7 +191,7 @@ enum HarnessChrome {
 
     /// Resolve the palette honoring the user's `customBackgroundHex/customForegroundHex`
     /// overrides — when a terminal config explicitly sets `background = #000000`, we
-    /// must paint pure black chrome rather than the named theme's tinted bg. Either
+    /// derive chrome from that black rather than the named theme's tinted bg. Either
     /// override may be present alone; missing slots fall back to the theme so the
     /// chrome (sidebar/tabs/status line) tracks the same color as the terminal canvas.
     static func update(
@@ -204,7 +207,7 @@ enum HarnessChrome {
         cursorHex: String? = nil
     ) {
         // Resolve through the same single source of truth the terminal surface
-        // uses, so chrome and terminal paint the identical canvas color.
+        // uses, then derive a recessed frame tint from that canvas.
         let canvas = ThemeManager.resolvedCanvas(
             themeName: themeName,
             appearanceMode: appearanceMode,

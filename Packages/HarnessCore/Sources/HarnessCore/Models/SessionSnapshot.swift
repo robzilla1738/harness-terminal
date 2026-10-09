@@ -20,6 +20,8 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
     public var activeWorkspaceID: WorkspaceID?
     public var themeName: String
     public var keepSessionsOnQuit: Bool
+    public var library = SessionLibrary()
+    public var persistenceError: String?
     public var savedAt: Date
 
     public init(
@@ -58,6 +60,8 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         case activeWorkspaceID
         case themeName
         case keepSessionsOnQuit
+        case library
+        case persistenceError
         case savedAt
     }
 
@@ -78,6 +82,8 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         activeWorkspaceID = try container.decodeIfPresent(WorkspaceID.self, forKey: .activeWorkspaceID) ?? workspaces.first?.id
         themeName = try container.decodeIfPresent(String.self, forKey: .themeName) ?? "Default"
         keepSessionsOnQuit = try container.decodeIfPresent(Bool.self, forKey: .keepSessionsOnQuit) ?? true
+        persistenceError = try container.decodeIfPresent(String.self, forKey: .persistenceError)
+        library = try container.decodeIfPresent(SessionLibrary.self, forKey: .library) ?? SessionLibrary()
         savedAt = try container.decodeIfPresent(Date.self, forKey: .savedAt) ?? .now
     }
 
@@ -92,6 +98,8 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
         try container.encodeIfPresent(activeWorkspaceID, forKey: .activeWorkspaceID)
         try container.encode(themeName, forKey: .themeName)
         try container.encode(keepSessionsOnQuit, forKey: .keepSessionsOnQuit)
+        try container.encode(library, forKey: .library)
+        try container.encodeIfPresent(persistenceError, forKey: .persistenceError)
         try container.encode(savedAt, forKey: .savedAt)
     }
 
@@ -105,6 +113,8 @@ public struct SessionSnapshot: Codable, Sendable, Equatable {
             && lhs.activeWorkspaceID == rhs.activeWorkspaceID
             && lhs.themeName == rhs.themeName
             && lhs.keepSessionsOnQuit == rhs.keepSessionsOnQuit
+            && lhs.library == rhs.library
+            && lhs.persistenceError == rhs.persistenceError
             && lhs.savedAt == rhs.savedAt
     }
 }

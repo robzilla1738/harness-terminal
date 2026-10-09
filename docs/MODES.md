@@ -7,18 +7,21 @@ Switch modes any time in **Settings → Terminal → Experience**. A new install
 **Persistent**. A settings file that never stored `experienceMode` still opens as **Full
 Terminal**, so an upgrade does not hide a prefix key or status line you already had.
 
-| Mode | Prefix key | Status line | Sessions survive a clean quit | Agent workflows |
+| Mode | Prefix key | Status line | Default: sessions survive a clean quit | Agent workflows |
 |------|:---------:|:-----------:|:-----------------------------:|:---------------:|
 | **Plain Terminal** | — | — | No (ephemeral) | available |
 | **Persistent Terminal** | — | — | Yes | available |
 | **Full Terminal** | ✓ | ✓ | Yes | available |
 | **Agent Workspace** | optional | optional | Yes | foregrounded |
 
+These columns describe preset defaults. Explicit controls and per-session persistence pins
+determine the effective behavior; the Settings summary reflects the current quit policy.
+
 ## 1. Plain Terminal
 
 A fast native terminal. No prefix key, no status bar, no multiplexer terminology — it feels
-like an ordinary terminal. Sessions are **ephemeral**: closing the app cleanly closes its
-shells. Splits and tabs are still available via the menu shortcuts (`⌘D`, `⌘⇧D`, `⌘T`).
+like an ordinary terminal. The preset disables global persistence: a clean quit closes
+unpinned sessions unless you subsequently enable **Keep sessions running**. Splits and tabs are still available via the menu shortcuts (`⌘D`, `⌘⇧D`, `⌘T`).
 
 ## 2. Persistent Terminal
 
@@ -52,7 +55,8 @@ keepSessionsOnQuit (global)  ||  session.persistent (per-session pin)
 
 - **Global** `keepSessionsOnQuit` keeps its classic "keep everything" meaning and is set by the
   mode (Plain → off; Persistent/Full/Agent → on). It's the *Settings → Terminal → Sessions →
-  "Keep sessions running"* toggle.
+  "Keep sessions running"* toggle. Changing this toggle overrides the preset without
+  changing the selected experience mode; choosing a mode again applies its preset.
 - **Per-session** `persistent` pins one session so it survives even when the global switch is
   off (Plain mode). Promote/demote:
   - GUI: right-click a session in the sidebar (⌘\ shows it) → **Keep running after quit**

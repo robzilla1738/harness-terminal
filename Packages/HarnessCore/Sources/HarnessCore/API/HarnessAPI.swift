@@ -19,8 +19,24 @@ public enum APIArgument: Equatable, Sendable {
     case object([String: APIArgument])
     case array([APIArgument])
 
+    public var jsonValue: Any {
+        switch self {
+        case let .string(value): value
+        case let .int(value): value
+        case let .double(value): value
+        case let .bool(value): value
+        case let .array(values): values.map(\.jsonValue)
+        case let .object(values): values.mapValues(\.jsonValue)
+        }
+    }
+
     public var string: String? {
         if case let .string(value) = self { return value }
+        return nil
+    }
+
+    public var int: Int? {
+        if case let .int(value) = self { return value }
         return nil
     }
 
@@ -285,6 +301,18 @@ public enum HarnessAPI {
 
     public static let methods: [APIMethod] = [
         method("server.version", "Daemon version", object([:]), object(["version": string("Marketing version"), "build": int("Build number")])),
+        method("pane.search_paths", "Find files and directories on a pane’s host", object(["pane": string("Source pane"), "path": string("Directory"), "query": string("Fuzzy query"), "project": bool("Search project files")]), object(["root": string("Search root"), "entries": array("Matching paths")])),
+        method("output.search", "Search retained output in open sessions (100 results per page)", object(["query": string("Literal text"), "case_sensitive": bool("Match case"), "session": string("Optional session scope"), "offset": int("Result offset")]), object(["matches": array("Matches with source and line locator"), "hasMore": bool("More results are available")])),
+        method("setup.list", "Saved setups and recently closed layouts", object([:]), object(["setups": array("Saved setups"), "recentlyClosed": array("Closed layouts")])),
+        method("setup.capture", "Save a session as a setup without capturing running commands", object(["session": string("Session id or name"), "name": string("Setup name")]), object(["ok": bool("Success")])),
+        method("setup.save", "Import or update a setup; never executes commands", object(["definition": APIJSONSchema(type: "object", description: "Versioned setup definition", additionalProperties: true)]), object(["ok": bool("Success")])),
+        method("setup.open", "Return to a running setup or explicitly open a new copy", object(["id": string("Setup UUID"), "mode": enumString("Open mode", ["existing", "newCopy"])]), object(["session": string("Session id")])),
+        method("setup.delete", "Delete a setup definition, leaving running sessions intact", object(["id": string("Setup UUID")]), object(["ok": bool("Success")])),
+        method("closed.restore", "Recreate a closed layout with fresh shells", object(["id": string("Closed entry UUID")]), object(["session": string("Session id")])),
+        method("closed.delete", "Remove a closed entry, or clear the list when id is omitted", object(["id": string("Closed entry UUID")]), object(["ok": bool("Success")])),
+        method("attention.list", "Activity for every pane", object([:]), array("Pane activity")),
+        method("attention.read", "Mark a pane alert read without resolving its status", object(["pane": string("Pane id")]), object(["ok": bool("Success")])),
+        method("attention.snooze", "Snooze a pane for 0, 15, or 60 minutes", object(["pane": string("Pane id"), "minutes": int("0, 15, or 60")]), object(["ok": bool("Success")])),
         method("session.list", "List sessions", object([:]), object(["sessions": array("Sessions")])),
         method("session.view", "One session and its tabs", object(["session": string("Session id or label")]), object([
             "session": string("Session id"),
@@ -542,6 +570,36 @@ public enum HarnessAPI {
         switch method {
         case "server.version":
             return .version
+        case "pane.search_paths":
+            return .query(.searchPaths(id: UUID(), surfaceID: try pane().surfaceID, path: arguments["path"]?.string, query: arguments["query"]?.string ?? "", project: arguments["project"]?.bool ?? false))
+        case "output.search":
+            let session = try arguments["session"]?.string.map { try uuid(targets.session($0).id) }
+            return .request(.searchOutput(id: UUID(), query: try text("query"), caseSensitive: arguments["case_sensitive"]?.bool ?? false, sessionID: session, offset: arguments["offset"]?.int ?? 0, generation: arguments["generation"]?.string))
+        case "setup.list": return .request(.library(.list))
+        case "setup.capture":
+            return .request(.library(.capture(sessionID: try uuid(targets.session(arguments["session"]?.string).id), name: try text("name"))))
+        case "setup.save":
+            guard let definition = arguments["definition"]?.object else {
+                throw APIPlanError(code: .badArguments, message: "A setup definition is required")
+            }
+            let data = try JSONSerialization.data(withJSONObject: definition.mapValues(\.jsonValue))
+            let setup = try JSONDecoder().decode(SavedSetup.self, from: data)
+            try setup.validate()
+            return .request(.library(.save(setup)))
+        case "setup.open":
+            guard let mode = SetupOpenMode(rawValue: arguments["mode"]?.string ?? "existing") else {
+                throw APIPlanError(code: .badArguments, message: "mode must be existing or newCopy")
+            }
+            return .request(.library(.open(try uuid(text("id")), mode: mode)))
+        case "setup.delete": return .request(.library(.deleteSetup(try uuid(text("id")))))
+        case "closed.restore": return .request(.library(.restoreClosed(try uuid(text("id")))))
+        case "closed.delete": return .request(.library(.deleteClosed(try arguments["id"]?.string.map(uuid))))
+        case "attention.list":
+            return .request(.listAttention)
+        case "attention.read":
+            return .request(.acknowledgeAttention(surfaceID: try pane().surfaceID))
+        case "attention.snooze":
+            return .request(.snoozeAttention(surfaceID: try pane().surfaceID, minutes: arguments["minutes"]?.int ?? 15))
         case "session.list":
             return .listSessions
         case "session.view":

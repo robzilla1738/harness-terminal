@@ -208,6 +208,7 @@ enum AgentIconRenderer {
     /// recolor it to the menu's label color). Cached per kind+size+color.
     static func coloredImage(for kind: AgentKind, size: CGFloat, color: NSColor) -> NSImage? {
         guard let template = templateImage(for: kind, size: size) else { return nil }
+        if !template.isTemplate { return template }
         // Key on the actual sRGB components, not `color.hashValue` — a hash collision
         // would hand back an icon baked in the wrong color. A semantic/system color that
         // can't resolve to sRGB falls back to its hash (rare; never crashes).
@@ -253,14 +254,14 @@ enum AgentIconRenderer {
         return String(color.hashValue)
     }
 
-    /// A tintable template for an agent that has no vector brand mark (e.g. Aider): its
+    /// A tintable fallback for the generic agent: its
     /// short `chip` monogram drawn as a silhouette (alpha = glyph coverage), so an icon
     /// slot stays visually uniform and recolors via `contentTintColor` like the real marks.
     static func monogramTemplate(_ text: String, size: CGFloat) -> NSImage {
         let key = "mono:\(text)@\(Int(size.rounded()))"
         if let cached = cache[key] { return cached }
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            let font = NSFont.systemFont(ofSize: size * 0.46, weight: .bold)
+            let font = NSFont.systemFont(ofSize: size * 0.68, weight: .semibold)
             let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
             let str = NSAttributedString(string: text, attributes: attrs)
             let b = str.size()
@@ -279,9 +280,15 @@ enum AgentIconRenderer {
     /// A template image (alpha = silhouette) for the agent, or nil if none exists.
     /// Set `contentTintColor` on the hosting `NSImageView` to color it.
     static func templateImage(for kind: AgentKind, size: CGFloat) -> NSImage? {
-        guard let art = AgentIconArt.icons[kind.rawValue] else { return nil }
         let key = "\(kind.rawValue)@\(Int(size.rounded()))"
         if let cached = cache[key] { return cached }
+        if let encoded = AgentIconArt.rasterImages[kind.rawValue],
+           let data = Data(base64Encoded: encoded), let image = NSImage(data: data) {
+            image.size = NSSize(width: size, height: size)
+            cache[key] = image
+            return image
+        }
+        guard let art = AgentIconArt.icons[kind.rawValue] else { return nil }
         let paths = art.subpaths.map { SVGPathParser.path(from: $0) }
         let vb = art.viewBox
         let rule: CGPathFillRule = art.evenOdd ? .evenOdd : .winding

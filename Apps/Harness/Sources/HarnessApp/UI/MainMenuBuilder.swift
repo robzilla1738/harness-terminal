@@ -3,6 +3,26 @@ import HarnessCore
 
 @MainActor
 enum MainMenuBuilder {
+    static func chromeContextMenu() -> NSMenu {
+        let menu = NSMenu()
+        func add(_ title: String, _ action: Selector) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = MenuTarget.shared
+            menu.addItem(item)
+        }
+        add("New Tab", #selector(MenuTarget.newTab))
+        add("New Session", #selector(MenuTarget.newSession))
+        add("Switch Session…", #selector(MenuTarget.switchSession))
+        menu.addItem(.separator())
+        add("Toggle Sidebar", #selector(MenuTarget.toggleSidebar))
+        add(SessionCoordinator.shared.settings.showMachineIndicator ? "Hide Machine Indicator" : "Show Machine Indicator",
+            #selector(MenuTarget.toggleMachineIndicator))
+        add("Command Palette…", #selector(MenuTarget.commandPalette))
+        menu.addItem(.separator())
+        add("Settings…", #selector(MenuTarget.openSettings))
+        return menu
+    }
+
     static func build() -> NSMenu {
         let main = NSMenu()
 
@@ -23,6 +43,11 @@ enum MainMenuBuilder {
         let prefs = NSMenuItem(title: "Settings…", action: #selector(MenuTarget.openSettings), keyEquivalent: ",")
         prefs.target = MenuTarget.shared
         app.submenu?.addItem(prefs)
+        for (title, action) in [("Import Terminal Settings…", #selector(MenuTarget.importSettings)), ("Undo Last Settings Import", #selector(MenuTarget.undoSettingsImport))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = MenuTarget.shared
+            app.submenu?.addItem(item)
+        }
         app.submenu?.addItem(.separator())
         let hide = NSMenuItem(title: "Hide Harness", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         app.submenu?.addItem(hide)
@@ -61,6 +86,14 @@ enum MainMenuBuilder {
         let newWindowItem = NSMenuItem(title: "New Window", action: #selector(MenuTarget.newWindow), keyEquivalent: "n")
         newWindowItem.target = MenuTarget.shared
         workspace.submenu?.addItem(newWindowItem)
+        let activity = NSMenuItem(title: "Activity…", action: #selector(MenuTarget.showActivity), keyEquivalent: "")
+        activity.target = MenuTarget.shared
+        workspace.submenu?.addItem(activity)
+        for (title, action) in [("Search All Sessions…", #selector(MenuTarget.searchAllSessions)), ("Saved Setups…", #selector(MenuTarget.showSetups)), ("Recently Closed…", #selector(MenuTarget.showRecentlyClosed))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = MenuTarget.shared
+            workspace.submenu?.addItem(item)
+        }
         let newSessionItem = NSMenuItem(title: "New Session", action: #selector(MenuTarget.newSession), keyEquivalent: "N")
         newSessionItem.keyEquivalentModifierMask = [.command, .shift]
         newSessionItem.target = MenuTarget.shared
@@ -192,6 +225,10 @@ enum MainMenuBuilder {
         findPrevious.keyEquivalentModifierMask = [.command, .shift]
         findPrevious.target = MenuTarget.shared
         view.submenu?.addItem(findPrevious)
+        let insertPath = NSMenuItem(title: "Insert Path…", action: #selector(MenuTarget.insertPath), keyEquivalent: "i")
+        insertPath.keyEquivalentModifierMask = [.command, .option]
+        insertPath.target = MenuTarget.shared
+        view.submenu?.addItem(insertPath)
         let goToDirectory = NSMenuItem(title: "Go to Directory…", action: #selector(MenuTarget.goToDirectory), keyEquivalent: "g")
         goToDirectory.keyEquivalentModifierMask = [.command, .option]
         goToDirectory.target = MenuTarget.shared
@@ -316,6 +353,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     /// Every other MenuTarget item stays enabled (default true), preserving prior behavior.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(closeTab), #selector(closeSession), #selector(selectPaneInDirection(_:)),
+             #selector(previousPane), #selector(nextPane), #selector(zoomPane), #selector(equalizeSplits),
+             #selector(moveTabToNewWindow):
+            return WindowContexts.all.contains(where: { $0.window === NSApp.keyWindow })
+        default: break
+        }
+        switch menuItem.action {
         case #selector(detachPane): return !SessionCoordinator.shared.activePaneIsDetached
         case #selector(reattachPane): return SessionCoordinator.shared.activePaneIsDetached
         case #selector(reopenClosedTab): return SessionCoordinator.shared.canReopenClosedTab
@@ -363,7 +407,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
                 let actions = NSMenu(title: host.name)
                 var entries: [(String, Selector)] = [(connected ? "Show" : "Connect", #selector(connectRemoteHost(_:)))]
                 if connected { entries.append(("Disconnect", #selector(disconnectRemoteHost(_:)))) }
-                entries += [("Edit…", #selector(editRemoteHost(_:))), ("Remove…", #selector(removeRemoteHost(_:)))]
+                entries += [("Connection Details…", #selector(connectionDetails(_:))), ("Retry Connection", #selector(retryConnection(_:))), ("Edit…", #selector(editRemoteHost(_:))), ("Remove…", #selector(removeRemoteHost(_:)))]
                 for (title, selector) in entries {
                     let action = NSMenuItem(title: title, action: selector, keyEquivalent: "")
                     action.target = self
@@ -390,17 +434,49 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     /// Online Tailscale peers, those running Harness first (found by an SSH probe, so their
     /// socket is already known). Picking one opens Add Remote Host prefilled; nothing is saved
     /// until that's confirmed.
+    @objc func retryConnection(_ sender: NSMenuItem) {
+        guard let owner = sender.representedObject as? String else { return }
+        SessionCoordinator.shared.retryConnection(owner)
+    }
+
+    @objc func connectionDetails(_ sender: NSMenuItem) {
+        guard let owner = sender.representedObject as? String else { return }
+        let state = SessionCoordinator.shared.connectionDescription(for: owner)
+        guard let endpoint = SessionCoordinator.shared.endpoint(forOwner: owner) else {
+            DisplayMessage.show("This host is disconnected. Choose Connect or edit its SSH settings.")
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let details: String
+            do {
+                guard case let .daemonStats(stats) = try DaemonClient(endpoint: endpoint).request(.daemonStats, timeout: 3) else { throw SetupError.invalid("Daemon did not answer") }
+                details = "Host: \(owner)\nConnection: \(state)\nDaemon: \(stats.version ?? "unknown") (\(stats.build.map(String.init) ?? "unknown"))\nFeatures: \((stats.capabilities ?? []).joined(separator: ", "))\nSurfaces: \(stats.surfaceCount)\n\nApp restarts reattach to surviving processes. Sleeping a local laptop pauses local processes. Reconnecting never reruns startup commands."
+            } catch { details = "Host: \(owner)\nConnection: \(state)\nDaemon request failed: \(error.localizedDescription)\n\nRetry the connection or edit the SSH destination and daemon socket." }
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Connection Details"
+                alert.informativeText = details
+                alert.addButton(withTitle: "Done")
+                alert.addButton(withTitle: "Copy Details")
+                if alert.runModal() == .alertSecondButtonReturn {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(details, forType: .string)
+                }
+            }
+        }
+    }
+
     @objc func suggestTailscalePeers() {
         DisplayMessage.show("Looking for Harness on your tailnet…")
         DispatchQueue.global(qos: .userInitiated).async {
             let present = Self.tailscaleCommandPresent()
             let peers = present ? TailscalePeers.parse(Self.tailscaleStatusJSON() ?? Data()) : []
             let sockets = TailscalePeers.withHarness(peers)
+            if FollowEvent.tailscaleStatusChanged(commandPresent: present, peerCount: peers.count) != nil {
+                _ = try? DaemonClient().request(.noteTailscaleStatus(peerCount: peers.count), timeout: 1)
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if FollowEvent.tailscaleStatusChanged(commandPresent: present, peerCount: peers.count) != nil {
-                        _ = try? DaemonClient().request(.noteTailscaleStatus(peerCount: peers.count), timeout: 1)
-                    }
                     self.confirmSuggestedPeer(peers, sockets: sockets, commandPresent: present)
                 }
             }
@@ -408,21 +484,16 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
 
     nonisolated private static func tailscaleCommandPresent() -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["tailscale"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        guard let result = try? ProcessCapture.run(URL(fileURLWithPath: "/usr/bin/which"),
+            arguments: ["tailscale"], timeout: 2, maxOutputBytes: 16_384) else { return false }
+        return result.status == 0
     }
 
     nonisolated private static func tailscaleStatusJSON() -> Data? {
         guard !TailscalePeers.joinsTailnet(TailscalePeers.statusArguments) else { return nil }
         guard let result = try? ProcessCapture.run(
             URL(fileURLWithPath: "/usr/bin/env"),
-            arguments: TailscalePeers.statusArguments
+            arguments: TailscalePeers.statusArguments, timeout: 8, maxOutputBytes: 1_048_576
         ), result.status == 0 else { return nil }
         return result.stdout
     }
@@ -471,8 +542,11 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard RemoteHostsService.shared.removeHost(named: name) else {
+            DisplayMessage.show("Couldn’t remove this host. Check disk space and permissions for remote-hosts.json.")
+            return
+        }
         SessionCoordinator.shared.disconnectRemote(named: name)
-        RemoteHostsService.shared.removeHost(named: name)
     }
 
     /// Opens the host in a window of its own (or brings its window forward); windows on other
@@ -519,6 +593,12 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
 
     @objc func closePaneOrTab() {
+        guard let window = NSApp.keyWindow else { return }
+        guard WindowContexts.all.contains(where: { $0.window === window }) else {
+            if window is QuickTerminalPanel { QuickTerminalController.shared.hide() }
+            else { window.performClose(nil) }
+            return
+        }
         SessionCoordinator.shared.closeFocusedPaneOrTab()
     }
 
@@ -564,6 +644,10 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func goToDirectory() {
         SessionCoordinator.shared.goToListedDirectory()
+    }
+
+    @objc func insertPath() {
+        SessionCoordinator.shared.insertListedPath()
     }
 
     @objc func find() {
@@ -624,6 +708,27 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         KeyboardShortcutsWindow.shared.toggle()
     }
 
+    private var activityWindow: NSWindow?
+
+    @objc func searchAllSessions() { OutputSearchController.shared.present() }
+    @objc func showSetups() { SessionLibraryController.shared.present() }
+    @objc func showRecentlyClosed() { SessionLibraryController.shared.present(recentlyClosed: true) }
+
+    @objc func showActivity() {
+        if let activityWindow { activityWindow.makeKeyAndOrderFront(nil); return }
+        let panel = AgentInboxPanelView { [weak self] item in
+            self?.activityWindow?.orderOut(nil)
+            SessionCoordinator.shared.openAttention(item)
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: panel.preferredHeight), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Activity"
+        window.isReleasedWhenClosed = false
+        window.contentView = panel
+        window.center()
+        activityWindow = window
+        window.makeKeyAndOrderFront(nil)
+    }
+
     @objc func commandPalette() {
         if let window = NSApp.keyWindow {
             CommandPaletteController.present(relativeTo: window)
@@ -633,6 +738,9 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     @objc func commandPrompt() {
         CommandPromptController.shared.present()
     }
+
+    @objc func importSettings() { SettingsImportController.present() }
+    @objc func undoSettingsImport() { SettingsImportController.undo() }
 
     @objc func openSettings() {
         SettingsWindowController.show()
@@ -652,6 +760,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         } else {
             SessionSwitcherController.toggle(relativeTo: NSApp.keyWindow)
         }
+    }
+
+    @objc func toggleMachineIndicator() {
+        let coordinator = SessionCoordinator.shared
+        coordinator.settings.showMachineIndicator.toggle()
+        coordinator.saveSettings()
+        coordinator.applySettingsToHosts()
     }
 
     @objc func toggleSidebar() {

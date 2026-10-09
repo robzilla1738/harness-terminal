@@ -12,6 +12,7 @@ final class SelectionQueue: @unchecked Sendable {
     /// The ticket of the latest selection queued per kind (guarded by `lock`).
     private var latest: [String: Int] = [:]
     private var tickets = 0
+    private var epoch = 0
 
     init(send: @escaping @Sendable (IPCRequest) -> Void) {
         self.send = send
@@ -19,14 +20,22 @@ final class SelectionQueue: @unchecked Sendable {
 
     func async(_ request: IPCRequest) {
         let kind = Self.kind(of: request)
-        let ticket = lock.withLock {
+        let (ticket, batch) = lock.withLock {
             tickets += 1
             if let kind { latest[kind] = tickets }
-            return tickets
+            return (tickets, epoch)
         }
         queue.async { [self] in
-            guard lock.withLock({ kind.map { latest[$0] == ticket } ?? true }) else { return }
+            guard lock.withLock({ batch != epoch || (kind.map { latest[$0] == ticket } ?? true) }) else { return }
             send(request)
+        }
+    }
+
+    func perform(_ body: @escaping @Sendable () -> Void) {
+        lock.withLock {
+            epoch += 1 // A command is an ordering barrier for earlier selections.
+            latest.removeAll(keepingCapacity: true)
+            queue.async(execute: body)
         }
     }
 
