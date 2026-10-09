@@ -564,9 +564,9 @@ public final class DaemonServer: @unchecked Sendable {
         searchQueue.addOperation { [weak self] in
             let response = work(cancellation)
             self?.queue.async { [weak self] in
-                guard let self, let search = searches[id], search.cancellation === cancellation else { return }
-                searches.removeValue(forKey: id)
-                send(response, to: search.fd)
+                guard let self, let search = self.searches[id], search.cancellation === cancellation else { return }
+                self.searches.removeValue(forKey: id)
+                self.send(response, to: search.fd)
             }
         }
     }
