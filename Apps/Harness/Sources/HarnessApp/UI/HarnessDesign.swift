@@ -16,6 +16,8 @@ enum HarnessDesign {
     }
 
     static let sidebarWidth: CGFloat = 264
+    /// Three comfortable tabs plus window controls and the new-tab button.
+    static let defaultWindowSize = NSSize(width: 960, height: 640)
     /// Distance from the window top to the traffic lights' center, measured from the real
     /// window when it's built (`MainWindowController`). The tab row and the sidebar's top
     /// controls center on this line so they sit level with the lights.
@@ -36,11 +38,11 @@ enum HarnessDesign {
     static let iconTileSize = NSSize(width: 28, height: 23)
     /// A lower rectangle, with enough leading room inside the pill's curved end.
     static let tabIconTileSize = NSSize(width: 20, height: 16)
-    static let tabIconTileInset: CGFloat = 7
+    static let tabIconTileInset: CGFloat = 12
     static var sidebarTabRowHeight: CGFloat { tabPillHeight + 2 * Spacing.xxs }
     static let sidebarSessionHeaderHeight: CGFloat = 30
     /// Leading space the traffic lights take on a full-size-content window's top row.
-    static let trafficLightClearance: CGFloat = 76
+    static let trafficLightClearance: CGFloat = 94
     static let paneHeaderIconSize: CGFloat = 12
     static let paneHeaderHeight: CGFloat = 30
     static let paneHeaderButtonSize: CGFloat = 24

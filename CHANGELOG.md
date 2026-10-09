@@ -22,6 +22,8 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ### Changed
 
+- Cleaner title-bar spacing with separate tabs, compact badges, and a 960-point default window width sized for three tabs and surrounding controls. Saved window sizes remain respected.
+
 - Recessed window chrome gives translucent terminal panes a lighter appearance against the tab bar, sidebar, and gutters while preserving terminal colors and one shared window blur.
 - Flat rectangular terminal and agent badges have balanced spacing, taller marks, and no drop shadow. Added sourced logos and detection for 23 coding CLIs across tabs, sidebar rows, Overview, and Agents settings. Removed agent color pickers and palette actions; legacy configuration values remain readable.
 - Onboarding explains persistence and optional notifications accurately, separates permission from agent-hook installation, accommodates smaller screens, and pauses ambient animation while inactive. Setup preserves unreadable and symlinked shell profiles, respects custom shell config locations, and keeps a working CLI intact if replacement fails.

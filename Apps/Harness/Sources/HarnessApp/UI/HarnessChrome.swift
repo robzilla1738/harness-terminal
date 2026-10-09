@@ -85,7 +85,7 @@ struct HarnessChromePalette {
         let isDark = spec.isDark
         // Recess the frame around the terminal, preserving the terminal's exact
         // theme colors. The same window blur remains visible through both surfaces.
-        let sidebar = blend(background, toward: .black, fraction: isDark ? 0.18 : 0.035)
+        let sidebar = blend(background, toward: .black, fraction: isDark ? 0.34 : 0.035)
         // Light themes need firmer separation/fills — at the dark-mode alphas the
         // borders and hover states are effectively invisible on a bright surface.
         let elevated = foreground.withAlphaComponent(isDark ? 0.07 : 0.08)
@@ -179,7 +179,7 @@ enum HarnessChrome {
     /// Fully clear and fully opaque settings retain their endpoints.
     static var framePaintOpacity: CGFloat {
         let opacity = paintOpacity
-        return current.isDark ? opacity + 0.45 * opacity * (1 - opacity) : opacity
+        return current.isDark ? opacity + 0.75 * opacity * (1 - opacity) : opacity
     }
     /// Terminal backdrop blur (0…100) from settings; the renderer applies this on each
     /// terminal surface. Chrome uses this for optional vibrancy tuning only.

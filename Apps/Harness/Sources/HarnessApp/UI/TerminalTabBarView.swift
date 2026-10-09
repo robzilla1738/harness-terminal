@@ -53,8 +53,6 @@ final class TerminalTabBarView: NSView {
     }
 
     private var barHeightConstraint: NSLayoutConstraint?
-    private let tabGroup = CALayer()
-    private let tabGroupView = TabGroupBackgroundView()
     private let newTabButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private let overflowButton = SoftIconButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private var tabs: [Tab] = []
@@ -64,14 +62,15 @@ final class TerminalTabBarView: NSView {
 
     // Layout metrics. Sessions, new-tab, and overflow share one hit target and one
     // glyph size so the row reads as a single control set, not three different buttons.
-    private let edgeInset = HarnessDesign.Spacing.md
+    private let edgeInset = HarnessDesign.Spacing.lg
     private let controlSize: CGFloat = HarnessDesign.chromeIconButtonSize
-    private let controlGap = HarnessDesign.Spacing.sm
+    private let controlGap = HarnessDesign.Spacing.lg
     /// Stacked-squares button that opens the session switcher.
     private let sessionsButton = SoftIconButton(frame: .zero)
-    private let pillSpacing = HarnessDesign.Spacing.xs
-    private let minPillWidth: CGFloat = 219
-    private let maxPillWidth: CGFloat = 375
+    private let pillSpacing = HarnessDesign.Spacing.md
+    private let minPillWidth: CGFloat = 160
+    private let preferredPillWidth: CGFloat = 240
+    private let maxPillWidth: CGFloat = 280
 
     /// Extra leading inset so the tab strip clears the macOS traffic lights when the
     /// sidebar is collapsed (content shifts to x=0 under `.fullSizeContentView`). 0
@@ -169,13 +168,6 @@ final class TerminalTabBarView: NSView {
     private func setup() {
         registerForDraggedTypes([PaneDrag.type])
         HarnessDesign.applyTabBarChrome(to: self)
-        tabGroup.cornerCurve = .continuous
-        tabGroup.borderWidth = 1
-        tabGroup.actions = ["bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
-        tabGroupView.wantsLayer = true
-        tabGroupView.layer = tabGroup
-        addSubview(tabGroupView)
-
         newTabButton.style = .glyph
         newTabButton.setSymbol("plus", accessibilityDescription: "New tab", pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
         newTabButton.toolTip = "New tab (⌘T)"
@@ -272,8 +264,6 @@ final class TerminalTabBarView: NSView {
 
     func applyChrome() {
         HarnessDesign.applyTabBarChrome(to: self)
-        tabGroup.backgroundColor = HarnessDesign.chrome.surfaceElevated.cgColor
-        tabGroup.borderColor = HarnessDesign.chrome.border.cgColor
         for pill in orderedPills {
             pill.applyChrome(isActive: pill.tabID == activeTabID)
         }
@@ -294,7 +284,7 @@ final class TerminalTabBarView: NSView {
     }
 
     /// Animate the traffic-light clearance inset (driven by the split controller as the
-    /// sidebar collapses/expands). 0 = sidebar visible, ~72 = collapsed.
+    /// sidebar collapses/expands). 0 = sidebar visible; the shared traffic-light clearance when collapsed.
     func setLeadingInset(_ inset: CGFloat) {
         leadingInset = inset
         layoutSubtreeIfNeeded()
@@ -326,14 +316,13 @@ final class TerminalTabBarView: NSView {
         let count = orderedPills.count
         let buttonY = rowCenterY - controlSize / 2
         guard count > 0 else {
-            tabGroupView.isHidden = true
             overflowButton.isHidden = true
             return
         }
 
-        // Hug each label. Stretching one short title out to the max width leaves a hollow pill.
+        // Keep a comfortable reading width, compressing only when the row fills.
         let inlineAvail = newTabX - controlGap - contentLeft
-        let naturals = orderedPills.map { $0.preferredWidth(min: minPillWidth, max: maxPillWidth) }
+        let naturals = orderedPills.map { $0.preferredWidth(min: preferredPillWidth, max: maxPillWidth) }
         let naturalSum = naturals.reduce(0, +) + pillSpacing * CGFloat(max(count - 1, 0))
 
         var needsOverflow = false
@@ -374,25 +363,6 @@ final class TerminalTabBarView: NSView {
             let pillWidth = widths[i]
             pill.frame = NSRect(x: x, y: y, width: pillWidth, height: HarnessDesign.tabPillHeight)
             x += pillWidth + pillSpacing
-        }
-        // One quiet capsule holds the entire visible group. Only the active tab
-        // gets its own pill; inactive tabs sit directly on this shared surface.
-        tabGroupView.isHidden = count < 2
-        tabGroupView.frame = NSRect(x: contentLeft - 2, y: y - 2,
-                               width: x - pillSpacing - contentLeft + 4,
-                               height: HarnessDesign.tabPillHeight + 4)
-        tabGroup.cornerRadius = tabGroup.bounds.height / 2
-        let visible = orderedPills.filter { !$0.isHidden }
-        tabGroup.sublayers = ChromeLayout.dividerSlots(
-            count: visible.count,
-            activeIndex: visible.firstIndex { $0.tabID == activeTabID },
-            hoveredIndex: nil
-        ).map { index in
-            let rule = CALayer()
-            rule.backgroundColor = HarnessDesign.chrome.borderStrong.cgColor
-            rule.frame = NSRect(x: visible[index].frame.maxX + pillSpacing / 2 - tabGroup.frame.minX,
-                                y: 10, width: 1, height: tabGroup.bounds.height - 20)
-            return rule
         }
         overflowButton.isHidden = !needsOverflow
         if needsOverflow {
@@ -984,10 +954,4 @@ private final class TabPillView: NSView {
         // ⌘N hint: a touch brighter on the active tab, quiet otherwise.
         shortcutLabel.textColor = isActive ? c.textSecondary : c.textTertiary
     }
-}
-
-/// Decorative group surface; tab pills above it own all pointer interactions.
-@MainActor
-private final class TabGroupBackgroundView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

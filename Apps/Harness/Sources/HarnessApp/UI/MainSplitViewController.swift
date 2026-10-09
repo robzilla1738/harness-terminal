@@ -329,7 +329,7 @@ final class MainSplitViewController: NSViewController {
     /// Leading inset the title strip's path readout needs to clear the macOS traffic lights
     /// when the sidebar is fully collapsed (content shifts to x=0 under `.fullSizeContentView`).
     /// The tab bar itself sits below the lights and never needs one.
-    private let trafficLightInset: CGFloat = 72
+    private let trafficLightInset = HarnessDesign.trafficLightClearance
 
     /// Inset the strip readout proportionally to how collapsed the sidebar is: full inset
     /// at width 0, none once the sidebar is wide enough to cover the traffic lights.

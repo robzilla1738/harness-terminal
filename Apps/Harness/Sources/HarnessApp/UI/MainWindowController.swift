@@ -30,7 +30,7 @@ final class MainWindowController: NSWindowController {
         )
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
+            contentRect: NSRect(origin: .zero, size: HarnessDesign.defaultWindowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -61,7 +61,7 @@ final class MainWindowController: NSWindowController {
         // fitting size (~sidebar width). Re-assert the intended default explicitly —
         // otherwise the window opens tiny (previously `minSize` masked this; lowering
         // the floor exposed it).
-        window.setContentSize(NSSize(width: 1280, height: 820))
+        window.setContentSize(HarnessDesign.defaultWindowSize)
         self.init(window: window)
         // A content controller can resize the window; the lights stay put relative to the top.
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter

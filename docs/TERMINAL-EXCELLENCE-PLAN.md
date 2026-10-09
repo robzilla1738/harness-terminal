@@ -377,6 +377,24 @@ The final consumer check covers the added output-subscription identity guard.
   existing 85% opacity, and its tabs reattached. No broad test suite was repeated
   for this appearance-only change.
 
+## Tab-strip proportions follow-up
+
+- New windows default to 960×640 points: room for three 240-point tabs plus the
+  traffic lights, Sessions control, and New Tab control. Saved window frames still
+  take precedence. Tabs compress to 160 points before using the existing overflow.
+- Removed the enclosing tab-group capsule and divider layers. Only the selected
+  tab carries the glass pill; inactive tabs sit on the frame. Shared control gaps
+  are 12 points, inter-tab gaps 8 points, and badge leading padding 12 points.
+- Increased traffic-light clearance to 94 points and share it between title-bar
+  and sidebar controls. Badge sizes and title typography remain unchanged.
+- Deepened dark frame tint (34% toward black and a stronger opacity bias), keeping
+  the existing blur, exact terminal colors, and explicit transparency endpoints.
+- Verification: release build and three focused tab spacing/drag checks passed;
+  both packaged apps passed strict signature checks. Visually reviewed three tabs
+  at the new default width in the running preview. The existing reconnect-text
+  issue reproduced after reopening and remains open under W. No performance claim
+  or broad-suite rerun for these chrome changes.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named
