@@ -8,6 +8,7 @@ import HarnessTerminalEngine
 final class HarnessSidebarPanelViewController: NSViewController {
     /// The session this window shows; set by `MainSplitViewController`.
     var context = WindowContext()
+    private let machineButton = MachineIndicatorButton(frame: .zero)
 
     private let chromeHeader = NSView()
     private let workspaceBar = NSView()
@@ -91,6 +92,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
     override func viewDidLayout() {
         super.viewDidLayout()
         syncSessionColumnWidth()
+        machineButton.isHidden = !SessionCoordinator.shared.settings.showMachineIndicator || view.bounds.width < 242
     }
 
     func applyChromeColors() {
@@ -103,6 +105,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
         HarnessDesign.applyChromeLabelAppearance([sectionLabel], isDark: HarnessDesign.chrome.isDark)
         workspacePill.applyChrome()
         sidebarToggleButton.applyChrome()
+        machineButton.applyChrome()
+        machineButton.isHidden = !SessionCoordinator.shared.settings.showMachineIndicator || view.bounds.width < 242
         dismissWorkspaceDropdown()
         for case let button as SoftIconButton in footer.subviews {
             button.applyChrome()
@@ -150,6 +154,9 @@ final class HarnessSidebarPanelViewController: NSViewController {
         newTabButton.translatesAutoresizingMaskIntoConstraints = false
 
         // Toggle after the traffic lights, bell and "+" at the trailing edge.
+        machineButton.compact = true
+        machineButton.translatesAutoresizingMaskIntoConstraints = false
+        chromeHeader.addSubview(machineButton)
         chromeHeader.addSubview(sidebarToggleButton)
         chromeHeader.addSubview(newTabButton)
         chromeHeader.addSubview(notificationBell)
@@ -162,6 +169,10 @@ final class HarnessSidebarPanelViewController: NSViewController {
             workspaceBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             workspaceBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             searchHeight,
+            machineButton.leadingAnchor.constraint(equalTo: sidebarToggleButton.trailingAnchor, constant: HarnessDesign.Spacing.md),
+            machineButton.centerYAnchor.constraint(equalTo: sidebarToggleButton.centerYAnchor),
+            machineButton.widthAnchor.constraint(equalToConstant: control),
+            machineButton.heightAnchor.constraint(equalToConstant: control),
             sidebarToggleButton.leadingAnchor.constraint(equalTo: chromeHeader.leadingAnchor, constant: HarnessDesign.trafficLightClearance),
             sidebarToggleButton.centerYAnchor.constraint(equalTo: chromeHeader.topAnchor, constant: HarnessDesign.titleRowCenter),
             sidebarToggleButton.widthAnchor.constraint(equalToConstant: control),
@@ -480,6 +491,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
     }
 
     @objc func reload() {
+        machineButton.update(owner: context.owner)
         let workspace = context.workspace
         workspaces = context.snapshot.workspaces
         activeWorkspaceID = workspace?.id
@@ -503,6 +515,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
     /// Tab titles, agents, and status change often; the outline is cheap to rebuild.
     func refreshMetadata() {
+        machineButton.update(owner: context.owner)
         reload()
     }
 

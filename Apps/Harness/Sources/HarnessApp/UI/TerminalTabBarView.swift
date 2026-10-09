@@ -67,6 +67,7 @@ final class TerminalTabBarView: NSView {
     private let controlGap = HarnessDesign.Spacing.lg
     /// Stacked-squares button that opens the session switcher.
     private let sessionsButton = SoftIconButton(frame: .zero)
+    private let machineButton = MachineIndicatorButton(frame: .zero)
     private let pillSpacing = HarnessDesign.Spacing.md
     private let minPillWidth: CGFloat = 160
     private let preferredPillWidth: CGFloat = 240
@@ -80,7 +81,15 @@ final class TerminalTabBarView: NSView {
     }
 
     /// Leading x of the first pill: the sessions glyph, then the same gap again.
-    private var sessionsButtonX: CGFloat { leadingInset + controlGap }
+    private var machineWidth: CGFloat { bounds.width < 720 ? controlSize : (machineButton.isRemote ? 172 : 110) }
+    private var showsMachine: Bool { SessionCoordinator.shared.settings.showMachineIndicator }
+    private var sessionsButtonX: CGFloat { leadingInset + controlGap + (showsMachine ? machineWidth + HarnessDesign.Spacing.md : 0) }
+
+    func updateMachine(owner: String) {
+        let wasRemote = machineButton.isRemote
+        machineButton.update(owner: owner)
+        if wasRemote != machineButton.isRemote { needsLayout = true }
+    }
     private var contentLeft: CGFloat { sessionsButtonX + controlSize + controlGap }
 
     // Drag-reorder state.
@@ -192,6 +201,7 @@ final class TerminalTabBarView: NSView {
         sessionsButton.action = #selector(showSessions)
         sessionsButton.translatesAutoresizingMaskIntoConstraints = true
         addSubview(sessionsButton)
+        addSubview(machineButton)
 
         let height = heightAnchor.constraint(equalToConstant: HarnessDesign.tabBarHeight)
         height.priority = .defaultHigh
@@ -270,6 +280,9 @@ final class TerminalTabBarView: NSView {
         newTabButton.applyChrome()
         overflowButton.applyChrome()
         sessionsButton.applyChrome()
+        machineButton.applyChrome()
+        machineButton.isHidden = !showsMachine
+        needsLayout = true
     }
 
     /// The sessions button, for anchoring the switcher from a keyboard shortcut.
@@ -295,6 +308,8 @@ final class TerminalTabBarView: NSView {
     override func layout() {
         super.layout()
         let buttonY = rowCenterY - controlSize / 2
+        machineButton.compact = bounds.width < 720
+        machineButton.frame = NSRect(x: leadingInset + controlGap, y: rowCenterY - 17, width: machineWidth, height: 34)
         sessionsButton.frame = NSRect(
             x: sessionsButtonX,
             y: buttonY,
@@ -953,5 +968,141 @@ private final class TabPillView: NSView {
         persistentIcon.contentTintColor = c.accent
         // ⌘N hint: a touch brighter on the active tab, quiet otherwise.
         shortcutLabel.textColor = isActive ? c.textSecondary : c.textTertiary
+    }
+}
+
+/// One window's machine identity. Opening its menu never performs discovery or a network request.
+@MainActor
+final class MachineIndicatorButton: NSButton {
+    private let symbol = NSImageView()
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private var owner = DaemonSidebar.localID
+    private var address = ""
+    private var connectionState = "Connected"
+    private var hasIdentity = false
+    private var connecting: Set<String> = []
+    var compact = false { didSet { if oldValue != compact { needsLayout = true } } }
+    var isRemote: Bool { owner != DaemonSidebar.localID }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        title = ""
+        isBordered = false
+        setButtonType(.momentaryChange)
+        target = self
+        action = #selector(showMachines)
+        wantsLayer = true
+        layer?.cornerRadius = HarnessDesign.Radius.control
+        nameLabel.font = HarnessDesign.Typography.tabTitle
+        detailLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        for label in [nameLabel, detailLabel] {
+            label.lineBreakMode = .byTruncatingMiddle
+            HarnessDesign.prepareChromeLabel(label)
+        }
+        for child in [symbol, nameLabel, detailLabel] {
+            child.setAccessibilityElement(false)
+            addSubview(child)
+        }
+        update(owner: DaemonSidebar.localID)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
+
+    func update(owner: String) {
+        let nextState = SessionCoordinator.shared.connectionDescription(for: owner)
+        guard !hasIdentity || self.owner != owner || connectionState != nextState else { return }
+        hasIdentity = true
+        if self.owner != owner || connectionState != nextState {
+            self.owner = owner
+            address = isRemote ? (RemoteHostsService.shared.hosts().first { $0.name == owner }?.sshTarget ?? owner) : ""
+        }
+        connectionState = nextState
+        nameLabel.stringValue = isRemote ? owner : "This Mac"
+        detailLabel.stringValue = connectionState == "Connected" ? address : connectionState
+        symbol.image = NSImage(systemSymbolName: isRemote ? "globe" : "laptopcomputer", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        toolTip = ([nameLabel.stringValue, address, isRemote ? connectionState : "Local terminal"].filter { !$0.isEmpty }).joined(separator: " · ") + " — Switch machine"
+        setAccessibilityLabel(toolTip)
+        applyChrome()
+        needsLayout = true
+    }
+
+    func applyChrome() {
+        let c = HarnessChrome.current
+        nameLabel.textColor = isRemote ? c.textPrimary : c.textSecondary
+        detailLabel.textColor = connectionState == "Connected" ? c.textSecondary : c.attention
+        symbol.contentTintColor = connectionState == "Connected" ? c.textSecondary : c.attention
+        HarnessDesign.applyChromeLabelAppearance([nameLabel, detailLabel], isDark: c.isDark)
+    }
+
+    override func layout() {
+        super.layout()
+        let twoLines = isRemote && !compact
+        nameLabel.isHidden = compact
+        detailLabel.isHidden = !twoLines
+        symbol.frame = NSRect(x: 5, y: bounds.midY - 9, width: 18, height: 18)
+        let width = max(0, bounds.width - 31)
+        nameLabel.frame = NSRect(x: 27, y: twoLines ? bounds.midY : bounds.midY - 8, width: width, height: 16)
+        detailLabel.frame = NSRect(x: 27, y: bounds.midY - 13, width: width, height: 12)
+        HarnessDesign.alignChromeText([nameLabel, detailLabel], in: self)
+    }
+
+    @objc private func showMachines() {
+        let menu = NSMenu(title: "Machines")
+        func add(_ title: String, owner: String) {
+            let item = NSMenuItem(title: title, action: #selector(selectMachine(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = owner
+            item.state = owner == self.owner ? .on : .off
+            item.isEnabled = !connecting.contains(owner)
+            menu.addItem(item)
+        }
+        menu.autoenablesItems = false
+        add("This Mac", owner: DaemonSidebar.localID)
+        let hosts = RemoteHostsService.shared.hosts()
+        if isRemote, let host = hosts.first(where: { $0.name == owner }), host.sshTarget != address {
+            address = host.sshTarget
+            hasIdentity = false
+            update(owner: owner)
+        }
+        if !hosts.isEmpty { menu.addItem(.separator()) }
+        for host in hosts {
+            let status = connecting.contains(host.name) ? "Connecting…" : SessionCoordinator.shared.connectionDescription(for: host.name)
+            add("\(host.name) — \(host.sshTarget) · \(status)", owner: host.name)
+        }
+        menu.addItem(.separator())
+        let sessions = NSMenuItem(title: "Sessions…", action: #selector(showSessions), keyEquivalent: "")
+        sessions.target = self
+        menu.addItem(sessions)
+        let addHost = NSMenuItem(title: "Add Remote Host…", action: #selector(MenuTarget.addRemoteHost), keyEquivalent: "")
+        addHost.target = MenuTarget.shared
+        menu.addItem(addHost)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: self)
+    }
+
+    @objc private func showSessions() {
+        window?.makeKeyAndOrderFront(nil)
+        SessionSwitcherController.present(relativeTo: window, anchor: self)
+    }
+
+    @objc private func selectMachine(_ sender: NSMenuItem) {
+        guard let selected = sender.representedObject as? String, !connecting.contains(selected) else { return }
+        let coordinator = SessionCoordinator.shared
+        if selected == DaemonSidebar.localID {
+            coordinator.showDaemon(selected)
+        } else if coordinator.connectionDescription(for: selected) == "Disconnected", coordinator.isConnected(selected) {
+            coordinator.retryConnection(selected)
+            coordinator.showDaemon(selected)
+        } else {
+            connecting.insert(selected)
+            coordinator.attachRemote(named: selected) { [weak self] attached in
+                self?.connecting.remove(selected)
+                if attached { coordinator.showDaemon(selected) }
+            }
+        }
     }
 }

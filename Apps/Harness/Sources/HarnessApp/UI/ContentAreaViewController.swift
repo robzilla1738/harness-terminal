@@ -189,6 +189,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     @objc private func retryRemote() { SessionCoordinator.shared.retryConnection(context.owner) }
 
     private func refreshConnectionNotice() {
+        tabBar.updateMachine(owner: context.owner)
         let state = SessionCoordinator.shared.connectionDescription(for: context.owner)
         connectionNotice.isHidden = context.owner == DaemonSidebar.localID || state == "Connected"
         connectionLabel.stringValue = "\(context.owner) · \(state) · Showing last output"
@@ -213,6 +214,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
     }
 
     func reloadTabBar() {
+        tabBar.updateMachine(owner: context.owner)
         let session = context.session
         tabBar.reload(tabs: session?.tabs ?? [], activeTabID: session?.activeTabID)
     }

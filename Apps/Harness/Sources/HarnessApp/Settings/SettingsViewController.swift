@@ -24,6 +24,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private let windowBorderOpacitySlider = HarnessSlider(frame: .zero)
     private let windowBorderOpacityLabel = NSTextField(labelWithString: "")
     private let transparentTitlebarToggle = HarnessToggle(frame: .zero)
+    private let machineIndicatorToggle = HarnessToggle(frame: .zero)
     private let sidebarVisibleToggle = HarnessToggle(frame: .zero)
     private let restoreWindowSizeToggle = HarnessToggle(frame: .zero)
     private let paneDensitySegment = HarnessSegmented(frame: .zero)
@@ -333,7 +334,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         }
 
         // Toggles that write straight through `applySettingsLive`.
-        for toggle in [cursorBlinkToggle, copyOnSelectToggle, vividColorsToggle, themeTerminalOutputToggle,
+        for toggle in [machineIndicatorToggle, cursorBlinkToggle, copyOnSelectToggle, vividColorsToggle, themeTerminalOutputToggle,
                        ligaturesToggle, promptGutterToggle, transparentTitlebarToggle, offMainPipelineToggle,
                        liveResizeReflowToggle, paddingBalanceToggle, mouseHideToggle, pasteProtectionToggle,
                        remoteControlToggle, boldIsBrightToggle, themeFitToggle, paneHeadersToggle,
@@ -660,6 +661,8 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Transparent title bar", transparentTitlebarToggle),
             settingsRow("Show sidebar", sidebarVisibleToggle,
                         hint: "Sessions in a sidebar instead of tabs in the title bar. ⌘\\ switches."),
+            settingsRow("Show machine indicator", machineIndicatorToggle,
+                        hint: "Show this Mac or the remote host in the window controls."),
             settingsRow("Remember size and position", restoreWindowSizeToggle,
                         hint: "Reopen at your last size. When off, start at 100 columns × 30 rows."),
         ])
@@ -2278,6 +2281,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         commandFinishedThresholdField.stringValue = String(settings.commandFinishedThresholdSeconds)
         transparentTitlebarToggle.state = on(settings.transparentTitlebar)
         sidebarVisibleToggle.state = on(settings.sidebarVisible)
+        machineIndicatorToggle.state = on(settings.showMachineIndicator)
         restoreWindowSizeToggle.state = on(settings.restoreWindowSize)
         systemNotificationsToggle.state = on(settings.systemNotificationsEnabled)
         notificationSoundToggle.state = on(settings.notificationSoundEnabled)
@@ -2367,6 +2371,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         write(\.paletteHex, HarnessSettings.normalizedPalette(paletteHexValues))
         write(\.transparentTitlebar, transparentTitlebarToggle.state == .on)
         write(\.sidebarVisible, sidebarVisibleToggle.state == .on)
+        write(\.showMachineIndicator, machineIndicatorToggle.state == .on)
         write(\.restoreWindowSize, restoreWindowSizeToggle.state == .on)
         write(\.paneSpacing, HarnessSettings.clampedPaneSpacing(Double(paneSpacingField.stringValue) ?? 4))
         write(\.windowPaddingX, HarnessSettings.clampedPadding(Float(paddingXField.stringValue) ?? 12))

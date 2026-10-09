@@ -424,6 +424,32 @@ The final consumer check covers the added output-subscription identity guard.
   sidebar enabled. Enabled size memory in that isolated preview and verified both
   the saved setting and AppKit frame (1200×674 points).
 
+## Window machine identity and switching
+
+- Added an optional machine control beside the tab strip and a compact equivalent in the
+  sidebar. Local windows say This Mac; remote windows show their saved name and
+  SSH destination, replacing the subtitle with reconnect/disconnect status when
+  necessary. Full identity and status remain available in the tooltip and AX label.
+- Identity comes from each window's owner, never the globally active host. Narrow
+  strips collapse the control to an icon; very narrow sidebars hide that extra
+  control while keeping the existing Remote menu available.
+- The menu lists saved hosts and their state, checks the current machine, and
+  exposes Sessions and Add Remote Host. Selection reuses asynchronous attachment,
+  retry, and window focus/open behavior; existing windows stay on their own hosts.
+  Duplicate connects from the same control are disabled while pending.
+- Appearance and the chrome context menu can show/hide the indicator. The setting
+  persists, and hiding it returns its width to the tabs. The local control uses a
+  quiet laptop glyph and untruncated label without an extra chevron.
+- No polling or hostname lookup: unchanged metadata snapshots leave labels/images
+  alone. Saved-host data is read on owner changes or menu opening.
+- Verification: four focused tab spacing/drag checks passed, including local and
+  remote identity at 480, 700, and 960 points. Two additional checks cover hiding
+  the control without reserved space and round-tripping its preference (six total).
+  Release build and both strict package signature checks passed. Visually checked
+  the untruncated label, menu, live off/on toggle, returned tab space, and sidebar
+  control. No live remote host is configured, so remote attachment remains unverified
+  in this pass. Existing reconnect/reflow text artifacts remain tracked separately.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named

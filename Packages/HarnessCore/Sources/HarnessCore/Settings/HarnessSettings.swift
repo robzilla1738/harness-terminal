@@ -118,6 +118,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var defaultCWD: String
     public var transparentTitlebar: Bool
     public var sidebarVisible: Bool
+    public var showMachineIndicator: Bool
     /// Restore the main window's size + position across launches. When false,
     /// the window opens at its built-in default size, centered. Window-level only — the
     /// frame is persisted via `NSWindow.setFrameAutosaveName`.
@@ -398,6 +399,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
         transparentTitlebar: Bool = true,
         sidebarVisible: Bool = false,
+        showMachineIndicator: Bool = true,
         restoreWindowSize: Bool = true,
         backgroundOpacity: Float = 0.63,
         backgroundBlur: Int = 16,
@@ -479,6 +481,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         self.defaultCWD = defaultCWD
         self.transparentTitlebar = transparentTitlebar
         self.sidebarVisible = sidebarVisible
+        self.showMachineIndicator = showMachineIndicator
         self.restoreWindowSize = restoreWindowSize
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
@@ -697,6 +700,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD = try fields.decode(.defaultCWD, \.defaultCWD)
         transparentTitlebar = try fields.decode(.transparentTitlebar, \.transparentTitlebar)
         sidebarVisible = try fields.decode(.sidebarVisible, \.sidebarVisible)
+        showMachineIndicator = try fields.decode(.showMachineIndicator, \.showMachineIndicator)
         restoreWindowSize = try fields.decode(.restoreWindowSize, \.restoreWindowSize)
         backgroundOpacity = try fields.decode(.backgroundOpacity, \.backgroundOpacity)
         backgroundBlur = try fields.decode(.backgroundBlur, \.backgroundBlur)

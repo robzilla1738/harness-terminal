@@ -15,6 +15,8 @@ enum MainMenuBuilder {
         add("Switch Session…", #selector(MenuTarget.switchSession))
         menu.addItem(.separator())
         add("Toggle Sidebar", #selector(MenuTarget.toggleSidebar))
+        add(SessionCoordinator.shared.settings.showMachineIndicator ? "Hide Machine Indicator" : "Show Machine Indicator",
+            #selector(MenuTarget.toggleMachineIndicator))
         add("Command Palette…", #selector(MenuTarget.commandPalette))
         menu.addItem(.separator())
         add("Settings…", #selector(MenuTarget.openSettings))
@@ -760,6 +762,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         } else {
             SessionSwitcherController.toggle(relativeTo: NSApp.keyWindow)
         }
+    }
+
+    @objc func toggleMachineIndicator() {
+        let coordinator = SessionCoordinator.shared
+        coordinator.settings.showMachineIndicator.toggle()
+        coordinator.saveSettings()
+        coordinator.applySettingsToHosts()
     }
 
     @objc func toggleSidebar() {
