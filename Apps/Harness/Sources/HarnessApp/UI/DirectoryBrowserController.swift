@@ -489,7 +489,9 @@ private final class PathPickerCellView: NSTableCellView {
         else { symbol = "doc.text" }
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: entry.directory ? "Folder" : "File")
         icon.contentTintColor = entry.directory ? .systemTeal : HarnessDesign.chrome.textSecondary
-        let text = NSMutableAttributedString(string: entry.name, attributes: [.font: PathPickerStyle.body, .foregroundColor: HarnessDesign.chrome.textSecondary])
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingHead
+        let text = NSMutableAttributedString(string: entry.name, attributes: [.font: PathPickerStyle.body, .foregroundColor: HarnessDesign.chrome.textSecondary, .paragraphStyle: paragraph])
         let filename = (entry.name as NSString).lastPathComponent
         let range = (entry.name as NSString).range(of: filename, options: .backwards)
         text.addAttribute(.foregroundColor, value: HarnessDesign.chrome.textPrimary, range: range)
