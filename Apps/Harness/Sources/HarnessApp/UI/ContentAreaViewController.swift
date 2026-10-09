@@ -883,12 +883,19 @@ final class HarnessSplitView: NSSplitView, NSSplitViewDelegate {
         forDrawnRect drawnRect: NSRect,
         ofDividerAt dividerIndex: Int
     ) -> NSRect {
-        // Widen the interactive/cursor zone past the 1px thin divider. NSSplitView
-        // shows the resize cursor over the effective rect, so this covers the cursor.
-        var rect = proposedEffectiveRect
+        // A zero-width comfortable divider can have an empty proposed rect. Derive the
+        // full-length hit area from pane geometry, centered on the visible gap, so both
+        // sides remain draggable without adding a drawn separator.
+        guard subviews.indices.contains(dividerIndex) else { return proposedEffectiveRect }
+        let first = subviews[dividerIndex].frame
         let hit = max(dividerThickness, 8)
-        if isVertical { rect.size.width = hit } else { rect.size.height = hit }
-        return rect
+        if isVertical {
+            return NSRect(x: first.maxX + dividerThickness / 2 - hit / 2,
+                          y: bounds.minY, width: hit, height: bounds.height)
+        }
+        let edge = isFlipped ? first.maxY : first.minY - dividerThickness
+        return NSRect(x: bounds.minX, y: edge + dividerThickness / 2 - hit / 2,
+                      width: bounds.width, height: hit)
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {

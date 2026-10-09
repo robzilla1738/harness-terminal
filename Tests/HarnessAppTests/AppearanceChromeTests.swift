@@ -133,4 +133,20 @@ final class AppearanceChromeTests: XCTestCase {
     private func tryUnwrapRGB(_ color: NSColor) -> NSColor {
         color.usingColorSpace(.sRGB) ?? color
     }
+    func testPaneDividerRemainsDraggableWhenAppKitProposesEmptyHitRect() {
+        let split = HarnessSplitView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        split.isVertical = true
+        split.addSubview(NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 400)))
+        split.addSubview(NSView(frame: NSRect(x: 300, y: 0, width: 300, height: 400)))
+        let vertical = split.splitView(split, effectiveRect: .zero, forDrawnRect: .zero, ofDividerAt: 0)
+        XCTAssertEqual(vertical.height, 400)
+        XCTAssertGreaterThanOrEqual(vertical.width, 8)
+        XCTAssertTrue(vertical.contains(NSPoint(x: 300, y: 200)))
+        split.isVertical = false
+        split.subviews[0].frame = NSRect(x: 0, y: 200, width: 600, height: 200)
+        let horizontal = split.splitView(split, effectiveRect: .zero, forDrawnRect: .zero, ofDividerAt: 0)
+        XCTAssertEqual(horizontal.width, 600)
+        XCTAssertGreaterThanOrEqual(horizontal.height, 8)
+    }
+
 }
