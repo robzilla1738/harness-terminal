@@ -3,9 +3,11 @@ import Foundation
 import os
 #endif
 
-public enum DaemonSessionError: Error, CustomStringConvertible {
+public enum DaemonSessionError: LocalizedError, CustomStringConvertible {
     case daemonError(String)
     case unexpectedResponse
+
+    public var errorDescription: String? { description }
 
     public var description: String {
         switch self {

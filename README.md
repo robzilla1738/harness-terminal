@@ -10,8 +10,9 @@ One self-contained app. The terminal engine, daemon, and CLI are first-party Swi
 
 ## Download
 
-**Harness 2.0** brings saved layouts, broader search, native color emoji, and the terminal
-reliability and performance improvements documented in the [changelog](CHANGELOG.md).
+**Harness 2.1** adds secure QR setup for the iPhone and iPad companion, LAN/Tailscale
+connection guidance, and terminal-input refinements. Saved layouts, broader search, native
+color emoji, and the full changes are documented in the [changelog](CHANGELOG.md).
 See the [release-readiness review](docs/RELEASE-READINESS-2026-10-09.md) and
 [performance results](docs/SCORECARD.md) for measured results and remaining acceptance work.
 
@@ -69,7 +70,7 @@ New installs start in Persistent: the quiet look, and sessions survive quitting.
 - Agent alerts as desktop notifications and a notification bell, with a switch per event in Settings ▸ Notifications (needs you, finished, failed, bell, long command finished); `Cmd+Shift+U` jumps to whoever is waiting
 - One-line hook install: `harness-cli install-hooks <agent>`
 - Command palette (`Cmd+K`) and a native macOS Settings window (`Cmd+,`)
-- 514 bundled color themes, including 25 original Harness palettes: the unchanged pure-black default, blue-teal Harness Deep Sea, Harness Navy, and eight light options, plus `.harnesstheme` export / import for sharing — double-click (or Open With) a theme file to install it, optionally applying its colors immediately. Settings ▸ Colors ▸ Theme saves the colors on screen as a named theme or exports them; saved and imported themes list in the theme menu
+- 514 bundled color themes, including 25 original Harness palettes: Graphite as the new-install default, pure-black Harness Obsidian, blue-teal Harness Deep Sea, Harness Navy, and eight light options, plus `.harnesstheme` export / import for sharing — double-click (or Open With) a theme file to install it, optionally applying its colors immediately. Settings ▸ Colors ▸ Theme saves the colors on screen as a named theme or exports them; saved and imported themes list in the theme menu
 - Shell integration (OSC 133), auto-injected at spawn for bash / zsh / fish: prompt marks for jump-to-prompt and a command success / failure gutter, no install step (opt out with `set-option shell-integration off`; manual snippets remain in [docs/shell-integration/](docs/shell-integration/README.md))
 - Inline images that stay put across reflow and scroll into history
 - Cursor-anchored Insert Path popup (`⌥⌘I`) with Folder/Project fuzzy search, keyboard navigation, and shell-quoted insertion; drag file-backed folders or images into a pane to insert paths
@@ -148,7 +149,11 @@ Pass extra SSH options (port, identity file, jump host) with `--ssh-arg`, e.g.
 
 ### Connect an iPhone or iPad
 
-With SSH enabled and the companion-ready host installed, enter `/remote` in Harness’s command prompt or choose **Connect Phone or iPad** in the command palette. Scan its QR code in the iOS app and enter your account password once to install a device key. In a shell, run `harness-cli pair`; use `--host` for a reachable LAN or Tailscale address and `--port` for a custom SSH port. The code contains public metadata only. See [mobile connection details](docs/MOBILE-BRIDGE.md#pairing-and-files).
+With SSH enabled and Harness 2.1 or later installed, enter `/remote` in Harness’s command prompt or choose **Connect Phone or iPad** in the command palette. In a shell, run `harness-cli pair`. Scan the compact QR code in the [native iOS companion](https://github.com/robzilla1738/harness-ios), verify the computer, and enter your account password once to install a device key. The code contains public metadata only.
+
+The Mac pairing window offers discovered LAN addresses, connected Tailscale addresses, **Set Up Tailscale**, and **Refresh**. Use the same tailnet on both devices for access away from home; ordinary SSH/Remote Login permissions still apply. Custom addresses and ports use `harness-cli pair --host reachable-hostname --port 22`. See [mobile connection and troubleshooting details](docs/MOBILE-BRIDGE.md#pairing-and-files).
+
+The companion groups work by host, workspace and session, uses the shared terminal engine and Metal renderer, includes touch scrolling and terminal shortcuts, and supports up to four visible panes on iPad. Its current distribution is source/development builds; an App Store release is not included in this terminal release.
 
 ## Agent hooks
 

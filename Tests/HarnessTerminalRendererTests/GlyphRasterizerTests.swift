@@ -22,6 +22,17 @@ final class GlyphRasterizerTests: XCTestCase {
         XCTAssertNil(rasterizer.rasterize(cluster: "ที่")?.rgba)
     }
 
+    func testTextPresentationSymbolsDoNotBecomeEmoji() throws {
+        let rasterizer = GlyphRasterizer(fontFamily: "Menlo", size: 14)
+        for text in ["●", "⏺", "⏺\u{FE0E}", "♥"] {
+            XCTAssertNil(try XCTUnwrap(rasterizer.rasterize(cluster: text)).rgba, text)
+            let shaped = rasterizer.shape(text, bold: false, italic: false)
+            XCTAssertFalse(shaped.isEmpty)
+            XCTAssertTrue(shaped.allSatisfy { !CTFontGetSymbolicTraits($0.font).contains(.traitColorGlyphs) }, text)
+        }
+        XCTAssertNotNil(try XCTUnwrap(rasterizer.rasterize(cluster: "⏺\u{FE0F}")).rgba)
+    }
+
     func testColorEmojiConvertToTheTargetColorSpace() throws {
         let sRGB = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let p3 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))

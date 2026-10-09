@@ -83,7 +83,9 @@ final class TerminalTabBarView: NSView {
     /// Leading x of the first pill: the sessions glyph, then the same gap again.
     private var machineWidth: CGFloat { bounds.width < 720 ? controlSize : (machineButton.isRemote ? 172 : 110) }
     private var showsMachine: Bool { SessionCoordinator.shared.settings.showMachineIndicator }
-    private var sessionsButtonX: CGFloat { leadingInset + controlGap + (showsMachine ? machineWidth + HarnessDesign.Spacing.md : 0) }
+    // The traffic-light clearance already includes a gap; don't add it a second time.
+    private var controlsLeft: CGFloat { max(controlGap, leadingInset) }
+    private var sessionsButtonX: CGFloat { controlsLeft + (showsMachine ? machineWidth + HarnessDesign.Spacing.md : 0) }
 
     func updateMachine(owner: String) {
         let wasRemote = machineButton.isRemote
@@ -309,7 +311,7 @@ final class TerminalTabBarView: NSView {
         super.layout()
         let buttonY = rowCenterY - controlSize / 2
         machineButton.compact = bounds.width < 720
-        machineButton.frame = NSRect(x: leadingInset + controlGap, y: rowCenterY - 17, width: machineWidth, height: 34)
+        machineButton.frame = NSRect(x: controlsLeft, y: rowCenterY - 17, width: machineWidth, height: 34)
         sessionsButton.frame = NSRect(
             x: sessionsButtonX,
             y: buttonY,

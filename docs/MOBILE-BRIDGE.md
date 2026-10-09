@@ -1,13 +1,13 @@
 # Harness mobile companion bridge
 
-Harness Remote connects over a normal, host-key-verified SSH **exec channel without a PTY**:
+The [Harness iPhone and iPad companion](https://github.com/robzilla1738/harness-ios) connects over a normal, host-key-verified SSH **exec channel without a PTY**:
 
 ```sh
 /absolute/path/to/harness-cli mobile-bridge --stdio --protocol 1
 ```
 
 The bridge connects to the existing local Harness daemon. It never restarts a daemon or
-creates a login shell. A daemon without `mobile-companion-v1` returns `updateRequired`.
+creates a login shell. A daemon without `mobile-companion-v1` returns `updateRequired`. The public companion-ready host release is Harness 2.1.0 (build 132) or later.
 Use one control channel for RPC and state subscriptions, and a separate channel for each
 visible terminal pane. The shared Foundation-only `HarnessRemoteProtocol` package is the
 authoritative wire model and codec.
@@ -48,7 +48,7 @@ resume sends retained byte deltas without restoring a second checkpoint.
 Read-only subscribers cannot input or resize. Control subscribers retain their daemon
 client ID, sizing and terminal-query-responder state. A `resize` with `takeOwnership`
 explicitly claims sizing; ordinary resizes do not repeatedly steal it from another client.
-Switching between Watch and Control uses a fresh attach.
+The bridge sends a size vote and its control claim in order on the same subscription socket. A repeated claim from a valid voter succeeds in both sizing modes, so keyboard resizes do not disconnect the phone. Switching between Watch and Control uses a fresh attach.
 
 `pane.history` accepts a pane or surface UUID plus optional token, before-row and count.
 It returns immutable styled rows with wrap, cluster, width, color, attributes and hyperlink
@@ -73,7 +73,7 @@ harness-cli pair --link
 harness-cli pair --json
 ```
 
-`remote pair` and `/remote` are CLI aliases; `remote list/add/remove` are unchanged. `mobile-setup --json` retains the existing metadata interface.
+`remote pair` and `/remote` are CLI aliases; `remote list/add/remove` are unchanged. In a local Harness pane on macOS, pairing opens the compact native QR window. SSH and headless terminals keep the text QR, shown only when both its width and height fit; the copyable link is always available there. `mobile-setup --json` retains the existing metadata interface.
 
 The app scans a versioned `harness://connect` link, reviews the host, and asks for the account password once to install and verify a device key. Existing saved credentials are reused for the same address/port/account. The shared `RemotePairingInfo` parser also accepts legacy JSON and rejects unsupported versions, duplicate URI fields, invalid fingerprints and oversized data.
 
@@ -96,3 +96,17 @@ up. It does not touch existing sessions or SSH keys. This check passed on macOS 
 Swift 6.2.4 aarch64 Linux during companion implementation. Physical iOS SSH/pairing
 acceptance remains a separate release check; bridge pipe validation does not establish
 device networking, typing or battery performance.
+
+### LAN, Tailscale and shell compatibility
+
+The pairing window includes Set Up Tailscale and Refresh. Read-only local `tailscale status --json` discovery adds the connected node’s IP to optional pairing `routes` (at most four alternates). A phone can reuse one identity-pinned profile on LAN or Tailscale; ordinary SSH/Remote Login and account authentication remain required. Setup never joins a tailnet or changes SSH settings. The iOS guide is documented in the companion repository’s `docs/PAIRING.md`.
+
+The companion executes the quoted bridge path through the SSH account shell, and wraps manual executable discovery in `/bin/sh -c` for fish compatibility. Concurrent bash, zsh and fish panes are exercised through independent bridge channels in the isolated real-SSH fixture. Input and history remain scoped to the exact pane.
+
+## Connection troubleshooting and observed device checks
+
+Being on the same Wi-Fi network establishes reachability, not SSH authorization. On macOS, enable **System Settings → General → Sharing → Remote Login** and explicitly allow the account in the code. An Administrators-only rule can stop accepting that account after temporary administrator membership expires. Keep the computer awake and check SSH/firewall access. A saved host key mismatch must be independently verified; rescanning cannot replace a trusted identity silently.
+
+Closing the GUI does not require re-pairing: persistent sessions belong to the daemon, and a connected host with no open sessions is a normal empty state. Closed processes are not recreated automatically; create a new session or restore a layout with fresh processes. The companion discards inactive pooled SSH clients, retries an interrupted initial handshake once per route, and never retries rejected authentication or replays uncertain input.
+
+On October 9, 2026, saved-key connection and background/reopen checks passed from an iPhone 17 Pro Max with the desktop GUI closed. A separate disposable-tab check passed attachment, repeated keyboard-sized resizes, typing, history, two immediate Ctrl-C interrupts and subsequent shell typing. Real bash/zsh/fish integration passes in an isolated SSH fixture. These checks do not qualify physical iPad/IME/VoiceOver use, real tailnet roaming or battery/performance targets; the companion's release evidence records those remaining gates.

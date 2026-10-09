@@ -8,6 +8,27 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-09
+
+Harness 2.1 adds secure connections from the native iPhone and iPad companion, plus pairing,
+terminal-input and desktop layout refinements. The companion's source is available in
+[harness-ios](https://github.com/robzilla1738/harness-ios); it is not yet distributed through the App Store.
+
+### Added
+- **Connect a phone or iPad:** `/remote`, the Connect Phone or iPad command-palette action, and `harness-cli pair` show a compact QR code with a copyable connection link. Setup verifies the SSH host identity and supports password-assisted installation of a device key. Codes contain public metadata only.
+- **LAN and Tailscale setup:** the pairing window discovers local addresses and an existing Tailscale connection, with setup guidance and Refresh. One pinned host identity can include alternate LAN/Tailscale routes; SSH account access is still required.
+- **Native companion protocol:** authenticated SSH exec channels carry workspace/session/pane snapshots, activity, exact-pane input and resizing, parser-complete checkpoints, resumable output, styled history, saved setups, bounded file uploads and managed device-key enrollment. The CLI and daemon support macOS and Linux hosts.
+
+### Fixed
+- **Mobile keyboard resizing:** size votes and ownership claims travel in order on one persistent subscription; valid repeated claims succeed in both sizing modes instead of disconnecting the phone.
+- **Shell compatibility:** bridge discovery works with bash, zsh and fish account shells, and concurrent pane channels keep input and history separate.
+- **Text symbol rendering:** text-default symbols such as Claude Code's response marker keep their monochrome presentation; explicit emoji and compound emoji retain color.
+- **Keyboard event reporting:** literal text key releases no longer duplicate characters when an application enables Kitty event reporting without requesting all keys.
+
+### Changed
+- **Desktop tab polish:** the active tab is slightly darker in the legacy Default theme, and traffic-light clearance is measured from the native controls so the workspace button and first tab have balanced gaps.
+- **Companion experience:** the iOS source now includes centered Liquid Glass terminal controls, a direct Ctrl-C button, one-shot modifiers, hold-to-repeat arrows, function/navigation keys, touch scrolling, desktop process marks, grouped sessions and clearer connection recovery. See its [verification and distribution status](https://github.com/robzilla1738/harness-ios/blob/main/docs/RELEASE.md).
+
 ## [2.0.2] - 2026-10-09
 
 ### Fixed
@@ -1485,3 +1506,5 @@ per-patch detail.
 [1.1.0]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.1.0
 [1.0.6]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.0.6
 [1.0.5]: https://github.com/robzilla1738/harness-terminal/releases/tag/v1.0.5
+
+[2.1.0]: https://github.com/robzilla1738/harness-terminal/releases/tag/v2.1.0

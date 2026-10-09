@@ -11,6 +11,9 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
     static let shared = MobilePairingController()
     private let hostField = NSTextField(string: "")
     private let addresses = NSPopUpButton()
+    private let networkHint = NSTextField(wrappingLabelWithString: "Wi-Fi nearby. Tailscale from anywhere.")
+    private var tailscale: TailscaleStatus?
+    private var networkTask: Task<Void, Never>?
     private let portField = NSTextField(string: "22")
     private let status = NSTextField(wrappingLabelWithString: "")
     private let fingerprint = NSTextField(wrappingLabelWithString: "")
@@ -22,8 +25,8 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
     private var probe: NWConnection?
 
     private init() {
-        let height = min(780, (NSScreen.main?.visibleFrame.height ?? 820) - 48)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let height = min(660, (NSScreen.main?.visibleFrame.height ?? 820) - 48)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Connect a Phone or iPad"
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -37,6 +40,13 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         hostField.delegate = self; portField.delegate = self
         addresses.setAccessibilityLabel("Connection network")
         addresses.target = self; addresses.action = #selector(selectAddress)
+        networkHint.font = .systemFont(ofSize: 12)
+        networkHint.textColor = .secondaryLabelColor
+        networkHint.alignment = .center
+        let tailscaleButton = NSButton(title: "Set Up Tailscale…", target: self, action: #selector(setUpTailscale))
+        let refresh = NSButton(title: "Refresh", target: self, action: #selector(refreshNetworks))
+        let networks = NSStackView(views: [addresses, tailscaleButton, refresh])
+        networks.spacing = 8
         portField.setAccessibilityLabel("SSH port")
         let hostRow = NSStackView(views: [NSTextField(labelWithString: "Address"), hostField, NSTextField(labelWithString: "Port"), portField])
         hostRow.spacing = 10
@@ -44,8 +54,8 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         hostField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
         qr.imageScaling = .scaleNone
         qr.setAccessibilityLabel("Connection metadata QR code")
-        qr.widthAnchor.constraint(equalToConstant: 280).isActive = true
-        qr.heightAnchor.constraint(equalToConstant: 280).isActive = true
+        qr.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        qr.heightAnchor.constraint(equalToConstant: 220).isActive = true
         fingerprint.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         fingerprint.isSelectable = true
         fingerprint.alignment = .center
@@ -60,7 +70,7 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         let note = NSTextField(wrappingLabelWithString: "This code contains no password or private key. Your phone verifies the host fingerprint before connecting.")
         note.font = .systemFont(ofSize: 12)
         note.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [heading, explanation, addresses, hostRow, qr, fingerprint, status, actions, note])
+        let stack = NSStackView(views: [heading, explanation, networks, networkHint, hostRow, qr, fingerprint, status, actions, note])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 14
@@ -83,25 +93,64 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
             note.widthAnchor.constraint(equalTo: stack.widthAnchor),
             fingerprint.widthAnchor.constraint(equalTo: stack.widthAnchor),
             status.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            networkHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         window.center()
     }
     required init?(coder: NSCoder) { nil }
 
-    func present() {
+    func present(host: String? = nil, port: Int? = nil) {
+        if let host { hostField.stringValue = host }
+        if let port { portField.stringValue = String(port) }
         showWindow(nil); window?.makeKeyAndOrderFront(nil)
-        do {
-            let available = try MobileConnectionAddress.available()
-            addresses.removeAllItems()
-            for address in available {
-                addresses.addItem(withTitle: address.title)
-                addresses.lastItem?.representedObject = address.host
+        refreshNetworks()
+    }
+
+    @objc private func refreshNetworks() {
+        networkTask?.cancel()
+        networkTask = Task { [weak self] in
+            do {
+                let (available, vpn) = try await Task.detached {
+                    (try MobileConnectionAddress.available().filter { !$0.isVPN }, TailscaleStatus.discover())
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                tailscale = vpn
+                addresses.removeAllItems()
+                for address in available {
+                    addresses.addItem(withTitle: address.title)
+                    addresses.lastItem?.representedObject = address.host
+                }
+                if let address = vpn.address {
+                    addresses.addItem(withTitle: "Tailscale · \(address)")
+                    addresses.lastItem?.representedObject = address
+                }
+                addresses.isHidden = addresses.numberOfItems == 0
+                networkHint.stringValue = vpn.address == nil ? "Wi-Fi nearby. Set up Tailscale to connect from anywhere." : "One QR code includes Wi-Fi and Tailscale. Your phone chooses a reachable route."
+                if hostField.stringValue.isEmpty { hostField.stringValue = available.first?.host ?? vpn.address ?? "" }
+                if let item = addresses.itemArray.first(where: { $0.representedObject as? String == hostField.stringValue }) { addresses.select(item) }
+                updateCode()
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.status.stringValue = "Could not discover network addresses. Enter your Mac's address and choose Update Code."
             }
-            addresses.isHidden = available.isEmpty
-            if hostField.stringValue.isEmpty { hostField.stringValue = available.first?.host ?? "" }
-            if let item = addresses.itemArray.first(where: { $0.representedObject as? String == hostField.stringValue }) { addresses.select(item) }
-            updateCode()
-        } catch { status.stringValue = "Could not discover network addresses. Enter your Mac's address and choose Update Code." }
+        }
+    }
+
+    @objc private func setUpTailscale() {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Connect from anywhere with Tailscale"
+        alert.informativeText = (tailscale?.message ?? "Install Tailscale on this Mac and your phone.")
+            + "\n\n1. Sign in to the same Tailscale account on both devices.\n2. Turn Tailscale on on both devices.\n3. Return here and choose Refresh, then scan the new QR code.\n\nKeep Remote Login enabled. Harness uses your Mac login password once, then its own device key."
+        alert.addButton(withTitle: tailscale?.installed == true ? "Open Tailscale" : "Get Tailscale")
+        alert.addButton(withTitle: "Done")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            let app = URL(fileURLWithPath: "/Applications/Tailscale.app")
+            if FileManager.default.fileExists(atPath: app.path) {
+                NSWorkspace.shared.open(app)
+            } else { NSWorkspace.shared.open(URL(string: "https://tailscale.com/download/mac")!) }
+        }
     }
 
     @objc private func selectAddress() {
@@ -115,7 +164,7 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         metadata = nil; qr.image = nil; fingerprint.stringValue = ""; copy.isEnabled = false; generate.isEnabled = true
         status.stringValue = "Choose Update Code to use this address and port."
     }
-    func windowWillClose(_ notification: Notification) { task?.cancel(); probe?.cancel(); probe = nil }
+    func windowWillClose(_ notification: Notification) { task?.cancel(); networkTask?.cancel(); probe?.cancel(); probe = nil }
 
     @objc private func updateCode() {
         task?.cancel(); probe?.cancel(); probe = nil
@@ -168,7 +217,7 @@ final class MobilePairingController: NSWindowController, NSWindowDelegate, NSTex
         filter?.setValue("M", forKey: "inputCorrectionLevel")
         guard let image = filter?.outputImage else { return nil }
         let bordered = image.composited(over: CIImage(color: .white).cropped(to: image.extent.insetBy(dx: -4, dy: -4)))
-        let scale = max(1, floor(280 / bordered.extent.width))
+        let scale = max(1, floor(220 / bordered.extent.width))
         let scaled = bordered.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cg = CIContext().createCGImage(scaled, from: scaled.extent) else { return nil }
         return NSImage(cgImage: cg, size: NSSize(width: scaled.extent.width, height: scaled.extent.height))

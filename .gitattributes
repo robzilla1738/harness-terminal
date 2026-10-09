@@ -8,3 +8,9 @@ Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine/Width/CharacterWidt
 # Preserve the pinned, unmodified upstream QR encoder formatting.
 Packages/CHarnessQR/qrcodegen.c -whitespace
 Packages/CHarnessQR/include/qrcodegen.h -whitespace
+
+# Third-party decoder sources and exported logo paths are not authored app code.
+Packages/CHarnessQR/qrcodegen.c linguist-vendored
+Packages/CHarnessQR/include/qrcodegen.h linguist-vendored
+Packages/CHarnessImage/stb_image.h linguist-vendored
+Apps/Harness/Sources/HarnessApp/UI/AgentIconArt.swift linguist-generated

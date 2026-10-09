@@ -53,6 +53,7 @@ final class MainWindowController: NSWindowController {
         window.toolbar = toolbar
         window.toolbarStyle = .unified
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
+        HarnessDesign.trafficLightTrailingEdge = Self.trafficLightTrailingEdge(in: window) ?? HarnessDesign.trafficLightTrailingEdge
         Self.applyWindowAppearance(window)
         let context = WindowContext(sessionID: sessionID, owner: owner)
         WindowContexts.register(context)
@@ -75,6 +76,7 @@ final class MainWindowController: NSWindowController {
         self.init(window: window)
         // A content controller can resize the window; the lights stay put relative to the top.
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter
+        HarnessDesign.trafficLightTrailingEdge = Self.trafficLightTrailingEdge(in: window) ?? HarnessDesign.trafficLightTrailingEdge
         // Window-edge hairline — topmost subview of the root contentView (added after the
         // split view loads, so it stays above all chrome). Click-through; layer island only.
         if let contentView = window.contentView {
@@ -196,6 +198,12 @@ final class MainWindowController: NSWindowController {
             opaqueBackground: HarnessChrome.current.terminalBackground,
             to: window
         )
+    }
+
+    static func trafficLightTrailingEdge(in window: NSWindow) -> CGFloat? {
+        guard let button = window.standardWindowButton(.zoomButton), let frameView = button.superview else { return nil }
+        let edge = frameView.convert(button.frame, to: nil).maxX
+        return edge > 0 && edge < 160 ? edge : nil
     }
 
     /// Distance from the window's top edge to the close button's center.

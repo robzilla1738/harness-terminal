@@ -23,10 +23,12 @@ public struct SurfaceSize: Equatable, Sendable {
 }
 
 public struct SurfaceTake: Equatable, Sendable {
+    public var accepted: Bool
     public var ownershipChanged: Bool
     public var size: SurfaceSize?
 
-    public init(ownershipChanged: Bool, size: SurfaceSize?) {
+    public init(accepted: Bool, ownershipChanged: Bool, size: SurfaceSize?) {
+        self.accepted = accepted
         self.ownershipChanged = ownershipChanged
         self.size = size
     }
@@ -65,16 +67,20 @@ public struct SurfaceSizeArbiter: Equatable, Sendable {
 
     /// Make `client` the owner of `surface`. Ownership does not change in
     /// `smallest` mode, when `client` has not voted, or when `client` already
-    /// owns the surface. `size` is set only when the PTY dimensions change.
+    /// owns the surface. `accepted` distinguishes an existing vote from an invalid
+    /// client; an already-applied claim succeeds. `size` is set only when the PTY dimensions change.
     public mutating func take(client: Int32, surface: String) -> SurfaceTake {
-        guard mode == .owner, votes[surface]?[client] != nil else {
-            return SurfaceTake(ownershipChanged: false, size: nil)
+        guard votes[surface]?[client] != nil else {
+            return SurfaceTake(accepted: false, ownershipChanged: false, size: nil)
+        }
+        guard mode == .owner else {
+            return SurfaceTake(accepted: true, ownershipChanged: false, size: nil)
         }
         let previous = owners[surface]
         let before = effectiveSize(surface)
         owners[surface] = client
         let after = effectiveSize(surface)
-        return SurfaceTake(ownershipChanged: previous != client, size: after != before ? after : nil)
+        return SurfaceTake(accepted: true, ownershipChanged: previous != client, size: after != before ? after : nil)
     }
 
     /// Drop every vote from `client`. In `owner` mode, a disconnected owner is

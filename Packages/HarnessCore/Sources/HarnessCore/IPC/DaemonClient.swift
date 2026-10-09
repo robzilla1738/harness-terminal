@@ -445,11 +445,17 @@ public final class DaemonSubscription: @unchecked Sendable {
     /// length on an old daemon, which drops the connection. The daemon's `.ok` ack arrives
     /// interleaved with the output stream and is ignored by the read loop, exactly like
     /// `detachSurface`'s; resizes are far too infrequent for the ack to matter.
-    public func resize(_ surfaceID: String, rows: UInt16, cols: UInt16) {
+    public func resize(_ surfaceID: String, rows: UInt16, cols: UInt16, takeOwnership: Bool = false) {
         lock.lock(); let dead = cancelled || finished; lock.unlock()
         guard !dead,
-              let payload = try? IPCCodec.encode(IPCEnvelope(request: .resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols)))
+              var payload = try? IPCCodec.encode(IPCEnvelope(request: .resizeSurface(surfaceID: surfaceID, rows: rows, cols: cols)))
         else { return }
+        // Keep the vote and claim on the same socket, in order. A separate RPC can
+        // reach the daemon before this subscription's size vote exists.
+        if takeOwnership {
+            guard let claim = try? IPCCodec.encode(IPCEnvelope(request: .takeSurface(surfaceID: surfaceID, clientID: nil))) else { return }
+            payload.append(claim)
+        }
         writeFrame(payload)
     }
 

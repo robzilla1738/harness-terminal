@@ -1,5 +1,10 @@
 # Release-readiness review — October 9, 2026
 
+This is the historical Harness 2.0 readiness review. The current 2.1 release and companion
+follow-up are documented in [the release runbook](RELEASE.md), [CHANGELOG.md](../CHANGELOG.md)
+and [MOBILE-BRIDGE.md](MOBILE-BRIDGE.md). Statements below describe that original audit.
+
+
 This candidate preserves Harness's existing visual design and improves restoration,
 split correctness, reflow performance, updater security, Unicode coverage, color emoji, and build reliability.
 It is a tested local candidate, not a published release or a claim that every bug is gone.

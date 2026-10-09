@@ -189,6 +189,18 @@ attaches the active tab. Inside: the prefix (`Ctrl-A`) then `o` / `;` cycles the
 active pane, `d` detaches; `SIGWINCH` re-lays-out live; splitting/killing panes
 in the GUI re-composites automatically.
 
+## Phone and iPad pairing
+
+| Command | Behavior |
+| --- | --- |
+| `pair [--host <address>] [--port <port>]` | Show public connection metadata as a QR code; local macOS Harness panes open the compact native pairing window. Text QR output appears only when it fits the terminal. |
+| `pair --link` | Print a copyable `harness://connect` link. |
+| `pair --json` | Print public host/user/port/fingerprint/executable metadata as JSON. |
+| `remote pair` or `/remote` | Alias for `pair`; desktop `/remote` and the Connect Phone or iPad palette action open the pairing window. |
+| `mobile-bridge --stdio --protocol 1` | Internal companion stream over an authenticated non-PTY SSH exec channel; requires the companion-ready daemon. |
+
+Enable SSH and allow the account first. Codes carry no password, private key or enrollment token. The phone verifies the advertised SSH identity and installs/verifies its device key using an account password, or reuses an existing saved credential. Local and connected Tailscale addresses can share the same pinned identity. See [mobile setup](MOBILE-BRIDGE.md).
+
 ## Remote daemons (over SSH)
 
 Drive a daemon running on another machine — including a headless or Linux box — by

@@ -16,6 +16,8 @@ final class WorkspacePivotTests: XCTestCase {
         XCTAssertEqual(taken.size, SurfaceSize(rows: 10, cols: 40))
         XCTAssertEqual(arbiter.owner(of: "s"), 2)
         XCTAssertFalse(arbiter.take(client: 2, surface: "s").ownershipChanged)
+        XCTAssertTrue(arbiter.take(client: 2, surface: "s").accepted)
+        XCTAssertFalse(arbiter.take(client: 3, surface: "s").accepted)
 
         // Client 1 votes again, so they are the most recent requester, then the owner leaves.
         XCTAssertNil(arbiter.vote(client: 1, surface: "s", rows: 40, cols: 120))
@@ -29,6 +31,7 @@ final class WorkspacePivotTests: XCTestCase {
         XCTAssertEqual(arbiter.vote(client: 1, surface: "s", rows: 50, cols: 200), SurfaceSize(rows: 50, cols: 200))
         XCTAssertEqual(arbiter.vote(client: 2, surface: "s", rows: 24, cols: 80), SurfaceSize(rows: 24, cols: 80))
         XCTAssertFalse(arbiter.take(client: 1, surface: "s").ownershipChanged)
+        XCTAssertTrue(arbiter.take(client: 1, surface: "s").accepted)
         XCTAssertEqual(arbiter.effectiveSize("s"), SurfaceSize(rows: 24, cols: 80))
         let grown = arbiter.disconnect(client: 2)
         XCTAssertEqual(grown["s"], SurfaceSize(rows: 50, cols: 200))

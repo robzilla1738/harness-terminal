@@ -22,6 +22,13 @@ final class MobilePairingQRTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { $0.hasPrefix("\u{1b}[30;47m    ") && $0.hasSuffix("    \u{1b}[0m") })
     }
 
+    func testTerminalQRRequiresEnoughHeightAsWellAsWidth() throws {
+        let qr = try MobilePairingQR(String(repeating: "connection", count: 25))
+        XCTAssertFalse(qr.fits(columns: 120, rows: 24))
+        XCTAssertFalse(qr.fits(columns: 30, rows: 80))
+        XCTAssertTrue(qr.fits(columns: 120, rows: 80))
+    }
+
     #if os(macOS)
     func testCameraDecoderReadsThePortablePairingQR() throws {
         let info = RemotePairingInfo(host: "studio.local", username: "person",

@@ -28,4 +28,16 @@ final class RemotePairingCodeTests: XCTestCase {
             XCTAssertThrowsError(try RemotePairingInfo.parseConnectionCode(source), source)
         }
     }
+
+    func testRoutesRoundTripAndRejectDuplicatesOrUnboundedLists() throws {
+        var routed = info
+        routed.alternateHosts = ["100.100.10.2", "studio.example.ts.net"]
+        XCTAssertEqual(try RemotePairingInfo.parseConnectionCode(routed.connectionURL().absoluteString), routed)
+        routed.alternateHosts = [routed.host]
+        XCTAssertThrowsError(try routed.validate())
+        routed.alternateHosts = (1...5).map { "192.168.1.\($0)" }
+        XCTAssertThrowsError(try routed.validate())
+        XCTAssertTrue(RemotePairingInfo.isTailscaleAddress("100.100.10.2"))
+        XCTAssertFalse(RemotePairingInfo.isTailscaleAddress("192.168.1.2"))
+    }
 }

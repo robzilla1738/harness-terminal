@@ -10,20 +10,24 @@ It runs on the `macos-26` runner with Xcode 26.6, the same runner and pinned
 `XCODE_VERSION` as CI, so a release is built by the toolchain CI tested. Bump
 `XCODE_VERSION` in `release.yml` and `ci.yml` together.
 
-## Harness 2.0 release preparation
+## Current release: Harness 2.1.0 (132)
 
-The user authorized the 2.0.0 release on October 9, 2026. Build 129 includes the terminal,
-workspace, and Mac usability changes from #185 and the reliability, Unicode, and color-glyph
-follow-up in #188. Version declarations and generated update notes are updated together.
+The October 9, 2026 release includes the companion-ready SSH bridge and secure public QR setup,
+LAN/Tailscale guidance, keyboard-size ownership fixes, shell compatibility, text-symbol and
+keyboard-event corrections, and desktop tab polish. The native iPhone/iPad companion is updated
+on [its main branch](https://github.com/robzilla1738/harness-ios); this release does not publish it
+to TestFlight or the App Store. See [mobile setup](MOBILE-BRIDGE.md) and the [changelog](../CHANGELOG.md).
 
-The [release-readiness review](RELEASE-READINESS-2026-10-09.md) records validation and
-older-log replay limits. Hardware acceptance remains tracked in
+Version declarations and generated update notes move together. Run CI on the shipping commit,
+then the release workflow with `tag=v2.1.0` and `deploy_appcast=true`. Signing, notarization,
+DMG smoke testing, and live appcast verification must pass before publication. The GitHub
+release and workflow retain the publication evidence and asset checksum.
+
+The [dated 2.0 readiness review](RELEASE-READINESS-2026-10-09.md) records the original terminal
+validation and restoration limits. Remaining desktop hardware acceptance stays in
 [#187](https://github.com/robzilla1738/harness-terminal/issues/187); measured performance gaps
-remain in [#27](https://github.com/robzilla1738/harness-terminal/issues/27) and the
-[scorecard](SCORECARD.md). These remain scoped limitations of the release, rather than claims
-of universal compatibility or performance leadership. CI must pass on the shipping commit,
-and signing, notarization, DMG smoke testing, and live appcast verification must complete
-before publication. The GitHub release and workflow run record the publication outcome.
+remain in [#27](https://github.com/robzilla1738/harness-terminal/issues/27) and [SCORECARD.md](SCORECARD.md).
+Mobile hardware evidence and distribution gates are tracked in the companion's `docs/RELEASE.md`.
 
 ## One-time GitHub setup
 

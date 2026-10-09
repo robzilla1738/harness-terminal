@@ -37,6 +37,11 @@ struct MobilePairingQR {
             return "\u{1b}[30;47m" + row + "\u{1b}[0m"
         }.joined(separator: "\n")
     }
+
+    func fits(columns: Int, rows: Int) -> Bool {
+        (columns == 0 || columns >= modules.count + 8)
+            && (rows == 0 || rows >= (modules.count + 9) / 2 + 2)
+    }
 }
 
 extension HarnessCLI {
@@ -53,12 +58,34 @@ extension HarnessCLI {
 
     static func printMobilePairing(_ info: RemotePairingInfo) throws {
         let link = try info.connectionURL().absoluteString
+        #if os(macOS)
+        let environment = ProcessInfo.processInfo.environment
+        if isatty(STDOUT_FILENO) != 0, environment["HARNESS_SURFACE"] != nil,
+           environment["SSH_CONNECTION"] == nil, environment["SSH_TTY"] == nil {
+            var components = URLComponents(string: link)!
+            components.scheme = "harness-pair"
+            let opener = Process()
+            opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            opener.arguments = ["-b", "com.robert.harness", components.url!.absoluteString]
+            opener.standardOutput = FileHandle.nullDevice
+            opener.standardError = FileHandle.nullDevice
+            do {
+                try opener.run()
+                opener.waitUntilExit()
+                if opener.terminationStatus == 0 {
+                    print("Scan the QR code in the Connect a Phone or iPad window.")
+                    return
+                }
+            } catch { /* A headless Mac can still use the terminal code below. */ }
+        }
+        #endif
         let qr = try MobilePairingQR(link)
         var window = winsize()
         _ = ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &window)
         print("\nConnect your phone\n\(info.username)@\(info.host):\(info.port)\n")
-        if window.ws_col == 0 || Int(window.ws_col) >= qr.modules.count + 8 { print(qr.terminalText) }
-        else { print("Widen this terminal to \(qr.modules.count + 8) columns to show the QR code, or paste the link below.") }
-        print("\n1. Open Harness on your phone and tap Scan QR code.\n2. Scan, then enter your host password once to install a device key.\n\nUse the same network, or Tailscale on both devices. SSH must be enabled.\nThis code contains no password or private key.\n\nConnection link:\n\(link)\n")
+        print("Open Harness on your phone and tap Scan QR code.\nUse the same network, or Tailscale on both devices. SSH must be enabled.\nThis code contains no password or private key.\n\nConnection link (or choose Paste connection link on your phone):\n\(link)\n")
+        // Keep the QR last so instructions and a wrapped link cannot scroll its top away.
+        if qr.fits(columns: Int(window.ws_col), rows: Int(window.ws_row)) { print(qr.terminalText) }
+        else { print("The QR needs \(qr.modules.count + 8) columns × \((qr.modules.count + 9) / 2 + 2) rows. Enlarge this pane or paste the connection link above.") }
     }
 }

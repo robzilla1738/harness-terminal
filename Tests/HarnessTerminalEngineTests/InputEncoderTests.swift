@@ -12,6 +12,20 @@ final class InputEncoderTests: XCTestCase {
         return m
     }
 
+    func testLiteralTextReleaseNeverDuplicatesTyping() {
+        for flags: UInt8 in [0, 1, 3] {
+            var modes = TerminalModes()
+            modes.kittyKeyboardStack = [flags]
+            XCTAssertEqual(encoder.encode(text: "x", shifted: nil, event: .press, modes: modes), bytes("x"))
+            XCTAssertEqual(encoder.encode(text: "x", shifted: nil, event: .release, modes: modes), [])
+        }
+        var modes = TerminalModes()
+        modes.kittyKeyboardStack = [3]
+        XCTAssertEqual(encoder.encode(text: "c", shifted: nil, modifiers: .control, event: .release, modes: modes), bytes("\u{1b}[99;5:3u"))
+        modes.kittyKeyboardStack = [11]
+        XCTAssertEqual(encoder.encode(text: "x", shifted: nil, event: .release, modes: modes), bytes("\u{1b}[120;1:3u"))
+    }
+
     // MARK: Cursor keys
 
     func testArrowsNormalMode() {

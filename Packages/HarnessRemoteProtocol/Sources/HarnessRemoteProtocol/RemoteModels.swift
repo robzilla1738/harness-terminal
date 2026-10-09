@@ -249,8 +249,10 @@ public struct RemotePairingInfo: Codable, Equatable, Sendable {
     public var username: String
     public var fingerprint: String
     public var executablePath: String
-    public init(version: Int = 1, host: String, port: Int = 22, username: String, fingerprint: String, executablePath: String) {
+    public var alternateHosts: [String]?
+    public init(version: Int = 1, host: String, port: Int = 22, username: String, fingerprint: String, executablePath: String, alternateHosts: [String]? = nil) {
         self.version = version; self.host = host; self.port = port; self.username = username; self.fingerprint = fingerprint; self.executablePath = executablePath
+        self.alternateHosts = alternateHosts
     }
 }
 

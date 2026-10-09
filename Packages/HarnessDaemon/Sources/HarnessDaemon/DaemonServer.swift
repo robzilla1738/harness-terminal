@@ -431,8 +431,8 @@ public final class DaemonServer: @unchecked Sendable {
                     targetFD = fd
                 }
                 let taken = sizeArbiter.take(client: targetFD, surface: surfaceID)
-                guard taken.ownershipChanged else {
-                    send(.error("take-surface did not change ownership"), to: fd)
+                guard taken.accepted else {
+                    send(.error("This client must attach and send its terminal size before taking control."), to: fd)
                     continue
                 }
                 if let size = taken.size {
@@ -440,9 +440,11 @@ public final class DaemonServer: @unchecked Sendable {
                 }
                 send(.ok, to: fd)
                 pushOwnership(surfaceID)
-                pushFollow(FollowEvent(type: "pane.owner_changed", payload: [
-                    "surface": .string(surfaceID), "client": .string(clients[targetFD]?.id.uuidString ?? ""),
-                ]))
+                if taken.ownershipChanged {
+                    pushFollow(FollowEvent(type: "pane.owner_changed", payload: [
+                        "surface": .string(surfaceID), "client": .string(clients[targetFD]?.id.uuidString ?? ""),
+                    ]))
+                }
                 continue
             }
             if case let .detachSurface(surfaceID) = request {

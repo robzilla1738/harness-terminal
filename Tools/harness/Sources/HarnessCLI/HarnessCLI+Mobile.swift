@@ -43,7 +43,9 @@ extension HarnessCLI {
         guard !flags.isSuperset(of: ["--json", "--link"]) else {
             throw RemoteFailure(code: "badArguments", message: "Choose either --json or --link.")
         }
-        let host = try flagValue(args, flag: "--host") ?? MobileConnectionAddress.available().first?.host
+        let localAddresses = try MobileConnectionAddress.available().filter { !$0.isVPN }.map(\.host)
+        let tailscale = TailscaleStatus.discover().address
+        let host = flagValue(args, flag: "--host") ?? localAddresses.first ?? tailscale
         guard let host else {
             throw RemoteFailure(code: "addressUnavailable", message: "Connect to Wi-Fi or Tailscale, or pass --host <reachable-address>.")
         }
@@ -67,8 +69,10 @@ extension HarnessCLI {
               let fingerprint = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isWhitespace).dropFirst().first.map(String.init) else {
             throw RemoteFailure(code: "hostKeyUnavailable", message: "Could not read the SSH host-key fingerprint.")
         }
+        let alternatives = Array(([tailscale].compactMap { $0 } + localAddresses).filter { $0 != host }.prefix(4))
         let info = RemotePairingInfo(host: host, port: port, username: NSUserName(), fingerprint: fingerprint,
-            executablePath: CLIInstallLocator.sourceBinary().standardizedFileURL.resolvingSymlinksInPath().path)
+            executablePath: CLIInstallLocator.sourceBinary().standardizedFileURL.resolvingSymlinksInPath().path,
+            alternateHosts: alternatives.isEmpty ? nil : alternatives)
         try info.validate()
         return info
     }
@@ -89,8 +93,6 @@ final class MobileBridge: @unchecked Sendable {
     private var latestAppearance: RemoteAppearance?
     private var currentAttach: HarnessRemoteProtocol.RemoteAttach?
     private var generation = UUID()
-    private var initialOwnershipRequested = false
-    private var ownership: RemoteOwnership?
     private var latestRevision: Int?
     private var latestAttention: [RemoteAttention]?
     private var finished = false
@@ -148,15 +150,12 @@ final class MobileBridge: @unchecked Sendable {
                 throw RemoteFailure(code: "inputDeliveryUnknown", message: "The connection interrupted input. It may have reached the program; it will not be retried.", deliveryUncertain: true)
             }
         case let .resize(resize):
-            stateLock.lock(); let attach = currentAttach; let subscription = pane; let owner = ownership; stateLock.unlock()
+            stateLock.lock(); let attach = currentAttach; let subscription = pane; stateLock.unlock()
             guard let attach, let subscription, !attach.readOnly, resize.surfaceID == attach.address.surfaceID else {
                 throw RemoteFailure(code: "resizeDenied", message: "This pane is not attached in Control mode")
             }
             try validateGeometry(cols: resize.cols, rows: resize.rows)
-            subscription.resize(resize.surfaceID, rows: resize.rows, cols: resize.cols)
-            if resize.takeOwnership, let id = owner?.clientID.flatMap(UUID.init(uuidString:)) {
-                _ = try HarnessCLI.checkedRequest(client, .takeSurface(surfaceID: resize.surfaceID, clientID: id))
-            }
+            subscription.resize(resize.surfaceID, rows: resize.rows, cols: resize.cols, takeOwnership: resize.takeOwnership)
         case .detach: detachPane()
         default: throw RemoteFailure(code: "unexpectedMessage", message: "This message is not accepted by the host bridge")
         }
@@ -271,19 +270,7 @@ final class MobileBridge: @unchecked Sendable {
             guard let self, self.isCurrent(id) else { return }
             let state = RemoteOwnership(surfaceID: owner.surfaceID, owner: owner.owner, responder: owner.responder ?? owner.owner,
                 rows: owner.rows, cols: owner.cols, mode: owner.mode.rawValue, clientID: owner.clientID?.uuidString)
-            self.stateLock.lock()
-            self.ownership = state
-            let claimInitialOwnership = !self.initialOwnershipRequested && !attach.readOnly && !owner.owner && owner.mode == .owner
-            if claimInitialOwnership { self.initialOwnershipRequested = true }
-            self.stateLock.unlock()
             self.emit(.ownership(state))
-            if claimInitialOwnership, let clientID = owner.clientID {
-                self.refreshQueue.async { [weak self] in
-                    guard let self, self.isCurrent(id) else { return }
-                    do { _ = try HarnessCLI.checkedRequest(self.client, .takeSurface(surfaceID: owner.surfaceID, clientID: clientID)) }
-                    catch { self.emit(.error(RemoteFailure(code: "ownershipFailed", message: error.localizedDescription))) }
-                }
-            }
         }, onEnd: { [weak self] in
             guard let self, self.isCurrent(id) else { return }
             self.fail(RemoteFailure(code: "paneDisconnected", message: "This pane disconnected. Refresh and reconnect."))
@@ -296,7 +283,7 @@ final class MobileBridge: @unchecked Sendable {
             self.emit(.error(RemoteFailure(code: "inputRejected", message: message)))
         }
         stateLock.lock(); pane = subscription; stateLock.unlock()
-        if !attach.readOnly { subscription.resize(attach.address.surfaceID, rows: attach.rows, cols: attach.cols) }
+        if !attach.readOnly { subscription.resize(attach.address.surfaceID, rows: attach.rows, cols: attach.cols, takeOwnership: true) }
     }
 
     private func snapshot() throws -> RemoteSnapshot {
@@ -437,7 +424,7 @@ final class MobileBridge: @unchecked Sendable {
     private func detachPane() {
         stateLock.lock()
         generation = UUID(); let subscription = pane
-        pane = nil; currentAttach = nil; ownership = nil; initialOwnershipRequested = false
+        pane = nil; currentAttach = nil
         stateLock.unlock()
         subscription?.cancel()
     }

@@ -230,6 +230,9 @@ public struct InputEncoder: Sendable {
                                       associatedText: associatedText, flags: flags) {
             return csiU
         }
+        // Text that falls back to literal bytes has no release representation. Sending it
+        // again on key-up would duplicate typing when Kitty enables event reporting only.
+        if event == .release { return [] }
         if modes.modifyOtherKeys >= 1, let other = modifyOtherKeysEncode(text, modifiers) {
             return other
         }

@@ -71,11 +71,46 @@ final class OwnershipDaemonTests: XCTestCase {
         XCTAssertEqual(size?.rows, 24, "ownership moves the PTY to the named client's size")
         XCTAssertEqual(size?.cols, 80)
 
+        let repeated = try client.request(.takeSurface(surfaceID: sid, clientID: narrowClient.id))
+        guard case .ok = repeated else { return XCTFail("Taking an already-owned pane must succeed: \(repeated)") }
+        // Keyboard appearance and rotation resize the same controlling subscription.
+        narrow.resize(sid, rows: 12, cols: 60, takeOwnership: true)
+        usleep(200_000)
+        size = try queryPTYSize(client, surfaceID: sid, output: output)
+        XCTAssertEqual(size?.rows, 12)
+        XCTAssertEqual(size?.cols, 60)
+
+        _ = try client.request(.setSurfaceSizeMode(.smallest))
+        let shared = try client.request(.takeSurface(surfaceID: sid, clientID: narrowClient.id))
+        guard case .ok = shared else { return XCTFail("Shared sizing must accept an attached controller: \(shared)") }
+        _ = try client.request(.setSurfaceSizeMode(.owner))
+
         narrow.cancel()
         usleep(300_000)
         size = try queryPTYSize(client, surfaceID: sid, output: output)
         XCTAssertEqual(size?.rows, 40, "when the owner disconnects, the other client takes over")
         XCTAssertEqual(size?.cols, 120)
+    }
+
+    func testInitialVoteAndTakeAreOrderedOnTheSubscription() throws {
+        let client = DaemonClient()
+        guard case let .surfaces(surfaces) = try client.request(.listSurfaces), let target = surfaces.first else {
+            return XCTFail("expected a default surface")
+        }
+        _ = try client.request(.setSurfaceSizeMode(.owner))
+        let output = OutputAccumulator()
+        let desktop = try client.subscribeSurfaceOutput(surfaceID: target.surfaceID, label: "desktop") { data, _ in
+            _ = output.appendAndContains(String(decoding: data, as: UTF8.self), marker: "")
+        }
+        defer { desktop.cancel() }
+        desktop.resize(target.surfaceID, rows: 40, cols: 120, takeOwnership: true)
+        let mobile = try client.attachStream(AttachRequest(surfaceID: target.surfaceID), onAttached: { _ in }, onData: { _, _ in }, onError: { XCTFail($0) })
+        defer { mobile.cancel() }
+        mobile.resize(target.surfaceID, rows: 15, cols: 50, takeOwnership: true)
+        usleep(200_000)
+        let size = try queryPTYSize(client, surfaceID: target.surfaceID, output: output)
+        XCTAssertEqual(size?.rows, 15)
+        XCTAssertEqual(size?.cols, 50)
     }
 
     private func queryPTYSize(

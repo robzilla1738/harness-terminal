@@ -84,6 +84,11 @@ public final class GlyphRasterizer {
     /// compositor / headless tests) where the font isn't activated — they keep the existing
     /// `CTFontCreateForString` path unchanged.
     private let symbolFont: CTFont?
+    // iOS can choose Apple Color Emoji for text-default symbols such as U+23FA.
+    // Keep a monochrome fallback without changing actual emoji or their variation selectors.
+    private lazy var textSymbolFonts: [CTFont] = ["Menlo", "AppleSymbols"].map {
+        CTFontCreateWithName($0 as CFString, pointSize, nil)
+    }
     private let grayColorSpace = CGColorSpaceCreateDeviceGray()
     private let rgbColorSpace: CGColorSpace
     private let shapedRunCacheLimit: Int
@@ -224,7 +229,11 @@ public final class GlyphRasterizer {
         // Box-drawing characters are rendered procedurally (cell-sized sprite) so they tile
         // seamlessly across cells regardless of the font.
         if BoxDrawing.supported(codepoint) { return rasterizeBox(codepoint) }
-        var chosenFont = font(bold: isBold, italic: isItalic)
+        let primary = font(bold: isBold, italic: isItalic)
+        var chosenFont = primary
+        if codepoint > 0x7F, scalar.properties.isEmoji, !scalar.properties.isEmojiPresentation {
+            chosenFont = textPresentationFont(for: String(scalar), base: primary) ?? primary
+        }
         let glyph: CGGlyph
         if let g = glyphID(for: codepoint, in: chosenFont) {
             glyph = g
@@ -268,6 +277,11 @@ public final class GlyphRasterizer {
             return scalars.first.flatMap { rasterize(codepoint: $0.value, bold: isBold, italic: isItalic) }
         }
         let base = font(bold: isBold, italic: isItalic)
+        if scalars.count == 2, scalars.last?.value == 0xFE0E,
+           let textFont = textPresentationFont(for: cluster, base: base),
+           let glyph = glyphID(for: scalars[0].value, in: textFont) {
+            return render(glyph: glyph, font: textFont)
+        }
         let fontKey = NSAttributedString.Key(kCTFontAttributeName as String)
         // Draw with the context's fill color (white), not the attributed string's default (black) —
         // CTLineDraw, unlike CTFontDrawGlyphs, honors the string's foreground color, and black ink on
@@ -408,10 +422,37 @@ public final class GlyphRasterizer {
                   CFGetTypeID(fontAttr as CFTypeRef) == CTFontGetTypeID() else { continue }
             let runFont = fontAttr as! CTFont // safe: type-checked above
             for i in 0 ..< count {
+                if CTFontGetSymbolicTraits(runFont).contains(.traitColorGlyphs),
+                   indices[i] >= 0, indices[i] < text.utf16.count {
+                    let source = text as NSString
+                    let cluster = source.substring(with: source.rangeOfComposedCharacterSequence(at: indices[i]))
+                    if let textFont = textPresentationFont(for: cluster, base: base),
+                       let scalar = cluster.unicodeScalars.first,
+                       let glyph = glyphID(for: scalar.value, in: textFont) {
+                        out.append(ShapedGlyph(glyph: glyph, font: textFont, utf16Index: indices[i]))
+                        continue
+                    }
+                }
                 out.append(ShapedGlyph(glyph: glyphs[i], font: runFont, utf16Index: indices[i]))
             }
         }
         return out
+    }
+
+    private func textPresentationFont(for cluster: String, base: CTFont) -> CTFont? {
+        let scalars = cluster.unicodeScalars
+        guard let scalar = scalars.first else { return nil }
+        let explicitText = scalars.count == 2 && scalars.last?.value == 0xFE0E
+        guard explicitText || (scalars.count == 1 && scalar.properties.isEmoji && !scalar.properties.isEmojiPresentation) else { return nil }
+        if !CTFontGetSymbolicTraits(base).contains(.traitColorGlyphs), glyphID(for: scalar.value, in: base) != nil { return base }
+        if let symbol = textSymbolFonts.first(where: {
+            !CTFontGetSymbolicTraits($0).contains(.traitColorGlyphs) && glyphID(for: scalar.value, in: $0) != nil
+        }) { return symbol }
+        let text = String(scalar) + "\u{FE0E}"
+        let fallback = CTFontCreateForString(base, text as CFString, CFRange(location: 0, length: text.utf16.count))
+        guard !CTFontGetSymbolicTraits(fallback).contains(.traitColorGlyphs), !Self.isLastResort(fallback),
+              glyphID(for: scalar.value, in: fallback) != nil else { return nil }
+        return fallback
     }
 
     /// Procedurally rasterize a box-drawing character to a cell-sized coverage bitmap so it

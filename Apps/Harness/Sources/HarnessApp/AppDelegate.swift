@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import HarnessCore
+import HarnessRemoteProtocol
 import HarnessTerminalKit
 
 @MainActor
@@ -322,7 +323,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        enqueueExternalOpen(urls)
+        for url in urls where url.scheme == "harness-pair" {
+            do {
+                guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                    throw RemoteFailure(code: "pairingCode", message: "This connection link is invalid. Run harness-cli pair again.")
+                }
+                components.scheme = "harness"
+                guard let link = components.url else {
+                    throw RemoteFailure(code: "pairingCode", message: "This connection link is invalid. Run harness-cli pair again.")
+                }
+                let info = try RemotePairingInfo.parseConnectionCode(link.absoluteString)
+                NSApp.activate(ignoringOtherApps: true)
+                MobilePairingController.shared.present(host: info.host, port: info.port)
+            } catch { DisplayMessage.show(error.localizedDescription) }
+        }
+        enqueueExternalOpen(urls.filter { $0.scheme != "harness-pair" })
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {

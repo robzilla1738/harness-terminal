@@ -57,8 +57,9 @@ enum HarnessDesign {
     static let tabIconTileInset: CGFloat = 12
     static var sidebarTabRowHeight: CGFloat { tabPillHeight + 2 * Spacing.xxs }
     static let sidebarSessionHeaderHeight: CGFloat = 30
-    /// Leading space the traffic lights take on a full-size-content window's top row.
-    static let trafficLightClearance: CGFloat = 94
+    /// Measured window controls plus one gap before the next control's hit target.
+    static var trafficLightTrailingEdge: CGFloat = 78
+    static var trafficLightClearance: CGFloat { trafficLightTrailingEdge + Spacing.lg }
     static let paneHeaderIconSize: CGFloat = 12
     static let paneHeaderHeight: CGFloat = 30
     static let paneHeaderButtonSize: CGFloat = 28
@@ -303,14 +304,14 @@ enum HarnessDesign {
     static var activeTabGlassTint: NSColor {
         let c = chrome
         return c.isDark && SessionCoordinator.shared.snapshot.themeName == "Default"
-            ? NSColor.black.withAlphaComponent(0.18)
+            ? NSColor.black.withAlphaComponent(0.28)
             : activeGlassTint(isDark: c.isDark, textPrimary: c.textPrimary)
     }
 
     static var activeTabFill: NSColor {
         let c = chrome
         return c.isDark && SessionCoordinator.shared.snapshot.themeName == "Default"
-            ? c.activePillFill.blended(withFraction: 0.25, of: .black) ?? c.activePillFill
+            ? c.activePillFill.blended(withFraction: 0.32, of: .black) ?? c.activePillFill
             : c.activePillFill
     }
 
