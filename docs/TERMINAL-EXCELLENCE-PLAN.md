@@ -213,14 +213,65 @@ watchers now run only for local tabs, so a remote cwd cannot be mistaken for thi
 | T3 | High | GUI history preference never reaches daemon raw replay; defaults silently retain only 1 MiB | Share budget calculation, update new/restored/live surfaces and disk compaction; retention regressions and 4.70 MB live replay observation pass |
 | M6 | Medium | Finder-launched shells without locale render UTF-8 as escaped bytes in less | Add LC_CTYPE=UTF-8 only when no locale is supplied; explicit environment wins; environment test and live less check pass |
 | M7 | High | ⌘W in Settings closes the terminal pane behind it | Route utility-window closure to the key window; disable pane mutation menu entries there; live Settings close preserves original pane |
-| P1 | High target gap | Consumer throughput trails Ghostty on all seven shared workloads | Open: 1.6–3.7× slower with a parser acknowledgement fence; profile daemon/GUI pipeline next |
-| P2 | Medium target gap | Correct Find uses more CPU than old search | Improved first candidate 79/111 ms to 24/70 ms, but old literal/regex baseline was 14/50 ms; open parity target |
-| P3 | High target gap | Retained short rows use substantially more memory than Ghostty | Open: candidate 666 MiB app+daemon versus Ghostty 250 MiB for 100k rows; decoded ceiling is enforced but row storage remains expensive |
-| P4 | Medium target gap | Startup and Unicode CPU cost do not establish parity | Readiness 440 ms versus Ghostty 304 ms (baseline Harness 429 ms); Unicode CPU +4–12% across available baselines; open |
+| P1 | High target gap | End-to-end consumer throughput | Follow-up: 43–63% less elapsed time than previous candidate; leads truecolor, still trails Ghostty by 20–49% in six workloads. Viewport copies and main-thread drawable waits removed; remaining parity target open |
+| P2 | Medium target gap | Correct Find uses more CPU than old search | Follow-up literal 17.65 ms, regex 73.70 ms; original baseline 14/50 ms. UTF-16 buffer reuse improves literal; parity target remains open |
+| P3 | Resolved for measured workload | Retained short-row memory | Follow-up 178.53 MiB app+daemon versus preceding 665.95 MiB and Ghostty 249.83 MiB; all 100k rows / 4.70 MB raw output retained. Lossless uniform-row compaction, original widths and actual allocation accounting; other workloads not inferred |
+| P4 | Medium target gap | Startup consistency and responsiveness | Readiness median 395.87 ms versus Ghostty 305.84 ms, including a 1375.77 ms outlier; open. Unicode parse+frame improves to 20.21 ms, previously about 51 ms |
 | T4 | Medium compatibility gap | Compound emoji retain text but use monochrome/tinted coverage | Open: existing R8 glyph atlas does not carry color emoji; text correctness is not color-rendering parity |
 | W1 | Medium fidelity gap | Raw history replay after daemon restart at a different width can show old shell redraw/prompt artifacts | Open: persisted raw output is not an exact saved grid. Live sequence/ownership checks pass, but do not prove restart fidelity |
 | F1 | Unverified | Real IME/non-US keyboard, VoiceOver spoken output, external displays/Spaces, real remote sleep/wake/tunnel loss | Requires the corresponding hardware/interaction or reachable test host; not inferred from unit tests |
 | F2 | Unmeasured | Physical input-to-photon, scrolling frame pacing, privileged power/wakeups | Internal presentation marks, parser acknowledgements, reflow CPU and short idle CPU samples are different metrics |
+
+## Performance and presentation follow-up
+
+Production follow-up `08e4fba`; divider-only correction `b855e74`. All timing and memory
+samples are retained in the [follow-up receipt](benchmarks/terminal-excellence-2026-10-08-followup.json).
+The divider change does not alter the measured engine, parser, search or GPU paths.
+
+- A release engine profile attributed about 80% of sampled feed work to copying the whole
+  viewport during scrolling. Full-screen scrolling now rotates physical rows; partial-region
+  scrolling normalizes before its existing copy. Snapshot/text/reflow/cell readers resolve
+  logical rows consistently. Existing scalar/fast-path and damage suites passed.
+- Uniform history rows store codepoints plus one attribute template and the original width;
+  heterogeneous rows keep full cells. Exact default padding is reconstructed; colored blanks,
+  explicit spaces, hyperlinks, wide tails and exceptional graphemes survive. History accounts
+  for backing-array capacity and metadata. Two focused regressions check content and budget.
+- Cell attributes now fit in 32 bytes with the same public properties and POD ownership.
+  Engine and renderer checks: 741 tests, two intentional skips, zero failures.
+- Search reuses the UTF-16 mapping buffer for ASCII literal matching. International text,
+  normalization, regex errors, soft wraps and cell coordinates retain their shared mapping.
+  Search/Thai/grapheme/reflow focused pass: 53 tests, zero failures.
+- Output scanners borrow contiguous bytes and avoid appending empty event arrays per byte.
+  Program status/bell/surface checks: 64 tests, three opt-in skips, zero failures.
+- Coalesced attachment replay now carries the first byte's sequence instead of the final
+  chunk's start. Daemon client checks: ten tests, zero failures.
+- A full-app release profile then attributed 1478/1801 UI-thread samples to `nextDrawable`.
+  Regular acquisition now runs on a dedicated queue, with one in-flight request and one latest
+  pending frame. Coalescing invalidates damage reuse, stale dimensions/generations are rejected,
+  and encoding stays on main. Resize transaction semantics, vsync and drawable count remain
+  unchanged. Timing records still include the off-main wait. Apple's [drawable contract](https://developer.apple.com/documentation/quartzcore/cametallayer/nextdrawable())
+  explains the potentially blocking call. Synchronous layout/resize still acquires on main;
+  that remaining path is not claimed to be stall-free.
+- Worker/scheduler checks: 36 tests pass. Resize/overlay/occlusion checks: 53 tests pass,
+  including a held-drawable regression proving replies remain live and the latest rows present.
+- Comfortable dividers now derive a centered, full-length drag target from pane geometry
+  even when AppKit supplies an empty proposed rectangle. Appearance/geometry checks pass. Accessible divider adjustment changed both panes
+  from 67 columns to 83/51 with intact reflow; pointer dragging was not conclusively
+  established by the automation coordinate path.
+- Live follow-up confirmed ANSI bold/italic/underline/strike, truecolor, Unicode pasted text,
+  grapheme Find, split creation/reflow, history scrolling, and command execution in a second
+  pane while the first was still streaming. This validates visible behavior, not physical
+  latency or a comprehensive hardware/IME pass. CUA typed Unicode omitted characters;
+  clipboard paste preserved them, so synthetic typing is not treated as an IME result.
+- Live light-theme inspection found dark sidebar fill left behind light text in Settings.
+  The sidebar backdrop now refreshes with chrome changes (including opacity), and a focused
+  transition regression verifies its light background. The spacing hint uses the actual default.
+- A restarted isolated fish session showed a retained device-query timeout warning from
+  its earlier unwatched lifetime. Current attached query/typing checks pass; detached-shell
+  negotiation remains an explicit lifecycle finding rather than a claimed clean bill of health.
+- Full-history 10k-row reflow now costs 11.31 ms versus 6.07 ms: decoding/repacking compact
+  storage is a documented CPU tradeoff. Bounded viewport previews and off-main full reflow
+  preserve interactive behavior. Further optimization remains open, as do regex CPU and startup.
 
 ## Completion disposition
 

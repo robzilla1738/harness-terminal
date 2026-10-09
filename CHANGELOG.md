@@ -20,6 +20,9 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Configurable pane spacing in Appearance settings, retaining the 8-point default.
 
 ### Changed
+- Regular Metal drawable waits run off the UI thread, keeping typing and output delivery responsive under load while preserving display synchronization.
+- Viewport scrolling rotates rows instead of copying the entire grid. Lossless compact history and 32-byte cells substantially reduce retained-output memory.
+- Literal Find reuses its UTF-16 mapping buffer, and daemon output scanners avoid per-byte collection overhead.
 - GUI daemon commands and subscriptions run off the main thread, with captured targets, ordered operations, and stale-result protection.
 - Find uses cancellable background matching across soft wraps; global output search uses expiring pagination without repeatedly materializing whole histories.
 - Accessibility text is cached by content revision and exposes actual visible, cursor, and selection ranges.
@@ -30,6 +33,9 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- Coalesced reconnect output retains the sequence of its first byte, preventing skipped output after reattachment.
+- Comfortable pane dividers retain a full-length drag target even when AppKit proposes an empty hit rectangle.
+- Settings refreshes its sidebar background along with text when switching light/dark appearance; the pane-spacing hint reflects the actual default.
 - Input queue exhaustion is reported instead of silently dropping a paste; uncertain writes are never automatically retried.
 - Invalid live configuration retains the last working settings. Session-save failures reach the app, and shutdown saves cannot be overwritten by an older debounce.
 - Idle panes repaint after display invalidation; Quick Terminal uses the same appearance updates as normal windows.
@@ -43,7 +49,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Marking Activity read or changing snooze preserves the activity's timestamp and does not resolve a blocked process.
 - Path insertion and Go to Directory reject terminal control characters.
 
-The terminal candidate has passed focused checks and a compact Mac acceptance pass. Performance leadership is not established: Ghostty leads all seven measured consumer workloads and uses less memory for the retained-history workload. Real remote-host recovery, physical IME/display checks, and spoken VoiceOver quality still need hands-on verification. See the [execution ledger](docs/TERMINAL-EXCELLENCE-PLAN.md), [scorecard](docs/SCORECARD.md), and [workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for evidence and remaining limits.
+The terminal candidate has passed focused checks and a compact Mac acceptance pass. Performance leadership is not established: Harness now leads the matched truecolor consumer and short-row memory workloads; Ghostty leads the other six consumer workloads and startup. Full-history reflow and regex CPU costs remain open tradeoffs. Real remote-host recovery, physical IME/display checks, and spoken VoiceOver quality still need hands-on verification. See the [execution ledger](docs/TERMINAL-EXCELLENCE-PLAN.md), [scorecard](docs/SCORECARD.md), and [workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for evidence and remaining limits.
 
 ## [1.13.0] - 2026-10-08
 

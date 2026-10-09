@@ -477,6 +477,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func chromeDidChange(_ note: Notification) {
         guard note.userInfo?["chromeChanged"] as? Bool == true else { return }
+        HarnessDesign.applySidebarChrome(to: sidebarContainer)
         // `flushAndApply` posts `chromeChanged` on every control action (including
         // continuous opacity/blur drags), but the palette only actually changes on a
         // theme or bg/fg/cursor edit. Skip the re-skin walk when the colors are identical
@@ -540,6 +541,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     // MARK: - Sidebar
 
+    private let sidebarContainer = NSView()
     private var sidebarButtons: [SettingsSidebarButton] = []
     private let settingsSearch = HarnessSearchField()
     private let sidebarTitleLabel = NSTextField(labelWithString: "Settings")
@@ -549,7 +551,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // A plain layer-backed view carrying the same themed sidebar chrome (vibrancy +
         // tint) the main window's sidebar uses — never the system `.sidebar` material,
         // which adds the system tint on top of the theme.
-        let container = NSView()
+        let container = sidebarContainer
         container.translatesAutoresizingMaskIntoConstraints = false
         HarnessDesign.applySidebarChrome(to: container)
 
@@ -677,7 +679,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             settingsRow("Density", paneDensitySegment,
                         hint: "Comfortable sets panes apart as cards. Compact keeps them flush."),
             settingsRow("Pane spacing", hstack([paneSpacingField, unitLabel("pt")], spacing: 6),
-                        hint: "Gap around and between panes. 0–24 pt; default 4. Comfortable only."),
+                        hint: "Gap around and between panes. 0–24 pt; default \(Int(HarnessSettings.defaultPaneSpacing)). Comfortable only."),
             settingsRow("Pane headers", paneHeadersToggle,
                         hint: "Program, directory, and split buttons atop each pane. Comfortable only."),
             settingsRow("Padding", paddingRow, hint: "Space between the text and the pane edge."),

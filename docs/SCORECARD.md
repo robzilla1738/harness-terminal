@@ -38,7 +38,58 @@ PREVIEW_SIGNPOSTS=1 make preview && Scripts/scorecard.sh input-latency
 Scripts/scorecard.sh report             # markdown to paste below
 ```
 
-## Candidate results — 2026-10-08, Apple M5 / 32 GiB
+## Performance follow-up — 2026-10-08, source `08e4fba`
+
+The follow-up removes full-viewport copies on scroll, losslessly compacts uniform history
+rows, packs cells into 32 bytes, reuses search UTF-16 buffers, and moves regular Metal
+drawable acquisition off the UI thread. Styling, retained text, display synchronization,
+and resize transactions remain intact. Profiles identified viewport copying and drawable
+waits; these changes address measured costs rather than reducing rendering quality.
+
+Same release environment and 150×45 configuration as below; one warm-up, median of three
+samples. [Raw receipt](benchmarks/terminal-excellence-2026-10-08-followup.json). The previous
+candidate column is the same-day preceding receipt, not a new interleaved run.
+
+| Consumed-output workload | Previous Harness ms | Follow-up Harness ms | Matched Ghostty ms |
+|---|---:|---:|---:|
+| ASCII | 120.65 | 52.09 | 42.60 |
+| ANSI SGR | 82.77 | 40.93 | 32.88 |
+| Mixed Unicode | 72.09 | 26.84 | 18.92 |
+| Attributes | 79.03 | 42.55 | 35.48 |
+| Truecolor gradient | 31.12 | 17.70 | 19.33 |
+| Redraw | 22.61 | 11.01 | 7.38 |
+| Scrollback | 127.85 | 58.93 | 48.98 |
+
+Harness leads the truecolor workload by about 8%; Harness takes 20–49% longer in the
+other six. This is a parser acknowledgement
+probe with producer and transport costs, **not physical input-to-photon or frame pacing**.
+Compared with the preceding Harness candidate, consumed-output time falls 43–63%.
+
+Retaining 100,000 identical short rows now costs **154.97 MiB app + 23.56 MiB daemon =
+178.53 MiB RSS**, versus 665.95 MiB previously and Ghostty's same-day 249.83 MiB.
+This is 73% below the preceding candidate and 29% below Ghostty for this specific workload.
+All 4,703,520 raw bytes remain retained. Uniform row attributes and blank padding are
+encoded losslessly; heterogeneous rows retain full cells. History byte accounting includes
+actual array capacity, original widths, metadata, and cluster storage. Other workloads can
+have different memory behavior; viewport and caches remain outside the decoded-history cap.
+
+Engine parse-plus-frame medians (ms): ASCII 22.32, SGR 20.08, Unicode 20.21, attributes
+19.80, gradient 10.25, redraw 7.87, scrollback 24.15. Literal search is 17.65 ms (previous
+23.53; original baseline 14.31); regex is 73.70 ms (previous 70.08; original 49.60).
+The 10k-row full-history width reflow costs 11.31 ms versus 6.07 ms previously: compact
+storage adds decoding/repacking work. Interactive viewport preview and background full
+reflow preserve UI responsiveness, but this CPU regression remains an open optimization.
+
+Readiness median is 395.87 ms versus matched Ghostty 305.84 ms. Harness's three measured
+samples were 1375.77, 395.87, 395.70 ms; the outlier is retained and startup consistency
+remains open. Idle observation: app 112.05 MiB / 0.25% CPU, daemon 17.61 MiB / 0.12% CPU,
+combined 129.66 MiB / 0.37% CPU over eight seconds. This is not a power measurement.
+
+Focused renderer/resize/overlay checks and a live two-pane output/typing pass preserve
+appearance and interaction. Compound emoji text is retained, but color emoji, external
+keyboard/display checks, physical latency, and full performance leadership remain open.
+
+## Previous candidate — 2026-10-08, source `7dbebe7`
 
 **Harness does not meet the Ghostty leadership target in this candidate.** Ghostty leads
 all seven measured consumer workloads, startup readiness, and retained-history memory.
