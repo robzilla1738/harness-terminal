@@ -36,6 +36,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
     public let environmentStore = EnvironmentStore()
     public let hookRegistry = HookRegistry()
     private let persistedDefaultShell: String?
+    private let persistedScrollbackBytes: Int
     /// One-shot first-run / post-update banner, consumed by the first freshly created
     /// surface (see `injectVersionBannerIfPending`). nil when disabled (tests, embedded
     /// registries) or once shown for this build.
@@ -102,7 +103,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
     /// lock), so a test can prove a quiet tick skipped it.
     var monitorFullPasses = 0
     public init(enableVersionBanner: Bool = false) {
-        let defaultShell = HarnessSettings.load().defaultShell
+        let settings = HarnessSettings.load()
+        let defaultShell = settings.defaultShell
+        persistedScrollbackBytes = ScrollbackBudget.rawBytes(forLines: settings.scrollbackLines)
         let trimmedDefaultShell = defaultShell.trimmingCharacters(in: .whitespacesAndNewlines)
         persistedDefaultShell = trimmedDefaultShell.isEmpty ? nil : defaultShell
         // Captured before `store.load()` materializes anything: "no layout.json" is what
@@ -1784,7 +1787,8 @@ public final class SurfaceRegistry: @unchecked Sendable {
         scrollbackBytes: Int?,
         freshlyCreated: Bool = false
     ) -> String? {
-        if sessions[surfaceID] != nil {
+        if let session = sessions[surfaceID] {
+            if let scrollbackBytes { session.setScrollbackBytes(scrollbackBytes) }
             // Existing surface: do NOT resize here. A surface's geometry is owned by the
             // per-client resize votes (`resizeSurface`), which every client sends once its
             // view (GUI) or TTY (CLI attach) lays out. `ensureSurface` carries only a
@@ -1837,7 +1841,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 shell: shellPath,
                 rows: rows,
                 cols: cols,
-                scrollbackBytes: scrollbackBytes ?? 1024 * 1024,
+                scrollbackBytes: scrollbackBytes ?? persistedScrollbackBytes,
                 extraEnvironment: spawnEnvironment,
                 termProgram: identity.name,
                 termProgramVersion: identity.version,

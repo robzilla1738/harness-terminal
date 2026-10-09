@@ -109,11 +109,16 @@ public enum ProcessCapture {
             process.waitUntilExit()
             return ProcessOutput(status: process.terminationStatus, stdout: stdout, stderr: stderr)
         } catch {
-            if process.isRunning { process.terminate() }
+            // Foundation's Linux waitUntilExit can wait for descendants holding inherited
+            // pipes. Close our ends and let Foundation reap asynchronously after bounded
+            // termination; cancellation must not inherit a grandchild's lifetime.
+            for handle in handles { try? handle.close() }
+            let pid = process.processIdentifier
+            let ownsGroup = getpgid(pid) == pid
+            if process.isRunning { kill(ownsGroup ? -pid : pid, SIGTERM) }
             let grace = ProcessInfo.processInfo.systemUptime + 0.1
             while process.isRunning, ProcessInfo.processInfo.systemUptime < grace { usleep(5_000) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            process.waitUntilExit()
+            if process.isRunning { kill(ownsGroup ? -pid : pid, SIGKILL) }
             throw error
         }
     }

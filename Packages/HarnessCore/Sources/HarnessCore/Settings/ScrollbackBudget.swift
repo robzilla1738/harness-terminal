@@ -11,6 +11,12 @@ public enum ScrollbackBudget {
     /// same ceiling `ScrollbackFile` persists.
     public static let unlimitedSafetyCapBytes = 512 * 1024 * 1024
 
+    /// Keep the unlimited wire sentinel and clamp before multiplying untrusted settings.
+    public static func rawBytes(forLines lines: Int) -> Int {
+        guard lines > 0 else { return 0 }
+        return min(lines, unlimitedSafetyCapBytes / bytesPerLine) * bytesPerLine
+    }
+
     /// Line cap for a daemon ring of `bytes`. `bytes <= 0` is the unlimited
     /// sentinel and maps to the safety ceiling, never to "keep every line".
     public static func lineCap(daemonScrollbackBytes bytes: Int) -> Int {

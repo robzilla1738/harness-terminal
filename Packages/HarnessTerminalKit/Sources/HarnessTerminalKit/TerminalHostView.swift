@@ -742,8 +742,30 @@ public final class TerminalHostView: NSView {
     private var appliedTriggers: [TriggerRule]?
 
     public func applySettings(_ settings: HarnessSettings) {
+        let retentionChanged = cachedSettings?.scrollbackLines != settings.scrollbackLines
         cachedSettings = settings
         applyNativeAppearance()
+        if retentionChanged, outputSubscription != nil {
+            let client = daemonClient, sid = surfaceID.uuidString
+            let cwd = cachedCwd, shell = cachedShell, required = requiresSessionLayout
+            let bytes = Self.scrollbackBytes(forLines: settings.scrollbackLines)
+            let cancellation = reconnectCancellation
+            reconnectQueue.async { [weak self] in
+                guard !cancellation.isCancelled else { return }
+                let message: String?
+                do {
+                    let response = try client.request(.ensureSurface(surfaceID: sid, cwd: cwd, shell: shell,
+                        rows: 24, cols: 80, scrollbackBytes: bytes, requireInLayout: required))
+                    if case let .error(error) = response { message = error } else { message = nil }
+                } catch { message = error.localizedDescription }
+                if let message {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, !cancellation.isCancelled else { return }
+                        self.hostDelegate?.terminalHostShowMessage("Couldn't update replay retention: \(message)", surfaceID: self.surfaceID)
+                    }
+                }
+            }
+        }
         // Output triggers: recompiled when they change (reload-on-save applies them live).
         if appliedTriggers != settings.triggers {
             appliedTriggers = settings.triggers
@@ -1059,7 +1081,7 @@ public final class TerminalHostView: NSView {
     /// the daemon maps to `ScrollbackBudget.unlimitedSafetyCapBytes`. Any positive
     /// count is sized at `ScrollbackBudget.bytesPerLine` bytes per line.
     static func scrollbackBytes(forLines lines: Int) -> Int {
-        lines == 0 ? 0 : lines * ScrollbackBudget.bytesPerLine
+        ScrollbackBudget.rawBytes(forLines: lines)
     }
 
     /// GUI history lines allowed for a daemon replay ring of `bytes`. `bytes <= 0`

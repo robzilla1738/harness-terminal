@@ -302,7 +302,8 @@ public final class RealPty: @unchecked Sendable {
         // can't OOM the session-authority daemon or fill the disk. The GUI line cap uses the same
         // ceiling. Mapping the sentinel here keeps the eviction loop + `loadTail` (which would
         // otherwise treat a 0 `maxBytes` as "keep nothing") working unchanged.
-        let requestedScrollbackBytes = scrollbackBytes == 0 ? ScrollbackFile.unlimitedSafetyCap : scrollbackBytes
+        let requestedScrollbackBytes = scrollbackBytes <= 0 ? ScrollbackFile.unlimitedSafetyCap
+            : min(scrollbackBytes, ScrollbackFile.unlimitedSafetyCap)
         self.maxScrollbackBytes = scrollbackURL == nil
             ? requestedScrollbackBytes
             : max(requestedScrollbackBytes, ScrollbackFile.minimumRetentionCap)
@@ -1618,6 +1619,26 @@ public final class RealPty: @unchecked Sendable {
             lifecycleLock.unlock()
             source.cancel()
         }
+    }
+
+    /// Changing replay retention does not resize or respawn the shell. Evict whole ordered
+    /// chunks, as on the read path; increasing the budget cannot recover already evicted data.
+    public func setScrollbackBytes(_ requested: Int) {
+        let cap = requested <= 0 ? ScrollbackFile.unlimitedSafetyCap
+            : min(requested, ScrollbackFile.unlimitedSafetyCap)
+        scrollbackLock.lock()
+        let effective = scrollbackFile == nil ? cap : max(cap, ScrollbackFile.minimumRetentionCap)
+        guard effective != maxScrollbackBytes else { scrollbackLock.unlock(); return }
+        if idleGrid.parked { mergeParkedHistoryLocked() }
+        maxScrollbackBytes = effective
+        while scrollbackBytes > effective, scrollbackHead < scrollback.count {
+            scrollbackBytes -= scrollback[scrollbackHead].data.count
+            scrollbackHead += 1
+        }
+        if scrollbackHead > 0 { scrollback.removeFirst(scrollbackHead); scrollbackHead = 0 }
+        scrollbackLock.unlock()
+        releaseAuthoritativeGrid()
+        scrollbackFile?.setRetentionCap(effective)
     }
 
     private func handleOutput(_ data: Data) {
