@@ -23,6 +23,16 @@ private func stripInheritedColorSuppression(_ environment: inout [String: String
     }
 }
 
+/// Finder/launchd do not supply a locale. macOS's UTF-8 character locale lets TUIs
+/// interpret terminal text without changing language, sorting, or explicit shell preferences.
+func ensureTerminalCharacterLocale(_ environment: inout [String: String]) {
+    #if canImport(Darwin)
+    if ["LC_ALL", "LC_CTYPE", "LANG"].allSatisfy({ environment[$0]?.isEmpty != false }) {
+        environment["LC_CTYPE"] = "UTF-8"
+    }
+    #endif
+}
+
 public struct ShellLaunchProfile: Sendable, Equatable {
     public var executable: String
     public var arguments: [String]
@@ -347,6 +357,7 @@ public final class RealPty: @unchecked Sendable {
 
         var environment = ProcessInfo.processInfo.environment
         stripInheritedColorSuppression(&environment)
+        ensureTerminalCharacterLocale(&environment)
         environment["TERM"] = "xterm-256color"
         // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
         // downgrading to the muted 256-color cube. The renderer passes truecolor through
@@ -534,6 +545,7 @@ public final class RealPty: @unchecked Sendable {
 
         var environment = ProcessInfo.processInfo.environment
         stripInheritedColorSuppression(&environment)
+        ensureTerminalCharacterLocale(&environment)
         environment["TERM"] = "xterm-256color"
         // Advertise 24-bit color so TUIs (Claude Code, etc.) emit truecolor instead of
         // downgrading to the muted 256-color cube. The renderer passes truecolor through
