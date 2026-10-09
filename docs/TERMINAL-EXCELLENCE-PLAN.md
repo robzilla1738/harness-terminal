@@ -340,7 +340,7 @@ The final consumer check covers the added output-subscription identity guard.
 
 ## Tab badge design follow-up
 
-- Flat 20×16-point tab badges, 12-point pane-header icons, 28×23-point
+- Flat 20×16-point tab badges, 12-point pane-header agent marks, 28×23-point
   Settings/Overview badges, a seven-point
   leading inset, and existing title spacing. The shell badge uses a drawn prompt
   mark, a darker charcoal face, and a quieter border. Removed the backing layer, gradient,
@@ -394,6 +394,18 @@ The final consumer check covers the added output-subscription identity guard.
   at the new default width in the running preview. The existing reconnect-text
   issue reproduced after reopening and remains open under W. No performance claim
   or broad-suite rerun for these chrome changes.
+
+## Pane-header polish follow-up
+
+- A consistent 18×14-point terminal outline replaces the faint symbol squeezed
+  into a square. Recognized agents add their compact 12-point mark beside the
+  title, matching the reference's terminal / agent / identity hierarchy.
+- Retained the shared 13-point medium label font, aligned text to display pixels,
+  and exposed full paths on hover. Split controls use matching medium strokes,
+  28-point click targets, 4-point spacing, and balanced edge padding.
+- Verification: release build passed and both packages passed strict signature
+  verification. Visually inspected the live Claude pane header. No broad test
+  rerun for this appearance-only adjustment.
 
 ## Completion disposition
 

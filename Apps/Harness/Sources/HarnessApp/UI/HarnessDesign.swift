@@ -45,7 +45,7 @@ enum HarnessDesign {
     static let trafficLightClearance: CGFloat = 94
     static let paneHeaderIconSize: CGFloat = 12
     static let paneHeaderHeight: CGFloat = 30
-    static let paneHeaderButtonSize: CGFloat = 24
+    static let paneHeaderButtonSize: CGFloat = 28
 
     static let horizontalInset: CGFloat = Spacing.lg
     static let rowSpacing: CGFloat = Spacing.xxs

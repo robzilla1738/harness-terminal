@@ -8,6 +8,9 @@ import HarnessCore
 final class PaneHeaderView: NSView, NSDraggingSource {
     private let surfaceID: SurfaceID
     private let icon = NSImageView()
+    private let agentIcon = NSImageView()
+    private var agentIconWidth: NSLayoutConstraint!
+    private var titleLeading: NSLayoutConstraint!
     private let titleLabel = NSTextField(labelWithString: "")
     private let splitRight = SoftIconButton(frame: .zero)
     private let splitDown = SoftIconButton(frame: .zero)
@@ -24,6 +27,12 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .medium))
+        icon.setAccessibilityElement(false)
+        agentIcon.imageScaling = .scaleProportionallyUpOrDown
+        agentIcon.translatesAutoresizingMaskIntoConstraints = false
+        agentIcon.setAccessibilityElement(false)
 
         titleLabel.font = HarnessDesign.Typography.paneHeader
         titleLabel.lineBreakMode = .byTruncatingMiddle
@@ -36,7 +45,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             (splitDown, "rectangle.split.1x2", "Split down", #selector(splitDownClicked)),
         ] {
             button.style = .glyph
-            button.setSymbol(symbol, accessibilityDescription: label, pointSize: HarnessDesign.chromeIconPointSize, weight: .regular)
+            button.setSymbol(symbol, accessibilityDescription: label, pointSize: HarnessDesign.chromeIconPointSize, weight: .medium)
             button.toolTip = label
             button.target = self
             button.action = action
@@ -52,28 +61,35 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         viewing.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(icon)
+        addSubview(agentIcon)
         addSubview(titleLabel)
         addSubview(viewing)
         addSubview(splitRight)
         addSubview(splitDown)
         let inset = HarnessDesign.Spacing.lg
         let button = HarnessDesign.paneHeaderButtonSize
+        agentIconWidth = agentIcon.widthAnchor.constraint(equalToConstant: 0)
+        titleLeading = titleLabel.leadingAnchor.constraint(equalTo: agentIcon.trailingAnchor)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: HarnessDesign.paneHeaderHeight),
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: HarnessDesign.paneHeaderIconSize),
-            icon.heightAnchor.constraint(equalToConstant: HarnessDesign.paneHeaderIconSize),
-            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HarnessDesign.Spacing.md),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 14),
+            agentIcon.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HarnessDesign.Spacing.md),
+            agentIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            agentIconWidth,
+            agentIcon.heightAnchor.constraint(equalToConstant: HarnessDesign.paneHeaderIconSize),
+            titleLeading,
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: viewing.leadingAnchor, constant: -HarnessDesign.Spacing.md),
             viewing.trailingAnchor.constraint(equalTo: splitRight.leadingAnchor, constant: -HarnessDesign.Spacing.md),
             viewing.centerYAnchor.constraint(equalTo: centerYAnchor),
-            splitDown.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.sm),
+            splitDown.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HarnessDesign.Spacing.md),
             splitDown.centerYAnchor.constraint(equalTo: centerYAnchor),
             splitDown.widthAnchor.constraint(equalToConstant: button),
             splitDown.heightAnchor.constraint(equalToConstant: button),
-            splitRight.trailingAnchor.constraint(equalTo: splitDown.leadingAnchor, constant: -HarnessDesign.Spacing.xxs),
+            splitRight.trailingAnchor.constraint(equalTo: splitDown.leadingAnchor, constant: -HarnessDesign.Spacing.xs),
             splitRight.centerYAnchor.constraint(equalTo: centerYAnchor),
             splitRight.widthAnchor.constraint(equalToConstant: button),
             splitRight.heightAnchor.constraint(equalToConstant: button),
@@ -91,6 +107,7 @@ final class PaneHeaderView: NSView, NSDraggingSource {
 
     func update(title: String, agent: AgentKind?, focused: Bool, ownership: SizeOwnership? = nil) {
         titleLabel.stringValue = title
+        titleLabel.toolTip = title
         setAccessibilityLabel("Pane: \(title)")
         self.agent = agent
         self.ownership = ownership
@@ -105,13 +122,15 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         // The fill is the island's call (canvas color at the paint opacity); see PaneIslandView.
         titleLabel.textColor = isFocused ? c.textPrimary : c.textSecondary
         HarnessDesign.applyChromeLabelAppearance([titleLabel], isDark: c.isDark)
+        icon.contentTintColor = isFocused ? c.textSecondary : c.textTertiary
+        agentIcon.isHidden = agent == nil
+        agentIconWidth.constant = agent == nil ? 0 : HarnessDesign.paneHeaderIconSize
+        titleLeading.constant = agent == nil ? 0 : HarnessDesign.Spacing.md
         if let agent {
-            icon.image = AgentIconRenderer.templateOrMonogramImage(for: agent, size: HarnessDesign.paneHeaderIconSize)
-            icon.contentTintColor = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: agent)) ?? c.accent
+            agentIcon.image = AgentIconRenderer.templateOrMonogramImage(for: agent, size: HarnessDesign.paneHeaderIconSize)
+            agentIcon.contentTintColor = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: agent)) ?? c.accent
         } else {
-            icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: HarnessDesign.paneHeaderIconSize, weight: .regular))
-            icon.contentTintColor = c.textTertiary
+            agentIcon.image = nil
         }
         splitRight.applyChrome()
         splitDown.applyChrome()
@@ -122,6 +141,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
                 attributes: [.font: HarnessDesign.Typography.paneHeader, .foregroundColor: c.accent]
             )
         }
+    }
+
+    override func layout() {
+        super.layout()
+        HarnessDesign.alignChromeText([titleLabel], in: self)
     }
 
     // MARK: - Actions
