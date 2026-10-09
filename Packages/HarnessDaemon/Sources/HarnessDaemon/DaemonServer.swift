@@ -43,7 +43,7 @@ public final class DaemonServer: @unchecked Sendable {
     /// can never complete into a frame — defense in depth against codec drift or a misbehaving
     /// peer turning `clientBuffers` into a per-connection memory sink.
     private let maxPartialFrameBytes = IPCCodec.maxPayloadLength + 4096
-    private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID)]] = [:]
+    private var outputSubscriptions: [Int32: [(surfaceID: String, token: UUID, deliveryID: UUID)]] = [:]
     /// FDs subscribed to layout-change pushes (`subscribeSnapshot`).
     private var snapshotSubscribers: Set<Int32> = []
     /// FDs subscribed to `events --follow`.
@@ -824,10 +824,16 @@ public final class DaemonServer: @unchecked Sendable {
     /// frames until an attach's history is out. The subscription's token, or nil when the
     /// surface doesn't exist.
     private func addOutputSubscription(surfaceID: String, label: String?, fd: Int32, gate: AttachGate?) -> UUID? {
+        let deliveryID = UUID()
         guard let token = registry.subscribe(surfaceID: surfaceID, handler: { [weak self] data, sequence in
             guard let server = self else { return }
             server.queue.async { [weak server] in
-                guard let server else { return }
+                // Cancellation cannot retract a callback already captured by the PTY's
+                // delivery queue. The descriptor may now belong to an unrelated RPC or
+                // a new attachment, so validate this exact subscription before writing.
+                guard let server,
+                      server.outputSubscriptions[fd]?.contains(where: { $0.deliveryID == deliveryID }) == true
+                else { return }
                 if let gate, !gate.admits(data, sequence: sequence) { return }
                 server.registry.metrics.recordOutputNotification()
                 server.sendDataFrame(data, sequence: sequence, to: fd)
@@ -835,7 +841,7 @@ public final class DaemonServer: @unchecked Sendable {
         }) else {
             return nil
         }
-        outputSubscriptions[fd, default: []].append((surfaceID, token))
+        outputSubscriptions[fd, default: []].append((surfaceID, token, deliveryID))
         // A subscription connection is long-lived and identifies a real client
         // (Harness.app, harness-cli attach, etc.). Register it so `list-clients`
         // and `daemon-stats` reflect actual users, not ephemeral RPC sockets.

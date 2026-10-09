@@ -345,6 +345,27 @@ final class DaemonRoundTripTests: XCTestCase {
         }, "output after the client leaves is parsed in the background too")
     }
 
+    /// A cancelled stream can still have output callbacks queued. Fresh RPC connections must
+    /// never receive that stream's binary frames when the kernel reuses its descriptor.
+    func testCancellingOutputDuringReconnectDoesNotContaminateRPCReplies() throws {
+        let client = DaemonClient()
+        let sid = UUID().uuidString
+        _ = try client.request(.ensureSurface(surfaceID: sid, cwd: nil, shell: "/bin/sh", rows: 24, cols: 80, scrollbackBytes: nil))
+        let pty = try XCTUnwrap(server.registry.sessionForTesting(surfaceID: sid))
+        let burst = Data(String(repeating: "RECONNECT_OUTPUT\r\n", count: 256).utf8)
+        for _ in 0 ..< 24 {
+            let start = AtomicBox<DaemonClient.AttachStart>()
+            let subscription = try client.attach(surfaceID: sid, label: "reconnect-test",
+                                                 onStart: { start.set($0) }, onData: { _, _ in })
+            XCTAssertTrue(waitUntil(timeout: 5) { start.value != nil })
+            pty.injectSyntheticOutput(burst)
+            subscription.cancel()
+            for _ in 0 ..< 4 {
+                guard case .pong = try client.request(.ping) else { return XCTFail("expected an uncontaminated RPC reply") }
+            }
+        }
+    }
+
     /// `owner` mode end to end: the second client learns it doesn't own the size, takes it by
     /// client id from another socket, and both clients hear the change.
     func testOwnershipFramesTellEachClientAndTakeMovesTheSize() throws {

@@ -33,6 +33,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- Cancelled output subscriptions cannot send stale binary frames into a newly reused connection.
 - Coalesced reconnect output retains the sequence of its first byte, preventing skipped output after reattachment.
 - Comfortable pane dividers retain a full-length drag target even when AppKit proposes an empty hit rectangle.
 - Settings refreshes its sidebar background along with text when switching light/dark appearance; the pane-spacing hint reflects the actual default.
