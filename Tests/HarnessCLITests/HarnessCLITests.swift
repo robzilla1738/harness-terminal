@@ -39,6 +39,7 @@ final class HarnessCLITests: XCTestCase {
     /// bidirectional drift guard below then fails until the catalog matches.
     static let dispatchVerbs: Set<String> = [
         "color-check", "theme-preview", "remote", "socket-path", "run", "daemon", "version",
+        "mobile-bridge", "mobile-setup", "pair",
         "ls", "inspect", "new", "wait", "keymap", "actions",
         "list-workspaces", "list-surfaces", "list-sessions", "list-agents", "doctor",
         "completions", "list-windows", "list-panes", "has-session", "list-commands",
