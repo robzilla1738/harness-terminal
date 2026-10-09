@@ -427,13 +427,14 @@ public final class RealPty: @unchecked Sendable {
     }
 
     /// Input to the shell, in order, never blocking a thread (see `PtyInputWriter`).
-    public func write(_ data: Data) {
-        inputWriter.write(data) { [weak self] in self?.dupMaster() }
+    @discardableResult
+    public func write(_ data: Data) -> Bool {
+        inputWriter.write(data, master: dupMaster())
     }
 
-    public func write(_ text: String) {
-        guard let data = text.data(using: .utf8) else { return }
-        write(data)
+    @discardableResult
+    public func write(_ text: String) -> Bool {
+        write(Data(text.utf8))
     }
 
     /// Clear the scrollback ring + the persisted file **without** respawning the shell — the tmux
@@ -483,6 +484,7 @@ public final class RealPty: @unchecked Sendable {
         // pre-bump value the SIGTERM'd child was tagged with — used by the SIGKILL
         // escalation so a TERM-ignoring old shell can't leak its blocked waitpid thread.
         let dyingGeneration = generation
+        inputWriter.reset()
         generation &+= 1
         readSource = nil
         master = -1
@@ -1387,6 +1389,21 @@ public final class RealPty: @unchecked Sendable {
         scrollbackLock.lock()
         defer { scrollbackLock.unlock() }
         return ringLocked()
+    }
+
+    func searchSnapshot() -> TerminalTextSnapshot? { withAuthoritative { $0.textSnapshot() } }
+
+    /// Changes when output arrives, history is cleared, or the shell is replaced.
+    var searchRevision: String {
+        lifecycleLock.lock()
+        let gen = generation
+        lifecycleLock.unlock()
+        scrollbackLock.lock()
+        let first = scrollbackHead < scrollback.count ? scrollback[scrollbackHead].sequence : nextSequence
+        let end = nextSequence
+        scrollbackLock.unlock()
+        let size = currentWinsize()
+        return "\(gen):\(first):\(end):\(size.cols):\(size.rows)"
     }
 
     private func withAuthoritative<T>(_ body: (TerminalEmulator) -> T) -> T? {

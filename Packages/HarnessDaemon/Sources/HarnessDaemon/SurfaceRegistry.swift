@@ -7,8 +7,27 @@ import HarnessTerminalEngine
 public final class SurfaceRegistry: @unchecked Sendable {
     var sessions: [DaemonSurfaceID: RealPty] = [:]
     var editor = SessionEditor()
-    private let store = SessionStore()
+    private lazy var store = SessionStore(onSaveError: { [weak self] message in
+        fputs("HarnessDaemon: session persistence failed — \(message)\n", harnessStderr)
+        self?.reportPersistenceError(message)
+    }, onSaveRecovery: { [weak self] in self?.reportPersistenceError(nil) })
+
+    private func reportPersistenceError(_ message: String?) {
+        // Never take the registry lock while on the store's queue: shutdown flushes
+        // in the opposite direction. Publish health without scheduling another save.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.editor.snapshot.persistenceError = message
+            self.editor.snapshot.revision += 1
+            let revision = self.editor.snapshot.revision
+            self.lock.unlock()
+            self.onSnapshotCommitted?(revision)
+        }
+    }
     let lock = NSLock()
+    let outputSearchLock = NSLock()
+    var outputSearchCursors: [String: OutputSearchCursor] = [:]
     // Kept non-public: PasteBufferStore mutations are all internal to SurfaceRegistry; external
     // callers (DaemonServer) reach it only through `handle(_:)`. The `internal` visibility (not
     // `private`) allows `flushAllStores()` in this same file to reach it.
@@ -566,14 +585,14 @@ public final class SurfaceRegistry: @unchecked Sendable {
             guard let session = sessions[surfaceID] else {
                 return .error("Surface not found")
             }
-            session.write(text)
+            guard session.write(text) else { return .error("Input was not accepted: the pane is closed or its input queue is full. Wait for the program to read input, then try again.") }
             acknowledgeProgramStatusIfCurrentLocked(surfaceID)
             return .ok
         case let .sendData(surfaceID, data):
             guard let session = sessions[surfaceID] else {
                 return .error("Surface not found")
             }
-            session.write(data)
+            guard session.write(data) else { return .error("Input was not accepted: the pane is closed or its input queue is full. Wait for the program to read input, then try again.") }
             acknowledgeProgramStatusIfCurrentLocked(surfaceID)
             return .ok
         case let .notify(surfaceID, title, body):
@@ -636,6 +655,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 freshlyCreated: true
             ).map { .surfaceID($0) } ?? .error("Failed to launch shell")
         case let .ensureSurface(surfaceID, cwd, shell, rows, cols, scrollbackBytes, requireInLayout):
+            guard TerminalGeometry.isValid(cols: Int(cols), rows: Int(rows)) else { return .error("Terminal dimensions exceed the supported grid limit.") }
             if requireInLayout == true,
                !editor.snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs).contains(where: { $0.rootPane.allSurfaceIDs().contains(where: { $0.uuidString == surfaceID }) }) {
                 return .error("This pane has closed.")
@@ -654,7 +674,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // Modes come from the byte-stream mirror (DECCKM, keypad, Kitty), not a live emulator.
             let bytes = encodedKeys(surfaceID: surfaceID, keys: keys)
             if let session = sessions[surfaceID] {
-                session.write(bytes)
+                guard session.write(bytes) else { return .error("Input was not accepted: the pane is closed or its input queue is full. Wait for the program to read input, then try again.") }
                 return .ok
             }
             return .error("Surface not found")
@@ -802,6 +822,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
             let result = session.replayWithEndSequence(fromSequence: fromSequence)
             return .replayResult(text: result.text, endSequence: result.endSequence)
         case let .resizeSurface(surfaceID, rows, cols):
+            guard TerminalGeometry.isValid(cols: Int(cols), rows: Int(rows)) else { return .error("Terminal dimensions exceed the supported grid limit.") }
             sessions[surfaceID]?.resize(rows: rows, cols: cols)
             return .ok
         case .detachSurface:
@@ -852,9 +873,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 var out = Data("\u{1b}[200~".utf8)
                 out.append(buffer.data)
                 out.append(Data("\u{1b}[201~".utf8))
-                session.write(out)
+                guard session.write(out) else { return .error("Input was not accepted: the pane is closed or its input queue is full. Wait for the program to read input, then try again.") }
             } else {
-                session.write(buffer.data)
+                guard session.write(buffer.data) else { return .error("Input was not accepted: the pane is closed or its input queue is full. Wait for the program to read input, then try again.") }
             }
             return .ok
         case let .selectPaneDirectional(currentPaneID, direction):

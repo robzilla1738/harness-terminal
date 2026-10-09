@@ -3,7 +3,7 @@ set -euo pipefail
 CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/.build/$CONFIG"
-APP="$ROOT/Harness.app"
+APP="${HARNESS_APP_OUTPUT:-$ROOT/Harness.app}"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"

@@ -25,8 +25,9 @@ public struct OutputSearchPage: Codable, Sendable {
     public var hasMore: Bool
     public var epoch: String
     public var revision: Int
-    public init(matches: [OutputSearchMatch], hasMore: Bool, epoch: String, revision: Int) {
-        self.matches = matches; self.hasMore = hasMore; self.epoch = epoch; self.revision = revision
+    public var generation: String?
+    public init(matches: [OutputSearchMatch], hasMore: Bool, epoch: String, revision: Int, generation: String? = nil) {
+        self.matches = matches; self.hasMore = hasMore; self.epoch = epoch; self.revision = revision; self.generation = generation
     }
 }
 

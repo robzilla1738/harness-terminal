@@ -376,7 +376,7 @@ enum HarnessMotion {
         completion: (@MainActor () -> Void)? = nil
     ) {
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = duration
+            ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
             ctx.timingFunction = timing
             body(ctx)
         }, completionHandler: completion.map { handler in
@@ -388,7 +388,7 @@ enum HarnessMotion {
     /// remount). Soft transition instead of a hard cut; the swap itself is the
     /// caller's responsibility — this only schedules the fade.
     static func crossfade(_ layer: CALayer?, duration: TimeInterval = HarnessDesign.Motion.fast) {
-        guard let layer else { return }
+        guard let layer, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let transition = CATransition()
         transition.type = .fade
         transition.duration = duration

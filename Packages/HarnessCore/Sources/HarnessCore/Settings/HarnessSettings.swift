@@ -688,7 +688,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         // Consume the cached import result when decode is called from load() — that caller
         // already ran TerminalConfigImporter.load() and stashed the result here so we don't
         // invoke the importer twice on every first-run or migration path.
-        let imported = HarnessSettings.pendingImportedConfig ?? TerminalConfigImporter.load()
+        let imported = (decoder.userInfo[Self.importContextKey] as? ImportContext).map { $0.config } ?? TerminalConfigImporter.load()
         let fallback = HarnessSettings.makeDefaults(imported: imported)
         let fields = FieldDecoder(container: container, fallback: fallback)
 
@@ -852,23 +852,37 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         remoteControl = try fields.decode(.remoteControl, \.remoteControl)
     }
 
-    /// Thread-unsafe scratch slot used exclusively within `load()` to pass the already-computed
-    /// import result into `init(from decoder:)` without running `TerminalConfigImporter.load()`
-    /// a second time. Set immediately before `JSONDecoder().decode(…)`, cleared immediately after.
-    /// Only valid on the calling thread; `load()` is always called from a single context
-    /// (app start / settings save+reload), never concurrently.
-    nonisolated(unsafe) private static var pendingImportedConfig: ImportedTerminalConfig??
+    private struct ImportContext { let config: ImportedTerminalConfig? }
+    private static let importContextKey = CodingUserInfoKey(rawValue: "Harness.importedConfig")!
+
+    private static func decode(_ data: Data, imported: ImportedTerminalConfig?) throws -> HarnessSettings {
+        let decoder = JSONDecoder()
+        decoder.userInfo[importContextKey] = ImportContext(config: imported)
+        return try decoder.decode(HarnessSettings.self, from: data)
+    }
+
+    /// Live reload never migrates, replaces, or backs up the user's file. The caller keeps
+    /// its last working settings when an editor is between writes or the JSON is invalid.
+    public static func reload(from url: URL = HarnessPaths.settingsURL) throws -> HarnessSettings {
+        var settings = try decode(Data(contentsOf: url), imported: nil)
+        settings.backgroundOpacity = clampedOpacity(settings.backgroundOpacity)
+        settings.backgroundBlur = clampedBlur(settings.backgroundBlur)
+        settings.fontSize = clampedFontSize(settings.fontSize)
+        settings.windowPaddingX = clampedPadding(settings.windowPaddingX)
+        settings.windowPaddingY = clampedPadding(settings.windowPaddingY)
+        return settings
+    }
 
     /// `imported` defaults to the live terminal-config import; tests inject a fixture so
     /// migration behavior doesn't depend on the machine's source-terminal config.
     public static func load(imported: ImportedTerminalConfig? = TerminalConfigImporter.load()) -> HarnessSettings {
         let url = HarnessPaths.settingsURL
-        if FileManager.default.fileExists(atPath: url.path), let data = try? Data(contentsOf: url) {
-            // Stash the already-loaded import result so init(from:) can reuse it rather than
-            // calling TerminalConfigImporter.load() a second time.
-            pendingImportedConfig = imported
-            defer { pendingImportedConfig = nil }
-            guard var settings = try? JSONDecoder().decode(HarnessSettings.self, from: data) else {
+        if FileManager.default.fileExists(atPath: url.path) {
+            guard let data = try? Data(contentsOf: url) else {
+                fputs("Harness: could not read settings.json; original left untouched\n", harnessStderr)
+                return makeDefaults(imported: imported)
+            }
+            guard var settings = try? decode(data, imported: imported) else {
                 // Present but unreadable: preserve it as `.corrupt` for recovery rather than
                 // silently overwriting it with defaults (which would discard the user's settings).
                 // Mirrors SessionStore/OptionStore — return defaults WITHOUT rewriting the file.

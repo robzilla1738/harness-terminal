@@ -865,6 +865,22 @@ final class HarnessSettingsTests: XCTestCase {
         )
     }
 
+    func testLiveReloadLeavesInvalidOriginalUntouched() throws {
+        try withTemporaryHarnessHome { root in
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let url = root.appendingPathComponent("settings.json")
+            let partial = Data("{\"fontSize\":".utf8)
+            try partial.write(to: url)
+            XCTAssertThrowsError(try HarnessSettings.reload())
+            XCTAssertEqual(try Data(contentsOf: url), partial)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["settings.json"])
+            try Data("{\"fontSize\": 999, \"fontFamily\": \"Menlo\"}".utf8).write(to: url)
+            let fresh = try HarnessSettings.reload()
+            XCTAssertEqual(fresh.fontSize, 32)
+            XCTAssertEqual(fresh.fontFamily, "Menlo")
+        }
+    }
+
     private func withTemporaryHarnessHome(_ body: (URL) throws -> Void) throws {
         let previousHome = getenv("HARNESS_HOME").map { String(cString: $0) }
         let root = URL(fileURLWithPath: "/tmp/harness-settings-\(UUID().uuidString.prefix(8))", isDirectory: true)

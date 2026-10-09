@@ -102,16 +102,12 @@ final class ThaiCombiningMarkTests: XCTestCase {
         XCTAssertEqual(g.cursor.col, 1)
     }
 
-    /// SARA AM after a base whose two inline mark slots are ALREADY full (a 2-mark cluster) cannot
-    /// fold its NIKHAHIT, so it keeps the faithful original U+0E33 cell instead of dropping the mark.
-    func testSaraAmAfterFullClusterKeepsOriginalScalar() {
+    func testSaraAmAfterFullClusterUsesOverflowStorage() {
         let t = term()
-        t.feed("ที่ำ") // ท + ◌ี + ◌่ (both slots full), then SARA AM
+        t.feed("ที่ำ")
         let g = t.readGrid()
-        XCTAssertEqual(cell(g, 0, 0).codepoint, 0x0E17)
-        XCTAssertEqual(cell(g, 0, 0).combining0, 0x0E35)
-        XCTAssertEqual(cell(g, 0, 0).combining1, 0x0E48, "base already carries two marks")
-        XCTAssertEqual(cell(g, 0, 1).codepoint, 0x0E33, "SARA AM stays faithful (NIKHAHIT couldn't attach)")
+        XCTAssertEqual(t.cluster(for: cell(g, 0, 0)), "ที่\u{0E4D}")
+        XCTAssertEqual(cell(g, 0, 1).codepoint, 0x0E32)
         XCTAssertEqual(g.cursor.col, 2)
     }
 
@@ -284,7 +280,7 @@ final class ThaiCombiningMarkTests: XCTestCase {
     func testSearchSaraAmAfterFullClusterMatchesFaithfulCell() {
         let t = term(); t.feed("ที่ำ")
         let cells = (0 ..< t.cols).map { cell(t.readGrid(), 0, $0) }
-        let hits = TerminalBufferSearch.matches(query: "ที่ำ", lineCount: 1, line: { _ in cells })
+        let hits = TerminalBufferSearch.matches(query: "ที่ำ", options: .default, lineCount: 1, clusters: t.clusters, line: { _ in cells })
         XCTAssertEqual(hits.count, 1, "ที่ำ matches its two faithful cells")
         XCTAssertEqual(hits.first?.columns, 0 ..< 2)
     }

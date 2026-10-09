@@ -38,14 +38,22 @@ public enum ExperienceMode: String, Codable, Sendable, CaseIterable {
     public var summary: String {
         switch self {
         case .plain:
-            return "A fast native terminal. No command prefix or status bar; sessions close when you quit."
+            return "A fast native terminal. No command prefix or status bar; sessions close on quit by default."
         case .persistent:
-            return "Like Plain, but sessions survive quitting and can be attached from the CLI."
+            return "Like Plain, with sessions kept running on quit by default and CLI attachment."
         case .full:
             return "The full Harness experience: command prefix, status line, copy mode, paste buffers, panes, and the harness-cli command set."
         case .agent:
             return "Persistent project workspaces with AI-agent detection, notifications, and jump-to-agent."
         }
+    }
+
+    /// The daemon's explicit policy takes precedence over the selected preset.
+    public func summary(keepSessionsOnQuit: Bool) -> String {
+        let effective = keepSessionsOnQuit
+            ? "Current quit behavior: keep sessions running."
+            : "Current quit behavior: close unpinned sessions."
+        return summary + " " + effective
     }
 
     /// Whether Harness controls — prefix-key handling, the prefix indicator, and the

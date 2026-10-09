@@ -514,7 +514,7 @@ enum CommandPaletteController {
                     }
                 }
                 coordinator.settings = settings
-                try? settings.save()
+                SessionCoordinator.shared.saveSettings()
                 coordinator.applySettingsToHosts()
                 SettingsWindowController.reloadIfOpen()
             })
@@ -537,7 +537,7 @@ enum CommandPaletteController {
                 } else {
                     next = current
                 }
-                coordinator.requestDaemon(DaemonSettingsControls.request(key: daemon.key, rawValue: next))
+                coordinator.requestDaemonAsync(DaemonSettingsControls.request(key: daemon.key, rawValue: next))
                 HarnessOptions.reloadFromDisk()
             })
         }

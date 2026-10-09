@@ -9,6 +9,8 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
+- Compound emoji and longer combining sequences survive rendering, copy, capture, reflow, and reattachment.
+- Native scrollback thumb dragging and track clicks, honoring the macOS scrollbar preference.
 - Per-pane Activity across attached hosts, with exact-pane navigation, read state, notification snoozing, and hook installation health.
 - Saved Setups with editable layouts, optional startup commands, import/export, and explicit Open versus Open New Copy behavior.
 - Recently Closed layout recovery with fresh shells and up to 20 entries per host.
@@ -18,12 +20,22 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Configurable pane spacing in Appearance settings, retaining the 8-point default.
 
 ### Changed
+- GUI daemon commands and subscriptions run off the main thread, with captured targets, ordered operations, and stale-result protection.
+- Find uses cancellable background matching across soft wraps; global output search uses expiring pagination without repeatedly materializing whole histories.
+- Accessibility text is cached by content revision and exposes actual visible, cursor, and selection ranges.
+- Decoded history has its own memory ceiling alongside raw output retention; wide rows can reach the byte ceiling before the line limit.
 - Wider horizontal tabs share a rounded container; sidebar tabs use matching height and selected styling. Tab dragging starts on the first press.
 - More consistent sidebar spacing, contextual menus, circular hover controls within pills, and darker selected tabs in the default theme.
 - Improved command palette and remote-host sheet readability, slower activity spinners, and clearer connection retry and diagnostic controls.
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- Input queue exhaustion is reported instead of silently dropping a paste; uncertain writes are never automatically retried.
+- Invalid live configuration retains the last working settings. Session-save failures reach the app, and shutdown saves cannot be overwritten by an older debounce.
+- Idle panes repaint after display invalidation; Quick Terminal uses the same appearance updates as normal windows.
+- Experience descriptions reflect effective session persistence. Remaining custom fades honor Reduce Motion.
+- Socket writes, discovery subprocesses, file-backed graphics reads, and trigger regex work have bounded resource/time behavior.
+- Isolated application homes no longer refresh the normal installed binaries or restart its launchd service.
 - A delayed session-backed terminal reconnect can no longer recreate a surface after its pane closes.
 - Marking Activity read or changing snooze preserves the activity's timestamp and does not resolve a blocked process.
 - Path insertion and Go to Directory reject terminal control characters.

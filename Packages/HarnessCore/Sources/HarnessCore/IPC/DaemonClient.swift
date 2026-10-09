@@ -20,8 +20,9 @@ public final class DaemonClient: @unchecked Sendable {
     }
 
     public func request(_ ipcRequest: IPCRequest, timeout: TimeInterval = 2) throws -> IPCResponse {
-        try queue.sync {
-            try self.performRequest(ipcRequest, timeout: timeout)
+        let deadline = SocketDeadline(timeout: timeout)
+        return try queue.sync {
+            try self.performRequest(ipcRequest, deadline: deadline)
         }
     }
 
@@ -32,9 +33,10 @@ public final class DaemonClient: @unchecked Sendable {
         onData: @escaping @Sendable (Data, UInt64) -> Void,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
-        let fd = try connectSocket()
+        let deadline = SocketDeadline(timeout: 2)
+        let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
         let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSurfaceOutput(surfaceID: surfaceID, label: label)))
-        do { try writeAll(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
+        do { try deadline.write(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(onData: onData, onEnd: onEnd)
         if RemoteAttach.isTunnel(endpoint) { subscription.presentAsTunnel() }
@@ -71,12 +73,13 @@ public final class DaemonClient: @unchecked Sendable {
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
         // 1. Subscribe first, buffering live frames (do NOT deliver yet).
-        let fd = try connectSocket()
+        let deadline = SocketDeadline(timeout: 2)
+        let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
         let subscribe: IPCRequest = readOnly
             ? .subscribeSurfaceOutputReadOnly(surfaceID: surfaceID, label: label)
             : .subscribeSurfaceOutput(surfaceID: surfaceID, label: label)
         let payload = try IPCCodec.encode(IPCEnvelope(request: subscribe))
-        do { try writeAll(payload, to: fd) } catch { close(fd); throw error }
+        do { try deadline.write(payload, to: fd) } catch { close(fd); throw error }
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(onData: onData, onEnd: onEnd, buffered: true)
 
@@ -160,7 +163,7 @@ public final class DaemonClient: @unchecked Sendable {
         }
         let request = AttachRequest(
             surfaceID: surfaceID, label: label, readOnly: readOnly, history: true,
-            fromSequence: resume?.sequence, epoch: resume?.epoch
+            fromSequence: resume?.sequence, epoch: resume?.epoch, inputErrors: true
         )
         return try attachStream(request, onAttached: { reply in
             onStart(AttachStart(
@@ -180,13 +183,16 @@ public final class DaemonClient: @unchecked Sendable {
         onOwnership: (@Sendable (SizeOwnership) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
-        let fd = try connectSocket()
+        let deadline = SocketDeadline(timeout: 2)
+        let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
         let payload = try IPCCodec.encode(IPCEnvelope(request: .attachStream(request)))
-        do { try writeAll(payload, to: fd) } catch { close(fd); throw error }
+        do { try deadline.write(payload, to: fd) } catch { close(fd); throw error }
         let subscription = DaemonSubscription(fd: fd)
-        subscription.start(onResponse: { response in
+        subscription.start(onResponse: { [weak subscription] response in
             switch response {
-            case let .attached(reply): onAttached(reply)
+            case let .attached(reply):
+                subscription?.setInputErrorSupport(reply.inputErrors == true)
+                onAttached(reply)
             case let .data(data, sequence): onData(data, sequence)
             case let .sizeOwnership(ownership): onOwnership?(ownership)
             default: break
@@ -220,9 +226,10 @@ public final class DaemonClient: @unchecked Sendable {
         onDirective: (@Sendable (ClientDirective) -> Void)? = nil,
         onEnd: (@Sendable () -> Void)? = nil
     ) throws -> DaemonSubscription {
-        let fd = try connectSocket()
+        let deadline = SocketDeadline(timeout: 2)
+        let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
         let payload = try IPCCodec.encode(IPCEnvelope(request: .subscribeSnapshot(label: label, directives: onDirective != nil)))
-        do { try writeAll(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
+        do { try deadline.write(payload, to: fd) } catch { close(fd); throw error } // EINTR-safe, looped
         let subscription = DaemonSubscription(fd: fd)
         subscription.start(
             onResponse: { response in
@@ -244,19 +251,24 @@ public final class DaemonClient: @unchecked Sendable {
         includeServer: Bool,
         onEvent: (FollowEvent) -> Void
     ) throws {
-        let fd = try connectSocket()
+        let deadline = SocketDeadline(timeout: 2)
+        let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
         defer { close(fd) }
         let payload = try IPCCodec.encode(
             IPCEnvelope(request: .subscribeEvents(sessionID: sessionID, includeServer: includeServer))
         )
-        try writeAll(payload, to: fd)
+        try deadline.write(payload, to: fd)
         var buffer = Data()
         var temp = [UInt8](repeating: 0, count: 65_536)
         while true {
+            var ready = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let polled = poll(&ready, 1, -1)
+            if polled < 0, errno == EINTR { continue }
+            if polled < 0 || ready.revents & Int16(POLLNVAL) != 0 { throw DaemonClientError.connectionFailed }
             let count = read(fd, &temp, temp.count)
             if count == 0 { return }
             if count < 0 {
-                if errno == EINTR { continue }
+                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
                 throw DaemonClientError.connectionFailed
             }
             buffer.append(contentsOf: temp.prefix(count))
@@ -284,75 +296,28 @@ public final class DaemonClient: @unchecked Sendable {
         }
     }
 
-    private func performRequest(_ ipcRequest: IPCRequest, timeout: TimeInterval) throws -> IPCResponse {
-        let fd = try connectSocket()
+    private func performRequest(_ ipcRequest: IPCRequest, deadline: SocketDeadline) throws -> IPCResponse {
+        let fd = try EndpointConnector.connect(endpoint, deadline: deadline)
         defer { close(fd) }
-
         let payload = try IPCCodec.encode(IPCEnvelope(request: ipcRequest))
-        try writeAll(payload, to: fd)
-
+        try deadline.write(payload, to: fd)
         var buffer = Data()
-        let deadline = Date().addingTimeInterval(timeout)
         var temp = [UInt8](repeating: 0, count: 65_536)
-        while Date() < deadline {
-            let remaining = max(0, deadline.timeIntervalSinceNow)
-            guard try waitForReadable(fd: fd, timeout: remaining) else { break }
+        while true {
+            try deadline.wait(fd, events: Int16(POLLIN))
             let count = read(fd, &temp, temp.count)
             if count > 0 {
                 buffer.append(contentsOf: temp.prefix(count))
-                if let reply = try IPCCodec.decodeReply(from: &buffer) {
-                    return reply.response
-                }
-            } else if count == 0 {
-                // Peer closed. A complete (possibly large, multi-read) reply may already be
-                // buffered — try one last decode before giving up, so we don't drop it.
-                if let reply = try? IPCCodec.decodeReply(from: &buffer) {
-                    return reply.response
-                }
-                break
-            }
-        }
-        throw DaemonClientError.timeout
-    }
-
-    private func connectSocket() throws -> Int32 {
-        // Establishing the byte stream is the only transport-specific step; the framing and read
-        // loop are endpoint-agnostic. `EndpointConnector` handles validation + connect for the
-        // local socket and (via an SSH tunnel) a remote one. Let its specific error propagate
-        // (e.g. `.pathTooLong` with the offending path) instead of flattening it to a generic
-        // `connectionFailed` — that detail is what tells a user how to fix it.
-        try EndpointConnector.connect(endpoint)
-    }
-
-    private func writeAll(_ data: Data, to fd: Int32) throws {
-        try data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            var written = 0
-            while written < raw.count {
-                let result = write(fd, base.advanced(by: written), raw.count - written)
-                if result > 0 {
-                    written += result
-                    continue
-                }
-                if result < 0, errno == EINTR { continue }
-                throw DaemonClientError.writeFailed
+                if let reply = try IPCCodec.decodeReply(from: &buffer) { return reply.response }
+            } else if count < 0, errno == EINTR || errno == EAGAIN {
+                continue
+            } else {
+                throw DaemonClientError.connectionFailed
             }
         }
     }
 
-    private func waitForReadable(fd: Int32, timeout: TimeInterval) throws -> Bool {
-        var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        let timeoutMS = max(0, Int32((timeout * 1000).rounded(.up)))
-        while true {
-            let result = poll(&pfd, 1, timeoutMS)
-            if result > 0 {
-                return (pfd.revents & Int16(POLLIN | POLLHUP | POLLERR)) != 0
-            }
-            if result == 0 { return false }
-            if errno == EINTR { continue }
-            throw DaemonClientError.connectionFailed
-        }
-    }
+
 }
 
 /// Live output stream over a dedicated socket.
@@ -422,23 +387,31 @@ public final class DaemonSubscription: @unchecked Sendable {
         writeFrame(payload)
     }
 
-    /// Write keystroke/paste bytes to `surfaceID` over this persistent full-duplex connection,
-    /// fire-and-forget (no reply). Replaces the per-keystroke `DaemonClient.request(.sendData:)`,
-    /// which opened a fresh socket and blocked for the `.ok`. Safe from any thread — the read loop
-    /// runs on its own queue and only reads; the `cancelled`/`finished` guard (same as
-    /// `detachSurface`) prevents writing to a torn-down fd.
-    /// Returns `false` if the input could NOT be delivered — the subscription is torn down
-    /// (`cancelled`/`finished`) or the socket hard-errored before all bytes flushed (e.g. the daemon
-    /// evicted this slow subscriber past its write-backlog cap while staying reachable). The caller
-    /// then falls back to a one-shot `.sendData` RPC so the keystroke isn't silently dropped in the
-    /// window between socket death and the main-thread re-attach. Returns `true` once the full frame
-    /// is on the wire (fire-and-forget — no `.ok` ack is awaited).
+    private var inputErrorsSupported = false
+    private var inputErrorHandler: (@Sendable (String) -> Void)?
+
+    func setInputErrorSupport(_ supported: Bool) {
+        lock.lock(); inputErrorsSupported = supported; lock.unlock()
+    }
+
+    public func setInputErrorHandler(_ handler: @escaping @Sendable (String) -> Void) {
+        lock.lock(); inputErrorHandler = handler; lock.unlock()
+    }
+
+    /// A false result has an UNKNOWN delivery outcome. Never retry this mutation.
+    /// Old daemons use their existing JSON request/reply path; binary input requires the
+    /// attach handshake's explicit agreement to report admission failures.
     @discardableResult
     public func sendInput(_ data: Data, surfaceID: String) -> Bool {
-        lock.lock(); let dead = cancelled || finished; lock.unlock()
-        guard !dead,
-              let payload = try? IPCCodec.encodeInputFrame(surfaceID: surfaceID, payload: data)
-        else { return false }
+        lock.lock()
+        let dead = cancelled || finished
+        let binary = inputErrorsSupported
+        lock.unlock()
+        guard !dead else { return false }
+        let payload = binary
+            ? try? IPCCodec.encodeInputFrame(surfaceID: surfaceID, payload: data)
+            : try? IPCCodec.encode(IPCEnvelope(request: .sendData(surfaceID: surfaceID, data: data)))
+        guard let payload else { return false }
         return writeFrame(payload)
     }
 
@@ -480,7 +453,7 @@ public final class DaemonSubscription: @unchecked Sendable {
     /// `writeLock` for the whole frame so two writers can't interleave bytes. A hard error (peer
     /// gone) just stops — the read loop independently observes EOF and tears down. Returns `true`
     /// iff every byte of the frame flushed; `false` on a torn-down subscription or a hard write
-    /// error (so `sendInput` can fall back). `detachSurface`/`resize` ignore the result.
+    /// error (the caller must report the uncertain delivery, without retrying). `detachSurface`/`resize` ignore the result.
     @discardableResult
     private func writeFrame(_ payload: Data) -> Bool {
         writeLock.lock()
@@ -492,18 +465,13 @@ public final class DaemonSubscription: @unchecked Sendable {
         // close raced an in-flight write into a stale descriptor.
         lock.lock(); let dead = cancelled || finished; lock.unlock()
         guard !dead else { return false }
-        // Write straight from the Data's storage (`writeAll`'s pattern) — this is the per-keystroke
-        // path, and the old `[UInt8](payload)` round-trip copied every input byte before each write.
-        return payload.withUnsafeBytes { raw -> Bool in
-            guard let base = raw.baseAddress else { return true } // empty frame: nothing to flush
-            var off = 0
-            while off < raw.count {
-                let n = write(fd, base.advanced(by: off), raw.count - off)
-                if n > 0 { off += n }
-                else if n < 0, errno == EINTR || errno == EAGAIN { continue }
-                else { return false } // hard error (EPIPE / peer gone) before the frame fully flushed
-            }
+        do {
+            try SocketDeadline(timeout: 2).write(payload, to: fd)
             return true
+        } catch {
+            // The outcome may be unknown. Close this stream and never retry its input.
+            cancel()
+            return false
         }
     }
 
@@ -645,7 +613,12 @@ public final class DaemonSubscription: @unchecked Sendable {
             var buffer = IPCReadBuffer()
             var temp = [UInt8](repeating: 0, count: 65_536)
             outer: while true {
+                var ready = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let polled = poll(&ready, 1, -1)
+                if polled < 0, errno == EINTR { continue }
+                if polled < 0 || ready.revents & Int16(POLLNVAL) != 0 { break }
                 let count = read(fd, &temp, temp.count)
+                if count < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
                 if count <= 0 { break }
                 buffer.append(temp, count: count)
                 while true {
@@ -655,6 +628,18 @@ public final class DaemonSubscription: @unchecked Sendable {
                     guard let decoded else { break }
                     switch decoded {
                     case let .reply(response):
+                        if case let .inputRejected(message) = response, let self {
+                            self.lock.lock()
+                            let handler = self.inputErrorHandler
+                            self.lock.unlock()
+                            handler?(message)
+                        }
+                        if case let .error(message) = response, let self {
+                            self.lock.lock()
+                            let handler = self.inputErrorHandler
+                            self.lock.unlock()
+                            handler?(message)
+                        }
                         onResponse(response)
                         // A subscription connection only carries `.ok`/`.error` acks before `.data`
                         // flows. An `.error` means the subscribe was rejected (e.g. surface gone) and

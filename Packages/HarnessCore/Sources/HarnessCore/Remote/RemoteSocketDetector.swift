@@ -43,10 +43,10 @@ public enum RemoteSocketDetector {
     }
 
     /// Blocking: runs the probe and returns the socket path. Call off the main thread.
-    public static func detect(target: String, sshArgs: [String]) throws -> String {
+    public static func detect(target: String, sshArgs: [String], cancelled: () -> Bool = { false }) throws -> String {
         let result = try ProcessCapture.run(
             URL(fileURLWithPath: "/usr/bin/ssh"),
-            arguments: try sshArguments(target: target, sshArgs: sshArgs)
+            arguments: try sshArguments(target: target, sshArgs: sshArgs), timeout: 12, maxOutputBytes: 1_048_576, cancelled: cancelled
         )
         let stdout = String(decoding: result.stdout, as: UTF8.self)
         if result.status == 0, let path = parse(stdout) { return path }

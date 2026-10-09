@@ -719,6 +719,15 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var findActive = false
     /// All matches for the current query, in buffer-line order (history + viewport space).
     private var findMatches: [TerminalBufferMatch] = []
+    private var findQuery = ""
+    private var findOptions = TerminalBufferSearchOptions.default
+    private var findCancellation: TerminalSearchCancellation?
+    private var findDebounce: DispatchWorkItem?
+    private var findContentRevision: UInt64 = 0
+    private var accessibleCache: (revision: UInt64, text: TerminalAccessibilityText, cursorLine: Int, cursorColumn: Int, history: Int)?
+    private var findTargetLine: Int?
+    public var onFindStatusChanged: ((String?) -> Void)?
+    public var accessibilityPaneName = "Terminal"
     /// Index of the "current" match within `findMatches` (the one we scrolled to).
     private var findCurrentIndex = 0
 
@@ -861,6 +870,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// clipboard writes — see `TerminalEmulator.isReplaying`). The flag brackets exactly this
     /// chunk's `feed` on the emulator's serialized context.
     public func receive(_ data: Data, replay: Bool) {
+        invalidateFindContent()
         historyRestore?.feed(data)
         if offMainParserFramePipelineEnabled {
             receiveOffMain(data, replay: replay)
@@ -1068,10 +1078,11 @@ public final class HarnessTerminalSurfaceView: NSView {
 
     /// Move everything anchored to absolute buffer lines down by `added` lines of history.
     private func shiftBufferLines(by added: Int) {
+        invalidateFindContent() // The replacement may have landed after an AX getter cached the old grid.
         guard added != 0 else { return }
         selectionAnchor?.line += added
         selectionHead?.line += added
-        findMatches = findMatches.map { TerminalBufferMatch(bufferLine: $0.bufferLine + added, columns: $0.columns) }
+        findMatches = findMatches.map { $0.shifted(by: added) }
         triggerHighlightMatches = triggerHighlightMatches.map {
             TerminalBufferMatch(bufferLine: $0.bufferLine + added, columns: $0.columns)
         }
@@ -1436,9 +1447,51 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// because `emulatorSync` is file-private. Lines are the full scrollback + screen, so VoiceOver
     /// can review history; the cursor line is offset past the scrollback so it indexes those lines.
     func accessibilitySnapshot() -> (lines: [String], cursorLine: Int, cursorColumn: Int) {
-        emulatorSync { emulator in
-            let cursor = emulator.readGrid().cursor
-            return (emulator.captureLines(joinWrapped: false), emulator.historyCount + cursor.row, cursor.col)
+        let state = accessibleState()
+        return (state.text.lines, state.cursorLine, state.cursorColumn)
+    }
+
+    func accessibleState() -> (text: TerminalAccessibilityText, cursorLine: Int, cursorColumn: Int, visible: NSRange) {
+        if accessibleCache?.revision != findContentRevision {
+            let (snapshot, cursor) = emulatorSync { ($0.textSnapshot(), $0.readGrid().cursor) }
+            var mapped: [TerminalMappedText] = []
+            mapped.reserveCapacity(snapshot.lineCount)
+            for line in 0..<snapshot.lineCount {
+                var row = TerminalMappedText()
+                var cells = snapshot.line(line)
+                while let last = cells.last, last.width != .spacerTail,
+                      (last.codepoint == 0 || last.codepoint == 32), last.combining0 == 0 {
+                    cells.removeLast()
+                }
+                row.append(cells, line: line, clusters: snapshot.clusters)
+                mapped.append(row)
+            }
+            accessibleCache = (findContentRevision, TerminalAccessibilityText(mappedLines: mapped),
+                               snapshot.historyCount + cursor.row, cursor.col, snapshot.historyCount)
+        }
+        let cache = accessibleCache!
+        let top = max(0, cache.history - scrollOffset)
+        let start = cache.text.characterRange(forLine: top)?.location ?? 0
+        let bottom = cache.text.characterRange(forLine: min(cache.text.lineCount - 1, top + rows - 1))
+        let end = bottom.map(NSMaxRange) ?? start
+        return (cache.text, cache.cursorLine, cache.cursorColumn, NSRange(location: start, length: max(0, end - start)))
+    }
+
+    func accessibleSelectionRanges() -> [NSRange] {
+        let state = accessibleState()
+        guard let raw = currentRawSelection else {
+            return [NSRange(location: state.text.characterIndex(line: state.cursorLine, column: state.cursorColumn), length: 0)]
+        }
+        let selection = emulatorSync { Self.resolveAbsoluteSelectionRegion(raw, emulator: $0, columns: columns) }
+        func range(_ row: Int, _ first: Int, _ lastRow: Int, _ last: Int) -> NSRange {
+            let start = state.text.characterIndex(line: row, column: first)
+            let end = state.text.characterIndex(line: lastRow, column: last + 1)
+            return NSRange(location: start, length: max(0, end - start))
+        }
+        switch selection {
+        case let .linear(s): return [range(s.startRow, s.startColumn, s.endRow, s.endColumn)]
+        case let .block(b): return (b.startRow...b.endRow).map { range($0, b.startColumn, $0, b.endColumn) }
+        case nil: return []
         }
     }
 
@@ -1500,6 +1553,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     private func invalidateRenderGeneration() {
+        invalidateFindContent()
         renderGeneration &+= 1
         emulatorState.resetPlainFrame()
         lastPresentedResultIsRendererCoherent = false
@@ -1582,7 +1636,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0.28 // peak: visible but not a jarring full-white blink
         fade.toValue = 0
-        fade.duration = 0.16
+        fade.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.16
         fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
         fade.isRemovedOnCompletion = true
         let token = bellFlashGeneration &+ 1
@@ -2023,6 +2077,12 @@ public final class HarnessTerminalSurfaceView: NSView {
             work.perform()
             work.cancel()
         }
+        if !repaintLastFrame() { scheduleRender() }
+    }
+
+    public override func viewWillDraw() {
+        super.viewWillDraw()
+        guard lastPresentedResult != nil, !scheduler.isOccluded, !metalLayer.presentsWithTransaction else { return }
         if !repaintLastFrame() { scheduleRender() }
     }
 
@@ -2935,7 +2995,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
         return TerminalGridSnapshot(
             cols: snapshot.cols, rows: snapshot.rows + 1, cells: snapshot.cells + line,
-            cursor: snapshot.cursor, images: snapshot.images, marks: snapshot.marks
+            cursor: snapshot.cursor, images: snapshot.images, marks: snapshot.marks, clusters: snapshot.clusters
         )
     }
 
@@ -3349,7 +3409,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     /// Set the scrollback offset so virtual buffer line `index` is the top viewport row.
-    private func scrollToBufferLine(_ index: Int) {
+    public func scrollToBufferLine(_ index: Int) {
         let historyCount = emulatorSync { $0.historyCount }
         let target = max(0, min(historyCount, historyCount - index))
         guard target != scrollOffset || scrollFraction != 0 else { return }
@@ -3846,6 +3906,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     public func endFind() {
         guard findActive else { return }
         findActive = false
+        findQuery = ""
+        findCancellation?.cancel()
+        findDebounce?.cancel()
         findMatches = []
         findCurrentIndex = 0
         onFindResultsChanged?(0, 0)
@@ -3856,32 +3919,74 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// match mode (`options`). Empty clears matches.
     public func updateFind(query: String, options: TerminalBufferSearchOptions = .default) {
         findActive = true
-        if query.isEmpty {
-            findMatches = []
-            findCurrentIndex = 0
-        } else {
-            findMatches = emulatorSync { emulator in
-                TerminalBufferSearch.matches(query: query, options: options, lineCount: emulator.bufferLineCount) { emulator.bufferLine($0) }
+        findQuery = query
+        findOptions = options
+        findCurrentIndex = 0
+        scheduleFind()
+    }
+
+    private func invalidateFindContent() {
+        findContentRevision &+= 1
+        if findActive, !findQuery.isEmpty { scheduleFind() }
+    }
+
+    private func scheduleFind() {
+        findCancellation?.cancel()
+        findDebounce?.cancel()
+        findMatches = []
+        onFindResultsChanged?(0, 0)
+        guard !findQuery.isEmpty else { onFindStatusChanged?(nil); scheduleRender(); return }
+        let cancellation = TerminalSearchCancellation()
+        findCancellation = cancellation
+        let query = findQuery, options = findOptions, revision = findContentRevision
+        onFindStatusChanged?("Searching…")
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !cancellation.isCancelled else { return }
+            let search: @Sendable (TerminalTextSnapshot) -> Void = { [weak self] snapshot in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    guard !cancellation.isCancelled else { return }
+                    let result = TerminalBufferSearch.search(query: query, options: options,
+                        lineCount: snapshot.lineCount, clusters: snapshot.clusters,
+                        isWrapped: snapshot.isWrapped, cancelled: { cancellation.isCancelled }, line: snapshot.line)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, !cancellation.isCancelled, self.findActive,
+                              revision == self.findContentRevision else { return }
+                        switch result {
+                        case let .matches(matches, limited):
+                            self.findMatches = matches
+                            self.findCurrentIndex = self.findTargetLine.flatMap { target in
+                                matches.firstIndex { $0.bufferLine == target }
+                            } ?? 0
+                            self.findTargetLine = nil
+                            if !matches.isEmpty { self.scrollToCurrentMatch() }
+                            self.onFindResultsChanged?(matches.isEmpty ? 0 : self.findCurrentIndex + 1, matches.count)
+                            self.onFindStatusChanged?(limited ? "Results limited" : nil)
+                        case let .invalidPattern(message): self.onFindStatusChanged?("Invalid pattern: " + message)
+                        case .cancelled: return
+                        case .expired: self.onFindStatusChanged?("Output changed. Search again.")
+                        }
+                        self.scheduleRender()
+                    }
+                }
             }
-            findCurrentIndex = 0
-            if !findMatches.isEmpty { scrollToCurrentMatch() }
+            if self.offMainParserFramePipelineEnabled {
+                self.emulatorState.async { emulator in search(emulator.textSnapshot()) }
+            } else { search(self.emulatorState.emulator.textSnapshot()) }
         }
-        onFindResultsChanged?(findMatches.isEmpty ? 0 : findCurrentIndex + 1, findMatches.count)
+        findDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
         scheduleRender()
     }
 
     public func revealSearchResult(query: String, caseSensitive: Bool, line: Int, fingerprint: UInt64) -> Bool {
         let valid = emulatorSync { emulator in
-            let lines = emulator.captureLines(joinWrapped: false)
-            return lines.indices.contains(line) && OutputSearch.fingerprint(lines[line]) == fingerprint
+            guard line >= 0, line < emulator.bufferLineCount else { return false }
+            let text = emulator.textSnapshot().logicalText(startingAt: line).text
+            return OutputSearch.fingerprint(text.text) == fingerprint
         }
         guard valid else { return false }
+        findTargetLine = line
         updateFind(query: query, options: TerminalBufferSearchOptions(caseSensitive: caseSensitive))
-        guard let index = findMatches.firstIndex(where: { $0.bufferLine == line }) else { return false }
-        findCurrentIndex = index
-        scrollToCurrentMatch()
-        onFindResultsChanged?(index + 1, findMatches.count)
-        scheduleRender()
         return true
     }
 
@@ -3912,10 +4017,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         guard !matches.isEmpty, rows > 0 else { return [] }
         let topVisible = historyCount - scrollOffset // buffer index of the top viewport row
         var hits: [TerminalSelection] = []
-        for m in matches where !m.columns.isEmpty {
-            let row = m.bufferLine - topVisible
-            if row >= 0, row < rows {
-                hits.append(TerminalSelection((row, m.columns.lowerBound), (row, m.columns.upperBound - 1)))
+        var lo = 0, hi = matches.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if (matches[mid].spans.last?.bufferLine ?? 0) < topVisible { lo = mid + 1 } else { hi = mid }
+        }
+        for match in matches[lo...] {
+            if match.bufferLine >= topVisible + rows { break }
+            for m in match.spans where !m.columns.isEmpty {
+                let row = m.bufferLine - topVisible
+                if row >= 0, row < rows {
+                    hits.append(TerminalSelection((row, m.columns.lowerBound), (row, m.columns.upperBound - 1)))
+                }
             }
         }
         return hits
@@ -4266,7 +4379,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             let cells = emulator.bufferLine(row)
             let startCol = (row == sel.startRow) ? sel.startColumn : 0
             let endCol = (row == sel.endRow) ? sel.endColumn : cells.count - 1
-            lines.append(rowText(cells: cells, startCol: startCol, endCol: endCol))
+            lines.append(rowText(cells: cells, startCol: startCol, endCol: endCol, clusters: emulator.clusters))
         }
         return lines.joined(separator: "\n")
     }
@@ -4274,13 +4387,13 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Extract a rectangular (block) selection: the same column span on every line, joined by \n.
     private nonisolated static func blockSelectedText(_ blk: BlockSelection, emulator: TerminalEmulator) -> String {
         (blk.startRow ... blk.endRow)
-            .map { rowText(cells: emulator.bufferLine($0), startCol: blk.startColumn, endCol: blk.endColumn) }
+            .map { rowText(cells: emulator.bufferLine($0), startCol: blk.startColumn, endCol: blk.endColumn, clusters: emulator.clusters) }
             .joined(separator: "\n")
     }
 
     /// One buffer line's text over `[startCol, endCol]` (clamped to the line): drop wide-char
     /// spacer tails, blanks → space, trailing whitespace trimmed.
-    private nonisolated static func rowText(cells: [TerminalGridCell], startCol: Int, endCol: Int) -> String {
+    private nonisolated static func rowText(cells: [TerminalGridCell], startCol: Int, endCol: Int, clusters: [UInt32: String]) -> String {
         var line = ""
         var col = max(0, startCol)
         let last = min(endCol, cells.count - 1)
@@ -4288,7 +4401,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             let cell = cells[col]
             if cell.width == .spacerTail { col += 1; continue }
             if cell.codepoint != 0 {
-                line += cell.cluster // base + combining marks
+                line += cell.resolvedCluster(in: clusters)
             } else {
                 line += " "
             }
@@ -4895,7 +5008,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         addSubview(overlay)
         selectionFadeView = overlay
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.22
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.22
             overlay.animator().alphaValue = 0
         }, completionHandler: { [weak overlay] in
             overlay?.removeFromSuperview()

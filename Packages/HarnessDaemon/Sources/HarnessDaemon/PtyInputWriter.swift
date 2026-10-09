@@ -6,94 +6,105 @@ import Glibc
 import Foundation
 import HarnessCore
 
-/// Keystrokes and pastes to one PTY, without ever blocking a thread. The master is
-/// non-blocking: a write takes what the PTY accepts, the rest waits in order, and a write
-/// source finishes the job when the program drains its input. A pane frozen with Ctrl-S, or
-/// a program that stops reading, costs a buffer instead of a parked GCD worker.
-///
-/// Every write goes to a private dup of the master, taken under the owner's lock: close or
-/// respawn can then close the master without the fd number being recycled under a pending
-/// write. Input queued for a shell that has since been respawned is dropped.
+/// Bounded, whole-write admission before dispatching work. The nonblocking descriptor is
+/// pinned to the shell generation at admission, so queued input cannot reach a replacement.
 final class PtyInputWriter: @unchecked Sendable {
-    /// Typed input never gets near this; it bounds a giant paste into a frozen pane.
     static let maxPending = 8 * 1024 * 1024
-
-    typealias Master = @Sendable () -> (fd: Int32, generation: UInt64)?
-
     private let queue: DispatchQueue
-    /// The current master (a fresh dup the caller now owns) and its shell generation.
-    /// Set with each write; read on the queue.
-    private var currentMaster: Master = { nil }
+    private let limit: Int
+    private let lock = NSLock()
     private var pending = Data()
-    private var pendingGeneration: UInt64?
+    private var master: (fd: Int32, generation: UInt64)?
+    private var newestGeneration: UInt64 = 0
+    private var scheduled = false
     private var waiting: DispatchSourceWrite?
+    private var waitToken: UUID?
 
-    init(queue: DispatchQueue) {
+    init(queue: DispatchQueue, limit: Int = maxPending) {
         self.queue = queue
+        self.limit = limit
     }
 
-    func write(_ data: Data, master: @escaping Master) {
-        guard !data.isEmpty else { return }
-        queue.async { [self] in
-            currentMaster = master
-            let room = Self.maxPending - pending.count
-            guard room > 0 else { return }
-            pending.append(data.prefix(room))
-            if waiting == nil { drain() }
+    /// Takes ownership of the supplied dup, including on rejection. No partial paste is admitted.
+    @discardableResult
+    func write(_ data: Data, master incoming: (fd: Int32, generation: UInt64)?) -> Bool {
+        guard let incoming else { return data.isEmpty }
+        guard !data.isEmpty else { sysClose(incoming.fd); return true }
+        lock.lock()
+        defer { lock.unlock() }
+        guard incoming.generation >= newestGeneration else { sysClose(incoming.fd); return false }
+        if incoming.generation > newestGeneration {
+            clearLocked()
+            newestGeneration = incoming.generation
         }
+        guard data.count <= limit - pending.count else { sysClose(incoming.fd); return false }
+        if master == nil { master = incoming } else { sysClose(incoming.fd) }
+        pending.append(data)
+        scheduleLocked()
+        return true
     }
 
-    /// Forget queued input (the surface closed). Runs on the writer's queue.
     func reset() {
-        queue.async { [self] in
-            waiting?.cancel()
-            waiting = nil
-            pending.removeAll()
-        }
+        lock.lock()
+        clearLocked()
+        lock.unlock()
     }
 
-    /// Write until the PTY is full or the input is gone. On the writer's queue.
+    private func clearLocked() {
+        waiting?.cancel()
+        waiting = nil
+        waitToken = nil
+        pending.removeAll(keepingCapacity: false)
+        if let master { sysClose(master.fd) }
+        master = nil
+    }
+
+    private func scheduleLocked() {
+        guard !scheduled, waiting == nil, !pending.isEmpty else { return }
+        scheduled = true
+        queue.async { [self] in drain() }
+    }
+
     private func drain() {
-        guard !pending.isEmpty, let master = currentMaster() else { return }
-        if let generation = pendingGeneration, generation != master.generation {
-            // The shell this input was typed into is gone.
-            pending.removeAll()
-            pendingGeneration = nil
-            sysClose(master.fd)
-            return
-        }
-        pendingGeneration = master.generation
-        while !pending.isEmpty {
-            let written = pending.withUnsafeBytes { sysWrite(master.fd, $0.baseAddress, $0.count) }
-            if written > 0 {
-                pending.removeFirst(written)
-                continue
+        lock.lock()
+        defer { lock.unlock() }
+        scheduled = false
+        guard let master else { return }
+        // Bound each turn so admission and close never wait behind a huge paste.
+        let count = min(pending.count, 65_536)
+        let written = pending.withUnsafeBytes { sysWrite(master.fd, $0.baseAddress, count) }
+        if written > 0 {
+            pending.removeFirst(written)
+            if pending.isEmpty { clearLocked() } else { scheduleLocked() }
+        } else if written < 0, errno == EINTR {
+            scheduleLocked()
+        } else if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+            let fd = sysDup(master.fd)
+            guard fd >= 0 else { clearLocked(); return }
+            let token = UUID()
+            let source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
+            source.setEventHandler { [weak self] in
+                source.cancel()
+                guard let self else { return }
+                self.lock.lock()
+                if self.waitToken == token {
+                    self.waiting = nil
+                    self.waitToken = nil
+                    self.scheduleLocked()
+                }
+                self.lock.unlock()
             }
-            if written < 0, errno == EINTR { continue }
-            if written < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                waitForRoom(master.fd)
-                return
-            }
-            pending.removeAll() // the PTY is gone (EIO / EBADF)
-            break
+            source.setCancelHandler { sysClose(fd) }
+            waiting = source
+            waitToken = token
+            source.resume()
+        } else {
+            clearLocked() // the pinned shell has exited
         }
-        pendingGeneration = nil
-        sysClose(master.fd)
     }
 
-    /// Resume when the PTY can take more. The source owns `fd` and closes it when cancelled.
-    /// Its handler holds it until that cancel (cancelling releases the handler), which the first
-    /// event or `close()` always reaches.
-    private func waitForRoom(_ fd: Int32) {
-        let source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
-        source.setEventHandler { [weak self] in
-            source.cancel()
-            guard let self else { return }
-            self.waiting = nil
-            self.drain()
-        }
-        source.setCancelHandler { sysClose(fd) }
-        waiting = source
-        source.resume()
+    deinit {
+        waiting?.cancel()
+        if let master { sysClose(master.fd) }
     }
 }

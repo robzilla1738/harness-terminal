@@ -175,7 +175,7 @@ public final class GridCompositor {
                 // Skip the spacer that follows a wide character: the wide glyph
                 // already spans two columns when emitted.
                 if cell.width == .spacerTail { continue }
-                var rc = RenderCell(cell)
+                var rc = RenderCell(cell, clusters: grid.clusters)
                 // `window-style`/`pane-style` base: substitute the pane's base color into any
                 // cell still using the surface default, so an inactive pane dims uniformly.
                 if pane.baseForeground != .none, rc.fg == .none { rc.fg = pane.baseForeground }
@@ -401,6 +401,7 @@ struct RenderCell: Equatable {
     /// Stacked combining scalars (0 = none), carried so a remote pane's Thai vowels/tones (and
     /// pane-label marks) are re-emitted to the client terminal instead of dropped. Part of
     /// `Equatable` so a combining-only change still repaints in the diff emitter.
+    var extendedCluster: String?
     var combining0: UInt32 = 0
     var combining1: UInt32 = 0
     var fg: TerminalGridColor
@@ -450,7 +451,8 @@ struct RenderCell: Equatable {
         self.overline = overline
     }
 
-    init(_ c: TerminalGridCell) {
+    init(_ c: TerminalGridCell, clusters: [UInt32: String]) {
+        extendedCluster = c.clusterID == 0 ? nil : c.resolvedCluster(in: clusters)
         codepoint = c.codepoint
         combining0 = c.combining0
         combining1 = c.combining1
@@ -483,6 +485,7 @@ struct RenderCell: Equatable {
     /// The full grapheme to emit: base scalar plus any combining marks. Empty cells render as a
     /// space. A no-mark cell yields a single scalar, so ASCII/CJK output is byte-identical.
     var cluster: String {
+        if let extendedCluster { return extendedCluster }
         guard codepoint != 0, let base = Unicode.Scalar(codepoint) else { return " " }
         var s = String()
         s.unicodeScalars.append(base)

@@ -103,7 +103,13 @@ final class SessionCoordinator: NSObject {
         let settingsWatcher = FileWatcher(url: HarnessPaths.settingsURL) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let fresh = HarnessSettings.load()
+                let fresh: HarnessSettings
+                do { fresh = try HarnessSettings.reload() }
+                catch {
+                    DisplayMessage.show("Could not reload settings.json. Your working settings are unchanged. Fix the file and save again.")
+                    fputs("Harness: settings reload failed — \(error)\n", harnessStderr)
+                    return
+                }
                 guard fresh != self.settings else { return }
                 self.settings = fresh
                 self.applySettingsToHosts()
@@ -142,7 +148,7 @@ final class SessionCoordinator: NSObject {
     @objc private func snapshotChangedNotification(_ note: Notification) {
         let revision = note.userInfo?["revision"] as? Int ?? -1
         guard revision != lastRevision else { return }
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     @objc private func notificationPosted(_ note: Notification) {
@@ -500,7 +506,6 @@ final class SessionCoordinator: NSObject {
         // (its onEnd is invalidated by the generation bump inside). A failed attempt has
         // no onEnd to retry from, so back off explicitly.
         startSnapshotSubscription()
-        if snapshotSubscription == nil { scheduleSnapshotResubscribe() }
         refreshSnapshot()
     }
 
@@ -512,20 +517,12 @@ final class SessionCoordinator: NSObject {
         lastCommandDurations = lastCommandDurations.filter { live.contains($0.key) }
     }
 
-    @discardableResult
-    func syncFromDaemon(metadataOnly: Bool = false) -> Bool {
-        let remote: SessionSnapshot
-        do {
-            remote = try selections(for: activeEndpoint).sync { try daemon.fetchSnapshot() }
-        } catch {
-            // Don't silently no-op: a failed hydration leaves the UI showing stale layout/metadata.
-            // Log + throttled toast (`noteDaemonError`); the app self-heals on the next sync.
-            fputs("Harness: snapshot fetch failed: \(error)\n", harnessStderr)
-            noteDaemonError(error)
-            return false
+    func syncFromDaemon(completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        requestDaemonAsync(.getSnapshot, refresh: false) { [weak self] response in
+            guard let self, case let .snapshot(snapshot)? = response else { completion(false); return }
+            self.applySnapshot(snapshot, metadataOnly: false)
+            completion(true)
         }
-        applySnapshot(remote, metadataOnly: metadataOnly)
-        return true
     }
 
     /// Bumped by every applied snapshot, so an off-main fetch that started earlier can tell a
@@ -542,6 +539,9 @@ final class SessionCoordinator: NSObject {
         // A CLI-driven theme change arrives by push (metadata-only), so it must force the
         // chrome path itself — recurring syncs otherwise never rebuild renderers.
         let themeChanged = remote.themeName != snapshot.themeName
+        if let error = remote.persistenceError, error != snapshot.persistenceError {
+            DisplayMessage.show("Sessions could not be saved: \(error)")
+        }
         snapshot = remote
         lastRevision = remote.revision
         // The daemon answered: bring up the push channel if it isn't already, and reconcile
@@ -830,7 +830,7 @@ final class SessionCoordinator: NSObject {
     }
 
     func saveImmediately() {
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     /// Switch appearance and repaint. Light uses the configured light theme even when the
@@ -847,7 +847,7 @@ final class SessionCoordinator: NSObject {
                 settings.systemDarkThemeName = ThemeManager.defaultSystemDarkThemeName
             }
         }
-        try? settings.save()
+        saveSettings()
         applySettingsToHosts()
     }
 
@@ -876,6 +876,7 @@ final class SessionCoordinator: NSObject {
     /// `refreshChromePalette()` so `.macOSSystem` resolution applies on every path.
     private func updateChromeAndHosts(systemAppearance: HarnessSystemAppearance? = nil) {
         refreshChromePalette(systemAppearance: systemAppearance)
+        QuickTerminalController.shared.applyTransparency()
         let allowClipboard = HarnessOptions.shared.get("set-clipboard")?.boolValue ?? true
         let allowClipboardRead = HarnessOptions.shared.get("allow-clipboard-read")?.boolValue ?? false
         for host in terminalHosts.allHosts() {
@@ -936,11 +937,11 @@ final class SessionCoordinator: NSObject {
     func setTheme(_ name: String, seedColors: Bool = true) {
         if seedColors {
             settings.clearThemeColorOverrides()
-            try? settings.save()
+            saveSettings()
         }
         let unchanged = snapshot.themeName == name
-        requestDaemon(.setTheme(name: name))
-        syncFromDaemon()
+        requestDaemonAsync(.setTheme(name: name))
+        refreshSnapshot()
         // Re-picking the current theme resets its colors: the sync alone doesn't re-skin.
         if unchanged { applySettingsToHosts() }
     }
@@ -986,21 +987,21 @@ final class SessionCoordinator: NSObject {
                 settings.applyThemeToTerminalOutput = applyToOutput
             }
         }
-        try? settings.save()
-        requestDaemon(.setTheme(name: document.name))
-        syncFromDaemon()
+        saveSettings()
+        requestDaemonAsync(.setTheme(name: document.name))
+        refreshSnapshot()
         // The document may carry new colors under the theme name already in use.
         applySettingsToHosts()
     }
 
     func addWorkspace(name: String) {
-        requestDaemon(.newWorkspace(name: name))
-        syncFromDaemon()
+        requestDaemonAsync(.newWorkspace(name: name))
+        refreshSnapshot()
     }
 
     func addSession(to workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) {
         createSession(in: workspaceID, cwd: cwd, name: name)
-        syncFromDaemon()
+        refreshSnapshot()
         // Kick the cwd tracker immediately after session creation so the shell's working
         // directory lights up as early as possible.  A second kick follows the daemon's next
         // snapshotChanged notification (which arrives once the PTY/surface is live), so there
@@ -1011,17 +1012,18 @@ final class SessionCoordinator: NSObject {
 
     /// Ask the daemon for a session without syncing, so a caller can open its window before
     /// the snapshot that makes it active arrives.
-    @discardableResult
-    func createSession(in workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil) -> SessionID? {
+    func createSession(in workspaceID: WorkspaceID, cwd: String? = nil, name: String? = nil,
+                       completion: @escaping @MainActor @Sendable (SessionID?) -> Void = { _ in }) {
         let cwd = cwd ?? activeTabCWD ?? settings.defaultCWD
-        guard case let .sessionID(id)? = requestDaemon(.newSession(workspaceID: workspaceID, cwd: cwd, name: name, shell: settings.defaultShell))
-        else { return nil }
-        return id
+        requestDaemonAsync(.newSession(workspaceID: workspaceID, cwd: cwd, name: name, shell: settings.defaultShell)) {
+            guard case let .sessionID(id)? = $0 else { completion(nil); return }
+            completion(id)
+        }
     }
 
     func addTab(to workspaceID: WorkspaceID, cwd: String? = nil) {
-        requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, shell: settings.defaultShell))
-        syncFromDaemon()
+        requestDaemonAsync(.newTab(workspaceID: workspaceID, cwd: cwd ?? activeTabCWD ?? settings.defaultCWD, shell: settings.defaultShell))
+        refreshSnapshot()
         // Kick the cwd tracker immediately so the new tab's path lights up without waiting
         // for the next 500ms tick.  When the daemon posts snapshotChanged for the new PTY
         // surface, syncFromDaemon is called again and SurfaceShellTracker's next tick picks
@@ -1031,20 +1033,26 @@ final class SessionCoordinator: NSObject {
 
     func openDefaultTerminalLaunch(_ launch: DefaultTerminalLaunchRequest) {
         guard let workspaceID = snapshot.activeWorkspace?.id ?? snapshot.workspaces.first?.id else { return }
-        let cwd = launch.cwd ?? settings.defaultCWD
-        guard case let .tabID(tabID)? = requestDaemon(.newTab(workspaceID: workspaceID, cwd: cwd, shell: settings.defaultShell)) else {
-            syncFromDaemon()
-            return
-        }
-        if let title = launch.title, !title.isEmpty {
-            requestDaemon(.renameTab(tabID: tabID, name: title))
-        }
-        syncFromDaemon()
-        guard let surfaceID = firstSurfaceID(forTab: tabID) else { return }
-        setActiveSurface(surfaceID)
-        terminalHosts.host(for: surfaceID)?.focusTerminal()
-        if let command = launch.command, !command.isEmpty {
-            requestDaemon(.sendData(surfaceID: surfaceID.uuidString, data: Data((command + "\r").utf8)))
+        let cwd = launch.cwd ?? settings.defaultCWD, shell = settings.defaultShell
+        let owner = activeOwner
+        performDaemonOperation(operation: { service in
+            guard case let .tabID(tabID) = try service.request(.newTab(workspaceID: workspaceID, cwd: cwd, shell: shell)) else {
+                throw DaemonSessionError.unexpectedResponse
+            }
+            if let title = launch.title, !title.isEmpty { try service.request(.renameTab(tabID: tabID, name: title)) }
+            let snapshot = try service.fetchSnapshot()
+            guard let surfaceID = snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
+                .first(where: { $0.id == tabID })?.rootPane.allSurfaceIDs().first else {
+                throw DaemonSessionError.unexpectedResponse
+            }
+            if let command = launch.command, !command.isEmpty {
+                try service.request(.sendData(surfaceID: surfaceID.uuidString, data: Data((command + "\r").utf8)))
+            }
+            return .surfaceID(surfaceID.uuidString)
+        }) { [weak self] response in
+            guard let self, self.activeOwner == owner,
+                  case let .surfaceID(raw)? = response, let surfaceID = UUID(uuidString: raw) else { return }
+            self.setActiveSurface(surfaceID)
         }
     }
 
@@ -1054,24 +1062,18 @@ final class SessionCoordinator: NSObject {
               let paneID = activeSurfaceID.flatMap({ paneID(for: $0, in: tab.rootPane) })
                 ?? tab.rootPane.allPaneIDs().last
         else { return }
-        requestDaemon(.newSplit(tabID: tab.id, paneID: paneID, direction: direction, shell: settings.defaultShell))
-        syncFromDaemon()
+        requestDaemonAsync(.newSplit(tabID: tab.id, paneID: paneID, direction: direction, shell: settings.defaultShell))
+        refreshSnapshot()
     }
 
     /// Move a tab into `session` (at `index`, else the end), or with nil into a new session of
     /// its own. Returns where it went. Moving into a new session doesn't sync, so the caller can
     /// open its window before the snapshot that makes it active arrives.
-    @discardableResult
-    func moveTab(_ tabID: TabID, toSession session: SessionID?, index: Int? = nil) -> SessionID? {
-        switch requestDaemon(.moveTab(tabID: tabID, toSessionID: session, index: index)) {
-        case let .sessionID(id)?:
-            if session != nil { syncFromDaemon() }
-            return id
-        case let .error(message)?:
-            DisplayMessage.show(message)
-            return nil
-        default:
-            return nil
+    func moveTab(_ tabID: TabID, toSession session: SessionID?, index: Int? = nil,
+                 completion: @escaping @MainActor @Sendable (SessionID?) -> Void = { _ in }) {
+        requestDaemonAsync(.moveTab(tabID: tabID, toSessionID: session, index: index)) {
+            guard case let .sessionID(id)? = $0 else { completion(nil); return }
+            completion(id)
         }
     }
 
@@ -1085,8 +1087,8 @@ final class SessionCoordinator: NSObject {
         let request: IPCRequest = zone.direction.map {
             .joinPane(sourcePaneID: sourcePane, destPaneID: targetPane, direction: $0, placement: zone.placement)
         } ?? .swapPanes(srcPaneID: sourcePane, dstPaneID: targetPane)
-        if case let .error(message)? = requestDaemon(request) { DisplayMessage.show(message) }
-        syncFromDaemon()
+        requestDaemonAsync(request)
+        refreshSnapshot()
     }
 
     /// A pane dropped on a tab moves into it, beside that tab's focused pane; dropped on empty
@@ -1101,8 +1103,8 @@ final class SessionCoordinator: NSObject {
         } else {
             request = .breakPane(paneID: sourcePane)
         }
-        if case let .error(message)? = requestDaemon(request) { DisplayMessage.show(message) }
-        syncFromDaemon()
+        requestDaemonAsync(request)
+        refreshSnapshot()
     }
 
     private func paneID(for surfaceID: SurfaceID, in node: PaneNode) -> PaneID? {
@@ -1128,11 +1130,13 @@ final class SessionCoordinator: NSObject {
     }
 
     func selectWorkspace(_ id: WorkspaceID) {
-        requestDaemon(.selectWorkspace(id: id))
-        syncFromDaemon()
+        selectionsSent += 1
+        requestDaemonAsync(.selectWorkspace(id: id))
+        refreshSnapshot()
     }
 
     func selectSession(workspaceID: WorkspaceID, sessionID: SessionID) {
+        selectionsSent += 1
         // A session already showing in another window: go to that window (becoming key
         // selects it there) rather than pulling its panes into this one.
         if let window = WindowContexts.window(showing: sessionID), window !== NSApp.keyWindow {
@@ -1144,18 +1148,19 @@ final class SessionCoordinator: NSObject {
         {
             return
         }
-        requestDaemon(.selectSession(workspaceID: workspaceID, sessionID: sessionID))
-        syncFromDaemon()
+        requestDaemonAsync(.selectSession(workspaceID: workspaceID, sessionID: sessionID))
+        refreshSnapshot()
     }
 
     func selectTab(workspaceID: WorkspaceID, tabID: TabID) {
+        selectionsSent += 1
         if snapshot.activeWorkspaceID == workspaceID,
            snapshot.activeWorkspace?.activeTabID == tabID
         {
             return
         }
-        requestDaemon(.selectTab(workspaceID: workspaceID, tabID: tabID))
-        syncFromDaemon()
+        requestDaemonAsync(.selectTab(workspaceID: workspaceID, tabID: tabID))
+        refreshSnapshot()
     }
 
     func selectAdjacentTab(offset: Int) {
@@ -1189,8 +1194,8 @@ final class SessionCoordinator: NSObject {
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
-        requestDaemon(.closeTab(tabID: tab.id))
-        syncFromDaemon()
+        requestDaemonAsync(.closeTab(tabID: tab.id))
+        refreshSnapshot()
     }
 
     var canReopenClosedTab: Bool { !snapshot.library.recentlyClosed.isEmpty }
@@ -1271,14 +1276,14 @@ final class SessionCoordinator: NSObject {
             let a = weight(first, along: direction), b = weight(second, along: direction)
             let even = a / (a + b)
             if abs(even - ratio) > 0.001, let firstID = firstLeaf(first), let secondID = firstLeaf(second) {
-                requestDaemon(.resizePaneRatio(tabID: tab.id, firstPaneID: firstID, secondPaneID: secondID, ratio: even))
+                requestDaemonAsync(.resizePaneRatio(tabID: tab.id, firstPaneID: firstID, secondPaneID: secondID, ratio: even))
                 changed = true
             }
             visit(first)
             visit(second)
         }
         visit(tab.rootPane)
-        if changed { syncFromDaemon() }
+        if changed { refreshSnapshot() }
     }
 
     func closeActiveTabWithConfirmation() {
@@ -1384,8 +1389,8 @@ final class SessionCoordinator: NSObject {
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
-        requestDaemon(.closeSession(sessionID: session.id))
-        syncFromDaemon()
+        requestDaemonAsync(.closeSession(sessionID: session.id))
+        refreshSnapshot()
     }
 
     func openTabInActiveWorkspace() {
@@ -1403,10 +1408,10 @@ final class SessionCoordinator: NSObject {
             for surfaceID in tab.rootPane.allSurfaceIDs() {
                 terminalHosts.removeHost(for: surfaceID)
             }
-            requestDaemon(.closeTab(tabID: tab.id))
+            requestDaemonAsync(.closeTab(tabID: tab.id))
         }
         selectTab(workspaceID: workspace.id, tabID: keepID)
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     /// Select a tab, then split its active pane — used by the tab context menu so the
@@ -1422,8 +1427,8 @@ final class SessionCoordinator: NSObject {
               let paneID = activeSurfaceID.flatMap({ paneID(for: $0, in: tab.rootPane) })
                 ?? tab.rootPane.allPaneIDs().last
         else { return }
-        requestDaemon(.killPane(paneID: paneID))
-        syncFromDaemon()
+        requestDaemonAsync(.killPane(paneID: paneID))
+        refreshSnapshot()
     }
 
     func zoomActivePane() {
@@ -1432,8 +1437,8 @@ final class SessionCoordinator: NSObject {
               let paneID = activeSurfaceID.flatMap({ paneID(for: $0, in: tab.rootPane) })
                 ?? tab.rootPane.allPaneIDs().last
         else { return }
-        requestDaemon(.zoomPane(paneID: paneID))
-        syncFromDaemon()
+        requestDaemonAsync(.zoomPane(paneID: paneID))
+        refreshSnapshot()
     }
 
     func cycleActivePane(forward: Bool) {
@@ -1672,7 +1677,7 @@ final class SessionCoordinator: NSObject {
         // Write the per-tab option through (tmux: synchronize-panes IS a window
         // option), so `setw -t <tab> synchronize-panes` and the GUI toggle are one
         // state — the compositor honors the same option for the same tab.
-        requestDaemon(.setOption(
+        requestDaemonAsync(.setOption(
             scope: "tab", target: tab.id.uuidString,
             key: "synchronize-panes", rawValue: nowOn ? "on" : "off"
         ))
@@ -1684,7 +1689,7 @@ final class SessionCoordinator: NSObject {
     /// the compositor toggle) into the local mirror. Called from full syncs, so it asks off the
     /// main thread: a window coming forward never waits on a (remote) daemon for it.
     private func adoptSynchronizeOptions() {
-        let service = daemon
+        let service = DaemonSessionService(endpoint: activeEndpoint)
         let owner = activeOwner
         DispatchQueue.global(qos: .userInitiated).async {
             guard case let .options(entries)? = try? service.request(.showOptions(scope: "tab")) else { return }
@@ -1743,9 +1748,9 @@ final class SessionCoordinator: NSObject {
             DisplayMessage.show("join-pane: invalid mark")
             return
         }
-        _ = requestDaemon(.joinPane(sourcePaneID: sourcePane, destPaneID: destPane, direction: direction))
+        requestDaemonAsync(.joinPane(sourcePaneID: sourcePane, destPaneID: destPane, direction: direction))
         setMarkedPane(false)
-        syncFromDaemon()
+        refreshSnapshot()
     }
 
     /// Re-assert the active-pane border after a (re)mount of `tab`'s panes. If the
@@ -1770,24 +1775,24 @@ final class SessionCoordinator: NSObject {
     func setSplitRatio(tabID: TabID, firstPaneID: PaneID, secondPaneID: PaneID, ratio: Double) {
         let request = IPCRequest.resizePaneRatio(tabID: tabID, firstPaneID: firstPaneID, secondPaneID: secondPaneID, ratio: ratio)
         logIfFailed(request, surface: tab(tabID)?.rootPane.allSurfaceIDs().first)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     /// Commit a tab drag-reorder. Full sync so the tab bar rebuilds in the new order
     /// (the metadata path updates pills in place by ID and wouldn't reflect a reorder).
     func reorderSession(workspaceID: WorkspaceID, sessionID: SessionID, toIndex: Int) {
-        requestDaemon(.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex))
-        syncFromDaemon()
+        requestDaemonAsync(.reorderSession(workspaceID: workspaceID, sessionID: sessionID, toIndex: toIndex))
+        refreshSnapshot()
     }
 
     func renameWorkspace(id: WorkspaceID, name: String) {
-        requestDaemon(.renameWorkspace(workspaceID: id, name: name))
-        syncFromDaemon()
+        requestDaemonAsync(.renameWorkspace(workspaceID: id, name: name))
+        refreshSnapshot()
     }
 
     func reorderTab(workspaceID: WorkspaceID, tabID: TabID, toIndex: Int) {
-        requestDaemon(.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex))
-        syncFromDaemon()
+        requestDaemonAsync(.reorderTab(workspaceID: workspaceID, tabID: tabID, toIndex: toIndex))
+        refreshSnapshot()
     }
 
     private func surfaceID(forPane paneID: PaneID, in node: PaneNode) -> SurfaceID? {
@@ -1905,8 +1910,8 @@ final class SessionCoordinator: NSObject {
         let apply: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard response == .alertFirstButtonReturn, !name.isEmpty, let self else { return }
-            self.requestDaemon(.renameTab(tabID: tabID, name: name))
-            self.syncFromDaemon(metadataOnly: true)
+            self.requestDaemonAsync(.renameTab(tabID: tabID, name: name))
+            refreshSnapshot()
         }
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
             alert.beginSheetModal(for: window, completionHandler: apply)
@@ -1941,8 +1946,8 @@ final class SessionCoordinator: NSObject {
         for surfaceID in surfaces {
             terminalHosts.removeHost(for: surfaceID)
         }
-        requestDaemon(.closeWorkspace(id: id))
-        syncFromDaemon()
+        requestDaemonAsync(.closeWorkspace(id: id))
+        refreshSnapshot()
     }
 
     func terminalHostIfExists(for surfaceID: SurfaceID) -> TerminalHostView? {
@@ -1982,8 +1987,8 @@ final class SessionCoordinator: NSObject {
             for session in workspace.sessions {
                 for tab in session.tabs {
                     guard let paneID = paneID(for: surfaceID, in: tab.rootPane) else { continue }
-                    requestDaemon(.killPane(paneID: paneID))
-                    syncFromDaemon()
+                    requestDaemonAsync(.killPane(paneID: paneID))
+                    refreshSnapshot()
                     return
                 }
             }
@@ -2087,13 +2092,13 @@ final class SessionCoordinator: NSObject {
     /// Store the report on its source pane; the unified activity stream delivers alerts.
     func handleNotification(for surfaceID: SurfaceID, event: NotificationEvent, title: String, body: String) {
         guard !attentionList().contains(where: { $0.entry.surfaceID == surfaceID && $0.entry.activity.notification == body }) else { return }
-        requestDaemon(.notify(surfaceID: surfaceID.uuidString, title: title, body: body), forSurface: surfaceID)
-        syncFromDaemon()
+        requestDaemonBatch([.notify(surfaceID: surfaceID.uuidString, title: title, body: body)], endpoint: endpoint(forSurface: surfaceID))
+        refreshSnapshot()
     }
 
     func clearNotification(for surfaceID: SurfaceID) {
-        requestDaemon(.clearNotification(surfaceID: surfaceID.uuidString), forSurface: surfaceID)
-        syncFromDaemon()
+        requestDaemonBatch([.clearNotification(surfaceID: surfaceID.uuidString)], endpoint: endpoint(forSurface: surfaceID))
+        refreshSnapshot()
     }
 
     func updateFontSize(delta: Float) {
@@ -2107,7 +2112,7 @@ final class SessionCoordinator: NSObject {
 
     private func applyFontSize(_ size: Float) {
         settings.fontSize = max(8, min(32, size))
-        try? settings.save()
+        saveSettings()
         for host in terminalHosts.allHosts() {
             host.applySettings(settings)
         }
@@ -2115,10 +2120,15 @@ final class SessionCoordinator: NSObject {
 
     /// Persist the secure-keyboard-entry setting and apply it immediately (takes/releases the
     /// process-global secure-input lock based on the new value + current app-active state).
+    func saveSettings() {
+        do { try settings.save() }
+        catch { DisplayMessage.show("Settings could not be saved: \(error.localizedDescription)") }
+    }
+
     func setSecureKeyboardEntry(_ enabled: Bool) {
         guard settings.secureKeyboardEntry != enabled else { return }
         settings.secureKeyboardEntry = enabled
-        try? settings.save()
+        saveSettings()
         SecureKeyboardEntry.shared.settingChanged()
     }
 
@@ -2137,6 +2147,9 @@ final class SessionCoordinator: NSObject {
     /// The active workspace's tabs, shaped for the branch monitor. Matches the old poll's
     /// scope: background workspaces refresh when they become active.
     private func gitBranchRecords(from snapshot: SessionSnapshot) -> [GitBranchMonitor.TabRecord] {
+        // A remote cwd belongs to the remote filesystem. A local lookup could erase its
+        // real branch or substitute a different repository at the same path on this Mac.
+        guard activeOwner == DaemonSidebar.localID else { return [] }
         guard let workspace = snapshot.activeWorkspace else { return [] }
         return workspace.sessions.flatMap(\.tabs).map { tab in
             GitBranchMonitor.TabRecord(
@@ -2152,49 +2165,61 @@ final class SessionCoordinator: NSObject {
     /// every successful sync, so the channel comes up as soon as the daemon answers; the
     /// follow-up background fetch closes the fetch→subscribe race (a revision committed
     /// between the snapshot we just fetched and the subscription registering).
+    private var snapshotSubscriptionPending = false
+
     private func startSnapshotSubscriptionIfNeeded() {
-        guard snapshotSubscription == nil else { return }
+        guard snapshotSubscription == nil, !snapshotSubscriptionPending else { return }
         startSnapshotSubscription()
-        guard snapshotSubscription != nil else {
-            // The subscribe attempt failed (daemon briefly down): without this, recovery
-            // would degrade to the 30 s safety poll — onEnd never fires for a channel
-            // that never came up.
-            scheduleSnapshotResubscribe()
-            return
-        }
-        refreshSnapshot()
     }
 
     private func startSnapshotSubscription() {
         snapshotSubscriptionGeneration += 1
         let generation = snapshotSubscriptionGeneration
         snapshotSubscription?.cancel()
-        snapshotSubscription = try? daemon.subscribeSnapshot(
-            label: "harness-app",
-            onRevision: { [weak self] revision in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
+        snapshotSubscription = nil
+        snapshotSubscriptionPending = true
+        let service = DaemonSessionService(endpoint: activeEndpoint)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let subscription = try? service.subscribeSnapshot(
+                label: "harness-app",
+                onRevision: { [weak self] revision in
+                    DispatchQueue.main.async {
                         guard let self, generation == self.snapshotSubscriptionGeneration else { return }
                         self.handlePushedRevision(revision)
                     }
-                }
-            },
-            onDirective: { [weak self] directive in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { self?.handleDirective(directive) }
-                }
-            },
-            onEnd: { [weak self] in
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
+                },
+                onDirective: { [weak self] directive in
+                    DispatchQueue.main.async {
                         guard let self, generation == self.snapshotSubscriptionGeneration else { return }
+                        self.handleDirective(directive)
+                    }
+                },
+                onEnd: { [weak self] in
+                    DispatchQueue.main.async {
+                        guard let self, generation == self.snapshotSubscriptionGeneration else { return }
+                        // Invalidate an attachment completion still on its way to main.
+                        self.snapshotSubscriptionGeneration += 1
+                        self.snapshotSubscriptionPending = false
                         self.snapshotSubscription = nil
                         self.scheduleSnapshotResubscribe()
                     }
                 }
+            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.snapshotSubscriptionGeneration else {
+                    subscription?.cancel()
+                    return
+                }
+                self.snapshotSubscriptionPending = false
+                self.snapshotSubscription = subscription
+                if subscription != nil {
+                    self.snapshotResubscribeDelay = 1
+                    self.refreshSnapshot() // Close the fetch-to-subscribe revision gap.
+                } else {
+                    self.scheduleSnapshotResubscribe()
+                }
             }
-        )
-        if snapshotSubscription != nil { snapshotResubscribeDelay = 1 }
+        }
     }
 
     private func handlePushedRevision(_ revision: Int) {
@@ -2229,13 +2254,14 @@ final class SessionCoordinator: NSObject {
     /// (structureChanged is computed independently) and a CLI theme change still applies
     /// (themeChanged forces the chrome path).
     func refreshSnapshot() {
+        guard pendingDaemonOperations[activeEndpoint, default: 0] == 0 else { refetch = true; return }
         guard !fetchInFlight else {
             refetch = true
             return
         }
         fetchInFlight = true
         refetch = false
-        let service = daemon
+        let service = DaemonSessionService(endpoint: activeEndpoint)
         let owner = activeOwner
         let applied = appliedSnapshots
         let sent = selectionsSent
@@ -2266,24 +2292,19 @@ final class SessionCoordinator: NSObject {
     /// gap were lost with the socket.
     private func scheduleSnapshotResubscribe() {
         let delay = snapshotResubscribeDelay
+        let generation = snapshotSubscriptionGeneration
         snapshotResubscribeDelay = min(delay * 2, 8)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.snapshotSubscription == nil else { return }
-                self.startSnapshotSubscription()
-                if self.snapshotSubscription != nil {
-                    self.refreshSnapshot()
-                } else {
-                    self.scheduleSnapshotResubscribe()
-                }
-            }
+            guard let self, generation == self.snapshotSubscriptionGeneration,
+                  self.snapshotSubscription == nil, !self.snapshotSubscriptionPending else { return }
+            self.startSnapshotSubscription()
         }
     }
 
     private func startSafetyPoll() {
         safetyPollTimer?.invalidate()
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.syncFromDaemon(metadataOnly: true) }
+            Task { @MainActor in self?.refreshSnapshot() }
         }
         timer.tolerance = 5
         RunLoop.main.add(timer, forMode: .common)
@@ -2333,18 +2354,59 @@ final class SessionCoordinator: NSObject {
     private var userVariableFlushScheduled = false
     private static let maxUserVariablesPerSurface = 64
 
-    @discardableResult
-    func requestDaemon(_ request: IPCRequest) -> IPCResponse? {
-        do {
-            return try selections(for: activeEndpoint).sync { try daemon.request(request) }
-        } catch {
-            // Never block the UI with a modal: a transient miss (e.g. the daemon
-            // is still spawning at launch) must degrade gracefully. Log always,
-            // and surface a non-blocking, throttled toast so the user isn't left
-            // wondering — but the app keeps running and self-heals on the next sync.
-            fputs("Harness daemon request failed: \(error)\n", harnessStderr)
-            noteDaemonError(error)
-            return nil
+    func afterDaemonOperations(_ completion: @escaping @MainActor @Sendable () -> Void) {
+        selections(for: activeEndpoint).perform { DispatchQueue.main.async { completion() } }
+    }
+
+    /// GUI operations are ordered per captured endpoint, independently of the input streams.
+    /// A failed mutation is never retried; only a subsequent snapshot may reconcile its outcome.
+    func requestDaemonAsync(_ request: IPCRequest, refresh: Bool = true, deliverStaleResult: Bool = false,
+                            completion: @escaping @MainActor @Sendable (IPCResponse?) -> Void = { _ in }) {
+        requestDaemonBatch([request], refresh: refresh, deliverStaleResult: deliverStaleResult, completion: completion)
+    }
+
+    func requestDaemonBatch(_ requests: [IPCRequest], refresh: Bool = true,
+                            endpoint: Endpoint? = nil, deliverStaleResult: Bool = false,
+                            completion: @escaping @MainActor @Sendable (IPCResponse?) -> Void = { _ in }) {
+        performDaemonOperation(endpoint: endpoint, refresh: refresh, deliverStaleResult: deliverStaleResult, operation: { service in
+            var response = IPCResponse.ok
+            for request in requests { response = try service.request(request) }
+            return response
+        }, completion: completion)
+    }
+
+    private var pendingDaemonOperations: [Endpoint: Int] = [:]
+    private(set) var daemonFailureRevision = 0
+
+    func performDaemonOperation(endpoint: Endpoint? = nil, refresh: Bool = true, deliverStaleResult: Bool = false,
+                                operation: @escaping @Sendable (DaemonSessionService) throws -> IPCResponse,
+                                completion: @escaping @MainActor @Sendable (IPCResponse?) -> Void = { _ in }) {
+        let endpoint = endpoint ?? activeEndpoint
+        let owner = activeOwner, sent = selectionsSent
+        let service = DaemonSessionService(endpoint: endpoint)
+        pendingDaemonOperations[endpoint, default: 0] += 1
+        selections(for: endpoint).perform { [weak self] in
+            let result = Result { try operation(service) }
+            let fresh = refresh ? try? service.fetchSnapshot() : nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pendingDaemonOperations[endpoint, default: 1] -= 1
+                let current = owner == self.activeOwner && endpoint == self.activeEndpoint && sent == self.selectionsSent
+                switch result {
+                case let .success(response): completion(current || deliverStaleResult ? response : nil)
+                case let .failure(error):
+                    self.daemonFailureRevision += 1
+                    fputs("Harness daemon operation failed: \(error)\n", harnessStderr)
+                    if current { DisplayMessage.show("\(error). Check the current state before trying again.") }
+                    completion(nil)
+                }
+                if current, let fresh, fresh.revision >= self.snapshot.revision {
+                    self.applySnapshot(fresh, metadataOnly: false)
+                    self.refetch = false
+                }
+                if endpoint == self.activeEndpoint, self.refetch,
+                   self.pendingDaemonOperations[endpoint, default: 0] == 0 { self.refreshSnapshot() }
+            }
         }
     }
 
@@ -2363,44 +2425,21 @@ final class SessionCoordinator: NSObject {
     /// What a pane reports goes to that pane's own daemon: a window behind may be on another
     /// machine. That daemon's next push refreshes whichever snapshot holds the pane.
     /// A request about one pane, sent to that pane's own daemon (errors show like any request).
-    @discardableResult
-    private func requestDaemon(_ request: IPCRequest, forSurface surfaceID: SurfaceID) -> IPCResponse? {
-        let endpoint = endpoint(forSurface: surfaceID)
-        guard endpoint != activeEndpoint else { return requestDaemon(request) }
-        do {
-            return try DaemonClient(endpoint: endpoint).request(request, timeout: 2)
-        } catch {
-            fputs("Harness daemon request failed: \(error)\n", harnessStderr)
-            noteDaemonError(error)
-            return nil
+    private func logIfFailed(_ request: IPCRequest, surface surfaceID: SurfaceID? = nil) {
+        let endpoint = surfaceID.map(endpoint(forSurface:)) ?? activeEndpoint
+        let service = DaemonSessionService(endpoint: endpoint)
+        selections(for: endpoint).perform {
+            do { try service.request(request) }
+            catch { fputs("Harness daemon metadata update failed: \(error)\n", harnessStderr) }
         }
     }
 
-    private func logIfFailed(_ request: IPCRequest, surface surfaceID: SurfaceID? = nil) {
-        let endpoint = surfaceID.map(endpoint(forSurface:)) ?? activeEndpoint
-        guard endpoint == activeEndpoint else {
-            // Another machine answers over SSH: never hold the main thread for it.
-            DispatchQueue.global(qos: .utility).async {
-                do {
-                    _ = try DaemonClient(endpoint: endpoint).request(request, timeout: 2)
-                } catch {
-                    fputs("Harness daemon metadata update failed: \(error)\n", harnessStderr)
-                }
-            }
-            return
-        }
-        do {
-            _ = try daemon.request(request)
-        } catch {
-            fputs("Harness daemon metadata update failed: \(error)\n", harnessStderr)
-        }
-    }
 }
 
 extension SessionCoordinator: TerminalHostDelegate {
     func terminalHostDidChangeTitle(_ title: String, surfaceID: SurfaceID) {
         logIfFailed(.updateTabTitle(surfaceID: surfaceID.uuidString, title: title), surface: surfaceID)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     /// OSC 9;4 progress — ephemeral GUI state (Ghostty parity), deliberately NOT mirrored
@@ -2412,7 +2451,7 @@ extension SessionCoordinator: TerminalHostDelegate {
 
     func terminalHostDidChangeWorkingDirectory(_ path: String, surfaceID: SurfaceID) {
         logIfFailed(.updateTabCwd(surfaceID: surfaceID.uuidString, path: path), surface: surfaceID)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     /// OSC 1337 `SetUserVar=` → a pane-scoped `@name` user option, so `#{@name}` format
@@ -2472,7 +2511,7 @@ extension SessionCoordinator: TerminalHostDelegate {
             .first { $0.rootPane.allSurfaceIDs().contains(surfaceID) }?.cwd
         if current == cwd { return }
         logIfFailed(.updateTabCwd(surfaceID: surfaceID.uuidString, path: cwd), surface: surfaceID)
-        syncFromDaemon(metadataOnly: true)
+        refreshSnapshot()
     }
 
     func terminalHostDidChangeFocus(_ focused: Bool, surfaceID: SurfaceID) {

@@ -485,7 +485,7 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         guard !TailscalePeers.joinsTailnet(TailscalePeers.statusArguments) else { return nil }
         guard let result = try? ProcessCapture.run(
             URL(fileURLWithPath: "/usr/bin/env"),
-            arguments: TailscalePeers.statusArguments
+            arguments: TailscalePeers.statusArguments, timeout: 8, maxOutputBytes: 1_048_576
         ), result.status == 0 else { return nil }
         return result.stdout
     }

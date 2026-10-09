@@ -38,6 +38,10 @@ final class TriggerScanner: @unchecked Sendable {
         var regexes: [(NSRegularExpression, Int)] = []
         var kept: [TriggerRule] = []
         for rule in active {
+            guard rule.pattern.utf8.count <= 4096 else {
+                fputs("Harness: trigger pattern exceeds 4096 bytes; ignored\n", harnessStderr)
+                continue
+            }
             if rule.match == .literal {
                 literals.append((rule.pattern, kept.count))
                 kept.append(rule)
@@ -72,12 +76,16 @@ final class TriggerScanner: @unchecked Sendable {
         }
         guard !regexes.isEmpty else { return matches }
         let full = NSRange(location: 0, length: ns.length)
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.002
         for (regex, ruleIndex) in regexes {
-            guard let m = regex.firstMatch(in: text, range: full), m.range.length > 0 else { continue }
-            matches.append(LineMatch(
-                columns: m.range.location ... (m.range.location + m.range.length - 1),
-                ruleIndex: ruleIndex
-            ))
+            guard ProcessInfo.processInfo.systemUptime < deadline else { break }
+            regex.enumerateMatches(in: text, options: [.reportProgress], range: full) { match, _, stop in
+                if ProcessInfo.processInfo.systemUptime >= deadline { stop.pointee = true; return }
+                if let match, match.range.length > 0 {
+                    matches.append(LineMatch(columns: match.range.location...NSMaxRange(match.range) - 1, ruleIndex: ruleIndex))
+                    stop.pointee = true
+                }
+            }
         }
         return matches
     }

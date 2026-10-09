@@ -9,14 +9,14 @@ import HarnessTerminalEngine
 /// that snapshots the current text + cursor and delegates.
 extension HarnessTerminalSurfaceView {
     private func accessibilityText() -> TerminalAccessibilityText {
-        TerminalAccessibilityText(lines: accessibilitySnapshot().lines)
+        accessibleState().text
     }
 
     public override func isAccessibilityElement() -> Bool { true }
 
     public override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
 
-    public override func accessibilityLabel() -> String? { "Terminal" }
+    public override func accessibilityLabel() -> String? { accessibilityPaneName }
 
     /// The full buffer text (scrollback + screen) — what VoiceOver reads and scrubs.
     public override func accessibilityValue() -> Any? { accessibilityText().value }
@@ -36,7 +36,16 @@ extension HarnessTerminalSurfaceView {
     }
 
     public override func accessibilityVisibleCharacterRange() -> NSRange {
-        NSRange(location: 0, length: accessibilityText().length)
+        accessibleState().visible
+    }
+
+    public override func accessibilitySelectedTextRanges() -> [NSValue]? {
+        accessibleSelectionRanges().map { NSValue(range: $0) }
+    }
+
+    public override func accessibilitySelectedText() -> String? {
+        let text = accessibilityText()
+        return accessibleSelectionRanges().compactMap { text.string(forRange: $0) }.joined(separator: "\n")
     }
 
     /// The cursor's line (in full-buffer coordinates), so VoiceOver announces where typing lands.

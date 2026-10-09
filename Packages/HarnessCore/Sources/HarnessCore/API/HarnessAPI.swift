@@ -574,7 +574,7 @@ public enum HarnessAPI {
             return .query(.searchPaths(id: UUID(), surfaceID: try pane().surfaceID, path: arguments["path"]?.string, query: arguments["query"]?.string ?? "", project: arguments["project"]?.bool ?? false))
         case "output.search":
             let session = try arguments["session"]?.string.map { try uuid(targets.session($0).id) }
-            return .request(.searchOutput(id: UUID(), query: try text("query"), caseSensitive: arguments["case_sensitive"]?.bool ?? false, sessionID: session, offset: arguments["offset"]?.int ?? 0))
+            return .request(.searchOutput(id: UUID(), query: try text("query"), caseSensitive: arguments["case_sensitive"]?.bool ?? false, sessionID: session, offset: arguments["offset"]?.int ?? 0, generation: arguments["generation"]?.string))
         case "setup.list": return .request(.library(.list))
         case "setup.capture":
             return .request(.library(.capture(sessionID: try uuid(targets.session(arguments["session"]?.string).id), name: try text("name"))))

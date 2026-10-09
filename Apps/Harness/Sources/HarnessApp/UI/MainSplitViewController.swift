@@ -259,7 +259,7 @@ final class MainSplitViewController: NSViewController {
     /// sidebar to an unusable sliver — but a programmatic collapse must reach 0).
     func setSidebarVisible(_ visible: Bool, animated: Bool) {
         SessionCoordinator.shared.settings.sidebarVisible = visible
-        try? SessionCoordinator.shared.settings.save()
+        SessionCoordinator.shared.saveSettings()
         // Sidebar mode lists tabs in the sidebar; title-bar mode shows the tab row.
         content.setTabRowHidden(visible)
         sidebarAnimToken &+= 1

@@ -13,6 +13,7 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
     private var results: [(owner: String, match: OutputSearchMatch, epoch: String, revision: Int)] = []
     private var pending: [(id: UUID, endpoint: Endpoint)] = []
     private var nextOffsets: [String: Int] = [:]
+    private var searchGenerations: [String: String] = [:]
     private var errors: [String] = []
     private var generation = 0
     private var remaining = 0
@@ -79,7 +80,7 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
     }
     func controlTextDidChange(_ obj: Notification) { searchChanged() }
     @objc private func searchChanged() {
-        cancel(); results.removeAll(); nextOffsets.removeAll(); errors.removeAll(); table.reloadData()
+        cancel(); results.removeAll(); nextOffsets.removeAll(); searchGenerations.removeAll(); errors.removeAll(); table.reloadData()
         moreButton.isEnabled = false
         let work = DispatchWorkItem { [weak self] in self?.startSearch() }
         debounce = work
@@ -106,10 +107,11 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
                 continue
             }
             let id = UUID()
+            let searchGeneration = searchGenerations[owner]
             pending.append((id, endpoint))
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let result = Result<OutputSearchPage, Error> {
-                    let response = try DaemonClient(endpoint: endpoint).request(.searchOutput(id: id, query: query, caseSensitive: sensitive, sessionID: session, offset: offset), timeout: 20)
+                    let response = try DaemonClient(endpoint: endpoint).request(.searchOutput(id: id, query: query, caseSensitive: sensitive, sessionID: session, offset: offset, generation: searchGeneration), timeout: 20)
                     if case let .error(message) = response { throw SetupError.invalid(message == "unrecognized request" ? "Update this host's daemon to search its output." : message) }
                     guard case let .text(json) = response else { throw SetupError.invalid("No search results returned") }
                     return try JSONDecoder().decode(OutputSearchPage.self, from: Data(json.utf8))
@@ -126,6 +128,7 @@ final class OutputSearchController: NSWindowController, NSSearchFieldDelegate, N
         remaining -= 1
         switch result {
         case let .success(page):
+            searchGenerations[owner] = page.generation
             results.append(contentsOf: page.matches.map { (owner, $0, page.epoch, page.revision) })
             nextOffsets[owner] = page.hasMore ? offset + page.matches.count : nil
         case let .failure(error): errors.append("\(owner): \(error.localizedDescription)"); nextOffsets[owner] = nil

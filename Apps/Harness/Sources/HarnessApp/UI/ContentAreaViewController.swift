@@ -15,7 +15,9 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         // Let go over its own window: the tab stays.
         if target === context { return }
         if let target, target.owner == context.owner, let session = target.sessionID {
-            if coordinator.moveTab(tabID, toSession: session) != nil { target.window?.makeKeyAndOrderFront(nil) }
+            coordinator.moveTab(tabID, toSession: session) { id in
+                if id != nil { target.window?.makeKeyAndOrderFront(nil) }
+            }
             return
         }
         (NSApp.delegate as? AppDelegate)?.moveTabToNewWindow(tabID, at: screenPoint)
@@ -292,7 +294,7 @@ final class ContentAreaViewController: NSViewController, TerminalTabBarDelegate 
         let current = coordinator.snapshot.workspaces
             .flatMap(\.sessions).flatMap(\.tabs)
             .first(where: { $0.id == tabID })?.persistent ?? false
-        coordinator.requestDaemon(.setTabPersistent(tabID: tabID, persistent: !current))
+        coordinator.requestDaemonAsync(.setTabPersistent(tabID: tabID, persistent: !current))
     }
 
     private func reloadAll(force: Bool) {

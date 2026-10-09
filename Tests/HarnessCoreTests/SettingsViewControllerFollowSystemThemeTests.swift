@@ -183,13 +183,15 @@ final class SettingsViewControllerFollowSystemThemeTests: XCTestCase {
         XCTAssertEqual(preserved.systemDarkThemeName, "Tokyo Night")
     }
 
-    func testReimportDoesNotSendRawSplitThemeToSetTheme() throws {
-        let source = try sessionCoordinatorSource()
-        let reimport = try sourceBlock(named: "reimportTerminalConfig", in: source)
-
-        XCTAssertTrue(reimport.contains("imported.themeName ?? imported.systemDarkThemeName"))
-        XCTAssertTrue(reimport.contains("setTheme(displayTheme, seedColors: false)"))
-        XCTAssertFalse(reimport.contains("setTheme(imported.themeName"))
+    func testReimportPreservesSplitThemesAsSeparateSettings() throws {
+        let current = HarnessSettings(appearanceMode: .theme)
+        let imported = ImportedTerminalConfig(systemLightThemeName: "GitHub Light", systemDarkThemeName: "Tokyo Night")
+        let preview = try SettingsImport(current: current, imported: imported)
+        let applied = try preview.applying(to: current, selected: Set(preview.changes.map(\.key)))
+        XCTAssertEqual(applied.appearanceMode, .macOSSystem)
+        XCTAssertEqual(applied.systemLightThemeName, "GitHub Light")
+        XCTAssertEqual(applied.systemDarkThemeName, "Tokyo Night")
+        XCTAssertFalse(preview.changes.contains { $0.key == "themeName" })
     }
 
     private struct PersistedSystemThemeSelection {

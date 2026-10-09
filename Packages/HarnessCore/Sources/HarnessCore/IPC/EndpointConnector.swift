@@ -10,10 +10,14 @@ import Foundation
 /// the single place that knows how to establish the byte stream — letting `DaemonClient` target a
 /// local socket or a tunnelled remote one through the same code.
 public enum EndpointConnector {
-    public static func connect(_ endpoint: Endpoint) throws -> Int32 {
+    public static func connect(_ endpoint: Endpoint, timeout: TimeInterval = 2) throws -> Int32 {
+        try connect(endpoint, deadline: SocketDeadline(timeout: timeout))
+    }
+
+    static func connect(_ endpoint: Endpoint, deadline: SocketDeadline) throws -> Int32 {
         switch endpoint {
         case let .unix(path):
-            return try connectUnix(path: path)
+            return try connectUnix(path: path, deadline: deadline)
         case .tcp:
             // A native encrypted TCP transport is a later phase; until then, remote access goes
             // through an SSH tunnel that presents the daemon as a local Unix socket.
@@ -21,7 +25,7 @@ public enum EndpointConnector {
         }
     }
 
-    private static func connectUnix(path: String) throws -> Int32 {
+    private static func connectUnix(path: String, deadline: SocketDeadline) throws -> Int32 {
         // Validate before opening the fd so an over-long path can't leak a socket — and so a deep
         // HARNESS_HOME (or tunnel path) fails clearly instead of silently truncating to the wrong
         // socket.
@@ -41,19 +45,32 @@ public enum EndpointConnector {
                 dest[sunPathCapacity - 1] = 0
             }
         }
-        // connect() can be interrupted by a signal (EINTR). For a blocking AF_UNIX stream socket the
-        // connect completes synchronously, so retry on EINTR rather than spuriously failing.
-        var connected: Int32 = -1
-        repeat {
-            connected = withUnsafePointer(to: &addr) {
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            close(fd)
+            throw EndpointError.connectionFailed
+        }
+        do {
+            let connected = withUnsafePointer(to: &addr) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     sysConnect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
                 }
             }
-        } while connected != 0 && errno == EINTR
-        guard connected == 0 else {
+            if connected != 0 {
+                guard errno == EINPROGRESS || errno == EINTR || errno == EAGAIN else {
+                    throw EndpointError.connectionFailed
+                }
+                try deadline.wait(fd, events: Int16(POLLOUT))
+                var socketError: Int32 = 0
+                var length = socklen_t(MemoryLayout<Int32>.size)
+                guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0,
+                      socketError == 0 else { throw EndpointError.connectionFailed }
+            }
+            // Keep O_NONBLOCK: readiness plus MSG_DONTWAIT alone is insufficient for
+            // a large AF_UNIX send on macOS. Both request and stream readers poll.
+        } catch {
             close(fd)
-            throw EndpointError.connectionFailed
+            throw error
         }
         setNoSigPipe(fd)
         return fd

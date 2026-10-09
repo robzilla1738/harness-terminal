@@ -76,4 +76,18 @@ final class SelectionQueueTests: XCTestCase {
             "\(IPCRequest.selectPane(tabID: tab, paneID: paneB))",
         ])
     }
+    func testCommandBarrierPreservesItsEarlierSelection() {
+        let daemon = Daemon()
+        let queue = SelectionQueue(send: daemon.send)
+        queue.async(.ping)
+        queue.async(.selectPane(tabID: tab, paneID: paneA))
+        queue.perform { daemon.send(.getSnapshot) }
+        queue.async(.selectPane(tabID: tab, paneID: paneB))
+        daemon.release()
+        queue.sync {}
+        XCTAssertEqual(daemon.sent, ["ping",
+            "\(IPCRequest.selectPane(tabID: tab, paneID: paneA))", "getSnapshot",
+            "\(IPCRequest.selectPane(tabID: tab, paneID: paneB))"])
+    }
+
 }

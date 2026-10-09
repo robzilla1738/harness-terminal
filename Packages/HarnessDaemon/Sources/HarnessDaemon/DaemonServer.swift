@@ -6,6 +6,7 @@ import Glibc
 import CHarnessSys
 import Foundation
 import HarnessCore
+import HarnessTerminalEngine
 
 /// @unchecked Sendable: socket-accept and subscription state are confined to the serial `queue`.
 public final class DaemonServer: @unchecked Sendable {
@@ -63,6 +64,7 @@ public final class DaemonServer: @unchecked Sendable {
     /// Connections that attached with `attachStream`: they understand `.sizeOwnership`. An
     /// older client's decoder would choke on it and drop its stream.
     private var streamClients: Set<Int32> = []
+    private var inputErrorClients: Set<Int32> = []
     /// Snapshot subscribers that asked for client directives (older apps can't decode them).
     private var directiveSubscribers: Set<Int32> = []
 
@@ -358,7 +360,10 @@ public final class DaemonServer: @unchecked Sendable {
             // PTY, fire-and-forget — no reply (the echo comes back on the output stream).
             if case let .input(surfaceID, payload) = frame {
                 if !readOnlyClients.contains(fd) {
-                    _ = registry.handle(.sendData(surfaceID: surfaceID, data: payload))
+                    let response = registry.handle(.sendData(surfaceID: surfaceID, data: payload))
+                    if inputErrorClients.contains(fd), case let .error(message) = response {
+                        send(.inputRejected(message), to: fd)
+                    }
                 }
                 continue
             }
@@ -476,10 +481,10 @@ public final class DaemonServer: @unchecked Sendable {
                 send(.ok, to: fd)
                 continue
             }
-            if case let .searchOutput(id, query, caseSensitive, sessionID, offset) = request {
+            if case let .searchOutput(id, query, caseSensitive, sessionID, offset, generation) = request {
                 scheduleSearch(id: id, fd: fd) { [registry, epoch] cancellation in
                     registry.searchOutput(query: query, caseSensitive: caseSensitive, sessionID: sessionID,
-                                          offset: offset, epoch: epoch, cancelled: cancellation)
+                                          offset: offset, epoch: epoch, cancelled: cancellation, generation: generation)
                 }
                 continue
             }
@@ -786,6 +791,7 @@ public final class DaemonServer: @unchecked Sendable {
     private func handleAttach(_ attach: AttachRequest, fd: Int32) {
         if attach.readOnly { readOnlyClients.insert(fd) } else { readOnlyClients.remove(fd) }
         streamClients.insert(fd)
+        if attach.inputErrors == true { inputErrorClients.insert(fd) }
         let gate = AttachGate()
         guard let token = addOutputSubscription(surfaceID: attach.surfaceID, label: attach.label, fd: fd, gate: gate) else {
             send(.error("Surface not found"), to: fd)
@@ -802,7 +808,7 @@ public final class DaemonServer: @unchecked Sendable {
                     return
                 }
                 self.send(.attached(AttachReply(
-                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt
+                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt, inputErrors: attach.inputErrors == true ? true : nil
                 )), to: fd)
                 for chunk in start.chunks {
                     self.sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)
@@ -859,6 +865,10 @@ public final class DaemonServer: @unchecked Sendable {
     /// minimum vote. In `owner` mode only the owner's vote changes the PTY; a
     /// non-owner records an advisory size and this returns without resizing.
     private func handleResize(surfaceID: String, rows: UInt16, cols: UInt16, fd: Int32) {
+        guard TerminalGeometry.isValid(cols: Int(cols), rows: Int(rows)) else {
+            send(.error("Terminal dimensions exceed the supported grid limit."), to: fd)
+            return
+        }
         // A read-only watcher sees the pane at the size the writers chose.
         guard !readOnlyClients.contains(fd) else { return }
         guard let size = sizeArbiter.vote(client: fd, surface: surfaceID, rows: rows, cols: cols) else { return }
@@ -956,6 +966,7 @@ public final class DaemonServer: @unchecked Sendable {
             _ = registry.handle(.resizeSurface(surfaceID: surfaceID, rows: size.rows, cols: size.cols))
         }
         streamClients.remove(fd)
+        inputErrorClients.remove(fd)
         directiveSubscribers.remove(fd)
         let surfaces = sentOwnership.removeValue(forKey: fd).map { Array($0.keys) } ?? []
         surfaces.forEach(pushOwnership)

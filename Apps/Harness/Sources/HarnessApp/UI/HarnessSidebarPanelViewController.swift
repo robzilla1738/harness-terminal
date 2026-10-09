@@ -228,7 +228,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         host.addSubview(inbox)
         agentsInbox = inbox
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = HarnessDesign.Motion.microFast
+            ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : HarnessDesign.Motion.microFast
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             inbox.animator().alphaValue = 1
         }
@@ -628,7 +628,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             dropdown.heightAnchor.constraint(equalToConstant: clampedDropdownHeight(dropdown.preferredHeight)),
         ])
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = HarnessDesign.Motion.microFast
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : HarnessDesign.Motion.microFast
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             dropdown.animator().alphaValue = 1
         }
@@ -773,7 +773,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
         case .splitDown: coordinator.splitTab(workspaceID: workspaceID, tabID: tabID, direction: .vertical)
         case .togglePersistent:
             guard let tab = coordinator.snapshot.activeWorkspace?.activeTab else { return }
-            coordinator.requestDaemon(.setTabPersistent(tabID: tabID, persistent: !tab.persistent))
+            coordinator.requestDaemonAsync(.setTabPersistent(tabID: tabID, persistent: !tab.persistent))
         }
     }
 
@@ -854,8 +854,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != session.name else { return }
-        SessionCoordinator.shared.requestDaemon(.renameSession(sessionID: id, name: trimmed))
-        SessionCoordinator.shared.syncFromDaemon()
+        SessionCoordinator.shared.requestDaemonAsync(.renameSession(sessionID: id, name: trimmed))
+        SessionCoordinator.shared.refreshSnapshot()
     }
 
     @objc private func copySessionCwd(_ sender: NSMenuItem) {
@@ -874,8 +874,8 @@ final class HarnessSidebarPanelViewController: NSViewController {
 
     @objc private func toggleSessionPersistent(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? SessionID, let session = session(for: id) else { return }
-        SessionCoordinator.shared.requestDaemon(.setSessionPersistent(sessionID: id, persistent: !session.persistent))
-        SessionCoordinator.shared.syncFromDaemon()
+        SessionCoordinator.shared.requestDaemonAsync(.setSessionPersistent(sessionID: id, persistent: !session.persistent))
+        SessionCoordinator.shared.refreshSnapshot()
     }
 
     @objc private func closeSessionFromMenu(_ sender: NSMenuItem) {
@@ -900,7 +900,7 @@ final class HarnessSidebarPanelViewController: NSViewController {
             SessionCoordinator.shared.closeSession(session)
         }
         SessionCoordinator.shared.selectSession(workspaceID: activeWorkspaceID, sessionID: id)
-        SessionCoordinator.shared.syncFromDaemon()
+        SessionCoordinator.shared.refreshSnapshot()
     }
 }
 
@@ -1023,7 +1023,8 @@ extension HarnessSidebarPanelViewController: NSTableViewDataSource, NSTableViewD
                 if from < target.index { target.index -= 1 }
                 guard from != target.index else { return false }
             }
-            return SessionCoordinator.shared.moveTab(tabID, toSession: target.session.id, index: target.index) != nil
+            SessionCoordinator.shared.moveTab(tabID, toSession: target.session.id, index: target.index)
+            return true
         }
         guard let workspaceID = activeWorkspaceID,
               let item = info.draggingPasteboard.pasteboardItems?.first,
@@ -1327,7 +1328,7 @@ private final class WorkspaceSwitcherRow: NSView {
         // Fade for polish — popping in is jarring next to the count label.
         let shouldShow = canDelete && (active || isHovered)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = HarnessDesign.Motion.microFast
+            ctx.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : HarnessDesign.Motion.microFast
             moreButton.animator().alphaValue = shouldShow ? 1 : 0
         }
     }

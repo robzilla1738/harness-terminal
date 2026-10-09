@@ -48,7 +48,7 @@ final class DaemonLauncher: @unchecked Sendable {
         // user's installed release binaries (the bin/ copies and the LaunchAgent label are
         // global — not isolated by HARNESS_HOME).
         #if !DEBUG
-        refreshInstalledBinaries()
+        if !HarnessPaths.hasHomeOverride { refreshInstalledBinaries() }
         #endif
         if let stats = daemonStats(timeout: 0.4) {
             if daemonIsStale(stats) {
@@ -72,7 +72,7 @@ final class DaemonLauncher: @unchecked Sendable {
         // daemon underneath a launchd service that then retries every throttle
         // interval.
         #if !DEBUG
-        if installLaunchAgentIfPossible(), pollUntilResponding(timeoutSeconds: 4) { return true }
+        if !HarnessPaths.hasHomeOverride, installLaunchAgentIfPossible(), pollUntilResponding(timeoutSeconds: 4) { return true }
         #endif
 
         spawnFallbackProcess()
@@ -119,6 +119,12 @@ final class DaemonLauncher: @unchecked Sendable {
     /// re-running `ensureAllSnapshotSurfaces` each time and widening the window where a pane reconnect
     /// could subscribe to a momentarily-missing surface and freeze.
     private func restartStaleDaemon() {
+        if HarnessPaths.hasHomeOverride {
+            // Only stop a child this launcher owns; never kick the normal launchd job.
+            fallbackProcess?.terminate()
+            fallbackProcess = nil
+            return
+        }
         guard let executable = launchAgentDaemonTarget(),
               let report = try? LaunchAgentInstaller.install(daemonPath: executable)
         else {

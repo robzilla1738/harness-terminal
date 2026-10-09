@@ -61,7 +61,7 @@ final class PaneCloseOverlay: NSView {
         guard revealed != isRevealed else { return }
         isRevealed = revealed
         if revealed { isHidden = false }
-        guard animated else {
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             alphaValue = revealed ? 1 : 0
             isHidden = !revealed
             return

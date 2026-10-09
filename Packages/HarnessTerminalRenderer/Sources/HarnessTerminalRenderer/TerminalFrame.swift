@@ -146,10 +146,11 @@ public struct TerminalFrame: Equatable, Sendable {
     /// Whether any cell carries SGR blink — computed once at build so the per-present
     /// blink-timer decision is a field read, not an O(cells) scan on the main thread.
     public var hasBlink: Bool
+    public var clusters: [UInt32: String]
 
     public init(columns: Int, rows: Int, cells: [RenderCell], cursor: CursorRender,
                 images: [FrameImage] = [], promptGutter: [Int: RenderColor] = [:],
-                hasBlink: Bool = false) {
+                hasBlink: Bool = false, clusters: [UInt32: String] = [:]) {
         self.columns = columns
         self.rows = rows
         self.cells = cells
@@ -157,6 +158,12 @@ public struct TerminalFrame: Equatable, Sendable {
         self.images = images
         self.promptGutter = promptGutter
         self.hasBlink = hasBlink
+        self.clusters = clusters
+    }
+
+    public func cluster(for cell: RenderCell) -> String {
+        let id = cell.combining1 & 0x8000_0000 == 0 ? 0 : cell.combining1 & 0x7fff_ffff
+        return id == 0 ? cell.cluster : clusters[id] ?? cell.cluster
     }
 
     public func cell(row: Int, column: Int) -> RenderCell? {
@@ -538,7 +545,7 @@ public struct FrameBuilder {
         let promptGutter = promptGutterEnabled ? resolvePromptGutter(snapshot.marks) : [:]
         return TerminalFrame(columns: snapshot.cols, rows: snapshot.rows, cells: cells,
                              cursor: cursor, images: images, promptGutter: promptGutter,
-                             hasBlink: cells.contains { $0.blink })
+                             hasBlink: cells.contains { $0.blink }, clusters: snapshot.clusters)
     }
 
     /// Scroll-delta rebuild: the viewport's content moved by `shift` rows (a pure scrollback
@@ -594,7 +601,7 @@ public struct FrameBuilder {
         let promptGutter = promptGutterEnabled ? resolvePromptGutter(snapshot.marks) : [:]
         return TerminalFrame(columns: cols, rows: rows, cells: cells,
                              cursor: cursor, images: [], promptGutter: promptGutter,
-                             hasBlink: cells.contains { $0.blink })
+                             hasBlink: cells.contains { $0.blink }, clusters: snapshot.clusters)
     }
 
     /// Re-shade `rows` of an already-built **plain** frame with selection/search highlights —

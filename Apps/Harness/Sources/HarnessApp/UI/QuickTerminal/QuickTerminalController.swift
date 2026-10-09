@@ -57,7 +57,21 @@ final class QuickTerminalController: NSObject {
         panel.setFrame(Self.topFrame(for: NSScreen.main ?? NSScreen.screens.first), display: true)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        // WindowServer blur must be applied after the panel is ordered in, including on re-show.
+        applyTransparency()
         host?.focusTerminal()
+    }
+
+    /// Settings/theme refreshes update a visible panel; a hidden panel catches up in `show()`.
+    func applyTransparency() {
+        guard let panel, panel.isVisible else { return }
+        let settings = SessionCoordinator.shared.settings
+        WindowAppearance.applyTransparency(
+            opacity: settings.backgroundOpacity,
+            blur: settings.backgroundBlur,
+            opaqueBackground: HarnessChrome.current.terminalBackground,
+            to: panel
+        )
     }
 
     private func hide() {

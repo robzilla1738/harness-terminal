@@ -42,6 +42,12 @@ struct HistoryRingBuffer<Element> {
     }
 
     var isEmpty: Bool { count == 0 }
+    var storageBytes: Int { storage.capacity * MemoryLayout<Element?>.stride }
+
+    mutating func compactIfUnderused() {
+        if count == 0 { removeAll(); releaseFallback = nil }
+        else if count < storage.count / 4 { growStorage(to: Swift.max(1, count * 2)) }
+    }
 
     /// Append a new newest element. O(1) amortized; grows the backing store (doubling) when full.
     mutating func append(_ element: Element) {
@@ -108,6 +114,7 @@ struct HistoryRingBuffer<Element> {
         storage = []
         head = 0
         count = 0
+        releaseFallback = nil
     }
 
     /// Map a logical index (0 = oldest) to its slot in `storage`. Only called when `count > 0` (or
@@ -141,3 +148,5 @@ extension HistoryRingBuffer: Sequence {
         }
     }
 }
+
+extension HistoryRingBuffer: Sendable where Element: Sendable {}

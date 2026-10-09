@@ -1,8 +1,10 @@
 import Foundation
 
-/// One scrollback ceiling for the daemon replay ring and the GUI line history.
-/// `scrollbackLines == 0` is the unlimited sentinel. Both sides stop at this byte
-/// cap, so the GUI cannot keep a second unbounded copy.
+/// Raw replay retention and the legacy line-count policy are separate from decoded memory.
+/// `scrollbackLines == 0` removes the configured line cap, but raw replay still stops at
+/// 512 MiB. The terminal engine independently caps decoded history at 512 MiB, accounting
+/// for stored row widths, row/ring metadata, and exceptional clusters. Wide rows can reach
+/// that limit before the requested line count. Active viewport and rendering caches are extra.
 public enum ScrollbackBudget {
     public static let bytesPerLine = 160
     /// 512 MiB of raw PTY output. Far more replay than a reattach needs, and the

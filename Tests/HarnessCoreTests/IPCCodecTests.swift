@@ -616,7 +616,8 @@ final class IPCCodecTests: XCTestCase {
         .hookID(UUID()),
         .hooks([HookEntry(id: UUID(), event: "pane-exited", commandSource: "display-message done", condition: nil)]),
         .follow("{\"payload\":{},\"type\":\"tab.created\"}"),
-        .error("Tab not found"),
+        .inputRejected("queue full"),
+            .error("Tab not found"),
     ]
 
     /// Compile-time guard: this no-`default` switch fails to build when an `IPCRequest` case is
@@ -660,7 +661,7 @@ final class IPCCodecTests: XCTestCase {
         case .workspaces, .surfaces, .agents, .workspaceID, .sessionID, .tabID, .paneID,
              .surfaceID, .snapshot, .text, .data, .replayResult, .snapshotChanged, .clientDirective, .agentInfo,
              .clients, .daemonStats, .clientID, .buffer, .buffers, .options, .hookID, .hooks,
-             .follow, .attached, .sizeOwnership, .error:
+             .follow, .attached, .sizeOwnership, .inputRejected, .error:
             break
         }
     }

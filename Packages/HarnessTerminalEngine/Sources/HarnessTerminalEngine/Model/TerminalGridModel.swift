@@ -123,6 +123,17 @@ public struct TerminalGridCell: Equatable, Sendable {
         return s
     }
 
+    /// Exceptional clusters use the unused high bit of the second scalar slot. Cells remain
+    /// trivially copyable and exactly the same size; ordinary ASCII and two-mark cells stay inline.
+    public var clusterID: UInt32 {
+        get { combining1 & 0x8000_0000 == 0 ? 0 : combining1 & 0x7fff_ffff }
+        set { combining1 = newValue == 0 ? 0 : newValue | 0x8000_0000 }
+    }
+
+    public func resolvedCluster(in clusters: [UInt32: String]) -> String {
+        clusterID == 0 ? cluster : clusters[clusterID] ?? cluster
+    }
+
     /// Stack a combining (width-0) scalar onto this cell's grapheme. Returns `false` if both
     /// inline slots are full (>2 marks): the MVP drops the excess. A Thai syllable never needs
     /// more than two, so this only loses coverage for emoji ZWJ / deep Indic (a Phase 3 concern).
@@ -214,15 +225,18 @@ public struct TerminalGridSnapshot: Equatable, Sendable {
     /// row. Empty when the program emits no shell integration. A row's presence marks a shell
     /// prompt; its `exit` is filled in once the command launched from it finishes.
     public let marks: [Int: SemanticMark]
+    public let clusters: [UInt32: String]
 
     public init(cols: Int, rows: Int, cells: [TerminalGridCell], cursor: TerminalCursor,
-                images: [ImagePlacementSnapshot] = [], marks: [Int: SemanticMark] = [:]) {
+                images: [ImagePlacementSnapshot] = [], marks: [Int: SemanticMark] = [:],
+                clusters: [UInt32: String] = [:]) {
         self.cols = cols
         self.rows = rows
         self.cells = cells
         self.cursor = cursor
         self.images = images
         self.marks = marks
+        self.clusters = clusters
     }
 
     /// The cell at (`row`, `col`), or `nil` if out of bounds. Bounds-checked so callers
@@ -240,4 +254,20 @@ public struct TerminalGridSnapshot: Equatable, Sendable {
 public struct SemanticMark: Equatable, Sendable {
     public var exit: Int?
     public init(exit: Int? = nil) { self.exit = exit }
+}
+
+/// Bound allocation before multiplying dimensions supplied by a client or embedding application.
+public enum TerminalGeometry {
+    public static let maxDimension = 4096
+    public static let maxCells = 1_048_576
+
+    public static func clamped(cols: Int, rows: Int) -> (cols: Int, rows: Int) {
+        let columns = min(maxDimension, max(1, cols))
+        return (columns, min(maxDimension, maxCells / columns, max(1, rows)))
+    }
+
+    public static func isValid(cols: Int, rows: Int) -> Bool {
+        let size = clamped(cols: cols, rows: rows)
+        return cols == size.cols && rows == size.rows
+    }
 }

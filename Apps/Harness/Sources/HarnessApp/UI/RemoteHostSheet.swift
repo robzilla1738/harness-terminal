@@ -33,6 +33,13 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     private let spinner = NSProgressIndicator()
     private let statusRow = NSStackView()
     private var nameEdited = false
+    private final class ProbeCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stopped = false
+        var isCancelled: Bool { lock.withLock { stopped } }
+        func cancel() { lock.withLock { stopped = true } }
+    }
+    private var probeCancellation: ProbeCancellation?
     private var busy = false { didSet { updateButtons() } }
 
     private init(editing: RemoteHost?, prefill: RemoteHost?) {
@@ -252,17 +259,21 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     /// Finds the socket over SSH, fills the field, then calls `next` with the result.
     private func runDetect(then next: @escaping @MainActor (Bool) -> Void) {
         let draft = self.draft
+        probeCancellation?.cancel()
+        let cancellation = ProbeCancellation()
+        probeCancellation = cancellation
         busy = true
         show("Step 1 of 2 · Checking SSH and detecting the daemon on \(draft.trimmedTarget)…")
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome: DetectOutcome
             do {
-                outcome = .found(try RemoteSocketDetector.detect(target: draft.trimmedTarget, sshArgs: draft.sshArgs))
+                outcome = .found(try RemoteSocketDetector.detect(target: draft.trimmedTarget, sshArgs: draft.sshArgs, cancelled: { cancellation.isCancelled }))
             } catch {
                 outcome = .failed("\(error)")
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
+                    guard !cancellation.isCancelled else { return }
                     self.busy = false
                     switch outcome {
                     case let .found(path):
@@ -343,6 +354,7 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
     @objc private func cancel() { finish() }
 
     private func finish() {
+        probeCancellation?.cancel()
         if let window, let parent = window.sheetParent {
             parent.endSheet(window)
         } else {

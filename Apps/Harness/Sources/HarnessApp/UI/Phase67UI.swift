@@ -62,15 +62,20 @@ enum Phase67UI {
                 }
             }
         case .buffer:
-            if case let .buffers(buffers)? = coordinator.requestDaemon(.listBuffers) {
+            let surface = coordinator.activeSurfaceID, endpoint = coordinator.activeEndpoint
+            coordinator.requestDaemonAsync(.listBuffers, refresh: false) { response in
+                guard case let .buffers(buffers)? = response else { return }
                 for buffer in buffers {
                     add(to: menu, title: "\(buffer.name): \(buffer.preview)", command: .sequence([])) {
-                        if let sid = coordinator.activeSurfaceID {
-                            coordinator.requestDaemon(.pasteBuffer(surfaceID: sid.uuidString, name: buffer.name, bracketed: false))
+                        if let surface {
+                            coordinator.requestDaemonBatch([.pasteBuffer(surfaceID: surface.uuidString, name: buffer.name, bracketed: false)], endpoint: endpoint)
                         }
                     }
                 }
+                if menu.items.isEmpty { menu.addItem(NSMenuItem(title: "(no buffers)", action: nil, keyEquivalent: "")) }
+                popUp(menu)
             }
+            return
         }
         if menu.items.isEmpty { menu.addItem(NSMenuItem(title: "(nothing to choose)", action: nil, keyEquivalent: "")) }
         popUp(menu)
@@ -129,20 +134,27 @@ enum Phase67UI {
     private static var popups: [PopupWindow] = []
 
     static func presentPopup(command: String?, coordinator: SessionCoordinator) {
-        guard case let .surfaceID(surfaceID)? = coordinator.requestDaemon(.createSurface(cwd: coordinator.settings.defaultCWD, shell: coordinator.settings.defaultShell)),
-              let uuid = SurfaceID(uuidString: surfaceID)
-        else { return }
-        let host = coordinator.terminalHost(for: uuid, cwd: coordinator.settings.defaultCWD)
-        let popup = PopupWindow(host: host, surfaceID: surfaceID) {
-            _ = coordinator.requestDaemon(.closeSurface(surfaceID: surfaceID))
-            popups.removeAll { $0.surfaceID == surfaceID }
-        }
-        popups.append(popup)
-        popup.makeKeyAndOrderFront(nil)
-        if let command, !command.isEmpty {
-            _ = coordinator.requestDaemon(.send(surfaceID: surfaceID, text: command + "\n"))
+        let endpoint = coordinator.activeEndpoint, owner = coordinator.activeOwner
+        let cwd = coordinator.settings.defaultCWD, shell = coordinator.settings.defaultShell
+        coordinator.requestDaemonAsync(.createSurface(cwd: cwd, shell: shell), refresh: false, deliverStaleResult: true) { response in
+            guard case let .surfaceID(surfaceID)? = response, let uuid = SurfaceID(uuidString: surfaceID) else { return }
+            guard coordinator.activeOwner == owner else {
+                coordinator.requestDaemonBatch([.closeSurface(surfaceID: surfaceID)], endpoint: endpoint)
+                return
+            }
+            let host = coordinator.terminalHost(for: uuid, cwd: cwd)
+            let popup = PopupWindow(host: host, surfaceID: surfaceID) {
+                coordinator.requestDaemonBatch([.closeSurface(surfaceID: surfaceID)], endpoint: endpoint)
+                popups.removeAll { $0.surfaceID == surfaceID }
+            }
+            popups.append(popup)
+            popup.makeKeyAndOrderFront(nil)
+            if let command, !command.isEmpty {
+                coordinator.requestDaemonBatch([.send(surfaceID: surfaceID, text: command + "\n")], endpoint: endpoint)
+            }
         }
     }
+
 }
 
 // MARK: - Overlay window (lock / clock)

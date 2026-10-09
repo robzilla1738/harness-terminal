@@ -80,13 +80,13 @@ final class MainExecutor: CommandExecutor {
             coordinator.openTabInActiveWorkspace()
         case .killWindow:
             if let tabID = coordinator.snapshot.activeWorkspace?.activeTab?.id {
-                coordinator.requestDaemon(.closeTab(tabID: tabID))
-                coordinator.syncFromDaemon()
+                coordinator.requestDaemonAsync(.closeTab(tabID: tabID))
+                coordinator.refreshSnapshot()
             }
         case .renameWindow(let newName):
             if let newName, let tabID = coordinator.snapshot.activeWorkspace?.activeTab?.id {
-                coordinator.requestDaemon(.renameTab(tabID: tabID, name: newName))
-                coordinator.syncFromDaemon()
+                coordinator.requestDaemonAsync(.renameTab(tabID: tabID, name: newName))
+                coordinator.refreshSnapshot()
             } else {
                 coordinator.beginRenameActiveTab()
             }
@@ -110,13 +110,13 @@ final class MainExecutor: CommandExecutor {
             }
         case .killSession:
             if let sessionID = coordinator.snapshot.activeWorkspace?.activeSessionID {
-                coordinator.requestDaemon(.closeSession(sessionID: sessionID))
-                coordinator.syncFromDaemon()
+                coordinator.requestDaemonAsync(.closeSession(sessionID: sessionID))
+                coordinator.refreshSnapshot()
             }
         case .renameSession(let newName):
             if let newName, let sessionID = coordinator.snapshot.activeWorkspace?.activeSessionID {
-                coordinator.requestDaemon(.renameSession(sessionID: sessionID, name: newName))
-                coordinator.syncFromDaemon()
+                coordinator.requestDaemonAsync(.renameSession(sessionID: sessionID, name: newName))
+                coordinator.refreshSnapshot()
             }
         case .nextSession:
             cycleActiveSession(coordinator: coordinator, forward: true)
@@ -146,16 +146,16 @@ final class MainExecutor: CommandExecutor {
             guard let surfaceID = coordinator.activeSurfaceID else {
                 throw CommandExecutionError.noActiveSurface
             }
-            coordinator.requestDaemon(.sendKeys(surfaceID: surfaceID.uuidString, keys: keys))
+            coordinator.requestDaemonAsync(.sendKeys(surfaceID: surfaceID.uuidString, keys: keys))
         case .sendKeysLiteral(let text):
             guard let surfaceID = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
-            coordinator.requestDaemon(.sendData(surfaceID: surfaceID.uuidString, data: Data(text.utf8)))
+            coordinator.requestDaemonAsync(.sendData(surfaceID: surfaceID.uuidString, data: Data(text.utf8)))
         case .sendKeysHex(let hex):
             guard let surfaceID = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
             let bytes = hex.compactMap { tok -> UInt8? in
                 UInt8(tok.hasPrefix("0x") || tok.hasPrefix("0X") ? String(tok.dropFirst(2)) : tok, radix: 16)
             }
-            coordinator.requestDaemon(.sendData(surfaceID: surfaceID.uuidString, data: Data(bytes)))
+            coordinator.requestDaemonAsync(.sendData(surfaceID: surfaceID.uuidString, data: Data(bytes)))
         case .displayMessage(let format):
             DisplayMessage.show(format)
         case .displayMessagePrint(let format):
@@ -188,68 +188,76 @@ final class MainExecutor: CommandExecutor {
         // Show verbs: query the daemon and render through the message overlay (the same
         // surface list-keys uses).
         case let .showOptions(scope):
-            if case let .options(items)? = coordinator.requestDaemon(.showOptions(scope: scope)) {
-                let lines = items.map { entry in
-                    "\(entry.scope)\(entry.target.map { "(\($0.prefix(8)))" } ?? "") \(entry.key) = \(entry.value)"
+            coordinator.requestDaemonAsync(.showOptions(scope: scope), refresh: false) { response in
+                if case let .options(items)? = response {
+                    let lines = items.map { entry in
+                        "\(entry.scope)\(entry.target.map { "(\($0.prefix(8)))" } ?? "") \(entry.key) = \(entry.value)"
+                    }
+                    DisplayMessage.show(lines.isEmpty ? "no options set" : lines.joined(separator: "\n"))
                 }
-                DisplayMessage.show(lines.isEmpty ? "no options set" : lines.joined(separator: "\n"))
             }
         case let .showEnvironment(global):
             let sessionID = global ? nil : coordinator.snapshot.activeWorkspace?.activeSession?.id
-            if case let .options(items)? = coordinator.requestDaemon(.showEnvironment(sessionID: sessionID)) {
-                let lines = items.map { "\($0.key)=\($0.value)" }
-                DisplayMessage.show(lines.isEmpty ? "no environment entries" : lines.joined(separator: "\n"))
+            coordinator.requestDaemonAsync(.showEnvironment(sessionID: sessionID), refresh: false) { response in
+                if case let .options(items)? = response {
+                    let lines = items.map { "\($0.key)=\($0.value)" }
+                    DisplayMessage.show(lines.isEmpty ? "no environment entries" : lines.joined(separator: "\n"))
+                }
             }
         case .listBuffers:
-            if case let .buffers(buffers)? = coordinator.requestDaemon(.listBuffers) {
-                let lines = buffers.map { "\($0.name): \($0.byteCount) bytes: \"\($0.preview)\"" }
-                DisplayMessage.show(lines.isEmpty ? "no buffers" : lines.joined(separator: "\n"))
+            coordinator.requestDaemonAsync(.listBuffers, refresh: false) { response in
+                if case let .buffers(buffers)? = response {
+                    let lines = buffers.map { "\($0.name): \($0.byteCount) bytes: \"\($0.preview)\"" }
+                    DisplayMessage.show(lines.isEmpty ? "no buffers" : lines.joined(separator: "\n"))
+                }
             }
         case let .showBuffer(name):
-            if case let .buffer(buffer)? = coordinator.requestDaemon(.getBuffer(name: name)) {
-                let text = buffer.data.map { String(decoding: $0, as: UTF8.self) } ?? buffer.preview
-                DisplayMessage.show(text.isEmpty ? "buffer is empty" : text)
-            } else {
-                DisplayMessage.show("no such buffer")
+            coordinator.requestDaemonAsync(.getBuffer(name: name), refresh: false) { response in
+                if case let .buffer(buffer)? = response {
+                    let text = buffer.data.map { String(decoding: $0, as: UTF8.self) } ?? buffer.preview
+                    DisplayMessage.show(text.isEmpty ? "buffer is empty" : text)
+                } else {
+                    DisplayMessage.show("no such buffer")
+                }
             }
         case let .showHooks(event):
-            if case let .hooks(hooks)? = coordinator.requestDaemon(.listHooks(event: event)) {
-                let lines = hooks.map { "\($0.event) → \($0.commandSource)  [\($0.id.uuidString.prefix(8))]" }
-                DisplayMessage.show(lines.isEmpty ? "no hooks bound" : lines.joined(separator: "\n"))
+            coordinator.requestDaemonAsync(.listHooks(event: event), refresh: false) { response in
+                if case let .hooks(hooks)? = response {
+                    let lines = hooks.map { "\($0.event) → \($0.commandSource)  [\($0.id.uuidString.prefix(8))]" }
+                    DisplayMessage.show(lines.isEmpty ? "no hooks bound" : lines.joined(separator: "\n"))
+                }
             }
         case .refreshClient:
-            coordinator.syncFromDaemon()
+            coordinator.refreshSnapshot()
         case .respawnWindow:
             try runViaTranslator(command, coordinator: coordinator)
         case .showMessages:
-            if case let .text(log)? = coordinator.requestDaemon(.showMessages) {
-                DisplayMessage.show(log.isEmpty ? "no messages" : log)
+            coordinator.requestDaemonAsync(.showMessages, refresh: false) { response in
+                if case let .text(log)? = response {
+                    DisplayMessage.show(log.isEmpty ? "no messages" : log)
+                }
             }
         case let .findWindow(pattern, name, content, title, scopeTarget):
             // Non-content searches translate to a selectTab request; -C needs live
             // captures, done inline (re-dispatching the clientLocal result would loop).
             guard content else { return try runViaTranslator(command, coordinator: coordinator) }
-            let match = FindWindowMatcher.firstMatch(
-                coordinator.snapshot, pattern: pattern, name: name, title: title,
-                target: scopeTarget, current: coordinator.snapshot.activeWorkspace?.activeSession
-            ) { surfaceID in
-                guard case let .text(text)? = coordinator.requestDaemon(
-                    .capturePane(surfaceID: surfaceID, includeScrollback: false)) else { return nil }
-                return text
-            }
-            guard let match else {
-                DisplayMessage.show("find-window: no matches for '\(pattern)'")
-                return
-            }
-            _ = coordinator.requestDaemon(.selectTab(workspaceID: match.workspaceID, tabID: match.tabID))
-            coordinator.syncFromDaemon()
+            let snapshot = coordinator.snapshot
+            coordinator.performDaemonOperation(operation: { service in
+                let match = FindWindowMatcher.firstMatch(snapshot, pattern: pattern, name: name, title: title,
+                    target: scopeTarget, current: snapshot.activeWorkspace?.activeSession) { surfaceID in
+                    guard case let .text(text)? = try? service.request(.capturePane(surfaceID: surfaceID, includeScrollback: false)) else { return nil }
+                    return text
+                }
+                guard let match else { throw CommandExecutionError.daemonError("find-window: no matches for '\(pattern)'") }
+                return try service.request(.selectTab(workspaceID: match.workspaceID, tabID: match.tabID))
+            })
         case .reloadKeybindings:
             KeybindingsService.shared.reload()
             PrefixKeymap.shared.rebuildFromSettings()
         case .showCheatsheet:
             PrefixCheatsheetWindow.shared.toggle()
         case .sequence(let commands):
-            for command in commands { try execute(command) }
+            executeSequence(commands[...], owner: coordinator.activeOwner)
         case .selectLayout(let name):
             try applyLayout(name: name, coordinator: coordinator)
         case .nextLayout:
@@ -260,16 +268,16 @@ final class MainExecutor: CommandExecutor {
             guard let tabID = coordinator.snapshot.activeWorkspace?.activeTab?.id else {
                 throw CommandExecutionError.noActiveSurface
             }
-            coordinator.requestDaemon(.rotatePanes(tabID: tabID, forward: forward))
-            coordinator.syncFromDaemon()
+            coordinator.requestDaemonAsync(.rotatePanes(tabID: tabID, forward: forward))
+            coordinator.refreshSnapshot()
         case .breakPane:
             try breakActivePane(coordinator: coordinator)
         case .respawnPane(let keepHistory):
             guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
-            coordinator.requestDaemon(.respawnPane(surfaceID: sid.uuidString, keepHistory: keepHistory))
+            coordinator.requestDaemonAsync(.respawnPane(surfaceID: sid.uuidString, keepHistory: keepHistory))
         case .clearHistory:
             guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
-            coordinator.requestDaemon(.clearHistory(surfaceID: sid.uuidString))
+            coordinator.requestDaemonAsync(.clearHistory(surfaceID: sid.uuidString))
         case let .movePane(direction, source):
             try runViaTranslator(.movePane(direction: direction, source: source), coordinator: coordinator)
         case .renumberWindows:
@@ -295,7 +303,7 @@ final class MainExecutor: CommandExecutor {
             Phase67UI.presentChoose(scope: scope, coordinator: coordinator)
         case .pipePane(let shellCommand):
             guard let sid = coordinator.activeSurfaceID else { throw CommandExecutionError.noActiveSurface }
-            coordinator.requestDaemon(.pipePane(surfaceID: sid.uuidString, shellCommand: shellCommand))
+            coordinator.requestDaemonAsync(.pipePane(surfaceID: sid.uuidString, shellCommand: shellCommand))
         case .lockClient:
             Phase67UI.lock()
         case .clockMode:
@@ -306,8 +314,8 @@ final class MainExecutor: CommandExecutor {
             linkWindow(targetSessionName: targetSessionName, coordinator: coordinator)
         case .unlinkWindow:
             if let tabID = coordinator.snapshot.activeWorkspace?.activeTab?.id {
-                coordinator.requestDaemon(.unlinkWindow(tabID: tabID))
-                coordinator.syncFromDaemon()
+                coordinator.requestDaemonAsync(.unlinkWindow(tabID: tabID))
+                coordinator.refreshSnapshot()
             }
         case .displayPopup(let command):
             Phase67UI.presentPopup(command: command, coordinator: coordinator)
@@ -315,6 +323,17 @@ final class MainExecutor: CommandExecutor {
             Phase67UI.presentMenu(items: items)
         case let .targeted(spec, inner):
             try runViaTranslator(.targeted(spec, inner), coordinator: coordinator)
+        }
+    }
+
+    private func executeSequence(_ commands: ArraySlice<Command>, owner: String) {
+        guard let first = commands.first, SessionCoordinator.shared.activeOwner == owner else { return }
+        let failureRevision = SessionCoordinator.shared.daemonFailureRevision
+        do { try dispatch(first) }
+        catch { DisplayMessage.show("error: \(error)"); return }
+        SessionCoordinator.shared.afterDaemonOperations { [weak self] in
+            guard SessionCoordinator.shared.daemonFailureRevision == failureRevision else { return }
+            self?.executeSequence(commands.dropFirst(), owner: owner)
         }
     }
 
@@ -328,8 +347,6 @@ final class MainExecutor: CommandExecutor {
     /// in the translator.
     @MainActor
     private func runViaTranslator(_ command: Command, coordinator: SessionCoordinator) throws {
-        let baseIndex = optionInt("base-index", default: 0, coordinator: coordinator)
-        let paneBaseIndex = optionInt("pane-base-index", default: 0, coordinator: coordinator)
         let activeTab = coordinator.snapshot.activeWorkspace?.activeTab
         let activePane = coordinator.activeSurfaceID.flatMap { sid in
             activeTab.flatMap { panePathLookup(surfaceID: sid, in: $0.rootPane) }
@@ -344,40 +361,29 @@ final class MainExecutor: CommandExecutor {
             focusedPaneID: activePane,
             markedPaneID: markedPane
         )
-        switch CommandIPCTranslator.translate(command, target: focus, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
-        case let .requests(requests):
-            // Daemon validation errors (unknown hook event, bad option scope, …) must
-            // reach the user — a silently-dropped .error reads as success (fail-loud
-            // policy). First error aborts the remainder.
-            for request in requests {
-                if case let .error(message)? = coordinator.requestDaemon(request) {
-                    coordinator.syncFromDaemon()
-                    throw CommandExecutionError.daemonError(message)
-                }
-            }
-            coordinator.syncFromDaemon()
-        case let .clientLocal(local):
+        if case let .clientLocal(local) = CommandIPCTranslator.translate(command, target: focus) {
             try dispatch(local)
-        case .unresolved:
-            // find-window's no-match is a search result, not a focus problem — say so
-            // (matches the -C path and the compositor/control-mode wording).
-            if case let .findWindow(pattern, _, _, _, _) = command {
-                DisplayMessage.show("find-window: no matches for '\(pattern)'")
-                return
-            }
-            // Distinguish "you named something that doesn't exist" (strict `-t`/`-s`
-            // resolution) from "there is nothing focused to act on".
-            if case let .targeted(spec, _) = command {
-                throw CommandExecutionError.targetNotFound(spec.raw)
-            }
-            throw CommandExecutionError.noActiveSurface
+            return
         }
-    }
-
-    @MainActor
-    private func optionInt(_ key: String, default fallback: Int, coordinator: SessionCoordinator) -> Int {
-        guard case let .options(entries)? = coordinator.requestDaemon(.showOptions(scope: nil)) else { return fallback }
-        return entries.first { $0.key == key }.flatMap { Int($0.value) } ?? fallback
+        coordinator.performDaemonOperation(operation: { service in
+            var baseIndex = 0, paneBaseIndex = 0
+            if case let .options(entries) = try service.request(.showOptions(scope: nil)) {
+                baseIndex = entries.first { $0.key == "base-index" }.flatMap { Int($0.value) } ?? 0
+                paneBaseIndex = entries.first { $0.key == "pane-base-index" }.flatMap { Int($0.value) } ?? 0
+            }
+            switch CommandIPCTranslator.translate(command, target: focus, baseIndex: baseIndex, paneBaseIndex: paneBaseIndex) {
+            case let .requests(requests):
+                for request in requests { try service.request(request) }
+                return .ok
+            case .clientLocal: throw CommandExecutionError.unsupportedInThisContext("This command needs an attached terminal.")
+            case .unresolved:
+                if case let .findWindow(pattern, _, _, _, _) = command {
+                    throw CommandExecutionError.daemonError("find-window: no matches for '\(pattern)'")
+                }
+                if case let .targeted(spec, _) = command { throw CommandExecutionError.targetNotFound(spec.raw) }
+                throw CommandExecutionError.noActiveSurface
+            }
+        })
     }
 
     // MARK: Phase 6/7 helpers
@@ -392,20 +398,22 @@ final class MainExecutor: CommandExecutor {
               letter.value >= 0x61, letter.value <= 0x7a
         else { return }
         let byte = UInt8(letter.value - 0x60)
-        coordinator.requestDaemon(.sendData(surfaceID: sid.uuidString, data: Data([byte])))
+        coordinator.requestDaemonAsync(.sendData(surfaceID: sid.uuidString, data: Data([byte])))
     }
 
     @MainActor
     private func sourceFile(path: String) throws {
         let expanded = (path as NSString).expandingTildeInPath
         let contents = try String(contentsOfFile: expanded, encoding: .utf8)
+        var commands: [Command] = []
         for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: true) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
             // Surface a bad line instead of silently skipping it, but keep sourcing the rest.
-            do { try executeSource(line) }
+            do { commands.append(try CommandParser.parse(line)) }
             catch { DisplayMessage.show("source: \(line): \(error)") }
         }
+        executeSequence(commands[...], owner: SessionCoordinator.shared.activeOwner)
     }
 
     @MainActor
@@ -415,8 +423,8 @@ final class MainExecutor: CommandExecutor {
             $0.name == targetSessionName || $0.id.uuidString == targetSessionName
         }
         guard let session = match else { return }
-        coordinator.requestDaemon(.linkWindow(tabID: tabID, targetSessionID: session.id))
-        coordinator.syncFromDaemon()
+        coordinator.requestDaemonAsync(.linkWindow(tabID: tabID, targetSessionID: session.id))
+        coordinator.refreshSnapshot()
     }
 
     @MainActor
@@ -427,8 +435,8 @@ final class MainExecutor: CommandExecutor {
         let activePaneID = coordinator.activeSurfaceID.flatMap { sid in
             coordinator.snapshot.activeWorkspace?.activeTab.flatMap { panePathLookup(surfaceID: sid, in: $0.rootPane) }
         }
-        coordinator.requestDaemon(.applyLayout(tabID: tabID, layout: name, mainPaneID: activePaneID))
-        coordinator.syncFromDaemon()
+        coordinator.requestDaemonAsync(.applyLayout(tabID: tabID, layout: name, mainPaneID: activePaneID))
+        coordinator.refreshSnapshot()
     }
 
     @MainActor
@@ -436,8 +444,8 @@ final class MainExecutor: CommandExecutor {
         guard let tabID = coordinator.snapshot.activeWorkspace?.activeTab?.id else {
             throw CommandExecutionError.noActiveSurface
         }
-        coordinator.requestDaemon(forward ? .nextLayout(tabID: tabID) : .previousLayout(tabID: tabID))
-        coordinator.syncFromDaemon()
+        coordinator.requestDaemonAsync(forward ? .nextLayout(tabID: tabID) : .previousLayout(tabID: tabID))
+        coordinator.refreshSnapshot()
     }
 
     @MainActor
@@ -446,8 +454,8 @@ final class MainExecutor: CommandExecutor {
               let sid = coordinator.activeSurfaceID,
               let paneID = panePathLookup(surfaceID: sid, in: tab.rootPane)
         else { throw CommandExecutionError.noActiveSurface }
-        coordinator.requestDaemon(.breakPane(paneID: paneID))
-        coordinator.syncFromDaemon()
+        coordinator.requestDaemonAsync(.breakPane(paneID: paneID))
+        coordinator.refreshSnapshot()
     }
 
     @MainActor
@@ -470,10 +478,12 @@ final class MainExecutor: CommandExecutor {
             case .down: axis = .down
             default: return
             }
-            let response = coordinator.requestDaemon(.selectPaneDirectional(currentPaneID: paneID, direction: axis))
-            if case let .paneID(neighbor) = response,
-               let neighborSurface = neighborSurface(paneID: neighbor, in: tab.rootPane) {
-                coordinator.setActiveSurface(neighborSurface)
+            let owner = coordinator.activeOwner
+            coordinator.requestDaemonAsync(.selectPaneDirectional(currentPaneID: paneID, direction: axis)) { response in
+                guard owner == coordinator.activeOwner, coordinator.activeSurfaceID == sid,
+                      case let .paneID(neighbor)? = response,
+                      let surface = self.neighborSurface(paneID: neighbor, in: tab.rootPane) else { return }
+                coordinator.setActiveSurface(surface)
             }
         }
     }
@@ -494,8 +504,8 @@ final class MainExecutor: CommandExecutor {
               let surfaceID = coordinator.activeSurfaceID,
               let paneID = panePathLookup(surfaceID: surfaceID, in: tab.rootPane)
         else { throw CommandExecutionError.noActiveSurface }
-        coordinator.requestDaemon(.resizePane(paneID: paneID, direction: direction, amount: amount))
-        coordinator.syncFromDaemon(metadataOnly: true)
+        coordinator.requestDaemonAsync(.resizePane(paneID: paneID, direction: direction, amount: amount))
+        coordinator.refreshSnapshot()
     }
 
     @MainActor
@@ -507,8 +517,8 @@ final class MainExecutor: CommandExecutor {
               let currentIdx = session.tabs.firstIndex(where: { $0.id == activeTab.id })
         else { return }
         let nextIdx = (currentIdx + (forward ? 1 : -1) + session.tabs.count) % session.tabs.count
-        coordinator.requestDaemon(.selectTab(workspaceID: workspace.id, tabID: session.tabs[nextIdx].id))
-        coordinator.syncFromDaemon()
+        coordinator.requestDaemonAsync(.selectTab(workspaceID: workspace.id, tabID: session.tabs[nextIdx].id))
+        coordinator.refreshSnapshot()
     }
 
     @MainActor
@@ -517,8 +527,8 @@ final class MainExecutor: CommandExecutor {
               let session = workspace.activeSession,
               index >= 0, index < session.tabs.count
         else { return }
-        coordinator.requestDaemon(.selectTab(workspaceID: workspace.id, tabID: session.tabs[index].id))
-        coordinator.syncFromDaemon()
+        coordinator.requestDaemonAsync(.selectTab(workspaceID: workspace.id, tabID: session.tabs[index].id))
+        coordinator.refreshSnapshot()
     }
 
     @MainActor
@@ -581,10 +591,12 @@ enum DisplayMessage {
         // `display-time` (ms, tmux) bounds the toast hold, same as the compositor's flash.
         if Date().timeIntervalSince(displayTimeFetchedAt) > 5 {
             displayTimeFetchedAt = Date()
-            cachedDisplayTimeMS = SessionCoordinator.shared.requestDaemon(.showOptions(scope: nil)).flatMap { response -> Int? in
-                guard case let .options(entries) = response else { return nil }
-                return entries.first { $0.key == "display-time" }.flatMap { Int($0.value) }
-            } ?? 750
+            let endpoint = SessionCoordinator.shared.activeEndpoint
+            DispatchQueue.global(qos: .utility).async {
+                guard case let .options(entries)? = try? DaemonClient(endpoint: endpoint).request(.showOptions(scope: nil)) else { return }
+                let value = entries.first { $0.key == "display-time" }.flatMap { Int($0.value) } ?? 750
+                DispatchQueue.main.async { cachedDisplayTimeMS = value }
+            }
         }
         Toast.show(rendered, in: host, hold: max(Double(cachedDisplayTimeMS) / 1000, 0.1))
     }
@@ -627,7 +639,7 @@ enum RunShell {
             process.waitUntilExit()
             if captureToBuffer, !data.isEmpty {
                 DispatchQueue.main.async {
-                    _ = SessionCoordinator.shared.requestDaemon(.setBuffer(name: nil, data: data))
+                    SessionCoordinator.shared.requestDaemonAsync(.setBuffer(name: nil, data: data))
                 }
             }
         }

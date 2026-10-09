@@ -45,7 +45,7 @@ final class PaletteShortcuts {
         }
         settings.paletteShortcuts[actionID] = raw
         SessionCoordinator.shared.settings = settings
-        try? settings.save()
+        SessionCoordinator.shared.saveSettings()
         reload()
     }
 

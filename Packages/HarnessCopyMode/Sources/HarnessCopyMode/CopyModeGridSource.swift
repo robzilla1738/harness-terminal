@@ -18,6 +18,7 @@ public protocol CopyModeGridSource {
     var columns: Int { get }
     /// One virtual line (0 = oldest), already padded/truncated to `columns`.
     func line(_ index: Int) -> [TerminalGridCell]
+    func cluster(for cell: TerminalGridCell) -> String
     /// OSC 133 shell-prompt rows in virtual line space, oldest first (empty without shell
     /// integration) — drives the copy-mode previous/next-prompt motions.
     var promptRows: [Int] { get }
@@ -26,6 +27,7 @@ public protocol CopyModeGridSource {
 extension CopyModeGridSource {
     /// Default: no shell-integration marks. The engine conformances override this.
     public var promptRows: [Int] { [] }
+    public func cluster(for cell: TerminalGridCell) -> String { cell.cluster }
 }
 
 /// One virtual line decomposed for column ↔ character mapping: the visible characters plus,
@@ -115,7 +117,7 @@ extension CopyModeGridSource {
             // grapheme; the engine guarantees one (combining marks fold into the base, non-extending
             // format scalars are dropped), but `.first` guards defensively so a stray multi-grapheme
             // cell can never trap `Character(_:)`. Blank cells render as a space.
-            chars.append(cell.cluster.first ?? " ")
+            chars.append(cluster(for: cell).first ?? " ")
             columnOf.append(c)
             widthOf.append(cell.width == .wide ? 2 : 1)
             c += 1

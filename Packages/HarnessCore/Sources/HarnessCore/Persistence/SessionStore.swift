@@ -6,7 +6,16 @@ public final class SessionStore: @unchecked Sendable {
     private var pendingSave: DispatchWorkItem?
     private let debounceInterval: TimeInterval = 0.5
 
-    public init() {}
+    private let onSaveError: @Sendable (String) -> Void
+    private let onSaveRecovery: @Sendable () -> Void
+    private var lastSaveError: String?
+
+    public init(onSaveError: @escaping @Sendable (String) -> Void = {
+        fputs("Harness: session persistence failed — \($0)\n", harnessStderr)
+    }, onSaveRecovery: @escaping @Sendable () -> Void = {}) {
+        self.onSaveError = onSaveError
+        self.onSaveRecovery = onSaveRecovery
+    }
 
     public func load() -> SessionSnapshot {
         queue.sync {
@@ -48,6 +57,8 @@ public final class SessionStore: @unchecked Sendable {
 
     public func saveImmediately(_ snapshot: SessionSnapshot) throws {
         try queue.sync {
+            pendingSave?.cancel()
+            pendingSave = nil
             // Synchronous and env-authoritative — used at init (first write) and on graceful
             // shutdown (flush the last debounce window). `ensureDirectories` materializes the full
             // owner-only tree (sessions/scrollback/logs); `writeSnapshot` then writes the layout.
@@ -59,7 +70,17 @@ public final class SessionStore: @unchecked Sendable {
     private func scheduleSave(_ snapshot: SessionSnapshot, to url: URL) {
         pendingSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            try? self?.writeSnapshot(snapshot, to: url)
+            guard let self else { return }
+            self.pendingSave = nil
+            do {
+                try self.writeSnapshot(snapshot, to: url)
+                if self.lastSaveError != nil { self.onSaveRecovery() }
+                self.lastSaveError = nil
+            } catch {
+                let message = "\(url.path): \(error.localizedDescription)"
+                if message != self.lastSaveError { self.onSaveError(message) }
+                self.lastSaveError = message
+            }
         }
         pendingSave = work
         queue.asyncAfter(deadline: .now() + debounceInterval, execute: work)
@@ -74,6 +95,7 @@ public final class SessionStore: @unchecked Sendable {
             attributes: [.posixPermissions: 0o700])
         var copy = snapshot
         copy.savedAt = .now
+        copy.persistenceError = nil // Runtime health must not become stale persisted state.
         let encoder = JSONEncoder()
         // Compact (not prettyPrinted) — layout.json is machine-written/read, not hand-edited, and
         // the encode runs on every mutation. `.sortedKeys` is kept for deterministic output (stable

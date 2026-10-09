@@ -312,7 +312,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         experienceSegment.action = #selector(experienceModeChanged)
         experienceSummaryLabel.font = .systemFont(ofSize: 11.5)
         experienceSummaryLabel.textColor = .secondaryLabelColor
-        experienceSummaryLabel.stringValue = settings.experienceMode.summary
+        experienceSummaryLabel.stringValue = settings.experienceMode.summary(keepSessionsOnQuit: SessionCoordinator.shared.snapshot.keepSessionsOnQuit)
 
         // Optional Harness controls without switching experience mode, as two independent
         // tri-states. Auto follows the preset; On/Off pin each via `prefixKeyEnabled` /
@@ -375,13 +375,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             // Empty = disable the prefix entirely (honored via `effectivePrefixKey`); don't
             // silently snap back to Ctrl-A the way the old code did.
             SettingsEditor.applyFromWindow(\.prefixKey, value, on: &SessionCoordinator.shared.settings)
-            try? SessionCoordinator.shared.settings.save()
+            self.saveSettings()
             PrefixKeymap.shared.rebuildFromSettings()
         }
         quickTerminalHotkeyRecorder = KeyRecorderView(initial: settings.quickTerminalHotkey)
         quickTerminalHotkeyRecorder.onChange = { value in
             SettingsEditor.applyFromWindow(\.quickTerminalHotkey, value, on: &SessionCoordinator.shared.settings)
-            try? SessionCoordinator.shared.settings.save()
+            self.saveSettings()
             QuickTerminalController.shared.rebuildFromSettings()
         }
 
@@ -439,13 +439,13 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         updateDependentRows()
     }
 
-    func showPage(_ pane: SettingsPane) {
+    func showPage(_ pane: SettingsPane, refresh: Bool = true) {
         for button in sidebarButtons { button.isSelected = (button.tag == pane.rawValue) }
         for subview in pageContainer.subviews { subview.removeFromSuperview() }
         // Rebuild the Advanced page each time it's shown so it re-checks daemon reachability (and
         // re-fetches live option values): a daemon that was down when Settings opened may be back,
         // and vice-versa. The other pages are static enough to stay cached.
-        if pane == .advanced { pages[.advanced] = buildAdvancedPage() }
+        if pane == .advanced, refresh { pages[.advanced] = buildAdvancedPage() }
         if pane == .notifications { refreshNotificationStatus() }
         guard let page = pages[pane] else { return }
         page.translatesAutoresizingMaskIntoConstraints = false
@@ -1139,18 +1139,19 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// Whether the last `loadAdvancedValues` reached the daemon. False = the overlaid values are
     /// builtin defaults, NOT the live daemon state — so the page warns and disables its controls
     /// (a change couldn't be applied) instead of silently presenting defaults as if real.
-    private var advDaemonReachable = true
+    private var advDaemonReachable = false
+    private var advLoading = false
     /// The daemon-backed controls (set-option surface), disabled when the daemon is unreachable.
     /// Excludes the performance toggles, which write local settings and stay usable offline.
     private var advDaemonControls: [NSControl] = []
 
-    private func buildAdvancedPage() -> NSView {
+    private func buildAdvancedPage(refresh: Bool = true) -> NSView {
         advDaemonControls.removeAll() // repopulated by the adv* factories below
         // The adv* controls are rebuilt on every Advanced-page show, so the prior batch's identifiers
         // are stale (keyed by ObjectIdentifier of freed controls). Clear the map alongside the control
         // list, otherwise it grows unbounded across reopens.
         advOptKeys.removeAll()
-        loadAdvancedValues()
+        if refresh { loadAdvancedValues() }
         // The performance toggles are member controls (not rebuilt by the adv* factories), so unlike
         // the daemon-backed controls they don't get refreshed by `loadAdvancedValues`. Re-read their
         // state from settings here so a rebuilt page reflects changes made since the last build.
@@ -1255,16 +1256,20 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     }
 
     private func loadAdvancedValues() {
-        advValues.removeAll()
-        for (key, value) in OptionStore.builtinDefaults { advValues[key] = value.stringValue }
-        // `requestDaemon` returns nil when the daemon is unreachable. Distinguish that from a real
-        // empty-options reply: only overlay (and mark reachable) on an actual `.options` response,
-        // so an unreachable daemon renders builtin defaults that the page flags as not-live.
-        if case let .options(entries)? = SessionCoordinator.shared.requestDaemon(.showOptions(scope: nil)) {
-            for entry in entries where entry.scope == "global" { advValues[entry.key] = entry.value }
-            advDaemonReachable = true
-        } else {
-            advDaemonReachable = false
+        guard !advLoading else { return }
+        if advValues.isEmpty {
+            for (key, value) in OptionStore.builtinDefaults { advValues[key] = value.stringValue }
+        }
+        advLoading = true
+        SessionCoordinator.shared.requestDaemonAsync(.showOptions(scope: nil), refresh: false) { [weak self] response in
+            guard let self else { return }
+            self.advLoading = false
+            if case let .options(entries)? = response {
+                for entry in entries where entry.scope == "global" { self.advValues[entry.key] = entry.value }
+                self.advDaemonReachable = true
+            } else { self.advDaemonReachable = false }
+            self.pages[.advanced] = self.buildAdvancedPage(refresh: false)
+            if self.currentPane == .advanced { self.showPage(.advanced, refresh: false) }
         }
     }
 
@@ -1314,7 +1319,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     }
 
     private func setDaemonOption(key: String, rawValue: String) {
-        SessionCoordinator.shared.requestDaemon(DaemonSettingsControls.request(key: key, rawValue: rawValue))
+        SessionCoordinator.shared.requestDaemonAsync(DaemonSettingsControls.request(key: key, rawValue: rawValue))
         advValues[key] = rawValue
         HarnessOptions.reloadFromDisk()
         // Nudge the status line + chrome to re-read the new option value.
@@ -1931,7 +1936,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let coordinator = SessionCoordinator.shared
         coordinator.settings.systemLightThemeName = theme
         coordinator.settings.clearThemeColorOverrides()
-        try? coordinator.settings.save()
+        saveSettings()
         coordinator.applySettingsToHosts()
         syncAppearanceControlsFromSettings()
         refreshColorPlaceholders()
@@ -1942,7 +1947,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         let coordinator = SessionCoordinator.shared
         coordinator.settings.systemDarkThemeName = theme
         coordinator.settings.clearThemeColorOverrides()
-        try? coordinator.settings.save()
+        saveSettings()
         coordinator.applySettingsToHosts()
         syncAppearanceControlsFromSettings()
         refreshColorPlaceholders()
@@ -1958,7 +1963,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
     @objc private func toggleKeepSessions() {
         let keep = keepSessionsToggle.state == .on
-        SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep))
+        keepSessionsToggle.isEnabled = false
+        SessionCoordinator.shared.requestDaemonAsync(.setKeepSessionsOnQuit(keep)) { [weak self] response in
+            guard let self else { return }
+            let effective = response == nil ? SessionCoordinator.shared.snapshot.keepSessionsOnQuit : keep
+            self.keepSessionsToggle.isEnabled = true
+            self.keepSessionsToggle.state = effective ? .on : .off
+            self.experienceSummaryLabel.stringValue = SessionCoordinator.shared.settings.experienceMode.summary(keepSessionsOnQuit: effective)
+        }
     }
 
     @objc private func setDefaultTerminalClicked() {
@@ -2067,7 +2079,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// notification the status line + prefix react to.
     @objc private func experienceModeChanged() {
         let mode = selectedExperienceMode
-        experienceSummaryLabel.stringValue = mode.summary
+        experienceSummaryLabel.stringValue = mode.summary(keepSessionsOnQuit: mode.persistsSessionsByDefault)
         flushAndApply()
         PrefixKeymap.shared.rebuildFromSettings()
         // Mode sets the default persistence: Plain is ephemeral (a clean quit closes its
@@ -2075,13 +2087,15 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         // "Keep sessions running" toggle. Mirror the snapshot truth into that toggle so the
         // two controls stay consistent while the window is open.
         let keep = mode.persistsSessionsByDefault
-        if SessionCoordinator.shared.requestDaemon(.setKeepSessionsOnQuit(keep)) != nil {
-            // Record the live apply so the launch-time reconcile sees this mode as settled —
-            // otherwise the next launch would treat the switch as a cross-launch mode change and
-            // re-impose the default over any keep-on-quit override made after switching.
-            AppDelegate.recordModePersistenceApplied(mode)
+        keepSessionsToggle.isEnabled = false
+        SessionCoordinator.shared.requestDaemonAsync(.setKeepSessionsOnQuit(keep)) { [weak self] response in
+            guard let self else { return }
+            if response != nil { AppDelegate.recordModePersistenceApplied(mode) }
+            let effective = response == nil ? SessionCoordinator.shared.snapshot.keepSessionsOnQuit : keep
+            self.keepSessionsToggle.isEnabled = true
+            self.keepSessionsToggle.state = effective ? .on : .off
+            self.experienceSummaryLabel.stringValue = self.selectedExperienceMode.summary(keepSessionsOnQuit: effective)
         }
-        keepSessionsToggle.state = keep ? .on : .off
     }
 
     /// The per-component prefix override re-gates the prefix key independently of the status line
@@ -2229,7 +2243,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             on: &coordinator.settings
         )
         retintAgentIcon(kind)
-        try? coordinator.settings.save()
+        saveSettings()
         coordinator.applySettingsToHosts()
     }
 
@@ -2257,7 +2271,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             well.color = NSColor.fromHex(coordinator.settings.agentColorHex(for: kind)) ?? .gray
             retintAgentIcon(kind)
         }
-        try? coordinator.settings.save()
+        saveSettings()
         coordinator.applySettingsToHosts()
     }
 
@@ -2290,7 +2304,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         appearanceModeSegment.selectItem(withTitle: Self.appearanceModeTitle(settings.appearanceMode))
         syncSystemThemePickersFromSettings()
         experienceSegment.selectedSegment = ExperienceMode.allCases.firstIndex(of: settings.experienceMode) ?? 0
-        experienceSummaryLabel.stringValue = settings.experienceMode.summary
+        experienceSummaryLabel.stringValue = settings.experienceMode.summary(keepSessionsOnQuit: SessionCoordinator.shared.snapshot.keepSessionsOnQuit)
         prefixControlSegment.selectItem(withTitle: harnessControlsTitle(settings.prefixKeyEnabled))
         // The older `showStatusLine` switch hides the band on its own; show that as Off here.
         statusLineControlSegment.selectItem(withTitle: settings.showStatusLine ? harnessControlsTitle(settings.statusLineEnabled) : "Off")
@@ -2381,9 +2395,14 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     /// Single flush — push every field into HarnessSettings, save, and apply
     /// to the live terminal/window. Called from every control's action so the
     /// settings window behaves entirely live.
+    private func saveSettings() {
+        do { try SessionCoordinator.shared.settings.save() }
+        catch { DisplayMessage.show("Could not save settings.json: \(error.localizedDescription). Check disk space and permissions.") }
+    }
+
     private func flushAndApply() {
         applySettingsLive()
-        try? SessionCoordinator.shared.settings.save()
+        saveSettings()
     }
 
     /// Settings window path into the shared writer. The palette calls `applyFromPalette`.

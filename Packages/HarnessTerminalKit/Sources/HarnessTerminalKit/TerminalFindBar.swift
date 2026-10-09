@@ -116,6 +116,13 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         nextButton.isEnabled = hasMatches
     }
 
+    func setStatus(_ message: String?) {
+        guard let message else { countLabel.toolTip = nil; return }
+        countLabel.stringValue = message.hasPrefix("Invalid pattern") ? "Invalid pattern" : message
+        countLabel.toolTip = message
+        countLabel.textColor = message.hasPrefix("Invalid pattern") ? .systemRed : .secondaryLabelColor
+    }
+
     // MARK: - Actions
 
     @objc private func previousTapped() { onPrevious?() }
