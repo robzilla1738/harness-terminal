@@ -11,7 +11,7 @@ final class IconTileView: NSView {
 
     private let face = CALayer()
     private let glyph = NSImageView()
-    private let prompt = NSTextField(labelWithString: ">_")
+    private let prompt = CAShapeLayer()
     private(set) var content: Content = .terminal
     private let badgeSize: NSSize
 
@@ -24,10 +24,13 @@ final class IconTileView: NSView {
         face.borderWidth = 0.5
         layer?.addSublayer(face)
 
-        prompt.font = .monospacedSystemFont(ofSize: size.height * 0.5, weight: .semibold)
-        prompt.alignment = .center
+        prompt.fillColor = nil
+        prompt.strokeColor = NSColor.fromHex("#98C794")!.cgColor
+        prompt.lineCap = .round
+        prompt.lineJoin = .round
+        prompt.actions = ["path": NSNull(), "hidden": NSNull()]
+        layer?.addSublayer(prompt)
         glyph.imageScaling = .scaleProportionallyUpOrDown
-        addSubview(prompt)
         addSubview(glyph)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: size.width),
@@ -48,7 +51,7 @@ final class IconTileView: NSView {
         CATransaction.setDisableActions(true)
         let faceRect = bounds
         face.frame = faceRect
-        face.cornerRadius = 5
+        face.cornerRadius = (faceRect.height * 0.25).rounded()
         let markScale: CGFloat
         switch content {
         case .agent(.crush): markScale = 1
@@ -57,8 +60,19 @@ final class IconTileView: NSView {
         }
         let markSide = (faceRect.height * markScale).rounded()
         glyph.frame = NSRect(x: faceRect.midX - markSide / 2, y: faceRect.midY - markSide / 2, width: markSide, height: markSide)
-        let textSize = prompt.intrinsicContentSize
-        prompt.frame = NSRect(x: faceRect.midX - textSize.width / 2, y: faceRect.midY - textSize.height / 2, width: textSize.width, height: textSize.height)
+        // Draw the prompt as one balanced mark, independent of font metrics.
+        let scale = faceRect.height / 16
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: -4.5, y: 3))
+        path.addLine(to: CGPoint(x: -1, y: 0))
+        path.addLine(to: CGPoint(x: -4.5, y: -3))
+        path.move(to: CGPoint(x: 1, y: -3))
+        path.addLine(to: CGPoint(x: 4.5, y: -3))
+        var transform = CGAffineTransform(translationX: faceRect.midX, y: faceRect.midY).scaledBy(x: scale, y: scale)
+        prompt.frame = bounds
+        prompt.path = path.copy(using: &transform)
+        prompt.lineWidth = 1.25 * scale
+        prompt.contentsScale = window?.backingScaleFactor ?? 2
         CATransaction.commit()
     }
 
@@ -68,9 +82,8 @@ final class IconTileView: NSView {
         let base: NSColor
         switch content {
         case .terminal:
-            base = NSColor.fromHex("#323A3D")!
+            base = NSColor.fromHex("#272C2D")!
             prompt.isHidden = false
-            prompt.textColor = NSColor.fromHex("#A5D7A1")
             glyph.isHidden = true
         case let .agent(kind):
             base = Self.faceColor(for: kind)
@@ -82,7 +95,7 @@ final class IconTileView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         face.backgroundColor = base.cgColor
-        face.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        face.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
         CATransaction.commit()
     }
 

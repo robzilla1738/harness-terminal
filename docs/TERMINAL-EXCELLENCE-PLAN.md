@@ -340,9 +340,10 @@ The final consumer check covers the added output-subscription identity guard.
 
 ## Tab badge design follow-up
 
-- Flat 22×18-point tab badges, 12-point pane-header icons, 28×23-point
+- Flat 20×16-point tab badges, 12-point pane-header icons, 28×23-point
   Settings/Overview badges, a seven-point
-  leading inset, and existing title spacing. Removed the backing layer, gradient,
+  leading inset, and existing title spacing. The shell badge uses a drawn prompt
+  mark, a darker charcoal face, and a quieter border. Removed the backing layer, gradient,
   inset bevel, and shadow. Static Core Animation layers do not animate.
 - Added sourced logos for all 23 named coding tools, replacing every named-tool
   monogram. Pi uses the coding agent's press kit. Source SVGs/PNG, hashes, upstream

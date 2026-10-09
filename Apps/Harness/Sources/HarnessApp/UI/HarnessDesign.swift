@@ -35,7 +35,7 @@ enum HarnessDesign {
     /// Leading app tile in sidebar rows.
     static let iconTileSize = NSSize(width: 28, height: 23)
     /// A lower rectangle, with enough leading room inside the pill's curved end.
-    static let tabIconTileSize = NSSize(width: 22, height: 18)
+    static let tabIconTileSize = NSSize(width: 20, height: 16)
     static let tabIconTileInset: CGFloat = 7
     static var sidebarTabRowHeight: CGFloat { tabPillHeight + 2 * Spacing.xxs }
     static let sidebarSessionHeaderHeight: CGFloat = 30
