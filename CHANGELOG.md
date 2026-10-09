@@ -9,7 +9,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
-- Compound emoji and longer combining sequences survive rendering, copy, capture, reflow, and reattachment.
+- Common compound emoji and longer combining sequences retain their text through rendering, copy, capture, reflow, and reattachment. Emoji currently use the monochrome glyph atlas; color emoji rendering remains open.
 - Native scrollback thumb dragging and track clicks, honoring the macOS scrollbar preference.
 - Per-pane Activity across attached hosts, with exact-pane navigation, read state, notification snoozing, and hook installation health.
 - Saved Setups with editable layouts, optional startup commands, import/export, and explicit Open versus Open New Copy behavior.
@@ -36,11 +36,14 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Experience descriptions reflect effective session persistence. Remaining custom fades honor Reduce Motion.
 - Socket writes, discovery subprocesses, file-backed graphics reads, and trigger regex work have bounded resource/time behavior.
 - Isolated application homes no longer refresh the normal installed binaries or restart its launchd service.
+- The scrollback setting reaches new, restored, and already attached daemon surfaces instead of leaving their raw replay buffer at 1 MiB.
+- Shells launched without any locale inherit a UTF-8 character locale; explicit locale settings remain unchanged.
+- ⌘W closes the active utility window instead of closing a terminal pane behind Settings.
 - A delayed session-backed terminal reconnect can no longer recreate a surface after its pane closes.
 - Marking Activity read or changing snooze preserves the activity's timestamp and does not resolve a blocked process.
 - Path insertion and Go to Directory reject terminal control characters.
 
-These changes are implemented locally. Real remote-host recovery still needs hands-on release verification; iOS is outside this round. See [Workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for behavior and limits.
+The terminal candidate has passed focused checks and a compact Mac acceptance pass. Performance leadership is not established: Ghostty leads all seven measured consumer workloads and uses less memory for the retained-history workload. Real remote-host recovery, physical IME/display checks, and spoken VoiceOver quality still need hands-on verification. See the [execution ledger](docs/TERMINAL-EXCELLENCE-PLAN.md), [scorecard](docs/SCORECARD.md), and [workspace workflows](docs/WORKSPACE-WORKFLOWS.md) for evidence and remaining limits.
 
 ## [1.13.0] - 2026-10-08
 

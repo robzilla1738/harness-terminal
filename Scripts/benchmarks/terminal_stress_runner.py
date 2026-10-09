@@ -3,7 +3,8 @@
 
 Runs inside ANY terminal (Harness, Ghostty, Terminal.app, …): it writes first-party byte
 payloads to stdout (the PTY slave) and times how long each `write` loop takes to drain — i.e.
-how fast the host terminal consumes/draws the stream end to end. Higher MB/s = faster.
+how fast the PTY accepts bytes. This does not wait for parsing or GPU presentation.
+Higher MB/s = faster admission, not necessarily a faster visible terminal.
 
 This script is deliberately self-contained and never imported, linked, or shelled-out from
 Harness product code — it is a measurement tool only. Run the same payloads in each terminal,

@@ -1,0 +1,401 @@
+{
+  "date": "2026-10-08",
+  "environment": {
+    "machine": "Apple M5, 32 GiB",
+    "os": "macOS 27.2",
+    "swift": "6.4, Xcode beta",
+    "architecture": "arm64",
+    "configuration": "release",
+    "ghostty": "1.3.1 ReleaseFast, Metal/CoreText",
+    "grid": "150x45 for GUI probes",
+    "font": "Menlo 14",
+    "opacity": 1,
+    "blur": 0,
+    "padding": 0,
+    "cursor_blink": false
+  },
+  "sources": {
+    "baseline": "56edc52 (app launcher isolation-only patches for GUI checks)",
+    "candidate": "7dbebe7",
+    "paired_engine": "Candidate parser/frame sources unchanged since b81554c; paired samples collected before final search-only optimization",
+    "candidate_search": "7dbebe7",
+    "candidate_memory": "a082510 (7dbebe7 only changes search and test fixture)"
+  },
+  "notes": [
+    "One warm-up plus three measured samples; each memory state is one observation.",
+    "Cross-terminal consumption is fenced with CSI 6n, not GPU presentation or physical input-to-photon. Python payload generation and query reply are included.",
+    "Startup is parent launch through correct 150x45 grid and acknowledgement of a READY marker. Includes Python startup and IPC; warm filesystem and cold per-launch daemon.",
+    "Memory is ps RSS, not physical footprint; app+daemon sum may double-count shared pages. Sampled CPU over ~8 seconds is not power.",
+    "History workload is 100000 rows / ~4.7 MB. Baseline daemon retained only ~1 MiB due to fixed budget bug; candidate retained all raw output.",
+    "Paired attributes and gradient have high baseline variance; do not claim a speedup. Unicode showed ~4-12% CPU cost increase across available baselines.",
+    "Search gains versus initial candidate do not erase regression against original baseline; old search had incorrect Unicode/wrap mappings."
+  ],
+  "startup_ack": {
+    "baseline": {
+      "samples_ms": [
+        420.493125,
+        428.884584,
+        457.573334
+      ],
+      "median_ms": 428.884584
+    },
+    "candidate": {
+      "samples_ms": [
+        434.126834,
+        439.537458,
+        441.708625
+      ],
+      "median_ms": 439.537458
+    },
+    "ghostty": {
+      "samples_ms": [
+        311.09175,
+        303.731917,
+        303.3055
+      ],
+      "median_ms": 303.731917
+    }
+  },
+  "consumer_ack": {
+    "harness": {
+      "plain_ascii": {
+        "samples_ms": [
+          122.667,
+          120.652792,
+          100.553291
+        ],
+        "median_ms": 120.652792
+      },
+      "ansi_sgr": {
+        "samples_ms": [
+          92.491208,
+          82.765167,
+          81.406125
+        ],
+        "median_ms": 82.765167
+      },
+      "unicode_mixed": {
+        "samples_ms": [
+          72.087417,
+          63.916875,
+          73.523208
+        ],
+        "median_ms": 72.087417
+      },
+      "attributes": {
+        "samples_ms": [
+          104.385084,
+          79.030541,
+          78.837417
+        ],
+        "median_ms": 79.030541
+      },
+      "truecolor_gradient": {
+        "samples_ms": [
+          25.122791,
+          36.250875,
+          31.117042
+        ],
+        "median_ms": 31.117042
+      },
+      "redraw": {
+        "samples_ms": [
+          29.153709,
+          22.4525,
+          22.612125
+        ],
+        "median_ms": 22.612125
+      },
+      "scrollback": {
+        "samples_ms": [
+          127.849041,
+          126.953917,
+          128.070209
+        ],
+        "median_ms": 127.849041
+      }
+    },
+    "ghostty": {
+      "plain_ascii": {
+        "samples_ms": [
+          43.012125,
+          43.669625,
+          43.658209
+        ],
+        "median_ms": 43.658209
+      },
+      "ansi_sgr": {
+        "samples_ms": [
+          32.994417,
+          33.080625,
+          33.206833
+        ],
+        "median_ms": 33.080625
+      },
+      "unicode_mixed": {
+        "samples_ms": [
+          19.324375,
+          19.014625,
+          19.244917
+        ],
+        "median_ms": 19.244917
+      },
+      "attributes": {
+        "samples_ms": [
+          35.752917,
+          35.957292,
+          36.005333
+        ],
+        "median_ms": 35.957292
+      },
+      "truecolor_gradient": {
+        "samples_ms": [
+          19.169291,
+          19.170875,
+          19.5575
+        ],
+        "median_ms": 19.170875
+      },
+      "redraw": {
+        "samples_ms": [
+          7.422542,
+          7.436083,
+          7.846584
+        ],
+        "median_ms": 7.436083
+      },
+      "scrollback": {
+        "samples_ms": [
+          50.655791,
+          50.701083,
+          52.658208
+        ],
+        "median_ms": 50.701083
+      }
+    }
+  },
+  "parser_frame_cpu": {
+    "baseline": {
+      "consumer_plain_ascii": {
+        "median_ms": 99.163042,
+        "min_ms": 99.034875,
+        "max_ms": 100.291667,
+        "n": 3
+      },
+      "consumer_ansi_sgr": {
+        "median_ms": 71.305166,
+        "min_ms": 71.283625,
+        "max_ms": 77.248375,
+        "n": 3
+      },
+      "consumer_unicode_mixed": {
+        "median_ms": 49.191083,
+        "min_ms": 45.406375,
+        "max_ms": 51.294416,
+        "n": 3
+      },
+      "consumer_attributes": {
+        "median_ms": 105.475459,
+        "min_ms": 74.712792,
+        "max_ms": 108.921042,
+        "n": 3
+      },
+      "consumer_truecolor_gradient": {
+        "median_ms": 10.589375,
+        "min_ms": 10.092583,
+        "max_ms": 22.686375,
+        "n": 3
+      },
+      "consumer_redraw": {
+        "median_ms": 11.747917,
+        "min_ms": 11.330042,
+        "max_ms": 27.00675,
+        "n": 3
+      },
+      "consumer_scrollback": {
+        "median_ms": 104.393042,
+        "min_ms": 102.876542,
+        "max_ms": 108.643166,
+        "n": 3
+      },
+      "scrollback_steady_state_at_cap": {
+        "median_ms": 7.284916,
+        "min_ms": 7.20925,
+        "max_ms": 7.43425,
+        "n": 3
+      },
+      "width_reflow_10k_prose": {
+        "median_ms": 6.206395,
+        "min_ms": 5.997166,
+        "max_ms": 6.422737,
+        "n": 3
+      }
+    },
+    "final": {
+      "consumer_plain_ascii": {
+        "median_ms": 100.702334,
+        "min_ms": 100.387083,
+        "max_ms": 102.036208,
+        "n": 3
+      },
+      "consumer_ansi_sgr": {
+        "median_ms": 71.732125,
+        "min_ms": 71.133,
+        "max_ms": 74.757917,
+        "n": 3
+      },
+      "consumer_unicode_mixed": {
+        "median_ms": 51.154292,
+        "min_ms": 50.216292,
+        "max_ms": 51.6625,
+        "n": 3
+      },
+      "consumer_attributes": {
+        "median_ms": 75.792625,
+        "min_ms": 75.508875,
+        "max_ms": 79.074083,
+        "n": 3
+      },
+      "consumer_truecolor_gradient": {
+        "median_ms": 10.139667,
+        "min_ms": 9.738666,
+        "max_ms": 10.262375,
+        "n": 3
+      },
+      "consumer_redraw": {
+        "median_ms": 11.774042,
+        "min_ms": 11.475916,
+        "max_ms": 11.955625,
+        "n": 3
+      },
+      "consumer_scrollback": {
+        "median_ms": 104.715041,
+        "min_ms": 102.734041,
+        "max_ms": 106.997708,
+        "n": 3
+      },
+      "scrollback_steady_state_at_cap": {
+        "median_ms": 7.526625,
+        "min_ms": 7.205542,
+        "max_ms": 8.079292,
+        "n": 3
+      },
+      "width_reflow_10k_prose": {
+        "median_ms": 6.069412,
+        "min_ms": 5.917208,
+        "max_ms": 6.388937,
+        "n": 3
+      }
+    }
+  },
+  "search_cpu": {
+    "baseline": {
+      "buffer_search_keystroke_substring": {
+        "samples_ms": [
+          14.543416,
+          14.306791,
+          13.665292
+        ],
+        "median_ms": 14.306791
+      },
+      "buffer_search_keystroke_regex": {
+        "samples_ms": [
+          48.617791,
+          49.738708,
+          49.600583
+        ],
+        "median_ms": 49.600583
+      }
+    },
+    "candidate": {
+      "buffer_search_keystroke_substring": {
+        "samples_ms": [
+          23.405458,
+          24.027958,
+          23.53025
+        ],
+        "median_ms": 23.53025
+      },
+      "buffer_search_keystroke_regex": {
+        "samples_ms": [
+          69.532459,
+          73.827125,
+          70.082875
+        ],
+        "median_ms": 70.082875
+      }
+    }
+  },
+  "memory_and_idle": {
+    "baseline": {
+      "idle": {
+        "app": {
+          "rss_mib": 108.796875,
+          "cpu_seconds": 0.29
+        },
+        "daemon": {
+          "rss_mib": 17.65625,
+          "cpu_seconds": 0.05
+        },
+        "seconds": 8.018917208999483,
+        "app_cpu_percent": 0.3741153477221529,
+        "daemon_cpu_percent": 0.24941023181476887
+      },
+      "history": {
+        "app": {
+          "rss_mib": 718.609375,
+          "cpu_seconds": 0.89
+        },
+        "daemon": {
+          "rss_mib": 23.9375,
+          "cpu_seconds": 0.23
+        },
+        "grid": "45 150",
+        "output_done": true,
+        "raw_bytes": 1047745
+      }
+    },
+    "candidate": {
+      "idle": {
+        "app": {
+          "rss_mib": 108.828125,
+          "cpu_seconds": 0.29
+        },
+        "daemon": {
+          "rss_mib": 17.703125,
+          "cpu_seconds": 0.04
+        },
+        "seconds": 8.03412579200085,
+        "app_cpu_percent": 0.37340714816625564,
+        "daemon_cpu_percent": 0.24893809877750397
+      },
+      "history": {
+        "app": {
+          "rss_mib": 642.265625,
+          "cpu_seconds": 0.88
+        },
+        "daemon": {
+          "rss_mib": 23.6875,
+          "cpu_seconds": 0.22
+        },
+        "grid": "45 150",
+        "output_done": true,
+        "raw_bytes": 4703514
+      }
+    },
+    "ghostty": {
+      "idle": {
+        "rss_mib": 119.703125,
+        "cpu_seconds": 0.32
+      },
+      "idle_seconds": 8.01732387499942,
+      "idle_cpu_percent": 1.1225690941668054,
+      "history": {
+        "rss_mib": 249.828125,
+        "cpu_seconds": 0.45
+      },
+      "grid": "45 150",
+      "history_complete": true
+    }
+  }
+}

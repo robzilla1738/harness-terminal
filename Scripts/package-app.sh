@@ -40,9 +40,8 @@ if [[ "$NOTES_VERSION" != "$PLIST_SHORT" ]]; then
   exit 1
 fi
 
-# SwiftPM resource bundles (for example HarnessTheme's bundled themes.json) are
-# emitted next to the built products. The app is assembled by this script rather
-# than by Xcode, so copy those bundles into Contents/Resources explicitly.
+# Copy any SwiftPM resource bundles next to the built products into the assembled app.
+# The theme catalog itself is compiled into BundledThemesData.swift; it needs no bundle.
 for bundle in "$BUILD_DIR"/*.bundle; do
   [[ -d "$bundle" ]] || continue
   ditto "$bundle" "$APP/Contents/Resources/$(basename "$bundle")"

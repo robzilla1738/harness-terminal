@@ -30,15 +30,15 @@ because asynchronous operations must preserve host and session identity.
 
 | Node | Coverage / acceptance | State |
 |---|---|---|
-| B | Source inventory, old roadmaps, issues, PRs 180/184; release baseline tied to source | Implemented; measurement coverage below |
-| R | GUI/IPC/CLI input admission, deadlines, cancellation, ordering, stale results | Implemented; integrated acceptance pending |
-| T | Engine, Unicode, reflow, history allocation, renderer, graphics, keyboard/mouse protocols | Implemented; integrated acceptance pending |
-| S | Literal/regex/wrapped search, global pagination, accessibility text/cursor/selection | Implemented; integrated acceptance pending |
-| M | Native scrollbar, settings, keyboard/IME, window management, themes, onboarding, menus | Implemented; integrated acceptance pending |
-| W | Persistence, multi-window/host ownership, setups, activity, agents, shell integration, CLI/Lua/API | Implemented; integrated acceptance pending |
-| H | Config recovery, storage failures, hostile output, files/clipboard/socket/SSH boundaries, Linux | Implemented; integrated acceptance pending |
-| P | Profiling, release packaging/resources/dependencies, docs and reproducible measurements | Implemented; integrated acceptance pending |
-| F | Focused checks, one full macOS/live-daemon run, compact UI pass, final performance comparison | Implemented; integrated acceptance pending |
+| B | Source inventory, old roadmaps, issues, PRs 180/184; release baseline tied to source | Audited; scoped measurements recorded; physical latency/power gaps open |
+| R | GUI/IPC/CLI input admission, deadlines, cancellation, ordering, stale results | Integrated, built, targeted/live CI passed; paused-daemon GUI check passed |
+| T | Engine, Unicode, reflow, history allocation, renderer, graphics, keyboard/mouse protocols | Integrated and verified by named suites; color emoji and newer width data remain open |
+| S | Literal/regex/wrapped search, global pagination, accessibility text/cursor/selection | Integrated; targeted/CI and Find UI checks passed; spoken VoiceOver unverified |
+| M | Native scrollbar, settings, keyboard/IME, window management, themes, onboarding, menus | Integrated; compact Mac pass complete; physical IME/displays/Spaces unverified |
+| W | Persistence, multi-window/host ownership, setups, activity, agents, shell integration, CLI/Lua/API | Audited and CI passed; raw-replay fidelity and real remote recovery remain open |
+| H | Config recovery, storage failures, hostile output, files/clipboard/socket/SSH boundaries, Linux | Integrated; recovery/deadline tests and Linux live suite passed; Linux job mandatory |
+| P | Profiling, release packaging/resources/dependencies, docs and reproducible measurements | Packaged and measured; throughput, search CPU, memory and startup targets missed |
+| F | Focused checks, one full macOS/live-daemon run, compact UI pass, final performance comparison | Reviewable local candidate delivered; open acceptance limits explicitly retained |
 
 ## Findings
 
@@ -55,14 +55,14 @@ completion markers and tests on a different commit do not verify the final candi
 | S1 | High | Find synchronously scans all history; spacer tails prevent adjacent CJK matches | S / implemented; mapping, cancellation, pagination checks pass |
 | S2 | Medium | Global search captures and splits whole histories again for each page | S / implemented; mapping, cancellation, pagination checks pass |
 | S3 | Medium | Each accessibility getter rebuilds all history; visible range reports entire history | S / implemented; mapping, cancellation, pagination checks pass |
-| M1 | Medium | Scrollbar is click-through and ignores always-visible system preference (#181) | M / implemented; appearance/repaint checks pass; hands-on pending |
-| M2 | Medium | Experience summary contradicts explicit keep-sessions override | M / implemented; appearance/repaint checks pass; hands-on pending |
-| M3 | Medium | Idle display invalidation can leave a pane blank; existing PR #180 | M / implemented; appearance/repaint checks pass; hands-on pending |
-| M4 | Medium | Quick Terminal blur/settings refresh differs from main window; existing PR #184 | M / implemented; appearance/repaint checks pass; hands-on pending |
-| H1 | High | Invalid live config replaces working settings with defaults | H / implemented; recovery/persistence checks pass; Linux CI pending |
-| H2 | Medium | Debounced session-save failures are swallowed | H / implemented; recovery/persistence checks pass; Linux CI pending |
-| H3 | Medium | Linux parked-snapshot test assumes ciphertext despite documented plaintext fallback | H / implemented; recovery/persistence checks pass; Linux CI pending |
-| B1 | Medium | Existing scorecard lacks matched current release throughput/memory/power/latency evidence | B/P / open |
+| M1 | Medium | Scrollbar is click-through and ignores always-visible system preference (#181) | M / integrated; appearance/repaint checks pass; hands-on evidence below |
+| M2 | Medium | Experience summary contradicts explicit keep-sessions override | M / integrated; appearance/repaint checks pass; hands-on evidence below |
+| M3 | Medium | Idle display invalidation can leave a pane blank; existing PR #180 | M / integrated; appearance/repaint checks pass; hands-on evidence below |
+| M4 | Medium | Quick Terminal blur/settings refresh differs from main window; existing PR #184 | M / integrated; appearance/repaint checks pass; hands-on evidence below |
+| H1 | High | Invalid live config replaces working settings with defaults | H / integrated; recovery/persistence and Linux live CI pass |
+| H2 | Medium | Debounced session-save failures are swallowed | H / integrated; recovery/persistence and Linux live CI pass |
+| H3 | Medium | Linux parked-snapshot test assumes ciphertext despite documented plaintext fallback | H / integrated; recovery/persistence and Linux live CI pass |
+| B1 | Medium | Existing scorecard conflates PTY drain with rendering speed and internal timing with photons | B/P / claims corrected; matched consumer/startup/memory results committed; physical latency/power open |
 
 ## Verification policy
 
@@ -77,7 +77,7 @@ different measurements. Sum app and daemon resource usage for cross-terminal com
 ## Evidence and environment
 
 - Starting tree has no tracked edits; `.supergoal/` is unrelated untracked material.
-- Latest inspected CI is for preceding commit `0385658`: macOS and Xcode build passed;
+- Initial inspected CI was for preceding commit `0385658`: macOS and Xcode build passed;
   Linux failed `SnapshotTests.testParkDropsTheGridKeepsTheChildAndANewClientSeesTheScreen`.
 - Running preview predates this candidate and is not acceptance evidence.
 - Local Swift: 6.4, arm64 macOS; active developer directory is CommandLineTools. Full Xcode
@@ -95,21 +95,21 @@ compiled on this toolchain; “verified” is reserved for a named check or obse
 
 | Subsystem | Inspected boundaries and disposition | Evidence / remaining acceptance |
 |---|---|---|
-| Engine / parser / VT / terminfo | VTParser bounds and abort handling; TerminalScreen, width lookup, alternate screens, 2026 timeout, replies and TerminalIdentity. Added compact exceptional grapheme IDs, immutable snapshot ownership, decoded-history accounting. ASCII cells remain POD. | GraphemeHistoryTests, ThaiCombiningMarkTests, HistoryRestoreTests pass. Existing conformance/reflow/damage/width suites included in final pass. |
-| Renderer / fonts / images | Frame construction, row hashes, glyph lookup, ligature runs, Metal uploads, image cache and bounded atlas. Frame and compositor carry cluster dictionaries. Existing image-cache eviction and capture-grid idle release retained. | FrameBuilder/Occlusion/WindowAppearance checks pass; offscreen renderer and font fallback in final pass. External-display sharpness remains physical acceptance. |
-| Terminal view / input | SurfaceIO admission before enqueue; generation-bound reconnect work; native scroller; keyboard, Option/Meta, IME, drop/paste and responder paths. Removed synchronous initial attach. | Writer admission, old writer, replay/ownership and async Find checks pass; compact GUI pass pending. |
+| Engine / parser / VT / terminfo | VTParser bounds and abort handling; TerminalScreen, width lookup, alternate screens, 2026 timeout, replies and TerminalIdentity. Added compact exceptional grapheme IDs, immutable snapshot ownership, decoded-history accounting. ASCII cells remain POD. | GraphemeHistoryTests, ThaiCombiningMarkTests, HistoryRestoreTests pass. Existing conformance/reflow/damage/width suites passed in final CI. |
+| Renderer / fonts / images | Frame construction, row hashes, glyph lookup, ligature runs, Metal uploads, image cache and bounded atlas. Frame and compositor carry cluster dictionaries. Existing image-cache eviction and capture-grid idle release retained. | FrameBuilder/Occlusion/WindowAppearance checks pass; offscreen renderer and font fallback suites passed in final CI. Color glyph support remains open. External-display sharpness remains physical acceptance. |
+| Terminal view / input | SurfaceIO admission before enqueue; generation-bound reconnect work; native scroller; keyboard, Option/Meta, IME, drop/paste and responder paths. Removed synchronous initial attach. | Writer admission, old writer, replay/ownership and async Find checks pass; compact GUI pass completed below. |
 | Find / accessibility | COW text snapshots, shared UTF-16/cell spans (wide tails excluded), soft wraps, NFC, cancellable worker search, explicit invalid-regex status. AX text cached by content revision with real visible/selection ranges. | Search, Thai, accessibility text, restore, and newest-query tests pass. VoiceOver spoken-output quality not inferred from headless checks. |
-| Daemon / lifecycle | RealPty fd generation, queued writer, authoritative parser, idle parking, attach history gate, sequence ordering and resize ownership. Input rejection negotiated on attach; old daemons use JSON input. | 22 existing live daemon round-trip cases passed after nonblocking transport change; final lifecycle/contention/ownership suites pending. |
+| Daemon / lifecycle | RealPty fd generation, queued writer, authoritative parser, idle parking, attach history gate, sequence ordering and resize ownership. Input rejection negotiated on attach; old daemons use JSON input. | 22 existing live daemon round-trip cases passed after nonblocking transport change; final lifecycle/contention/ownership suites passed in CI. |
 | Storage / config | Separate non-mutating live reload; startup preserves unreadable originals; existing corrupt backups retained. Save debounces report failures, immediate flush cancels older saves. Runtime persistence health travels in additive snapshots. | Settings and SessionPersistence tests pass. Errors do not automatically replay mutations. |
-| IPC / CLI / JSON API | Frame caps before decode, peer UID and 0600 socket, bounded write backlog, whole connect/write/read deadline, nonblocking Unix descriptors, poll-based subscriptions/follow. GUI uses captured endpoint queues; CLI retains synchronous semantics. | BoundedIO, IPCCodec and live daemon tests pass; final CLI/API/target suites pending. |
-| Lua / hooks | Vendored Lua 5.1.5 remains confined to CLI; config permissions and local-script trust model retained. Shared command targeting and error codes retained. | ScriptEngine/command/format suites in final pass. User Lua is trusted executable code, not a sandbox. |
-| Shell integration | bash/zsh/fish startup injection, custom startup paths, disable switch, quoting and OSC 7/133 paths reviewed. Explicit `/bin/sh` used for portable pagination fixture rather than inheriting user shell customization. | Existing shell injection/profile tests in final pass; live shell/TUI pass pending. |
-| Settings / menus / palette | Effective quit-persistence text, async daemon-owned settings, save error feedback, captured targets and ordered command sequences. Appearance refresh shared with Quick Terminal. | Settings/layout/catalog checks in final pass. Existing explicit overrides retained. |
-| Onboarding / themes | Short first-run flow and optional installs retained. Theme import/settings merge boundaries, resource loading and fallback reviewed. | Existing onboarding/theme tests in final pass; first-run visual check pending. |
-| Windows / workspaces | Multi-window owner capture, async create/move completion, split focus/drag and restoration paths reviewed. PR #180 idle repaint and #184 shared transparency integrated before terminal-view changes. | Targeted appearance/repaint passed; window/split/Quick Terminal acceptance pending. |
-| Agents / Activity / setups | Existing per-pane activity identities, snooze/read timestamp semantics, setup open/new-copy separation, Recently Closed fresh-shell behavior retained. Metadata IPC moved off main. | Existing workspace/agent/setup suites in final pass. |
-| Remote | DaemonLink and active snapshot attachment connect off main, stale generations discarded. SSH trust/argument validation retained; discovery has cancellation, 12 s total deadline and 1 MiB output cap. | Endpoint/reconnect/SSH tests in final pass. Real network sleep/wake/tunnel recovery requires a reachable test host. |
-| Packaging / updates | SwiftPM and Xcode macOS 15 target, arm64 products, Sparkle 2.9.2 pin agreement, version 1.13.0/build 128 agreement, EdDSA appcast and release signing gates reviewed. | Local packaging/resource/signature validation pending; no public release or notarization requested. |
+| IPC / CLI / JSON API | Frame caps before decode, peer UID and 0600 socket, bounded write backlog, whole connect/write/read deadline, nonblocking Unix descriptors, poll-based subscriptions/follow. GUI uses captured endpoint queues; CLI retains synchronous semantics. | BoundedIO, IPCCodec and live daemon tests pass; final CLI/API/target suites passed in CI. |
+| Lua / hooks | Vendored Lua 5.1.5 remains confined to CLI; config permissions and local-script trust model retained. Shared command targeting and error codes retained. | ScriptEngine/command/format suites passed in final CI. User Lua is trusted executable code, not a sandbox. |
+| Shell integration | bash/zsh/fish startup injection, custom startup paths, disable switch, quoting and OSC 7/133 paths reviewed. Explicit `/bin/sh` used for portable pagination fixture rather than inheriting user shell customization. | Existing shell injection/profile tests passed in final CI; bash/zsh/fish and less checked live. |
+| Settings / menus / palette | Effective quit-persistence text, async daemon-owned settings, save error feedback, captured targets and ordered command sequences. Appearance refresh shared with Quick Terminal. | Settings/layout/catalog checks passed in final CI. Existing explicit overrides retained. |
+| Onboarding / themes | Short first-run flow and optional installs retained. Theme import/settings merge boundaries, resource loading and fallback reviewed. | Existing onboarding/theme tests passed in final CI; first-run flow inspected live. |
+| Windows / workspaces | Multi-window owner capture, async create/move completion, split focus/drag and restoration paths reviewed. PR #180 idle repaint and #184 shared transparency integrated before terminal-view changes. | Targeted appearance/repaint passed; split focus and utility-window closure checked live. Quick Terminal appearance has targeted checks; Spaces/display transitions remain unverified. |
+| Agents / Activity / setups | Existing per-pane activity identities, snooze/read timestamp semantics, setup open/new-copy separation, Recently Closed fresh-shell behavior retained. Metadata IPC moved off main. | Existing workspace/agent/setup suites passed in final CI. |
+| Remote | DaemonLink and active snapshot attachment connect off main, stale generations discarded. SSH trust/argument validation retained; discovery has cancellation, 12 s total deadline and 1 MiB output cap. | Endpoint/reconnect/SSH tests passed in final CI. Real network sleep/wake/tunnel recovery requires a reachable test host. |
+| Packaging / updates | SwiftPM and Xcode macOS 15 target, arm64 products, Sparkle 2.9.2 pin agreement, version 1.13.0/build 128 agreement, EdDSA appcast and release signing gates reviewed. | Local resource/version/arm64/macOS-15/ad-hoc signature validation passed; no public release or notarization performed. |
 | Generated / vendored resources | Width table and generator use UCD 15.1; existing all-scalar equivalence suite checks them. Release notes generator/version guard, themes bundles, Nerd Font license, C base64 and CLua boundaries reviewed. | Generated resources unchanged unless noted; no blind dependency upgrades. Newer Unicode width-table coverage remains a separate compatibility limit. |
 
 Additional findings resolved during implementation:
@@ -137,7 +137,7 @@ Additional findings resolved during implementation:
   source and existing suites. Do not recreate their obsolete replacements.
 - PR #180 (`5ae404e`) and PR #184 (`92d1c839`) are integrated here; overlapping files were
   reconciled before this work. Neither PR is treated as independently verifying this candidate.
-- #181: native interactive scrollbar implemented here; hands-on check pending.
+- #181: native interactive scrollbar implemented; track click and thumb drag moved history without selecting terminal text.
 - #182: Dynamic Island was removed in v1.13; it is absent from current chrome.
 - #99: source-aware remote rail exists; this pass hardens its async subscriptions.
 - #12: engine, renderer, kit and core already export Swift package products.
@@ -147,7 +147,7 @@ Additional findings resolved during implementation:
 
 ## Retention and trust contracts
 
-- Raw PTY retention and decoded history are separate: raw output is bounded at 512 MiB;
+- Raw PTY retention and decoded history are separate: raw output is bounded at 512 MiB; the scrollback setting now reaches new/restored/live daemon surfaces rather than a fixed 1 MiB replay buffer. Disk-backed raw history has a 64 KiB minimum cap;
   decoded history is independently bounded at 512 MiB including stored row capacities,
   ring metadata and a conservative exceptional-cluster allowance. Configured line caps
   still apply first. Active screen, transient COW snapshots, rendering caches and raw bytes
@@ -169,27 +169,63 @@ Additional allocation/host findings: geometry is capped before multiplication (4
 axis and 1,048,576 cells); unsupported daemon resize requests fail explicitly. Local Git HEAD
 watchers now run only for local tabs, so a remote cwd cannot be mistaken for this Mac's path.
 
-## Evidence collected so far
+## Verification and local delivery
 
-- Reliability checks: 81 passed (settings, persistence, snapshots, new and existing PTY writer).
-- Text/history/IPC correction pass: 30 passed. Broader mapping/recovery/trigger pass: 55 passed.
-- Bounded I/O, queue barriers and grapheme regression pass: 10 passed.
-- Async Find plus live transport pass: existing transport/Find checks passed; new pagination
-  fixture initially inherited an incompatible shell. An explicit `/bin/sh` fixture passes,
-  including disjoint pages and expiration after output changes.
-- One full local macOS pass exercised 2,255 tests with live daemon coverage (58 opt-in
-  performance/platform cases skipped). Only two obsolete source-string assertions failed:
-  they described the pre-existing importer before `56edc52`. Replaced by a behavioral
-  split-theme import check; focused importer/Git-monitor correction pass follows.
-- Initial release consumer baseline includes the already-integrated repaint/appearance patches;
-  engine/search changes were absent. ASCII consumer throughput was 10.454 MB/s, Unicode
-  22.862 MB/s, substring search 14.84 ms and regex search 48.62 ms over 20,001 rows.
-- First candidate: ASCII 10.451 MB/s; Unicode 18.138 MB/s; substring 79.16 ms; regex 110.68 ms.
-  These regressions prompted the mapping/grapheme optimization; they are not a passing
-  performance claim. Matched final results are still pending.
+- Focused checks covered input admission/overflow/order, socket deadlines, subprocess
+  cancellation, Unicode/cell mapping, history eviction, invalid configuration reload,
+  persistence failures, stale Find/global pages, attachment/reconnect ordering, and appearance.
+  Suites were selected for changed contracts, without a coverage quota or repeated full runs.
+- One local full macOS/live-daemon pass exercised 2,255 tests, with 58 intentional skips.
+  Two obsolete importer source-string assertions failed; a behavioral split-theme import
+  check replaced them, and the focused 16-test correction pass passed.
+- Final production source `7dbebe7` passed [CI run 37865660157](https://github.com/robzilla1738/harness-terminal/actions/runs/37865660157):
+  macOS **2,259 tests, 58 skipped, zero failures**; Linux **1,720 tests, two skipped,
+  zero failures**; debug/release builds, Xcode build, manifest agreement and benchmark job
+  passed. Reused this evidence for identical production code instead of another local full run.
+- Linux CI exposed a descendant-pipe cancellation wait and a cold fixture timeout. The
+  cancellation path no longer waits on inherited pipes after termination. The pagination
+  fixture gives setup RPCs a bounded ten-second deadline with request-specific diagnostics;
+  production timeouts remain unchanged. Linux is no longer an advisory job.
+- Compact GUI acceptance: first-run flow and optional-install choices; bash/zsh/fish;
+  Unicode output and copy/paste; emoji Find with accurate matches; malformed regex feedback;
+  native scroller track click and thumb drag; split creation/focus; less alternate-screen
+  restoration; effective persistence text under explicit overrides; Settings ⌘W behavior.
+- Paused only the isolated daemon for twenty seconds: tab creation did not stop Settings
+  from opening/closing. After resume exactly one tab appeared, with no mutation retry.
+- Measurements use release builds, one warm-up and three samples, one exclusive local Mac
+  slot, and an isolated application home. One ambiguous parser run and one initially invalid
+  grid probe were repeated; the accepted results are in the [scorecard](SCORECARD.md) and
+  [machine-readable receipt](benchmarks/terminal-excellence-2026-10-08.json).
+- Packaged local app: `dist/terminal-excellence/HarnessExcellence.app`, bundle
+  `com.robert.harness.excellence`, separate `dist/terminal-excellence/home`, automatic updates
+  disabled. App, daemon and CLI are arm64 with macOS 15 minimum; version 1.13.0/build 128
+  agrees. All 485 embedded community themes match their generator input; the Nerd Font,
+  font license, icon, logo and Sparkle framework are present. Deep strict ad-hoc code-signature
+  verification passed. This is a local candidate, not a signed/notarized public release.
+- Existing `.supergoal/`, normal installation, normal launchd service, and user data were
+  preserved. The previous running preview was not used as candidate verification.
 
-## Completion
+## Additional findings from integration and measurement
 
-Every finding must have a fix and scoped evidence or an explicitly open limitation. Every
-subsystem must have an audit disposition. Deliver a packaged local candidate, updated docs,
-and measured results without claiming global performance leadership from incomplete data.
+| ID | Severity | Affected behavior | Fix / evidence |
+|---|---|---|---|
+| R6 | High | Linux subprocess timeout waits for descendants that inherited output pipes | Terminate owned process group where possible, close capture handles, stop awaiting Foundation pipe completion; cancellation regression and Linux CI pass |
+| T3 | High | GUI history preference never reaches daemon raw replay; defaults silently retain only 1 MiB | Share budget calculation, update new/restored/live surfaces and disk compaction; retention regressions and 4.70 MB live replay observation pass |
+| M6 | Medium | Finder-launched shells without locale render UTF-8 as escaped bytes in less | Add LC_CTYPE=UTF-8 only when no locale is supplied; explicit environment wins; environment test and live less check pass |
+| M7 | High | ⌘W in Settings closes the terminal pane behind it | Route utility-window closure to the key window; disable pane mutation menu entries there; live Settings close preserves original pane |
+| P1 | High target gap | Consumer throughput trails Ghostty on all seven shared workloads | Open: 1.6–3.7× slower with a parser acknowledgement fence; profile daemon/GUI pipeline next |
+| P2 | Medium target gap | Correct Find uses more CPU than old search | Improved first candidate 79/111 ms to 24/70 ms, but old literal/regex baseline was 14/50 ms; open parity target |
+| P3 | High target gap | Retained short rows use substantially more memory than Ghostty | Open: candidate 666 MiB app+daemon versus Ghostty 250 MiB for 100k rows; decoded ceiling is enforced but row storage remains expensive |
+| P4 | Medium target gap | Startup and Unicode CPU cost do not establish parity | Readiness 440 ms versus Ghostty 304 ms (baseline Harness 429 ms); Unicode CPU +4–12% across available baselines; open |
+| T4 | Medium compatibility gap | Compound emoji retain text but use monochrome/tinted coverage | Open: existing R8 glyph atlas does not carry color emoji; text correctness is not color-rendering parity |
+| W1 | Medium fidelity gap | Raw history replay after daemon restart at a different width can show old shell redraw/prompt artifacts | Open: persisted raw output is not an exact saved grid. Live sequence/ownership checks pass, but do not prove restart fidelity |
+| F1 | Unverified | Real IME/non-US keyboard, VoiceOver spoken output, external displays/Spaces, real remote sleep/wake/tunnel loss | Requires the corresponding hardware/interaction or reachable test host; not inferred from unit tests |
+| F2 | Unmeasured | Physical input-to-photon, scrolling frame pacing, privileged power/wakeups | Internal presentation marks, parser acknowledgements, reflow CPU and short idle CPU samples are different metrics |
+
+## Completion disposition
+
+The candidate is reviewable, packaged, audited by subsystem, and supported by named
+verification and honest release measurements. Performance leadership and the open
+compatibility/physical acceptance targets above are **not complete**. No fastest-terminal
+claim, public release, signing identity change, or replacement of the user's installation
+is part of this delivery.
