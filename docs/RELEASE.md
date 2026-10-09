@@ -10,19 +10,20 @@ It runs on the `macos-26` runner with Xcode 26.6, the same runner and pinned
 `XCODE_VERSION` as CI, so a release is built by the toolchain CI tested. Bump
 `XCODE_VERSION` in `release.yml` and `ci.yml` together.
 
-## Current development status
+## Harness 2.0 release preparation
 
-The terminal-excellence work in [#185](https://github.com/robzilla1738/harness-terminal/pull/185)
-is unreleased. Integrating it into `main` does not authorize publication. The latest
-published release remains v1.13.0; no version bump, tag, DMG, appcast, or release workflow
-is part of this integration. Keep changes under **Unreleased** in the changelog.
+The user authorized the 2.0.0 release on October 9, 2026. Build 129 includes the terminal,
+workspace, and Mac usability changes from #185 and the reliability, Unicode, and color-glyph
+follow-up in #188. Version declarations and generated update notes are updated together.
 
-The [October 9 release-readiness review](RELEASE-READINESS-2026-10-09.md) documents
-the candidate fix and regression evidence for [screen restoration (#186)](https://github.com/robzilla1738/harness-terminal/issues/186),
-including older-log compatibility limits. Before publishing, run CI on the shipping commit
-and review the [remaining acceptance checklist (#187)](https://github.com/robzilla1738/harness-terminal/issues/187).
-Performance gaps remain tracked in [#27](https://github.com/robzilla1738/harness-terminal/issues/27)
-and the [scorecard](SCORECARD.md). Passing CI does not close those observed or unverified gaps.
+The [release-readiness review](RELEASE-READINESS-2026-10-09.md) records validation and
+older-log replay limits. Hardware acceptance remains tracked in
+[#187](https://github.com/robzilla1738/harness-terminal/issues/187); measured performance gaps
+remain in [#27](https://github.com/robzilla1738/harness-terminal/issues/27) and the
+[scorecard](SCORECARD.md). These remain scoped limitations of the release, rather than claims
+of universal compatibility or performance leadership. CI must pass on the shipping commit,
+and signing, notarization, DMG smoke testing, and live appcast verification must complete
+before publication. The GitHub release and workflow run record the publication outcome.
 
 ## One-time GitHub setup
 
@@ -126,7 +127,7 @@ the release.
 | Job | Runner | What it checks |
 | --- | --- | --- |
 | Build & test (macOS) | `macos-26`, Xcode 26.6 | `swift build`, `swift build -c release`, and `swift test --enable-code-coverage` with `HARNESS_LIVE_DAEMON_TESTS=1`; uploads the coverage data. |
-| Build & test (Linux, headless daemon) | `ubuntu-24.04`, `swift:6.0` container | Debug and release builds of the daemon, CLI, and pure libraries, then `swift test` with the live daemon tests. **Advisory for now** (`continue-on-error`) while the Linux suite is brought back to green. |
+| Build & test (Linux, headless daemon) | `ubuntu-24.04`, `swift:6.0` container | Debug and release builds of the daemon, CLI, and pure libraries, then `swift test` with the live daemon tests. |
 | Xcode project builds | `macos-26`, Xcode 26.6 | `xcodebuild` Debug build of the committed `Harness.xcodeproj`, so drift between `project.yml` and the targets is caught. |
 | Manifest version agreement | `ubuntu-24.04` | The Sparkle version agrees across `Package.swift`, `project.yml`, and `project.pbxproj`. |
 | Format lint (advisory) | `macos-26` | `swift format lint`; never blocks. |

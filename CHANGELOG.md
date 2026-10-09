@@ -8,6 +8,13 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-09
+
+Harness 2.0 brings saved workspace layouts, activity across connected hosts, broader search,
+native color emoji, and a substantial terminal reliability and performance pass. The existing
+visual design is preserved. Settings and saved sessions remain compatible; older scrollback
+logs without recorded resize geometry retain legacy replay behavior.
+
 ### Added
 - Optional, off-by-default window-specific machine indicator and switching menu beside the tabs, with local/remote identity, SSH destination, connection status, and a compact sidebar control.
 - Cursor-anchored Insert Path popup (⌥⌘I), with themed file icons, fuzzy Folder/Project search, keyboard navigation, and focus restoration.

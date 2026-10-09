@@ -10,15 +10,10 @@ One self-contained app. The terminal engine, daemon, and CLI are first-party Swi
 
 ## Download
 
-**Development status:** `main` includes unreleased terminal, workspace, and Mac usability
-improvements from [#185](https://github.com/robzilla1738/harness-terminal/pull/185).
-The latest published release remains **v1.13.0**; the download below does not include these
-changes. The current candidate adds resize-aware replay for the fish prompt corruption
-tracked in [#186](https://github.com/robzilla1738/harness-terminal/issues/186); logs recorded
-before this change lack the geometry needed for the fix.
-See the [release-readiness review](docs/RELEASE-READINESS-2026-10-09.md),
-[audit](docs/TERMINAL-EXCELLENCE-PLAN.md), [performance results](docs/SCORECARD.md),
-and [remaining acceptance work](https://github.com/robzilla1738/harness-terminal/issues/187).
+**Harness 2.0** brings saved layouts, broader search, native color emoji, and the terminal
+reliability and performance improvements documented in the [changelog](CHANGELOG.md).
+See the [release-readiness review](docs/RELEASE-READINESS-2026-10-09.md) and
+[performance results](docs/SCORECARD.md) for measured results and remaining acceptance work.
 
 **[Download Harness for macOS →](https://github.com/robzilla1738/harness-terminal/releases/latest/download/Harness.dmg)**
 
