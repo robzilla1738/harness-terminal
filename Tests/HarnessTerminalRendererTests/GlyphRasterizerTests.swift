@@ -4,6 +4,43 @@ import XCTest
 @testable import HarnessTerminalRenderer
 
 final class GlyphRasterizerTests: XCTestCase {
+    func testColorEmojiRasterizeWithIntrinsicColorsIncludingCompoundClusters() throws {
+        let rasterizer = GlyphRasterizer(fontFamily: "Menlo", size: 16, scale: 2)
+        for text in ["😀", "👩🏽‍💻", "🇺🇸", "❤️"] {
+            let glyph = try XCTUnwrap(rasterizer.rasterize(cluster: text), text)
+            let pixels = try XCTUnwrap(glyph.rgba, text)
+            XCTAssertEqual(pixels.count, glyph.width * glyph.height * 4)
+            XCTAssertTrue(stride(from: 0, to: pixels.count, by: 4).contains { offset in
+                pixels[offset + 3] > 64 && abs(Int(pixels[offset]) - Int(pixels[offset + 2])) > 30
+            }, "\(text) must contain colored ink, not a foreground mask")
+        }
+        XCTAssertNil(rasterizer.rasterize(cluster: "A")?.rgba, "ordinary text retains grayscale storage")
+        XCTAssertNil(rasterizer.rasterize(cluster: "ที่")?.rgba)
+    }
+
+    func testColorEmojiConvertToTheTargetColorSpace() throws {
+        let sRGB = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let p3 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+        let standard = GlyphRasterizer(fontFamily: "Menlo", size: 16, colorSpace: sRGB)
+        let wide = GlyphRasterizer(fontFamily: "Menlo", size: 16, colorSpace: p3)
+        let source = try XCTUnwrap(standard.rasterize(cluster: "😀")?.rgba)
+        let converted = try XCTUnwrap(wide.rasterize(cluster: "😀")?.rgba)
+        XCTAssertEqual(source.count, converted.count)
+        XCTAssertNotEqual(source, converted, "P3 must convert colors rather than relabel sRGB bytes")
+        var checked = 0
+        for offset in stride(from: 0, to: source.count, by: 4)
+        where source[offset + 3] == 255 && converted[offset + 3] == 255 {
+            let components = (0..<3).map { CGFloat(source[offset + $0]) / 255 } + [1]
+            let color = try XCTUnwrap(CGColor(colorSpace: sRGB, components: components))
+            let expected = try XCTUnwrap(color.converted(to: p3, intent: .defaultIntent, options: nil)?.components)
+            for channel in 0..<3 {
+                XCTAssertEqual(Double(converted[offset + channel]), Double(expected[channel] * 255), accuracy: 3)
+            }
+            checked += 1
+        }
+        XCTAssertGreaterThan(checked, 100)
+    }
+
     private struct ShapedGlyphSignature: Equatable {
         var glyph: CGGlyph
         var utf16Index: Int

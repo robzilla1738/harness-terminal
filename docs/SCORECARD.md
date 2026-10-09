@@ -38,6 +38,29 @@ PREVIEW_SIGNPOSTS=1 make preview && Scripts/scorecard.sh input-latency
 Scripts/scorecard.sh report             # markdown to paste below
 ```
 
+## Release continuation — 2026-10-09, Unicode and color glyphs
+
+Native color glyphs retain a separate, lazy RGBA atlas; ordinary text stays in R8 storage.
+Page-format flags share the existing GPU page index. When only one page is populated, cache
+hits no longer update an unnecessary LRU clock. Five interleaved release samples after a
+warm-up per variant, on Apple M5 / macOS 27.2 / Swift 6.4, compare against `4e260a4`:
+
+| Existing workload | Before median | Candidate median |
+| --- | ---: | ---: |
+| 18,800 warm ASCII atlas lookups | 161.96 µs | 128.67 µs |
+| Full 160×48 frame CPU encode | 432.54 µs | 379.46 µs |
+
+The ASCII lookup workload uses **20.6% less time**. Full-encode samples are noisier (candidate
+352.58–465.46 µs versus baseline 393.04–451.63 µs); they show no median slowdown in this check,
+not a reliable end-to-end speedup. [Raw samples, source hashes, and the initial regression
+check](benchmarks/unicode-color-2026-10-09.json) retain the evidence before and after removing
+unnecessary atlas work. No builds or other tests ran concurrently with these samples.
+These numbers do not measure physical latency, GPU execution, power, or competitor throughput.
+
+Color emoji and the old width-data gap are addressed: width and Grapheme_Extend data now use
+checksum-pinned Unicode 18.0.0. Full grapheme segmentation and available glyphs still depend
+on platform services and fonts. The earlier cross-terminal leadership targets remain open.
+
 ## Release audit — 2026-10-09, width reflow
 
 On the same Apple M5, macOS 27.2, Swift 6.4 release configuration, compact hard-ended

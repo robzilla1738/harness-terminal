@@ -73,7 +73,10 @@ struct ShapedGlyphKey: Hashable {
 
 /// A packed glyph's location in the atlas (normalized UV) plus its pixel placement.
 struct AtlasEntry {
-    let pageIndex: Int
+    /// The high bit selects color storage, matching the GPU instance format.
+    let encodedPageIndex: UInt32
+    var pageIndex: Int { Int(encodedPageIndex & 0x7FFF_FFFF) }
+    var isColor: Bool { encodedPageIndex & 0x8000_0000 != 0 }
     let uvOrigin: SIMD2<Float>
     let uvSize: SIMD2<Float>
     let pixelWidth: Int
@@ -82,15 +85,17 @@ struct AtlasEntry {
     let bearingY: Int
 }
 
-/// A texture-array glyph atlas (R8Unorm coverage) with a simple shelf packer per page.
+/// R8 coverage pages plus lazily allocated RGBA color pages, each with bounded LRU storage.
 /// Glyphs are rasterized and uploaded on demand and cached by `GlyphKey`. A cached `nil`
 /// means the glyph has no ink (e.g. space) so the renderer skips it.
 final class GlyphAtlas {
     /// Grows (by re-creating and copying) as pages fill: a pane that only ever shows ASCII
     /// holds one 1 MiB page, not all of them.
-    private(set) var texture: MTLTexture
+    var texture: MTLTexture { coveragePages.texture }
+    var colorTexture: MTLTexture? { colorPages?.texture }
+    private let coveragePages: GlyphAtlasPages
+    private var colorPages: GlyphAtlasPages?
     private let device: MTLDevice
-    private var allocatedPages: Int
     let size: Int
     let maxPages: Int
 
@@ -114,15 +119,7 @@ final class GlyphAtlas {
     private var hits = 0
     private var misses = 0
     private var resets = 0
-    private var pagesUsed = 1
     private var pageEvictions = 0
-    /// Monotonic use clock for the page-LRU policy. Every cache hit and every fresh pack
-    /// touches its page; eviction picks the populated page with the smallest tick. A plain
-    /// counter (not wall time) — cheap, overflow-free in practice (UInt64 at one tick per
-    /// glyph access outlives the process by geological margins).
-    private var useTick: UInt64 = 0
-    private var pageLastUse: [UInt64]
-
     var stats: GlyphAtlasStats {
         let shapedRunStats = rasterizer.shapedRunStats
         return GlyphAtlasStats(
@@ -131,7 +128,7 @@ final class GlyphAtlas {
             hits: hits,
             misses: misses,
             resets: resets,
-            pages: pagesUsed,
+            pages: coveragePages.pagesUsed + (colorPages?.pagesUsed ?? 0),
             shapedRunEntries: shapedRunStats.entries,
             shapedRunCacheHits: shapedRunStats.hits,
             shapedRunCacheMisses: shapedRunStats.misses,
@@ -140,26 +137,18 @@ final class GlyphAtlas {
         )
     }
 
-    // Shelf packer cursor.
-    private var pageIndex = 0
-    private var penX = 0
-    private var penY = 0
-    private var shelfHeight = 0
-
     // Startup contract: the atlas is created EMPTY and glyphs are rasterized purely on
     // demand (`entry(for:)` → `rasterizer.rasterize` → `place`), so launch never pays to
     // pre-rasterize a glyph set. Only one 1024×1024 page is allocated up front; the first
     // visible characters rasterize as they're drawn. Do not add a startup prewarm/preload
     // here — eager rasterization is exactly the work we keep off the first-paint path.
     init?(device: MTLDevice, rasterizer: GlyphRasterizer, size: Int = 1024, maxPages: Int = 4) {
-        guard let texture = Self.makeTexture(device: device, size: size, pages: 1) else { return nil }
-        self.texture = texture
+        guard let pages = GlyphAtlasPages(device: device, size: size, maxPages: maxPages, isColor: false) else { return nil }
+        self.coveragePages = pages
         self.device = device
-        self.allocatedPages = 1
         self.size = size
         self.maxPages = max(1, maxPages)
         self.rasterizer = rasterizer
-        self.pageLastUse = Array(repeating: 0, count: self.maxPages)
     }
 
     /// Atlas entry for a glyph variant, rasterizing + packing on first use. Returns nil if
@@ -251,10 +240,11 @@ final class GlyphAtlas {
 
     /// Record a cache hit as a use of the entry's page for the LRU clock. Cached no-ink
     /// entries (nil) live on no page and never count as a use.
+    @inline(__always)
     private func touchPage(of entry: AtlasEntry?) {
-        guard let page = entry?.pageIndex else { return }
-        useTick &+= 1
-        pageLastUse[page] = useTick
+        guard let entry else { return }
+        if entry.isColor { colorPages?.touch(entry.pageIndex) }
+        else { coveragePages.touch(entry.pageIndex) }
     }
 
     /// Shape a run for ligatures (delegates to the rasterizer's CoreText shaper).
@@ -262,184 +252,38 @@ final class GlyphAtlas {
         rasterizer.shape(text, bold: bold, italic: italic)
     }
 
-    /// Pack a rasterized glyph into the shelf and upload it. Returns nil only when the glyph has
-    /// no ink, or (pathologically) is larger than one atlas page. Normal growth advances to a
-    /// fresh page instead of resetting. At `maxPages`, the atlas keeps the old self-healing full
-    /// reset fallback; LRU per-page eviction is a later refinement.
     private func place(_ glyph: RasterizedGlyph) -> AtlasEntry? {
-        guard glyph.width > 0, glyph.height > 0, glyph.width <= size, glyph.height <= size else {
-            return nil
+        let pages: GlyphAtlasPages
+        if glyph.rgba != nil {
+            if colorPages == nil {
+                colorPages = GlyphAtlasPages(device: device, size: min(size, 512), maxPages: maxPages, isColor: true)
+            }
+            guard let colorPages else { return nil }
+            pages = colorPages
+        } else { pages = coveragePages }
+        guard let packed = pages.pack(glyph) else { return nil }
+        if let victim = packed.evicted {
+            resets += 1
+            pageEvictions += 1
+            // The two atlases have separate page namespaces. Evicting emoji must not discard ASCII.
+            func survives(_ entry: AtlasEntry?) -> Bool {
+                entry?.isColor != pages.isColor || entry?.pageIndex != victim
+            }
+            cache = cache.filter { survives($0.value) }
+            shapedCache = shapedCache.filter { survives($0.value) }
+            clusterCache = clusterCache.filter { survives($0.value) }
+            if !pages.isColor { dropASCIIEntries(onPage: victim) }
         }
-        if let entry = pack(glyph) { return entry }
-        // Every page is full (or the rewound page re-filled): evict the least-recently-used
-        // page and pack onto it. One eviction always suffices — the victim page is completely
-        // empty afterwards and the size guard above ensures the glyph fits an empty page — so
-        // this replaces the old "wipe the WHOLE atlas + every cache" fallback with a one-page
-        // re-rasterization cost. The full reset survives below purely as a defensive backstop
-        // (it should be unreachable; a failed pack after eviction would mean the pen logic
-        // regressed, and healing loudly beats packing into garbage).
-        evictLRUPage()
-        if let entry = pack(glyph) { return entry }
-        resetPacker()
-        return pack(glyph) // should succeed for any glyph that fits one empty page
+        return packed.entry
     }
 
-    /// Evict the least-recently-used populated page: drop every cached entry living on it and
-    /// rewind the shelf packer to that page's origin so subsequent packs overwrite it. The
-    /// texture bytes are not cleared — new packs overwrite them — but once the caches drop the
-    /// page's entries no lookup can return a UV into it, so nothing samples stale coverage
-    /// through the atlas. Instances the RENDERER already baked (row caches, stable uploads) are
-    /// invalidated by the epoch bump: `resets` participates in the row-cache key and the
-    /// renderer's mid-encode reset check, so the existing one-frame-stale-then-heal contract is
-    /// unchanged — only the heal cost shrinks from "every glyph ever drawn" to "one page".
-    ///
-    /// Tie-break: lowest page index wins (it is also the oldest allocation in append order),
-    /// which keeps eviction deterministic for tests. With `maxPages == 1` this degrades to the
-    /// old single-page reset behavior exactly (evict page 0, repack), so the legacy overflow
-    /// test's observable contract (`resets > 0`, heals on page 0) is preserved.
-    private func evictLRUPage() {
-        var victim = 0
-        var oldest = UInt64.max
-        for page in 0 ..< pagesUsed where pageLastUse[page] < oldest {
-            oldest = pageLastUse[page]
-            victim = page
-        }
-        resets += 1          // epoch bump — renderer-side baked UVs must re-encode (see above)
-        pageEvictions += 1
-        // Drop only the victim page's entries. A cached `nil` (no-ink glyph) lives on no page
-        // (`$0.value?.pageIndex` is nil) and deliberately survives every eviction.
-        cache = cache.filter { $0.value?.pageIndex != victim }
-        shapedCache = shapedCache.filter { $0.value?.pageIndex != victim }
-        clusterCache = clusterCache.filter { $0.value?.pageIndex != victim }
-        dropASCIIEntries(onPage: victim)
-        pageIndex = victim
-        penX = 0
-        penY = 0
-        shelfHeight = 0
-        useTick &+= 1
-        pageLastUse[victim] = useTick // the page being repacked is by definition most recent
-    }
-
-    /// Drop every cached entry and rewind the shelf packer so the texture can be repacked from
-    /// scratch. Both caches index into `texture`, so they must be cleared together with the pen.
-    /// Cached glyphs re-rasterize on next access; at worst one frame shows stale UVs, then heals.
-    /// Since page-LRU eviction landed, this fires only on the cache-entry cap (`maxCacheEntries`,
-    /// the unbounded-no-ink-entry guard) and `place`'s defensive backstop.
     private func resetPacker() {
         resets += 1
-        pageIndex = 0
-        pagesUsed = 1
-        penX = 0
-        penY = 0
-        shelfHeight = 0
-        useTick &+= 1
-        pageLastUse = Array(repeating: 0, count: maxPages)
-        pageLastUse[0] = useTick
+        coveragePages.reset()
+        colorPages?.reset()
         cache.removeAll(keepingCapacity: true)
         shapedCache.removeAll(keepingCapacity: true)
         clusterCache.removeAll(keepingCapacity: true)
         clearASCIICache()
-    }
-
-    /// Shelf-pack one inked glyph, uploading its coverage. Returns nil when the atlas is full.
-    private func pack(_ glyph: RasterizedGlyph) -> AtlasEntry? {
-        guard glyph.width <= size, glyph.height <= size else { return nil }
-        // Advance to a new shelf if this glyph won't fit on the current row.
-        if penX + glyph.width > size {
-            penX = 0
-            penY += shelfHeight + 1
-            shelfHeight = 0
-        }
-        if penY + glyph.height > size {
-            guard advancePage() else { return nil }
-        }
-
-        let originX = penX
-        let originY = penY
-
-        glyph.coverage.withUnsafeBytes { raw in
-            texture.replace(
-                region: MTLRegionMake2D(originX, originY, glyph.width, glyph.height),
-                mipmapLevel: 0,
-                slice: pageIndex,
-                withBytes: raw.baseAddress!,
-                bytesPerRow: glyph.width,
-                bytesPerImage: glyph.width * glyph.height
-            )
-        }
-
-        penX += glyph.width + 1
-        shelfHeight = max(shelfHeight, glyph.height)
-        // A fresh pack is a use: keep the LRU ordering honest while a page is being filled
-        // (otherwise a page packed full this frame but not yet *hit* would look idle).
-        useTick &+= 1
-        pageLastUse[pageIndex] = useTick
-
-        let inv = Float(size)
-        return AtlasEntry(
-            pageIndex: pageIndex,
-            uvOrigin: SIMD2(Float(originX) / inv, Float(originY) / inv),
-            uvSize: SIMD2(Float(glyph.width) / inv, Float(glyph.height) / inv),
-            pixelWidth: glyph.width,
-            pixelHeight: glyph.height,
-            bearingX: glyph.bearingX,
-            bearingY: glyph.bearingY
-        )
-    }
-
-    private static func makeTexture(device: MTLDevice, size: Int, pages: Int) -> MTLTexture? {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .r8Unorm,
-            width: size,
-            height: size,
-            mipmapped: false
-        )
-        descriptor.textureType = .type2DArray
-        descriptor.arrayLength = max(1, pages)
-        descriptor.usage = [.shaderRead]
-        // Apple Silicon (unified memory) requires .shared for CPU-writable textures;
-        // discrete GPUs use .managed. `replace(region:)` works for both.
-        descriptor.storageMode = device.hasUnifiedMemory ? .shared : .managed
-        return device.makeTexture(descriptor: descriptor)
-    }
-
-    /// Double the pages (up to `maxPages`), carrying the filled ones over. Frames already
-    /// in flight keep the old texture alive until they finish.
-    private func growTexture() -> Bool {
-        let pages = min(maxPages, allocatedPages * 2)
-        guard pages > allocatedPages, let grown = Self.makeTexture(device: device, size: size, pages: pages) else { return false }
-        let region = MTLRegionMake2D(0, 0, size, size)
-        var bytes = [UInt8](repeating: 0, count: size * size)
-        for slice in 0 ..< allocatedPages {
-            bytes.withUnsafeMutableBytes { raw in
-                texture.getBytes(raw.baseAddress!, bytesPerRow: size, bytesPerImage: size * size,
-                                 from: region, mipmapLevel: 0, slice: slice)
-            }
-            bytes.withUnsafeBytes { raw in
-                grown.replace(region: region, mipmapLevel: 0, slice: slice, withBytes: raw.baseAddress!,
-                              bytesPerRow: size, bytesPerImage: size * size)
-            }
-        }
-        texture = grown
-        allocatedPages = pages
-        return true
-    }
-
-    private func advancePage() -> Bool {
-        // Advance only into a NEVER-USED page (`pagesUsed`, the append frontier) — never
-        // `pageIndex + 1`, which after an LRU eviction can be a page still holding live cached
-        // entries (eviction rewinds `pageIndex` to the victim, below the frontier; blindly
-        // stepping past it would overwrite a live page's coverage while cache entries still
-        // return UVs into it). When every page has been allocated, fail — `place` then evicts
-        // the LRU page. During the initial growth phase `pageIndex == pagesUsed - 1`, so this
-        // is byte-identical to the old `pageIndex + 1` stepping.
-        guard pagesUsed < maxPages else { return false }
-        if pagesUsed >= allocatedPages, !growTexture() { return false }
-        pageIndex = pagesUsed
-        pagesUsed += 1
-        penX = 0
-        penY = 0
-        shelfHeight = 0
-        return true
     }
 }

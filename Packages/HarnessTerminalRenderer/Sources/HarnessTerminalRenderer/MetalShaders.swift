@@ -103,8 +103,15 @@ enum MetalShaders {
 
     fragment float4 glyph_fragment(VOut in [[stage_in]],
                                    texture2d_array<float> atlas [[texture(0)]],
+                                   texture2d_array<float> colorAtlas [[texture(1)]],
                                    sampler samp [[sampler(0)]],
                                    constant float &gamma [[buffer(0)]]) {
+        if ((in.pageIndex & 0x80000000u) != 0u) {
+            float4 pixel = colorAtlas.sample(samp, in.uv, in.pageIndex & 0x7fffffffu);
+            // CoreGraphics supplies premultiplied color; this pipeline blends straight alpha.
+            float3 color = pixel.a > 0.0 ? pixel.rgb / pixel.a : float3(0.0);
+            return float4(color, pixel.a * in.color.a);
+        }
         float coverage = atlas.sample(samp, in.uv, in.pageIndex).r;
         // Gamma-correct ("linear-corrected") coverage thickens light-on-dark antialiasing.
         // gamma == 1 is native (no change).

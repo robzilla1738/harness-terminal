@@ -11,7 +11,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ### Added
 - Optional, off-by-default window-specific machine indicator and switching menu beside the tabs, with local/remote identity, SSH destination, connection status, and a compact sidebar control.
 - Cursor-anchored Insert Path popup (⌥⌘I), with themed file icons, fuzzy Folder/Project search, keyboard navigation, and focus restoration.
-- Common compound emoji and longer combining sequences retain their text through rendering, copy, capture, reflow, and reattachment. Emoji currently use the monochrome glyph atlas; color emoji rendering remains open.
+- Common compound emoji and longer combining sequences retain their text through rendering, copy, capture, reflow, and reattachment. Native color emoji retain their intrinsic colors, with on-demand RGBA storage separate from the ordinary-text atlas and correct sRGB/Display-P3 conversion.
 - Native scrollback thumb dragging and track clicks, honoring the macOS scrollbar preference.
 - Per-pane Activity across attached hosts, with exact-pane navigation, read state, notification snoozing, and hook installation health.
 - Saved Setups with editable layouts, optional startup commands, import/export, and explicit Open versus Open New Copy behavior.
@@ -22,6 +22,8 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Configurable pane spacing in Appearance settings, retaining the 8-point default.
 
 ### Changed
+- Warm ASCII glyph-cache lookup avoids unnecessary LRU writes while only one page is populated: 20.6% less time in the recorded 18,800-lookup release benchmark.
+- Unicode width and combining-mark data now use checksum-pinned Unicode 18.0.0 sources. Newly assigned combining marks survive capture, reflow, and restoration even when the host Unicode database is older.
 - Full-history width reflow avoids decoding blank padding on compact, hard-ended rows: 21% less CPU time in the matched 10,000-line prose benchmark, with text, styling, wrapping, and image anchors preserved.
 - Sparkle is updated to 2.9.6 across SwiftPM and Xcode, incorporating upstream installer and delta-update security fixes.
 
@@ -45,6 +47,8 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- Copy mode preserves newer combining marks when the host segments them differently; copy and search retain correct cell coordinates.
+- Mixed blinking and non-blinking text no longer shares a shaping run while the blink phase is hidden.
 - Make PTY read-source installation atomic with close/respawn, avoiding stale descriptor access and disposal of an inactive dispatch source.
 - PTY draining uses bounded nonblocking reads, preserving queued output when macOS reports zero available bytes before resize or read-source cancellation.
 - Clearing history invalidates warmed capture/search grids and serializes the disk reset with output appends; replacing a shell with cleared history rejects late output from its predecessor.

@@ -1,7 +1,7 @@
 # Release-readiness review — October 9, 2026
 
 This candidate preserves Harness's existing visual design and improves restoration,
-split correctness, reflow performance, updater security, and build reliability.
+split correctness, reflow performance, updater security, Unicode coverage, color emoji, and build reliability.
 It is a tested local candidate, not a published release or a claim that every bug is gone.
 The starting revision was `889af7e`; changes are on `codex/release-readiness-20261009`.
 The earlier [terminal audit](TERMINAL-EXCELLENCE-PLAN.md) remains historical evidence;
@@ -25,6 +25,44 @@ See the [raw receipt](benchmarks/release-audit-2026-10-09.json) and [scorecard](
 This measures CPU reflow, not physical input latency, energy use, or superiority over every terminal.
 
 ## Verification
+
+### Unicode and color-glyph continuation
+
+- Replaced hand-maintained Unicode 15.1 width ranges with a reproducible generator for
+  [Unicode 18.0.0](https://www.unicode.org/versions/Unicode18.0.0/). Three versioned upstream
+  files have pinned SHA-256 hashes. Network and local-data generation produce identical output;
+  modified input fails before emitting a table. Exhaustive scalar tests compare packed and
+  reference lookups. Unicode's license is retained and copied into the packaged app.
+- New combining marks use pinned Grapheme_Extend data even on older hosts. Capture, reflow,
+  restore, copy and search retain their text and column mapping. Copy mode no longer truncates
+  a cell to the first grapheme recognized by the host's older Unicode implementation.
+- Added native CoreText color emoji, including flags, modifiers and joined sequences, with
+  a lazy RGBA atlas alongside ordinary R8 text. Independent page eviction preserves text
+  cache entries. Growth tests verify all four channels survive texture replacement; LRU
+  tests verify hot pages survive after growth and repeated eviction.
+- Color glyphs bypass foreground tint, coverage gamma and font thickening while respecting
+  conceal, faint and blink. Rasterization uses the pane's sRGB/Display-P3 space, including
+  thumbnails. Pixel tests cover both ligated and per-cell paths. Mixed blink states now split
+  shaping runs correctly.
+- Removed unnecessary LRU writes when only one atlas page is populated. The existing warm
+  ASCII cache benchmark is 20.6% faster than `4e260a4` across five interleaved release samples.
+  Full-frame encode measurements show no median slowdown but substantial noise; see the
+  [scorecard](SCORECARD.md) and [raw receipt](benchmarks/unicode-color-2026-10-09.json).
+
+The final full local macOS suite passed **2,313 tests, 58 skipped, zero failures** in 93.7 seconds.
+Optimized release validation passed **161 tests, two skipped, zero failures**. The final
+Xcode Debug build succeeded. The packaged candidate passed
+ad hoc signature verification and includes the complete third-party notices. A live GUI check
+confirmed native emoji, unchanged foreground tint behavior, dim/concealed emoji, ordinary
+Latin/CJK/Thai text, drawing characters, bold/italic/underline, and Find (`1 of 5` for a joined
+emoji). The window design remains unchanged.
+
+Logs: `/tmp/harness-unicode-color-full-final.log`,
+`/tmp/harness-unicode-color-release-verified.log`, `/tmp/harness-unicode-color-xcode.log`,
+`/tmp/harness-color-space-tests.log`, and `/tmp/harness-unicode-color-package.log`.
+The [draft PR](https://github.com/robzilla1738/harness-terminal/pull/188) records the exact final
+commit's CI outcome. This upgrade covers width/extender data, not full Unicode 18 grapheme
+segmentation or glyph availability on every supported macOS version.
 
 ### Follow-up review
 
@@ -157,9 +195,9 @@ into a complete, indefinitely retained terminal state.
 2. Complete or explicitly scope the physical IME/non-US keyboard, VoiceOver spoken output,
    external display/Spaces, and real SSH sleep/wake/tunnel-loss acceptance work tracked in
    [#187](https://github.com/robzilla1738/harness-terminal/issues/187). These were not verified here.
-3. Preserve honest compatibility/performance claims. Color emoji still use monochrome
-   coverage; Unicode tables and broader cross-terminal throughput gaps described in the
-   existing audit are not resolved by this reflow optimization.
+3. Preserve honest compatibility/performance claims. Native color emoji and Unicode 18 width
+   data are now implemented. Full grapheme segmentation/font coverage still depend on the host;
+   broader cross-terminal throughput, startup, physical latency and power targets remain open.
 4. Follow the [release runbook](RELEASE.md): choose/bump the release version and build,
    regenerate release notes, sign with Developer ID, notarize, smoke-test the DMG, and
    verify the Sparkle update path. No version bump, tag, public release or appcast publication

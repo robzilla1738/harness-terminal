@@ -32,7 +32,7 @@ because asynchronous operations must preserve host and session identity.
 |---|---|---|
 | B | Source inventory, old roadmaps, issues, PRs 180/184; release baseline tied to source | Audited; scoped measurements recorded; physical latency/power gaps open |
 | R | GUI/IPC/CLI input admission, deadlines, cancellation, ordering, stale results | Integrated, built, targeted/live CI passed; paused-daemon GUI check passed |
-| T | Engine, Unicode, reflow, history allocation, renderer, graphics, keyboard/mouse protocols | Integrated and verified by named suites; color emoji and newer width data remain open |
+| T | Engine, Unicode, reflow, history allocation, renderer, graphics, keyboard/mouse protocols | Integrated and verified by named suites; color emoji and Unicode 18 width data added in the October 9 continuation |
 | S | Literal/regex/wrapped search, global pagination, accessibility text/cursor/selection | Integrated; targeted/CI and Find UI checks passed; spoken VoiceOver unverified |
 | M | Native scrollbar, settings, keyboard/IME, window management, themes, onboarding, menus | Integrated; compact Mac pass complete; physical IME/displays/Spaces unverified |
 | W | Persistence, multi-window/host ownership, setups, activity, agents, shell integration, CLI/Lua/API | Audited and CI passed; raw-replay fidelity and real remote recovery remain open |
@@ -217,7 +217,7 @@ watchers now run only for local tabs, so a remote cwd cannot be mistaken for thi
 | P2 | Medium target gap | Correct Find uses more CPU than old search | Follow-up literal 17.65 ms, regex 73.70 ms; original baseline 14/50 ms. UTF-16 buffer reuse improves literal; parity target remains open |
 | P3 | Resolved for measured workload | Retained short-row memory | Follow-up 178.53 MiB app+daemon versus preceding 665.95 MiB and Ghostty 249.83 MiB; all 100k rows / 4.70 MB raw output retained. Lossless uniform-row compaction, original widths and actual allocation accounting; other workloads not inferred |
 | P4 | Medium target gap | Startup consistency and responsiveness | Readiness median 395.87 ms versus Ghostty 305.84 ms, including a 1375.77 ms outlier; open. Unicode parse+frame improves to 20.21 ms, previously about 51 ms |
-| T4 | Medium compatibility gap | Compound emoji retain text but use monochrome/tinted coverage | Open: existing R8 glyph atlas does not carry color emoji; text correctness is not color-rendering parity |
+| T4 | Medium compatibility gap | Compound emoji retain text but use monochrome/tinted coverage | Resolved in the October 9 continuation: lazy RGBA atlas, intrinsic colors, sRGB/P3 conversion, and Metal readback tests |
 | W1 | Medium fidelity gap | Raw history replay after daemon restart at a different width can show old shell redraw/prompt artifacts | Open: persisted raw output is not an exact saved grid. Live sequence/ownership checks pass, but do not prove restart fidelity |
 | F1 | Unverified | Real IME/non-US keyboard, VoiceOver spoken output, external displays/Spaces, real remote sleep/wake/tunnel loss | Requires the corresponding hardware/interaction or reachable test host; not inferred from unit tests |
 | F2 | Unmeasured | Physical input-to-photon, scrolling frame pacing, privileged power/wakeups | Internal presentation marks, parser acknowledgements, reflow CPU and short idle CPU samples are different metrics |
@@ -517,3 +517,20 @@ verification and honest release measurements. Performance leadership and the ope
 compatibility/physical acceptance targets above are **not complete**. No fastest-terminal
 claim, public release, signing identity change, or replacement of the user's installation
 is part of this delivery.
+
+
+## October 9 continuation — Unicode and color emoji
+
+The current candidate supersedes the historical color-emoji and width-table-age gaps above.
+Unicode width and Grapheme_Extend data now derive from three checksum-pinned Unicode 18.0.0
+files, with a reproducible Python generator replacing duplicated hand-maintained ranges.
+New combining marks no longer disappear merely because Swift's host Unicode database is older.
+This does not claim complete Unicode 18 grapheme segmentation or font coverage; those still
+depend on platform text services and installed fonts.
+
+CoreText color glyphs now use a separate, lazily allocated RGBA atlas. Ordinary text keeps R8
+coverage; color-page eviction preserves the text cache. Emoji bypass foreground tint, text
+gamma and thickening, and rasterize in the pane's sRGB or Display-P3 space. Overview thumbnails
+rebuild when their color space changes. The [release report](RELEASE-READINESS-2026-10-09.md)
+records verification and scoped performance evidence. Physical acceptance and the broader
+cross-terminal performance targets remain open.

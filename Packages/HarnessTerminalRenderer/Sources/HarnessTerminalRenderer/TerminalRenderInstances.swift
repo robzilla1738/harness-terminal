@@ -140,6 +140,7 @@ struct GlyphInstance {
     var uvOrigin: SIMD2<Float>
     var uvSize: SIMD2<Float>
     /// Must mirror Metal `GlyphInstance.pageIndex` (uint@32, padding to color@48).
+    /// The high bit selects the intrinsic-color atlas; the remaining bits select its page.
     var pageIndex: UInt32
     var color: SIMD4<Float>
 }

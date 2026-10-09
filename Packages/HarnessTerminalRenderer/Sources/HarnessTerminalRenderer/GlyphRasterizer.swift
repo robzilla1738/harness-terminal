@@ -22,9 +22,8 @@ public struct CellMetrics: Equatable, Sendable {
     }
 }
 
-/// A rasterized glyph: an 8-bit alpha coverage bitmap plus placement metrics, ready to be
-/// packed into the GPU glyph atlas. Coverage is row-major, `width * height` bytes, with
-/// row 0 at the top of the image.
+/// A rasterized glyph with placement metrics and either R8 coverage or premultiplied RGBA.
+/// Pixels are row-major with row 0 at the top; color glyphs leave `coverage` empty.
 public struct RasterizedGlyph: Equatable, Sendable {
     public let width: Int
     public let height: Int
@@ -35,6 +34,8 @@ public struct RasterizedGlyph: Equatable, Sendable {
     /// shares the exact same baseline (no per-glyph rounding jitter).
     public let bearingY: Int
     public let coverage: [UInt8]
+    /// Premultiplied RGBA for fonts with intrinsic colors; ordinary glyphs keep R8 coverage.
+    public var rgba: [UInt8]? = nil
 }
 
 struct ShapedRunCacheStats: Equatable {
@@ -84,6 +85,7 @@ public final class GlyphRasterizer {
     /// `CTFontCreateForString` path unchanged.
     private let symbolFont: CTFont?
     private let grayColorSpace = CGColorSpaceCreateDeviceGray()
+    private let rgbColorSpace: CGColorSpace
     private let shapedRunCacheLimit: Int
     // Stores non-Sendable CTFont-bearing shaped glyphs; this rasterizer is single-surface,
     // single-threaded renderer state, so the cache deliberately remains internal and unlocked.
@@ -109,14 +111,16 @@ public final class GlyphRasterizer {
         scale: CGFloat = 2.0,
         shapedRunCacheLimit: Int = 3_000,
         fontThicken: Bool = false,
-        fontThickenStrength: Int = 255
+        fontThickenStrength: Int = 255,
+        colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     ) {
         self.init(
             resolvedFont: TerminalFontResolver.resolve(fontFamily: fontFamily, size: size),
             scale: scale,
             shapedRunCacheLimit: shapedRunCacheLimit,
             fontThicken: fontThicken,
-            fontThickenStrength: fontThickenStrength
+            fontThickenStrength: fontThickenStrength,
+            colorSpace: colorSpace
         )
     }
 
@@ -125,9 +129,11 @@ public final class GlyphRasterizer {
         scale: CGFloat = 2.0,
         shapedRunCacheLimit: Int = 3_000,
         fontThicken: Bool = false,
-        fontThickenStrength: Int = 255
+        fontThickenStrength: Int = 255,
+        colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     ) {
         self.scale = scale
+        self.rgbColorSpace = colorSpace
         self.pointSize = resolvedFont.pointSize
         self.shapedRunCacheLimit = max(1, shapedRunCacheLimit)
         // Init only creates the four CTFont objects (regular/bold/italic/bold-italic) — it
@@ -269,6 +275,12 @@ public final class GlyphRasterizer {
         let fromContextKey = NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String)
         let attributed = NSAttributedString(string: cluster, attributes: [fontKey: base, fromContextKey: true])
         let line = CTLineCreateWithAttributedString(attributed)
+        let hasColor = (CTLineGetGlyphRuns(line) as? [CTRun] ?? []).contains { run in
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            guard let value = attributes[kCTFontAttributeName as String],
+                  CFGetTypeID(value as CFTypeRef) == CTFontGetTypeID() else { return false }
+            return CTFontGetSymbolicTraits(value as! CTFont).contains(.traitColorGlyphs)
+        }
 
         // Tight ink bounds (glyph path), in points, with the pen origin at (0,0) and the baseline at
         // y = 0. Marks above the cap give maxY > ascent; left-overhang gives minX < 0.
@@ -288,7 +300,9 @@ public final class GlyphRasterizer {
 
         guard let ctx = CGContext(
             data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
-            bytesPerRow: 0, space: grayColorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue
+            bytesPerRow: 0, space: hasColor ? rgbColorSpace : grayColorSpace,
+            bitmapInfo: hasColor ? CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+                                 : CGImageAlphaInfo.none.rawValue
         ) else { return nil }
         ctx.setAllowsAntialiasing(true)
         ctx.setShouldAntialias(true)
@@ -299,6 +313,11 @@ public final class GlyphRasterizer {
         // from `textPosition`. Same alignment math as the single-glyph path.
         ctx.textPosition = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTLineDraw(line, ctx)
+
+        if hasColor {
+            return RasterizedGlyph(width: pxW, height: pxH, bearingX: leftPx - pad,
+                                   bearingY: topPx + pad, coverage: [], rgba: readPixels(ctx, width: pxW, height: pxH, bytesPerPixel: 4))
+        }
 
         // Thicken composed clusters the same way single glyphs are thickened, so crisp-mode
         // Thai/combining-mark text doesn't render visibly thinner than its neighbors.
@@ -424,6 +443,7 @@ public final class GlyphRasterizer {
     /// Render a resolved glyph id in a font into an alpha-coverage bitmap. Returns nil when
     /// the glyph has no ink.
     private func render(glyph: CGGlyph, font: CTFont) -> RasterizedGlyph? {
+        let hasColor = CTFontGetSymbolicTraits(font).contains(.traitColorGlyphs)
         var g = glyph
         var bounds = CGRect.zero
         CTFontGetBoundingRectsForGlyphs(font, .horizontal, &g, &bounds, 1)
@@ -448,8 +468,9 @@ public final class GlyphRasterizer {
             height: pxH,
             bitsPerComponent: 8,
             bytesPerRow: 0, // let CoreGraphics choose alignment
-            space: grayColorSpace,
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
+            space: hasColor ? rgbColorSpace : grayColorSpace,
+            bitmapInfo: hasColor ? CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+                                 : CGImageAlphaInfo.none.rawValue
         ) else { return nil }
 
         ctx.setAllowsAntialiasing(true)
@@ -462,6 +483,11 @@ public final class GlyphRasterizer {
         // is pixel-aligned. `position` is in points (pre-scale), hence the /scale.
         var position = CGPoint(x: CGFloat(pad - leftPx) / scale, y: CGFloat(pad - botPx) / scale)
         CTFontDrawGlyphs(font, &g, &position, 1, ctx)
+
+        if hasColor {
+            return RasterizedGlyph(width: pxW, height: pxH, bearingX: leftPx - pad,
+                                   bearingY: topPx + pad, coverage: [], rgba: readPixels(ctx, width: pxW, height: pxH, bytesPerPixel: 4))
+        }
 
         let rawCoverage = readCoverage(ctx, width: pxW, height: pxH)
         let coverage = fontThicken
@@ -491,14 +517,19 @@ public final class GlyphRasterizer {
     /// Copy the grayscale context's pixels into a tightly-packed `width*height` buffer,
     /// honoring the context's (possibly padded) bytesPerRow.
     private func readCoverage(_ ctx: CGContext, width: Int, height: Int) -> [UInt8] {
-        guard let base = ctx.data else { return [UInt8](repeating: 0, count: width * height) }
+        readPixels(ctx, width: width, height: height, bytesPerPixel: 1)
+    }
+
+    private func readPixels(_ ctx: CGContext, width: Int, height: Int, bytesPerPixel: Int) -> [UInt8] {
+        let rowBytes = width * bytesPerPixel
+        guard let base = ctx.data else { return [UInt8](repeating: 0, count: rowBytes * height) }
         let bytesPerRow = ctx.bytesPerRow
         let src = base.assumingMemoryBound(to: UInt8.self)
-        var out = [UInt8](repeating: 0, count: width * height)
+        var out = [UInt8](repeating: 0, count: rowBytes * height)
         for y in 0 ..< height {
             let rowStart = y * bytesPerRow
-            for x in 0 ..< width {
-                out[y * width + x] = src[rowStart + x]
+            for x in 0 ..< rowBytes {
+                out[y * rowBytes + x] = src[rowStart + x]
             }
         }
         return out

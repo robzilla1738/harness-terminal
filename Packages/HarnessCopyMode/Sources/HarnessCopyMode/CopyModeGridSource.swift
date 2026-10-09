@@ -112,14 +112,14 @@ extension CopyModeGridSource {
         while c < cells.count {
             let cell = cells[c]
             if cell.width == .spacerTail { c += 1; continue }
-            // One Character per cell = base scalar + any combining marks (a Thai cluster is a single
-            // grapheme), so column/character mapping stays 1:1. `cluster.first` takes that single
-            // grapheme; the engine guarantees one (combining marks fold into the base, non-extending
-            // format scalars are dropped), but `.first` guards defensively so a stray multi-grapheme
-            // cell can never trap `Character(_:)`. Blank cells render as a space.
-            chars.append(cluster(for: cell).first ?? " ")
-            columnOf.append(c)
-            widthOf.append(cell.width == .wide ? 2 : 1)
+            // Host grapheme segmentation may split a cell containing newer UCD marks. Keep every
+            // character mapped to that cell so copy and search neither drop text nor shift columns.
+            let text = cluster(for: cell)
+            for character in text.isEmpty ? " " : text {
+                chars.append(character)
+                columnOf.append(c)
+                widthOf.append(cell.width == .wide ? 2 : 1)
+            }
             c += 1
         }
         return CopyModeLine(chars: chars, columnOf: columnOf, widthOf: widthOf, totalColumns: cells.count)

@@ -1,0 +1,774 @@
+{
+  "timestamp_utc": "2026-10-09T06:48:02.256566+00:00",
+  "base_commit": "4e260a47a32cae9ddedfe617d61503f163c5de7e",
+  "hardware": "Apple M5",
+  "macOS": "27.2",
+  "toolchain": "Swift 6.4 / Xcode beta, release optimization",
+  "method": "Same unchanged benchmark sources, one warm-up per variant, five interleaved measured samples each. Separate test bundles built before/after the Unicode and color changes. No concurrent builds or tests during measurement.",
+  "limits": "Local warm ASCII cache and full-frame CPU encode only. Not a cross-terminal, GPU execution, physical latency, power, or cold-start claim.",
+  "source_sha256": {
+    "Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine/Width/CharacterWidth.swift": "e3145bce4abbf6ba49a86745807e08246fcf90230715b907e783722beb74b00c",
+    "Packages/HarnessTerminalEngine/Sources/HarnessTerminalEngine/Width/CharacterWidthTable.swift": "7c407d8fd77d2b4598b4861d8d4dbbbb92fad7212933973ca82b0e9602cbbb8b",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/ANSIPalette.swift": "e497c71f6ca100de14c9a04a8b9357d68a47bf8c184ca87b482b93ba1a30dd02",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/BoxDrawing.swift": "29239ffecb78516c49a38abb9368bab9823ff3c47339941b5a779acfbd3baa71",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/CellColorResolver.swift": "6f9779aa0b25b38e26709b69c551f16726a5aa1a8f21a882f171678ef8f35813",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/DynamicInstanceBuffer.swift": "be4465f035bf1129a3fd65c2d2cdb2b6f63e1995aa6c20ce4d34e4afb9fd5d1e",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/GlyphAtlas.swift": "135b23e07c30003d76919777fa741be244c588889a9d9961da427f59e22a00e3",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/GlyphAtlasPages.swift": "a1919bf975af3c6d59842f2f79e50a6a6c876f9285c980dc1bf33c30eaa6e302",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/GlyphRasterizer.swift": "054bd5ba32b9c266415f60ee034339fd58b41e1be8dfa7e629eb31cc3311faca",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/ImageTextureCache.swift": "41c055865fbbdd95b87bec1a3a00b67e60b7c633e0d36b67e21e17da27a870da",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/MetalShaders.swift": "8530e60a09cff4882633f79a334f0eeb4f1f1fa0c7aea13cc74b722053eab543",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/RenderColorConversion.swift": "503ff8dc78a5efcd5aee8ef6a3c6af5c3a3b5e348d2e6dd42a910a7c3e30c9a2",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/TerminalFontResolver.swift": "57470a69d06458d89648bbdc7d566daa70fd186155714cf8089ecf4a8be80c08",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/TerminalFrame.swift": "20da202bff3fc85096665fe1a1a6da6352ecf1fad8a6c276f9c104c3af7e354d",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/TerminalMetalRenderer.swift": "a60c47286a75f9bc86b05440389403b3821c565f28c0ab24472148ceb6065df8",
+    "Packages/HarnessTerminalRenderer/Sources/HarnessTerminalRenderer/TerminalRenderInstances.swift": "53439ba4a06992258669629dbcb07f590517e103605b95d88528b373b6aabd40"
+  },
+  "samples": [
+    {
+      "variant": "baseline",
+      "sample": 0,
+      "warmup": true,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 164166,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 434417,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "sample": 0,
+      "warmup": true,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 140333,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 229084,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "sample": 1,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 127542,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 379458,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "baseline",
+      "sample": 1,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 158958,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 393042,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "baseline",
+      "sample": 2,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 166625,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 432542,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "sample": 2,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 128875,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 352583,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "sample": 3,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 128417,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 465458,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "baseline",
+      "sample": 3,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 171833,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 442625,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "baseline",
+      "sample": 4,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 161375,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 398791,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "sample": 4,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 128875,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 376666,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "candidate",
+      "sample": 5,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 128666,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 394834,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    },
+    {
+      "variant": "baseline",
+      "sample": 5,
+      "warmup": false,
+      "metrics": [
+        {
+          "benchmark": "glyph_atlas_ascii_warm_path",
+          "nanos": 161959,
+          "entries": 94,
+          "hits": 18800,
+          "misses": 0,
+          "pages": 1
+        },
+        {
+          "benchmark": "render_encode_stats_160x48",
+          "nanos": 451625,
+          "cells": 7680,
+          "bgInstances": 48,
+          "bgSpans": 48,
+          "bgCells": 7680,
+          "glyphInstances": 7680,
+          "decoInstances": 0,
+          "imageInstances": 0,
+          "atlasPages": 1,
+          "encodedRows": 48,
+          "reusedRows": 0,
+          "instanceUploadBytes": 493056
+        }
+      ]
+    }
+  ],
+  "median_ns": {
+    "glyph_atlas_ascii_warm_path": {
+      "baseline": 161959,
+      "candidate": 128666
+    },
+    "render_encode_stats_160x48": {
+      "baseline": 432542,
+      "candidate": 379458
+    }
+  },
+  "initial_candidate_check": {
+    "median_ns": {
+      "glyph_atlas_ascii_warm_path": {
+        "baseline": 166041,
+        "candidate": 180083
+      },
+      "render_encode_stats_160x48": {
+        "baseline": 379417,
+        "candidate": 428834
+      }
+    },
+    "samples": [
+      {
+        "variant": "baseline",
+        "sample": 0,
+        "warmup": true,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 164459,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 371375,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "candidate",
+        "sample": 0,
+        "warmup": true,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 182500,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 232417,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "candidate",
+        "sample": 1,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 175167,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 455250,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "sample": 1,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 166041,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 420833,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "sample": 2,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 175416,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 379417,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "candidate",
+        "sample": 2,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 196042,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 399209,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "candidate",
+        "sample": 3,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 171542,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 428834,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "sample": 3,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 160250,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 434417,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "sample": 4,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 157708,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 285583,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "candidate",
+        "sample": 4,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 210416,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 386708,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "candidate",
+        "sample": 5,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 180083,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 444333,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "sample": 5,
+        "warmup": false,
+        "metrics": [
+          {
+            "benchmark": "glyph_atlas_ascii_warm_path",
+            "nanos": 168500,
+            "entries": 94,
+            "hits": 18800,
+            "misses": 0,
+            "pages": 1
+          },
+          {
+            "benchmark": "render_encode_stats_160x48",
+            "nanos": 282625,
+            "cells": 7680,
+            "bgInstances": 48,
+            "bgSpans": 48,
+            "bgCells": 7680,
+            "glyphInstances": 7680,
+            "decoInstances": 0,
+            "imageInstances": 0,
+            "atlasPages": 1,
+            "encodedRows": 48,
+            "reusedRows": 0,
+            "instanceUploadBytes": 493056
+          }
+        ]
+      }
+    ],
+    "finding": "The initial split-atlas implementation increased median ASCII lookup cost. Packed page flags and avoiding LRU writes while only one page is populated removed that regression."
+  }
+}

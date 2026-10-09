@@ -1912,7 +1912,8 @@ public final class HarnessTerminalSurfaceView: NSView {
             fontSize: fontSize,
             scale: scale,
             fontThicken: fontThicken,
-            fontThickenStrength: fontThickenStrength
+            fontThickenStrength: fontThickenStrength,
+            colorSpace: CGColorSpace(name: layerColorSpaceName)!
         )
         // Tell the engine the real cell pixel size so inline-image cell footprints + cursor
         // advancement match what the renderer draws.

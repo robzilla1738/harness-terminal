@@ -2,6 +2,23 @@ import XCTest
 @testable import HarnessTerminalEngine
 
 final class GraphemeHistoryTests: XCTestCase {
+    func testNewUnicodeCombiningMarksSurviveWithoutHostUnicodeSupport() {
+        let text = "A\u{05C8}\u{1ACF}\u{1AE0}\u{0897}"
+        let term = TerminalEmulator(cols: 8, rows: 2)
+        let scalarwise = TerminalEmulator(cols: 8, rows: 2)
+        term.feed(text + "X")
+        scalarwise.feedScalarwise(Array((text + "X").utf8))
+        XCTAssertEqual(term.readGrid(), scalarwise.readGrid())
+        XCTAssertEqual(term.readGrid().cursor.col, 2)
+        XCTAssertEqual(term.cluster(for: term.readGrid().cells[0]), text)
+        XCTAssertEqual(term.captureLines(joinWrapped: true).first, text + "X")
+        term.resize(cols: 3, rows: 2)
+        XCTAssertEqual(term.captureLines(joinWrapped: true).first, text + "X")
+        let restored = TerminalEmulator(cols: 3, rows: 2)
+        restored.feed(PaneCapture.screen(term))
+        XCTAssertEqual(restored.captureLines(joinWrapped: true).first, text + "X")
+    }
+
     func testOversizedGeometryIsBoundedBeforeAllocation() {
         let size = TerminalGeometry.clamped(cols: .max, rows: .max)
         XCTAssertLessThanOrEqual(size.cols * size.rows, TerminalGeometry.maxCells)
