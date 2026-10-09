@@ -453,6 +453,46 @@ The final consumer check covers the added output-subscription identity guard.
 - Default-off follow-up: four focused checks passed for absent keys, explicit
   on/off preferences, and layout behavior. The preview was switched off and verified.
 
+## Broad review follow-up — 2026-10-08
+
+Reconciled the existing subsystem ledger against `a7953d4` and its all-green CI run
+[37883688549](https://github.com/robzilla1738/harness-terminal/actions/runs/37883688549).
+Reviewed the boundaries for IPC/input ordering, compact history and text mapping, image
+decoding/caches, path and global search, accessibility, remote ownership/tunnels, settings
+and persistence, onboarding and agent hooks, tab/pane/window layout, shell integration,
+CLI/Lua actions, and packaging/update resources. Prior verified behavior is retained as
+prior evidence; this is not a claim that every possible runtime combination was exercised.
+
+| Finding | Severity | Delivered change | Verification |
+|---|---|---|---|
+| GUI Tailscale reporting can wait on a daemon request | Medium | Keep reporting on discovery worker; bound command lookup | Release compile; existing bounded-I/O checks |
+| Project Git discovery can block on pipes/process exit | High | Shared deadline/output/cancellation helper; cap files plus parent directories | Bounded-I/O tests; live popup filtering and layout inspected |
+| Real path names lose surrounding spaces | Medium | Preserve path bytes; only empty input uses cwd | New real-directory regression passed |
+| Timed-out path mutation can be repeated from the still-open popup | High | Close on ambiguous transport outcome and instruct user to check terminal | Source review; failure is never retried |
+| Rename removes original remote before replacement is saved | High | One locked atomic replacement; reject collisions; surface removal failures | New store regression passed |
+| Duplicate or late remote attachments change ownership after disconnect | High | Coalesce GUI requests and invalidate their presentation after disconnect | Release compile; real network recovery remains unverified |
+| Search reopens with stale context, can validate twice, or intercept IME Return | Medium | Refresh source, cancel validation, prevent repeat opens, honor marked text | IME regression passed; live Find/error and global-result opening passed |
+| Image cap checked after ImageIO creates the decoded image | High | Validate source metadata before image creation, retain postdecode guard | Existing PNG/Kitty/image protocol checks passed |
+| Capture command can allocate unbounded output or target a newly selected host | High | 4 MiB combined output cap; capture endpoint at invocation; drop conditional branch if host/pane changed | Existing output-limit checks; release compile |
+| Isolated preview waits for a daemon it cannot replace | Medium | Reuse compatible unowned preview daemon; preserve normal update policy | Live launch returned to the existing shell without reconnect delay |
+| Search mapping repeatedly allocates buffers and resolves simple drawing glyphs | Low | Reuse arrays and normalized scalar path | Unicode/grapheme checks; literal median 17.67 → 15.31 ms |
+
+Focused verification: initial 41 checks passed; a second set of 79 checks passed for
+bounded I/O, prelaunch cancellation, SSH validation, IME Find, text mapping, graphemes,
+and image protocols. Counts overlap and must not be presented as 120 distinct tests.
+Release build and both strict ad-hoc package signature checks passed. Live inspection
+covered the 100×30 window, small badges, lighter panes, popup filtering, Find matches and
+invalid-regex feedback, and global-result opening into the correct pane. Global results now
+use reusable inset rows with monospaced excerpts and quieter system-font location labels;
+Open Pane is disabled without a selection. The popup dismissed between automation calls,
+so insertion was not re-established in this pass; prior insertion evidence remains separate.
+The preview retained its existing compatible daemon, while the packaged daemon contains
+the new discovery changes. Final-source macOS/Linux/Xcode checks are tracked on
+[PR #185](https://github.com/robzilla1738/harness-terminal/pull/185/checks), avoiding a
+second equivalent full local run. No physical IME, live remote, power, or photon claim
+follows from these checks. W1 replay corruption reproduced after relaunch with fish (duplicated prompt/redraw fragments); it remains a release-quality defect. Existing monochrome emoji,
+Unicode-table age, and cross-terminal speed targets remain open.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named

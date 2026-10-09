@@ -31,6 +31,13 @@ final class BoundedIOTests: XCTestCase {
         }
     }
 
+    func testCancelledDiscoveryDoesNotLaunch() {
+        // A nonexistent executable would fail to launch if cancellation were checked too late.
+        XCTAssertThrowsError(try ProcessCapture.run(URL(fileURLWithPath: "/nonexistent-harness-command"), arguments: [], cancelled: { true })) {
+            XCTAssertEqual($0 as? ProcessCaptureError, .cancelled)
+        }
+    }
+
     func testBlockedSocketWriteUsesOneDeadline() throws {
         var pair: [Int32] = [-1, -1]
         #if canImport(Darwin)

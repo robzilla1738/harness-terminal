@@ -36,7 +36,12 @@ final class RemoteHostsService: @unchecked Sendable {
 
     /// Saves (or replaces by name). False when the file couldn't be written.
     @discardableResult
-    func addHost(_ host: RemoteHost) -> Bool { store.upsert(host).saved }
+    func addHost(_ host: RemoteHost, replacing oldName: String? = nil) -> Bool {
+        let previous = store.host(named: oldName ?? host.name)
+        guard store.upsert(host, replacing: oldName).saved else { return false }
+        if let previous, previous != host { SSHTunnelManager.shared.stop(host: previous.name) }
+        return true
+    }
 
     /// Opens (or reuses) the tunnel for an unsaved or saved host without making it the
     /// window's host. Blocking — call off the main thread.
@@ -58,12 +63,13 @@ final class RemoteHostsService: @unchecked Sendable {
         return snapshot.workspaces.reduce(0) { $0 + $1.sessions.count }
     }
 
-    func removeHost(named name: String) {
-        store.remove(name: name)
+    func removeHost(named name: String) -> Bool {
+        guard store.remove(name: name).saved else { return false }
         SSHTunnelManager.shared.stop(host: name)
         lock.lock()
         if _activeHostName == name { _activeHostName = nil }
         lock.unlock()
+        return true
     }
 
     /// Bring up (or reuse) the tunnel to `name` and return the local endpoint that reaches it.

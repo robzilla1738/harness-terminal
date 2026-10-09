@@ -100,6 +100,10 @@ final class DaemonLauncher: @unchecked Sendable {
     /// start time the mtime heuristic compares against and made it permanently read "fresh".
     private func daemonIsStale(_ stats: DaemonStats) -> Bool {
         if stats.isStale(comparedTo: HarnessVersion.build) { return true }
+        // An isolated preview cannot restart a daemon inherited from an earlier app run.
+        // Reuse that compatible daemon instead of waiting for an impossible replacement
+        // after each bundle refresh. A child owned by this launcher can still be updated.
+        if HarnessPaths.hasHomeOverride, fallbackProcess?.processIdentifier != stats.pid { return false }
         return bundledDaemonIsNewer(than: stats)
     }
 

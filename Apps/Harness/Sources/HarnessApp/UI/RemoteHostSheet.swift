@@ -338,14 +338,12 @@ final class RemoteHostSheet: NSWindowController, NSTextFieldDelegate {
             show("Check the SSH destination and options.", tone: .bad)
             return
         }
-        if let editing, editing.name != host.name {
-            RemoteHostsService.shared.removeHost(named: editing.name)
-        }
-        // Edited settings must not ride the old forward.
-        RemoteHostsService.shared.dropTunnelIfChanged(host)
-        guard RemoteHostsService.shared.addHost(host) else {
-            show("Couldn't write remote-hosts.json. Check disk space and permissions.", tone: .bad)
+        guard RemoteHostsService.shared.addHost(host, replacing: editing?.name) else {
+            show("Couldn’t save this host. Check that its name isn’t already used, and check disk space and permissions for remote-hosts.json.", tone: .bad)
             return
+        }
+        if let editing, editing.name != host.name {
+            SessionCoordinator.shared.disconnectRemote(named: editing.name)
         }
         finish()
         SessionCoordinator.shared.connectToRemote(named: host.name)

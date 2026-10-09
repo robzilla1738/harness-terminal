@@ -30,7 +30,7 @@ final class AnotherMacTests: XCTestCase {
 
         XCTAssertEqual(PaneDirectory.root(cwd: left.path, path: nil), left.path)
         XCTAssertEqual(PaneDirectory.root(cwd: "", path: nil), "/")
-        XCTAssertEqual(PaneDirectory.root(cwd: left.path, path: "  "), left.path)
+        XCTAssertEqual(PaneDirectory.root(cwd: left.path, path: ""), left.path)
         let replaced = PaneDirectory.listing(cwd: left.path, path: right.path)
         XCTAssertEqual(replaced.root, (right.path as NSString).standardizingPath)
         XCTAssertEqual(replaced.entries.map(\.name), ["beta.txt"])
@@ -60,6 +60,20 @@ final class AnotherMacTests: XCTestCase {
         }
         XCTAssertEqual(surfaceID, "surface-a")
         XCTAssertEqual(path, right.path)
+    }
+
+    func testDirectoryNavigationPreservesSpacesInNames() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("harness-path-\(UUID())")
+        let folder = root.appendingPathComponent(" folder ")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: folder.appendingPathComponent("file.txt"))
+        for path in [folder.path, " folder "] {
+            let listing = PaneDirectory.listing(cwd: root.path, path: path)
+            XCTAssertEqual(listing.root, folder.path)
+            XCTAssertEqual(listing.entries.map(\.name), ["file.txt"])
+        }
+        XCTAssertEqual(PaneDirectory.root(cwd: root.path, path: "  "), root.appendingPathComponent("  ").path)
     }
 
     func testNonOwnerPrimaryResizeLeavesOwnerSizeUnchangedAndAlternateDoesNotReflow() {

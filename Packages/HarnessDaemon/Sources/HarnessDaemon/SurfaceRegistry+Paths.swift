@@ -1,13 +1,9 @@
 import Foundation
 import HarnessCore
-#if canImport(Darwin)
-import Darwin
-#else
-import Glibc
-#endif
 
 extension SurfaceRegistry {
     func searchPaths(surfaceID: String, path: String?, query: String, project: Bool, cancelled: FlagBox) -> IPCResponse {
+        guard !cancelled.read() else { return .error("Search cancelled") }
         guard query.count <= 256 else { return .error("Use a search of 256 characters or fewer.") }
         lock.lock()
         let pty = sessions[surfaceID]
@@ -23,14 +19,22 @@ extension SurfaceRegistry {
                     guard let files = try gitPaths(["-C", searchRoot, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cancelled: cancelled) else {
                         return .error("Could not enumerate project files.")
                     }
-                    let filesAndPaths = Set(String(decoding: files, as: UTF8.self).split(separator: "\0").map(String.init)).sorted().map {
+                    let paths = files.split(separator: 0)
+                    guard paths.count <= 20_000 else {
+                        return .error("This project has too many paths. Choose a smaller folder.")
+                    }
+                    let filesAndPaths = Set(paths.map { String(decoding: $0, as: UTF8.self) }).map {
                         PaneDirEntry(name: $0, path: (searchRoot as NSString).appendingPathComponent($0), directory: false)
                     }
                     var directories: Set<String> = []
                     for entry in filesAndPaths {
+                        guard !cancelled.read() else { return .error("Search cancelled") }
                         var parent = (entry.name as NSString).deletingLastPathComponent
                         while !parent.isEmpty, parent != "." {
                             directories.insert(parent)
+                            guard directories.count + filesAndPaths.count <= 20_000 else {
+                                return .error("This project has too many paths. Choose a smaller folder.")
+                            }
                             parent = (parent as NSString).deletingLastPathComponent
                         }
                     }
@@ -46,7 +50,8 @@ extension SurfaceRegistry {
                 let urls = try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isDirectoryKey], options: [])
                 guard urls.count <= 20_000 else { return .error("This folder is too large. Choose a smaller folder.") }
                 entries = try urls.map { url in
-                    PaneDirEntry(name: url.lastPathComponent, path: url.path, directory: try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
+                    guard !cancelled.read() else { throw SetupError.invalid("Search cancelled") }
+                    return PaneDirEntry(name: url.lastPathComponent, path: url.path, directory: try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
                 }
             }
             guard !cancelled.read() else { return .error("Search cancelled") }
@@ -80,39 +85,10 @@ extension SurfaceRegistry {
     }
 
     private func gitPaths(_ arguments: [String], cancelled: FlagBox) throws -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["git"] + arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        try process.run()
-        let started = Date()
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
-        timer.setEventHandler {
-            if process.isRunning, cancelled.read() || Date().timeIntervalSince(started) > 5 {
-                process.terminate()
-                if Date().timeIntervalSince(started) > 6 { _ = kill(process.processIdentifier, SIGKILL) }
-            }
-        }
-        timer.resume()
-        defer { timer.cancel() }
-        var data = Data()
-        while true {
-            let chunk = pipe.fileHandleForReading.availableData
-            if chunk.isEmpty { break }
-            if data.count + chunk.count > 4 * 1024 * 1024 {
-                process.terminate()
-                process.waitUntilExit()
-                throw SetupError.invalid("This project has too many paths. Choose a smaller folder.")
-            }
-            data.append(chunk)
-        }
-        process.waitUntilExit()
-        guard !cancelled.read() else { throw SetupError.invalid("Search cancelled") }
-        guard Date().timeIntervalSince(started) < 5 else { throw SetupError.invalid("Project file lookup timed out.") }
-        return process.terminationStatus == 0 ? data : nil
+        let result = try ProcessCapture.run(
+            URL(fileURLWithPath: "/usr/bin/env"), arguments: ["git"] + arguments,
+            timeout: 5, maxOutputBytes: 4 * 1024 * 1024, cancelled: { cancelled.read() }
+        )
+        return result.status == 0 ? result.stdout : nil
     }
 }

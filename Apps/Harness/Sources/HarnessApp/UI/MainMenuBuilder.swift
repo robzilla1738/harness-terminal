@@ -472,11 +472,11 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
             let present = Self.tailscaleCommandPresent()
             let peers = present ? TailscalePeers.parse(Self.tailscaleStatusJSON() ?? Data()) : []
             let sockets = TailscalePeers.withHarness(peers)
+            if FollowEvent.tailscaleStatusChanged(commandPresent: present, peerCount: peers.count) != nil {
+                _ = try? DaemonClient().request(.noteTailscaleStatus(peerCount: peers.count), timeout: 1)
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if FollowEvent.tailscaleStatusChanged(commandPresent: present, peerCount: peers.count) != nil {
-                        _ = try? DaemonClient().request(.noteTailscaleStatus(peerCount: peers.count), timeout: 1)
-                    }
                     self.confirmSuggestedPeer(peers, sockets: sockets, commandPresent: present)
                 }
             }
@@ -484,14 +484,9 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
 
     nonisolated private static func tailscaleCommandPresent() -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["tailscale"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        guard let result = try? ProcessCapture.run(URL(fileURLWithPath: "/usr/bin/which"),
+            arguments: ["tailscale"], timeout: 2, maxOutputBytes: 16_384) else { return false }
+        return result.status == 0
     }
 
     nonisolated private static func tailscaleStatusJSON() -> Data? {
@@ -547,8 +542,11 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard RemoteHostsService.shared.removeHost(named: name) else {
+            DisplayMessage.show("Couldn’t remove this host. Check disk space and permissions for remote-hosts.json.")
+            return
+        }
         SessionCoordinator.shared.disconnectRemote(named: name)
-        RemoteHostsService.shared.removeHost(named: name)
     }
 
     /// Opens the host in a window of its own (or brings its window forward); windows on other

@@ -38,6 +38,23 @@ PREVIEW_SIGNPOSTS=1 make preview && Scripts/scorecard.sh input-latency
 Scripts/scorecard.sh report             # markdown to paste below
 ```
 
+## Review follow-up — 2026-10-08, Find CPU
+
+A matched release check against `a7953d4` uses the existing 20,001-row search workload,
+one warm-up and three measured samples. Mapping arrays retain their capacity between
+logical lines; uncombined ASCII and box/block drawing bypass temporary text resolution.
+Unicode normalization, combining clusters, wide-cell coordinates, and matching remain intact.
+
+| Search | Before median | Review median | Change |
+|---|---:|---:|---:|
+| Literal, 20,000 matches | 17.67 ms | 15.31 ms | 13.3% less time |
+| Regex, 20,000 matches | 75.20 ms | 72.96 ms | 3.0% less time; small difference |
+
+[Raw samples and engine hashes](benchmarks/terminal-excellence-2026-10-08-review.json)
+include the intermediate buffer-only variant and warm-ups. These are CPU Find measurements,
+not rendering latency, output throughput, or a new Ghostty comparison. The earlier
+cross-terminal performance gaps below remain open; no visual feature was reduced.
+
 ## Performance follow-up — 2026-10-08, final consumer source `b41b325`
 
 The follow-up removes full-viewport copies on scroll, losslessly compacts uniform history

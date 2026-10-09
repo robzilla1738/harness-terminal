@@ -51,6 +51,11 @@ public struct TerminalMappedText: Sendable {
 
     public init() {}
 
+    mutating func removeAll() {
+        units.removeAll(keepingCapacity: true)
+        spans.removeAll(keepingCapacity: true)
+    }
+
     public mutating func append(_ cells: [TerminalGridCell], line: Int, clusters: [UInt32: String] = [:]) {
         var resolver = TerminalTextResolver()
         append(cells, line: line, clusters: clusters, resolver: &resolver)
@@ -62,7 +67,10 @@ public struct TerminalMappedText: Sendable {
         for (column, cell) in cells.enumerated() where cell.width != .spacerTail {
             let offset = units.count
             let count: Int
-            if cell.combining0 == 0, cell.codepoint < 128 {
+            // ASCII and box/block drawing scalars are already normalized and fit in one
+            // UTF-16 unit. Log searches need no temporary String or resolver lookup for them.
+            if cell.combining0 == 0, cell.combining1 == 0,
+               cell.codepoint < 128 || (0x2500...0x259F).contains(cell.codepoint) {
                 units.append(UInt16(cell.codepoint == 0 ? 32 : cell.codepoint))
                 count = 1
             } else {

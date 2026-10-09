@@ -140,6 +140,7 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard !textView.hasMarkedText() else { return false }
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
             // ⇧⏎ jumps to the previous match, ⏎ to the next.

@@ -30,6 +30,8 @@ public enum ProcessCapture {
                            environment: [String: String]? = nil, timeout: TimeInterval? = nil,
                            maxOutputBytes: Int = 64 * 1024 * 1024,
                            cancelled: () -> Bool = { false }) throws -> ProcessOutput {
+        if cancelled() { throw ProcessCaptureError.cancelled }
+        let deadline = timeout.map { ProcessInfo.processInfo.systemUptime + max(0, $0) }
         let outputLimit = max(0, maxOutputBytes)
         let process = Process()
         process.executableURL = executable
@@ -67,7 +69,6 @@ public enum ProcessCapture {
         var open = [true, true]
         var inputOpen = input != nil
         var inputOffset = 0
-        let deadline = timeout.map { ProcessInfo.processInfo.systemUptime + max(0, $0) }
         do {
             for handle in handles {
                 let flags = fcntl(handle.fileDescriptor, F_GETFL)

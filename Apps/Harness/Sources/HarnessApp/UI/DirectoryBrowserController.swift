@@ -376,7 +376,11 @@ final class DirectoryBrowserController: NSObject, NSSearchFieldDelegate, NSTable
                 switch result {
                 case let .success(.error(message)): self.status.stringValue = message
                 case .success: self.close(); SessionCoordinator.shared.refreshSnapshot()
-                case let .failure(error): self.status.stringValue = error.localizedDescription
+                case let .failure(error):
+                    // A lost reply does not tell us whether input or tab creation happened.
+                    // Close the action so Return cannot unknowingly send the same mutation again.
+                    self.close()
+                    DisplayMessage.show("Couldn’t confirm the action. Check the terminal before trying again. \(error.localizedDescription)")
                 }
                 self.status.toolTip = self.status.stringValue
             }

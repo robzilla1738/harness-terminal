@@ -1,0 +1,174 @@
+{
+  "date": "2026-10-08",
+  "baseline_source": "a7953d4",
+  "candidate": "review follow-up; engine file hashes below",
+  "environment": {
+    "machine": "Apple M5, 32 GiB",
+    "configuration": "release",
+    "toolchain": "Xcode-beta Swift 6.4",
+    "workload": "PerformanceBenchmarks/testBufferSearchKeystroke, 120x40, 20,001 retained rows, 20,000 matches"
+  },
+  "method": "One warm-up and three measured samples per variant, sequential on the same Mac; no concurrent local build or UI checks. CPU search only, not app/daemon throughput or physical latency.",
+  "baseline": [
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17249750,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 73512666,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 18228583,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 75196083,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17668791,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 75665292,
+      "lines": 20001,
+      "hits": 20000
+    }
+  ],
+  "buffer_reuse_only": [
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17110583,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 76112625,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17616792,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 74788416,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 17014083,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 75140792,
+      "lines": 20001,
+      "hits": 20000
+    }
+  ],
+  "final": [
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 15311416,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 73079958,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 15347791,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 72960166,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_substring",
+      "nanos": 15266458,
+      "lines": 20001,
+      "hits": 20000
+    },
+    {
+      "benchmark": "buffer_search_keystroke_regex",
+      "nanos": 72725667,
+      "lines": 20001,
+      "hits": 20000
+    }
+  ],
+  "engine_sha256": {
+    "TerminalTextSnapshot.swift": "99842c133519c90633908f836a38e25b7bcce62b34d63b381286f7046af79b53",
+    "TerminalBufferSearch.swift": "530deac424ccb98ed7d3d190252f499d73fc5e80e3250dad7a2e75e2683cf797"
+  },
+  "warmups": {
+    "baseline": [
+      {
+        "benchmark": "buffer_search_keystroke_substring",
+        "nanos": 18066667,
+        "lines": 20001,
+        "hits": 20000
+      },
+      {
+        "benchmark": "buffer_search_keystroke_regex",
+        "nanos": 73977792,
+        "lines": 20001,
+        "hits": 20000
+      }
+    ],
+    "buffer_reuse_only": [
+      {
+        "benchmark": "buffer_search_keystroke_substring",
+        "nanos": 18865625,
+        "lines": 20001,
+        "hits": 20000
+      },
+      {
+        "benchmark": "buffer_search_keystroke_regex",
+        "nanos": 81308333,
+        "lines": 20001,
+        "hits": 20000
+      }
+    ],
+    "final": [
+      {
+        "benchmark": "buffer_search_keystroke_substring",
+        "nanos": 15145416,
+        "lines": 20001,
+        "hits": 20000
+      },
+      {
+        "benchmark": "buffer_search_keystroke_regex",
+        "nanos": 73155333,
+        "lines": 20001,
+        "hits": 20000
+      }
+    ]
+  }
+}

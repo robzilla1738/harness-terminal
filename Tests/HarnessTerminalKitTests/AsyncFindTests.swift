@@ -5,6 +5,21 @@ import HarnessTerminalEngine
 
 @MainActor
 final class AsyncFindTests: XCTestCase {
+    func testReturnCommitsMarkedTextBeforeNavigatingMatches() {
+        let bar = TerminalFindBar(frame: .zero)
+        let editor = NSTextView()
+        var navigations = 0
+        bar.onNext = { navigations += 1 }
+        editor.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertFalse(bar.control(NSSearchField(), textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertEqual(navigations, 0)
+        editor.unmarkText()
+        XCTAssertTrue(bar.control(NSSearchField(), textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertEqual(navigations, 1)
+    }
+
     func testNewQueryReplacesPendingSearchAndInvalidRegexIsReported() async {
         let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: true)
         view.receive("old old old\r\n世界 family 👩🏽‍💻\r\n")

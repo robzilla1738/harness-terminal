@@ -28,12 +28,10 @@ public struct PaneDirListing: Codable, Equatable, Sendable {
 public enum PaneDirectory {
     public static func root(cwd: String, path: String?) -> String {
         let base = cwd.isEmpty ? "/" : cwd
-        guard let path else { return base }
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return base }
-        if trimmed.hasPrefix("/") { return (trimmed as NSString).standardizingPath }
+        guard let path, !path.isEmpty else { return base }
+        if path.hasPrefix("/") { return (path as NSString).standardizingPath }
         let parent = base.hasSuffix("/") ? String(base.dropLast()) : base
-        return ((parent as NSString).appendingPathComponent(trimmed) as NSString).standardizingPath
+        return ((parent as NSString).appendingPathComponent(path) as NSString).standardizingPath
     }
 
     public static func list(root: String, fileManager: FileManager = .default) -> [PaneDirEntry] {

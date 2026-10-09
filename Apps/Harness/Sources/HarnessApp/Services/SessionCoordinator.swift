@@ -318,11 +318,19 @@ final class SessionCoordinator: NSObject {
     /// Attach to a saved remote daemon in the background, then call back on the main actor
     /// with whether it's attached. Bringing up the SSH tunnel blocks, so it runs off-main;
     /// failures show and change nothing.
+    private var pendingRemoteAttachments: [String: (id: UUID, callbacks: [@MainActor @Sendable (Bool) -> Void])] = [:]
+
     func attachRemote(named name: String, then done: @escaping @MainActor @Sendable (Bool) -> Void) {
         if isConnected(name) {
             done(true)
             return
         }
+        if pendingRemoteAttachments[name] != nil {
+            pendingRemoteAttachments[name]?.callbacks.append(done)
+            return
+        }
+        let id = UUID()
+        pendingRemoteAttachments[name] = (id, [done])
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Carry Sendable values (an endpoint, a snapshot, a message) back to the main actor.
             var resolved: Endpoint?
@@ -338,16 +346,23 @@ final class SessionCoordinator: NSObject {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    guard self.pendingRemoteAttachments[name]?.id == id else {
+                        if self.pendingRemoteAttachments[name] == nil, !self.isConnected(name) {
+                            RemoteHostsService.shared.disconnect(named: name)
+                        }
+                        return
+                    }
+                    let callbacks = self.pendingRemoteAttachments.removeValue(forKey: name)?.callbacks ?? []
                     guard let endpoint, let first else {
                         self.noteDaemonError(DaemonSessionError.daemonError(message))
-                        done(false)
+                        callbacks.forEach { $0(false) }
                         return
                     }
                     if !self.isConnected(name) {
                         self.attachLink(DaemonLink(owner: name, endpoint: endpoint, snapshot: first))
                     }
                     self.disconnectedHosts.remove(name)
-                    done(true)
+                    callbacks.forEach { $0(true) }
                 }
             }
         }
@@ -427,7 +442,13 @@ final class SessionCoordinator: NSObject {
     /// Detach from a remote daemon: its windows close (the last one moves to this Mac), and
     /// its tunnel goes down. Its sessions keep running there.
     func disconnectRemote(named name: String) {
-        guard name != DaemonSidebar.localID, isConnected(name) else { return }
+        guard name != DaemonSidebar.localID else { return }
+        let callbacks = pendingRemoteAttachments.removeValue(forKey: name)?.callbacks ?? []
+        callbacks.forEach { $0(false) }
+        guard isConnected(name) else {
+            RemoteHostsService.shared.disconnect(named: name)
+            return
+        }
         if activeOwner == name {
             // This Mac is attached whenever a remote is active.
             guard let local = links.removeValue(forKey: DaemonSidebar.localID) else { return }

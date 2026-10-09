@@ -128,6 +128,9 @@ public enum TerminalBufferSearch {
                     let text = mapped.text as NSString
                     var remaining = fullRange
                     while remaining.length > 0 {
+                        if cancelled() || ProcessInfo.processInfo.systemUptime > deadline {
+                            limited = true; break
+                        }
                         let found = text.range(of: pattern, options: options.caseSensitive ? [] : [.caseInsensitive], range: remaining)
                         if found.location == NSNotFound { break }
                         matches.append(TerminalBufferMatch(spans: mapped.cells(for: found)))
@@ -139,7 +142,7 @@ public enum TerminalBufferSearch {
             if cancelled() { return .cancelled }
             if ProcessInfo.processInfo.systemUptime > deadline { limited = true }
             if limited { break }
-            mapped = TerminalMappedText()
+            mapped.removeAll()
         }
         return .matches(matches, limited: limited)
     }

@@ -165,7 +165,10 @@ final class MainExecutor: CommandExecutor {
         case .runShell(let shellCommand, let captureToBuffer):
             RunShell.run(shellCommand, captureToBuffer: captureToBuffer)
         case .ifShell(let condition, let then, let otherwise):
+            let owner = coordinator.activeOwner, surface = coordinator.activeSurfaceID
             RunShell.runConditional(condition) { success in
+                // A delayed condition must not run its branch in a different host or pane.
+                guard coordinator.activeOwner == owner, coordinator.activeSurfaceID == surface else { return }
                 let branch = success ? then : otherwise
                 guard let branch else { return }
                 MainExecutor.shared.executeSurfacingErrors(branch)
@@ -613,20 +616,27 @@ enum RunShell {
     /// stored in a paste buffer (`run-shell -b`); otherwise output is dropped.
     static func run(_ command: String, captureToBuffer: Bool) {
         let shell = loginShell
+        let endpoint = SessionCoordinator.shared.activeEndpoint
         DispatchQueue.global(qos: .utility).async {
+            if captureToBuffer {
+                do {
+                    let output = try ProcessCapture.run(URL(fileURLWithPath: shell), arguments: ["-lc", command],
+                                                        maxOutputBytes: 4 * 1024 * 1024)
+                    if !output.stdout.isEmpty {
+                        DispatchQueue.main.async {
+                            SessionCoordinator.shared.requestDaemonBatch([.setBuffer(name: nil, data: output.stdout)],
+                                                                          refresh: false, endpoint: endpoint)
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async { DisplayMessage.show("run-shell failed: \(error.localizedDescription)") }
+                }
+                return
+            }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: shell)
             process.arguments = ["-lc", command]
-            // Only stdout is captured, and only with -b; stderr is never used. Route every UNUSED
-            // stream to /dev/null instead of an undrained Pipe: an unread pipe that fills (~64 KiB)
-            // blocks the child on write() so it never exits, deadlocking readDataToEndOfFile()/
-            // waitUntilExit() and permanently leaking this GCD worker thread.
-            let out: Pipe? = captureToBuffer ? Pipe() : nil
-            if let out {
-                process.standardOutput = out
-            } else {
-                process.standardOutput = FileHandle.nullDevice
-            }
+            process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             do {
                 try process.run()
@@ -635,13 +645,7 @@ enum RunShell {
                 DispatchQueue.main.async { MainActor.assumeIsolated { DisplayMessage.show("run-shell failed: \(error.localizedDescription)") } }
                 return
             }
-            let data = out?.fileHandleForReading.readDataToEndOfFile() ?? Data()
             process.waitUntilExit()
-            if captureToBuffer, !data.isEmpty {
-                DispatchQueue.main.async {
-                    SessionCoordinator.shared.requestDaemonAsync(.setBuffer(name: nil, data: data))
-                }
-            }
         }
     }
 

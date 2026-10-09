@@ -23,6 +23,8 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ### Changed
 
+- Global-search results separate excerpts from quieter location details, with consistent row spacing and reusable cells. Literal Find takes about 13% less CPU time in the recorded 20,001-row release workload.
+
 - Cleaner title-bar spacing with separate tabs, compact badges, and a 100-column × 30-row fresh-window default based on the configured font and padding. New settings remember window size and position; explicit preferences and saved sizes remain respected.
 
 - Recessed window chrome gives translucent terminal panes a lighter appearance against the tab bar, sidebar, and gutters while preserving terminal colors and one shared window blur.
@@ -41,6 +43,11 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- Remote-host renames save atomically and reject name collisions; failed removal preserves the connection. Concurrent GUI attachment requests are coalesced, and disconnected requests cannot reopen a host.
+- Path insertion reports uncertain command outcomes without leaving Return ready to repeat them. File navigation preserves spaces; project discovery has bounded output, cancellation, and path counts.
+- Find and global output search respect IME composition. Global search refreshes its source when reopened, cancels result validation on dismissal, and prevents duplicate opens.
+- Image dimensions are checked before decoding. Cancelled discovery does not launch a subprocess, and compatible isolated previews avoid an unnecessary daemon-replacement wait.
+- Captured shell output is bounded and stays with the original host; delayed conditional actions cannot execute in a different pane.
 - Cancelled output subscriptions cannot send stale binary frames into a newly reused connection.
 - Coalesced reconnect output retains the sequence of its first byte, preventing skipped output after reattachment.
 - Comfortable pane dividers retain a full-length drag target even when AppKit proposes an empty hit rectangle.
