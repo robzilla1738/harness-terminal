@@ -5,7 +5,7 @@ import HarnessTerminalKit
 
 @MainActor
 final class AppearanceChromeTests: XCTestCase {
-    func testChromeFollowsLightThenRestoresTheBlackDefault() {
+    func testChromeFollowsLightThenRestoresGraphite() {
         let settings = HarnessSettings()
         XCTAssertEqual(settings.appearanceMode, .theme)
         XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
@@ -17,7 +17,7 @@ final class AppearanceChromeTests: XCTestCase {
         XCTAssertEqual(HarnessChrome.backgroundBlur, 16)
         XCTAssertEqual(HarnessChrome.paintOpacity, 0.63, accuracy: 0.0001)
         assertHex(HarnessChrome.current.terminalBackground, ThemeManager.defaultBaselineBackgroundHex)
-        assertHex(HarnessChrome.current.sidebarBackground, ThemeManager.defaultBaselineBackgroundHex)
+        assertDarker(HarnessChrome.current.sidebarBackground, than: HarnessChrome.current.terminalBackground)
         assertHex(HarnessChrome.current.accent, ThemeManager.defaultBaselineCursorHex)
 
         let lightCanvas = ThemeManager.resolvedCanvas(
@@ -65,7 +65,7 @@ final class AppearanceChromeTests: XCTestCase {
         XCTAssertEqual(HarnessChrome.paintOpacity, 0.63, accuracy: 0.0001)
         XCTAssertEqual(HarnessChrome.backgroundBlur, 16)
         assertHex(HarnessChrome.current.terminalBackground, ThemeManager.defaultBaselineBackgroundHex)
-        assertHex(HarnessChrome.current.sidebarBackground, ThemeManager.defaultBaselineBackgroundHex)
+        assertDarker(HarnessChrome.current.sidebarBackground, than: HarnessChrome.current.terminalBackground)
         assertHex(HarnessChrome.current.accent, ThemeManager.defaultBaselineCursorHex)
     }
 

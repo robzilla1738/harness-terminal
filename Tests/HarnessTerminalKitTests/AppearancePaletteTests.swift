@@ -56,8 +56,7 @@ final class AppearancePaletteTests: XCTestCase {
     }
 
     func testLightCanvasTakesSelectionFromTheLightTheme() {
-        // The snapshot still names the black default; a light canvas must not inherit its
-        // #333333 selection, which buried dark ink on Harness Light.
+        // A light canvas must use the light selection even when the snapshot names Default.
         var settings = HarnessSettings()
         settings.appearanceMode = .light
         let light = TerminalHostView.resolvedNativeAppearance(themeName: "Default", settings: settings, systemAppearance: .dark)
@@ -65,7 +64,7 @@ final class AppearancePaletteTests: XCTestCase {
 
         settings.appearanceMode = .theme
         let dark = TerminalHostView.resolvedNativeAppearance(themeName: "Default", settings: settings, systemAppearance: .light)
-        XCTAssertEqual(dark.selectionBackgroundHex?.lowercased(), "#333333")
+        XCTAssertEqual(dark.selectionBackgroundHex?.lowercased(), "#343d44")
     }
 
     func testThemeModeExplicitPaletteFillsOnlyEmptySlots() {

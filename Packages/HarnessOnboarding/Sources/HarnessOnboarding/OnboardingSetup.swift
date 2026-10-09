@@ -2,8 +2,8 @@ import AppKit
 import Observation
 
 /// What the Notifications and Command Line steps show and do, in one place. The wizard's footer
-/// reads it to offer each step's single primary action, and navigation (Back, Skip, Esc) is locked
-/// while `isBusy` so the wizard can't be torn down halfway through a write.
+/// reads it to offer each step's single primary action. Only local installs lock navigation;
+/// waiting for the optional macOS permission prompt must never trap the user here.
 ///
 /// Every check re-runs on `refresh()`, so reopening the wizard from Help ▸ Welcome to Harness shows
 /// what is already set up instead of offering to do it again.
@@ -22,9 +22,13 @@ final class OnboardingSetup {
     var isInstallingHooks = false
     var isRequestingNotifications = false
     @ObservationIgnored var notificationRequest: @MainActor (@escaping @MainActor @Sendable (Result<NotificationPermission.State, Error>) -> Void) -> Void = NotificationPermission.request
+    @ObservationIgnored var notificationTimeout: Duration = .seconds(15)
+    @ObservationIgnored private var notificationWait: Task<Void, Never>?
+    private var notificationRequestID: UUID?
     var hooksError: String?
 
     var isBusy: Bool { isInstallingCLI || isInstallingHooks || isRequestingNotifications }
+    var blocksNavigation: Bool { isInstallingCLI || isInstallingHooks }
     var allowsSystemSetup: Bool { !HarnessCLIPaths.hasHomeOverride }
 
     var cliReady: Bool { cliInstalled && cliError == nil && shells.allSatisfy(\.alreadyHas) }
@@ -48,14 +52,30 @@ final class OnboardingSetup {
         guard !isBusy, allowsSystemSetup else { return }
         isRequestingNotifications = true
         hooksError = nil
+        let requestID = UUID()
+        notificationRequestID = requestID
+        notificationWait = Task { [weak self, notificationTimeout] in
+            do { try await Task.sleep(for: notificationTimeout) }
+            catch { return }
+            guard let self, self.notificationRequestID == requestID else { return }
+            self.stopWaitingForNotifications()
+            self.hooksError = "macOS hasn't answered the notification request. You can try again or continue with Not Now and enable notifications in System Settings later."
+        }
         notificationRequest { [weak self] result in
-            guard let self else { return }
-            self.isRequestingNotifications = false
+            guard let self, self.notificationRequestID == requestID else { return }
+            self.stopWaitingForNotifications()
             switch result {
             case let .success(state): self.notifications = state
             case let .failure(error): self.hooksError = error.localizedDescription
             }
         }
+    }
+
+    func stopWaitingForNotifications() {
+        notificationWait?.cancel()
+        notificationWait = nil
+        notificationRequestID = nil
+        isRequestingNotifications = false
     }
 
     func installHooks() {

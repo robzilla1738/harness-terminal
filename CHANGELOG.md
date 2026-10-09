@@ -8,6 +8,16 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-09
+
+### Fixed
+- Dock agent badges resize to fit inside the app icon, including when four agents are shown.
+- The terminal scrollbar hides after scrolling stops, including when macOS uses the legacy scrollbar style. Thumb dragging and track clicks remain available while it is visible.
+- Notification setup no longer traps users behind an unanswered macOS permission request. Back, Not Now, Skip Setup, and Escape remain available while waiting; an unanswered request times out with recovery guidance. The welcome window also allows system permission dialogs to appear above it.
+
+### Changed
+- Harness Graphite is now the default theme and appears first in the collection. The previous pure-black palette is available as Harness Obsidian; existing selections of Harness Default retain their colors. All 25 original themes, custom editing, and theme sharing remain available.
+
 ## [2.0.1] - 2026-10-09
 
 ### Added

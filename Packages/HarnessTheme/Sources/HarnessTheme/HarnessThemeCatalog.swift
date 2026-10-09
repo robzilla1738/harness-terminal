@@ -6,9 +6,8 @@ import Foundation
 /// Community themes live in the bundled `themes.json` resource and merge in here without
 /// API changes — `theme(named:)`, `search(_:)`, and `allThemes` are the stable surface.
 public enum HarnessThemeCatalog {
-    /// The default theme used when none is selected: a pure black canvas with white text and
-    /// a muted ANSI-16, so fresh installs don't start on over-saturated primaries.
-    public static let defaultThemeName = "Harness Default"
+    /// The default theme used when none is selected.
+    public static let defaultThemeName = "Harness Graphite"
 
     /// Curated, surfaced-first themes.
     public static let featuredNames = HarnessOriginalThemes.all.map(\.name) + [
@@ -45,16 +44,17 @@ public enum HarnessThemeCatalog {
     public static var userThemes: [HarnessThemeDefinition] {
         get { userThemesLock.lock(); defer { userThemesLock.unlock() }; return storedUserThemes }
         set {
-            let builtinNames = Set(builtins.map { $0.name.lowercased() })
             userThemesLock.lock()
-            storedUserThemes = newValue.filter { !builtinNames.contains($0.name.lowercased()) }
+            storedUserThemes = newValue.filter { !isBuiltin($0.name) }
             userThemesLock.unlock()
         }
     }
 
     /// Whether `name` belongs to a built-in theme (a saved theme can't take it).
     public static func isBuiltin(_ name: String) -> Bool {
-        builtins.contains { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame }
+        let lowered = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let lookupName = legacyThemeAliases[lowered] ?? lowered
+        return builtins.contains { $0.name.lowercased() == lookupName }
     }
 
     private static let userThemesLock = NSLock()
@@ -90,7 +90,8 @@ public enum HarnessThemeCatalog {
     }()
 
     private static let legacyThemeAliases = [
-        "ghostty default": defaultThemeName.lowercased(),
+        "ghostty default": "harness obsidian",
+        "harness default": "harness obsidian",
     ]
 
     /// Load the ported community catalog, embedded as base64-encoded JSON in

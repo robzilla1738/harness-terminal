@@ -93,7 +93,7 @@ harness-cli new-tab --workspace Default --cwd ~/Code/myproject
 harness-cli send-keys --surface "$HARNESS_SURFACE" --keys "ls -la Enter"
 harness-cli notify --surface "$HARNESS_SURFACE" --title Agent --body "Needs approval"
 harness-cli color-check
-harness-cli theme-preview --theme "Harness Default"
+harness-cli theme-preview --theme "Harness Graphite"
 ```
 
 Install it onto your `PATH`:

@@ -407,7 +407,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         windowPaddingY: Float = 14,
         appearanceMode: HarnessAppearanceMode = .theme,
         systemLightThemeName: String = "Harness Light",
-        systemDarkThemeName: String = "Harness Default",
+        systemDarkThemeName: String = "Harness Graphite",
         customBackgroundHex: String? = nil,
         customForegroundHex: String? = nil,
         customCursorHex: String? = nil,
