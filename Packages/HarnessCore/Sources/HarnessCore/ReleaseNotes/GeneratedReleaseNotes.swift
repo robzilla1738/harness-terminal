@@ -6,7 +6,7 @@
 extension ReleaseNotes {
     public static let current = ReleaseNotes(
         version: "2.1.0",
-        changelogDigest: "dff4a9c637f902f4",
+        changelogDigest: "00635410337c292c",
         sections: [
             Section(title: "Added", items: [
                 "Connect a phone or iPad",
@@ -20,6 +20,7 @@ extension ReleaseNotes {
                 "Keyboard event reporting",
             ]),
             Section(title: "Changed", items: [
+                "New website",
                 "Desktop tab polish",
                 "Companion experience",
             ]),

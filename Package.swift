@@ -17,7 +17,7 @@ let strictFoundationSettings: [SwiftSetting] = [.unsafeFlags(["-warnings-as-erro
 #if os(macOS)
 let platformDependencies: [Package.Dependency] = [
     // Sparkle: macOS auto-update. The only Swift package dependency, and only the GUI links it.
-    // Lua 5.1 is vendored in CLua51 and linked by the CLI only. Appcast hosted at harnesscli.dev.
+    // Lua 5.1 is vendored in CLua51 and linked by the CLI only. Appcast hosted at thebestterminal.com.
     // Pinned to the audited 2.9.x line (`Package.resolved` locks 2.9.6): a fresh resolve can't
     // float onto an unaudited future major/minor, while patch-level security fixes still land.
     .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.9.6")),

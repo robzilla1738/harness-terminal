@@ -45,7 +45,7 @@ public enum TerminalBanner {
             lines += wrappedStep(number: index + 1, key: step.key, what: step.what, inner: inner)
         }
         lines.append([])
-        lines.append([Run("Docs: harnesscli.dev"), Run("  ·  ", sgr: dim), Run("Settings: ⌘,")])
+        lines.append([Run("Docs: thebestterminal.com"), Run("  ·  ", sgr: dim), Run("Settings: ⌘,")])
         lines += wrappedText("One-time tour — it won't print again.", sgr: dim, inner: inner)
         return render(lines: lines, columns: columns)
     }
@@ -65,7 +65,7 @@ public enum TerminalBanner {
             }
         }
         lines.append([])
-        lines.append([Run("Full notes: harnesscli.dev/changelog", sgr: dim)])
+        lines.append([Run("Full notes: thebestterminal.com/changelog", sgr: dim)])
         return render(lines: lines, columns: columns)
     }
 

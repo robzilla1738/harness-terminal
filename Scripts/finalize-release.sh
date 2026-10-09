@@ -114,14 +114,14 @@ if [[ "${DEPLOY_WEBSITE:-0}" == "1" ]]; then
     mkdir -p "$WEBSITE_DIR/public"
     cp "$ROOT/dist/appcast.xml" "$WEBSITE_DIR/public/appcast.xml"
     ( cd "$WEBSITE_DIR" && vercel --prod --yes )
-    echo "    appcast live at https://harnesscli.dev/appcast.xml — Sparkle auto-update is now wired."
+    echo "    appcast live at https://thebestterminal.com/appcast.xml — Sparkle auto-update is now wired."
   else
     echo "    Skipped website deploy (set WEBSITE_DIR and ensure dist/appcast.xml exists)." >&2
   fi
 else
   echo "==> appcast at dist/appcast.xml. Deploy it: copy to the website's public/appcast.xml and \`vercel --prod\`,"
-  echo "    or re-run with DEPLOY_WEBSITE=1. SUFeedURL (https://harnesscli.dev/appcast.xml) then resolves."
-  echo "    Ensure DOWNLOAD_URL_PREFIX (${DOWNLOAD_URL_PREFIX:-https://harnesscli.dev/}) points at the live DMG."
+  echo "    or re-run with DEPLOY_WEBSITE=1. SUFeedURL (https://thebestterminal.com/appcast.xml) then resolves."
+  echo "    Ensure DOWNLOAD_URL_PREFIX (${DOWNLOAD_URL_PREFIX:-https://thebestterminal.com/}) points at the live DMG."
 fi
 
 echo "Done. Notarized DMG on release $TAG; appcast generated."

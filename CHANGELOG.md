@@ -26,6 +26,7 @@ terminal-input and desktop layout refinements. The companion's source is availab
 - **Keyboard event reporting:** literal text key releases no longer duplicate characters when an application enables Kitty event reporting without requesting all keys.
 
 ### Changed
+- **New website:** built-in documentation links and the update feed now use `thebestterminal.com`. The former domain continues serving the signed update feed for existing installations.
 - **Desktop tab polish:** the active tab is slightly darker in the legacy Default theme, and traffic-light clearance is measured from the native controls so the workspace button and first tab have balanced gaps.
 - **Companion experience:** the iOS source now includes centered Liquid Glass terminal controls, a direct Ctrl-C button, one-shot modifiers, hold-to-repeat arrows, function/navigation keys, touch scrolling, desktop process marks, grouped sessions and clearer connection recovery. See its [verification and distribution status](https://github.com/robzilla1738/harness-ios/blob/main/docs/RELEASE.md).
 

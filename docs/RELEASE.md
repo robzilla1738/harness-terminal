@@ -54,8 +54,11 @@ Optional appcast deploy settings:
 | Environment variable `WEBSITE_REPOSITORY` | Website repository in `owner/name` form. The workflow writes `public/appcast.xml` there. |
 | Secret `WEBSITE_DEPLOY_TOKEN` | Token with write access to `WEBSITE_REPOSITORY`. Use this only if `deploy_appcast` is enabled. |
 
-The website deploy path assumes the website repository owns `harnesscli.dev` and
-deploys after a push, for example through Vercel's Git integration. The DMG does
+The website deploy path assumes the website repository owns `thebestterminal.com` and
+deploys after a push, for example through Vercel's Git integration. Keep
+`harnesscli.dev` attached to the same production deployment as a compatibility
+domain: versions before 2.1 still fetch their appcast from that address. Both
+domains must serve the same signed feed so existing installations can upgrade. The DMG does
 not need to be copied to the website: the generated appcast points Sparkle at
 the GitHub Release asset URL for the matching tag.
 
@@ -104,7 +107,7 @@ resource bundles, `make sign` (sign and notarize the app), `make dmg`, create a
 staple the DMG, upload it to the release, generate `dist/appcast.xml`),
 `Scripts/smoke-dmg.sh Harness.dmg`, upload the appcast to the release, and, with
 `deploy_appcast`, commit `public/appcast.xml` to the website repository and wait
-(up to about five minutes) for `https://harnesscli.dev/appcast.xml` to serve it.
+(up to about five minutes) for `https://thebestterminal.com/appcast.xml` to serve it.
 Only then is the release published and marked latest. `Harness.dmg` and
 `dist/appcast.xml` are also kept as the run's `harness-release-<tag>` artifact,
 and the temporary signing keychain is deleted even when a step fails.
@@ -118,7 +121,7 @@ and the temporary signing keychain is deleted even when a step fails.
 - `dist/appcast.xml`, uploaded to the GitHub Release for audit/debugging.
 - Optionally, `public/appcast.xml` in the website repository.
 
-Installed apps only see the update after `https://harnesscli.dev/appcast.xml`
+Installed apps only see the update after `https://thebestterminal.com/appcast.xml`
 serves the new appcast. If `deploy_appcast` is disabled, manually publish
 `dist/appcast.xml` to the website before expecting Sparkle auto-update to find
 the release.

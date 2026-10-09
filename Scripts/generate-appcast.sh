@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Generate / refresh the Sparkle appcast for harnesscli.dev.
+# Generate / refresh the Sparkle appcast for thebestterminal.com.
 #
 # Sparkle's `generate_appcast` scans a directory of release archives (.dmg / .zip), EdDSA-signs
 # each with the private key that matches SUPublicEDKey in Info.plist (public:
@@ -17,7 +17,7 @@ set -euo pipefail
 #   DOWNLOAD_URL_PREFIX=https://github.com/<owner>/<repo>/releases/download/<tag>/
 #     Override where Sparkle downloads archives from.
 #
-# Publish: upload the resulting appcast.xml to https://harnesscli.dev/appcast.xml and ensure
+# Publish: upload the resulting appcast.xml to https://thebestterminal.com/appcast.xml and ensure
 # the enclosure URLs written by DOWNLOAD_URL_PREFIX resolve to the matching archive(s).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,7 +25,7 @@ ARCHIVES="${1:-$ROOT/dist}"
 # Where the archives are hosted. Enclosure URLs in the appcast are made absolute against
 # this so Sparkle downloads from the site no matter where appcast.xml itself is fetched
 # from. Override with DOWNLOAD_URL_PREFIX if you host downloads on a subpath/CDN.
-DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://harnesscli.dev/}"
+DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://thebestterminal.com/}"
 
 # Locate generate_appcast: prefer PATH, else the resolved Sparkle SPM artifact, else Homebrew.
 GEN="$(command -v generate_appcast || true)"
@@ -61,4 +61,4 @@ fi
 "$GEN" "${GEN_ARGS[@]}" "$ARCHIVES"
 echo ""
 echo "Wrote $ARCHIVES/appcast.xml"
-echo "Next: upload appcast.xml to https://harnesscli.dev/appcast.xml and keep the archive URLs live."
+echo "Next: upload appcast.xml to https://thebestterminal.com/appcast.xml and keep the archive URLs live."

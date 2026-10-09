@@ -184,7 +184,7 @@
     <!-- Sparkle auto-update. Appcast hosted on the website; updates are EdDSA-signed
          (the public key below; the private key lives in the release machine's keychain). -->
     <key>SUFeedURL</key>
-    <string>https://harnesscli.dev/appcast.xml</string>
+    <string>https://thebestterminal.com/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>3LBPx8Uv5L5ptqRqdCWovmUIPLxcDEPnivy8cOpIlH8=</string>
     <key>SUEnableAutomaticChecks</key>

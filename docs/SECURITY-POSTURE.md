@@ -34,7 +34,7 @@ requested — the entitlements file contains exactly one key (the sandbox opt-ou
 
 ## Update path (Sparkle)
 
-- Appcast over HTTPS only: `SUFeedURL = https://harnesscli.dev/appcast.xml` (ATS applies;
+- Appcast over HTTPS only: `SUFeedURL = https://thebestterminal.com/appcast.xml` (ATS applies;
   no exception domains are declared).
 - Updates are EdDSA-signed: `SUPublicEDKey` is baked into Info.plist; the private key
   lives only in the protected `release` environment's secrets (or, for a local release,

@@ -33,7 +33,7 @@ final class TerminalBannerTests: XCTestCase {
         XCTAssertTrue(banner.contains("Try this, in order"))
         XCTAssertTrue(banner.contains("ctrl-a ?"))
         XCTAssertTrue(banner.contains("harness-cli"))
-        XCTAssertTrue(banner.contains("harnesscli.dev"))
+        XCTAssertTrue(banner.contains("thebestterminal.com"))
         XCTAssertTrue(banner.contains("won't print again"))
     }
 

@@ -260,7 +260,7 @@ grep -q "https://github.com/robzilla1738/harness-terminal/releases/download/$tag
 grep -q "sparkle:edSignature=" "$tmpdir/appcast.xml"
 
 if [[ "$deploy_appcast" == "1" ]]; then
-  curl -fsSL -H 'Cache-Control: no-cache' https://harnesscli.dev/appcast.xml -o "$tmpdir/live-appcast.xml"
+  curl -fsSL -H 'Cache-Control: no-cache' https://thebestterminal.com/appcast.xml -o "$tmpdir/live-appcast.xml"
   diff -u "$tmpdir/appcast.xml" "$tmpdir/live-appcast.xml"
 fi
 

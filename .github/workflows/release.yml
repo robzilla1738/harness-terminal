@@ -298,15 +298,18 @@ jobs:
           trap 'rm -f "$live"' EXIT
 
           for attempt in {1..30}; do
-            if curl -fsSL -H 'Cache-Control: no-cache' https://harnesscli.dev/appcast.xml -o "$live"; then
+            if curl -fsSL -H 'Cache-Control: no-cache' https://thebestterminal.com/appcast.xml -o "$live"; then
               actual="$(shasum -a 256 "$live" | awk '{print $1}')"
               if [[ "$actual" == "$expected" ]] && diff -u dist/appcast.xml "$live"; then
                 grep -q "<sparkle:version>$APP_BUILD</sparkle:version>" "$live"
                 grep -q "<sparkle:shortVersionString>$APP_VERSION</sparkle:shortVersionString>" "$live"
                 grep -q "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/Harness.dmg" "$live"
                 grep -q "sparkle:edSignature=" "$live"
-                echo "Live appcast matches dist/appcast.xml."
-                exit 0
+                # Older installations still fetch their updates from the former domain.
+                if curl -fsSL -H 'Cache-Control: no-cache' https://harnesscli.dev/appcast.xml -o "$live" && diff -u dist/appcast.xml "$live"; then
+                  echo "Primary and compatibility appcasts match dist/appcast.xml."
+                  exit 0
+                fi
               fi
             fi
 
@@ -314,7 +317,7 @@ jobs:
             sleep 10
           done
 
-          echo "https://harnesscli.dev/appcast.xml did not match dist/appcast.xml." >&2
+          echo "https://thebestterminal.com/appcast.xml did not match dist/appcast.xml." >&2
           echo "Expected SHA-256: $expected" >&2
           echo "Last live SHA-256: ${actual:-unavailable}" >&2
           exit 1
