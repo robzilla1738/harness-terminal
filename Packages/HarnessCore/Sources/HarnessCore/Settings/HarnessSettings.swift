@@ -399,7 +399,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
         defaultCWD: String = FileManager.default.homeDirectoryForCurrentUser.path,
         transparentTitlebar: Bool = true,
         sidebarVisible: Bool = false,
-        showMachineIndicator: Bool = true,
+        showMachineIndicator: Bool = false,
         restoreWindowSize: Bool = true,
         backgroundOpacity: Float = 0.63,
         backgroundBlur: Int = 16,

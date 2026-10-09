@@ -24,6 +24,10 @@ final class TabSpacingTests: XCTestCase {
     }
 
     func testMachineIndicatorLeavesRoomForTabsAndControlsAtNarrowWidths() throws {
+        let coordinator = SessionCoordinator.shared
+        let saved = coordinator.settings.showMachineIndicator
+        defer { coordinator.settings.showMachineIndicator = saved }
+        coordinator.settings.showMachineIndicator = true
         for width: CGFloat in [480, 700, 960] {
             let bar = TerminalTabBarView(frame: NSRect(x: 0, y: 0, width: width, height: HarnessDesign.tabBarHeight))
             bar.leadingInset = HarnessDesign.trafficLightClearance

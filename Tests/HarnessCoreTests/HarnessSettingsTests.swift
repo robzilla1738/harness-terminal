@@ -498,11 +498,13 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertFalse(decoded.liveResizeReflow)
     }
 
-    func testMachineIndicatorDefaultsOnAndPreservesHiddenPreference() throws {
-        XCTAssertTrue(try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8)).showMachineIndicator)
-        var settings = HarnessSettings()
-        settings.showMachineIndicator = false
-        XCTAssertFalse(try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(settings)).showMachineIndicator)
+    func testMachineIndicatorDefaultsOffAndPreservesExplicitPreference() throws {
+        XCTAssertFalse(try JSONDecoder().decode(HarnessSettings.self, from: Data("{}".utf8)).showMachineIndicator)
+        for enabled in [false, true] {
+            var settings = HarnessSettings()
+            settings.showMachineIndicator = enabled
+            XCTAssertEqual(try JSONDecoder().decode(HarnessSettings.self, from: JSONEncoder().encode(settings)).showMachineIndicator, enabled)
+        }
     }
 
     func testRestoreWindowSizeDefaultsOnAndPreservesExplicitPreference() throws {

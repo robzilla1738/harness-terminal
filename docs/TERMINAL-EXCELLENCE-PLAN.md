@@ -437,7 +437,8 @@ The final consumer check covers the added output-subscription identity guard.
   exposes Sessions and Add Remote Host. Selection reuses asynchronous attachment,
   retry, and window focus/open behavior; existing windows stay on their own hosts.
   Duplicate connects from the same control are disabled while pending.
-- Appearance and the chrome context menu can show/hide the indicator. The setting
+- The indicator defaults off. Appearance and the chrome context menu can show/hide
+  it, and explicit enabled preferences are preserved. The setting
   persists, and hiding it returns its width to the tabs. The local control uses a
   quiet laptop glyph and untruncated label without an extra chevron.
 - No polling or hostname lookup: unchanged metadata snapshots leave labels/images
@@ -449,6 +450,8 @@ The final consumer check covers the added output-subscription identity guard.
   the untruncated label, menu, live off/on toggle, returned tab space, and sidebar
   control. No live remote host is configured, so remote attachment remains unverified
   in this pass. Existing reconnect/reflow text artifacts remain tracked separately.
+- Default-off follow-up: four focused checks passed for absent keys, explicit
+  on/off preferences, and layout behavior. The preview was switched off and verified.
 
 ## Completion disposition
 
