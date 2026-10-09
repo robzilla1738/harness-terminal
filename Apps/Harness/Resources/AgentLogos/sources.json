@@ -1,0 +1,163 @@
+{
+  "codex": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/codex.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://github.com/openai/codex",
+    "file": "codex.svg",
+    "sha256": "d08b4e824cd6727e89617f59e4737273ff53e44c1da849d016dd64dfd08b33e1"
+  },
+  "claude-code": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/claude.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://claude.com/product/claude-code",
+    "file": "claude-code.svg",
+    "sha256": "365a70a7eb3956d9b9a96086058ebe04e1dbd8e291a756ad964e8a283fbd6d38"
+  },
+  "cursor": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/cursor.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://cursor.com/cli",
+    "file": "cursor.svg",
+    "sha256": "0cb51bddf264ae108926fd554c063ef40fc1aac3c5c921ddb39ad184e4e5d0ef"
+  },
+  "openclaw": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/openclaw.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://github.com/openclaw/openclaw",
+    "file": "openclaw.svg",
+    "sha256": "8ef4de8032b06492af52a2070fc044ce7cc0c1dcef70471b386571eb1c3b2b63"
+  },
+  "opencode": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/opencode.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://opencode.ai",
+    "file": "opencode.svg",
+    "sha256": "7cfa6e9d6726f7c9fa26c7d9aef0dfec52d20a137380454340f30f12ccbfd302"
+  },
+  "gemini": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/gemini.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://github.com/google-gemini/gemini-cli",
+    "file": "gemini.svg",
+    "sha256": "87d5b3c4be75a66f54c1936482a263df68185545b741129badd1b7c2449c18d3"
+  },
+  "goose": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/goose.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://github.com/block/goose",
+    "file": "goose.svg",
+    "sha256": "8779d9a61c5b0be78a3d36cab6843ba5af86218ba2ff1b18eb918c7a8d25bb99"
+  },
+  "grok": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/grok.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://x.ai",
+    "file": "grok.svg",
+    "sha256": "9175fc90c22655160231976c849f25a03b888d7cc0e04c5f1b987b659bb07c95"
+  },
+  "hermes": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/hermesagent.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://github.com/NousResearch/hermes-agent",
+    "file": "hermes.svg",
+    "sha256": "02d43c0a91fc2ee41f2684fc39613ff6687de29a4b079665bace5303671dd63b"
+  },
+  "kiro": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/kiro.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://kiro.dev/cli/",
+    "file": "kiro.svg",
+    "sha256": "1e56073e35799b0d7075d5376ca2d99c3d3bbf51a000a1ec3d4b0df7612c91d6"
+  },
+  "openhands": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/openhands.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://github.com/OpenHands/OpenHands",
+    "file": "openhands.svg",
+    "sha256": "246a996b64ceb4e60fee29506a5f17b14f44042b2a17844c03b69c3447aebc2d"
+  },
+  "kimi": {
+    "url": "https://raw.githubusercontent.com/lobehub/lobe-icons/c385b2b8d1f9e19aa86e628d4e23c91ee1111a47/packages/static-svg/icons/kimi.svg",
+    "license": "MIT (LobeHub)",
+    "official": "https://github.com/MoonshotAI/kimi-code",
+    "file": "kimi.svg",
+    "sha256": "ed08131b46acf70e6e2144eceb775e74098b58ea65fa21eaee04be7b05cfe63b"
+  },
+  "aider": {
+    "url": "https://raw.githubusercontent.com/Aider-AI/aider/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/aider/website/assets/icons/safari-pinned-tab.svg",
+    "license": "Apache-2.0",
+    "file": "aider.svg",
+    "sha256": "145269573c298162e3e032de7563d39e6db234d29fbb7a7312f251e28cc374a6",
+    "official": "https://aider.chat"
+  },
+  "cline": {
+    "url": "https://raw.githubusercontent.com/cline/cline/fa840c741c3fc2eb49e7e0a4484895a99dae5cc5/apps/cline-hub/src/webview/public/cline-logo-filled.svg",
+    "license": "Apache-2.0",
+    "file": "cline.svg",
+    "sha256": "6aab009bf089a8dc1b5452c05c471244a08595b78fd639835eacc0821b887c06",
+    "official": "https://github.com/cline/cline"
+  },
+  "kilo": {
+    "url": "https://raw.githubusercontent.com/Kilo-Org/kilocode/974723450caa7c91f140b128e2f2e3b4a932ade8/packages/ui/src/assets/icons/provider/kilo.svg",
+    "license": "MIT",
+    "file": "kilo.svg",
+    "sha256": "425602fa01faa0eb462e45ac70bf670ea9ffd46c67077227f928dfea75ba1df1",
+    "official": "https://github.com/Kilo-Org/kilocode"
+  },
+  "qwen": {
+    "url": "https://raw.githubusercontent.com/QwenLM/qwen-code/fbde5cf00e9cb5ba0fdf825e3a0e691d9b1d7423/packages/vscode-ide-companion/assets/sidebar-icon.svg",
+    "license": "Apache-2.0",
+    "file": "qwen.svg",
+    "sha256": "7c7b987b0dba797addc54f59c16c1a74085b68c837f863f312c2521a4e165a03",
+    "official": "https://github.com/QwenLM/qwen-code"
+  },
+  "vibe": {
+    "url": "https://raw.githubusercontent.com/mistralai/mistral-vibe/7cb91894c40bb25173abcfa36e5ea2b4b81eb28c/distribution/zed/icons/mistral_vibe.svg",
+    "license": "Apache-2.0",
+    "file": "vibe.svg",
+    "sha256": "7c0e3122d2be9fc603c4e37956033f13bc8391da7d163e3ffc91ad80a59f40f9",
+    "official": "https://github.com/mistralai/mistral-vibe"
+  },
+  "crush": {
+    "url": "https://raw.githubusercontent.com/charmbracelet/crush/cd8070361f36c8370c1071a8eb34250c3033145a/internal/ui/notification/crush-icon-solo.png",
+    "license": "FSL-1.1-MIT; logo trademark Charm",
+    "file": "crush.png",
+    "sha256": "a41177d5afbdbc6838526d0a1b62076a686a18d2949e262eb405a2142dd082f2",
+    "official": "https://github.com/charmbracelet/crush"
+  },
+  "copilot": {
+    "url": "https://raw.githubusercontent.com/primer/octicons/97825f832c98f817867f770d084c08e3edc6f78c/icons/copilot-24.svg",
+    "license": "MIT (GitHub Primer)",
+    "file": "copilot.svg",
+    "sha256": "eeafb3c2f333e04ccf7d031ae215f7adafaed4c6352556b0bf79496e048bcdd7",
+    "official": "https://github.com/github/copilot-cli"
+  },
+  "amp": {
+    "url": "https://ampcode.com/app-icon.svg?v=4",
+    "license": "Amp brand mark",
+    "file": "amp.svg",
+    "sha256": "40c79d8c7baa04c2fee214cc1c66a9797eb6aa96bec6c5b20c7d12cd66490696",
+    "official": "https://ampcode.com"
+  },
+  "droid": {
+    "url": "https://factory.ai/favicon.svg",
+    "license": "Factory brand mark",
+    "file": "droid.svg",
+    "sha256": "416ea4962d7b0b8be8bec7f7190c13c22d5f20fdcac401aa72886fd5c81d2fb2",
+    "official": "https://factory.ai"
+  },
+  "auggie": {
+    "url": "https://www.augmentcode.com/favicon.svg",
+    "license": "Augment brand mark",
+    "file": "auggie.svg",
+    "sha256": "5151bb83fc6ee1f848f183923f25ea92fc2125ec0e7495e2a55b47dc4fd10e81",
+    "official": "https://www.augmentcode.com"
+  },
+  "pi": {
+    "url": "https://pi.dev/logo.svg",
+    "license": "Pi press kit; MIT site",
+    "official": "https://pi.dev/press-kit",
+    "file": "pi.svg",
+    "sha256": "abd66e7868b2d24f0f0895f9237ee8a6dcb22337583b0dc54aeb595acecb4d6b"
+  }
+}

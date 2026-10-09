@@ -443,7 +443,7 @@ PaneNode tree ──PaneRectSolver──▶ [PaneRect] ────┤
 | `cursorStyle`, `cursorBlink`, `copyOnSelect` | Terminal behavior |
 | `dividerHex`, `statusLineHex` | Chrome accents (nil → derive from theme) |
 | `selection*Hex`, `boldColorHex`, `cursorTextHex`, `paletteHex[16]` | Terminal colors; seeded by theme preset, applied by the native renderer |
-| `agentColorOverrides` | Per-agent brand color overrides |
+| `agentColorOverrides` | Legacy values preserved on disk; agent identities use fixed colors |
 | `systemNotificationsEnabled` | Delivery channel: show a macOS banner for an enabled notification event (in-window bell still updates). *Which* events notify is gated per-event by `notificationEvents` |
 | `notificationSoundEnabled` | Chime with agent alerts; banner carries the sound, or an in-app `NSSound` chime when banners are off |
 | `importedConfigSignature` | Fingerprint of last imported terminal config (migration) |
@@ -495,7 +495,7 @@ Per-agent guides: [docs/agent-hooks/](agent-hooks/). Daemon hooks (`hooks.json`)
 
 **Workspace services:** `SessionLibraryController` and `SetupEditorController` edit the daemon-owned `SessionLibrary` stored in `SessionSnapshot`. `SurfaceRegistry+Setups` owns validation, capture, launch, and closed-layout recovery. `OutputSearchController` and `DirectoryBrowserController` capture their source host/session/pane; daemon search workers are bounded and cancelable. Output navigation checks daemon epoch, revision, pane identity, and line fingerprint before validating the displayed buffer. Session-backed `ensureSurface` requests set `requireInLayout` to prevent late reconnects from recreating closed panes. Standalone surfaces retain the explicit creation path.
 
-**Brand icons:** `IconTileView` (tabs, sidebar tab rows, Overview tiles), `PaneHeaderView`, the Dock tile (`DockTileRenderer`), the `MenuBarController` menu, and Settings ▸ Agents render each agent's mark from **`AgentIconArt`** via **`SVGPathParser`** → `CGPath` and **`AgentIconRenderer`** (`templateImage` tintable by `contentTintColor`; `coloredImage` baked for `NSMenuItem`; `monogramTemplate` for the text-only fallback). Sources (attribution in [docs/THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)): **lobe-icons** `@lobehub/icons-static-svg` (MIT) for `codex`, `claude`, `cursor`, `openclaw`, `opencode`, `gemini`, `goose`; a **vendor brand mark** (matching the Skillz app) for `pi` (Inflection). No bundled raster assets — vector, crisp at any size, the same procedural approach as the box-drawing. Agents with no mark (Hermes, Aider) fall back to a tinted two-letter monogram (`AgentIconRenderer.monogramTemplate`); the per-agent color override tints it. **Hermes** uses the monogram deliberately: its official mark is a detailed portrait that is illegible at the 14–18px sizes the icon is shown at.
+**Brand icons:** `IconTileView` uses flat rectangular badges in tabs, sidebar rows, Overview, and Agents settings. `AgentIconArt` embeds 22 normalized vector marks and Crush's original raster mark; `AgentIconRenderer` caches images for all icon surfaces, including pane headers, the Dock, and menus. Every named tool has a sourced logo; only the generic agent uses letters. Colors are fixed, and legacy overrides remain readable without changing visual identities. Source files, hashes, licenses, and regeneration instructions are in the [logo catalog](../Apps/Harness/Resources/AgentLogos/README.md).
 
 ---
 
@@ -561,7 +561,7 @@ Sidebar mode (⌘\):
 | Shell tracker | `SurfaceShellTracker` | cwd polling via proc tree |
 | Daemon fallback | `DaemonLauncher` | Starts daemon when launchd unavailable |
 | Terminal | `TerminalHostView` | Hosts `HarnessTerminalSurfaceView`; daemon I/O |
-| Settings UI | `SettingsViewController`, `KeyRecorderView`, `HarnessControls` | Standalone native macOS Settings window via `SettingsWindowController` (not embedded); rebuilt per open; standard titled window, sidebar vibrancy, native search, and pages **Appearance · Colors · Terminal · Keys · Notifications · Agents · Advanced** as grouped preference sections. Form controls in `HarnessControls.swift` use system semantic colors and the user accent so the window tracks macOS light/dark appearance while keeping Harness-specific controls for sliders, swatches, segmented choices, and searchable selects. **Notifications** page = one switch per `NotificationEvent` ("Notify me when") plus Delivery (banner, sound, macOS permission status, test). **Agents** page = per-agent rows (icon + matched executables + color swatch + one-click Install hooks). **Advanced** = curated daemon-owned `OptionStore` options (status format, mouse, base-index, monitor, repeat-time, pane borders…) read/written via `showOptions`/`setOption` IPC. |
+| Settings UI | `SettingsViewController`, `KeyRecorderView`, `HarnessControls` | Standalone native macOS Settings window via `SettingsWindowController` (not embedded); rebuilt per open; standard titled window, sidebar vibrancy, native search, and pages **Appearance · Colors · Terminal · Keys · Notifications · Agents · Advanced** as grouped preference sections. Form controls in `HarnessControls.swift` use system semantic colors and the user accent so the window tracks macOS light/dark appearance while keeping Harness-specific controls for sliders, swatches, segmented choices, and searchable selects. **Notifications** page = one switch per `NotificationEvent` ("Notify me when") plus Delivery (banner, sound, macOS permission status, test). **Agents** page = per-agent rows (fixed logo badge + matched executables + optional one-click Install Hooks). **Advanced** = curated daemon-owned `OptionStore` options (status format, mouse, base-index, monitor, repeat-time, pane borders…) read/written via `showOptions`/`setOption` IPC. |
 | Daemon | `SurfaceRegistry`, `RealPty`, `DaemonServer` | Session authority |
 | Core | `SessionEditor`, `CommandParser`, `OptionStore`, `HookRegistry`, `PasteBufferStore`, `FormatString` | |
 
@@ -685,3 +685,20 @@ table, and hooks; not standalone `harness-cli` subcommands.
 | Xcode build fails | Stale project | `xcodegen generate` |
 
 ---
+
+### Expanded CLI identities (October 2026)
+
+Harness recognizes Codex, Claude Code, Cursor Agent, Grok, Pi, Hermes, OpenClaw,
+OpenCode, Aider, Gemini, Goose, GitHub Copilot, Cline, Kilo Code, Qwen Code, Amp,
+Droid, Crush, Kiro, Mistral Vibe, OpenHands, Auggie, and Kimi Code. Native executable
+aliases and known npm launcher entry points are detected automatically. Custom
+`agents.json` remains an explicit override of the default detection table.
+
+Every named tool has a locally bundled logo and fixed badge palette. Legacy
+`agentColorOverrides` values round-trip through settings but no longer recolor
+identities. Install each CLI separately; recognition does not install software or
+add hooks. Settings shows an Install Hooks button only for tools with an existing
+Harness hook adapter. The expanded identities use process/output-based status
+unless configured through the existing hook interface.
+
+Artwork and regeneration instructions: [logo catalog](../Apps/Harness/Resources/AgentLogos/README.md).

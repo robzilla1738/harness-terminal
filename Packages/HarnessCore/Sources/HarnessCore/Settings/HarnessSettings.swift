@@ -164,8 +164,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// 16 ANSI palette overrides (`palette N=#hex`). `nil` slots fall back to the
     /// active theme preset. Seeded from a theme, importable from terminal config.
     public var paletteHex: [String?]
-    /// Per-agent brand color overrides keyed by `AgentKind.rawValue`.
-    /// Missing keys use the built-in agent default.
+    /// Legacy agent colors are retained for configuration round-tripping; UI identities are fixed.
     public var agentColorOverrides: [String: String]
     /// Shortcuts assigned from the command palette: action id → `cmd-shift-z` style chord.
     public var paletteShortcuts: [String: String]
@@ -583,7 +582,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     }
 
     public func agentColorHex(for kind: AgentKind) -> String {
-        agentColorOverrides[kind.rawValue] ?? "#\(kind.dotHex.uppercased())"
+        "#\(kind.dotHex.uppercased())"
     }
 
     /// Whether `event` is allowed to fire a notification. Falls back to the event's

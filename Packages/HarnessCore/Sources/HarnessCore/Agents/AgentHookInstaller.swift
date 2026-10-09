@@ -238,7 +238,8 @@ public enum AgentHookInstaller {
             // OpenClaw reads a JSON5 config; edit as text to preserve comments/trailing commas.
             return .regionEdit(filename: ".openclaw/openclaw.json", body: openClawHookBody,
                                commentToken: "//", insertAtTop: true, conflictKey: "hooks")
-        case .aider, .gemini, .goose, .generic:
+        case .aider, .gemini, .goose, .generic,
+             .copilot, .cline, .kilo, .qwen, .amp, .droid, .crush, .kiro, .vibe, .openhands, .auggie, .kimi:
             return nil
         }
     }

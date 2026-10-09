@@ -177,17 +177,6 @@ public enum SettingsPalette {
         add("prefixKey", "Prefix key", detail: { $0.prefixKey }) { settings in
             SettingsEditor.applyFromPalette(\.prefixKey, settings.prefixKey, on: &settings)
         }
-        for kind in AgentKind.allCases {
-            add("agentColor.\(kind.rawValue)", "\(kind.rawValue) color", detail: { $0.agentColorHex(for: kind) }) { settings in
-                var overrides = settings.agentColorOverrides
-                overrides[kind.rawValue] = settings.agentColorHex(for: kind)
-                SettingsEditor.applyFromPalette(
-                    \.agentColorOverrides,
-                    HarnessSettings.normalizedAgentColorOverrides(overrides),
-                    on: &settings
-                )
-            }
-        }
         return rows
     }
 

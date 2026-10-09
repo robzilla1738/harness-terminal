@@ -2,19 +2,15 @@
 
 ## Agent platform icons
 
-Harness renders agent brand marks from vector geometry and tints them at draw time.
+Harness displays locally bundled logos for 23 coding tools. See the complete
+[source catalog](../Apps/Harness/Resources/AgentLogos/README.md) for official project
+pages, pinned artwork URLs, SHA-256 hashes, transformations, and licenses. Original
+license texts are retained in `Apps/Harness/Resources/AgentLogos/licenses` and
+included in packaged apps. Most marks are monochrome vectors; Crush retains its
+original raster artwork. Only unidentified generic agents use a monogram.
 
-- **[Lobe Icons](https://github.com/lobehub/lobe-icons)** (MIT, see below), the
-  `@lobehub/icons-static-svg` monochrome (`currentColor`) variants: `codex`, `claude`
-  (Claude Code), `cursor`, `openclaw`, `opencode`, `gemini`, and `goose`.
-- **Vendor brand mark** for `pi` (Inflection Pi). A trademark of its owner, embedded only as
-  monochrome geometry to identify the running agent.
-
-Agents without a mark (Grok, Hermes, Aider) fall back to a tinted two-letter monogram. (Hermes's
-official mark is a detailed portrait that is illegible at icon size, so it uses the monogram.)
-
-Platform names and logos are trademarks of their respective owners. They are used
-here solely to identify the corresponding coding agent in the UI.
+Platform names and logos are trademarks of their respective owners, used solely
+to identify the corresponding tool. No affiliation or endorsement is implied.
 
 ### Lobe Icons — MIT License
 

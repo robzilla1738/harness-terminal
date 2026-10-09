@@ -573,7 +573,7 @@ private final class TabPillView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     /// Leading app tile: `>_` for a shell, the brand tile for an agent.
-    private let iconTile = IconTileView(side: HarnessDesign.tabIconTileSize)
+    private let iconTile = IconTileView(size: HarnessDesign.tabIconTileSize)
     /// "Kept alive" flag: a small pin shown at the leading edge when this tab is pinned to
     /// survive a clean quit (`tab.persistent`). The visible counterpart of the context-menu
     /// "Keep Tab Running After Quit" checkmark — a tmux-style window flag for persistence.
@@ -876,7 +876,7 @@ private final class TabPillView: NSView {
         let shortcut = shortcutLabel.isHidden
             ? 0
             : ceil((shortcutLabel.stringValue as NSString).size(withAttributes: [.font: shortcutLabel.font as Any]).width)
-        let leading = HarnessDesign.tabIconTileInset + persistentIconWidth.constant + HarnessDesign.tabIconTileSize + HarnessDesign.Spacing.md
+        let leading = HarnessDesign.tabIconTileInset + persistentIconWidth.constant + HarnessDesign.tabIconTileSize.width + HarnessDesign.Spacing.md
         let status = statusWidth.constant > 0 ? Self.statusSide + HarnessDesign.Spacing.sm : 0
         let trailing = HarnessDesign.Spacing.md + status + shortcut + HarnessDesign.Spacing.lg
         return CGFloat(ChromeLayout.huggedPillWidth(

@@ -87,6 +87,25 @@ final class AgentDetectorTests: XCTestCase {
         XCTAssertTrue(defaultEntry?.matchesAny(["2.1.152", "claude"]) ?? false)
     }
 
+    func testExpandedCatalogRecognizesNativeAndPackagedCLIsWithoutMatchingFileArguments() throws {
+        let tools: [(AgentKind, String)] = [
+            (.copilot, "copilot"), (.cline, "cline"), (.kilo, "kilo"), (.qwen, "qwen"),
+            (.amp, "amp"), (.droid, "droid"), (.crush, "crush"), (.kiro, "kiro-cli"),
+            (.vibe, "vibe"), (.openhands, "openhands"), (.auggie, "auggie"), (.kimi, "kimi"),
+        ]
+        for (kind, executable) in tools {
+            let entry = try XCTUnwrap(AgentTable.default.entries.first { $0.kind == kind })
+            XCTAssertTrue(entry.matchesProcess(resolvedExecutable: "/usr/local/bin/" + executable, arguments: [executable]))
+            XCTAssertFalse(entry.matchesProcess(resolvedExecutable: "/usr/bin/vim", arguments: ["vim", executable]))
+        }
+        let qwen = try XCTUnwrap(AgentTable.default.entries.first { $0.kind == .qwen })
+        XCTAssertTrue(qwen.matchesProcess(resolvedExecutable: "/usr/local/bin/node", arguments: ["node", "/opt/lib/node_modules/@qwen-code/qwen-code/cli-entry.js"]))
+        XCTAssertFalse(qwen.matchesProcess(resolvedExecutable: "/usr/local/bin/node", arguments: ["node", "/project/cli-entry.js"]))
+        XCTAssertFalse(qwen.matchesProcess(resolvedExecutable: "/usr/bin/cat", arguments: ["cat", "/opt/lib/node_modules/@qwen-code/qwen-code/cli-entry.js"]))
+        XCTAssertNil(AgentTitleInference.kind(from: "GitHub issue notes"))
+        XCTAssertEqual(AgentTitleInference.kind(from: "GitHub Copilot — project"), .copilot)
+    }
+
     func testDefaultTableResolvesOpenCodeExecutable() throws {
         let entry = try XCTUnwrap(AgentTable.default.entries.first { $0.matches(executable: "opencode") })
         XCTAssertEqual(entry.kind, .openCode)

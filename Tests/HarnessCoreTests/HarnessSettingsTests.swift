@@ -779,7 +779,7 @@ final class HarnessSettingsTests: XCTestCase {
         XCTAssertEqual(HarnessSettings(windowPaddingX: -5, windowPaddingY: -1).windowPaddingX, 0, accuracy: 0.001)
     }
 
-    func testAgentColorOverridesNormalizeAndFallbackToDefaults() throws {
+    func testLegacyAgentColorsRoundTripWhileIdentityUsesFixedDefaults() throws {
         let data = Data("""
         {
           "agentColorOverrides": {
@@ -793,8 +793,9 @@ final class HarnessSettingsTests: XCTestCase {
 
         let settings = try JSONDecoder().decode(HarnessSettings.self, from: data)
 
-        XCTAssertEqual(settings.agentColorHex(for: .codex), "#12ABEF")
-        XCTAssertEqual(settings.agentColorHex(for: .claudeCode), "#FFEEDD")
+        XCTAssertEqual(settings.agentColorHex(for: .codex), "#10A37F")
+        XCTAssertEqual(settings.agentColorOverrides["codex"], "#12ABEF")
+        XCTAssertEqual(settings.agentColorHex(for: .claudeCode), "#D97757")
         XCTAssertEqual(settings.agentColorHex(for: .cursor), "#5CC8FF")
         XCTAssertNil(settings.agentColorOverrides["unknown"])
     }

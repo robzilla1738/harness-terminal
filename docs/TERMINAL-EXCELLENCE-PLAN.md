@@ -338,6 +338,30 @@ The final consumer check covers the added output-subscription identity guard.
   Real user notification permission and agent configuration are deliberately not changed by
   the preview acceptance pass. Full CI for the new candidate remains separate from earlier evidence.
 
+## Tab badge design follow-up
+
+- Flat 26×22-point tab badges, 28×23-point Settings/Overview badges, a seven-point
+  leading inset, and existing title spacing. Removed the backing layer, gradient,
+  inset bevel, and shadow. Static Core Animation layers do not animate.
+- Added sourced logos for all 23 named coding tools, replacing every named-tool
+  monogram. Pi uses the coding agent's press kit. Source SVGs/PNG, hashes, upstream
+  URLs, license texts, and an offline generator are checked in.
+- Added Copilot, Cline, Kilo, Qwen, Amp, Droid, Crush, Kiro, Vibe, OpenHands, Auggie,
+  and Kimi identities. Detection uses exact executable names or published npm
+  entry points; ordinary file arguments are not scanned. New tools do not claim
+  one-click hooks where no adapter exists.
+- Removed agent color pickers, Reset Colors, and palette color actions. Legacy
+  settings values are preserved for round-trip compatibility; fixed identities
+  render consistently across tabs, sidebar, Overview, pane headers, and Settings.
+- Verification: 14 focused detection/settings checks passed; release build passed.
+  The preview was reopened and both the actual tab bar and all 23 Settings logos
+  were visually inspected. Both local app bundles passed strict signature checks.
+  No terminal performance claim follows from this UI change.
+- Separate W follow-up observed during preview restart: retained Claude startup
+  text reattached with missing spaces/overprinted prompt fragments. The shell and
+  tabs survived. Cause is unverified; do not treat reconnect rendering as cleared
+  by this icon review.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named

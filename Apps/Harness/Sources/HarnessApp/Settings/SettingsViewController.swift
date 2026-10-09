@@ -134,8 +134,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private var paletteWells: [HarnessSwatchWell] = []
     private var paletteNote: NSTextField?
     private var paletteHexValues: [String?] = Array(repeating: nil, count: 16)
-    private var agentColorWells: [AgentKind: HarnessSwatchWell] = [:]
-    private var agentIconViews: [AgentKind: NSImageView] = [:]
     private var colorBindings: [ColorBinding] = []
     /// Live "Install Hooks / Reinstall Hooks" buttons keyed by agent (Agents page).
     private var hookButtons: [AgentKind: NSButton] = [:]
@@ -154,10 +152,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         "Bright Black", "Bright Red", "Bright Green", "Bright Yellow",
         "Bright Blue", "Bright Magenta", "Bright Cyan", "Bright White",
     ]
-    private static let agentColorKinds: [AgentKind] = [
-        .codex, .claudeCode, .cursor, .grok, .pi, .hermes,
-        .openClaw, .openCode, .aider, .gemini, .goose,
-    ]
+    private static let agentKinds = AgentKind.allCases.filter { $0 != .generic }
 
     deinit {
         // A fresh controller is built on each open and the previous one is torn down; drop
@@ -304,7 +299,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
 
         paletteHexValues = HarnessSettings.normalizedPalette(settings.paletteHex)
         buildPaletteWells()
-        buildAgentColorWells(settings: settings)
 
         experienceSegment.setSegments(ExperienceMode.allCases.map(Self.experienceTitle))
         experienceSegment.selectedSegment = ExperienceMode.allCases.firstIndex(of: settings.experienceMode) ?? 0
@@ -529,6 +523,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             case let v as HarnessToggle: v.applyChrome()
             case let v as HarnessSlider: v.applyChrome()
             case let v as HarnessSwatchWell: v.applyChrome()
+            case let v as IconTileView: v.applyChrome()
             case let v as HarnessSegmented: v.applyChrome()
             case let v as HarnessSelect: v.applyChrome()
             case let v as KeyRecorderView: v.applyChrome()
@@ -1019,10 +1014,9 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     // MARK: - Page: Agents
 
     private func buildAgentsPage() -> NSView {
-        let resetColors = makeLinkButton("Reset Colors", action: #selector(resetAgentColors))
         let agentsGroup = settingsGroup(
-            "Agents", Self.agentColorKinds.map(agentRow), accessory: resetColors,
-            footer: "Harness spots an agent by the program running in a pane, in any shell. Hooks let it tell you the moment it stops or needs input; installing merges them into the agent's own config and backs that file up first."
+            "Agents", Self.agentKinds.map(agentRow),
+            footer: "Harness identifies these tools when you run them in a pane. Install each CLI separately. Where available, optional hooks report when the agent stops or needs input; Harness backs up existing hook configuration before changing it."
         )
 
         let detectionGroup = settingsGroup("Setup", [
@@ -1035,21 +1029,11 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return page("Agents", [agentsGroup, detectionGroup])
     }
 
-    /// One per-agent row: brand icon + name + the executables it matches + a color-override
-    /// swatch + a one-click "Install hooks" button (with installed status) where supported.
+    /// The same designed badge used by tabs, plus detection details and hook setup.
     private func agentRow(_ kind: AgentKind) -> NSView {
-        let c = HarnessChrome.current
-        let colorHex = SessionCoordinator.shared.settings.agentColorHex(for: kind)
-
-        let icon = NSImageView()
+        let icon = IconTileView()
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        // Brand mark when one exists, else a tinted monogram (e.g. Aider) — never a blank slot.
-        icon.image = AgentIconRenderer.templateOrMonogramImage(for: kind, size: 18)
-        icon.contentTintColor = NSColor.fromHex(colorHex) ?? c.textSecondary
-        icon.widthAnchor.constraint(equalToConstant: 20).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
-        agentIconViews[kind] = icon
+        icon.apply(.agent(kind))
 
         let name = NSTextField(labelWithString: kind.displayName)
         name.font = .systemFont(ofSize: 13)
@@ -1081,7 +1065,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
             hookButtons[kind] = button
             trailing.addArrangedSubview(button)
         }
-        if let well = agentColorWells[kind] { trailing.addArrangedSubview(well) }
 
         let row = NSStackView(views: [icon, textCol, spacer(), trailing])
         row.orientation = .horizontal
@@ -1093,11 +1076,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
     private func executablesString(for kind: AgentKind) -> String {
         let execs = AgentTable.default.entries.first { $0.kind == kind }?.executables ?? []
         return execs.isEmpty ? "—" : execs.joined(separator: ", ")
-    }
-
-    private func retintAgentIcon(_ kind: AgentKind) {
-        let hex = SessionCoordinator.shared.settings.agentColorHex(for: kind)
-        agentIconViews[kind]?.contentTintColor = NSColor.fromHex(hex) ?? HarnessChrome.current.textSecondary
     }
 
     @objc private func copySetupPrompt() {
@@ -1718,22 +1696,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         paletteNote?.isHidden = editable
     }
 
-    private func buildAgentColorWells(settings: HarnessSettings) {
-        agentColorWells.removeAll()
-        for kind in Self.agentColorKinds {
-            let well = HarnessSwatchWell(frame: .zero)
-            well.translatesAutoresizingMaskIntoConstraints = false
-            well.widthAnchor.constraint(equalToConstant: Form.swatchWidth).isActive = true
-            well.heightAnchor.constraint(equalToConstant: Form.swatchHeight).isActive = true
-            well.color = NSColor.fromHex(settings.agentColorHex(for: kind)) ?? .gray
-            well.target = self
-            well.action = #selector(agentColorWellChanged(_:))
-            well.toolTip = kind.displayName
-            well.setAccessibilityLabel("\(kind.displayName) color")
-            agentColorWells[kind] = well
-        }
-    }
-
     // MARK: - Formatting / utilities
 
     private func formatPercent(_ value: Float) -> String {
@@ -2234,21 +2196,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         flushAndApply()
     }
 
-    @objc private func agentColorWellChanged(_ sender: HarnessSwatchWell) {
-        guard let kind = agentColorWells.first(where: { $0.value === sender })?.key else { return }
-        let coordinator = SessionCoordinator.shared
-        var overrides = coordinator.settings.agentColorOverrides
-        overrides[kind.rawValue] = hexString(sender.color)
-        SettingsEditor.applyFromWindow(
-            \.agentColorOverrides,
-            HarnessSettings.normalizedAgentColorOverrides(overrides),
-            on: &coordinator.settings
-        )
-        retintAgentIcon(kind)
-        saveSettings()
-        coordinator.applySettingsToHosts()
-    }
-
     /// Modal confirm for a destructive, instantly-applied reset. Mirrors the sidebar's delete/close
     /// alerts. Returns true only when the user explicitly confirms.
     private func confirmDestructive(message: String, info: String, confirmTitle: String) -> Bool {
@@ -2259,22 +2206,6 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         alert.addButton(withTitle: confirmTitle)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    @objc private func resetAgentColors() {
-        guard confirmDestructive(
-            message: "Reset agent colors?",
-            info: "All custom agent color overrides will be removed. This can't be undone.",
-            confirmTitle: "Reset"
-        ) else { return }
-        let coordinator = SessionCoordinator.shared
-        coordinator.settings.agentColorOverrides.removeAll()
-        for (kind, well) in agentColorWells {
-            well.color = NSColor.fromHex(coordinator.settings.agentColorHex(for: kind)) ?? .gray
-            retintAgentIcon(kind)
-        }
-        saveSettings()
-        coordinator.applySettingsToHosts()
     }
 
     @objc private func resetPalette() {
@@ -2961,7 +2892,7 @@ enum SettingsPane: Int, CaseIterable {
         case .notifications:
             return ["notify", "banner", "alert", "bell", "sound", "blocked", "failed", "error", "done", "finished", "permission"]
         case .agents:
-            return ["agent", "color", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "detection"]
+            return ["agent", "icons", "codex", "claude", "cursor", "pi", "hermes", "openclaw", "hook", "detection"]
         case .advanced:
             return ["options", "status", "mouse", "mode", "clipboard", "base-index", "renumber", "monitor", "rename", "repeat", "history", "pane", "border", "harness-cli", "set-option", "performance", "pipeline", "render", "identity", "term_program", "xtversion", "shift+enter", "kitty", "ghostty"]
         }

@@ -179,6 +179,7 @@
 		61A8E108CD6BD6BA134237E6 /* HarnessTerminalKit in Frameworks */ = {isa = PBXBuildFile; productRef = 248D16B9515E84F9123917D7 /* HarnessTerminalKit */; };
 		620F80349B52B635168CA86F /* HostedAttention.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E4B2310A3B7DC4184687C3 /* HostedAttention.swift */; };
 		635B9813845D44B0C3527B4A /* RemoteHostsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405DBFEE8FED9A0BA41A3F5D /* RemoteHostsService.swift */; };
+		639C99E2B6D33B76B1443247 /* AgentLogoNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = C9608FF28F6355956B464D04 /* AgentLogoNotices.txt */; };
 		63A7BB255C20C0417076524A /* AgentIconRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EF7E2D845AA0AA644F588C /* AgentIconRenderer.swift */; };
 		63C7CD099AACC03EB1AFC50B /* TabAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BACA7ED813936C9B469999C /* TabAlertTests.swift */; };
 		64693A89D42DEB175173E3A1 /* wide_cjk__11x5__to__48x4.golden in Resources */ = {isa = PBXBuildFile; fileRef = CD5F6D380EE12692B4A39253 /* wide_cjk__11x5__to__48x4.golden */; };
@@ -246,6 +247,7 @@
 		87D58E072A730F252BF6BC74 /* HarnessCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8A750F2173FD4FFF51B03D72 /* HarnessCore */; };
 		87EB8777EA8043B7752985B8 /* SurfaceShellTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A0FAADD0C7DE4496F9A776 /* SurfaceShellTracker.swift */; };
 		8972057BE0004B957F6B4F0D /* ProcessAndLayoutContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BA201B506FA5DE62F4CA98A /* ProcessAndLayoutContextTests.swift */; };
+		8A97218CF9777F7CB4DBA5C1 /* OnboardingSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F5257F6DDF8572BE04DF2BE /* OnboardingSetupTests.swift */; };
 		8A9C4092FEE2B46379DB5093 /* RealPtyReapRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED8E5A452F81D79C520118E /* RealPtyReapRecordTests.swift */; };
 		8B1A56978E26C6722A72365F /* TerminalConfigImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 275F951E6B2787DECD0F1C56 /* TerminalConfigImporterTests.swift */; };
 		8C00D38E0430620212133366 /* Harness.icns in Resources */ = {isa = PBXBuildFile; fileRef = 9CBF9C616141AB5AFCF041D6 /* Harness.icns */; };
@@ -547,6 +549,7 @@
 		3BAD54046F4C80A9A61D33AC /* HarnessAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessAPITests.swift; sourceTree = "<group>"; };
 		3D0F256CBDC4814FB9CE1DA0 /* KeyboardShortcutsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardShortcutsWindow.swift; sourceTree = "<group>"; };
 		3E18DFB7649906F46802FE40 /* RemoteSocketDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSocketDetectorTests.swift; sourceTree = "<group>"; };
+		3F5257F6DDF8572BE04DF2BE /* OnboardingSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingSetupTests.swift; sourceTree = "<group>"; };
 		3FEB6A1125BED162AF834697 /* QuickTerminalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickTerminalController.swift; sourceTree = "<group>"; };
 		405DBFEE8FED9A0BA41A3F5D /* RemoteHostsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHostsService.swift; sourceTree = "<group>"; };
 		4074B32606803907E18989E9 /* OcclusionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OcclusionTests.swift; sourceTree = "<group>"; };
@@ -767,6 +770,7 @@
 		C7B28F244A93C401B7B9A832 /* SessionLibraryController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLibraryController.swift; sourceTree = "<group>"; };
 		C7B73AD2795EB28644DB2463 /* TerminalBufferSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalBufferSearchTests.swift; sourceTree = "<group>"; };
 		C91C2E3C2A8847B6A0514123 /* StatusLineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusLineView.swift; sourceTree = "<group>"; };
+		C9608FF28F6355956B464D04 /* AgentLogoNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AgentLogoNotices.txt; sourceTree = "<group>"; };
 		C98251A71A00B4D1AAD8859A /* SessionEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEditorTests.swift; sourceTree = "<group>"; };
 		CB808C784D47F165C2E844FC /* HarnessTerminalSurfaceDragDropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessTerminalSurfaceDragDropTests.swift; sourceTree = "<group>"; };
 		CBC3E55B14E2DEBFAF66BFFE /* PerformanceBenchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceBenchmarks.swift; sourceTree = "<group>"; };
@@ -1189,6 +1193,7 @@
 		3708609F1510C2FE945FA367 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				C9608FF28F6355956B464D04 /* AgentLogoNotices.txt */,
 				79A1AD65F04E24EFEC4E4AC7 /* Info.plist */,
 			);
 			path = Resources;
@@ -1258,6 +1263,7 @@
 			children = (
 				E43C936FEA07AF65E3E4C948 /* BinaryInstallerVersionTests.swift */,
 				A1755742095DC424B5ED75DB /* OnboardingEnvironmentTests.swift */,
+				3F5257F6DDF8572BE04DF2BE /* OnboardingSetupTests.swift */,
 				61D8D3FAB4B00D89523177AA /* ShellProfileInstallerTests.swift */,
 			);
 			path = HarnessOnboardingTests;
@@ -2012,6 +2018,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				639C99E2B6D33B76B1443247 /* AgentLogoNotices.txt in Resources */,
 				935E07FA27015FDA59C248B3 /* Assets.xcassets in Resources */,
 				43A5E392B6D6308A881BC018 /* Fonts in Resources */,
 				8C00D38E0430620212133366 /* Harness.icns in Resources */,
@@ -2249,6 +2256,7 @@
 			files = (
 				BD9D4E5EB30B50ECFE2240E5 /* BinaryInstallerVersionTests.swift in Sources */,
 				43BB99082EB1FDCFA66A568D /* OnboardingEnvironmentTests.swift in Sources */,
+				8A97218CF9777F7CB4DBA5C1 /* OnboardingSetupTests.swift in Sources */,
 				E55C26CA654DCA675B1DF923 /* ShellProfileInstallerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

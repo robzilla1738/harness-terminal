@@ -1508,7 +1508,7 @@ final class SidebarTabRowView: NSView {
     var onContextMenu: (() -> NSMenu?)?
     private let moreButton = SoftIconButton(frame: .zero)
     private let fill = NSView()
-    private let tile = IconTileView(side: HarnessDesign.tabIconTileSize)
+    private let tile = IconTileView(size: HarnessDesign.tabIconTileSize)
     private var glassView: NSView?
     private let label = NSTextField(labelWithString: "")
     private let status = TabStatusView(frame: NSRect(x: 0, y: 0, width: 12, height: 12))
