@@ -10,9 +10,13 @@ final class GlyphRasterizerTests: XCTestCase {
             let glyph = try XCTUnwrap(rasterizer.rasterize(cluster: text), text)
             let pixels = try XCTUnwrap(glyph.rgba, text)
             XCTAssertEqual(pixels.count, glyph.width * glyph.height * 4)
-            XCTAssertTrue(stride(from: 0, to: pixels.count, by: 4).contains { offset in
-                pixels[offset + 3] > 64 && abs(Int(pixels[offset]) - Int(pixels[offset + 2])) > 30
-            }, "\(text) must contain colored ink, not a foreground mask")
+            var hasColoredInk = false
+            for offset in stride(from: 0, to: pixels.count, by: 4) {
+                let red = Int(pixels[offset])
+                let blue = Int(pixels[offset + 2])
+                if pixels[offset + 3] > 64 && abs(red - blue) > 30 { hasColoredInk = true }
+            }
+            XCTAssertTrue(hasColoredInk, "\(text) must contain colored ink, not a foreground mask")
         }
         XCTAssertNil(rasterizer.rasterize(cluster: "A")?.rgba, "ordinary text retains grayscale storage")
         XCTAssertNil(rasterizer.rasterize(cluster: "ที่")?.rgba)

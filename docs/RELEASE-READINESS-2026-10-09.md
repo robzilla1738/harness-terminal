@@ -60,8 +60,11 @@ emoji). The window design remains unchanged.
 Logs: `/tmp/harness-unicode-color-full-final.log`,
 `/tmp/harness-unicode-color-release-verified.log`, `/tmp/harness-unicode-color-xcode.log`,
 `/tmp/harness-color-space-tests.log`, and `/tmp/harness-unicode-color-package.log`.
-The [draft PR](https://github.com/robzilla1738/harness-terminal/pull/188) records the exact final
-commit's CI outcome. This upgrade covers width/extender data, not full Unicode 18 grapheme
+The first continuation CI run passed **1,745 Linux tests, two skipped, zero failures**, plus
+both release builds and the Xcode project. Its pinned macOS compiler rejected an overly
+complex test assertion that the local beta accepted; the assertion was split into explicit
+scalar steps and its 26-test suite passed locally. The [draft PR](https://github.com/robzilla1738/harness-terminal/pull/188)
+records the exact final commit's rerun outcome. This upgrade covers width/extender data, not full Unicode 18 grapheme
 segmentation or glyph availability on every supported macOS version.
 
 ### Follow-up review
