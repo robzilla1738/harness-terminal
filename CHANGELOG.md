@@ -45,6 +45,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- Make PTY read-source installation atomic with close/respawn, avoiding stale descriptor access and disposal of an inactive dispatch source.
 - PTY draining uses bounded nonblocking reads, preserving queued output when macOS reports zero available bytes before resize or read-source cancellation.
 - Clearing history invalidates warmed capture/search grids and serializes the disk reset with output appends; replacing a shell with cleared history rejects late output from its predecessor.
 - Turning scrollback persistence off preserves an idle pane's screen in memory while deleting its disk snapshot; snapshot writes and deletion are serialized.

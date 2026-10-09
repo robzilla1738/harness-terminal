@@ -50,6 +50,12 @@ The continuation found additional failures with reproducing tests:
 
 The review also keeps PTY size/foreground queries under the descriptor lifecycle lock and
 aligns the preview bundle's minimum OS with macOS 15. Neither change alters the visual design.
+A final lifecycle review moved read-source installation under the lifecycle lock: a superseded
+start now returns before touching a potentially reused descriptor, and every created source is
+activated. Previously a concurrent close could lead to disposal of an inactive dispatch source.
+A no-fork regression verifies a stale start leaves an unrelated pipe's descriptor untouched.
+The source-installation follow-up passed **39 live-daemon/lifecycle tests with coverage** and
+**50 lifecycle/snapshot/persistence tests under Thread Sanitizer without race reports**.
 
 The full follow-up runs exposed the incorrect FIONREAD assumption through the new respawn
 regression. Its fixture now uses child-produced output and file acknowledgements, plus a read
@@ -74,7 +80,8 @@ Both corrected fixtures passed in a four-test run with code coverage enabled.
 Follow-up logs: `/tmp/harness-followup-final-sanitizer.log`,
 `/tmp/harness-final-release-verified.log`, `/tmp/harness-followup-linux.log`,
 `/tmp/harness-followup-final-all.log`, `/tmp/harness-ci-fixtures.log`, and
-`/tmp/harness-followup-final-xcode.log`.
+`/tmp/harness-followup-final-xcode.log`. Source-installation follow-up logs are
+`/tmp/harness-source-install-tests.log` and `/tmp/harness-source-install-sanitizer.log`.
 
 ### Initial pass
 

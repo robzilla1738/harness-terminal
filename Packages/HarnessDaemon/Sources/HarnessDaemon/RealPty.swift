@@ -1634,8 +1634,14 @@ public final class RealPty: @unchecked Sendable {
     }
 
 
-    private func startReading(fd: Int32, generation gen: UInt64) {
-        guard fd >= 0 else { return }
+    func startReading(fd: Int32, generation gen: UInt64) {
+        // Install while close/respawn cannot release the descriptor. A superseded start
+        // owns no fd: its old generation already closed it, and the number may be reused.
+        lifecycleLock.lock()
+        guard fd >= 0, master == fd, generation == gen, !isClosed else {
+            lifecycleLock.unlock()
+            return
+        }
         // Non-blocking, so input writes never park a thread (see `PtyInputWriter`). The flag is
         // on the shared file description, so reads see it too: an empty read is a wakeup, not EOF.
         _ = harness_set_nonblocking(fd)
@@ -1662,18 +1668,9 @@ public final class RealPty: @unchecked Sendable {
             self?.absorbPendingOutput(fd: fd, generation: gen)
             sysClose(fd)
         }
-        // Install only if we're still the current generation; a concurrent
-        // respawn/close may have already advanced past us, in which case cancel
-        // (which closes fd) rather than leaking a live source on a dead surface.
-        lifecycleLock.lock()
-        if generation == gen, !isClosed {
-            readSource = source
-            lifecycleLock.unlock()
-            source.resume()
-        } else {
-            lifecycleLock.unlock()
-            source.cancel()
-        }
+        readSource = source
+        lifecycleLock.unlock()
+        source.resume()
     }
 
     /// Changing replay retention does not resize or respawn the shell. Evict whole ordered
