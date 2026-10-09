@@ -38,6 +38,17 @@ PREVIEW_SIGNPOSTS=1 make preview && Scripts/scorecard.sh input-latency
 Scripts/scorecard.sh report             # markdown to paste below
 ```
 
+## Release audit — 2026-10-09, width reflow
+
+On the same Apple M5, macOS 27.2, Swift 6.4 release configuration, compact hard-ended
+history rows now omit blank padding during reflow decoding. Wrapped rows keep their
+original widths; the existing reflow, CJK, grapheme, and viewport-preview checks passed.
+One warm-up per variant followed by three samples gives **11.47 ms before / 9.03 ms after**
+for the existing 10,000-line prose workload, **21.2% less CPU time**. Only the engine file
+changed between variants; [raw samples and conditions](benchmarks/release-audit-2026-10-09.json)
+record the sequential measurement order. This is a reflow improvement, not a new
+cross-terminal latency, throughput, or power claim.
+
 ## Review follow-up — 2026-10-08, Find CPU
 
 A matched release check against `a7953d4` uses the existing 20,001-row search workload,

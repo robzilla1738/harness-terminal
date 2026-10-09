@@ -265,13 +265,15 @@ public struct AttachReply: Codable, Equatable, Sendable {
     /// of the history on a resync. Absent from older daemons on a resync.
     public var screen: Data?
     public var inputErrors: Bool?
+    public var replaySizes: [ReplaySize]?
 
-    public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil, inputErrors: Bool? = nil) {
+    public init(epoch: String, resync: Bool, endSequence: UInt64, screen: Data? = nil, inputErrors: Bool? = nil, replaySizes: [ReplaySize]? = nil) {
         self.epoch = epoch
         self.resync = resync
         self.endSequence = endSequence
         self.screen = screen
         self.inputErrors = inputErrors
+        self.replaySizes = replaySizes
     }
 }
 

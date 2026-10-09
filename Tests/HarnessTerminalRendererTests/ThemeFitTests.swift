@@ -60,7 +60,7 @@ final class ThemeFitTests: XCTestCase {
         XCTAssertEqual(locked, ["126,126,126", "0,0,0", "193,179,180"])
 
         for (fg, bg, theme) in pairs {
-            var resolver = CellColorResolver(
+            let resolver = CellColorResolver(
                 palette: ANSIPalette(base16: Array(repeating: HarnessTheme.RGBColor(red: 136, green: 136, blue: 136), count: 16)),
                 defaultForeground: theme,
                 defaultBackground: bg,

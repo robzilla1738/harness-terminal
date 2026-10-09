@@ -311,9 +311,28 @@ private final class HistoryRestore: @unchecked Sendable {
     let queue = DispatchQueue(label: "com.robert.harness.terminal-surface.history-restore", qos: .userInitiated)
     /// Main-confined: any history arrived. A restore without any has nothing to add.
     var receivedHistory = false
+    private let sizes: [ReplaySize]
+    private var receivingHistory = true
+    private var pendingSize: (cols: Int, rows: Int, localOnly: Bool)?
 
-    init(emulator: TerminalEmulator) {
+    init(emulator: TerminalEmulator, sizes: [ReplaySize]) {
         self.emulator = emulator
+        self.sizes = sizes
+        emulator.isReplaying = true
+    }
+
+    func feedHistory(_ data: Data, sequence: UInt64) {
+        queue.async { [self] in
+            ReplaySize.replay(data, sequence: sequence, sizes: sizes, resize: { cols, rows in
+                if emulator.cols != cols || emulator.rows != rows { emulator.resize(cols: cols, rows: rows) }
+            }, feed: emulator.feed)
+        }
+    }
+
+    func finish(cols: Int, rows: Int) {
+        receivingHistory = false
+        let target = pendingSize ?? (cols, rows, false)
+        resize(cols: target.cols, rows: target.rows, localOnly: target.localOnly)
     }
 
     func feed(_ data: Data) {
@@ -321,6 +340,10 @@ private final class HistoryRestore: @unchecked Sendable {
     }
 
     func resize(cols: Int, rows: Int, localOnly: Bool) {
+        if receivingHistory {
+            pendingSize = (cols, rows, localOnly)
+            return
+        }
         queue.async { [self] in
             if localOnly {
                 _ = emulator.resizePrimaryLocally(cols: cols, rows: rows)
@@ -1033,17 +1056,35 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// now, then rebuild the scrollback off the main thread from the history that follows
     /// (`receiveHistory`) and swap it in once parsed (`finishHistoryRestore`). The history never
     /// scrolls past on screen. Without a screen (an older daemon) the pane is blank until then.
-    public func beginHistoryRestore(screen: Data?) {
-        receive(Data("\u{1b}c".utf8) + (screen ?? Data()), replay: true)
+    public func beginHistoryRestore(screen: Data?, replaySizes: [ReplaySize] = []) {
+        historyRestore = nil
+        let sizes = ReplaySize.validated(replaySizes)
         let (cols, rows) = (columns, rows)
-        historyRestore = HistoryRestore(emulator: emulatorSync { $0.makeReplacement(cols: cols, rows: rows) })
+        let first = sizes.first
+        let restore = HistoryRestore(emulator: emulatorSync {
+            $0.makeReplacement(cols: Int(first?.cols ?? UInt16(clamping: cols)),
+                               rows: Int(first?.rows ?? UInt16(clamping: rows)))
+        }, sizes: sizes)
+        // Paint the preview at its source geometry before reflowing into this window.
+        // The history emulator independently follows every recorded resize.
+        let prepare: @Sendable (TerminalEmulator) -> Void = { emulator in
+            if let last = sizes.last { emulator.resize(cols: Int(last.cols), rows: Int(last.rows)) }
+            emulator.isReplaying = true
+            emulator.feed(Data("\u{1b}c".utf8) + (screen ?? Data()))
+            emulator.isReplaying = false
+            emulator.resize(cols: cols, rows: rows)
+        }
+        if offMainParserFramePipelineEnabled { emulatorState.async(prepare) }
+        else { prepare(emulatorState.emulator) }
+        receive(Data(), replay: true)
+        historyRestore = restore
     }
 
     /// History for the restore `beginHistoryRestore` started, oldest first.
-    public func receiveHistory(_ data: Data) {
+    public func receiveHistory(_ data: Data, sequence: UInt64 = 0) {
         guard let restore = historyRestore else { return }
         restore.receivedHistory = true
-        restore.feed(data)
+        restore.feedHistory(data, sequence: sequence)
     }
 
     /// The history has all arrived. Once the replacement has parsed it, it becomes the pane's
@@ -1054,6 +1095,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             historyRestore = nil
             return
         }
+        restore.finish(cols: columns, rows: rows)
         restore.queue.async { [weak self] in
             DispatchQueue.main.async { self?.swapInHistoryRestore(restore) }
         }
@@ -1072,6 +1114,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let swap: @Sendable (TerminalEmulator) -> Int = { previous in
             restore.queue.sync {}
             let next = restore.emulator
+            next.isReplaying = false
             next.takeOver(from: previous)
             state.replaceEmulator(with: next)
             let added = next.historyCount - previous.historyCount
@@ -2163,7 +2206,18 @@ public final class HarnessTerminalSurfaceView: NSView {
         originOffsetY = geometry.originY
         let newCols = geometry.cols
         let newRows = geometry.rows
-        guard newCols != columns || newRows != rows else { return }
+        guard newCols != columns || newRows != rows else {
+            // Split rebuilding can briefly shrink a reused view before restoring its bounds.
+            // Its old debounce must not commit that temporary size after layout has settled.
+            resizeCommitWork?.cancel()
+            resizeCommitWork = nil
+            if previewCols != 0, previewCols != newCols || previewRows != newRows {
+                _ = emulatorState.claimPreviewToken()
+                previewCols = 0; previewRows = 0
+                invalidateRenderGeneration()
+            }
+            return
+        }
         if !hasSizedGrid {
             // First real layout: size immediately so the terminal opens correct (no flash).
             hasSizedGrid = true
@@ -2863,7 +2917,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         } else {
             let token = state.claimFrameToken()
             let flush = flushTransaction
-            state.async { emulator in
+            state.async { [weak self] emulator in
                 // Latest-wins coalescing: if a newer build is already queued behind this one, skip —
                 // it will consume the damage this one would have (no rows lost), so a burst of marks
                 // collapses to a single build instead of N stale frames. For a live-resize commit
@@ -3145,7 +3199,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         // Preview-namespace token (NOT claimFrameToken): the output pipeline must not cancel an
         // in-flight re-wrap — during an animated resize both pipelines run concurrently.
         let token = state.claimPreviewToken()
-        state.async { emulator in
+        state.async { [weak self] emulator in
             // Latest-wins within the preview pipeline: a further boundary tick is already queued
             // behind this one — skip; it renders a strictly newer drag target.
             guard state.isLatestPreviewToken(token) else { return }
@@ -4018,7 +4072,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !cancellation.isCancelled else { return }
             let search: @Sendable (TerminalTextSnapshot) -> Void = { [weak self] snapshot in
-                DispatchQueue.global(qos: .userInitiated).async {
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     guard !cancellation.isCancelled else { return }
                     let result = TerminalBufferSearch.search(query: query, options: options,
                         lineCount: snapshot.lineCount, clusters: snapshot.clusters,
@@ -5086,7 +5140,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.22
             overlay.animator().alphaValue = 0
         }, completionHandler: { [weak overlay] in
-            overlay?.removeFromSuperview()
+            DispatchQueue.main.async { [weak overlay] in overlay?.removeFromSuperview() }
         })
     }
 

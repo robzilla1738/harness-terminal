@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-09",
+  "base_commit": "889af7e",
+  "hardware": "Apple M5",
+  "macOS": "27.2",
+  "configuration": "Release, Swift 6.4 / Xcode beta. No simultaneous build or active container workload during timed samples.",
+  "workload": "PerformanceBenchmarks.testWidthReflowDeepScrollbackProse: 10 width changes across 10,000 retained prose rows; nanos per width change. One build/run warm-up per variant, then three measured runs. Baseline differs only in TerminalScreen.swift (from 889af7e).",
+  "samples_ns": {
+    "baseline": [
+      11467583,
+      11582208,
+      11400770
+    ],
+    "candidate": [
+      8879225,
+      9034129,
+      9133616
+    ]
+  },
+  "median_ns": {
+    "baseline": 11467583,
+    "candidate": 9034129
+  },
+  "reduction_percent": 21.220286785803076,
+  "limits": "CPU reflow only; not physical latency, power, or cross-terminal leadership. Order: baseline then candidate, not interleaved."
+}

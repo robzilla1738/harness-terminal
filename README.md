@@ -13,8 +13,11 @@ One self-contained app. The terminal engine, daemon, and CLI are first-party Swi
 **Development status:** `main` includes unreleased terminal, workspace, and Mac usability
 improvements from [#185](https://github.com/robzilla1738/harness-terminal/pull/185).
 The latest published release remains **v1.13.0**; the download below does not include these
-changes. Screen restoration has a known [reattachment defect](https://github.com/robzilla1738/harness-terminal/issues/186).
-See the [audit](docs/TERMINAL-EXCELLENCE-PLAN.md), [performance results](docs/SCORECARD.md),
+changes. The current candidate adds resize-aware replay for the fish prompt corruption
+tracked in [#186](https://github.com/robzilla1738/harness-terminal/issues/186); logs recorded
+before this change lack the geometry needed for the fix.
+See the [release-readiness review](docs/RELEASE-READINESS-2026-10-09.md),
+[audit](docs/TERMINAL-EXCELLENCE-PLAN.md), [performance results](docs/SCORECARD.md),
 and [remaining acceptance work](https://github.com/robzilla1738/harness-terminal/issues/187).
 
 **[Download Harness for macOS →](https://github.com/robzilla1738/harness-terminal/releases/latest/download/Harness.dmg)**
@@ -28,7 +31,7 @@ Prefer to build it yourself? Jump to [Build from source](#build-from-source).
 ## Why Harness
 
 - **It's a real terminal first.** GPU rendering, accurate sRGB color by default, opt-in converted Display-P3 vivid color, ligatures, inline images (Sixel / Kitty / iTerm2), and 492 built-in themes with black and light Harness defaults. Block and box-drawing glyphs are drawn procedurally, so borders tile without seams at any font.
-- **Your work outlives the window.** Sessions, tabs, and splits are owned by a daemon. Quit and reopen to resume them, scrollback included. Retained output is persisted to disk and replayed after a daemon restart; restoration can currently duplicate or overprint prompt/redraw text (tracked in [#186](https://github.com/robzilla1738/harness-terminal/issues/186)). Attach the same session from a second window or another machine.
+- **Your work outlives the window.** Sessions, tabs, and splits are owned by a daemon. Quit and reopen to resume them, scrollback included. Retained output and its resize history are persisted for replay after a daemon restart. Older logs use the legacy replay path; see the [restoration limits](docs/RELEASE-READINESS-2026-10-09.md). Attach the same session from a second window or another machine.
 - **It's scriptable, locally or remotely.** `harness-cli` drives the whole thing — open tabs, send keys, capture a pane, resize, swap, zoom — so your tooling can build the layout it needs. Point any command at a headless or remote daemon with `--host <name>`; the daemon and CLI run on Linux too, so a remote box can host your sessions.
 - **It watches your agents.** Harness detects Claude Code, Codex, Cursor, and others by their process tree, shows which session is running what, and pings you when an agent stops or asks for approval. `Cmd+Shift+U` jumps you to the one that's waiting and skips the ones still thinking.
 

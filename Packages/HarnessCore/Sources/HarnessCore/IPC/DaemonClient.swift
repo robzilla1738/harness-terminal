@@ -132,6 +132,7 @@ public final class DaemonClient: @unchecked Sendable {
         public var historyEnd: UInt64
         public var point: AttachPoint?
         public var screen: Data?
+        public var replaySizes: [ReplaySize]?
     }
 
     /// Attach to a surface's output with its history. On a daemon with `attach-stream` this
@@ -168,7 +169,8 @@ public final class DaemonClient: @unchecked Sendable {
         return try attachStream(request, onAttached: { reply in
             onStart(AttachStart(
                 resync: reply.resync, historyEnd: reply.endSequence,
-                point: AttachPoint(epoch: reply.epoch, sequence: reply.endSequence), screen: reply.screen
+                point: AttachPoint(epoch: reply.epoch, sequence: reply.endSequence), screen: reply.screen,
+                replaySizes: reply.replaySizes
             ))
         }, onData: onData, onOwnership: onOwnership, onEnd: onEnd)
     }

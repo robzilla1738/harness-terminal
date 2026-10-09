@@ -72,7 +72,7 @@ final class RemoteHostStoreTests: XCTestCase {
         let sessions = HarnessPaths.sessionsDirectory
         let fm = FileManager.default
         try? fm.removeItem(at: sessions)
-        fm.createFile(atPath: sessions.path, contents: Data())
+        XCTAssertTrue(fm.createFile(atPath: sessions.path, contents: Data()))
         defer {
             try? fm.removeItem(at: sessions)
             try? fm.createDirectory(at: sessions, withIntermediateDirectories: true)

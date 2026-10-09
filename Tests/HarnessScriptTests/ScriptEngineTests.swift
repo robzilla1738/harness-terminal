@@ -3,6 +3,17 @@ import HarnessCore
 @testable import HarnessScript
 
 final class ScriptEngineTests: XCTestCase {
+    #if os(macOS)
+    func testNativeLibraryLoadingUsesModernMacOSLoader() throws {
+        let engine = try ScriptEngine()
+        let result = engine.load("""
+        local symbol, message = package.loadlib("/usr/lib/libSystem.B.dylib", "getpid")
+        assert(type(symbol) == "function", message)
+        """, from: "loader-check", replacingFileLayer: false)
+        XCTAssertEqual(result, .loaded)
+    }
+    #endif
+
     func testCallBridgesTablesBothWaysAndReportsFailures() throws {
         let engine = try ScriptEngine()
         var seen: [(String, [String: APIArgument])] = []

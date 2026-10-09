@@ -96,6 +96,70 @@ final class RealPtyLifecycleTests: XCTestCase {
         pty.close() // must not crash or hang on a second close
     }
 
+    func testRespawnWithClearedHistoryRejectsLateOutputFromOldChild() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = directory.appendingPathComponent("output")
+        let pty = try RealPty(id: UUID().uuidString, cwd: NSTemporaryDirectory(), shell: "/bin/sh",
+                              launchArgumentsOverride: ["-c", """
+                              printf 'CHILD_READY\\n'
+                              while [ ! -f "$1" ]; do sleep 0.01; done
+                              cat "$1"
+                              touch "$1.sent"
+                              exec /bin/cat
+                              """, "sh", payload.path])
+        pty.start()
+        defer { pty.close() }
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("CHILD_READY") })
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        let started = DispatchSemaphore(value: 0)
+        pty.blockReadQueueForTesting(until: gate, started: started)
+        guard started.wait(timeout: .now() + 5) == .success else {
+            return XCTFail("read queue did not reach the gate")
+        }
+        try Data("OLD_CHILD_OUTPUT\n".utf8).write(to: payload, options: .atomic)
+        guard waitUntil(timeout: 5, { FileManager.default.fileExists(atPath: payload.path + ".sent") })
+        else { return XCTFail("old child did not finish writing its output") }
+        try Data("NEW_CHILD_OUTPUT\n".utf8).write(to: payload, options: .atomic)
+        pty.respawn(clearHistory: true)
+        gate.signal()
+        XCTAssertTrue(waitUntil(timeout: 5) { pty.replay(fromSequence: nil).contains("NEW_CHILD_OUTPUT") })
+        XCTAssertFalse(pty.replay(fromSequence: nil).contains("OLD_CHILD_OUTPUT"),
+                       "the old read source's cancellation drain must not refill cleared history")
+    }
+
+    func testCloseDrainsOutputWhenReadSourceIsCancelledBeforeReadingIt() throws {
+        let trigger = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: trigger)
+            try? FileManager.default.removeItem(atPath: trigger.path + ".sent")
+        }
+        let pty = try RealPty(id: UUID().uuidString, cwd: NSTemporaryDirectory(), shell: "/bin/sh",
+                              launchArgumentsOverride: ["-c", """
+                              printf 'CHILD_READY\\n'
+                              while [ ! -f "$1" ]; do sleep 0.01; done
+                              printf 'FINAL_UNREAD_OUTPUT\\n'
+                              touch "$1.sent"
+                              exec /bin/cat
+                              """, "sh", trigger.path])
+        pty.start()
+        defer { pty.close() }
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("CHILD_READY") })
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        let started = DispatchSemaphore(value: 0)
+        pty.blockReadQueueForTesting(until: gate, started: started)
+        XCTAssertEqual(started.wait(timeout: .now() + 5), .success)
+        try Data().write(to: trigger)
+        XCTAssertTrue(waitUntil { FileManager.default.fileExists(atPath: trigger.path + ".sent") })
+        pty.close()
+        gate.signal()
+        XCTAssertTrue(waitUntil(timeout: 2) { pty.replay(fromSequence: nil).contains("FINAL_UNREAD_OUTPUT") },
+                      "an exited process's last bytes must survive cancellation of its read source")
+    }
+
     /// Respawn must NOT fire `onExit` (it's a replace, not a death) and must keep the
     /// surface streaming. Regression test for the generation race where the old
     /// child's exit-watcher ran `close()` against the freshly respawned shell.
@@ -243,6 +307,9 @@ final class RealPtyLifecycleTests: XCTestCase {
             DispatchQueue.global().async {
                 pty.write("echo \(i)\n")
                 pty.resize(rows: UInt16(20 + (i % 8)), cols: UInt16(80 + (i % 8)))
+                _ = pty.currentSize()
+                _ = pty.probeForegroundCommand()
+                _ = pty.probeForegroundProcess()
                 group.leave()
             }
         }

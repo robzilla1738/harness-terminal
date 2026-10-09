@@ -51,13 +51,13 @@ final class EndpointClientTests: XCTestCase {
             catch { XCTFail("Fixture request failed: \(message): \(error)"); throw error }
         }
         guard case let .snapshot(initial) = try request(.getSnapshot), let workspace = initial.activeWorkspaceID,
-              case let .tabID(tabID) = try request(.newTab(workspaceID: workspace, cwd: "/tmp", shell: "/bin/sh")),
+              case let .sessionID(sessionID) = try request(.newSession(workspaceID: workspace, cwd: "/tmp", name: "Search fixture", shell: "/bin/sh")),
               case let .snapshot(fresh) = try request(.getSnapshot),
-              let surfaceID = fresh.workspaces.flatMap(\.sessions).flatMap(\.tabs).first(where: { $0.id == tabID })?.rootPane.allSurfaceIDs().first?.uuidString else {
+              let surfaceID = fresh.workspaces.flatMap(\.sessions).first(where: { $0.id == sessionID })?.tabs.first?.rootPane.allSurfaceIDs().first?.uuidString else {
             return XCTFail("No test shell")
         }
         _ = try request(.send(surfaceID: surfaceID,
-            text: "i=1; while [ \"$i\" -le 130 ]; do printf '__excel_%s\\n' \"$i\"; i=$((i+1)); done\n"))
+            text: "stty -echo; PS1=''; i=1; while [ \"$i\" -le 130 ]; do printf '__excel_%s\\n' \"$i\"; i=$((i+1)); done; read go; printf '__changed__\\n'; read finish\n"))
         let ready = waitUntil {
             guard case let .text(text)? = try? request(.capturePane(surfaceID: surfaceID, includeScrollback: true)) else { return false }
             return text.contains("__excel_130")
@@ -68,8 +68,11 @@ final class EndpointClientTests: XCTestCase {
         }
         func page(offset: Int, generation: String?) throws -> OutputSearchPage {
             let reply = try request(.searchOutput(id: UUID(), query: "__excel_", caseSensitive: true,
-                sessionID: nil, offset: offset, generation: generation))
-            guard case let .text(json) = reply else { throw DaemonClientError.unexpectedResponse }
+                sessionID: sessionID, offset: offset, generation: generation))
+            guard case let .text(json) = reply else {
+                XCTFail("Expected search page, received: \(reply)")
+                throw DaemonClientError.unexpectedResponse
+            }
             return try JSONDecoder().decode(OutputSearchPage.self, from: Data(json.utf8))
         }
         let first = try page(offset: 0, generation: nil)
@@ -80,13 +83,16 @@ final class EndpointClientTests: XCTestCase {
         XCTAssertFalse(second.matches.isEmpty)
         XCTAssertTrue(Set(first.matches.map(\.line)).isDisjoint(with: second.matches.map(\.line)))
         let beforeChange = try page(offset: 0, generation: nil)
-        _ = try request(.send(surfaceID: surfaceID, text: "printf '__changed__\\n'\n"))
-        XCTAssertTrue(waitUntil {
+        _ = try request(.send(surfaceID: surfaceID, text: "go\n"))
+        let changed = waitUntil {
             guard case let .text(text)? = try? request(.capturePane(surfaceID: surfaceID, includeScrollback: true)) else { return false }
-            return text.contains("__changed__")
-        })
+            return text.contains("\r\n__changed__\r\n")
+        }
+        if !changed {
+            return XCTFail("Shell did not produce the change: \(try request(.capturePane(surfaceID: surfaceID, includeScrollback: true)))")
+        }
         let expired = try request(.searchOutput(id: UUID(), query: "__excel_", caseSensitive: true,
-            sessionID: nil, offset: 100, generation: beforeChange.generation))
+            sessionID: sessionID, offset: 100, generation: beforeChange.generation))
         guard case let .error(message) = expired else { return XCTFail("Expected expired generation") }
         XCTAssertTrue(message.contains("expired"))
     }

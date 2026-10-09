@@ -1,0 +1,40 @@
+{
+  "description": "Captured from fish --no-config with a deterministic prompt, typing a long command and resizing 40x8 -> 25x6 -> 70x12 -> 40x8 before execution. Raw PTY bytes, including redraws.",
+  "events": [
+    {
+      "cols": 40,
+      "rows": 8,
+      "data": "DRtdMDsvcC90bXAbXBtbbRtbPzIwMDRoG1s/MjAzMWgbWz40OzFtGz0bXTEzMztBO2NsaWNrX2V2ZW50cz0xG1xmaXNoPiAbXTEzMztCG1wbW0sNG1s2Qw=="
+    },
+    {
+      "cols": 40,
+      "rows": 8,
+      "data": "cHJpbnRmIA0bWzEzQyclc1xuJyANG1syMEMnYSANG1syM0Nsb25nIA0bWzI4Q2NvbW1hbmQgDRtbMzZDcmVkcmF3IA0bWzNDYWNyb3NzIA0bWzEwQ3NldmVyYWwgDRtbMThDdGVybWluYWwgDRtbMjdDd2lkdGhzOiANG1szNUMwMTIzNDU2Nzg5IA0bWzZDQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVonDRtbMzNDG1tBG1tBG1syN0RwcmludGYgJyVzXG4nICdhIGxvbmcgY29tbWFuZCByZWRyYXcgYWNyb3NzIHNldmVyYWwgdGVybWluYWwgd2lkdGhzOiAwMTIzNDU2Nzg5IEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaJw0bWzMzQw=="
+    },
+    {
+      "cols": 25,
+      "rows": 6,
+      "data": ""
+    },
+    {
+      "cols": 70,
+      "rows": 12,
+      "data": ""
+    },
+    {
+      "cols": 40,
+      "rows": 8,
+      "data": ""
+    },
+    {
+      "cols": 40,
+      "rows": 8,
+      "data": "G1s/MjAwNGwbWz8yMDMxbBtbPjQ7MG0bPg0KG1ttG10xMzM7QztjbWRsaW5lX3VybD1wcmludGYlMjAlMjclMjVzJTVDbiUyNyUyMCUyN2ElMjBsb25nJTIwY29tbWFuZCUyMHJlZHJhdyUyMGFjcm9zcyUyMHNldmVyYWwlMjB0ZXJtaW5hbCUyMHdpZHRocyUzQSUyMDAxMjM0NTY3ODklMjBBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWiUyNxtcG10wO3ByaW50ZiAnJXNcbicgJ2EgbG9uIC9wL3RtcBtcG1ttDWEgbG9uZyBjb21tYW5kIHJlZHJhdyBhY3Jvc3Mgc2V2ZXJhbCB0ZXJtaW5hbCB3aWR0aHM6IDAxMjM0NTY3ODkgQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoNChtdMTMzO0Q7MBtcG1s/MjVoG1sybeKPjhtbbSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA3ij44gDRtbSxtdMDsvcC90bXAbXBtbbRtbPzIwMDRoG1s/MjAzMWgbWz40OzFtGz0bXTEzMztBO2NsaWNrX2V2ZW50cz0xG1xmaXNoPiAbXTEzMztCG1wbW0sNG1s2Qw=="
+    },
+    {
+      "cols": 40,
+      "rows": 8,
+      "data": "cHJpbnRmIA0bWzEzQxtbPzIwMDRsG1s/MjAzMWwbWz40OzBtGz4nRklTSF9SRVBMQVlfT0tcbicNG1szMUMbWzI1RHByaW50ZiAnRklTSF9SRVBMQVlfT0tcbicNG1szMUMNChtbbRtdMTMzO0M7Y21kbGluZV91cmw9cHJpbnRmJTIwJTI3RklTSF9SRVBMQVlfT0slNUNuJTI3G1wbXTA7cHJpbnRmICdGSVNIX1JFUExBWV8gL3AvdG1wG1wbW20NRklTSF9SRVBMQVlfT0sNChtdMTMzO0Q7MBtcG1s/MjVoG1sybeKPjhtbbSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA3ij44gDRtbSxtdMDsvcC90bXAbXBtbbRtbPzIwMDRoG1s/MjAzMWgbWz40OzFtGz0bXTEzMztBO2NsaWNrX2V2ZW50cz0xG1xmaXNoPiAbXTEzMztCG1wbW0sNG1s2Qw=="
+    }
+  ]
+}

@@ -18,9 +18,9 @@ let strictFoundationSettings: [SwiftSetting] = [.unsafeFlags(["-warnings-as-erro
 let platformDependencies: [Package.Dependency] = [
     // Sparkle: macOS auto-update. The only Swift package dependency, and only the GUI links it.
     // Lua 5.1 is vendored in CLua51 and linked by the CLI only. Appcast hosted at harnesscli.dev.
-    // Pinned to the audited 2.9.x line (`Package.resolved` locks 2.9.2): a fresh resolve can't
+    // Pinned to the audited 2.9.x line (`Package.resolved` locks 2.9.6): a fresh resolve can't
     // float onto an unaudited future major/minor, while patch-level security fixes still land.
-    .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.9.2")),
+    .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.9.6")),
 ]
 let platformProducts: [Product] = [
     // Native terminal renderer: pure-Swift color resolution + a Metal glyph/draw layer.
@@ -227,9 +227,8 @@ let package = Package(
             publicHeadersPath: "include",
             cSettings: [
                 .headerSearchPath("."),
-                .define("LUA_USE_MACOSX", .when(platforms: [.macOS])),
-                .define("LUA_USE_POSIX", .when(platforms: [.linux])),
-                .define("LUA_USE_DLOPEN", .when(platforms: [.linux])),
+                .define("LUA_USE_POSIX", .when(platforms: [.macOS, .linux])),
+                .define("LUA_USE_DLOPEN", .when(platforms: [.macOS, .linux])),
             ],
             linkerSettings: [
                 .linkedLibrary("dl", .when(platforms: [.linux])),

@@ -1,4 +1,5 @@
 import Foundation
+import HarnessCore
 import HarnessTerminalEngine
 import XCTest
 @testable import HarnessTerminalKit
@@ -70,6 +71,35 @@ final class HistoryRestoreTests: XCTestCase {
 
     func testRestoreSwapsInTheHistoryOffMainPipeline() async {
         await runRestore(offMain: true)
+    }
+
+    func testRestoreAtAnotherWidthPreservesRedrawsAndLiveOutput() async {
+        for offMain in [false, true] {
+            let view = HarnessTerminalSurfaceView(offMainParserFramePipeline: offMain)
+            let (cols, rows) = view.testingGridSize
+            let first = Data("abcdefghijklmnop\r\u{1b}[2Kprompt> ".utf8)
+            let second = Data("echo 👨‍👩‍👧‍👦\r\n👨‍👩‍👧‍👦\r\nprompt> ".utf8)
+            let sizes = [ReplaySize(sequence: 1, cols: 10, rows: 4),
+                         ReplaySize(sequence: UInt64(first.count + 1), cols: 20, rows: 6)]
+            let truth = TerminalEmulator(cols: 10, rows: 4)
+            truth.feed(first)
+            truth.resize(cols: 20, rows: 6)
+            truth.feed(second)
+            view.beginHistoryRestore(screen: PaneCapture.screen(truth), replaySizes: sizes)
+            let bytes = first + second
+            // Chunk boundaries deliberately cross a resize and multibyte UTF-8.
+            for offset in stride(from: 0, to: bytes.count, by: 7) {
+                view.receiveHistory(Data(bytes.dropFirst(offset).prefix(7)), sequence: UInt64(offset + 1))
+            }
+            view.finishHistoryRestore()
+            truth.resize(cols: cols, rows: rows)
+            let live = Data("live\r\n".utf8)
+            view.receive(live)
+            truth.feed(live)
+            await settle(view)
+            XCTAssertEqual(view.accessibilitySnapshot().lines, truth.captureLines(joinWrapped: false))
+            XCTAssertEqual(view.testingReadGridSnapshot().cursor, truth.readGrid().cursor)
+        }
     }
 
     func testARestoreWithNoHistoryKeepsTheScreen() async {

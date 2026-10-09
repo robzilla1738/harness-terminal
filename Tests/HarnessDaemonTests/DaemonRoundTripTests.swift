@@ -327,7 +327,7 @@ final class DaemonRoundTripTests: XCTestCase {
         )))
         let pty = try XCTUnwrap(server.registry.sessionForTesting(surfaceID: sid))
         XCTAssertTrue(waitUntil(timeout: 15) {
-            pty.replay(fromSequence: nil).contains("UNWATCHED_DONE") && pty.screenGrid.fedThrough == pty.ringEnd
+            pty.replay(fromSequence: nil).contains("\r\nUNWATCHED_DONE\r\n") && pty.screenGrid.fedThrough == pty.ringEnd
         }, "the screen is caught up with no client attached")
         let parsed = pty.screenGrid.bytesFed
 

@@ -63,7 +63,9 @@ enum PaneTransitions {
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             ghost.animator().alphaValue = 0
             ghost.animator().frame = frame.insetBy(dx: frame.width * 0.04, dy: frame.height * 0.04).offsetBy(dx: toward.x, dy: toward.y)
-        }, completionHandler: { ghost.removeFromSuperview() })
+        }, completionHandler: { [weak ghost] in
+            DispatchQueue.main.async { [weak ghost] in ghost?.removeFromSuperview() }
+        })
     }
 
     /// Scale about the card's center, then shift.

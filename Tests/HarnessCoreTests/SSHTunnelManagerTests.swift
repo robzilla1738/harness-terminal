@@ -162,7 +162,7 @@ final class SSHTunnelManagerTests: XCTestCase {
 
         _ = try manager.endpoint(for: host(), waitTimeout: 2)
         // The reachability probe is faked, so drop a real socket file to prove cleanup removes it.
-        FileManager.default.createFile(atPath: expectedSocket.path, contents: Data())
+        XCTAssertTrue(FileManager.default.createFile(atPath: expectedSocket.path, contents: Data()))
         XCTAssertTrue(FileManager.default.fileExists(atPath: expectedSocket.path))
         XCTAssertTrue(manager.isConnected("devbox"))
 

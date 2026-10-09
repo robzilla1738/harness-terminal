@@ -27,6 +27,52 @@ final class ScrollbackFileTests: XCTestCase {
         HarnessPaths.scrollbackFileURL(forSurfaceID: id)
     }
 
+    func testResizeHistorySurvivesRestartTailTrimmingAndCompaction() throws {
+        let fileURL = url()
+        let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        file.recordSize(cols: 10, rows: 4)
+        file.append(Data(repeating: 65, count: 40 * 1024))
+        file.recordSize(cols: 20, rows: 6)
+        file.append(Data(repeating: 66, count: 40 * 1024))
+        file.flush()
+        let restored = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        XCTAssertEqual(restored.replaySizesForTail(maxBytes: 64 * 1024), [
+            ReplaySize(sequence: 1, cols: 10, rows: 4),
+            ReplaySize(sequence: 24 * 1024 + 1, cols: 20, rows: 6),
+        ])
+        XCTAssertEqual(restored.replaySizesForTail(maxBytes: 1024), [ReplaySize(sequence: 1, cols: 20, rows: 6)])
+        restored.recordSize(cols: 30, rows: 8)
+        restored.flush() // a resize with no output is persisted too
+        let again = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        XCTAssertEqual(again.replaySizesForTail(maxBytes: 1024).last,
+                       ReplaySize(sequence: 1025, cols: 30, rows: 8))
+        let permissions = try FileManager.default.attributesOfItem(atPath: fileURL.appendingPathExtension("sizes").path)[.posixPermissions] as? Int
+        XCTAssertEqual(permissions.map { $0 & 0o777 }, 0o600)
+        again.reset()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("sizes").path))
+    }
+
+    func testReplacementLogRejectsOldResizeOffsetsAndOptOutRemovesThem() throws {
+        let fileURL = url()
+        let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        file.recordSize(cols: 10, rows: 4)
+        file.append(Data("old".utf8))
+        file.flush()
+        try Data("replacement".utf8).write(to: fileURL, options: .atomic)
+        let replacement = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        XCTAssertTrue(replacement.replaySizesForTail(maxBytes: 1024).isEmpty)
+        replacement.append(Data("new".utf8), size: ReplaySize(sequence: 0, cols: 20, rows: 6))
+        replacement.flush()
+        replacement.setSuspended(true)
+        replacement.flush()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("sizes").path))
+        replacement.setSuspended(false)
+        replacement.append(Data("fresh".utf8), size: ReplaySize(sequence: 0, cols: 30, rows: 8))
+        replacement.flush()
+        let restored = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)
+        XCTAssertEqual(restored.replaySizesForTail(maxBytes: 1024), [ReplaySize(sequence: 1, cols: 30, rows: 8)])
+    }
+
     func testLiveRetentionChangeKeepsNewBudgetAndCompactsWhenReduced() throws {
         let fileURL = url()
         let file = ScrollbackFile(url: fileURL, retentionCap: 64 * 1024)

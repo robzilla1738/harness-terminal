@@ -17,7 +17,9 @@ is unreleased. Integrating it into `main` does not authorize publication. The la
 published release remains v1.13.0; no version bump, tag, DMG, appcast, or release workflow
 is part of this integration. Keep changes under **Unreleased** in the changelog.
 
-Before preparing another release, resolve the [screen-restoration defect (#186)](https://github.com/robzilla1738/harness-terminal/issues/186)
+The [October 9 release-readiness review](RELEASE-READINESS-2026-10-09.md) documents
+the candidate fix and regression evidence for [screen restoration (#186)](https://github.com/robzilla1738/harness-terminal/issues/186),
+including older-log compatibility limits. Before publishing, run CI on the shipping commit
 and review the [remaining acceptance checklist (#187)](https://github.com/robzilla1738/harness-terminal/issues/187).
 Performance gaps remain tracked in [#27](https://github.com/robzilla1738/harness-terminal/issues/27)
 and the [scorecard](SCORECARD.md). Passing CI does not close those observed or unverified gaps.

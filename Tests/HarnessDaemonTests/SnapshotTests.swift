@@ -1,4 +1,5 @@
 import Foundation
+import HarnessCore
 import XCTest
 @testable import HarnessDaemonCore
 @testable import HarnessTerminalEngine
@@ -6,6 +7,43 @@ import XCTest
 /// Snapshot (1.17). The parsers are fed by capture, attach and the screen warmer, not by the
 /// PTY read loop. A parked pane keeps the child and drops the grids.
 final class SnapshotTests: XCTestCase {
+    func testDisablingPersistencePreservesParkedScreenInMemory() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pty = try catPty(scrollbackURL: directory.appendingPathComponent("pane.scroll"))
+        defer { pty.close() }
+        pty.setParkMaterialForTesting(directory: directory, key: Data(repeating: 7, count: 32))
+        pty.injectSyntheticOutput(Data("KEEP_VISIBLE_WHEN_PRIVATE".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("KEEP_VISIBLE_WHEN_PRIVATE") })
+        pty.parkIfIdle(now: Date().addingTimeInterval(120))
+        let before = try XCTUnwrap(pty.screenFrame())
+        XCTAssertTrue(screenText(before).contains("KEEP_VISIBLE_WHEN_PRIVATE"))
+        pty.setScrollbackPersistence(enabled: false)
+        XCTAssertEqual(pty.screenFrame(), before, "opting out of disk persistence must not blank an idle pane")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(pty.id).park").path))
+        pty.clearScrollback()
+        XCTAssertFalse(screenText(pty.screenFrame()).contains("KEEP_VISIBLE_WHEN_PRIVATE"))
+    }
+
+    func testClearingHistoryInvalidatesWarmCaptureAndScreenCaches() throws {
+        let pty = try catPty()
+        defer { pty.close() }
+        let bytes = Data("CLEARED_SECRET\r\n".utf8)
+        pty.injectSyntheticOutput(bytes)
+        XCTAssertTrue(waitUntil { pty.ringEnd == UInt64(bytes.count + 1) })
+        XCTAssertTrue(pty.captureGrid(start: nil, end: nil, joinWrapped: false).contains("CLEARED_SECRET"))
+        XCTAssertTrue(screenText(pty.screenFrame()).contains("CLEARED_SECRET"))
+
+        pty.clearScrollback()
+        XCTAssertFalse(pty.captureGrid(start: nil, end: nil, joinWrapped: false).contains("CLEARED_SECRET"))
+        XCTAssertFalse(screenText(pty.screenFrame()).contains("CLEARED_SECRET"))
+        pty.injectSyntheticOutput(Data("FRESH".utf8))
+        XCTAssertTrue(waitUntil { pty.replay(fromSequence: nil).contains("FRESH") })
+        XCTAssertFalse(pty.captureGrid(start: nil, end: nil, joinWrapped: false).contains("CLEARED_SECRET"))
+        XCTAssertFalse(screenText(pty.screenFrame()).contains("CLEARED_SECRET"))
+    }
+
     func testCatchUpFeedsOnlyTheGapAndResyncsWhenTheRingDropsBytes() {
         let parser = AuthoritativeParser()
         let first = [SnapshotByteSpan(sequence: 1, data: Data("AAA".utf8))]
@@ -26,6 +64,124 @@ final class SnapshotTests: XCTestCase {
         let text = screenText(parser.frame())
         XCTAssertTrue(text.contains("Z"))
         XCTAssertFalse(text.contains("AAA"))
+    }
+
+    func testResizeReflowsExistingScreenInsteadOfReinterpretingCursorMoves() {
+        let parser = AuthoritativeParser()
+        let bytes = Data("abcdefghijklmnop\r\u{1b}[2Kprompt> ".utf8)
+        let ring = [SnapshotByteSpan(sequence: 1, data: bytes)]
+        let truth = TerminalEmulator(cols: 10, rows: 4)
+        truth.feed(bytes)
+        parser.catchUp(ring: ring, cols: 10, rows: 4)
+        truth.resize(cols: 20, rows: 6)
+        parser.catchUp(ring: ring, cols: 20, rows: 6)
+        XCTAssertEqual(parser.terminal?.captureLines(joinWrapped: false), truth.captureLines(joinWrapped: false))
+        XCTAssertEqual(parser.bytesFed, bytes.count, "a resize must not parse the retained bytes again")
+    }
+
+    func testColdReplayUsesRecordedSizesThroughCursorRedrawAndAlternateScreen() throws {
+        let pty = try RealPty(id: UUID().uuidString, cwd: NSTemporaryDirectory(), shell: "/bin/cat",
+                              rows: 4, cols: 10)
+        defer { pty.close() }
+        let truth = TerminalEmulator(cols: 10, rows: 4)
+        let first = Data("abcdefghijklmnop\r\u{1b}[2Kprompt> ".utf8)
+        pty.injectSyntheticOutput(first)
+        truth.feed(first)
+        pty.resize(rows: 6, cols: 20)
+        truth.resize(cols: 20, rows: 6)
+        let second = Data("\r\u{1b}[2Kprompt> echo 界\r\n界\r\n\u{1b}[?1049h\u{1b}[2J\u{1b}[Heditor".utf8)
+        pty.injectSyntheticOutput(second)
+        truth.feed(second)
+        pty.resize(rows: 5, cols: 12)
+        truth.resize(cols: 12, rows: 5)
+        let third = Data("\u{1b}[5;1Hstatus\u{1b}[?1049l\r\nprompt> ".utf8)
+        pty.injectSyntheticOutput(third)
+        truth.feed(third)
+        XCTAssertTrue(waitUntil { pty.ringEnd == UInt64(first.count + second.count + third.count + 1) })
+        let history = pty.attachHistory(fromSequence: nil, chunkLimit: 7)
+        let sizes = try XCTUnwrap(history.replaySizes)
+        XCTAssertEqual(sizes.map(\.cols), [10, 20, 12])
+        let restored = TerminalEmulator(cols: 10, rows: 4)
+        for chunk in history.chunks {
+            ReplaySize.replay(chunk.data, sequence: chunk.sequence, sizes: sizes,
+                              resize: { restored.resize(cols: $0, rows: $1) }, feed: restored.feed)
+        }
+        XCTAssertEqual(restored.captureLines(joinWrapped: false), truth.captureLines(joinWrapped: false))
+        XCTAssertEqual(history.screen?.vt, PaneCapture.screen(truth))
+        pty.parkIfIdle(now: Date().addingTimeInterval(120))
+        XCTAssertEqual(pty.attachHistory(fromSequence: nil).replaySizes, sizes)
+        pty.resize(rows: 7, cols: 25)
+        truth.resize(cols: 25, rows: 7)
+        XCTAssertTrue(waitUntil { pty.attachHistory(fromSequence: nil).screen?.vt == PaneCapture.screen(truth) },
+                      "a resize without output must unpark and rebuild at the recorded boundaries")
+    }
+
+    func testRestartRestoresResizeBoundariesBeforeStartingTheNewShell() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("pane.scroll")
+        let pty = try RealPty(id: "old", cwd: directory.path, shell: "/bin/cat", rows: 4, cols: 10, scrollbackURL: url)
+        let first = Data("abcdefghijklmnop\r\u{1b}[2Kprompt> ".utf8)
+        pty.injectSyntheticOutput(first)
+        pty.resize(rows: 6, cols: 20)
+        let second = Data("echo hello\r\nhello\r\nprompt> ".utf8)
+        pty.injectSyntheticOutput(second)
+        XCTAssertTrue(waitUntil { pty.ringEnd == UInt64(first.count + second.count + 1) })
+        pty.flushScrollback()
+        pty.close()
+        let restored = try RealPty(id: "new", cwd: directory.path, shell: "/bin/cat", rows: 8, cols: 30, scrollbackURL: url)
+        defer { restored.close() }
+        let truth = TerminalEmulator(cols: 10, rows: 4)
+        truth.feed(first)
+        truth.resize(cols: 20, rows: 6)
+        truth.feed(second)
+        truth.feed(Data(RealPty.restoreSeparator.utf8))
+        truth.resize(cols: 30, rows: 8)
+        XCTAssertEqual(restored.attachHistory(fromSequence: nil).screen?.vt, PaneCapture.screen(truth))
+    }
+
+    func testCapturedFishRedrawTraceMatchesIncrementalTerminalAfterReattach() throws {
+        struct Trace: Decodable {
+            struct Event: Decodable { var cols: UInt16; var rows: UInt16; var data: Data }
+            var events: [Event]
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/fish-resize-replay.json")
+        let trace = try JSONDecoder().decode(Trace.self, from: Data(contentsOf: url))
+        let truth = TerminalEmulator(cols: 40, rows: 8)
+        var sizes: [ReplaySize] = []
+        var bytes = Data()
+        var reproducedLegacyDefect = false
+        for event in trace.events {
+            let sequence = UInt64(bytes.count + 1)
+            if sizes.last?.cols != event.cols || sizes.last?.rows != event.rows {
+                if sizes.last?.sequence == sequence { sizes.removeLast() }
+                sizes.append(ReplaySize(sequence: sequence, cols: event.cols, rows: event.rows))
+            }
+            truth.resize(cols: Int(event.cols), rows: Int(event.rows))
+            truth.feed(event.data)
+            bytes.append(event.data)
+            let legacy = TerminalEmulator(cols: Int(event.cols), rows: Int(event.rows))
+            legacy.feed(bytes)
+            reproducedLegacyDefect = reproducedLegacyDefect
+                || legacy.captureLines(joinWrapped: false) != truth.captureLines(joinWrapped: false)
+            let restored = AuthoritativeParser()
+            restored.catchUp(ring: [SnapshotByteSpan(sequence: 1, data: bytes)],
+                             cols: Int(event.cols), rows: Int(event.rows), sizes: sizes)
+            XCTAssertEqual(restored.frame()?.vt, PaneCapture.screen(truth),
+                           "reattachment must match at every captured resize boundary")
+        }
+        let parser = AuthoritativeParser()
+        let ring = [SnapshotByteSpan(sequence: 1, data: bytes)]
+        parser.catchUp(ring: ring, cols: 40, rows: 8, sizes: sizes)
+        XCTAssertEqual(parser.terminal?.captureLines(joinWrapped: false), truth.captureLines(joinWrapped: false))
+        XCTAssertEqual(parser.frame()?.vt, PaneCapture.screen(truth))
+        XCTAssertTrue(truth.captureLines(joinWrapped: false).contains { $0.contains("FISH_REPLAY_OK") })
+        XCTAssertTrue(reproducedLegacyDefect, "the captured trace must exercise the old replay defect")
+        parser.releaseGrid()
+        parser.catchUp(ring: ring, cols: 40, rows: 8, sizes: sizes)
+        XCTAssertEqual(parser.frame()?.vt, PaneCapture.screen(truth), "cold and warm restoration agree")
     }
 
     /// Kitty animation commands (chunked frames included) parse in the authoritative grid like

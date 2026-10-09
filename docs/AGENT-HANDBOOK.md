@@ -302,7 +302,7 @@ harness/
 | — | `HarnessDaemonCore` | Testable daemon logic |
 | `harness-cli` | `HarnessCLI` | CLI client (depends on terminal packages for attach/compositor) |
 
-**One Swift package dependency.** The GUI app's only package dependency is **Sparkle** (macOS auto-update), pinned `.upToNextMinor(from: "2.9.2")` (`Package.resolved` locks the exact revision). `git clone && swift build` fetches just that package. Lua 5.1.5 is vendored in `CLua51` and linked by `HarnessScript`, which only the CLI links. The daemon target does not depend on it. `CHarnessBase64` is first-party and used by the engine for the OSC 52 path. The whole package builds in the **Swift 6 language mode** (complete strict concurrency everywhere); `HarnessCore` and `HarnessTerminalEngine` treat **warnings as errors** (`strictFoundationSettings`).
+**One Swift package dependency.** The GUI app's only package dependency is **Sparkle** (macOS auto-update), pinned `.upToNextMinor(from: "2.9.6")` (`Package.resolved` locks the exact revision). `git clone && swift build` fetches just that package. Lua 5.1.5 is vendored in `CLua51` and linked by `HarnessScript`, which only the CLI links. The daemon target does not depend on it. `CHarnessBase64` is first-party and used by the engine for the OSC 52 path. The whole package builds in the **Swift 6 language mode** (complete strict concurrency everywhere); `HarnessCore` and `HarnessTerminalEngine` treat **warnings as errors** (`strictFoundationSettings`).
 
 ---
 

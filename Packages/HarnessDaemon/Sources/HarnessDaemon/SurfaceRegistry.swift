@@ -995,6 +995,7 @@ public final class SurfaceRegistry: @unchecked Sendable {
                 // from disk, so it starts clean. The RealPty that normally owns this file is gone, so
                 // delete it directly; the default cap is fine on a now-empty history.
                 try? FileManager.default.removeItem(at: scrollbackURL)
+                try? FileManager.default.removeItem(at: scrollbackURL.appendingPathExtension("sizes"))
             }
             guard createOrEnsureSurface(surfaceID: surfaceID, cwd: fallbackCwd, shell: nil,
                                         rows: 24, cols: 80, scrollbackBytes: reviveScrollbackBytes) != nil else {
@@ -1815,7 +1816,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // surface — including across a live `respawn-pane` — without RealPty surgery.
             let persistScrollback = resolvedPersistScrollback(forSurfaceKey: surfaceID)
             let scrollbackURL = HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
-            if !persistScrollback { try? FileManager.default.removeItem(at: scrollbackURL) }
+            if !persistScrollback {
+                try? FileManager.default.removeItem(at: scrollbackURL)
+                try? FileManager.default.removeItem(at: scrollbackURL.appendingPathExtension("sizes"))
+            }
             // Shell-integration auto-inject (opt-out via `shell-integration off`): prompt
             // marks work out of the box. The user's `set-environment` table always wins,
             // and the plan is ALL-or-nothing: if any of its env keys would lose that merge,
@@ -2017,7 +2021,9 @@ public final class SurfaceRegistry: @unchecked Sendable {
             // already reaped the RealPty, so `removed` is nil here and the line above is a no-op —
             // remove the file by path so it doesn't linger until the next restart's orphan sweep.
             // The RealPty (and its ScrollbackFile) is gone in that case, so this can't be resurrected.
-            try? FileManager.default.removeItem(at: HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID))
+            let scrollbackURL = HarnessPaths.scrollbackFileURL(forSurfaceID: surfaceID)
+            try? FileManager.default.removeItem(at: scrollbackURL)
+            try? FileManager.default.removeItem(at: scrollbackURL.appendingPathExtension("sizes"))
             stopPipe(surfaceID: surfaceID)
             // Drop the output monitor too, else it leaks across tab/session/pane churn.
             monitorLock.lock(); monitors.removeValue(forKey: surfaceID); monitorLock.unlock()
@@ -2257,9 +2263,10 @@ public final class SurfaceRegistry: @unchecked Sendable {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil) else { return }
         let live = scrollbackLiveSurfaceKeys()
-        // `.scroll` logs and `.park` idle snapshots are both named for their surface.
-        for file in files where file.pathExtension == "scroll" || file.pathExtension == "park" {
-            let surfaceID = file.deletingPathExtension().lastPathComponent
+        for file in files where file.pathExtension == "scroll" || file.pathExtension == "park"
+            || file.lastPathComponent.hasSuffix(".scroll.sizes") {
+            let log = file.pathExtension == "sizes" ? file.deletingPathExtension() : file
+            let surfaceID = log.deletingPathExtension().lastPathComponent
             // Delete only genuine crash orphans — files neither backing a live PTY nor referenced
             // anywhere in the layout.
             if !live.contains(surfaceID) {

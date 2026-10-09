@@ -22,6 +22,8 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Configurable pane spacing in Appearance settings, retaining the 8-point default.
 
 ### Changed
+- Full-history width reflow avoids decoding blank padding on compact, hard-ended rows: 21% less CPU time in the matched 10,000-line prose benchmark, with text, styling, wrapping, and image anchors preserved.
+- Sparkle is updated to 2.9.6 across SwiftPM and Xcode, incorporating upstream installer and delta-update security fixes.
 
 - Global-search results separate excerpts from quieter location details, with consistent row spacing and reusable cells. Literal Find takes about 13% less CPU time in the recorded 20,001-row release workload.
 
@@ -43,6 +45,17 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- PTY draining uses bounded nonblocking reads, preserving queued output when macOS reports zero available bytes before resize or read-source cancellation.
+- Clearing history invalidates warmed capture/search grids and serializes the disk reset with output appends; replacing a shell with cleared history rejects late output from its predecessor.
+- Turning scrollback persistence off preserves an idle pane's screen in memory while deleting its disk snapshot; snapshot writes and deletion are serialized.
+- PTY size and foreground-process queries cannot inspect a recycled descriptor during shell replacement.
+- Lua native-library loading on macOS uses `dlopen`, restoring loading of libraries in the system cache and removing obsolete loader API use.
+- The isolated preview bundle advertises the same macOS 15 minimum as the app.
+- Rebuilding a nested split cancels temporary resize targets when a neighboring pane returns to its original bounds, preventing a narrow terminal grid inside a full-width pane.
+- Terminal reattachment follows the original resize boundaries, preventing prompt/redraw corruption when output was produced at different widths. Resize history survives parking and daemon restarts and is removed with persisted scrollback.
+- Cached daemon capture grids reflow on resize instead of reparsing their entire output history.
+- UI animation completion and drag-pasteboard access honor main-actor isolation; delayed callbacks keep weak ownership.
+- Benchmark comparison and recording now fail when the test process fails, even if the comparison step succeeds.
 - Remote-host renames save atomically and reject name collisions; failed removal preserves the connection. Concurrent GUI attachment requests are coalesced, and disconnected requests cannot reopen a host.
 - Path insertion reports uncertain command outcomes without leaving Return ready to repeat them. File navigation preserves spaces; project discovery has bounded output, cancellation, and path counts.
 - Find and global output search respect IME composition. Global search refreshes its source when reopened, cancels result validation on dismissal, and prevents duplicate opens.

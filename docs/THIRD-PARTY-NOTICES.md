@@ -38,7 +38,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Sparkle 2.9.2
+## Sparkle 2.9.6
 
 The app bundles Sparkle (`Sparkle.framework`) for updates, pinned in `Package.swift`. Its
 license, including the external licenses it carries, is reproduced as shipped.

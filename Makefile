@@ -1,3 +1,5 @@
+SHELL := /bin/bash
+
 .PHONY: build bench bench-record bench-check preview preview-stop preview-clean release release-notes package dmg smoke-dmg sign appcast finalize hotfix-release icon clean
 
 build:
@@ -9,12 +11,12 @@ bench:
 # Record the current run as the committed benchmark baseline (do this deliberately, in the
 # same PR as an intentional performance change, on the hardware class you gate on).
 bench-record:
-	HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks 2>&1 \
+	set -o pipefail; HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks 2>&1 \
 		| python3 Scripts/benchmarks/compare_benchmarks.py --record benchmark-baselines.json
 
 # Compare a fresh run against the committed baseline; exits non-zero on a >15% regression.
 bench-check:
-	HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks 2>&1 \
+	set -o pipefail; HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks 2>&1 \
 		| python3 Scripts/benchmarks/compare_benchmarks.py --baseline benchmark-baselines.json
 
 preview:

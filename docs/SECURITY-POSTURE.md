@@ -40,6 +40,7 @@ requested — the entitlements file contains exactly one key (the sandbox opt-ou
   lives only in the protected `release` environment's secrets (or, for a local release,
   the release machine's keychain). Sparkle rejects any download whose
   signature doesn't verify, independent of TLS.
+- Sparkle 2.9.6 includes the upstream fixes for [installer path validation](https://github.com/sparkle-project/Sparkle/security/advisories/GHSA-3x7w-j75x-ppq5) and the [delta symlink follow-up](https://github.com/sparkle-project/Sparkle/security/advisories/GHSA-gmj2-gq3j-vqmj).
 - Sparkle is pinned `upToNextMinor` from an audited release in all three manifests
   (Package.swift / project.yml / project.pbxproj, kept in agreement by the CI
   `manifest-lint` job), so a fresh resolve can't float onto an unaudited major/minor.
@@ -107,6 +108,16 @@ Semantics (pinned by `ScrollbackPersistenceTests`):
   from another key. Turning `persist-scrollback` off stores no scrollback bytes and no
   parked snapshot.
   The snapshot bytes are an internal attach frame, not a published wire format.
+
+## Replay geometry
+
+New output records terminal resize boundaries alongside the raw byte sequence. The optional
+attach metadata is backward compatible; existing logs and older daemons without it retain
+the legacy fallback. Sizes are validated before replay. The `.scroll.sizes` sidecar is
+owner-only, bound to the log inode, rebased on compaction, and removed with the log on clear,
+opt-out, or pane deletion. A replaced log never inherits stale offsets. As with the raw log,
+a crash during a pending flush can lose the last unflushed metadata. Geometry predating this
+version cannot be recovered retroactively.
 
 ## IME
 
