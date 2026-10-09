@@ -54,7 +54,7 @@ public enum TerminalBufferSearch {
     public static func search(query: String, options: TerminalBufferSearchOptions = .default,
                               lineCount: Int, clusters: [UInt32: String] = [:],
                               isWrapped: (Int) -> Bool = { _ in false },
-                              cancelled: () -> Bool = { false },
+                              cancelled: @escaping () -> Bool = { false },
                               line: (Int) -> [TerminalGridCell]) -> TerminalSearchOutcome {
         guard !query.isEmpty, lineCount > 0 else { return .matches([], limited: false) }
         guard query.utf8.count <= 4096 else { return .invalidPattern("Search is limited to 4,096 bytes.") }
