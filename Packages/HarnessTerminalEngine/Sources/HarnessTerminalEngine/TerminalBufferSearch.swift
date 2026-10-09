@@ -73,13 +73,20 @@ public enum TerminalBufferSearch {
             regex = options.isRegex ? try NSRegularExpression(pattern: pattern,
                 options: options.caseSensitive ? [] : [.caseInsensitive]) : nil
         } catch { return .invalidPattern(error.localizedDescription) }
+        let asciiPattern = !options.isRegex && pattern.utf16.allSatisfy({ $0 < 128 })
+            ? Array(pattern.utf16).map { foldASCII($0, caseSensitive: options.caseSensitive) } : []
+        var skip = [Int](repeating: max(1, asciiPattern.count), count: 128)
+        if asciiPattern.count > 1 {
+            for index in 0..<(asciiPattern.count - 1) { skip[Int(asciiPattern[index])] = asciiPattern.count - index - 1 }
+        }
         let deadline = ProcessInfo.processInfo.systemUptime + 0.25
         var matches: [TerminalBufferMatch] = []
         var mapped = TerminalMappedText()
+        var resolver = TerminalTextResolver()
         var limited = false
         for index in 0..<lineCount {
             if cancelled() { return .cancelled }
-            mapped.append(line(index), line: index, clusters: clusters)
+            mapped.append(line(index), line: index, clusters: clusters, resolver: &resolver)
             if mapped.text.utf16.count > 262_144 { return .matches(matches, limited: true) }
             if isWrapped(index), index + 1 < lineCount { continue }
             let text = mapped.text as NSString
@@ -94,13 +101,39 @@ public enum TerminalBufferSearch {
                     }
                 }
             } else {
-                var remaining = fullRange
-                while remaining.length > 0 {
-                    let found = text.range(of: pattern, options: options.caseSensitive ? [] : [.caseInsensitive], range: remaining)
-                    if found.location == NSNotFound { break }
-                    matches.append(TerminalBufferMatch(spans: mapped.cells(for: found)))
-                    if matches.count >= 50_000 { limited = true; break }
-                    remaining = NSRange(location: NSMaxRange(found), length: text.length - NSMaxRange(found))
+                // Logs overwhelmingly contain ASCII with box/block drawing. Avoid Foundation's
+                // per-line case-folding search there; Unicode letters keep the full Foundation
+                // path (e.g. Kelvin sign and long s can match an ASCII needle).
+                let units = asciiPattern.isEmpty ? [] : Array(mapped.text.utf16)
+                if !asciiPattern.isEmpty, units.allSatisfy({ $0 < 128 || (0x2500...0x259F).contains($0) }) {
+                    var offset = 0, iterations = 0
+                    while offset + asciiPattern.count <= units.count {
+                        if iterations & 63 == 0, cancelled() || ProcessInfo.processInfo.systemUptime > deadline {
+                            limited = true; break
+                        }
+                        iterations += 1
+                        var count = asciiPattern.count
+                        while count > 0, foldASCII(units[offset + count - 1], caseSensitive: options.caseSensitive) == asciiPattern[count - 1] {
+                            count -= 1
+                        }
+                        if count == 0 {
+                            matches.append(TerminalBufferMatch(spans: mapped.cells(for: NSRange(location: offset, length: asciiPattern.count))))
+                            if matches.count >= 50_000 { limited = true; break }
+                            offset += asciiPattern.count
+                        } else {
+                            let last = foldASCII(units[offset + asciiPattern.count - 1], caseSensitive: options.caseSensitive)
+                            offset += last < 128 ? skip[Int(last)] : asciiPattern.count
+                        }
+                    }
+                } else {
+                    var remaining = fullRange
+                    while remaining.length > 0 {
+                        let found = text.range(of: pattern, options: options.caseSensitive ? [] : [.caseInsensitive], range: remaining)
+                        if found.location == NSNotFound { break }
+                        matches.append(TerminalBufferMatch(spans: mapped.cells(for: found)))
+                        if matches.count >= 50_000 { limited = true; break }
+                        remaining = NSRange(location: NSMaxRange(found), length: text.length - NSMaxRange(found))
+                    }
                 }
             }
             if cancelled() { return .cancelled }
@@ -109,6 +142,10 @@ public enum TerminalBufferSearch {
             mapped = TerminalMappedText()
         }
         return .matches(matches, limited: limited)
+    }
+
+    private static func foldASCII(_ unit: UInt16, caseSensitive: Bool) -> UInt16 {
+        !caseSensitive && unit >= 65 && unit <= 90 ? unit + 32 : unit
     }
 }
 

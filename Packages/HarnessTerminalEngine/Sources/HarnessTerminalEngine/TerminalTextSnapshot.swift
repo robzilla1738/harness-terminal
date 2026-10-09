@@ -51,6 +51,11 @@ public struct TerminalMappedText: Sendable {
     public init() {}
 
     public mutating func append(_ cells: [TerminalGridCell], line: Int, clusters: [UInt32: String] = [:]) {
+        var resolver = TerminalTextResolver()
+        append(cells, line: line, clusters: clusters, resolver: &resolver)
+    }
+
+    mutating func append(_ cells: [TerminalGridCell], line: Int, clusters: [UInt32: String], resolver: inout TerminalTextResolver) {
         var units: [UInt16] = []
         units.reserveCapacity(cells.count)
         var runColumn = 0, runOffset = length, runLength = 0
@@ -60,7 +65,7 @@ public struct TerminalMappedText: Sendable {
                 units.append(UInt16(cell.codepoint == 0 ? 32 : cell.codepoint))
                 count = 1
             } else {
-                let unit = cell.resolvedCluster(in: clusters).precomposedStringWithCanonicalMapping
+                let unit = resolver.unit(cell, clusters: clusters)
                 count = unit.utf16.count
                 units.append(contentsOf: unit.utf16)
             }
@@ -114,5 +119,19 @@ public struct TerminalMappedText: Sendable {
     public func offset(atColumn column: Int) -> Int {
         guard let span = spans.first(where: { $0.columns.contains(column) || $0.columns.lowerBound >= column }) else { return length }
         return span.range.location + (span.linear ? max(0, column - span.columns.lowerBound) : 0)
+    }
+}
+
+/// A bounded search-local memo avoids repeatedly normalizing common CJK and drawing glyphs.
+/// Marked cells still resolve against the snapshot's own cluster storage.
+struct TerminalTextResolver {
+    private var scalars: [UInt32: String] = [:]
+
+    mutating func unit(_ cell: TerminalGridCell, clusters: [UInt32: String]) -> String {
+        let simple = cell.combining0 == 0 && cell.combining1 == 0
+        if simple, let cached = scalars[cell.codepoint] { return cached }
+        let unit = cell.resolvedCluster(in: clusters).precomposedStringWithCanonicalMapping
+        if simple, scalars.count < 4096 { scalars[cell.codepoint] = unit }
+        return unit
     }
 }
