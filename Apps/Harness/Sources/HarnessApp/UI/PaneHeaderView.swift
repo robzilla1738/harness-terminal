@@ -62,8 +62,8 @@ final class PaneHeaderView: NSView, NSDraggingSource {
             heightAnchor.constraint(equalToConstant: HarnessDesign.paneHeaderHeight),
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16),
-            icon.heightAnchor.constraint(equalToConstant: 16),
+            icon.widthAnchor.constraint(equalToConstant: HarnessDesign.paneHeaderIconSize),
+            icon.heightAnchor.constraint(equalToConstant: HarnessDesign.paneHeaderIconSize),
             titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HarnessDesign.Spacing.md),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: viewing.leadingAnchor, constant: -HarnessDesign.Spacing.md),
@@ -106,11 +106,11 @@ final class PaneHeaderView: NSView, NSDraggingSource {
         titleLabel.textColor = isFocused ? c.textPrimary : c.textSecondary
         HarnessDesign.applyChromeLabelAppearance([titleLabel], isDark: c.isDark)
         if let agent {
-            icon.image = AgentIconRenderer.templateOrMonogramImage(for: agent, size: 16)
+            icon.image = AgentIconRenderer.templateOrMonogramImage(for: agent, size: HarnessDesign.paneHeaderIconSize)
             icon.contentTintColor = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: agent)) ?? c.accent
         } else {
             icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: HarnessDesign.paneHeaderIconSize, weight: .regular))
             icon.contentTintColor = c.textTertiary
         }
         splitRight.applyChrome()

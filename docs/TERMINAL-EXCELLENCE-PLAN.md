@@ -340,7 +340,8 @@ The final consumer check covers the added output-subscription identity guard.
 
 ## Tab badge design follow-up
 
-- Flat 26×22-point tab badges, 28×23-point Settings/Overview badges, a seven-point
+- Flat 22×18-point tab badges, 12-point pane-header icons, 28×23-point
+  Settings/Overview badges, a seven-point
   leading inset, and existing title spacing. Removed the backing layer, gradient,
   inset bevel, and shadow. Static Core Animation layers do not animate.
 - Added sourced logos for all 23 named coding tools, replacing every named-tool
