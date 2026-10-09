@@ -5335,6 +5335,19 @@ extension HarnessTerminalSurfaceView: @preconcurrency NSTextInputClient {
 
     public func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
 
+    /// Anchors UI to the last presented cursor without waiting behind parser work.
+    public var cursorRectInScreen: NSRect? {
+        guard scrollOffset == 0, copyMode == nil, let renderer, let window,
+              let cursor = lastPresentedResult?.frame.cursor else { return nil }
+        let cellWidth = CGFloat(renderer.cellPixelWidth) / window.backingScaleFactor
+        let cellHeight = CGFloat(renderer.cellPixelHeight) / window.backingScaleFactor
+        let rect = NSRect(x: gridOriginPointsX + CGFloat(cursor.column) * cellWidth,
+                          y: bounds.height - gridOriginPointsY - CGFloat(cursor.row + 1) * cellHeight,
+                          width: cellWidth, height: cellHeight)
+        guard bounds.intersects(rect) else { return nil }
+        return window.convertToScreen(convert(rect, to: nil))
+    }
+
     /// Where the IME candidate window should anchor: the cursor cell, in screen space.
     public func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
         guard let renderer, let window else { return .zero }

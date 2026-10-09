@@ -196,7 +196,7 @@ enum CommandPaletteController {
                 title: "Insert Path",
                 subtitle: "Insert a shell-quoted path from this daemon",
                 symbol: "doc.on.clipboard",
-                shortcut: "",
+                shortcut: "⌥⌘I",
                 section: .actions
             ) {
                 coordinator.insertListedPath()

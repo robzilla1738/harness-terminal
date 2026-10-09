@@ -9,6 +9,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 ## [Unreleased]
 
 ### Added
+- Cursor-anchored Insert Path popup (⌥⌘I), with themed file icons, fuzzy Folder/Project search, keyboard navigation, and focus restoration.
 - Common compound emoji and longer combining sequences retain their text through rendering, copy, capture, reflow, and reattachment. Emoji currently use the monochrome glyph atlas; color emoji rendering remains open.
 - Native scrollback thumb dragging and track clicks, honoring the macOS scrollbar preference.
 - Per-pane Activity across attached hosts, with exact-pane navigation, read state, notification snoozing, and hook installation health.

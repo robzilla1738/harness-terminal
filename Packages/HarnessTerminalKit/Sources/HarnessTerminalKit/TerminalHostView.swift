@@ -856,6 +856,8 @@ public final class TerminalHostView: NSView {
 
     public var gridCellCount: (rows: Int, columns: Int) { nativeView.gridCellCount }
 
+    public var cursorRectInScreen: NSRect? { nativeView.cursorRectInScreen }
+
     public var outputGeneration: UInt64 { nativeView.outputGeneration }
     public var thumbnailStyle: TerminalThumbnailStyle { nativeView.thumbnailStyle }
     public func thumbnail(_ done: @escaping @MainActor @Sendable (TerminalThumbnail) -> Void) {

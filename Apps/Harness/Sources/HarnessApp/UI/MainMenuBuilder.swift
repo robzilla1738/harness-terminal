@@ -223,6 +223,10 @@ enum MainMenuBuilder {
         findPrevious.keyEquivalentModifierMask = [.command, .shift]
         findPrevious.target = MenuTarget.shared
         view.submenu?.addItem(findPrevious)
+        let insertPath = NSMenuItem(title: "Insert Path…", action: #selector(MenuTarget.insertPath), keyEquivalent: "i")
+        insertPath.keyEquivalentModifierMask = [.command, .option]
+        insertPath.target = MenuTarget.shared
+        view.submenu?.addItem(insertPath)
         let goToDirectory = NSMenuItem(title: "Go to Directory…", action: #selector(MenuTarget.goToDirectory), keyEquivalent: "g")
         goToDirectory.keyEquivalentModifierMask = [.command, .option]
         goToDirectory.target = MenuTarget.shared
@@ -640,6 +644,10 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
 
     @objc func goToDirectory() {
         SessionCoordinator.shared.goToListedDirectory()
+    }
+
+    @objc func insertPath() {
+        SessionCoordinator.shared.insertListedPath()
     }
 
     @objc func find() {

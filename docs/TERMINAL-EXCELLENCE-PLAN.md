@@ -295,6 +295,23 @@ The final consumer check covers the added output-subscription identity guard.
   its source and binary hashes are recorded beside the app and in the measurement receipt.
   Later documentation-only changes reuse this identical production-source evidence.
 
+## Cursor-anchored path insertion follow-up
+
+- Replaced the centered path browser with a 340-point cursor-anchored popup, available
+  through View → Insert Path and ⌥⌘I. Folder navigation, project fuzzy search, remote
+  targeting, multiple selection, and shell-quoted insertion remain available.
+- Search and result labels use 13-point system type; breadcrumb, scope, and hints use
+  11-point system type. Folder/Project uses the shared segmented control with the tab
+  strip’s pill geometry, selected fill, and border colors. Consistent padding and adaptive
+  result height keep short lists compact. Cursor placement reads the presented frame
+  without waiting for the parser.
+- Focused placement checks pass (four cases: below cursor, bottom-edge flip, stable side
+  during filtering, and a narrow window on a display with a negative origin). Existing
+  path-search and two-host directory checks passed. Live checks covered shell-quoted
+  insertion without execution, empty results, cancellation/focus restoration, project
+  scope, and light/dark appearance. This follow-up has not yet received a full CI run;
+  the `b41b325` results above describe the preceding production source.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named
