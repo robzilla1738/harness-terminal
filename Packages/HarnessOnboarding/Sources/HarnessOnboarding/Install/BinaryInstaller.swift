@@ -71,6 +71,7 @@ enum BinaryInstaller {
     /// app moves the agent to the installed copy itself the next time its daemon fails to answer.
     /// Best-effort: the app starts a daemon on its own when launchd won't.
     nonisolated private static func installLaunchAgentIfNeeded() {
+        guard !HarnessCLIPaths.hasHomeOverride else { return }
         let plistURL = HarnessCLIPaths.launchAgentURL
         if let existing = launchAgentDaemonPath(at: plistURL),
            FileManager.default.isExecutableFile(atPath: existing) { return }
@@ -192,12 +193,15 @@ enum BinaryInstaller {
             if let installedBuild, let sourceBuild, installedBuild > sourceBuild {
                 return .keptNewerInstalled
             }
-            try FileManager.default.removeItem(at: dest)
         }
-        try FileManager.default.copyItem(at: src, to: dest)
+        // Stage beside the destination so a failed copy leaves the working installation intact.
+        let staging = dest.deletingLastPathComponent().appendingPathComponent(".harness-install-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        try FileManager.default.copyItem(at: src, to: staging)
         if executable {
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path)
         }
+        guard rename(staging.path, dest.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         return .copied
     }
 

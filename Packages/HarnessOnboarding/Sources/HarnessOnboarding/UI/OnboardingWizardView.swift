@@ -45,7 +45,7 @@ struct OnboardingWizardView: View {
                 .padding(.horizontal, 28)
                 .padding(.bottom, 26)
         }
-        .frame(minWidth: 700, maxWidth: 820, minHeight: 560, maxHeight: 620)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(panelBackground)
         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
         .overlay(
@@ -110,16 +110,21 @@ struct OnboardingWizardView: View {
     // MARK: - Steps
 
     private var stepArea: some View {
-        ZStack {
-            ForEach(steps) { step in
-                if step == currentStep {
-                    stepContent(for: step)
-                        .padding(.horizontal, 56)
-                        .padding(.bottom, 24)   // sit a little above center, like a dialog
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(transition)
+        GeometryReader { geometry in
+            ScrollView {
+                ZStack {
+                    ForEach(steps) { step in
+                        if step == currentStep {
+                            stepContent(for: step)
+                                .padding(.horizontal, 32)
+                                .padding(.vertical, 24)
+                                .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+                                .transition(transition)
+                        }
+                    }
                 }
             }
+            .scrollBounceBehavior(.basedOnSize)
         }
         .animation(Motion.spring, value: currentStep)
     }
@@ -163,12 +168,13 @@ struct OnboardingWizardView: View {
         case .discover:
             return next
         case .notifications:
+            guard setup.allowsSystemSetup else { return next }
             if setup.notifications == .undetermined {
-                return Action(title: "Turn On Notifications", perform: setup.setUpNotifications, isSetup: true)
+                return Action(title: "Turn On Notifications", perform: setup.requestNotifications, isSetup: true)
             }
             if !setup.pendingHookAgents.isEmpty {
                 return Action(title: setup.hooksError == nil ? "Install Hooks" : "Try Again",
-                              perform: setup.setUpNotifications, isSetup: true)
+                              perform: setup.installHooks, isSetup: true)
             }
             if setup.notifications == .denied {
                 return Action(title: "Open System Settings", perform: NotificationPermission.openSystemSettings, isSetup: true)
@@ -207,7 +213,10 @@ struct OnboardingWizardView: View {
 
             // Not disabled while busy (every action ignores a press then), so the button stays
             // white behind its spinner instead of dimming.
-            Button(action: action.perform) {
+            Button {
+                guard !setup.isBusy else { return }
+                action.perform()
+            } label: {
                 ZStack {
                     // Keep the button's width while the spinner shows.
                     Text(action.title).opacity(setup.isBusy ? 0 : 1)

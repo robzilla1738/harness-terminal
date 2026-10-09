@@ -2636,22 +2636,19 @@ extension SessionCoordinator: TerminalHostDelegate {
 }
 
 enum DesktopNotifier {
-    /// Call once at app launch. macOS only shows the system prompt the first
-    /// time; subsequent calls are no-ops, so it's safe to call eagerly. Also
-    /// installs the foreground-presentation delegate (see `ForegroundPresenter`).
-    static func requestAuthorizationIfNeeded() {
+    /// Register foreground delivery without asking for permission before the user chooses setup.
+    static func configurePresentation() {
         let center = UNUserNotificationCenter.current()
         // Without a delegate that opts in, macOS suppresses banners while Harness is
         // the *frontmost* app — so an agent notification fired while you're looking at
         // another tab would silently no-op. The presenter forces banner + sound + list
         // even in the foreground, so agent alerts always land.
         center.delegate = ForegroundPresenter.shared
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
     static func show(title: String, body: String, withSound: Bool = true, owner: String? = nil, surfaceID: String? = nil) {
         let center = UNUserNotificationCenter.current()
-        // The delegate is set once in `requestAuthorizationIfNeeded` (called at app launch
+        // The delegate is set once in `configurePresentation` (called at app launch
         // before any notification can fire) and in `requestOrOpenSettings` / `sendTest`.
         // Re-setting it here on every banner delivery was redundant and slightly wasteful
         // (UNUserNotificationCenter retains the delegate strongly per Apple docs, so it can
@@ -2660,15 +2657,7 @@ enum DesktopNotifier {
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:
                 add(title: title, body: body, withSound: withSound, owner: owner, surfaceID: surfaceID)
-            case .notDetermined:
-                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-                    if granted {
-                        add(title: title, body: body, withSound: withSound, owner: owner, surfaceID: surfaceID)
-                    } else if withSound {
-                        DispatchQueue.main.async { NSSound(named: "Glass")?.play() }
-                    }
-                }
-            case .denied:
+            case .notDetermined, .denied:
                 if withSound {
                     DispatchQueue.main.async { NSSound(named: "Glass")?.play() }
                 }

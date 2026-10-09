@@ -20,18 +20,18 @@ struct NotificationsStepView: View {
         VStack(spacing: 28) {
             StepIntro(
                 eyebrow: "Notifications",
-                title: "Know the moment an agent needs you.",
-                bodyText: "Notifications are how Harness reaches you outside its window: when an agent asks for approval, finishes, or fails, even while you're in another app."
+                title: "Stay informed without watching every pane.",
+                bodyText: "Optional alerts for supported approval, completion, and failure events. Choose which events, banners, and sounds you want in Settings."
             )
 
             RowList {
                 IconRow(symbol: "bell.badge", title: "Notifications",
-                        detail: "A banner and sound for each approval request, finished run, and failure.") {
+                        detail: "Allow macOS notifications. Delivery also follows your Harness settings and Focus preferences.") {
                     notificationStatus
                 }
                 if !setup.agents.isEmpty {
                     IconRow(symbol: "point.3.connected.trianglepath.dotted", title: "Agent hooks",
-                            detail: "\(agentNames) report the instant they stop, instead of Harness inferring it from their output.") {
+                            detail: "Add hooks to \(agentNames) settings, with backups. Supported events vary by agent; harness-cli is installed if needed.") {
                         setup.pendingHookAgents.isEmpty
                             ? StatusPill(text: "Installed", tone: .success)
                             : StatusPill(text: "Not installed")
@@ -39,12 +39,14 @@ struct NotificationsStepView: View {
                 }
             }
 
-            if let error = setup.hooksError {
+            if !setup.allowsSystemSetup {
+                StatusNote(text: Text("This isolated preview leaves system permissions and agent settings unchanged. Setup is available in your regular Harness app."))
+            } else if let error = setup.hooksError {
                 StatusNote(text: Text(verbatim: error), tone: .danger)
             } else if setup.notifications == .denied {
                 StatusNote(text: Text("macOS asks only once. Turn Harness on in System Settings ▸ Notifications."))
             } else if setup.notificationsReady {
-                StatusNote(text: Text("All set. ⇧⌘U also jumps to whichever agent is waiting."))
+                StatusNote(text: Text("Permission is enabled. Harness notification preferences still apply; ⇧⌘U jumps to a waiting agent."))
             }
         }
         .animation(Motion.spring, value: setup.notifications)

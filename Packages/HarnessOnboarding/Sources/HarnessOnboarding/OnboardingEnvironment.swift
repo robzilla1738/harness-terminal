@@ -24,8 +24,10 @@ public enum OnboardingEnvironment {
     /// The installable agents detected on this machine. Defaults to none (row stays hidden).
     public static var detectAgents: () -> [Agent] = { [] }
 
-    /// Install Harness notification hooks for the agent `id`; returns true on success.
-    public static var installHooks: (_ agentID: String) -> Bool = { _ in false }
+    /// Install notification hooks, preserving a useful error when setup cannot complete.
+    public static var installHooks: (_ agentID: String) throws -> Void = { _ in
+        throw CocoaError(.featureUnsupported)
+    }
 
     /// The canonical fish completion script for `harness-cli`, generated from `CLICommandCatalog`
     /// (`CompletionGenerator.script(for: .fish)`). `HarnessApp` populates this; left unset (preview/

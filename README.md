@@ -103,12 +103,16 @@ export PATH="$HOME/Library/Application Support/Harness/bin:$PATH"
 
 On a fresh install, `Harness.app` opens a one-shot first-run tour (Welcome → Overview →
 Notifications → Command line → Ready; reopen it from Help ▸ Welcome to Harness). Its
-Notifications step asks for notification permission and installs hooks for the agents it
-detects in one click. Its optional Command line step performs the same local installation:
+Notifications step offers permission and agent-hook installation as separate optional
+actions. Skipping setup never prompts later just because an agent event arrives. Its optional Command line step performs the same local installation:
 it copies `harness-cli` and `HarnessDaemon`, registers the LaunchAgent only when none is
 working (so the daemon your sessions run in keeps running), adds a PATH block with a backup
 to the shells you use (your login shell plus any shell that already has a profile), and
-writes fish completions when fish is one of them. After an update, Harness shows release
+writes fish completions when fish is one of them. It respects `ZDOTDIR` and
+`XDG_CONFIG_HOME`, preserves existing bash login profiles and dotfile symlinks, and reports
+unreadable profiles without replacing them. Isolated preview builds leave system
+permissions, shell profiles, agent settings, and the regular installation unchanged.
+After an update, Harness shows release
 highlights (suppressible via the `update-banner` option).
 
 ## Remote & headless daemons

@@ -24,15 +24,17 @@ struct CommandLineStepView: View {
                 }
                 ForEach(setup.shells) { shell in
                     IconRow(symbol: "doc.text", title: shell.shell.rawValue,
-                            detail: "PATH entry in \((shell.profileURL.path as NSString).abbreviatingWithTildeInPath), backed up first") {
+                            detail: "Add PATH to \((shell.profileURL.path as NSString).abbreviatingWithTildeInPath); back up an existing file first") {
                         shell.alreadyHas
-                            ? StatusPill(text: "On PATH", tone: .success)
+                            ? StatusPill(text: "Configured", tone: .success)
                             : StatusPill(text: "Not set up")
                     }
                 }
             }
 
-            if let error = setup.cliError {
+            if !setup.allowsSystemSetup {
+                StatusNote(text: Text("Installation is disabled in this isolated preview so your shell profiles and regular Harness installation stay unchanged."))
+            } else if let error = setup.cliError {
                 StatusNote(text: Text(verbatim: "Couldn't finish: \(error)"), tone: .danger)
             } else if !setup.canInstallCLI {
                 StatusNote(text: Text(verbatim: BinaryInstaller.InstallError.missingBundledTools.errorDescription ?? ""), tone: .danger)

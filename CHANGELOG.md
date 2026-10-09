@@ -21,6 +21,7 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Configurable pane spacing in Appearance settings, retaining the 8-point default.
 
 ### Changed
+- Onboarding explains persistence and optional notifications accurately, separates permission from agent-hook installation, accommodates smaller screens, and pauses ambient animation while inactive. Setup preserves unreadable and symlinked shell profiles, respects custom shell config locations, and keeps a working CLI intact if replacement fails.
 - Regular Metal drawable waits run off the UI thread, keeping typing and output delivery responsive under load while preserving display synchronization.
 - Viewport scrolling rotates rows instead of copying the entire grid. Lossless compact history and 32-byte cells substantially reduce retained-output memory.
 - Literal Find reuses its UTF-16 mapping buffer, and daemon output scanners avoid per-byte collection overhead.

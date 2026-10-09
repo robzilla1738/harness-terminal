@@ -128,7 +128,6 @@ struct StatusNote: View {
             .foregroundStyle(tone == .danger ? ImmersivePalette.SUI.danger : ImmersivePalette.SUI.textTertiary)
             .multilineTextAlignment(.center)
             .lineSpacing(2)
-            .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 480)
             .transition(.opacity)
@@ -191,6 +190,7 @@ struct KeyCaps: View {
 // MARK: - Buttons
 
 struct GlassPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
@@ -207,8 +207,8 @@ struct GlassPrimaryButtonStyle: ButtonStyle {
             )
             .contentShape(.focusEffect, Capsule())
             .opacity(isEnabled ? 1 : 0.55)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
-            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1.0)
+            .animation(reduceMotion ? nil : .spring(response: 0.18, dampingFraction: 0.75), value: configuration.isPressed)
     }
 }
 

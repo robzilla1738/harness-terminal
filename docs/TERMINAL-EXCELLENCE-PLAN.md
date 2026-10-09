@@ -312,6 +312,32 @@ The final consumer check covers the added output-subscription identity guard.
   scope, and light/dark appearance. This follow-up has not yet received a full CI run;
   the `b41b325` results above describe the preceding production source.
 
+## Onboarding review follow-up
+
+- Reviewed all five screens, their setup paths, defaults, menu shortcuts, return-to-terminal
+  behavior, and the app-level notification authorization path. Copy now distinguishes
+  persistence while the Mac remains running, optional hooks, per-agent event support, and
+  system permission from Harness notification preferences. The final screen teaches Find
+  and Insert Path and points back to setup and the current shortcut list.
+- Notification permission no longer runs at startup or in response to background events.
+  Permission and hook installation are separate choices; permission requests are single-flight,
+  failures remain actionable, and a hook requiring manual merge is not reported as installed.
+- The wizard scrolls long content within the panel, keeps navigation visible, respects Reduce
+  Motion for button presses, and pauses the ambient animation when the app becomes inactive.
+- CLI installation preserves working binaries if staging fails. Profile edits retain symlinks,
+  refuse unreadable text, recognize active PATH assignments rather than comments, and honor
+  existing bash login profiles, ZDOTDIR, and XDG_CONFIG_HOME. Completion failures remain retryable.
+- Isolated application homes now apply to onboarding too. Preview setup cannot change the
+  regular installation, shell profiles, agent settings, or notification permissions; its UI
+  explains this. LaunchAgent registration is also guarded at the installer boundary.
+- Focused onboarding suite: **32 tests, zero failures**, including permission retry and
+  single-flight behavior, profile preservation, custom locations, and atomic copy failure.
+  Release build and strict ad-hoc signature verification passed. The live five-screen pass
+  verified readable overview/completion layouts, Return and Back navigation, isolated setup
+  paths and disabled writes, and completion restoring the original pane and both tabs.
+  Real user notification permission and agent configuration are deliberately not changed by
+  the preview acceptance pass. Full CI for the new candidate remains separate from earlier evidence.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named

@@ -70,11 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 (NSApp.delegate as? AppDelegate)?.windowControllers.forEach { $0.effectiveAppearanceDidChange() }
             }
         }
-        // Request notification authorization once at launch instead of on every
-        // notification post. macOS only shows the system prompt the first time
-        // and silently denies after; doing it eagerly means notifications can
-        // start arriving as soon as the first agent transitions to `waiting`.
-        DesktopNotifier.requestAuthorizationIfNeeded()
+        // Present banners when allowed; onboarding or Settings owns the permission prompt.
+        DesktopNotifier.configurePresentation()
 
         // Locate/spawn the daemon off the main thread, then sync from real state.
         DaemonLauncher.shared.ensureRunning { ok in

@@ -35,8 +35,11 @@ enum OnboardingController {
             }
         }
         OnboardingEnvironment.installHooks = { agentID in
-            guard let kind = AgentKind(rawValue: agentID) else { return false }
-            return (try? AgentHookInstaller.install(agent: kind)) != nil
+            guard let kind = AgentKind(rawValue: agentID) else { throw SetupError.invalid("Unknown agent: \(agentID)") }
+            let result = try AgentHookInstaller.install(agent: kind)
+            guard !result.needsManualMerge, AgentHookInstaller.isInstalled(agent: kind) else {
+                throw SetupError.invalid("Existing settings need a manual merge. See docs/agent-hooks/\(agentID).md.")
+            }
         }
         // Single source of truth: the wizard writes the same catalog-generated fish completion the
         // `harness-cli completions fish` / installer path emits — never a hand-maintained list.

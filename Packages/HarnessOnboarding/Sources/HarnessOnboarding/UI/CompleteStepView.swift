@@ -6,9 +6,9 @@ struct CompleteStepView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let shortcuts: [(keys: [String], title: String, detail: String)] = [
-        (["⌘", "K"], "Command palette", "Every command and setting, by name"),
-        (["⇧", "⌘", "U"], "Jump to agent", "Go straight to whoever needs you"),
-        (["⇧", "⌘", "O"], "Workspace Overview", "Every tab as a live tile"),
+        (["⌘", "K"], "Command palette", "Find actions and settings by name"),
+        (["⌥", "⌘", "I"], "Insert path", "Find files without leaving your shell"),
+        (["⌘", "F"], "Find in terminal", "Search output in the current pane"),
         (["⌘", "N"], "New window", "Another session, side by side"),
     ]
 
@@ -16,8 +16,8 @@ struct CompleteStepView: View {
         VStack(spacing: 28) {
             StepIntro(
                 eyebrow: "Ready",
-                title: "You're all set.",
-                bodyText: "Four shortcuts to start with. Press ⌘/ for the rest."
+                title: "Your terminal is ready.",
+                bodyText: "Setup is optional. Revisit it in Help → Welcome to Harness. These are the default shortcuts; ⌘/ shows your bindings."
             )
 
             Grid(horizontalSpacing: 12, verticalSpacing: 12) {
