@@ -42,20 +42,7 @@ public enum ThemeManager {
     public static let defaultSystemLightThemeName = "Harness Light"
     public static let defaultSystemDarkThemeName = HarnessThemeCatalog.defaultThemeName
 
-    public static let featuredThemes = [
-        HarnessThemeCatalog.defaultThemeName,
-        "Harness Light",
-        "Harness Navy",
-        "Catppuccin Mocha",
-        "Dracula",
-        "Tokyo Night",
-        "Nord",
-        "One Dark",
-        "Gruvbox Dark",
-        "Solarized Dark",
-        "Monokai",
-        "GitHub Dark",
-    ]
+    public static let featuredThemes = HarnessThemeCatalog.featuredNames
 
 
     public static func backgroundHex(themeName: String) -> String? {

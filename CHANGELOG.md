@@ -8,6 +8,18 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-09
+
+### Added
+- A curated collection of 25 original Harness themes: 17 dark and eight light palettes, with complete 16-color terminal palettes, coordinated cursors, and readable selections. Includes the blue-teal Harness Deep Sea, plus Graphite, Midnight, Cobalt, Lagoon, Spruce, Moss, Ember, Copper, Dune, Aubergine, Plum, Rosewood, Moonstone, Aurora, Parchment, Porcelain, Glacier, Seafoam, Lavender, Rose Quartz, and Sandstone.
+
+### Changed
+- The original Harness collection appears first in theme pickers and command-palette suggestions. The pure-black Harness Default, Harness Navy, and Harness Light keep their existing colors. All 489 community themes remain available, bringing the bundled catalog to 514 themes.
+- Custom theme creation, editing, and `.harnesstheme` import/export remain available; current theme selections are preserved when updating.
+
+### Fixed
+- Theme-picker search receives keyboard focus instead of sending typed text to the Settings search field, and theme rows expose named accessibility actions.
+
 ## [2.0.0] - 2026-10-09
 
 Harness 2.0 brings saved workspace layouts, activity across connected hosts, broader search,

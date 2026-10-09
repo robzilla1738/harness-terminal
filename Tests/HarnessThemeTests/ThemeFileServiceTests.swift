@@ -29,6 +29,19 @@ final class ThemeFileServiceTests: XCTestCase {
         XCTAssertEqual(restored, doc)
     }
 
+    func testOriginalThemesCanBeCustomizedAndSharedWithoutChangingTheBuiltin() throws {
+        for theme in HarnessOriginalThemes.all {
+            var custom = ThemeDocument(definition: theme)
+            custom.name = "My \(theme.name)"
+            custom.colors.cursor = RGBColor(hex: "#ff8800")!
+            let url = try service.install(custom, into: tempDir)
+            let imported = try service.importTheme(from: url)
+            XCTAssertEqual(imported, custom)
+            XCTAssertEqual(HarnessThemeCatalog.theme(named: theme.name), theme)
+        }
+        XCTAssertEqual(try service.installedThemes(in: tempDir).count, 25)
+    }
+
     func testInstallUsesSanitizedName() throws {
         let doc = sampleDocument(name: "Tokyo Night")
         let url = try service.install(doc, into: tempDir)

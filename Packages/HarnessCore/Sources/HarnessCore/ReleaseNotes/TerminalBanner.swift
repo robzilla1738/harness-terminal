@@ -23,7 +23,7 @@ public enum TerminalBanner {
         lines.append([])
         lines.append([Run("Why it's different", sgr: bold)])
         let bullets = [
-            "GPU-native renderer — instant, pixel-smooth output and 490 built-in themes",
+            "GPU-native renderer — pixel-smooth output and 25 original Harness themes alongside community favorites",
             "Your shells outlive the window — a background daemon keeps every session running across closes and restarts",
             "tmux workflows, no tmux — tabs, splits, prefix keys, copy mode, scriptable from harness-cli",
             "Agent-aware — Claude Code, Codex & friends show live working / needs-attention status on their tab",

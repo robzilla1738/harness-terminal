@@ -858,7 +858,7 @@ final class HarnessSegmented: NSControl {
 
 // MARK: - Select (searchable dropdown)
 
-/// Themed dropdown replacing `NSPopUpButton` for long lists (the 490-theme catalog). Shows
+/// Themed dropdown replacing `NSPopUpButton` for long lists such as the theme catalog. Shows
 /// the current value + chevron; click opens a searchable themed popover. Popup-compatible
 /// shims keep call sites a type-swap.
 @MainActor
@@ -1020,7 +1020,7 @@ final class HarnessSelectPopover: NSObject {
     private let featuredCount: Int
     private let onPick: (String) -> Void
     /// Called once, after the panel + event monitor have been fully torn down.
-    /// `HarnessSelect` uses this to nil its own `popover` reference so the 490-item
+    /// `HarnessSelect` uses this to nil its own `popover` reference so the
     /// `allItems` array is released immediately on dismiss rather than held until the
     /// next popover open.  Not set by default — callers that don't need the callback
     /// can skip it.
@@ -1084,7 +1084,7 @@ final class HarnessSelectPopover: NSObject {
             stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -2),
         ])
 
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+        let panel = KeyablePanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = true
@@ -1151,7 +1151,7 @@ final class HarnessSelectPopover: NSObject {
         if let panel { panel.parent?.removeChildWindow(panel); panel.orderOut(nil) }
         panel = nil
         // Notify the owner so it can nil its own reference to this popover.  This releases
-        // the `allItems` array (up to 490 theme names) immediately rather than retaining it
+        // the `allItems` array immediately rather than retaining it
         // until the next popover open or window close.  The callback is invoked after all
         // teardown so the owner cannot re-enter dismiss() via its own cleanup.
         onDismiss?()
@@ -1183,6 +1183,8 @@ private final class SelectRow: NSControl {
         label.font = .systemFont(ofSize: 12.5, weight: isSelected ? .semibold : .regular)
         label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
         addSubview(label)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 26),
@@ -1212,6 +1214,9 @@ private final class SelectRow: NSControl {
         guard bounds.contains(p) else { return }
         onSelect()
     }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityPerformPress() -> Bool { onSelect(); return true }
 
     private func applyChrome() {
         let c = HarnessChrome.current

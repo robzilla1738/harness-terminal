@@ -82,8 +82,22 @@ final class HarnessThemeCatalogTests: XCTestCase {
         }
     }
 
+    func testOriginalCollectionIsCompleteAndListedFirst() {
+        let originals = HarnessOriginalThemes.all
+        XCTAssertEqual(originals.count, 25)
+        XCTAssertEqual(originals.filter(\.isDark).count, 17)
+        XCTAssertEqual(Set(originals.map(\.name)).count, 25)
+        XCTAssertEqual(Set(originals.map(\.backgroundHex)).count, 25)
+        XCTAssertEqual(Array(HarnessThemeCatalog.allThemes.prefix(25)), originals)
+        for theme in originals {
+            XCTAssertTrue(HarnessThemeCatalog.isBuiltin(theme.name))
+            XCTAssertEqual(HarnessThemeCatalog.theme(named: theme.name), theme)
+        }
+        XCTAssertEqual(HarnessThemeCatalog.theme(named: "Harness Deep Sea")?.backgroundHex, "#00212c")
+    }
+
     func testCommunityThemesResourceIsBundled() {
-        XCTAssertEqual(HarnessThemeCatalog.allThemes.count, 492)
+        XCTAssertEqual(HarnessThemeCatalog.allThemes.count, 514)
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: "Zenwritten Light"))
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: "0x96f"))
     }
