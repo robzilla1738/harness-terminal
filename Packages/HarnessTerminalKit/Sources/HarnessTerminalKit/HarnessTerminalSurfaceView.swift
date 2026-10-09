@@ -11,6 +11,22 @@ import QuartzCore
 // `HarnessTheme.RGBColor` in this file. Pin the name to ours.
 private typealias RGBColor = HarnessTheme.RGBColor
 
+/// QuartzCore supports drawable acquisition on a rendering thread. This one-shot handoff
+/// writes on drawableQueue, then is read only by its queued main-thread completion.
+private final class SurfaceDrawableRequest: @unchecked Sendable {
+    let layer: CAMetalLayer
+    var drawable: CAMetalDrawable?
+    var waitNanos: UInt64 = 0
+
+    init(layer: CAMetalLayer) { self.layer = layer }
+
+    func acquire() {
+        let start = DispatchTime.now().uptimeNanoseconds
+        drawable = autoreleasepool { layer.nextDrawable() }
+        waitNanos = DispatchTime.now().uptimeNanoseconds &- start
+    }
+}
+
 private struct SurfaceFrameBuildConfiguration: Sendable {
     var resolver: CellColorResolver
     var cursorColor: RGBColor
@@ -509,6 +525,11 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// busy parsing). During a drag the grid content is unchanged — reflow + SIGWINCH is debounced
     /// to drag-end (`scheduleResizeCommit`) — so stretching the last frame is exactly correct and
     /// never blocks main behind the parser. Main-thread only (written in `presentBuiltFrame`).
+    // Only drawable acquisition runs here. Renderer state and presentation stay on main.
+    private let drawableQueue = DispatchQueue(label: "com.robert.harness.drawable", qos: .userInteractive)
+    private var drawableRequestInFlight = false
+    private var pendingDrawableFrame: SurfaceFrameBuildResult?
+    private var pendingDrawableNeedsFullDamage = false
     private var lastPresentedResult: SurfaceFrameBuildResult?
     /// True when the renderer's row-instance cache verifiably holds exactly
     /// `lastPresentedResult.frame`'s rows — i.e. the last renderer encode was of that frame through
@@ -1153,6 +1174,9 @@ public final class HarnessTerminalSurfaceView: NSView {
     // commit build's frame token while both sit queued).
     var testingPendingResize: (cols: Int, rows: Int)? { emulatorState.pendingResizeForTesting() }
     func testingRenderNowOffMainAsync() { renderNowOffMain() }
+    func testingBlockDrawableQueue(_ block: @escaping @Sendable () -> Void) {
+        drawableQueue.async(execute: block)
+    }
     func testingBlockEmulatorQueue(until gate: DispatchSemaphore) {
         emulatorState.async { _ in gate.wait() }
     }
@@ -2857,8 +2881,50 @@ public final class HarnessTerminalSurfaceView: NSView {
                     if flush || self.metalLayer.presentsWithTransaction {
                         self.presentWithinExplicitTransaction { self.presentBuiltFrame(result) }
                     } else {
-                        self.presentBuiltFrame(result)
+                        self.enqueueDrawableFrame(result)
                     }
+                }
+            }
+        }
+    }
+
+    /// Keep a single drawable wait off main, with at most one latest pending frame. Replacing
+    /// a built frame invalidates damage reuse because the parser has already consumed its damage.
+    /// This preserves display synchronization without parking input, output delivery or AppKit
+    /// behind the compositor's next refresh. Live resize retains its explicit transaction path.
+    private func enqueueDrawableFrame(_ result: SurfaceFrameBuildResult) {
+        guard renderGeneration == result.generation, window != nil, renderer != nil else { return }
+        if pendingDrawableFrame != nil { pendingDrawableNeedsFullDamage = true }
+        pendingDrawableFrame = result
+        guard !drawableRequestInFlight else { return }
+        drawableRequestInFlight = true
+        let request = SurfaceDrawableRequest(layer: metalLayer)
+        drawableQueue.async { [weak self] in
+            request.acquire()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.drawableRequestInFlight = false
+                guard let pending = self.pendingDrawableFrame else { return }
+                self.pendingDrawableFrame = nil
+                if self.pendingDrawableNeedsFullDamage {
+                    self.renderer?.invalidateRowReuseCache()
+                    self.lastPresentedResultIsRendererCoherent = false
+                }
+                self.pendingDrawableNeedsFullDamage = false
+                guard let drawable = request.drawable,
+                      drawable.texture.width == Int(self.metalLayer.drawableSize.width),
+                      drawable.texture.height == Int(self.metalLayer.drawableSize.height) else {
+                    self.renderer?.invalidateRowReuseCache()
+                    self.lastPresentedResultIsRendererCoherent = false
+                    self.scheduleRender()
+                    return
+                }
+                if self.metalLayer.presentsWithTransaction {
+                    self.presentWithinExplicitTransaction {
+                        self.presentBuiltFrame(pending, drawable: drawable, drawableWaitNanos: request.waitNanos)
+                    }
+                } else {
+                    self.presentBuiltFrame(pending, drawable: drawable, drawableWaitNanos: request.waitNanos)
                 }
             }
         }
@@ -2867,9 +2933,17 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Present an already-built off-main frame (main thread). A stale generation / no window / no
     /// renderer is an intentional drop; a nil drawable or a failed present is transient, so re-arm the
     /// scheduler (and wake the link) to retry on the next tick rather than leaving a frame unshown.
-    private func presentBuiltFrame(_ result: SurfaceFrameBuildResult) {
+    private func presentBuiltFrame(
+        _ result: SurfaceFrameBuildResult, drawable: CAMetalDrawable? = nil, drawableWaitNanos: UInt64 = 0
+    ) {
         guard renderGeneration == result.generation, window != nil, let renderer else { return }
-        let outcome = presentFrame(result, damage: result.damage, scrollShift: result.scrollShift)
+        // A synchronous layout/resize frame supersedes any older frame waiting for a drawable.
+        if pendingDrawableFrame != nil {
+            pendingDrawableFrame = nil
+            pendingDrawableNeedsFullDamage = false
+            renderer.invalidateRowReuseCache()
+        }
+        let outcome = presentFrame(result, damage: result.damage, scrollShift: result.scrollShift, drawable: drawable, acquiredWaitNanos: drawableWaitNanos)
         if outcome == .presented {
             // Remember the presented frame so a live resize can re-stretch it without rebuilding
             // (and without touching the emulator queue). See `repaintLastFrame`.
@@ -2900,25 +2974,24 @@ public final class HarnessTerminalSurfaceView: NSView {
         StartupMetrics.shared.mark(.firstDrawablePresented)
     }
 
-    /// Acquire a drawable and present `result`'s frame at the current origin — the one place the
-    /// main thread meets the GPU (drawable wait + in-flight semaphore + encode). While the layer is
+    /// Present `result` at the current origin. Regular asynchronous frames supply a drawable
+    /// acquired off main; synchronous layout/repaint callers acquire here. While the layer is
     /// in `presentsWithTransaction` mode (live resize) the present is routed through the renderer's
     /// transaction-synchronized path, keyed off the layer property itself so present modes can
     /// never mix while the mode is on — DELIBERATE for output/tick presents mid-drag too: an async
     /// `commandBuffer.present` against a transaction-mode layer presents at an indeterminate later
     /// commit (the glitch class this change eliminates), and the uniform sync cost is the bounded
     /// schedule wait (sub-ms, measured as `presentScheduleNanos`), paid only while dragging.
-    /// The `present` signpost interval brackets nextDrawable() + the renderer's
-    /// inFlightSemaphore.wait(): the drawable / GPU back-pressure (vsync) stall on the main thread
-    /// — the term the latency work targets (0b showed parse+build is ~16µs, so any felt lag lives
-    /// here, not upstream). When signposts are enabled we also record a rolling p50/p95 breakdown
-    /// (total / drawable wait / semaphore wait / schedule). A `false` return is a skipped present
+    /// The `present` signpost brackets main-thread encoding/presentation. Rolling timing
+    /// statistics also include any off-main drawable wait, so moving that wait does not make
+    /// it disappear from the total / drawable / semaphore / schedule breakdown. A `false` return is a skipped present
     /// (nil drawable or encode failure) — callers decide whether to retry or fall back; only
     /// `presentBuiltFrame` counts a genuine drop (`recordFrameDrop`), keyed by which failure it was.
     private enum PresentAttempt { case presented, nilDrawable, encodeFailure }
 
     private func presentFrame(
-        _ result: SurfaceFrameBuildResult, damage: TerminalDamage?, scrollShift: Int = 0
+        _ result: SurfaceFrameBuildResult, damage: TerminalDamage?, scrollShift: Int = 0,
+        drawable acquiredDrawable: CAMetalDrawable? = nil, acquiredWaitNanos: UInt64 = 0
     ) -> PresentAttempt {
         guard let renderer else { return .encodeFailure }
         // Smooth scroll is applied at present time from the CURRENT fraction (render-only state):
@@ -2940,12 +3013,14 @@ public final class HarnessTerminalSurfaceView: NSView {
         let clipRows = result.hasPeekRow ? result.frame.rows - 1 : nil
         let sp = FrameSignposter.shared
         let presentStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
-        var drawableWaitNanos: UInt64 = 0
+        var drawableWaitNanos = acquiredWaitNanos
         let outcome = sp.interval("present") { () -> PresentAttempt in
             let drawableStart = sp.enabled ? DispatchTime.now().uptimeNanoseconds : 0
-            guard let drawable = sp.interval("drawableWait", { metalLayer.nextDrawable() })
+            guard let drawable = acquiredDrawable ?? sp.interval("drawableWait", { metalLayer.nextDrawable() })
             else { return .nilDrawable }
-            if sp.enabled { drawableWaitNanos = DispatchTime.now().uptimeNanoseconds &- drawableStart }
+            if sp.enabled, acquiredDrawable == nil {
+                drawableWaitNanos = DispatchTime.now().uptimeNanoseconds &- drawableStart
+            }
             let presented = renderer.present(
                 result.frame,
                 to: drawable,
@@ -2965,7 +3040,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
         if sp.enabled, outcome == .presented {
             sp.recordPresent(
-                nanos: DispatchTime.now().uptimeNanoseconds &- presentStart,
+                nanos: (DispatchTime.now().uptimeNanoseconds &- presentStart) &+ acquiredWaitNanos,
                 drawableWait: drawableWaitNanos,
                 semaphoreWait: renderer.stats.semaphoreWaitNanos,
                 schedule: renderer.stats.presentScheduleNanos,
