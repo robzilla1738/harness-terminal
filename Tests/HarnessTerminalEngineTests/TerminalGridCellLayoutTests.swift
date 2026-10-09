@@ -11,7 +11,7 @@ final class TerminalGridCellLayoutTests: XCTestCase {
         // Upper bound, not an exact match, so it is robust across Swift versions / architectures
         // while still catching a regression back toward the old 64-byte layout.
         XCTAssertLessThanOrEqual(
-            MemoryLayout<TerminalGridCell>.stride, 40,
+            MemoryLayout<TerminalGridCell>.stride, 32,
             "TerminalGridCell grew — a wide (8-byte) field likely crept back into the per-cell hot path"
         )
     }

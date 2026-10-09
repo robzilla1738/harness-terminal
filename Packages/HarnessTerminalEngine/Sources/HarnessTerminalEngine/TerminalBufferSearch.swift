@@ -87,10 +87,9 @@ public enum TerminalBufferSearch {
         for index in 0..<lineCount {
             if cancelled() { return .cancelled }
             mapped.append(line(index), line: index, clusters: clusters, resolver: &resolver)
-            if mapped.text.utf16.count > 262_144 { return .matches(matches, limited: true) }
+            if mapped.utf16Count > 262_144 { return .matches(matches, limited: true) }
             if isWrapped(index), index + 1 < lineCount { continue }
-            let text = mapped.text as NSString
-            let fullRange = NSRange(location: 0, length: text.length)
+            let fullRange = NSRange(location: 0, length: mapped.utf16Count)
             if let regex {
                 regex.enumerateMatches(in: mapped.text, options: [.reportProgress], range: fullRange) { result, _, stop in
                     if cancelled() || ProcessInfo.processInfo.systemUptime > deadline || matches.count >= 50_000 {
@@ -104,7 +103,7 @@ public enum TerminalBufferSearch {
                 // Logs overwhelmingly contain ASCII with box/block drawing. Avoid Foundation's
                 // per-line case-folding search there; Unicode letters keep the full Foundation
                 // path (e.g. Kelvin sign and long s can match an ASCII needle).
-                let units = asciiPattern.isEmpty ? [] : Array(mapped.text.utf16)
+                let units = mapped.units
                 if !asciiPattern.isEmpty, units.allSatisfy({ $0 < 128 || (0x2500...0x259F).contains($0) }) {
                     var offset = 0, iterations = 0
                     while offset + asciiPattern.count <= units.count {
@@ -126,6 +125,7 @@ public enum TerminalBufferSearch {
                         }
                     }
                 } else {
+                    let text = mapped.text as NSString
                     var remaining = fullRange
                     while remaining.length > 0 {
                         let found = text.range(of: pattern, options: options.caseSensitive ? [] : [.caseInsensitive], range: remaining)

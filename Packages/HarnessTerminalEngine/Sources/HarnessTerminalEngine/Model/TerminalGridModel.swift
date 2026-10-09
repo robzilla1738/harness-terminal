@@ -18,7 +18,7 @@ public enum TerminalGridColor: Equatable, Sendable {
 }
 
 /// Underline style (ECMA-48 SGR 4 plus the `4:N` substyles modern terminals understand).
-public enum TerminalGridUnderline: Equatable, Sendable {
+public enum TerminalGridUnderline: UInt16, Sendable {
     case none
     case single
     case double
@@ -30,7 +30,7 @@ public enum TerminalGridUnderline: Equatable, Sendable {
 /// How many columns a cell occupies. `wide` is the leading cell of a double-width
 /// glyph (e.g. CJK); `spacerTail` is the empty trailing column it reserves — renderers
 /// and the compositor skip it because the wide glyph already spans both columns.
-public enum TerminalCellWidth: Equatable, Sendable {
+public enum TerminalCellWidth: UInt16, Sendable {
     case normal
     case wide
     case spacerTail
@@ -50,16 +50,49 @@ public struct TerminalGridCell: Equatable, Sendable {
     public var foreground: TerminalGridColor
     public var background: TerminalGridColor
     public var underlineColor: TerminalGridColor
-    public var bold: Bool
-    public var faint: Bool
-    public var italic: Bool
-    public var underline: TerminalGridUnderline
-    public var blink: Bool
-    public var inverse: Bool
-    public var invisible: Bool
-    public var strikethrough: Bool
-    public var overline: Bool
-    public var width: TerminalCellWidth
+    // The eight switches, underline style and width fit in 13 bits. Keeping them in
+    // one word preserves the POD representation and brings each hot-path cell to 32 bytes.
+    @usableFromInline var attributes: UInt16 = 0
+    @inlinable public var bold: Bool {
+        get { attributes & 1 != 0 }
+        set { attributes = newValue ? attributes | 1 : attributes & ~1 }
+    }
+    @inlinable public var faint: Bool {
+        get { attributes & 2 != 0 }
+        set { attributes = newValue ? attributes | 2 : attributes & ~2 }
+    }
+    @inlinable public var italic: Bool {
+        get { attributes & 4 != 0 }
+        set { attributes = newValue ? attributes | 4 : attributes & ~4 }
+    }
+    @inlinable public var blink: Bool {
+        get { attributes & 8 != 0 }
+        set { attributes = newValue ? attributes | 8 : attributes & ~8 }
+    }
+    @inlinable public var inverse: Bool {
+        get { attributes & 16 != 0 }
+        set { attributes = newValue ? attributes | 16 : attributes & ~16 }
+    }
+    @inlinable public var invisible: Bool {
+        get { attributes & 32 != 0 }
+        set { attributes = newValue ? attributes | 32 : attributes & ~32 }
+    }
+    @inlinable public var strikethrough: Bool {
+        get { attributes & 64 != 0 }
+        set { attributes = newValue ? attributes | 64 : attributes & ~64 }
+    }
+    @inlinable public var overline: Bool {
+        get { attributes & 128 != 0 }
+        set { attributes = newValue ? attributes | 128 : attributes & ~128 }
+    }
+    @inlinable public var underline: TerminalGridUnderline {
+        get { TerminalGridUnderline(rawValue: (attributes >> 8) & 7)! }
+        set { attributes = (attributes & ~0x0700) | (newValue.rawValue << 8) }
+    }
+    @inlinable public var width: TerminalCellWidth {
+        get { TerminalCellWidth(rawValue: (attributes >> 11) & 3)! }
+        set { attributes = (attributes & ~0x1800) | (newValue.rawValue << 11) }
+    }
     /// A third mark, kept only on a Kitty image placeholder cell, where it is the image id's high
     /// byte (`KittyPlaceholders`). Those marks are all in the BMP, so 16 bits fit them, in what
     /// would otherwise be padding before `hyperlinkID`. 0 = none. Not part of `cluster`.
@@ -94,6 +127,8 @@ public struct TerminalGridCell: Equatable, Sendable {
         self.foreground = foreground
         self.background = background
         self.underlineColor = underlineColor
+        self.placeholderMark = placeholderMark
+        self.hyperlinkID = hyperlinkID
         self.bold = bold
         self.faint = faint
         self.italic = italic
@@ -104,8 +139,6 @@ public struct TerminalGridCell: Equatable, Sendable {
         self.strikethrough = strikethrough
         self.overline = overline
         self.width = width
-        self.placeholderMark = placeholderMark
-        self.hyperlinkID = hyperlinkID
     }
 
     /// An empty default-styled cell (a space-equivalent with no attributes).

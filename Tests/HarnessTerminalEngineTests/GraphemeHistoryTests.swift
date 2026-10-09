@@ -40,12 +40,42 @@ final class GraphemeHistoryTests: XCTestCase {
         term.maxDecodedHistoryBytes = 32_000
         term.feed(String(repeating: String(repeating: "x", count: 190) + "\r\n", count: 100))
         XCTAssertLessThanOrEqual(term.decodedHistoryBytes, 32_000)
-        XCTAssertLessThan(term.historyCount, 10)
+        XCTAssertLessThan(term.historyCount, 100)
         term.resize(cols: 40, rows: 2)
         XCTAssertLessThanOrEqual(term.decodedHistoryBytes, 32_000)
         term.feed("\u{1b}[3J")
         XCTAssertEqual(term.historyCount, 0)
         XCTAssertEqual(term.decodedHistoryBytes, 0)
+    }
+
+    func testCompactHistoryPreservesAllCellAttributesAndSnapshotOwnership() {
+        let payloads = [
+            "plain text with spaces  ",
+            "\u{1b}[1;3;4;38;2;12;34;56mcolored text\u{1b}[0m",
+            "\u{1b}[44m\u{1b}[2K\u{1b}[0mstyled blank padding",
+            "中文 👩🏽‍💻 a\u{301} end",
+            "\u{1b}]8;;https://example.com\u{7}linked\u{1b}]8;;\u{7} plain",
+        ]
+        for payload in payloads {
+            let term = TerminalEmulator(cols: 50, rows: 2)
+            term.feed(payload)
+            let expected = Array(term.readGrid().cells.prefix(50))
+            let snapshot = term.textSnapshot()
+            term.feed("\r\n\r\n\r\n")
+            XCTAssertEqual(term.bufferLine(0), expected, payload)
+            XCTAssertEqual(snapshot.line(0), expected, payload)
+            term.resize(cols: 50, rows: 5)
+            XCTAssertEqual(term.bufferLine(0), expected, payload)
+        }
+    }
+
+    func testShortHistoryRowsDoNotRetainFullWidthCellArrays() {
+        let term = TerminalEmulator(cols: 150, rows: 3)
+        term.maxScrollbackLines = 0
+        for index in 0..<1_000 { term.feed("history row \(index)\r\n") }
+        XCTAssertGreaterThan(term.historyCount, 990)
+        XCTAssertLessThan(term.decodedHistoryBytes, 512 * 1024)
+        XCTAssertEqual(term.captureLines(joinWrapped: true).first, "history row 0")
     }
 
     func testSearchMapsWideTextAndSoftWrapsAndReportsInvalidPattern() {

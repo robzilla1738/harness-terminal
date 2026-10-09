@@ -44,29 +44,31 @@ extension SurfaceRegistry {
     /// seen. Static + pure so it is unit-testable.
     static func scanForBell(_ data: Data, state: inout BellScanState) -> Bool {
         var sawBell = false
-        for byte in data {
-            switch state {
-            case .normal:
-                if byte == 0x1B { state = .esc }
-                else if byte == 0x07 { sawBell = true }
-            case .esc:
-                switch byte {
-                case 0x5D, 0x50, 0x5F, 0x5E, 0x58: state = .string   // OSC ] / DCS P / APC _ / PM ^ / SOS X
-                case 0x1B: state = .esc                              // ESC restarts escape parsing
-                case 0x07: sawBell = true; state = .normal           // BEL after a non-string ESC: real
-                default: state = .normal                             // CSI, ST, other escapes
+        data.withUnsafeBytes { raw in
+            for byte in raw.bindMemory(to: UInt8.self) {
+                switch state {
+                case .normal:
+                    if byte == 0x1B { state = .esc }
+                    else if byte == 0x07 { sawBell = true }
+                case .esc:
+                    switch byte {
+                    case 0x5D, 0x50, 0x5F, 0x5E, 0x58: state = .string   // OSC ] / DCS P / APC _ / PM ^ / SOS X
+                    case 0x1B: state = .esc                              // ESC restarts escape parsing
+                    case 0x07: sawBell = true; state = .normal           // BEL after a non-string ESC: real
+                    default: state = .normal                             // CSI, ST, other escapes
+                    }
+                case .string:
+                    // A BEL terminates an OSC (xterm) and is data inside the others — never a bell.
+                    // CAN/SUB abort a string sequence (as the VT parser does), so an unterminated string
+                    // can't pin the scanner and swallow every later bell.
+                    if byte == 0x07 { state = .normal }
+                    else if byte == 0x18 || byte == 0x1A { state = .normal } // CAN / SUB abort
+                    else if byte == 0x1B { state = .stringEsc }
+                case .stringEsc:
+                    if byte == 0x5C { state = .normal }                  // ST (ESC \) terminates the string
+                    else if byte == 0x1B { state = .stringEsc }          // another ESC; keep waiting
+                    else { state = .string }                             // ESC was data; stay in the string
                 }
-            case .string:
-                // A BEL terminates an OSC (xterm) and is data inside the others — never a bell.
-                // CAN/SUB abort a string sequence (as the VT parser does), so an unterminated string
-                // can't pin the scanner and swallow every later bell.
-                if byte == 0x07 { state = .normal }
-                else if byte == 0x18 || byte == 0x1A { state = .normal } // CAN / SUB abort
-                else if byte == 0x1B { state = .stringEsc }
-            case .stringEsc:
-                if byte == 0x5C { state = .normal }                  // ST (ESC \) terminates the string
-                else if byte == 0x1B { state = .stringEsc }          // another ESC; keep waiting
-                else { state = .string }                             // ESC was data; stay in the string
             }
         }
         return sawBell

@@ -28,7 +28,7 @@ public struct TerminalTextSnapshot: Sendable {
         while index >= 0, index < lineCount {
             mapped.append(line(index), line: index, clusters: clusters)
             index += 1
-            if !isWrapped(index - 1) || mapped.text.utf16.count >= 262_144 { break }
+            if !isWrapped(index - 1) || mapped.utf16Count >= 262_144 { break }
         }
         return (mapped, index)
     }
@@ -44,9 +44,10 @@ public struct TerminalMappedText: Sendable {
         public let linear: Bool
         public var columns: Range<Int>
     }
-    public private(set) var text = ""
+    var units: [UInt16] = []
+    public var text: String { String(decoding: units, as: UTF16.self) }
+    public var utf16Count: Int { units.count }
     public private(set) var spans: [Span] = []
-    private var length = 0
 
     public init() {}
 
@@ -56,10 +57,10 @@ public struct TerminalMappedText: Sendable {
     }
 
     mutating func append(_ cells: [TerminalGridCell], line: Int, clusters: [UInt32: String], resolver: inout TerminalTextResolver) {
-        var units: [UInt16] = []
-        units.reserveCapacity(cells.count)
-        var runColumn = 0, runOffset = length, runLength = 0
+        units.reserveCapacity(units.count + cells.count)
+        var runColumn = 0, runOffset = units.count, runLength = 0
         for (column, cell) in cells.enumerated() where cell.width != .spacerTail {
+            let offset = units.count
             let count: Int
             if cell.combining0 == 0, cell.codepoint < 128 {
                 units.append(UInt16(cell.codepoint == 0 ? 32 : cell.codepoint))
@@ -77,19 +78,17 @@ public struct TerminalMappedText: Sendable {
                 runLength = 0
             }
             if linear {
-                if runLength == 0 { runColumn = column; runOffset = length }
+                if runLength == 0 { runColumn = column; runOffset = offset }
                 runLength += 1
             } else {
-                spans.append(Span(range: NSRange(location: length, length: count), line: line,
+                spans.append(Span(range: NSRange(location: offset, length: count), line: line,
                                   linear: linear, columns: columns))
             }
-            length += count
         }
         if runLength > 0 {
             spans.append(Span(range: NSRange(location: runOffset, length: runLength), line: line,
                               linear: true, columns: runColumn..<(runColumn + runLength)))
         }
-        text += String(decoding: units, as: UTF16.self)
     }
 
     public func cells(for range: NSRange) -> [TerminalBufferSpan] {
@@ -117,7 +116,7 @@ public struct TerminalMappedText: Sendable {
     }
 
     public func offset(atColumn column: Int) -> Int {
-        guard let span = spans.first(where: { $0.columns.contains(column) || $0.columns.lowerBound >= column }) else { return length }
+        guard let span = spans.first(where: { $0.columns.contains(column) || $0.columns.lowerBound >= column }) else { return units.count }
         return span.range.location + (span.linear ? max(0, column - span.columns.lowerBound) : 0)
     }
 }

@@ -85,8 +85,14 @@ public struct PtyStreamScanner: Equatable, Sendable {
 
     public mutating func scan(_ data: Data) -> [PtyScanEvent] {
         var events: [PtyScanEvent] = []
-        for byte in data {
-            events.append(contentsOf: feed(byte))
+        data.withUnsafeBytes { raw in
+            for byte in raw.bindMemory(to: UInt8.self) {
+                // Ordinary output cannot change monitoring state. Avoid allocating/copying
+                // an empty event array for every printable byte on the delivery queue.
+                if phase == .ground, byte != 0x1B, byte != 0x07 { continue }
+                let emitted = feed(byte)
+                if !emitted.isEmpty { events.append(contentsOf: emitted) }
+            }
         }
         return events
     }

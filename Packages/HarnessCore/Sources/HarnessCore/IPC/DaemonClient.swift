@@ -547,7 +547,7 @@ public final class DaemonSubscription: @unchecked Sendable {
     /// SAME closure the read loop forwards to, so flushed and live frames share one ordered sink.
     ///
     /// The surviving frames are CONCATENATED into a single `onData` call (their bytes are already in
-    /// order, and every consumer ignores the per-frame sequence on delivery), so a large buffer
+    /// order, and the coalesced frame keeps its FIRST byte's sequence), so a large buffer
     /// flushes as ONE main-thread hop instead of one per frame — the per-frame `main.async` storm
     /// the old loop caused under a big buffer.
     ///
@@ -568,13 +568,13 @@ public final class DaemonSubscription: @unchecked Sendable {
         let skipDedup = bufferOverflowed || endSequence == 0
         var dropped = 0
         var coalesced = Data()
-        var lastSequence: UInt64 = 0
+        var firstSequence: UInt64 = 0
         for (data, sequence) in pendingFrames {
             if !skipDedup, sequence < endSequence { dropped += 1; continue }
+            if coalesced.isEmpty { firstSequence = sequence }
             coalesced.append(data)
-            lastSequence = sequence
         }
-        if !coalesced.isEmpty { onData(coalesced, lastSequence) }
+        if !coalesced.isEmpty { onData(coalesced, firstSequence) }
         pendingFrames.removeAll(keepingCapacity: false)
         pendingBytes = 0
         bufferOverflowed = false
