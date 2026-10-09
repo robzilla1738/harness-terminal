@@ -134,10 +134,9 @@ public struct TerminalGridCell: Equatable, Sendable {
         clusterID == 0 ? cluster : clusters[clusterID] ?? cluster
     }
 
-    /// Stack a combining (width-0) scalar onto this cell's grapheme. Returns `false` if both
-    /// inline slots are full (>2 marks): the MVP drops the excess. A Thai syllable never needs
-    /// more than two, so this only loses coverage for emoji ZWJ / deep Indic (a Phase 3 concern).
-    /// A Kitty image placeholder keeps a third mark in `placeholderMark`.
+    /// Stack a combining scalar into the inline slots. Returns `false` when the screen must
+    /// promote the cell into its exceptional-cluster pool. A Kitty image placeholder keeps
+    /// a third protocol mark in `placeholderMark`.
     @discardableResult
     public mutating func appendCombining(_ scalar: UInt32) -> Bool {
         if combining0 == 0 { combining0 = scalar; return true }

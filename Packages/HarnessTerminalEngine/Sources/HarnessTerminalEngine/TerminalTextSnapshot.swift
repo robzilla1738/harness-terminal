@@ -51,28 +51,40 @@ public struct TerminalMappedText: Sendable {
     public init() {}
 
     public mutating func append(_ cells: [TerminalGridCell], line: Int, clusters: [UInt32: String] = [:]) {
+        var units: [UInt16] = []
+        units.reserveCapacity(cells.count)
+        var runColumn = 0, runOffset = length, runLength = 0
         for (column, cell) in cells.enumerated() where cell.width != .spacerTail {
             let count: Int
             if cell.combining0 == 0, cell.codepoint < 128 {
-                text.unicodeScalars.append(Unicode.Scalar(UInt8(cell.codepoint == 0 ? 32 : cell.codepoint)))
+                units.append(UInt16(cell.codepoint == 0 ? 32 : cell.codepoint))
                 count = 1
             } else {
                 let unit = cell.resolvedCluster(in: clusters).precomposedStringWithCanonicalMapping
-                text += unit
                 count = unit.utf16.count
+                units.append(contentsOf: unit.utf16)
             }
             let columns = column..<min(cells.count, column + (cell.width == .wide ? 2 : 1))
             let linear = count == 1 && cell.width == .normal
-            if linear, let last = spans.last, last.linear, last.line == line,
-               last.columns.upperBound == column {
-                spans[spans.count - 1].range.length += 1
-                spans[spans.count - 1].columns = last.columns.lowerBound..<columns.upperBound
+            if runLength > 0, !linear || runColumn + runLength != column {
+                spans.append(Span(range: NSRange(location: runOffset, length: runLength), line: line,
+                                  linear: true, columns: runColumn..<(runColumn + runLength)))
+                runLength = 0
+            }
+            if linear {
+                if runLength == 0 { runColumn = column; runOffset = length }
+                runLength += 1
             } else {
                 spans.append(Span(range: NSRange(location: length, length: count), line: line,
                                   linear: linear, columns: columns))
             }
             length += count
         }
+        if runLength > 0 {
+            spans.append(Span(range: NSRange(location: runOffset, length: runLength), line: line,
+                              linear: true, columns: runColumn..<(runColumn + runLength)))
+        }
+        text += String(decoding: units, as: UTF16.self)
     }
 
     public func cells(for range: NSRange) -> [TerminalBufferSpan] {

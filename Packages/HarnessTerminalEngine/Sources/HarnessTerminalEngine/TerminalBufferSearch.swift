@@ -104,6 +104,7 @@ public enum TerminalBufferSearch {
                 }
             }
             if cancelled() { return .cancelled }
+            if ProcessInfo.processInfo.systemUptime > deadline { limited = true }
             if limited { break }
             mapped = TerminalMappedText()
         }
