@@ -113,9 +113,6 @@ final class LiveResizeTests: XCTestCase {
         view.needsLayout = true
         view.layoutSubtreeIfNeeded()
         view.viewDidEndLiveResize()
-        // (The drag-end flush may commit the stale armed size and immediately start a NEW preview
-        // toward the settled size — that successor is legitimate; only the MID-DRAG build must die.)
-
         // A landing carrying the mid-drag target must now be dropped: the end-of-drag token claim
         // made every token from during the drag stale, independent of whether the flush bumped the
         // generation (a drag ending at its original size commits nothing).
@@ -138,6 +135,38 @@ final class LiveResizeTests: XCTestCase {
         wait(for: [fired], timeout: 2)
         XCTAssertEqual(view.testingGridSize.cols, 90)
         XCTAssertEqual(resizes, 1)
+    }
+
+    func testTransientLayoutReturningToOriginalSizeCancelsResize() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("No Metal device available") }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        let view = try makeHostedView(in: window)
+        let originalFrame = window.frame
+        let originalGrid = view.testingGridSize
+        var resizes = 0
+        view.onResize = { _, _ in resizes += 1 }
+        var temporaryFrame = originalFrame
+        temporaryFrame.size.width -= 100
+        window.setFrame(temporaryFrame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        XCTAssertTrue(view.testingHasPendingResizeCommit)
+
+        window.setFrame(originalFrame, display: false)
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+        let settled = expectation(description: "transient resize debounce elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+        XCTAssertEqual(view.testingGridSize.cols, originalGrid.cols)
+        XCTAssertEqual(view.testingGridSize.rows, originalGrid.rows)
+        XCTAssertEqual(resizes, 0, "a temporary layout must not resize the PTY after bounds recover")
+        XCTAssertFalse(view.testingHasPendingResizeCommit)
     }
 
     // MARK: - computeGridGeometry (pure)

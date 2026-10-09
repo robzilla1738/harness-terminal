@@ -3,12 +3,22 @@ import XCTest
 
 /// Correctness lock for the O(1) table-driven `CharacterWidth.width(of:)`.
 ///
-/// The table (`CharacterWidthTable`, produced by `Scripts/generate-width-table.swift`) is proven
-/// **byte-identical** to the canonical linear-scan `referenceWidth` for **every** scalar
-/// `0x0…0x10FFFF`. This is the single guarantee that makes the fast path safe: if anyone edits the
-/// canonical ranges without regenerating the table (or vice-versa), `testWidthMatchesReferenceForAllScalars`
-/// fails. Tier A1 may not change the width path without this test staying green.
+/// Exhaustively compare the packed lookup with generated linear ranges, and check known
+/// assignments independently. The generator verifies its upstream inputs with pinned hashes.
 final class CharacterWidthTests: XCTestCase {
+
+    func testUnicode18WidthsIncludeNewAssignmentsAndCorrections() {
+        XCTAssertEqual(CharacterWidth.unicodeVersion, "18.0.0")
+        for scalar: UInt32 in [0x2630, 0x4DC0, 0x18E00, 0x19191, 0x1FAE9] {
+            XCTAssertEqual(CharacterWidth.width(of: scalar), 2, String(scalar, radix: 16))
+        }
+        for scalar: UInt32 in [0x05C8, 0x0897, 0x1ACF, 0x1AE0] {
+            XCTAssertEqual(CharacterWidth.width(of: scalar), 0, String(scalar, radix: 16))
+            XCTAssertTrue(CharacterWidth.isGraphemeExtend(scalar))
+        }
+        XCTAssertEqual(CharacterWidth.width(of: 0x1171E), 1, "Ahom medial RA is now a spacing mark")
+        XCTAssertFalse(CharacterWidth.isGraphemeExtend(0x200B), "format controls must not join visible cells")
+    }
 
     /// THE safety net: the generated table must agree with the canonical oracle on every scalar.
     func testWidthMatchesReferenceForAllScalars() {

@@ -14,6 +14,7 @@ enum PaneDrag {
         return item
     }
 
+    @MainActor
     static func surfaceID(in info: NSDraggingInfo) -> SurfaceID? {
         info.draggingPasteboard.string(forType: type).flatMap(UUID.init(uuidString:))
     }

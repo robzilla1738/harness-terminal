@@ -30,6 +30,7 @@ public final class TerminalThumbnailView: NSView {
     /// What `renderer` was built for: the font and the pixels per point it rasterizes at.
     private var rendererFont: TerminalThumbnailStyle.Font?
     private var rendererScale: CGFloat = 0
+    private var rendererColorSpaceName: String?
     /// Cell size in points for `rendererFont`, measured once per font.
     private var cellMetrics: (font: TerminalThumbnailStyle.Font, metrics: CellMetrics)?
     private var shown: TerminalThumbnail?
@@ -138,16 +139,18 @@ public final class TerminalThumbnailView: NSView {
             fitting: (width, height), columns: shown.frame.columns, rows: shown.frame.rows,
             cell: metrics, backing: backing
         )
-        if renderer == nil || rendererFont != style.font || rendererScale != scale {
+        if renderer == nil || rendererFont != style.font || rendererScale != scale || rendererColorSpaceName != style.colorSpaceName {
             // Small glyphs: a quarter-size atlas page holds a thumbnail's working set, and a
             // still screen's images need a small texture budget.
             renderer = TerminalMetalRenderer(
                 device: device, fontFamily: style.font.family, fontSize: style.font.size,
                 scale: scale, atlasSize: 512, imageCacheBytes: Self.imageCacheBytes,
-                fontThicken: style.font.thicken, fontThickenStrength: style.font.thickenStrength
+                fontThicken: style.font.thicken, fontThickenStrength: style.font.thickenStrength,
+                colorSpace: CGColorSpace(name: style.colorSpaceName as CFString)!
             )
             rendererFont = style.font
             rendererScale = scale
+            rendererColorSpaceName = style.colorSpaceName
         }
         guard let renderer else { return }
         metalLayer.contentsScale = backing

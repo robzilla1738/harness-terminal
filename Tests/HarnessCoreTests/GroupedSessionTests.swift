@@ -63,7 +63,7 @@ final class GroupedSessionTests: XCTestCase {
         let member = try XCTUnwrap(editor.snapshot.workspaces[0].sessions.first { $0.id == memberID })
         XCTAssertTrue(member.tabs.map(\.id).contains(try XCTUnwrap(counterparts.first)))
         // An ungrouped session has none.
-        var plain = SessionEditor()
+        let plain = SessionEditor()
         let plainTab = try XCTUnwrap(plain.snapshot.activeWorkspace?.activeTab)
         XCTAssertTrue(plain.groupCounterparts(of: plainTab.id).isEmpty)
     }

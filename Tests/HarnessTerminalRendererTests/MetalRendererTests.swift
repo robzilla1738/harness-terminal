@@ -1292,6 +1292,102 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertEqual(atlas.stats.pages, 1)
     }
 
+    func testColorAtlasAllocatesLazilyAndEvictionPreservesTextCache() throws {
+        let (device, _) = try makeRenderer()
+        let atlas = try makeAtlas(device, size: 48, maxPages: 1)
+        let key = GlyphKey(codepoint: 65, bold: false, italic: false)
+        _ = try XCTUnwrap(atlas.entry(for: key))
+        XCTAssertNil(atlas.colorTexture)
+        XCTAssertEqual(atlas.texture.pixelFormat, .r8Unorm)
+        for scalar in "😀😎😍🤔🥳😡😴🤩".unicodeScalars {
+            let entry = try XCTUnwrap(atlas.entry(for: GlyphKey(codepoint: scalar.value, bold: false, italic: false)))
+            XCTAssertTrue(entry.isColor)
+        }
+        XCTAssertEqual(atlas.colorTexture?.pixelFormat, .rgba8Unorm)
+        XCTAssertEqual(atlas.colorTexture?.arrayLength, 1)
+        XCTAssertGreaterThan(atlas.stats.pageEvictions, 0)
+        let misses = atlas.stats.misses
+        XCTAssertFalse(try XCTUnwrap(atlas.entry(for: key)).isColor)
+        XCTAssertEqual(atlas.stats.misses, misses, "emoji eviction must not evict the ordinary text atlas")
+    }
+
+    func testEmojiColorsSurviveForegroundAndCoverageGammaChanges() throws {
+        let (device, renderer) = try makeRenderer()
+        let (width, height) = renderer.surfacePixelSize(columns: 10, rows: 1)
+        let target = try XCTUnwrap(makeTarget(device, width: width, height: height))
+        let red = frame("\u{1b}[?25l\u{1b}[31m😀👩🏽‍💻🇺🇸❤️", cols: 10, rows: 1)
+        renderer.render(red, to: target, clearColor: .init(red: 0, green: 0, blue: 0, alpha: 1), gamma: 1)
+        let original = readPixelBytes(target, width: width, height: height)
+        let blue = frame("\u{1b}[?25l\u{1b}[34m😀👩🏽‍💻🇺🇸❤️", cols: 10, rows: 1)
+        renderer.render(blue, to: target, clearColor: .init(red: 0, green: 0, blue: 0, alpha: 1), gamma: 0.6)
+        writeSnapshotIfRequested(texture: target, width: width, height: height, name: "color_emoji")
+        XCTAssertEqual(readPixelBytes(target, width: width, height: height), original,
+                       "intrinsic emoji colors must bypass foreground tint and coverage gamma")
+        XCTAssertTrue(stride(from: 0, to: original.count, by: 4).contains { offset in
+            original[offset] > 140 && original[offset + 1] > 100 && original[offset + 2] < 80
+        }, "the smiley must retain yellow pixels in the rendered Metal output")
+    }
+
+    func testColorAtlasGrowthCopiesEveryRGBAChannel() throws {
+        let (device, _) = try makeRenderer()
+        let pages = try XCTUnwrap(GlyphAtlasPages(device: device, size: 48, maxPages: 2, isColor: true))
+        let pixel: [UInt8] = [100, 60, 20, 128]
+        let pixels = Array(repeating: pixel, count: 20 * 20).flatMap { $0 }
+        let glyph = RasterizedGlyph(width: 20, height: 20, bearingX: 0, bearingY: 20, coverage: [], rgba: pixels)
+        for _ in 0..<5 { XCTAssertNil(try XCTUnwrap(pages.pack(glyph)).evicted) }
+        XCTAssertEqual(pages.texture.arrayLength, 2)
+        var restored = [UInt8](repeating: 0, count: pixels.count)
+        restored.withUnsafeMutableBytes { bytes in
+            pages.texture.getBytes(bytes.baseAddress!, bytesPerRow: 80, bytesPerImage: pixels.count,
+                                   from: MTLRegionMake2D(0, 0, 20, 20), mipmapLevel: 0, slice: 0)
+        }
+        XCTAssertEqual(restored, pixels, "growing the color texture must retain RGB and premultiplied alpha")
+    }
+
+    func testAtlasEvictsTheColdPageAfterGrowingFromOnePage() throws {
+        let (device, _) = try makeRenderer()
+        for isColor in [false, true] {
+            let pages = try XCTUnwrap(GlyphAtlasPages(device: device, size: 22, maxPages: 2, isColor: isColor))
+            let glyph = RasterizedGlyph(width: 20, height: 20, bearingX: 0, bearingY: 20,
+                                        coverage: isColor ? [] : Array(repeating: 255, count: 400),
+                                        rgba: isColor ? Array(repeating: 255, count: 1600) : nil)
+            XCTAssertEqual(try XCTUnwrap(pages.pack(glyph)).entry.pageIndex, 0)
+            pages.touch(0)
+            XCTAssertEqual(try XCTUnwrap(pages.pack(glyph)).entry.pageIndex, 1)
+            for _ in 0..<3 {
+                pages.touch(0)
+                XCTAssertEqual(try XCTUnwrap(pages.pack(glyph)).evicted, 1,
+                               "eviction must preserve the hot page, even after reusing an earlier page")
+            }
+        }
+    }
+
+    func testColorEmojiHonorConcealFaintAndBlinkWithBothGlyphPaths() throws {
+        let (device, renderer) = try makeRenderer()
+        let (width, height) = renderer.surfacePixelSize(columns: 8, rows: 1)
+        let target = try XCTUnwrap(makeTarget(device, width: width, height: height))
+        for ligatures in [false, true] {
+            func pixels(_ text: String) -> [UInt8] {
+                renderer.render(frame("\u{1b}[?25l" + text, cols: 8, rows: 1), to: target,
+                                clearColor: .init(red: 0, green: 0, blue: 0, alpha: 1), ligatures: ligatures)
+                return readPixelBytes(target, width: width, height: height)
+            }
+            let blank = pixels("")
+            let normal = pixels("😀👩🏽‍💻")
+            XCTAssertNotEqual(normal, blank)
+            XCTAssertEqual(pixels("\u{1b}[8m😀👩🏽‍💻"), blank, "concealed color glyphs must not leak visible pixels")
+            let faint = pixels("\u{1b}[2m😀👩🏽‍💻")
+            for offset in stride(from: 0, to: normal.count, by: 4) {
+                for channel in 0..<3 {
+                    XCTAssertEqual(Double(faint[offset + channel]), Double(normal[offset + channel]) * 0.5, accuracy: 1)
+                }
+            }
+            renderer.textBlinkHidden = true
+            XCTAssertEqual(pixels("😀\u{1b}[5m😀"), pixels("😀"), "a blinking glyph must not join a visible shaping run")
+            renderer.textBlinkHidden = false
+        }
+    }
+
     func testGlyphAtlasSinglePageEntriesUsePageZero() throws {
         let (device, _) = try makeRenderer()
         let atlas = try makeAtlas(device)

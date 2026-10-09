@@ -79,6 +79,8 @@ public struct RenderCell: Equatable, Sendable {
     /// backgrounds, inverse cells, selection, and search highlights. Defaults to `true` so any
     /// cell built without an explicit decision is still filled.
     public var drawBackground: Bool = true
+    /// Intrinsic-color glyphs bypass the foreground, so carry SGR conceal/faint separately.
+    public var colorGlyphOpacity: Float = 1
 
     /// True when there is a visible glyph to rasterize (not blank/space and not the
     /// trailing spacer of a wide cell). The cell background is filled only when
@@ -756,7 +758,8 @@ public struct FrameBuilder {
                 overline: cell.overline,
                 blink: cell.blink,
                 width: cell.width,
-                drawBackground: drawBackground
+                drawBackground: drawBackground,
+                colorGlyphOpacity: cell.invisible ? 0 : (cell.faint ? Float(1 - resolver.faintFraction) : 1)
             ))
         }
     }

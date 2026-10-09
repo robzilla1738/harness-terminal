@@ -8,10 +8,17 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-09
+
+Harness 2.0 brings saved workspace layouts, activity across connected hosts, broader search,
+native color emoji, and a substantial terminal reliability and performance pass. The existing
+visual design is preserved. Settings and saved sessions remain compatible; older scrollback
+logs without recorded resize geometry retain legacy replay behavior.
+
 ### Added
 - Optional, off-by-default window-specific machine indicator and switching menu beside the tabs, with local/remote identity, SSH destination, connection status, and a compact sidebar control.
 - Cursor-anchored Insert Path popup (⌥⌘I), with themed file icons, fuzzy Folder/Project search, keyboard navigation, and focus restoration.
-- Common compound emoji and longer combining sequences retain their text through rendering, copy, capture, reflow, and reattachment. Emoji currently use the monochrome glyph atlas; color emoji rendering remains open.
+- Common compound emoji and longer combining sequences retain their text through rendering, copy, capture, reflow, and reattachment. Native color emoji retain their intrinsic colors, with on-demand RGBA storage separate from the ordinary-text atlas and correct sRGB/Display-P3 conversion.
 - Native scrollback thumb dragging and track clicks, honoring the macOS scrollbar preference.
 - Per-pane Activity across attached hosts, with exact-pane navigation, read state, notification snoozing, and hook installation health.
 - Saved Setups with editable layouts, optional startup commands, import/export, and explicit Open versus Open New Copy behavior.
@@ -22,6 +29,10 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Configurable pane spacing in Appearance settings, retaining the 8-point default.
 
 ### Changed
+- Warm ASCII glyph-cache lookup avoids unnecessary LRU writes while only one page is populated: 20.6% less time in the recorded 18,800-lookup release benchmark.
+- Unicode width and combining-mark data now use checksum-pinned Unicode 18.0.0 sources. Newly assigned combining marks survive capture, reflow, and restoration even when the host Unicode database is older.
+- Full-history width reflow avoids decoding blank padding on compact, hard-ended rows: 21% less CPU time in the matched 10,000-line prose benchmark, with text, styling, wrapping, and image anchors preserved.
+- Sparkle is updated to 2.9.6 across SwiftPM and Xcode, incorporating upstream installer and delta-update security fixes.
 
 - Global-search results separate excerpts from quieter location details, with consistent row spacing and reusable cells. Literal Find takes about 13% less CPU time in the recorded 20,001-row release workload.
 
@@ -43,6 +54,20 @@ has a matching `vX.Y.Z` tag and a signed, notarized DMG on
 - Utility windows enforce usable minimum sizes; saved setup editing shows saving feedback and prevents duplicate submissions.
 
 ### Fixed
+- Copy mode preserves newer combining marks when the host segments them differently; copy and search retain correct cell coordinates.
+- Mixed blinking and non-blinking text no longer shares a shaping run while the blink phase is hidden.
+- Make PTY read-source installation atomic with close/respawn, avoiding stale descriptor access and disposal of an inactive dispatch source.
+- PTY draining uses bounded nonblocking reads, preserving queued output when macOS reports zero available bytes before resize or read-source cancellation.
+- Clearing history invalidates warmed capture/search grids and serializes the disk reset with output appends; replacing a shell with cleared history rejects late output from its predecessor.
+- Turning scrollback persistence off preserves an idle pane's screen in memory while deleting its disk snapshot; snapshot writes and deletion are serialized.
+- PTY size and foreground-process queries cannot inspect a recycled descriptor during shell replacement.
+- Lua native-library loading on macOS uses `dlopen`, restoring loading of libraries in the system cache and removing obsolete loader API use.
+- The isolated preview bundle advertises the same macOS 15 minimum as the app.
+- Rebuilding a nested split cancels temporary resize targets when a neighboring pane returns to its original bounds, preventing a narrow terminal grid inside a full-width pane.
+- Terminal reattachment follows the original resize boundaries, preventing prompt/redraw corruption when output was produced at different widths. Resize history survives parking and daemon restarts and is removed with persisted scrollback.
+- Cached daemon capture grids reflow on resize instead of reparsing their entire output history.
+- UI animation completion and drag-pasteboard access honor main-actor isolation; delayed callbacks keep weak ownership.
+- Benchmark comparison and recording now fail when the test process fails, even if the comparison step succeeds.
 - Remote-host renames save atomically and reject name collisions; failed removal preserves the connection. Concurrent GUI attachment requests are coalesced, and disconnected requests cannot reopen a host.
 - Path insertion reports uncertain command outcomes without leaving Return ready to repeat them. File navigation preserves spaces; project discovery has bounded output, cancellation, and path counts.
 - Find and global output search respect IME composition. Global search refreshes its source when reopened, cancels result validation on dismissal, and prevents duplicate opens.

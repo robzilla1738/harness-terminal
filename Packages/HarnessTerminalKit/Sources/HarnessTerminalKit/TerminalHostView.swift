@@ -334,7 +334,7 @@ public final class TerminalHostView: NSView {
         let keys = scriptKeys ?? ScriptKeyConsumer { [weak self] request in
             guard let self else { return }
             let surfaceID = self.surfaceID
-            ScriptActionRunner.run(request, origin: .key, surface: surfaceID.uuidString) { result in
+            ScriptActionRunner.run(request, origin: .key, surface: surfaceID.uuidString) { [weak self] result in
                 DispatchQueue.main.async { [weak self] in
                     MainActor.assumeIsolated {
                         self?.hostDelegate?.terminalHostScriptActionFinished(result, surfaceID: surfaceID)
@@ -1133,7 +1133,7 @@ public final class TerminalHostView: NSView {
                     self.attachPoint = start.point
                     if start.resync {
                         self.restoreEnd = start.historyEnd
-                        self.nativeView.beginHistoryRestore(screen: start.screen)
+                        self.nativeView.beginHistoryRestore(screen: start.screen, replaySizes: start.replaySizes ?? [])
                     }
                 }
             }
@@ -1145,7 +1145,7 @@ public final class TerminalHostView: NSView {
                     guard let self, generation == self.attachGeneration else { return }
                     let end = sequence &+ UInt64(data.count)
                     if let restoreEnd = self.restoreEnd, sequence < restoreEnd {
-                        self.nativeView.receiveHistory(data)
+                        self.nativeView.receiveHistory(data, sequence: sequence)
                         if end >= restoreEnd { self.finishHistoryRestore() }
                     } else {
                         self.finishHistoryRestore()

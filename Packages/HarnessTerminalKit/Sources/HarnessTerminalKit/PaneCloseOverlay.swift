@@ -70,8 +70,10 @@ final class PaneCloseOverlay: NSView {
             context.duration = Self.fadeDuration
             self?.animator().alphaValue = revealed ? 1 : 0
         }, completionHandler: { [weak self] in
-            guard let self, !self.isRevealed else { return }
-            self.isHidden = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isRevealed else { return }
+                self.isHidden = true
+            }
         })
     }
 

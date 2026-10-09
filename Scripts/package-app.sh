@@ -97,5 +97,6 @@ chmod +x "$APP/Contents/MacOS/"*
 
 # Logo provenance and redistribution licenses accompany the compiled marks.
 cp "$ROOT/Apps/Harness/Sources/HarnessApp/Resources/AgentLogoNotices.txt" "$APP/Contents/Resources/AgentLogoNotices.txt"
+cp "$ROOT/docs/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/THIRD-PARTY-NOTICES.md"
 
 echo "Created $APP"

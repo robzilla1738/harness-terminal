@@ -185,7 +185,8 @@ public final class TerminalMetalRenderer {
         atlasMaxPages: Int = 4,
         imageCacheBytes: Int = TerminalMetalRenderer.defaultImageCacheBytes,
         fontThicken: Bool = false,
-        fontThickenStrength: Int = 255
+        fontThickenStrength: Int = 255,
+        colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     ) {
         self.init(
             device: device,
@@ -195,7 +196,8 @@ public final class TerminalMetalRenderer {
             atlasMaxPages: atlasMaxPages,
             imageCacheBytes: imageCacheBytes,
             fontThicken: fontThicken,
-            fontThickenStrength: fontThickenStrength
+            fontThickenStrength: fontThickenStrength,
+            colorSpace: colorSpace
         )
     }
 
@@ -207,14 +209,16 @@ public final class TerminalMetalRenderer {
         atlasMaxPages: Int = 4,
         imageCacheBytes: Int = TerminalMetalRenderer.defaultImageCacheBytes,
         fontThicken: Bool = false,
-        fontThickenStrength: Int = 255
+        fontThickenStrength: Int = 255,
+        colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     ) {
         guard let queue = device.makeCommandQueue() else { return nil }
         let rasterizer = GlyphRasterizer(
             resolvedFont: resolvedFont,
             scale: scale,
             fontThicken: fontThicken,
-            fontThickenStrength: fontThickenStrength
+            fontThickenStrength: fontThickenStrength,
+            colorSpace: colorSpace
         )
         guard let atlas = GlyphAtlas(
             device: device,
@@ -645,6 +649,7 @@ public final class TerminalMetalRenderer {
             renderEncoder.setVertexBytes(&vp, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
             renderEncoder.setVertexBytes(&scrollPx, length: MemoryLayout<Float>.stride, index: 2)
             renderEncoder.setFragmentTexture(atlas.texture, index: 0)
+            renderEncoder.setFragmentTexture(atlas.colorTexture ?? atlas.texture, index: 1)
             renderEncoder.setFragmentSamplerState(sampler, index: 0)
             renderEncoder.setFragmentBytes(&glyphGamma, length: MemoryLayout<Float>.stride, index: 0)
             renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instanceBuffers.glyphCount)
@@ -1653,7 +1658,7 @@ public final class TerminalMetalRenderer {
                 entry,
                 originX: ox + Float(cell.column * cellPixelWidth),
                 originY: oy + Float(cell.row * cellPixelHeight),
-                color: color
+                color: color, colorGlyphOpacity: cell.colorGlyphOpacity
             ))
         }
     }
@@ -1735,7 +1740,8 @@ public final class TerminalMetalRenderer {
                 if GlyphRasterizer.isNerdFontCodepoint(rc.codepoint) { break } // icon → per-cell symbol fallback
                 if rc.combining0 != 0 { break } // composed separately as a CoreText cluster bitmap
                 if let cur = cursorCell, cur.row == row, cur.column == c { break }
-                if rc.bold != bold || rc.italic != italic || rc.foreground != fg { break }
+                if rc.bold != bold || rc.italic != italic || rc.foreground != fg
+                    || rc.blink != cell.blink || rc.colorGlyphOpacity != cell.colorGlyphOpacity { break }
                 let scalar = Unicode.Scalar(rc.codepoint) ?? " "
                 let before = ligatureRunText.utf16.count
                 ligatureRunText.unicodeScalars.append(scalar)
@@ -1752,7 +1758,7 @@ public final class TerminalMetalRenderer {
                     entry,
                     originX: ox + Float(cellColumn * cellPixelWidth),
                     originY: oy + Float(row * cellPixelHeight),
-                    color: color
+                    color: color, colorGlyphOpacity: cell.colorGlyphOpacity
                 ))
             }
             col = c
@@ -1774,7 +1780,7 @@ public final class TerminalMetalRenderer {
             entry,
             originX: ox + Float(col * cellPixelWidth),
             originY: oy + Float(row * cellPixelHeight),
-            color: color
+            color: color, colorGlyphOpacity: cell.colorGlyphOpacity
         ))
     }
 
@@ -1791,11 +1797,13 @@ public final class TerminalMetalRenderer {
             entry,
             originX: ox + Float(col * cellPixelWidth),
             originY: oy + Float(row * cellPixelHeight),
-            color: color
+            color: color, colorGlyphOpacity: cell.colorGlyphOpacity
         ))
     }
 
-    private func glyphInstance(_ entry: AtlasEntry, originX: Float, originY: Float, color: SIMD4<Float>) -> GlyphInstance {
+    private func glyphInstance(_ entry: AtlasEntry, originX: Float, originY: Float, color: SIMD4<Float>, colorGlyphOpacity: Float) -> GlyphInstance {
+        var color = color
+        if entry.isColor { color.w *= colorGlyphOpacity }
         let gx = originX + Float(entry.bearingX)
         let gy = originY + Float(ascentPixels - entry.bearingY)
         return GlyphInstance(
@@ -1803,7 +1811,7 @@ public final class TerminalMetalRenderer {
             size: SIMD2(Float(entry.pixelWidth), Float(entry.pixelHeight)),
             uvOrigin: entry.uvOrigin,
             uvSize: entry.uvSize,
-            pageIndex: UInt32(entry.pageIndex),
+            pageIndex: entry.encodedPageIndex,
             color: color
         )
     }

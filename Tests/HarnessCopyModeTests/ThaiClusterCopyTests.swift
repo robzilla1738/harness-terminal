@@ -6,6 +6,18 @@ import HarnessTerminalEngine
 /// Copy-mode must treat a cell carrying combining marks as one grapheme in one column, so a
 /// selection over Thai copies "ที่" (base + vowel + tone), not a bare consonant or a shifted column.
 final class ThaiClusterCopyTests: XCTestCase {
+    func testNewUnicodeMarksSurviveCopyAndSearchOnOlderHosts() {
+        let cluster = "A\u{05C8}\u{1ACF}\u{1AE0}\u{0897}"
+        let terminal = TerminalEmulator(cols: 8, rows: 1)
+        terminal.feed(cluster + "X")
+        let line = terminal.renderedLine(0)
+        XCTAssertEqual(line.substring(fromColumn: 0, toColumn: 1), cluster)
+        XCTAssertEqual(line.substring(fromColumn: 1, toColumn: 2), "X")
+        XCTAssertTrue(line.text.hasPrefix(cluster + "X"))
+        XCTAssertEqual(CopyModeReducer.computeMatches(cluster + "X", grid: terminal),
+                       [CopyModeMatch(line: 0, startColumn: 0, endColumn: 2)])
+    }
+
     /// A single-line grid whose first cell carries combining marks.
     private struct ThaiGrid: CopyModeGridSource {
         let cells: [TerminalGridCell]

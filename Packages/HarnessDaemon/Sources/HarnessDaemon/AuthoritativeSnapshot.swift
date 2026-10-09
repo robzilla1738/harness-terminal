@@ -1,4 +1,5 @@
 import Foundation
+import HarnessCore
 import HarnessTerminalEngine
 #if canImport(CryptoKit)
 import CryptoKit
@@ -48,26 +49,7 @@ struct AttachHistory: Equatable {
     var resync: Bool
     /// On a resync, the screen at `endSequence`, painted before the history.
     var screen: ScreenFrame?
-}
-
-/// Bytes the snapshot has not applied yet. Nil means the ring no longer holds
-/// `fedThrough`, so the emulator has to be reset and fed the ring that remains.
-enum SnapshotResync {
-    static func gap(fedThrough: UInt64, ring: [SnapshotByteSpan]) -> Data? {
-        guard let first = ring.first else { return Data() }
-        if fedThrough < first.sequence { return nil }
-        var out = Data()
-        for entry in ring {
-            let end = entry.sequence &+ UInt64(entry.data.count)
-            if fedThrough >= end { continue }
-            if fedThrough > entry.sequence {
-                out.append(entry.data.dropFirst(Int(fedThrough - entry.sequence)))
-            } else {
-                out.append(entry.data)
-            }
-        }
-        return out
-    }
+    var replaySizes: [ReplaySize]?
 }
 
 enum SnapshotCipher {
@@ -184,28 +166,39 @@ final class AuthoritativeParser {
         self.historyLines = historyLines
     }
 
-    func catchUp(ring: [SnapshotByteSpan], cols: Int, rows: Int) {
-        let sizeChanged = term?.cols != cols || term?.rows != rows
-        let gap = SnapshotResync.gap(fedThrough: fedThrough, ring: ring)
-        if term == nil || sizeChanged || gap == nil {
-            let created = TerminalEmulator(cols: max(cols, 1), rows: max(rows, 1))
+    func catchUp(ring: [SnapshotByteSpan], cols: Int, rows: Int, sizes: [ReplaySize] = []) {
+        let evicted = ring.first.map { fedThrough < $0.sequence } ?? false
+        if term == nil || evicted {
+            let initial = sizes.first
+            let created = TerminalEmulator(cols: Int(initial?.cols ?? UInt16(clamping: cols)),
+                                           rows: Int(initial?.rows ?? UInt16(clamping: rows)))
             created.maxScrollbackLines = historyLines
             created.readsGraphicsFiles = false
+            created.isReplaying = true
             term = created
-            let all = ring.reduce(into: Data()) { $0.append($1.data) }
-            if !all.isEmpty { created.feed(all) }
-            bytesFed += all.count
-            fedThrough = ring.last.map { $0.sequence &+ UInt64($0.data.count) } ?? 0
-            return
+            fedThrough = ring.first?.sequence ?? 0
         }
-        if let gap, !gap.isEmpty {
-            term?.feed(gap)
-            bytesFed += gap.count
+        guard let term else { return }
+        var low = 0
+        var high = ring.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if ring[mid].sequence + UInt64(ring[mid].data.count) <= fedThrough { low = mid + 1 }
+            else { high = mid }
         }
-        if let last = ring.last {
-            // A ring copied before another reader's must not move the mark backwards.
-            fedThrough = max(fedThrough, last.sequence &+ UInt64(last.data.count))
+        for span in ring[low...] {
+            let end = span.sequence &+ UInt64(span.data.count)
+            guard end > fedThrough else { continue }
+            let offset = fedThrough > span.sequence ? Int(fedThrough - span.sequence) : 0
+            let data = Data(span.data.dropFirst(offset))
+            ReplaySize.replay(data, sequence: span.sequence + UInt64(offset), sizes: sizes,
+                              resize: { c, r in
+                                  if term.cols != c || term.rows != r { term.resize(cols: c, rows: r) }
+                              }, feed: term.feed)
+            bytesFed += data.count
+            fedThrough = end
         }
+        if term.cols != cols || term.rows != rows { term.resize(cols: cols, rows: rows) }
     }
 
     func frame() -> ScreenFrame? {

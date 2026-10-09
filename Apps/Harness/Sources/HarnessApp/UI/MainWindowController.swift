@@ -50,7 +50,6 @@ final class MainWindowController: NSWindowController {
         // the traffic lights to the height the tab row sits at. Measure where they land
         // before the chrome is built, so tabs and sidebar controls center on that line.
         let toolbar = NSToolbar(identifier: "HarnessTitleRow")
-        toolbar.showsBaselineSeparator = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
         HarnessDesign.titleRowCenter = Self.trafficLightCenter(in: window) ?? HarnessDesign.titleRowCenter

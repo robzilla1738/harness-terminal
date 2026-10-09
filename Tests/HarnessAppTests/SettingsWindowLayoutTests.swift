@@ -14,7 +14,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
         // (short, so the socket path fits) before anything touches it, and leave it there: a
         // later save must never land in the real settings file.
         setenv("HARNESS_HOME", "/tmp/hst-\(UUID().uuidString.prefix(6))", 1)
-        _ = NSApplication.shared
+        MainActor.assumeIsolated { _ = NSApplication.shared }
     }
 
     func testEveryPaneLaysOutCleanly() {

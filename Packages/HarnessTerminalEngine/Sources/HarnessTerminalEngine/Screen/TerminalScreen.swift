@@ -176,6 +176,17 @@ final class TerminalScreen {
             }
         }
 
+        /// Hard-ended history rows have no cursor in their padding. Reflow would immediately
+        /// trim these blanks, so avoid allocating and then scanning them in the first place.
+        var reflowCells: [TerminalGridCell] {
+            guard !wrapped, case let .uniform(codepoints, template, _) = storage else { return cells }
+            return codepoints.map { codepoint in
+                var cell = template
+                cell.codepoint = codepoint
+                return cell
+            }
+        }
+
         var bytes: Int {
             switch storage {
             case .full(let cells): return cells.capacity * MemoryLayout<TerminalGridCell>.stride + 32
@@ -1221,7 +1232,7 @@ final class TerminalScreen {
         func sourceRow(_ i: Int) -> (cells: [TerminalGridCell], wrapped: Bool, mark: SemanticMark?) {
             if i < history.count {
                 let h = history[i]
-                return (h.cells, h.wrapped, h.mark)
+                return (h.reflowCells, h.wrapped, h.mark)
             }
             let r = i - history.count
             return (viewportRowCells(r), rowWrapped[r], rowMarks[r])
@@ -1287,7 +1298,7 @@ final class TerminalScreen {
             sourceRow: { i in
                 if i < historyCount {
                     let h = self.history[i]
-                    return (h.cells, h.wrapped, h.mark)
+                    return (h.reflowCells, h.wrapped, h.mark)
                 }
                 let r = i - historyCount
                 return (vpRows[r], self.rowWrapped[r], self.rowMarks[r])
@@ -1632,9 +1643,9 @@ final class TerminalScreen {
         // Only fold TRUE grapheme-extending marks (Thai vowels/tones, accents, variation selectors)
         // onto the base. Width-0 FORMAT scalars (ZWSP, BOM, word joiner, bidi LRM/RLM/overrides) are
         // not grapheme extenders: folding them would make the cell's `cluster` span two extended
-        // grapheme clusters — which crashes `Character(cluster)` on the copy-mode read path and is
-        // semantically wrong — so drop them, exactly as the pre-cluster code did for all width-0.
-        guard let s = Unicode.Scalar(scalar), s.properties.isGraphemeExtend else { return false }
+        // grapheme clusters. Keep only pinned UCD extenders, including newly assigned marks that
+        // the host Unicode database may not recognize yet.
+        guard let s = Unicode.Scalar(scalar), CharacterWidth.isGraphemeExtend(scalar) else { return false }
         guard cursorRow >= 0, cursorRow < rows else { return false }
         let rowBase = rowStart(cursorRow)
         var baseCol: Int

@@ -62,6 +62,15 @@ final class ScrollbackFile: @unchecked Sendable {
     /// Current on-disk size, seeded from the existing file so compaction accounting survives a
     /// restart that loaded a pre-existing log.
     private var fileBytes: Int
+    private var sizes: [ReplaySize] = []
+    private var sizesDirty = false
+    private var sizesURL: URL { url.appendingPathExtension("sizes") }
+
+    private struct SizeIndex: Codable {
+        var inode: UInt64
+        var bytes: Int
+        var sizes: [ReplaySize]
+    }
 
     init(url: URL, retentionCap: Int) {
         self.url = url
@@ -70,7 +79,17 @@ final class ScrollbackFile: @unchecked Sendable {
         self.retentionCap = retentionCap <= 0
             ? Self.unlimitedSafetyCap
             : min(max(retentionCap, Self.minimumRetentionCap), Self.unlimitedSafetyCap)
-        self.fileBytes = Self.compactExistingLogIfNeeded(url: url, retentionCap: self.retentionCap)
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        self.fileBytes = attributes?[.size] as? Int ?? 0
+        if let bytes = Self.readSizeIndex(url: url.appendingPathExtension("sizes")),
+           let index = try? JSONDecoder().decode(SizeIndex.self, from: bytes),
+           index.inode == (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value,
+           index.bytes <= fileBytes, index.bytes >= 0,
+           index.sizes.last?.sequence ?? 0 <= UInt64(index.bytes) {
+            sizes = ReplaySize.validated(index.sizes)
+        }
+        if fileBytes > self.retentionCap { compact() }
+        persistSizes()
         // Re-assert owner-only on a pre-existing log too, so files created by builds that
         // predate the permission tightening are fixed on the first load after an upgrade.
         Self.restrictToOwner(url)
@@ -110,13 +129,7 @@ final class ScrollbackFile: @unchecked Sendable {
         guard let size = try? handle.seekToEnd(), size > 0 else { return Data() }
         let start = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
         guard (try? handle.seek(toOffset: start)) != nil else { return Data() }
-        return (try? handle.readToEnd()) ?? Data()
-    }
-
-    private static func compactExistingLogIfNeeded(url: URL, retentionCap: Int) -> Int {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-        guard size > retentionCap else { return size }
-        return compactToTail(url: url, retentionCap: retentionCap) ?? size
+        return (try? handle.read(upToCount: min(maxBytes, Int(size - start)))) ?? Data()
     }
 
     /// Rewrite the log down to its last `retentionCap` bytes by *streaming* the tail through a
@@ -163,13 +176,66 @@ final class ScrollbackFile: @unchecked Sendable {
         }
     }
 
+    private static func readSizeIndex(url: URL) -> Data? {
+        guard let file = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? file.close() }
+        guard let data = try? file.read(upToCount: IPCCodec.maxPayloadLength + 1),
+              data.count <= IPCCodec.maxPayloadLength else { return nil }
+        return data
+    }
+
+    /// Sequence numbers in the sidecar are zero-based file offsets. Rebase the retained tail
+    /// to the new daemon's byte sequence, keeping the size in force at its first byte.
+    func replaySizesForTail(maxBytes: Int) -> [ReplaySize] {
+        queue.sync {
+            let start = UInt64(max(0, fileBytes - maxBytes))
+            let first = sizes.lastIndex(where: { $0.sequence <= start }) ?? 0
+            return sizes.dropFirst(first).map {
+                ReplaySize(sequence: max($0.sequence, start) - start + 1, cols: $0.cols, rows: $0.rows)
+            }
+        }
+    }
+
+    func recordSize(cols: UInt16, rows: UInt16) {
+        queue.async { [self] in
+            guard !closed, !suspended else { return }
+            recordSizeOnQueue(cols: cols, rows: rows)
+            if sizesDirty { scheduleFlush() }
+        }
+    }
+
+    private func recordSizeOnQueue(cols: UInt16, rows: UInt16) {
+        guard sizes.last?.cols != cols || sizes.last?.rows != rows else { return }
+        let offset = UInt64(fileBytes + pending.count)
+        if sizes.last?.sequence == offset { sizes.removeLast() }
+        sizes.append(ReplaySize(sequence: offset, cols: cols, rows: rows))
+        sizesDirty = true
+    }
+
+    private func persistSizes() {
+        guard sizesDirty, !sizes.isEmpty,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value else { return }
+        let index = SizeIndex(inode: inode, bytes: fileBytes, sizes: sizes)
+        do {
+            let data = try JSONEncoder().encode(index)
+            if HarnessPaths.atomicWrite(data, to: sizesURL, label: "HarnessDaemon scrollback sizes") {
+                Self.restrictToOwner(sizesURL)
+                sizesDirty = false
+            }
+        } catch {
+            fputs("HarnessDaemon scrollback: cannot encode resize history: \(error)\n", harnessStderr)
+        }
+    }
+
     /// Queue a chunk of output for persistence. Cheap on the caller (the PTY read loop): append
     /// to the pending buffer and arm the flush timer if none is pending. The actual disk write
     /// happens on `queue`.
-    func append(_ data: Data) {
+    func append(_ data: Data, size: ReplaySize? = nil) {
         guard !data.isEmpty else { return }
         queue.async { [weak self] in
             guard let self, !self.closed, !self.suspended else { return }
+            if let size { self.recordSizeOnQueue(cols: size.cols, rows: size.rows) }
             self.pending.append(data)
             // Bound RAM under a sustained flood: once buffered output crosses the cap, flush
             // synchronously rather than re-arming the debounce (which a gapless stream would
@@ -213,6 +279,9 @@ final class ScrollbackFile: @unchecked Sendable {
             self.pending.removeAll(keepingCapacity: false)
             try? FileManager.default.removeItem(at: self.url)
             self.fileBytes = 0
+            self.sizes.removeAll()
+            self.sizesDirty = false
+            try? FileManager.default.removeItem(at: self.sizesURL)
         }
     }
 
@@ -234,6 +303,9 @@ final class ScrollbackFile: @unchecked Sendable {
             self.pending.removeAll(keepingCapacity: true)
             try? FileManager.default.removeItem(at: self.url)
             self.fileBytes = 0
+            self.sizes.removeAll()
+            self.sizesDirty = false
+            try? FileManager.default.removeItem(at: self.sizesURL)
         }
     }
 
@@ -246,6 +318,9 @@ final class ScrollbackFile: @unchecked Sendable {
             self.pending.removeAll(keepingCapacity: false)
             try? FileManager.default.removeItem(at: self.url)
             self.fileBytes = 0
+            self.sizes.removeAll()
+            self.sizesDirty = false
+            try? FileManager.default.removeItem(at: self.sizesURL)
         }
     }
 
@@ -257,12 +332,22 @@ final class ScrollbackFile: @unchecked Sendable {
         pendingFlush?.cancel()
         pendingFlush = nil
         flushDeadline = nil
-        guard !closed, !pending.isEmpty else { return }
+        guard !closed else { return }
+        guard !pending.isEmpty else { persistSizes(); return }
         let chunk = pending
         pending.removeAll(keepingCapacity: true)
-        guard appendToDisk(chunk) else { return }
+        guard appendToDisk(chunk) else {
+            // A failed/partial write breaks the file-offset mapping. Never reuse stale sizes.
+            sizes.removeAll()
+            sizesDirty = false
+            try? FileManager.default.removeItem(at: sizesURL)
+            fileBytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+            return
+        }
         fileBytes += chunk.count
+        sizesDirty = !sizes.isEmpty
         if fileBytes > highWater { compact() }
+        persistSizes()
     }
 
     private func appendToDisk(_ data: Data) -> Bool {
@@ -313,7 +398,14 @@ final class ScrollbackFile: @unchecked Sendable {
     /// for the atomicity/durability dance). On failure the old log survives untouched.
     private func compact() {
         if let newSize = Self.compactToTail(url: url, retentionCap: retentionCap) {
+            let dropped = UInt64(fileBytes - newSize)
+            let first = sizes.lastIndex(where: { $0.sequence <= dropped }) ?? 0
+            sizes = sizes.dropFirst(first).map {
+                ReplaySize(sequence: max($0.sequence, dropped) - dropped, cols: $0.cols, rows: $0.rows)
+            }
+            sizesDirty = !sizes.isEmpty
             fileBytes = newSize
+            persistSizes()
         }
     }
 }

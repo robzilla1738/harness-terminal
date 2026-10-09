@@ -808,7 +808,8 @@ public final class DaemonServer: @unchecked Sendable {
                     return
                 }
                 self.send(.attached(AttachReply(
-                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt, inputErrors: attach.inputErrors == true ? true : nil
+                    epoch: self.epoch, resync: start.resync, endSequence: start.endSequence, screen: start.screen?.vt, inputErrors: attach.inputErrors == true ? true : nil,
+                    replaySizes: start.replaySizes
                 )), to: fd)
                 for chunk in start.chunks {
                     self.sendDataFrame(chunk.data, sequence: chunk.sequence, to: fd)
