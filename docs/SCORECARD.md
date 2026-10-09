@@ -38,7 +38,7 @@ PREVIEW_SIGNPOSTS=1 make preview && Scripts/scorecard.sh input-latency
 Scripts/scorecard.sh report             # markdown to paste below
 ```
 
-## Performance follow-up — 2026-10-08, source `08e4fba`
+## Performance follow-up — 2026-10-08, final consumer source `b41b325`
 
 The follow-up removes full-viewport copies on scroll, losslessly compacts uniform history
 rows, packs cells into 32 bytes, reuses search UTF-16 buffers, and moves regular Metal
@@ -48,22 +48,30 @@ waits; these changes address measured costs rather than reducing rendering quali
 
 Same release environment and 150×45 configuration as below; one warm-up, median of three
 samples. [Raw receipt](benchmarks/terminal-excellence-2026-10-08-followup.json). The previous
-candidate column is the same-day preceding receipt, not a new interleaved run.
+candidate and Ghostty columns are same-day preceding receipts, not a new interleaved run.
+Engine, memory and startup measurements use `08e4fba`; the final consumer check includes
+the later subscription-cancellation guard and UI corrections.
 
 | Consumed-output workload | Previous Harness ms | Follow-up Harness ms | Matched Ghostty ms |
 |---|---:|---:|---:|
-| ASCII | 120.65 | 52.09 | 42.60 |
-| ANSI SGR | 82.77 | 40.93 | 32.88 |
-| Mixed Unicode | 72.09 | 26.84 | 18.92 |
-| Attributes | 79.03 | 42.55 | 35.48 |
+| ASCII | 120.65 | 51.81 | 42.60 |
+| ANSI SGR | 82.77 | 41.40 | 32.88 |
+| Mixed Unicode | 72.09 | 30.33 | 18.92 |
+| Attributes | 79.03 | 43.19 | 35.48 |
 | Truecolor gradient | 31.12 | 17.70 | 19.33 |
-| Redraw | 22.61 | 11.01 | 7.38 |
-| Scrollback | 127.85 | 58.93 | 48.98 |
+| Redraw | 22.61 | 10.61 | 7.38 |
+| Scrollback | 127.85 | 58.96 | 48.98 |
 
-Harness leads the truecolor workload by about 8%; Harness takes 20–49% longer in the
+Harness leads the truecolor workload by about 8%; Harness takes 20–60% longer in the
 other six. This is a parser acknowledgement
 probe with producer and transport costs, **not physical input-to-photon or frame pacing**.
-Compared with the preceding Harness candidate, consumed-output time falls 43–63%.
+Compared with the preceding Harness candidate, consumed-output time falls 43–58%.
+
+Six final workloads stayed within roughly 4% of the initial follow-up. Unicode rose from
+26.84 to 30.33 ms; a short paired Unicode-only check returned 26.60 ms prior / 28.36 ms
+final. That possible slowdown remains open amid sample variation. The subscription guard
+prevents stale output from corrupting fresh connections and remains enabled. Every sample,
+including a final scrollback outlier, is retained in the receipt.
 
 Retaining 100,000 identical short rows now costs **154.97 MiB app + 23.56 MiB daemon =
 178.53 MiB RSS**, versus 665.95 MiB previously and Ghostty's same-day 249.83 MiB.

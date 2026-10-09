@@ -18,7 +18,10 @@
     "candidate": "08e4fba",
     "previous_candidate": "7dbebe7",
     "baseline": "56edc52",
-    "ghostty_memory": "same-day preceding receipt, same 100000-row workload and retention"
+    "ghostty_memory": "same-day preceding receipt, same 100000-row workload and retention",
+    "packaged_candidate": "b41b325",
+    "final_consumer_check": "b41b325; includes subscription identity guard, Settings contrast and divider corrections",
+    "unicode_pair_prior": "b855e74; same measured engine/presentation paths as 08e4fba"
   },
   "notes": [
     "One warm-up and three measured samples for consumer, engine and startup. Each memory/idle state is a single observation.",
@@ -28,7 +31,8 @@
     "Startup has a 1376 ms outlier; retain it. Median is not a guarantee. Idle CPU is a coarse eight-second ps sample, not power or wakeups.",
     "Full-history reflow is slower than the prior candidate (11.31 vs 6.07 ms); compact history trades decode/repack work for memory. Interactive preview remains bounded and full reflow stays off main.",
     "Literal search improves over the previous candidate but both literal and regex remain above the original, incorrect search baseline.",
-    "No font, glyph atlas, color quality, image protocol, history content, display synchronization or feature was disabled for these optimizations."
+    "No font, glyph atlas, color quality, image protocol, history content, display synchronization or feature was disabled for these optimizations.",
+    "Final b41b325 consumer medians (ms): ASCII 51.807, SGR 41.402, Unicode 30.330, attributes 43.185, gradient 17.698, redraw 10.606, scrollback 58.964. A paired Unicode-only check returned 26.605 prior / 28.362 final; possible Unicode slowdown remains unresolved amid sample variation. All raw samples, including the final scrollback outlier, are retained."
   ],
   "consumer_ack": {
     "harness": [
@@ -1033,5 +1037,393 @@
         "raw_bytes": 4703520
       }
     }
-  ]
+  ],
+  "final_consumer_check": [
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 52.992667,
+      "consumer_ms": 53.134625
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 41.777625,
+      "consumer_ms": 42.319958
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 27.993208,
+      "consumer_ms": 29.354375
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.898375,
+      "consumer_ms": 43.0255
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.418833,
+      "consumer_ms": 17.52925
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.711959,
+      "consumer_ms": 10.808542
+    },
+    {
+      "variant": "harness",
+      "sample": 0,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 60.622417,
+      "consumer_ms": 60.748625
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 51.689167,
+      "consumer_ms": 51.8735
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 41.2675,
+      "consumer_ms": 41.402125
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 26.749292,
+      "consumer_ms": 30.852167
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.523292,
+      "consumer_ms": 43.185125
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.63525,
+      "consumer_ms": 17.751375
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.613792,
+      "consumer_ms": 10.707667
+    },
+    {
+      "variant": "harness",
+      "sample": 1,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 58.727041,
+      "consumer_ms": 58.843041
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 51.686458,
+      "consumer_ms": 51.806833
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 40.18725,
+      "consumer_ms": 40.306833
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 26.637458,
+      "consumer_ms": 30.330167
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 44.69025,
+      "consumer_ms": 44.806042
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.574666,
+      "consumer_ms": 17.69775
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.499458,
+      "consumer_ms": 10.606166
+    },
+    {
+      "variant": "harness",
+      "sample": 2,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 58.836708,
+      "consumer_ms": 58.964167
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "plain_ascii",
+      "bytes": 1048544,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 51.187125,
+      "consumer_ms": 51.312333
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "ansi_sgr",
+      "bytes": 1048626,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.089125,
+      "consumer_ms": 42.204125
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "unicode_mixed",
+      "bytes": 1048619,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 26.299125,
+      "consumer_ms": 27.175958
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "attributes",
+      "bytes": 1048618,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 42.495791,
+      "consumer_ms": 42.604916
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "truecolor_gradient",
+      "bytes": 843750,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 17.531042,
+      "consumer_ms": 17.645917
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "redraw",
+      "bytes": 869760,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 10.493166,
+      "consumer_ms": 10.59575
+    },
+    {
+      "variant": "harness",
+      "sample": 3,
+      "case": "scrollback",
+      "bytes": 860000,
+      "columns": 150,
+      "rows": 45,
+      "write_ms": 86.844917,
+      "consumer_ms": 87.053833
+    }
+  ],
+  "final_unicode_pair": {
+    "prior": [
+      {
+        "variant": "prior",
+        "sample": 0,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 36.295791,
+        "consumer_ms": 38.785166
+      },
+      {
+        "variant": "prior",
+        "sample": 1,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 28.087166,
+        "consumer_ms": 28.267875
+      },
+      {
+        "variant": "prior",
+        "sample": 2,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 25.981959,
+        "consumer_ms": 26.093542
+      },
+      {
+        "variant": "prior",
+        "sample": 3,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 26.464291,
+        "consumer_ms": 26.604666
+      }
+    ],
+    "current": [
+      {
+        "variant": "current",
+        "sample": 0,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 35.172292,
+        "consumer_ms": 37.683792
+      },
+      {
+        "variant": "current",
+        "sample": 1,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 28.23925,
+        "consumer_ms": 28.362167
+      },
+      {
+        "variant": "current",
+        "sample": 2,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 32.5365,
+        "consumer_ms": 33.05025
+      },
+      {
+        "variant": "current",
+        "sample": 3,
+        "case": "unicode_mixed",
+        "bytes": 1048619,
+        "columns": 150,
+        "rows": 45,
+        "write_ms": 28.223709,
+        "consumer_ms": 28.351292
+      }
+    ]
+  },
+  "final_verification": {
+    "source": "b41b325041c985cb6829cd003fbf1fe6a9e11b3c",
+    "ci": "https://github.com/robzilla1738/harness-terminal/actions/runs/37871847760",
+    "macos": {
+      "tests": 2265,
+      "skipped": 58,
+      "failures": 0
+    },
+    "linux": {
+      "tests": 1723,
+      "skipped": 2,
+      "failures": 0
+    },
+    "packaging": "release arm64 macOS 15+, strict ad-hoc signature verified, isolated home, automatic updates disabled",
+    "packaged_binary_sha256": {
+      "Contents/MacOS/Harness": "558bbe6fba3663d560116253d286fb8b6a2858f0db66e2f84c78b5d8b08c8a62",
+      "Contents/MacOS/HarnessDaemon": "cb1fcb21b432a171a2240a01bc1e493f5180cb64cd7e6ba619c0ad89c1c9860c",
+      "Contents/MacOS/harness-cli": "ff6b7a4a97fb7ccd4f8c30d331fd283f3b8db3152d869841086a6f7580be5cec"
+    }
+  }
 }

@@ -37,7 +37,7 @@ because asynchronous operations must preserve host and session identity.
 | M | Native scrollbar, settings, keyboard/IME, window management, themes, onboarding, menus | Integrated; compact Mac pass complete; physical IME/displays/Spaces unverified |
 | W | Persistence, multi-window/host ownership, setups, activity, agents, shell integration, CLI/Lua/API | Audited and CI passed; raw-replay fidelity and real remote recovery remain open |
 | H | Config recovery, storage failures, hostile output, files/clipboard/socket/SSH boundaries, Linux | Integrated; recovery/deadline tests and Linux live suite passed; Linux job mandatory |
-| P | Profiling, release packaging/resources/dependencies, docs and reproducible measurements | Packaged and measured; throughput, search CPU, memory and startup targets missed |
+| P | Profiling, release packaging/resources/dependencies, docs and reproducible measurements | Packaged and measured; truecolor consumer and short-row memory targets exceeded; other throughput, search CPU and startup targets remain open |
 | F | Focused checks, one full macOS/live-daemon run, compact UI pass, final performance comparison | Reviewable local candidate delivered; open acceptance limits explicitly retained |
 
 ## Findings
@@ -178,7 +178,7 @@ watchers now run only for local tabs, so a remote cwd cannot be mistaken for thi
 - One local full macOS/live-daemon pass exercised 2,255 tests, with 58 intentional skips.
   Two obsolete importer source-string assertions failed; a behavioral split-theme import
   check replaced them, and the focused 16-test correction pass passed.
-- Final production source `7dbebe7` passed [CI run 37865660157](https://github.com/robzilla1738/harness-terminal/actions/runs/37865660157):
+- The preceding production source `7dbebe7` passed [CI run 37865660157](https://github.com/robzilla1738/harness-terminal/actions/runs/37865660157):
   macOS **2,259 tests, 58 skipped, zero failures**; Linux **1,720 tests, two skipped,
   zero failures**; debug/release builds, Xcode build, manifest agreement and benchmark job
   passed. Reused this evidence for identical production code instead of another local full run.
@@ -213,7 +213,7 @@ watchers now run only for local tabs, so a remote cwd cannot be mistaken for thi
 | T3 | High | GUI history preference never reaches daemon raw replay; defaults silently retain only 1 MiB | Share budget calculation, update new/restored/live surfaces and disk compaction; retention regressions and 4.70 MB live replay observation pass |
 | M6 | Medium | Finder-launched shells without locale render UTF-8 as escaped bytes in less | Add LC_CTYPE=UTF-8 only when no locale is supplied; explicit environment wins; environment test and live less check pass |
 | M7 | High | ⌘W in Settings closes the terminal pane behind it | Route utility-window closure to the key window; disable pane mutation menu entries there; live Settings close preserves original pane |
-| P1 | High target gap | End-to-end consumer throughput | Follow-up: 43–63% less elapsed time than previous candidate; leads truecolor, still trails Ghostty by 20–49% in six workloads. Viewport copies and main-thread drawable waits removed; remaining parity target open |
+| P1 | High target gap | End-to-end consumer throughput | Follow-up: 43–58% less elapsed time than previous candidate; leads truecolor, still trails Ghostty by 20–60% in six workloads. Viewport copies and main-thread drawable waits removed; remaining parity target open |
 | P2 | Medium target gap | Correct Find uses more CPU than old search | Follow-up literal 17.65 ms, regex 73.70 ms; original baseline 14/50 ms. UTF-16 buffer reuse improves literal; parity target remains open |
 | P3 | Resolved for measured workload | Retained short-row memory | Follow-up 178.53 MiB app+daemon versus preceding 665.95 MiB and Ghostty 249.83 MiB; all 100k rows / 4.70 MB raw output retained. Lossless uniform-row compaction, original widths and actual allocation accounting; other workloads not inferred |
 | P4 | Medium target gap | Startup consistency and responsiveness | Readiness median 395.87 ms versus Ghostty 305.84 ms, including a 1375.77 ms outlier; open. Unicode parse+frame improves to 20.21 ms, previously about 51 ms |
@@ -224,9 +224,10 @@ watchers now run only for local tabs, so a remote cwd cannot be mistaken for thi
 
 ## Performance and presentation follow-up
 
-Production follow-up `08e4fba`; divider-only correction `b855e74`. All timing and memory
-samples are retained in the [follow-up receipt](benchmarks/terminal-excellence-2026-10-08-followup.json).
-The divider change does not alter the measured engine, parser, search or GPU paths.
+Engine, memory and initial consumer source `08e4fba`; packaged source and final consumer
+check `b41b325`. Later changes correct divider geometry, Settings contrast/copy, and stale
+output delivery after cancellation. All timing and memory samples are retained in the [follow-up receipt](benchmarks/terminal-excellence-2026-10-08-followup.json).
+The final consumer check covers the added output-subscription identity guard.
 
 - A release engine profile attributed about 80% of sampled feed work to copying the whole
   viewport during scrolling. Full-screen scrolling now rotates physical rows; partial-region
@@ -245,6 +246,12 @@ The divider change does not alter the measured engine, parser, search or GPU pat
   Program status/bell/surface checks: 64 tests, three opt-in skips, zero failures.
 - Coalesced attachment replay now carries the first byte's sequence instead of the final
   chunk's start. Daemon client checks: ten tests, zero failures.
+- Linux CI on `c0c22ef` exposed a binary output frame arriving on a fresh RPC connection
+  after attachment cancellation; macOS passed that candidate. PTY callbacks already queued
+  at cancellation could outlive their subscription and use a recycled descriptor. Output
+  delivery now checks the exact subscription identity on the socket queue before writing.
+  All 23 live-daemon round-trip checks pass, including a regression interleaving output,
+  cancellation and fresh RPC requests.
 - A full-app release profile then attributed 1478/1801 UI-thread samples to `nextDrawable`.
   Regular acquisition now runs on a dedicated queue, with one in-flight request and one latest
   pending frame. Coalescing invalidates damage reuse, stale dimensions/generations are rejected,
@@ -265,13 +272,28 @@ The divider change does not alter the measured engine, parser, search or GPU pat
   clipboard paste preserved them, so synthetic typing is not treated as an IME result.
 - Live light-theme inspection found dark sidebar fill left behind light text in Settings.
   The sidebar backdrop now refreshes with chrome changes (including opacity), and a focused
-  transition regression verifies its light background. The spacing hint uses the actual default.
+  transition regression verifies its light background. All four Settings layout/keyboard/transition
+  tests pass. The packaged app was then verified live in both appearances, including sidebar
+  contrast, the corrected default hint, and Settings closure preserving the pane.
 - A restarted isolated fish session showed a retained device-query timeout warning from
   its earlier unwatched lifetime. Current attached query/typing checks pass; detached-shell
   negotiation remains an explicit lifecycle finding rather than a claimed clean bill of health.
 - Full-history 10k-row reflow now costs 11.31 ms versus 6.07 ms: decoding/repacking compact
   storage is a documented CPU tradeoff. Bounded viewport previews and off-main full reflow
   preserve interactive behavior. Further optimization remains open, as do regex CPU and startup.
+
+- Final release consumer check retains the large gains: 43–58% less elapsed time than
+  `7dbebe7`. Six workloads are within roughly 4% of the earlier follow-up; Unicode returned
+  30.33 ms versus 26.84 ms. A paired Unicode-only check returned 26.60/28.36 ms. This possible
+  slowdown remains open amid sample variation; the receipt retains every sample. The
+  cancellation guard stays in place to protect correctness.
+
+- Final production source `b41b325` passed [CI run 37871847760](https://github.com/robzilla1738/harness-terminal/actions/runs/37871847760):
+  macOS **2,265 tests, 58 skipped, zero failures**; Linux **1,723 tests, two skipped,
+  zero failures**. Debug/release builds, Xcode build, manifest agreement, and benchmark job
+  passed. The final release app was repackaged and strictly ad-hoc signature verified;
+  its source and binary hashes are recorded beside the app and in the measurement receipt.
+  Later documentation-only changes reuse this identical production-source evidence.
 
 ## Completion disposition
 
