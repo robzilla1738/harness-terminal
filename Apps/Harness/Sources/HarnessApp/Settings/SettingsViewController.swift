@@ -877,7 +877,7 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         scrollbackField.widthAnchor.constraint(equalToConstant: Form.wideNumberFieldWidth).isActive = true
         let scrollGroup = settingsGroup("Scrolling", [
             settingsRow("Scrollback", hstack([scrollbackField, unitLabel("lines")], spacing: 6),
-                        hint: "0 keeps everything, up to 512 MiB a pane."),
+                        hint: "0 removes the line cap. Decoded history and raw output each retain up to 512 MiB per pane."),
             settingsRow("Scroll speed", sliderRow(scrollMultiplierSlider, scrollMultiplierLabel)),
         ])
 

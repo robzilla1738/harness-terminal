@@ -347,6 +347,13 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     /// Every other MenuTarget item stays enabled (default true), preserving prior behavior.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(closeTab), #selector(closeSession), #selector(selectPaneInDirection(_:)),
+             #selector(previousPane), #selector(nextPane), #selector(zoomPane), #selector(equalizeSplits),
+             #selector(moveTabToNewWindow):
+            return WindowContexts.all.contains(where: { $0.window === NSApp.keyWindow })
+        default: break
+        }
+        switch menuItem.action {
         case #selector(detachPane): return !SessionCoordinator.shared.activePaneIsDetached
         case #selector(reattachPane): return SessionCoordinator.shared.activePaneIsDetached
         case #selector(reopenClosedTab): return SessionCoordinator.shared.canReopenClosedTab
@@ -582,6 +589,12 @@ final class MenuTarget: NSObject, NSMenuItemValidation, NSMenuDelegate {
     }
 
     @objc func closePaneOrTab() {
+        guard let window = NSApp.keyWindow else { return }
+        guard WindowContexts.all.contains(where: { $0.window === window }) else {
+            if window is QuickTerminalPanel { QuickTerminalController.shared.hide() }
+            else { window.performClose(nil) }
+            return
+        }
         SessionCoordinator.shared.closeFocusedPaneOrTab()
     }
 

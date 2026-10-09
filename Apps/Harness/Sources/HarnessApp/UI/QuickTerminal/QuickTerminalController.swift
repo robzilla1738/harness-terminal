@@ -74,7 +74,7 @@ final class QuickTerminalController: NSObject {
         )
     }
 
-    private func hide() {
+    func hide() {
         panel?.orderOut(nil)
     }
 
