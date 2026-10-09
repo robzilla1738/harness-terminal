@@ -484,12 +484,14 @@ Release build and both strict ad-hoc package signature checks passed. Live inspe
 covered the 100×30 window, small badges, lighter panes, popup filtering, Find matches and
 invalid-regex feedback, and global-result opening into the correct pane. Global results now
 use reusable inset rows with monospaced excerpts and quieter system-font location labels;
-Open Pane is disabled without a selection. The popup dismissed between automation calls,
-so insertion was not re-established in this pass; prior insertion evidence remains separate.
+Open Pane is disabled without a selection. The popup initially dismissed between automation calls. A final uninterrupted interaction
+verified filtered README insertion and restored shell focus without executing the path.
 The preview retained its existing compatible daemon, while the packaged daemon contains
-the new discovery changes. Final-source macOS/Linux/Xcode checks are tracked on
-[PR #185](https://github.com/robzilla1738/harness-terminal/pull/185/checks), avoiding a
-second equivalent full local run. No physical IME, live remote, power, or photon claim
+the new discovery changes. Production source `c8178e8` passed [all CI jobs](https://github.com/robzilla1738/harness-terminal/actions/runs/37885409984):
+macOS 2,286 tests (58 intentional skips), Linux live-daemon 1,728 tests (two skips),
+zero failures; Xcode, benchmark, and manifest jobs passed. This documentation follow-up
+changes no production or test source. Equivalent full local suites were not repeated. Pre-existing AppKit actor-isolation/deprecation build warnings remain; this is not a warning-free build.
+No physical IME, live remote, power, or photon claim
 follows from these checks. W1 replay corruption reproduced after relaunch with fish (duplicated prompt/redraw fragments); it remains a release-quality defect. Existing monochrome emoji,
 Unicode-table age, and cross-terminal speed targets remain open.
 
