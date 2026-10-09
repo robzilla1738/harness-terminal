@@ -2,7 +2,7 @@ import Foundation
 
 /// The native theme catalog.
 ///
-/// Phase 3 ships the hand-curated featured themes with full, accurate 16-color palettes.
+/// Ships 25 original Harness palettes alongside featured community favorites.
 /// Community themes live in the bundled `themes.json` resource and merge in here without
 /// API changes — `theme(named:)`, `search(_:)`, and `allThemes` are the stable surface.
 public enum HarnessThemeCatalog {
@@ -11,10 +11,7 @@ public enum HarnessThemeCatalog {
     public static let defaultThemeName = "Harness Default"
 
     /// Curated, surfaced-first themes.
-    public static let featuredNames = [
-        "Harness Default",
-        "Harness Light",
-        "Harness Navy",
+    public static let featuredNames = HarnessOriginalThemes.all.map(\.name) + [
         "Catppuccin Mocha",
         "Dracula",
         "Tokyo Night",
@@ -111,44 +108,7 @@ public enum HarnessThemeCatalog {
         return themes
     }
 
-    private static let builtins: [HarnessThemeDefinition] = [
-        .make(
-            "Harness Default",
-            bg: "#000000", fg: "#ffffff", cursor: "#ffffff",
-            selectionBackground: "#333333",
-            palette: [
-                "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
-                "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
-                "#6e6e6e", "#d54e53", "#b9ca4a", "#e7c547",
-                "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
-            ]
-        ),
-        // The light companion to the default: near-white with a cool tint, deep ink, a blue
-        // accent, and ANSI colors that all clear 3.5:1 on the canvas.
-        .make(
-            "Harness Light",
-            bg: "#f8f9fc", fg: "#1e2430", cursor: "#2463d1",
-            selectionBackground: "#cddcf7",
-            palette: [
-                "#1f2533", "#c42b3c", "#2e7d32", "#9a6700",
-                "#2463d1", "#8250df", "#12808a", "#d8dce5",
-                "#5f6878", "#d73a49", "#3b8f40", "#a86f00",
-                "#3d7ef0", "#8f5ee8", "#18858f", "#eef1f6",
-            ]
-        ),
-        // A deep navy canvas with a soft blue accent. Body text clears 7:1 and every ANSI
-        // color 4:1.
-        .make(
-            "Harness Navy",
-            bg: "#121b2d", fg: "#d5dceb", cursor: "#6fa8f5",
-            selectionBackground: "#2b3d5e",
-            palette: [
-                "#1c2740", "#e5767f", "#9ccc83", "#e9c47f",
-                "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
-                "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
-                "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
-            ]
-        ),
+    private static let builtins: [HarnessThemeDefinition] = HarnessOriginalThemes.all + [
         .make(
             "Catppuccin Mocha",
             bg: "#1e1e2e", fg: "#cdd6f4", cursor: "#f5e0dc",

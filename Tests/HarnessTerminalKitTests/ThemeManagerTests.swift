@@ -317,6 +317,34 @@ final class ThemeManagerTests: XCTestCase {
 }
 
 final class HarnessLightReadabilityTests: XCTestCase {
+    @MainActor
+    func testOriginalThemePresetsAreFeaturedAndReadable() throws {
+        let originals = HarnessThemeCatalog.allThemes.filter { HarnessThemeCatalog.isBuiltin($0.name) && $0.name.hasPrefix("Harness ") }
+        XCTAssertEqual(originals.count, 25)
+        XCTAssertEqual(Array(ThemeManager.featuredThemes.prefix(25)), originals.map(\.name))
+        for theme in originals {
+            let preset = ThemeManager.presetColors(themeName: theme.name)
+            XCTAssertEqual(preset.backgroundHex, theme.backgroundHex)
+            XCTAssertEqual(preset.paletteHex, theme.paletteHex)
+            let background = try XCTUnwrap(ChromeColor(hex: theme.backgroundHex))
+            let foreground = try XCTUnwrap(ChromeColor(hex: theme.foregroundHex))
+            let cursor = try XCTUnwrap(theme.cursorHex.flatMap(ChromeColor.init(hex:)))
+            let selection = try XCTUnwrap(theme.selectionBackgroundHex.flatMap(ChromeColor.init(hex:)))
+            XCTAssertGreaterThanOrEqual(foreground.contrastRatio(against: background), 7, theme.name)
+            XCTAssertGreaterThanOrEqual(foreground.contrastRatio(against: selection), 4.5, theme.name)
+            XCTAssertGreaterThanOrEqual(cursor.contrastRatio(against: background), 3, theme.name)
+            // Preserve the original Light palette; new palettes meet the stronger text floor.
+            let minimum = theme.name == "Harness Light" ? 3.5 : 4.5
+            for index in [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14] {
+                let color = try XCTUnwrap(ChromeColor(hex: theme.palette[index].hexString))
+                XCTAssertGreaterThanOrEqual(color.contrastRatio(against: background), minimum, "\(theme.name) ANSI \(index)")
+            }
+            let chrome = ChromePaletteSpec.resolve(backgroundHex: theme.backgroundHex, foregroundHex: theme.foregroundHex)
+            XCTAssertTrue(ChromeContrast.meetsText(chrome.textPrimary, on: chrome.surface), theme.name)
+            XCTAssertTrue(ChromeContrast.meetsPill(chrome.activePillLabel, on: chrome.activePillFill), theme.name)
+        }
+    }
+
     func testHarnessLightIsCrispAndEveryInkColorReads() throws {
         let theme = try XCTUnwrap(HarnessThemeCatalog.theme(named: "Harness Light"))
         let background = try XCTUnwrap(ChromeColor(hex: theme.backgroundHex))

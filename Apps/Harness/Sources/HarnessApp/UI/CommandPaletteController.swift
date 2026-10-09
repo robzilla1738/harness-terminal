@@ -28,7 +28,7 @@ struct PaletteAction: Identifiable {
     let symbol: String
     let shortcut: String
     let section: Section
-    /// Surfaced only while the user is searching (e.g. the 490-theme catalog) — listing it in
+    /// Surfaced only while the user is searching (e.g. the community theme catalog) — listing it in
     /// the unfiltered browse view would bury everything else.
     var searchOnly: Bool = false
     let handler: () -> Void
@@ -453,7 +453,7 @@ enum CommandPaletteController {
             }
         }
 
-        // MARK: - Themes: featured browsable, the full 490-theme catalog reachable by search.
+        // MARK: - Themes: featured browsable, the full catalog reachable by search.
         let featured = Set(ThemeManager.featuredThemes)
         for theme in ThemeManager.allThemeNames() {
             actions.append(PaletteAction(

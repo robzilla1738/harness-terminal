@@ -8,6 +8,30 @@ import HarnessCore
 /// cut short.
 @MainActor
 final class SettingsWindowLayoutTests: XCTestCase {
+    func testThemeSearchPanelAcceptsKeyboardFocus() async throws {
+        let parent = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        var picked: String?
+        let popover = HarnessSelectPopover(items: ["Harness Default", "Harness Deep Sea"],
+                                          selected: nil, placeholder: "Search themes", featuredCount: 2) { picked = $0 }
+        defer { popover.dismiss(); parent.orderOut(nil) }
+        popover.present(anchor: parent.frame, width: 280, relativeTo: parent)
+        let panel = try XCTUnwrap(parent.childWindows?.first)
+        XCTAssertTrue(panel.canBecomeKey, "A borderless theme picker must accept search input")
+        let focused = expectation(description: "Theme search receives focus")
+        DispatchQueue.main.async {
+            XCTAssertTrue(panel.firstResponder is NSTextView, "The search field editor should own typing")
+            focused.fulfill()
+        }
+        await fulfillment(of: [focused], timeout: 2)
+        let content = try XCTUnwrap(panel.contentView)
+        let row = try XCTUnwrap(descendants(of: content).first { $0.accessibilityLabel() == "Harness Deep Sea" })
+        XCTAssertTrue(row.isAccessibilityElement())
+        XCTAssertTrue(row.accessibilityPerformPress())
+        XCTAssertEqual(picked, "Harness Deep Sea")
+        XCTAssertTrue(parent.childWindows?.isEmpty ?? true)
+    }
+
     override class func setUp() {
         super.setUp()
         // Settings reads and writes the shared coordinator's store. Point it at a scratch home
