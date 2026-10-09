@@ -41,8 +41,7 @@ public enum TerminalTextRenderingMode: String, Codable, Sendable {
     }
 }
 
-/// When the live grid-size overlay ("120 × 32") is shown while resizing the window (Ghostty's
-/// `resize-overlay`). `afterFirst` (default) skips the overlay on the terminal's first sizing
+/// When the live grid-size overlay ("120 × 32") is shown while resizing the window. `afterFirst` (default) skips the overlay on the terminal's first sizing
 /// (opening a window isn't a resize) but shows it on every interactive resize after.
 public enum ResizeOverlayMode: String, Codable, Sendable, CaseIterable {
     case afterFirst = "after-first"
@@ -68,9 +67,9 @@ public enum BellMode: String, Codable, Sendable, CaseIterable {
     case both
 }
 
-/// How the Option key behaves for text-producing keys (Ghostty `macos-option-as-alt`).
+/// How the Option key behaves for text-producing keys.
 /// `.composed` (default) lets Option type whatever the macOS keyboard layout produces —
-/// `@`, `|`, `é`, dead keys — matching Terminal.app / iTerm2 / Ghostty / kitty (#155).
+/// `@`, `|`, `é`, dead keys — matching Terminal.app / iTerm2 / kitty (#155).
 /// `.meta` restores the classic Esc-prefix behavior readline/emacs users expect
 /// (alt-b / alt-f); `.leftMetaOnly` / `.rightMetaOnly` split the two Option keys so one
 /// side stays Meta while the other composes. Option+arrow/backspace word motion keeps
@@ -155,7 +154,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     public var dividerHex: String?
     /// Color of the bottom status line's text. nil → derive from the theme.
     public var statusLineHex: String?
-    /// Hairline border around the entire window edge (Ghostty's faint perimeter line),
+    /// Hairline border around the entire window edge,
     /// helping the window stand out from same-tone backgrounds. nil → derive from the
     /// theme (light grey on dark themes, dark grey on light).
     public var windowBorderHex: String?
@@ -231,7 +230,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// `queue.sync`), stale builds are dropped by a render-generation tag, and the row-reuse cache
     /// is queue-owned. An explicitly stored `false` is honored (opt-out).
     public var offMainParserFramePipeline: Bool
-    /// Real-time (Ghostty-style) live resize: while dragging the window edge, reflow the grid and
+    /// Real-time live resize: while dragging the window edge, reflow the grid and
     /// signal the running program (`SIGWINCH`) at every cell boundary, so interactive programs
     /// (vim/htop/tmux) redraw continuously instead of waiting for the drag to end. **Default on.**
     /// An explicitly stored `false` reverts to the legacy defer-to-release behavior (the authoritative
@@ -270,13 +269,11 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// Feedback for a bell on the focused surface (off/audible/visual/both). The tmux
     /// `visual-bell`/`bell-action` options bridge into this via `BellFeedback.resolve`.
     public var bellMode: BellMode
-    /// Multiplier applied to mouse-wheel / trackpad scroll distance (Ghostty `mouse-scroll-
-    /// multiplier`). 1 = native; >1 faster, <1 slower. Clamped to a sane range on read.
+    /// Multiplier applied to mouse-wheel / trackpad scroll distance. 1 = native; >1 faster, <1 slower. Clamped to a sane range on read.
     public var scrollMultiplier: Double
-    /// Hide the mouse cursor while typing until the mouse next moves (Ghostty
-    /// `mouse-hide-while-typing`). Off by default (matching Ghostty).
+    /// Hide the mouse cursor while typing until the mouse next moves. Off by default.
     public var mouseHideWhileTyping: Bool
-    /// Option-key behavior for text keys (Ghostty `macos-option-as-alt`): compose characters
+    /// Option-key behavior for text keys : compose characters
     /// via the keyboard layout (default — option+L types `@` on international layouts, #155),
     /// act as Meta (Esc-prefix), or split by physical side.
     public var optionAsMeta: OptionAsMetaMode
@@ -287,7 +284,7 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// (default ⌘⌥`). Requires at least one modifier; only honored while `quickTerminalEnabled` is set.
     public var quickTerminalHotkey: String
     /// Distribute the leftover sub-cell space evenly so the grid is centered, instead of parking
-    /// the remainder at the bottom-right edge (Ghostty's `window-padding-balance`).
+    /// the remainder at the bottom-right edge.
     public var windowPaddingBalance: Bool
     /// Minimum WCAG contrast ratio (1…21) forced between a cell's foreground and its background.
     /// 1 = off (no adjustment). Imported from a terminal config's `minimum-contrast`.
@@ -324,14 +321,13 @@ public struct HarnessSettings: Codable, Sendable, Equatable {
     /// event is delivered; this map decides *which* events notify. Read via `isEventEnabled(_:)`.
     public var notificationEvents: [String: Bool]
     /// Map bold + palette colors 0–7 to their bright variants 8–15 (classic terminal
-    /// behavior, Ghostty `bold-is-bright`). Off keeps the theme's exact colors for bold text.
+    /// behavior). Off keeps the theme's exact colors for bold text.
     public var boldIsBright: Bool
     /// Hold process-global secure keyboard entry (`EnableSecureEventInput`) while Harness is the
     /// active app, so another local process can't keylog passphrases typed at sudo/ssh prompts.
     /// Off by default — opt-in, matching Terminal.app / iTerm2 shipping it off.
     public var secureKeyboardEntry: Bool
-    /// New tabs/windows open in the focused pane's working directory (Ghostty
-    /// `window-inherit-working-directory`, default on — the shipped Harness behavior).
+    /// New tabs/windows open in the focused pane's working directory (enabled by default).
     /// Off pins new tabs to `defaultCWD`.
     public var windowInheritCWD: Bool
     /// Per-host/per-command theme profiles (see `ProfileRule`). Empty = no profile matching.

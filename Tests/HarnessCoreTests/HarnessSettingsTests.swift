@@ -137,7 +137,7 @@ final class HarnessSettingsTests: XCTestCase {
     func testScrollMultiplierAndMouseHideDefaults() {
         let s = HarnessSettings()
         XCTAssertEqual(s.scrollMultiplier, 1, "native scroll speed by default")
-        XCTAssertFalse(s.mouseHideWhileTyping, "off by default (matching Ghostty)")
+        XCTAssertFalse(s.mouseHideWhileTyping, "off by default")
     }
 
     func testScrollMultiplierClampsToSaneRange() {
@@ -474,7 +474,7 @@ final class HarnessSettingsTests: XCTestCase {
     }
 
     func testLiveResizeReflowDefaultsOnAndRoundTrips() throws {
-        // Real-time (Ghostty-style) resize is the production default.
+        // Real-time resize is the production default.
         XCTAssertTrue(HarnessSettings().liveResizeReflow)
 
         // A legacy settings.json with no key gets real-time resize on upgrade.
@@ -927,7 +927,7 @@ final class HarnessSettingsTests: XCTestCase {
 
     /// Every key absent → every field equals the fallback instance the decoder funnels
     /// through. That fallback is `makeDefaults(imported:)`, NOT `HarnessSettings()`: on a
-    /// machine with an importable terminal config (Ghostty/iTerm2) the defaults are
+    /// machine with an importable terminal config from another terminal the defaults are
     /// import-aware (shell, opacity, font), so comparing against the plain initializer
     /// only passes on machines with nothing to import (like CI). Spot-checks a
     /// representative spread of field types.
@@ -947,13 +947,13 @@ final class HarnessSettingsTests: XCTestCase {
 
     func testOptionAsMetaDefaultsToComposedAndRoundTrips() throws {
         XCTAssertEqual(HarnessSettings().optionAsMeta, .composed,
-                       "industry default (Terminal.app/iTerm2/Ghostty/kitty): Option composes characters")
+                       "industry default (Terminal.app/iTerm2/kitty): Option composes characters")
         var settings = HarnessSettings()
         settings.optionAsMeta = .leftMetaOnly
         let data = try JSONEncoder().encode(settings)
         let decoded = try JSONDecoder().decode(HarnessSettings.self, from: data)
         XCTAssertEqual(decoded.optionAsMeta, .leftMetaOnly)
-        // The stored raw value is the Ghostty-shaped short form.
+        // The stored raw value is the import-compatible short form.
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["optionAsMeta"] as? String, "left")
     }

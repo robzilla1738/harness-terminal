@@ -31,7 +31,7 @@ final class TerminalProtocolCompatibilityTests: XCTestCase {
         let term = TerminalEmulator(cols: 20, rows: 4)
         var replies: [String] = []
         term.onResponse = { replies.append(String(decoding: $0, as: UTF8.self)) }
-        XCTAssertTrue(term.modes.alternateScroll, "1007 defaults on (iTerm2/Ghostty convention)")
+        XCTAssertTrue(term.modes.alternateScroll, "1007 defaults on")
         term.feed("\u{1b}[?1007$p") // DECRQM
         XCTAssertEqual(replies.last, "\u{1b}[?1007;1$y")
         term.feed("\u{1b}[?1007l")
@@ -92,7 +92,7 @@ final class TerminalProtocolCompatibilityTests: XCTestCase {
             TerminalProgressReport(state: .indeterminate, value: 0),
             TerminalProgressReport(state: .indeterminate, value: nil),
         ])
-        XCTAssertFalse(notified, "9;4 must never surface as a notification (Ghostty parity)")
+        XCTAssertFalse(notified, "9;4 must never surface as a notification ")
     }
 
     func testOSC94BareFourIsConsumedSilently() {

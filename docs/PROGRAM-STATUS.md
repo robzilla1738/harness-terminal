@@ -1,6 +1,6 @@
 # Program status (OSC 7501)
 
-Harness reads [OSC 7501 revision 0.2](https://www.superlogical.com/rex/docs/build/program-status). A program reports what it is doing. The terminal keeps one record per id and shows that state on the tab, the session row, and the waiting list (⌘⇧U), and `blocked`, `done`, and `error` notify you when the pane isn't in front.
+Harness implements OSC 7501 revision 0.2 for structured program status. A program reports what it is doing. The terminal keeps one record per id and shows that state on the tab, the session row, and the waiting list (⌘⇧U), and `blocked`, `done`, and `error` notify you when the pane isn't in front.
 
 ## Report
 
@@ -49,3 +49,7 @@ ConEmu progress (OSC 9;4) may fill the root record only until the first real 750
 The daemon scans the byte stream with no window open. The GUI parser, given the same bytes, produces the same records. One presenter feeds the tab, the session row, notifications, and the waiting queue. `working` shows a spinner on the tab, or a filling ring when `progress` is set. `blocked` joins the waiting queue, `kind` picks the glyph, and `msg` is shortened plain text. `done` and `error` mark the session row until focus plus a key. When `app` is set, the tab title ends with it (`title · app`).
 
 `harness-cli events --follow` emits `terminal.program_status` as soon as a real report is accepted, and `terminal.program_status_removed` when a real report clears the records. `harness-cli api call pane.program_status` returns the records for one pane.
+
+## Protocol source
+
+The interoperable wire format is specified by the [Program Status Protocol revision 0.2](https://www.superlogical.com/rex/docs/build/program-status). This document describes Harness's handling of that format; implementation and protocol attribution are distinct. See [architecture and provenance](ARCHITECTURE-AND-PROVENANCE.md).

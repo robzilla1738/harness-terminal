@@ -7,7 +7,7 @@ final class MainWindowController: NSWindowController {
     /// restore and the live "Remember window size" toggle use the exact same name.
     static let frameAutosaveName = "HarnessMainWindow"
 
-    /// Faint hairline around the whole window edge (Ghostty parity). Color/opacity from
+    /// Faint hairline around the whole window edge. Color/opacity from
     /// settings (`windowBorderHex`/`windowBorderOpacity`); re-applied in `applyTransparency`.
     private let borderOverlay = WindowBorderOverlayView()
 

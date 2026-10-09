@@ -361,7 +361,7 @@ public final class TerminalMetalRenderer {
     /// Core Animation transaction — the one carrying the window's new frame — so the present is
     /// commit → `waitUntilScheduled()` → `drawable.present()` instead of the async
     /// `commandBuffer.present(drawable)`. That latches the terminal content to the window edge
-    /// with zero lag (Hume's glitchless-resize technique; Ghostty does the same). The wait is
+    /// with zero lag (Hume's glitchless-resize technique). The wait is
     /// bounded by GPU *scheduling*, not completion — typically well under a millisecond — and is
     /// paid only while the layer is in transaction mode; the async path is byte-identical to
     /// before, preserving present-on-echo latency.
@@ -489,7 +489,7 @@ public final class TerminalMetalRenderer {
 
         // Cursor: block fills the cell (glyphs still draw on top); bar is a thin left edge;
         // underline is a thin bottom edge. When unfocused (`hollow`), the cursor becomes a 1px box
-        // outline regardless of style — the standard macOS/Ghostty "inactive window" cursor — so
+        // outline regardless of style — the standard macOS "inactive window" cursor — so
         // the glyph shows through. Full alpha (the bg pipeline doesn't blend). Respects the origin.
         if frameShapeIsValid, frame.cursor.visible {
             let cellX = ox + Float(frame.cursor.column * cellPixelWidth)

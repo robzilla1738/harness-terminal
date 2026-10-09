@@ -1,7 +1,7 @@
 import Foundation
 
-/// Auto-injected shell integration (OSC 133 prompt marks) at spawn — Ghostty's "it just
-/// works" behavior, without touching the user's rc files. The daemon owns the spawn
+/// Auto-injected shell integration (OSC 133 prompt marks) at spawn without touching
+/// the user's rc files. The daemon owns the spawn
 /// environment, so each shell gets its standard injection vehicle:
 ///
 /// - **zsh** — `ZDOTDIR` shim: a directory whose `.zshenv` restores the user's real
@@ -25,8 +25,7 @@ import Foundation
 /// Bash requires **bash ≥ 4.4**: older bash (notably the stock macOS 3.2) does not read
 /// `$ENV` under `--posix` when invoked as `bash`, which would leave the pane in posix mode
 /// with NO startup files at all — strictly worse than no injection. The version is probed
-/// once per shell path (cached); too-old or unprobeable bash spawns untouched, exactly the
-/// Ghostty policy (their automatic bash integration carries the same floor).
+/// once per shell path (cached); too-old or unprobeable bash spawns untouched.
 public enum ShellIntegrationInjector {
     /// What a spawn must change to carry the injection. `environment` merges over the
     /// inherited process env; `argumentsOverride` replaces the shell's launch arguments

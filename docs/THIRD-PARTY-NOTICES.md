@@ -1,5 +1,10 @@
 # Third-party notices
 
+For current dependency boundaries, compatibility aliases and recorded development
+history, see [architecture and provenance](ARCHITECTURE-AND-PROVENANCE.md).
+Names here identify retained material and its source; notices are preserved when
+product documentation is revised.
+
 ## Agent platform icons
 
 Harness displays locally bundled logos for 23 coding tools. See the complete

@@ -13,11 +13,9 @@ A `KeySpec` is `[modifier-]…<key>`:
 ## Option key (⌥) behavior
 
 By default the Option key **types characters** — whatever your macOS keyboard layout
-produces (`@`, `|`, `é`, dead keys like ⌥e e → é), matching Terminal.app, iTerm2, Ghostty,
-and kitty. If you rely on Option as Meta for readline/emacs (`alt-b`, `alt-f` → `ESC b`,
+produces (`@`, `|`, `é`, dead keys like ⌥e e → é). If you rely on Option as Meta for readline/emacs (`alt-b`, `alt-f` → `ESC b`,
 `ESC f`), switch it in **Settings ▸ Keys ▸ Option key**: *Meta* (Esc+key), or *Left Meta* / *Right
-Meta* to keep one Option key for Meta and the other for typing characters (the Ghostty
-`macos-option-as-alt` shape; an imported Ghostty config carries the setting over).
+Meta* to keep one Option key for Meta and the other for typing characters. Compatible config imports also preserve the `macos-option-as-alt` setting.
 
 Regardless of mode: ⌥←/⌥→ word motion and ⌥⌫ word delete keep their Esc encodings (macOS
 terminal convention), Ctrl+Option combos always take the escape-code path, and `M-…`

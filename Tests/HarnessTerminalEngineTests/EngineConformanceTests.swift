@@ -226,7 +226,7 @@ final class EngineConformanceTests: XCTestCase {
         term.feed("\u{1b}[2 q") // steady block
         XCTAssertEqual(term.readGrid()!.cursor.shape, .block)
         XCTAssertEqual(term.readGrid()!.cursor.blinking, false)
-        term.feed("\u{1b}[0 q") // 0 = reset to the user default (Ghostty/kitty/xterm de-facto)
+        term.feed("\u{1b}[0 q") // 0 = reset to the user default
         XCTAssertEqual(term.readGrid()!.cursor.shape, .default)
         XCTAssertNil(term.readGrid()!.cursor.blinking)
         term.feed("\u{1b}[1 q") // 1 = blinking block (explicit, unlike 0)
@@ -511,7 +511,7 @@ final class EngineConformanceTests: XCTestCase {
 
     func testInvalidDECSTBMIsNoOpAndPreservesRegionAndCursor() {
         // After a valid region (rows 2..3), an invalid DECSTBM must be a complete no-op in
-        // xterm/Ghostty: it must NOT reset the region to full screen or home the cursor.
+        // Invalid margins must NOT reset the region to full screen or home the cursor.
         // `ESC[1;1r` (top==bottom) and `ESC[5;3r` (top>bottom) are both degenerate.
         for bad in ["\u{1b}[1;1r", "\u{1b}[5;3r"] {
             let term = HarnessGridTerminal(cols: 10, rows: 4)!
@@ -572,7 +572,7 @@ final class EngineConformanceTests: XCTestCase {
     }
 
     func testDECRCWithoutPriorSaveRestoresDefaultPen() {
-        // `ESC[31m ESC[2;6H ESC8 X` with no prior DECSC: xterm/Ghostty home the cursor AND
+        // `ESC[31m ESC[2;6H ESC8 X` with no prior DECSC: home the cursor AND
         // reset the SGR pen, so X prints at (0,0) with the DEFAULT (no) foreground, not red.
         let grid = read("\u{1b}[31m\u{1b}[2;6H\u{1b}8X", cols: 80, rows: 24)
         XCTAssertEqual(grid.cell(row: 0, col: 0)?.codepoint, codepoint("X"))

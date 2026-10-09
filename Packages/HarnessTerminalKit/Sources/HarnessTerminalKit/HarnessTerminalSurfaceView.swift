@@ -569,7 +569,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// cached preview at the new drawable size). Reset on commit so the next drag starts fresh.
     private var previewCols = 0
     private var previewRows = 0
-    /// Real-time live resize (Ghostty parity). When true, a window-edge drag commits the
+    /// Real-time live resize. When true, a window-edge drag commits the
     /// authoritative grid reflow + PTY `SIGWINCH` at every cell boundary so interactive programs
     /// (vim/htop/tmux) redraw continuously, instead of deferring the reflow to drag-end. The
     /// non-mutating re-wrap preview still rides under it for instant feedback. Set from
@@ -654,10 +654,10 @@ public final class HarnessTerminalSurfaceView: NSView {
     private var copyOnSelect = false
     /// Confirm before pasting risky (multi-line / control-char) text when bracketed paste is off.
     private var pasteProtection = true
-    /// Mouse-wheel / trackpad scroll-distance multiplier (Ghostty `mouse-scroll-multiplier`).
+    /// Mouse-wheel / trackpad scroll-distance multiplier.
     /// 1 = native. Set from `HarnessSettings.scrollMultiplier` (already clamped).
     var scrollMultiplier: CGFloat = 1
-    /// Hide the cursor while typing until the mouse next moves (Ghostty `mouse-hide-while-typing`).
+    /// Hide the cursor while typing until the mouse next moves.
     var mouseHideWhileTyping = false
     var optionAsMeta: OptionAsMetaMode = .composed
     /// True swallows the key. Installed by the host for the config-file keymap.
@@ -735,7 +735,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     /// Grid origin captured at `viewWillStartLiveResize`, held for the whole drag. Balanced
     /// padding re-centers the grid on *every* layout, so a pixel-by-pixel drag shifts the text
     /// ±1px per frame — a visible shimmer. Freezing the origin anchors the content for the
-    /// duration (Ghostty's behavior: leftover sub-cell space accumulates at the right/bottom)
+    /// duration (leftover sub-cell space accumulates at the right/bottom)
     /// and `viewDidEndLiveResize` re-centers exactly once for the settled size.
     private var liveResizeFrozenOrigin: (x: Int, y: Int)?
     /// Safety valve for DEC 2026 synchronized output: a program that enters a synchronized
@@ -2089,7 +2089,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         scheduleRender()
     }
 
-    /// Glitchless live resize (Hume's technique; Ghostty parity). While the user drags the window
+    /// Glitchless live resize (Hume's technique). While the user drags the window
     /// edge, the layer presents *with* the Core Animation transaction: every present becomes
     /// commit → `waitUntilScheduled()` → `drawable.present()` (see the renderer's
     /// `synchronizedWithTransaction`), so the terminal frame and the window's new frame land in
@@ -2228,7 +2228,7 @@ public final class HarnessTerminalSurfaceView: NSView {
             // resizes smoothly every frame), so this fires exactly when the displayed size ticks.
             onGridSizeWillChange?(newCols, newRows, false)
             if liveResizeReflowEnabled, metalLayer.presentsWithTransaction {
-                // Real-time live resize (Ghostty parity): commit the authoritative reflow + PTY
+                // Real-time live resize : commit the authoritative reflow + PTY
                 // SIGWINCH at THIS cell boundary so the running program redraws during the drag,
                 // not on release. The reflow runs off-main and coalesces latest-wins, so a fast
                 // drag stays cheap. The preview below still rides under it for instant feedback.
@@ -2373,8 +2373,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
     }
 
-    /// Real-time authoritative commit fired at EVERY cell boundary during a live drag (Ghostty
-    /// parity) — the counterpart to `commitGridSize`'s debounced drag-end path. It mutates the real
+    /// Real-time authoritative commit fired at EVERY cell boundary during a live drag — the counterpart to `commitGridSize`'s debounced drag-end path. It mutates the real
     /// grid (`emulator.resize`) and sends the PTY `SIGWINCH` (`onResize`) live, so interactive
     /// programs — vim/htop/btop/tmux/less, and any alternate-screen TUI the non-mutating preview
     /// cannot serve — reflow and redraw continuously instead of snapping at release.
@@ -3750,7 +3749,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         }
         selectionRectangular = event.modifierFlags.contains(.option)
         if event.clickCount >= 3, !selectionRectangular {
-            // Triple-click selects the whole LOGICAL line across soft wraps (Ghostty/iTerm2/kitty),
+            // Triple-click selects the whole LOGICAL line across soft wraps,
             // not just the display row. Anchor across the wrapped buffer lines; `.line` granularity
             // then fills each to full width and the multi-row linear region covers the logical line.
             let span = logicalLineBufferRowSpan(at: pos.row)
@@ -3857,7 +3856,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         if isMouseReporting(event) {
             reportMouse(event, button: .middle, kind: .press)
         } else if event.buttonNumber == 2 {
-            // Middle-click pastes the current selection (the X11/Ghostty primary-paste
+            // Middle-click pastes the current selection (the X11 primary-paste
             // convention), falling back to the clipboard. Routed through pasteText so
             // bracketed paste and paste protection apply exactly like ⌘V.
             if let text = selectionTextIfAny() ?? NSPasteboard.general.string(forType: .string),
@@ -4193,14 +4192,14 @@ public final class HarnessTerminalSurfaceView: NSView {
             // One wheel report per *line* of travel (cell-height accumulated, remainder carried),
             // not per NSEvent — a trackpad fires a ~120Hz stream of tiny deltas plus momentum
             // events, and reporting each one flooded TUIs (Claude Code) with wheel events, making
-            // scroll feel hair-trigger. Matches Ghostty's pending-scroll accumulation.
+            // scroll feel hair-trigger. Accumulate fractional wheel movement until it reaches a full cell.
             let cellH = max(1, CGFloat(renderer.cellPixelHeight) / scale)
             let lines = consumeWheelLines(event, cellHeight: cellH)
             if lines != 0 {
                 let button: MouseButton = lines > 0 ? .wheelUp : .wheelDown
                 for _ in 0 ..< min(abs(lines), 32) { reportMouse(event, button: button, kind: .press) }
             }
-            // Horizontal wheel: buttons 66/67, one report per cell-width column (Ghostty parity).
+            // Horizontal wheel: buttons 66/67, one report per cell-width column.
             let cellW = max(1, CGFloat(renderer.cellPixelWidth) / scale)
             let cols = consumeWheelColumns(event, cellWidth: cellW)
             if cols != 0 {
@@ -4265,7 +4264,7 @@ public final class HarnessTerminalSurfaceView: NSView {
         } else {
             // macOS simulates acceleration on non-precise wheels by ramping the delta from 0.1
             // upward — a slow single notch would otherwise accumulate 0.3 lines and do nothing
-            // until the fourth click. Clamp a notch to at least one full tick (Ghostty parity).
+            // until the fourth click. Clamp a notch to at least one full tick.
             let ticks = delta > 0 ? max(delta, 1) : min(delta, -1)
             wheelLineRemainder += ticks * Self.mouseWheelLinesPerTick * scrollMultiplier
         }
@@ -4704,7 +4703,7 @@ public final class HarnessTerminalSurfaceView: NSView {
     }
 
     public override func keyDown(with event: NSEvent) {
-        // Mouse-hide-while-typing (Ghostty): a typing keystroke hides the cursor until the mouse
+        // Mouse-hide-while-typing: a typing keystroke hides the cursor until the mouse
         // next moves. Skip bare ⌘-shortcuts — those are app commands, not text input. AppKit
         // auto-restores the cursor on the next mouse move, so this is self-correcting.
         if mouseHideWhileTyping, !event.modifierFlags.contains(.command) {

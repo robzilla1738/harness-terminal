@@ -358,7 +358,7 @@ final class PerformanceBenchmarks: XCTestCase {
     }
 
     /// A sustained ~4 MiB flood of SGR-punctuated + mixed-width-Unicode output — the shape that a
-    /// build log / chatty TUI produces, and the workloads Harness trails Ghostty on.
+    /// build log / chatty TUI produces, and exercises sustained terminal output.
     private func floodPayload(targetBytes: Int = 4 * 1024 * 1024) -> [UInt8] {
         let colors = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96]
         let uni = "café résumé Ω 世 中 λ ✓ "

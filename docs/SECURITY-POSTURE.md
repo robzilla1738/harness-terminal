@@ -15,8 +15,6 @@ oversight:
 - The daemon architecture makes it structurally impossible anyway: `HarnessDaemon` is a
   launchd-supervised background process that spawns PTYs and owns a Unix control socket —
   none of which fits the sandbox's container model.
-- Every mainstream terminal (Terminal.app aside, which ships with private entitlements)
-  makes the same call: Ghostty, iTerm2, kitty, Alacritty, WezTerm are unsandboxed.
 
 What we do instead: keep the *attack surface into* Harness small and authenticated (socket
 posture below), never execute content we receive (OSC handling is parse-only; paste

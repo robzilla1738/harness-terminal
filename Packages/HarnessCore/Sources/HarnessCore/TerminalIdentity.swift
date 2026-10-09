@@ -6,9 +6,10 @@ import Foundation
 ///
 /// Capability-detecting tools (notably Claude Code) decide whether to enable the
 /// Kitty keyboard protocol — which is what makes Shift+Enter insert a newline — by
-/// matching `TERM_PROGRAM` against a list of recognized terminals. Harness speaks the
-/// same Kitty protocol Ghostty does, so the default **compatible** identity reports
-/// `ghostty` and those tools light up immediately. **harness** reports the true name.
+/// matching `TERM_PROGRAM` against a list of recognized terminals. The default
+/// **compatible** identity reports `ghostty` to satisfy those name-based checks.
+/// This is a compatibility alias; the parser and renderer are Harness's own packages.
+/// **harness** reports the product name. See docs/ARCHITECTURE-AND-PROVENANCE.md.
 ///
 /// Stored as the `terminal-identity` option (`OptionStore`, persisted in `options.json`),
 /// so the daemon (env) and the app (XTVERSION reply) read one value with no drift. The

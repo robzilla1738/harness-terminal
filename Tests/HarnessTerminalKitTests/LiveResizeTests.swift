@@ -775,7 +775,7 @@ final class LiveResizeTests: XCTestCase {
         XCTAssertFalse(view.testingRenderPending, "nothing re-marked dirty (the hold is inert)")
     }
 
-    // MARK: - Real-time live reflow (Ghostty parity)
+    // MARK: - Real-time live reflow
 
     func testCommitFiresLiveAtBoundaryWithReflowOn() {
         // The headline behavior: with real-time reflow on (the default), a cell-boundary commit

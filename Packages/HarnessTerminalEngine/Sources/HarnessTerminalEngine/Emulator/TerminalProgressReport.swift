@@ -3,7 +3,7 @@ import Foundation
 /// A ConEmu progress report (OSC 9;4) — `ESC ] 9 ; 4 ; <state> ; <value> ST`.
 /// The terminal-native "program is working" signal: Claude Code 2.0+ keep-alives an
 /// indeterminate report across each turn, build tools report determinate percentages.
-/// States and semantics match Ghostty/Windows Terminal/ConEmu.
+/// States follow the ConEmu progress protocol.
 public struct TerminalProgressReport: Equatable, Sendable {
     public enum State: Int, Sendable {
         /// Clear/hide the progress indicator.

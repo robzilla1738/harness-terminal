@@ -90,7 +90,7 @@ final class ShellIntegrationInjectorTests: XCTestCase {
 
     /// Old bash (the stock macOS 3.2) doesn't read `$ENV` under `--posix` when invoked as
     /// `bash` — half-injecting would strip the user's startup files. No plan below 4.4;
-    /// 4.4 itself is the floor (the Ghostty policy).
+    /// 4.4 itself is the floor.
     func testBashBelowFloorGetsNoPlan() {
         XCTAssertNil(ShellIntegrationInjector.plan(
             shellPath: "/bin/bash", baseEnvironment: [:], home: home,

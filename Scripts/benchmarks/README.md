@@ -21,7 +21,7 @@ load produce **non-overlapping** "regression" sets — that's machine variance, 
 
 `terminal_stress_runner.py` measures how fast a terminal **drains the PTY** — it runs *inside* any
 terminal, writes first-party byte payloads to stdout, and times each `write` loop. Higher MB/s =
-faster. It is implementation-independent (works in Harness, Ghostty, Terminal.app, …) and is **never
+faster. It is implementation-independent (runs in any terminal) and is **never
 linked or shelled-out from product code** — a measurement tool only.
 
 ## Run
@@ -32,8 +32,8 @@ background, opacity 1, blur 0, padding 0, window sized to **160 × 48**.
 ```bash
 # In a Harness pane:
 python3 Scripts/benchmarks/terminal_stress_runner.py harness harness.jsonl harness.done
-# In a Ghostty window (or any other terminal), same payloads:
-python3 Scripts/benchmarks/terminal_stress_runner.py ghostty ghostty.jsonl ghostty.done
+# In another terminal, same payloads:
+python3 Scripts/benchmarks/terminal_stress_runner.py baseline baseline.jsonl baseline.done
 ```
 
 Run **5×** per terminal and compare **medians** (`mbps` per `benchmark`). Each line is one workload:

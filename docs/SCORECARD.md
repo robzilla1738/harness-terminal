@@ -1,9 +1,11 @@
-# Harness vs Ghostty — comparative scorecard
+# Harness performance scorecard
 
-The "true Ghostty competitor" claim needs receipts. This document is where they live:
-methodology first, then committed results from real owner hardware. The current candidate section records scoped release measurements. Older sections are
-historical receipts, not current performance claims. [`Scripts/scorecard.sh`](../Scripts/scorecard.sh)
-and the consumer benchmarks measure different parts of the pipeline.
+This document records methodology and scoped measurements from owner hardware.
+Named reference terminals identify the applications actually measured; they do not
+describe Harness's implementation or establish affiliation. Older sections are
+historical evidence, not claims about the current release.
+[`Scripts/scorecard.sh`](../Scripts/scorecard.sh) and the consumer benchmarks measure
+different parts of the pipeline.
 
 **Numbers are receipts, never CI gates.** A prior 37-agent deep dive measured run-to-run
 latency noise at 50–100× above signal; thresholds would gate on weather. Trends across

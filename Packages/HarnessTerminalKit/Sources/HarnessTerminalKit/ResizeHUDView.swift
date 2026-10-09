@@ -1,7 +1,7 @@
 import AppKit
 
-/// Transient "120 × 32" overlay shown while the window/grid is being resized (Ghostty's resize
-/// overlay). Lives as a sibling above the Metal surface in `TerminalHostView`; it never touches
+/// Transient "120 × 32" overlay shown while the window/grid is being resized.
+/// Lives as a sibling above the Metal surface in `TerminalHostView`; it never touches
 /// the render pipeline. Auto-hides via a debounced fade so a continuous drag keeps it solid and
 /// it fades shortly after the size settles — the same debounce shape as the grid resize commit.
 final class ResizeHUDView: NSView {

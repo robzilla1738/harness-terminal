@@ -305,7 +305,7 @@ public struct InputEncoder: Sendable {
         // Defang paste injection: a clipboard payload that itself contains the bracketed-paste END
         // marker would otherwise close the paste early, so everything after it reaches the program
         // as typed input — running on paste, the exact attack bracketed paste exists to prevent.
-        // Strip every embedded end marker before wrapping, like kitty/ghostty/foot. Only the 7-bit
+        // Strip every embedded end marker before wrapping. Only the 7-bit
         // `ESC[201~` form is removed: all six bytes are ASCII (< 0x80) and so can never fall inside
         // a UTF-8 multi-byte scalar in `body`, making the byte scan safe.
         stripBracketedPasteEnd(&body)
@@ -344,7 +344,7 @@ public struct InputEncoder: Sendable {
         let evt = eventSuffix(event, modes.kittyKeyboardFlags)
         if m.isEmpty, evt.isEmpty {
             // Active Kitty flags supersede DECCKM: always the CSI form, never SS3 (a Kitty-mode
-            // parser treats `ESC O A` as Alt+O A). Matches Ghostty, whose kitty path ignores
+            // parser treats `ESC O A` as Alt+O A). Kitty encoding ignores
             // cursor-key mode entirely.
             if modes.kittyKeyboardFlags != 0 { return esc("[\(final)") }
             return modes.cursorKeysApplication ? esc("O\(final)") : esc("[\(final)")

@@ -75,7 +75,7 @@ extension Tab {
 
 /// The argument rewriting `harness-cli` does before a command sees its flags.
 public enum CLIArguments {
-    /// Rex-style short target flags. A command whose own tmux flags use the same letter keeps
+    /// Short target flags. A command whose own tmux flags use the same letter keeps
     /// them: `set-option -s` is a scope, `capture-pane -S` a start line, `wait-for -S` a signal.
     static let shortFlags: [String: String] = ["-s": "--session", "-w": "--tab", "-b": "--pane", "-S": "--host"]
     /// The commands short flags apply to: ones that take a target and no tmux command text. A

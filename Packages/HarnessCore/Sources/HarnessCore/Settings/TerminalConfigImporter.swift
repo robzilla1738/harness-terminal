@@ -32,9 +32,9 @@ public struct ImportedTerminalConfig: Sendable, Equatable {
     public var cursorStyle: String?
     public var cursorBlink: Bool?
     public var copyOnSelect: Bool?
-    /// Ghostty `bold-is-bright`: bold + palette 0-7 maps to bright 8-15.
+    /// Imported `bold-is-bright`: bold + palette 0-7 maps to bright 8-15.
     public var boldIsBright: Bool?
-    /// Ghostty `macos-option-as-alt`: false = compose characters, true = Meta, left/right
+    /// Imported `macos-option-as-alt`: false = compose characters, true = Meta, left/right
     /// = only that Option key is Meta.
     public var optionAsMeta: OptionAsMetaMode?
     /// "Ghostty" when a contributing path is a Ghostty config. Nil for any other file.
@@ -378,7 +378,7 @@ public enum TerminalConfigImporter {
         return defaults
     }
 
-    /// Ghostty `macos-option-as-alt`: boolean forms map to Meta/compose; `left`/`right`
+    /// Imported `macos-option-as-alt`: boolean forms map to Meta/compose; `left`/`right`
     /// make only that Option key Meta.
     private static func parseOptionAsMeta(_ raw: String) -> OptionAsMetaMode? {
         switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Harness vs Ghostty comparative scorecard — orchestration + reporting over instrumentation
+# Harness performance scorecard — orchestration + reporting over instrumentation
 # that already exists (StartupMetrics' startup.log, Scripts/benchmarks/terminal_stress_runner.py,
 # FrameSignposter via Scripts/measure-fluidity.sh, powermetrics, footprint(1)).
 #

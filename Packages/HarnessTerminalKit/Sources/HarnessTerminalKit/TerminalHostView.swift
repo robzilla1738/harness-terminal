@@ -174,7 +174,7 @@ public final class TerminalHostView: NSView {
     private var borderLabelTop: NSLayoutConstraint?
     private var borderLabelBottom: NSLayoutConstraint?
 
-    /// Live "120 × 32" resize overlay (Ghostty's resize-overlay). Floats above the surface; its
+    /// Live "120 × 32" resize overlay. Floats above the surface; its
     /// position constraints are toggled from settings and it auto-hides on its own.
     private let resizeHUD = ResizeHUDView()
     private let scrollbar = TerminalScrollbarView()

@@ -589,7 +589,7 @@ final class TerminalScreen {
 
     /// DECSCUSR `CSI Ps SP q`: 1 blink block, 2 steady block, 3 blink underline, 4 steady
     /// underline, 5 blink bar, 6 steady bar. 0 (and a missing/out-of-range Ps) resets to the
-    /// user default — the Ghostty/kitty/xterm de-facto reading, and what TUIs emit on exit
+    /// user default — the terminal reset convention, and what TUIs emit on exit
     /// (`CSI 0 SP q` / bare `CSI SP q`) expecting the configured style back, NOT a hard
     /// blinking block (the strict-DEC reading, which left a permanent block over a bar/
     /// underline user style — and replays from persisted scrollback re-applied it forever).
@@ -1934,7 +1934,7 @@ final class TerminalScreen {
     func setScrollRegion(top: Int, bottom: Int) {
         let t = clamp(top, 0, rows - 1)
         let b = clamp(bottom, 0, rows - 1)
-        // Invalid DECSTBM (top >= bottom) is a complete no-op in xterm/Ghostty — it must
+        // Invalid DECSTBM (top >= bottom) is a complete no-op in the VT screen model — it must
         // not reset the region or home the cursor. The one exception is the full-screen
         // identity: `ESC[r` maps absent params to top=0, bottom=rows-1, the valid reset that
         // must still home. On a 1-row grid that identity degenerates to t==b==0, so guarding
@@ -2353,7 +2353,7 @@ final class TerminalScreen {
     }
 
     func restoreCursor() {
-        // With no prior DECSC, xterm/Ghostty restore to defaults: home cursor AND reset the
+        // With no prior DECSC, restore to defaults: home cursor AND reset the
         // SGR pen. Restoring from a fresh default SavedCursor covers both that and the saved case.
         let s = savedCursor ?? SavedCursor(row: 0, col: 0, pen: Pen(), pendingWrap: false)
         cursorRow = clamp(s.row, 0, rows - 1)

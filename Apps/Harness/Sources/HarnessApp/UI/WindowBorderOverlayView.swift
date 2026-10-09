@@ -1,6 +1,6 @@
 import AppKit
 
-/// Hairline border around the entire window edge (Ghostty's faint perimeter border) so the
+/// Hairline border around the entire window edge so the
 /// window stands out from same-tone backgrounds. A click-through overlay pinned over the root
 /// contentView, drawn as a CALayer border that follows the window's live corner radius and the
 /// system's continuous (squircle) curve — so it hugs the real corner instead of dropping out

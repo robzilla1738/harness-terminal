@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-terminal PTY output-stress runner (implementation-independent).
 
-Runs inside ANY terminal (Harness, Ghostty, Terminal.app, …): it writes first-party byte
+Runs inside any terminal: it writes first-party byte
 payloads to stdout (the PTY slave) and times how long each `write` loop takes to drain — i.e.
 how fast the PTY accepts bytes. This does not wait for parsing or GPU presentation.
 Higher MB/s = faster admission, not necessarily a faster visible terminal.
@@ -10,7 +10,7 @@ This script is deliberately self-contained and never imported, linked, or shelle
 Harness product code — it is a measurement tool only. Run the same payloads in each terminal,
 five runs each, and compare medians.
 
-    # in a Harness pane, then in a Ghostty window (matched: Menlo 14, black bg, opacity 1,
+    # in a Harness pane, then in another terminal (matched: Menlo 14, black bg, opacity 1,
     # blur 0, padding 0, 160x48):
     python3 Scripts/benchmarks/terminal_stress_runner.py harness out.jsonl out.done
 

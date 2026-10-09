@@ -44,7 +44,7 @@ struct EncodedRowInstances {
 /// Per-frame metadata for one `buildFrameInstances` pass. The instance data itself lives in the
 /// renderer's PERSISTENT flat arrays (`flatBg`/`flatGlyph`/`flatDeco` + `rowSeg`), mutated in
 /// place per dirty row — a clean row's bytes are never touched or copied, so a steady-state
-/// frame costs O(damage), not O(grid) (the Ghostty `Contents` model).
+/// frame costs O(damage), not O(grid).
 struct EncodedFrameInstances {
     var bgSpans = 0
     var bgCells = 0

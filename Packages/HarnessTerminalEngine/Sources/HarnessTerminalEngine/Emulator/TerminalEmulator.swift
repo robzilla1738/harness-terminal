@@ -120,7 +120,7 @@ public final class TerminalEmulator: VTParserHandler {
     /// `(title, body)`). The host routes it to the system notification path.
     public var onNotification: ((_ title: String?, _ body: String) -> Void)?
     /// ConEmu progress report (OSC 9;4) — `ESC ] 9 ; 4 ; <state> ; <value> ST`. Emitted by
-    /// Claude Code 2.0+, amp, zig build, systemd, … while they work. Like Ghostty, any
+    /// Claude Code 2.0+, amp, zig build, systemd, … while they work. Any
     /// `9;4;…` payload is always a progress report, never a notification (the accepted
     /// iTerm2 OSC 9 collision). The host drives its working indicator from this.
     public var onProgress: ((TerminalProgressReport) -> Void)?
@@ -1127,7 +1127,7 @@ public final class TerminalEmulator: VTParserHandler {
 
     /// OSC 9 carries two protocols: `9;4;<state>[;<value>]` is a ConEmu progress report;
     /// anything else is an iTerm2-style desktop notification with the payload as body.
-    /// Ghostty parity: `9;4` always wins the collision (a notification can't start with "4;").
+    /// `9;4` always wins the collision (a notification can't start with "4;").
     private func handleOSC9(_ payload: String) {
         guard payload == "4" || payload.hasPrefix("4;") else {
             if !isReplaying { onNotification?(nil, payload) }
@@ -1536,7 +1536,7 @@ public final class TerminalEmulator: VTParserHandler {
 
     private func deviceAttributes() {
         // Identify as a VT220-class terminal (62) with Sixel graphics (4) and ANSI color (22) —
-        // the same class Ghostty/xterm report. `parserDCS` decodes Sixel, so tools that gate on
+        // the standard VT device class. `parserDCS` decodes Sixel, so tools that gate on
         // the DA1 feature list (img2sixel, chafa, timg) will actually emit it; the 62 class is
         // what makes capability-probing TUIs try VT220-level sequences we do implement (DECRQM,
         // DA3, the title stack) instead of degrading to VT100.
@@ -1648,7 +1648,7 @@ public struct TerminalModes: Sendable, Equatable, Codable {
     public var bracketedPaste = false
     public var focusReporting = false
     /// DECSET 1007 "alternate scroll": wheel events on the alternate screen become arrow
-    /// keys. On by default (the iTerm2/Ghostty convention) so less/man/vim scroll out of
+    /// keys. On by default so less/man/vim scroll out of
     /// the box; programs can opt out with `CSI ? 1007 l`.
     public var alternateScroll = true
     public var mouseClick = false

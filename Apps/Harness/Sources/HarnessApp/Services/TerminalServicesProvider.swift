@@ -26,8 +26,7 @@ final class TerminalServicesProvider: NSObject {
     }
 
     /// Folder URLs carried by the service pasteboard, most-reliable source first. Filtered to
-    /// directories so "New Terminal *Here*" always targets the folder itself (matching Ghostty's
-    /// `FilePath` context).
+    /// directories so "New Terminal *Here*" always targets the folder itself.
     private static func directories(from pasteboard: NSPasteboard) -> [URL] {
         var urls: [URL] = []
         if let objects = pasteboard.readObjects(forClasses: [NSURL.self],

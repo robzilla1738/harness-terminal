@@ -9,7 +9,7 @@ final class SidebarOutlineTests: XCTestCase {
 
     func testSessionsHeadTheirTabsAndTheActiveTabIsSelected() {
         let demo = session("Demo", tabs: ["btop", "htop"])
-        let work = session("Work", tabs: ["ghostty"])
+        let work = session("Work", tabs: ["shell"])
         let lines = SidebarOutline.lines(
             groups: [DaemonSidebarGroup(id: "local", title: "This Mac", detail: "", local: true, sessions: [])],
             liveOwner: "local", live: [demo, work], activeSessionID: demo.id, sessionTitle: \.name
@@ -24,7 +24,7 @@ final class SidebarOutlineTests: XCTestCase {
 
     func testFilterKeepsMatchingTabsOrAWholeMatchingSession() {
         let demo = session("Demo", tabs: ["btop", "htop"])
-        let work = session("Work", tabs: ["ghostty"])
+        let work = session("Work", tabs: ["shell"])
         let byTab = SidebarOutline.lines(groups: [], liveOwner: "local", live: [demo, work], activeSessionID: nil, query: "htop", sessionTitle: \.name)
         XCTAssertEqual(byTab.count, 2)
         let byName = SidebarOutline.lines(groups: [], liveOwner: "local", live: [demo, work], activeSessionID: nil, query: "work", sessionTitle: \.name)

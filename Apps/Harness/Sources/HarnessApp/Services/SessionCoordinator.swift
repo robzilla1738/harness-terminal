@@ -32,7 +32,7 @@ final class SessionCoordinator: NSObject {
     /// the app is active.
     private var safetyPollTimer: Timer?
     var settings = HarnessSettings.load()
-    /// Hot-reload watchers for `settings.json` / `keybindings.json` (Ghostty config-reload-on-save).
+    /// Hot-reload watchers for `settings.json` / `keybindings.json` (reload on save).
     /// Held for the coordinator's lifetime.
     private var configWatchers: [FileWatcher] = []
     /// Which daemon the GUI currently drives: the local one, or a remote daemon over an SSH tunnel.
@@ -95,7 +95,7 @@ final class SessionCoordinator: NSObject {
     }
 
     /// Watch the on-disk config so an external edit (a text editor, `harness-cli set-option`, a
-    /// dotfile sync) applies live — Ghostty's config-reload-on-save. The `fresh != settings` guard
+    /// dotfile sync) applies live when the file changes. The `fresh != settings` guard
     /// makes the app's OWN saves a no-op: it already updated the in-memory `settings` before writing,
     /// so the reload loads identical values and does nothing. `FileWatcher` delivers on the main
     /// queue, so `assumeIsolated` is safe (and hop-free) for this @MainActor coordinator.
@@ -2463,7 +2463,7 @@ extension SessionCoordinator: TerminalHostDelegate {
         refreshSnapshot()
     }
 
-    /// OSC 9;4 progress — ephemeral GUI state (Ghostty parity), deliberately NOT mirrored
+    /// OSC 9;4 progress — ephemeral GUI state, deliberately NOT mirrored
     /// to the daemon: keep-alives arrive ~1/s per working agent and must not churn
     /// layout.json commits. The tracker nudges a metadata-only tab refresh on transitions.
     func terminalHostDidUpdateProgress(_ report: TerminalProgressReport, surfaceID: SurfaceID) {

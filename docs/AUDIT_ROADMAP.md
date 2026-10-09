@@ -1,5 +1,10 @@
 # Harness — Full Audit & Parity Roadmap
 
+> Historical planning record. This is retained to explain past decisions and measurements;
+> it is not the current product description or release checklist. See
+> [capabilities](CAPABILITIES.md), [architecture and provenance](ARCHITECTURE-AND-PROVENANCE.md),
+> and [the release runbook](RELEASE.md) for the current state.
+
 > **Status:** ✅ **PR-1 → PR-21 are all merged & shipped to `main`** (PRs #115–#138; per-PR markers below) — bundled into the **v1.9.0** release. The **P5 tail (PR-22 / PR-23 / PR-24)** is **superseded by [docs/V1_10_ROADMAP.md](V1_10_ROADMAP.md)** (as PR-30/31/32, PR-29, and PR-36 respectively) — execute it there, not here. Originally generated 2026-06-08 from an exhaustive read-only audit; shipped state reconciled 2026-06-09.
 > Execute remaining PRs in priority order, one focused themed PR at a time (impl + tests + green CI, merged on review). Finding IDs in `[...]` map to the appendix table at the bottom.
 

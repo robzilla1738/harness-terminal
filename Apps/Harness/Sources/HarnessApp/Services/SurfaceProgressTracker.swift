@@ -3,18 +3,17 @@ import HarnessCore
 import HarnessTerminalEngine
 
 /// Per-surface OSC 9;4 progress state — the terminal-native "program is working" signal
-/// (Claude Code 2.0+ keep-alives an indeterminate report across each turn). Ghostty-faithful
-/// semantics: ephemeral (never part of the daemon snapshot or layout.json), state 0 clears
+/// (Claude Code 2.0+ keep-alives an indeterminate report across each turn). State is ephemeral (never part of the daemon snapshot or layout.json), state 0 clears
 /// immediately, and a hardcoded 15s stale timeout — re-armed by every report — cleans up after
 /// programs that die without sending the remove. App-local; the tab strip reads `isActive`.
 @MainActor
 final class SurfaceProgressTracker {
     static let shared = SurfaceProgressTracker()
-    /// Ghostty's stale-progress cleanup window. Emitters keep-alive at least ~1/s, so a
+    /// Stale-progress cleanup window. Emitters keep-alive at least ~1/s, so a
     /// surface that goes 15s without a report is treated as no longer reporting.
     static let staleTimeout: TimeInterval = 15
 
-    /// Test seams: the shared instance uses the 15s Ghostty window, the real main-queue timer,
+    /// Test seams: the shared instance uses the 15-second cleanup window, the real main-queue timer,
     /// and the app-wide metadata nudge; unit tests capture the nudge (instead of dragging
     /// `SessionCoordinator.shared` and its daemon connection into the test process) and the
     /// scheduled work items (so the stale sweep is driven deterministically — wall-clock sleeps

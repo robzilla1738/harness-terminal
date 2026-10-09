@@ -64,7 +64,7 @@ final class KittyKeyboardTests: XCTestCase {
 
     func testKittySupersedesDECCKMForCursorKeys() {
         // DECCKM (application cursor keys) must be ignored while any Kitty flags are active: a
-        // Kitty-mode parser reads `ESC O A` as Alt+O A. Ghostty's kitty path never consults DECCKM.
+        // Kitty-mode parser reads `ESC O A` as Alt+O A. Kitty encoding supersedes DECCKM.
         var m = kittyModes(1)
         m.cursorKeysApplication = true
         XCTAssertEqual(String(decoding: enc.encode(.up, modes: m), as: UTF8.self), "\u{1b}[A")

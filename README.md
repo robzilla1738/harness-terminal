@@ -238,7 +238,8 @@ xcodebuild -project Harness.xcodeproj -scheme Harness -configuration Debug \
 
 - [Experience modes](docs/MODES.md) — Plain / Persistent / Full / Agent
 - [Sessions & panes guide](docs/MULTIPLEXER_GUIDE.md) — prefix, panes, sessions, copy mode, attach from anywhere
-- [Harness and Rex](docs/COMPARISON.md) — an honest feature comparison, including what's not planned
+- [Capabilities and limits](docs/CAPABILITIES.md) — what Harness supports and where the boundaries are
+- [Architecture and provenance](docs/ARCHITECTURE-AND-PROVENANCE.md) — implementation, dependencies and compatibility
 - [tmux parity ledger](docs/TMUX_PARITY.md) — capability status, adaptations for the daemon-owned model, explicitly rejected tmux features with rationale
 - [tmux-style capabilities PDF](docs/HARNESS_TMUX_CAPABILITIES.pdf) — printable setup, shortcuts, commands, attach, copy mode, and troubleshooting
 - [Release runbook](docs/RELEASE.md) — signed/notarized DMG, GitHub Actions release workflow, and Sparkle appcast publishing

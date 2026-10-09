@@ -105,7 +105,7 @@ enum MainMenuBuilder {
         let newTabItem = NSMenuItem(title: "New Tab", action: #selector(MenuTarget.newTab), keyEquivalent: "t")
         newTabItem.target = MenuTarget.shared
         workspace.submenu?.addItem(newTabItem)
-        // ⌘W closes the focused pane first (Ghostty, iTerm); ⌥⌘W closes the whole tab.
+        // ⌘W closes the focused pane first; ⌥⌘W closes the whole tab.
         let close = NSMenuItem(title: "Close", action: #selector(MenuTarget.closePaneOrTab), keyEquivalent: "w")
         close.target = MenuTarget.shared
         workspace.submenu?.addItem(close)

@@ -193,7 +193,7 @@ public struct CursorRender: Equatable, Sendable {
     public var textColor: RenderColor
     public var style: CursorStyle
     /// Drawn as a 1px box outline (regardless of style) when the surface is unfocused, so an
-    /// inactive window reads as such — standard macOS/Ghostty behavior. A hollow block also does
+    /// inactive window reads as such — standard macOS behavior. A hollow block also does
     /// NOT invert the glyph under it (the cell shows through the outline).
     public var hollow: Bool
 

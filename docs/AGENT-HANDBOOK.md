@@ -23,15 +23,16 @@ Update this file together with `claude.md` / `agents.md` when those sections cha
 ## Native terminal renderer
 
 Harness renders terminals with its **own** self-contained stack — there is **no
-third-party terminal engine dependency** (the entire terminal stack is first-party; the only
-external package is Sparkle, GUI auto-update only). `TerminalHostView`
+third-party terminal engine dependency**. The current Swift package graph uses Sparkle
+for GUI updates; the CLI also links vendored Lua and image decoding uses vendored stb_image.
+Community themes, fonts, and agent marks have separate attribution. See
+[architecture and provenance](ARCHITECTURE-AND-PROVENANCE.md). `TerminalHostView`
 hosts `HarnessTerminalSurfaceView` (a `CAMetalLayer` view) driving `HarnessTerminalEngine`
 (VT parser + screen/scrollback), `HarnessTheme` (514-theme catalog + `.harnesstheme`), and
 `HarnessTerminalRenderer` (CoreText atlas + Metal). Features: themed translucent canvas with
 untouched program output (`applyThemeToTerminalOutput` toggles theme-colored output), balanced
 window padding (centered grid) + a live resize HUD, cursor styles + blink (DECSCUSR; `0` / a
-bare `CSI SP q` resets to the *user-configured* style — the Ghostty/kitty semantics, not a hard
-blinking block — and a hollow box when the window is unfocused; a blink toggle re-encodes ≤1 row,
+bare `CSI SP q` resets to the *user-configured* style, rather than a hard blinking block, and a hollow box when the window is unfocused; a blink toggle re-encodes ≤1 row,
 pinned by test), word/line (double/triple-click)
 + Option-rectangle text selection + copy /
 paste (bracketed-paste aware, with paste protection) / copy-on-select / right-click menu —
@@ -52,8 +53,7 @@ crossings build their re-wrap preview ASYNC on the emulator queue — latest-win
 landed via `presentResizePreview` with generation/token/target stale-drop guards — so a boundary
 tick costs main no more than a sub-cell tick, and the renderer salvages content-identical rows
 across the column change via per-row `contentKey`s; instance data lives in persistent flat
-arrays + a per-row segment table mutated in place per dirty row — the Ghostty `Contents` model —
-with span-list incremental GPU uploads), optional WCAG
+arrays + a per-row segment table mutated in place per dirty row, with span-list incremental GPU uploads), optional WCAG
 `minimum-contrast`, a bundled Nerd Font symbol fallback (Powerline/icon glyphs always render),
 procedurally-rendered block elements + box-drawing (seamless, font-independent), and IME / dead
 keys (`NSTextInputClient`).
@@ -105,7 +105,7 @@ users moving in keep their colors/font — kept by product decision.
   under `.topLeft`) and `layout()` renders synchronously inside a `CATransaction` (no stretch
   flicker). The drawable resizes every frame; the authoritative **grid reflow + PTY `SIGWINCH`**
   fire per path:
-  - **Real-time (default, Ghostty parity, `liveResizeReflow` on):** during a window-edge drag
+  - **Real-time (default, `liveResizeReflow` on):** during a window-edge drag
     (`presentsWithTransaction`), `requestLiveResizeCommit` commits the reflow + SIGWINCH at every
     cell boundary so interactive programs redraw live. The reflow target is staged queue-side
     (`SurfaceEmulatorState.pendingResize`) and materialized by the NEXT output/commit build to
@@ -472,7 +472,7 @@ Shell env: `/usr/bin/env HARNESS_SURFACE=<uuid> $SHELL -l`
 
 **Detection:** `AgentDetector` + daemon `AgentScanner` (~1.5s) on process tree from shell PID. Kinds: codex, claude-code, cursor, grok, pi, hermes, openclaw, opencode, aider, gemini, goose, generic. **`install-hooks`** writes configs for eight agents (codex, claude-code, cursor, grok, opencode, pi, hermes, openclaw); JSON configs (e.g. `~/.claude/settings.json`) are **deep-merged** — never overwritten — grok/opencode/pi get a Harness-owned file, and hermes/openclaw a marked region; every install backs the file up first and is idempotent (`JSONMerge.deepMerge` in HarnessCore, covered by `HarnessCoreTests`). Each hook runs `harness-cli notify` and also prints an OSC 7501 report to the tty. Codex's hooks use the event/matcher shape (NOT the inert `on_pause`/`on_done` keys) in `~/.codex/hooks.json`; Codex enables hooks by default, so `install` no longer touches `~/.codex/config.toml`. Agents with no hook mechanism (aider, gemini, goose) are **not** installable — they notify via the hook-independent activity path once detected. The install logic lives in **`HarnessCore.AgentHookInstaller`** (`install`/`isInstalled`/`installableAgents`, `homeOverride` for tests), shared by the CLI shim (`AgentHookInstallerCLI`) **and** the GUI's per-agent "Install hooks" button (Settings ▸ Agents) — no shelling out, no duplication.
 
-**OSC 9;4 progress pipeline:** `TerminalProgressReport` (engine, `HarnessTerminalEngine`) parses `ESC ] 9 ; 4 ; <state> ; <value> ST` (ConEmu/Ghostty/Windows Terminal semantics) and invokes `onProgress` on the surface view. `SurfaceProgressTracker` (`@MainActor`, app-local, never persisted) aggregates reports per surface and expires them after a hardcoded **15 s stale timeout** (re-armed by each keep-alive) — matching Ghostty's cleanup window for programs that die without sending the remove. `TabPillView` reads `SurfaceProgressTracker.shared.isActive(_:)` and paints the **working dot** (Ghostty-style tiny indicator before the tab title) while the report is live. **Fallback for agents that don't emit OSC 9;4** (e.g. Codex): the tab dot also lights when `tab.agent?.activity == .working` and the tab is not already `.waiting` — the activity comes from `AgentDetector` / `AgentScanner` output recency via the daemon. An explicit OSC 9;4 report always outranks the fallback.
+**OSC 9;4 progress pipeline:** `TerminalProgressReport` (engine, `HarnessTerminalEngine`) parses `ESC ] 9 ; 4 ; <state> ; <value> ST` (ConEmu progress semantics) and invokes `onProgress` on the surface view. `SurfaceProgressTracker` (`@MainActor`, app-local, never persisted) aggregates reports per surface and expires them after a hardcoded **15 s stale timeout** (re-armed by each keep-alive) for programs that exit without sending a remove. `TabPillView` reads `SurfaceProgressTracker.shared.isActive(_:)` and paints the **working dot** (a small indicator before the tab title) while the report is live. **Fallback for agents that don't emit OSC 9;4** (e.g. Codex): the tab dot also lights when `tab.agent?.activity == .working` and the tab is not already `.waiting` — the activity comes from `AgentDetector` / `AgentScanner` output recency via the daemon. An explicit OSC 9;4 report always outranks the fallback.
 
 **Title fallback:** `AgentTitleInference.kind(from: tab.title)` when proc-tree misses agent (sidebar/tab use `tab.agent?.kind ?? inference`).
 
@@ -616,7 +616,7 @@ App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The lau
 
 **HarnessBenchmarks** (opt-in perf baselines for VT parse / readGrid / scrollback / IPC codec / compositor / frame building / renderer stats / atlas caches / off-main stall sampling): `make bench` or `HARNESS_BENCHMARKS=1 swift test -c release --filter HarnessBenchmarks` (skipped otherwise so `swift test` stays fast). Benchmarks print JSON timing lines; do not gate CI on absolute timings. The engine gate is `testConsumerScoreboard` (`consumer_<workload>` with the `feedNanos`/`frameBuildNanos` split — parse dominates, frame build is ~0.1 ms); `testIPCInclusiveScoreboard` runs the same payloads through the real `IPCCodec` output frame to confirm the daemon framing/chunking tax is negligible. The cross-terminal `Scripts/benchmarks/terminal_stress_runner.py` drain is **not** an engine measure (PTY-drain, ±25–33% on window focus, can move opposite to engine speed) — gate on the in-process scoreboard, not the drain ratios.
 
-**Comparative receipts (`Scripts/scorecard.sh` + [docs/SCORECARD.md](SCORECARD.md)):** the Harness-vs-Ghostty scorecard — cold start (startup.log phase deltas vs wall-clock-to-window), sustained PTY throughput, idle power (`powermetrics`; app + daemon summed), long-session memory, and Harness-side input-to-photon percentiles. Orchestration + reporting only; run sections on quiet, plugged-in owner hardware and commit the results to the doc — numbers are **receipts, never CI gates**, and probe asymmetries are stated in the report itself. `--dry-run` self-checks the helpers (Linux-safe).
+**Comparative receipts (`Scripts/scorecard.sh` + [docs/SCORECARD.md](SCORECARD.md)):** the Harness performance scorecard — cold start (startup.log phase deltas vs wall-clock-to-window), sustained PTY throughput, idle power (`powermetrics`; app + daemon summed), long-session memory, and Harness-side input-to-photon percentiles. Orchestration + reporting only; run sections on quiet, plugged-in owner hardware and commit the results to the doc — numbers are **receipts, never CI gates**, and probe asymmetries are stated in the report itself. `--dry-run` self-checks the helpers (Linux-safe).
 
 **Frame signpost instrumentation (`HARNESS_FRAME_SIGNPOSTS=1`):** `FrameSignposter` (`HarnessTerminalKit`) is gated off by default (each call is a single branch when disabled, so it is safe on the hot path). Enable with `PREVIEW_SIGNPOSTS=1 make preview` — `open` strips the shell environment, so the preview script passes the flag as a launch argument (`open -n … --args -HARNESS_FRAME_SIGNPOSTS 1`, read via `UserDefaults`); setting `HARNESS_FRAME_SIGNPOSTS=1` in the launch environment also works for direct binary launches (`xctrace … --launch`). This enables `os_signpost` intervals around the per-frame `parse → gridRead → frameBuild → present` pipeline on the `com.robert.harness / frame` track, and `TerminalRenderStats` splits `encodeNanos` into `buildInstancesNanos` (CPU instance build) + `uploadNanos` (GPU buffer upload) so a slow encode is attributable per value boundary (grid read / frame build / instance build / upload). The periodic log line blends samples from ALL presenting surfaces — single visible surface for attribution. The `present` interval is the most informative: it wraps `nextDrawable()` + `inFlightSemaphore.wait()` on the main thread and captures the vsync / GPU back-pressure stall. Every 120 frames it also logs p50/p95/max present latency (µs) to the unified log, readable with `log stream --predicate 'subsystem == "com.robert.harness"'` without Instruments. Profile with `xctrace record --template 'os_signpost'` on a `make preview` run.
 
