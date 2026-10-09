@@ -5,12 +5,12 @@ import HarnessTheme
 
 final class ThemeManagerTests: XCTestCase {
     @MainActor
-    func testDefaultBaselinePaletteMatchesMutedANSI16() {
+    func testDefaultBaselinePaletteMatchesGraphite() {
         XCTAssertEqual(ThemeManager.defaultBaselinePaletteHex, [
-            "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
-            "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
-            "#6e6e6e", "#d54e53", "#b9ca4a", "#e7c547",
-            "#7aa6da", "#c397d8", "#70c0b1", "#eaeaea",
+            "#24282c", "#e58a8a", "#a6bf8e", "#dfbd83",
+            "#89afd4", "#b9a0d5", "#89c2c8", "#cbd3d8",
+            "#7b878f", "#f2a1a1", "#bed3a5", "#eed09e",
+            "#a4c5e5", "#cfbae7", "#a6d8dc", "#f0f4f5",
         ])
         XCTAssertEqual(
             ThemeManager.paletteHex(themeName: ThemeManager.defaultDisplayName),
@@ -22,7 +22,7 @@ final class ThemeManagerTests: XCTestCase {
     func testDefaultBaselineIsShippedTheme() {
         let theme = HarnessThemeCatalog.theme(named: ThemeManager.defaultThemeName)
 
-        XCTAssertEqual(ThemeManager.defaultThemeName, "Harness Default")
+        XCTAssertEqual(ThemeManager.defaultThemeName, "Harness Graphite")
         XCTAssertEqual(theme?.paletteHex, ThemeManager.defaultBaselinePaletteHex)
         XCTAssertEqual(ThemeManager.paletteHex(themeName: ThemeManager.defaultDisplayName), theme?.paletteHex)
     }
@@ -216,7 +216,7 @@ final class ThemeManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testFreshSettingsResolveDarkBlackCanvas() {
+    func testFreshSettingsResolveGraphiteCanvas() {
         let settings = HarnessSettings()
         XCTAssertEqual(settings.appearanceMode, .theme)
         XCTAssertEqual(settings.backgroundOpacity, 0.63, accuracy: 0.0001)
@@ -299,7 +299,7 @@ final class ThemeManagerTests: XCTestCase {
     }
 
     @MainActor
-    func testBlackDefaultIsReadable() throws {
+    func testGraphiteDefaultIsReadable() throws {
         let background = try XCTUnwrap(ChromeColor(hex: ThemeManager.defaultBaselineBackgroundHex))
         let foreground = try XCTUnwrap(ChromeColor(hex: ThemeManager.defaultBaselineForegroundHex))
         XCTAssertGreaterThanOrEqual(foreground.contrastRatio(against: background), 7, "body text clears WCAG AAA")

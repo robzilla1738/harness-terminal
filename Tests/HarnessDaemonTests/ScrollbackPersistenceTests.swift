@@ -79,7 +79,11 @@ final class ScrollbackPersistenceTests: XCTestCase {
         _ = pty.subscribe { data, _ in
             if acc.appendAndContains(String(decoding: data, as: UTF8.self), marker: marker) { saw.fulfill() }
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { pty.write("echo \(marker)\n") }
+        // Keep the marker out of the command echo: clearing after the echo alone races
+        // the actual printf output, which could legitimately append the marker again.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            pty.write("printf '%s%s\\n' HARNESS_CLEAR_ MARKER\n")
+        }
         wait(for: [saw], timeout: 8)
         // handleOutput appends to the ring before fanning out to subscribers, so seeing the
         // marker means it is already in scrollback — no settle needed.

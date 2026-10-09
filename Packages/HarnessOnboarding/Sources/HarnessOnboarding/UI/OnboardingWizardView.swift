@@ -54,6 +54,7 @@ struct OnboardingWizardView: View {
         )
         .shadow(color: .black.opacity(0.6), radius: 60, x: 0, y: 30)
         .onAppear(perform: setup.refresh)
+        .onDisappear { setup.stopWaitingForNotifications() }
         // Pick up changes made elsewhere while the wizard was open: notifications turned on in
         // System Settings, an agent installed, a profile edited by hand.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -88,7 +89,7 @@ struct OnboardingWizardView: View {
             if currentStep != .complete {
                 Button("Skip Setup", action: onFinish)
                     .buttonStyle(GlassTextButtonStyle())
-                    .disabled(setup.isBusy)
+                    .disabled(setup.blocksNavigation)
             }
         }
         .frame(height: 30)
@@ -200,7 +201,7 @@ struct OnboardingWizardView: View {
                 }
                 .buttonStyle(GlassTextButtonStyle())
                 .keyboardShortcut("[", modifiers: .command)
-                .disabled(setup.isBusy)
+                .disabled(setup.blocksNavigation)
             }
 
             Spacer()
@@ -208,7 +209,7 @@ struct OnboardingWizardView: View {
             if action.isSetup {
                 Button("Not Now", action: advance)
                     .buttonStyle(GlassTextButtonStyle())
-                    .disabled(setup.isBusy)
+                    .disabled(setup.blocksNavigation)
             }
 
             // Not disabled while busy (every action ignores a press then), so the button stays
@@ -232,13 +233,15 @@ struct OnboardingWizardView: View {
     }
 
     private func advance() {
-        guard !setup.isBusy, currentIndex < steps.count - 1 else { return }
+        guard !setup.blocksNavigation, currentIndex < steps.count - 1 else { return }
+        setup.stopWaitingForNotifications()
         movingForward = true
         currentStep = steps[currentIndex + 1]
     }
 
     private func goBack() {
-        guard !setup.isBusy, currentIndex > 0 else { return }
+        guard !setup.blocksNavigation, currentIndex > 0 else { return }
+        setup.stopWaitingForNotifications()
         movingForward = false
         currentStep = steps[currentIndex - 1]
     }

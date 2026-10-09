@@ -189,7 +189,7 @@ final class HarnessSettingsTests: XCTestCase {
 
     func testSystemThemeNamesDefaultAndRoundTrip() throws {
         XCTAssertEqual(HarnessSettings().systemLightThemeName, "Harness Light")
-        XCTAssertEqual(HarnessSettings().systemDarkThemeName, "Harness Default")
+        XCTAssertEqual(HarnessSettings().systemDarkThemeName, "Harness Graphite")
 
         let settings = HarnessSettings(
             appearanceMode: .macOSSystem,
@@ -224,7 +224,7 @@ final class HarnessSettingsTests: XCTestCase {
 
         XCTAssertEqual(migrated.appearanceMode, .theme)
         XCTAssertEqual(migrated.systemLightThemeName, "Harness Light")
-        XCTAssertEqual(migrated.systemDarkThemeName, "Harness Default")
+        XCTAssertEqual(migrated.systemDarkThemeName, "Harness Graphite")
     }
 
     func testLegacyAutoLightDarkSettingsMigrateToMacOSSystemAndRoundTrip() throws {
@@ -258,7 +258,7 @@ final class HarnessSettingsTests: XCTestCase {
 
             XCTAssertEqual(settings.appearanceMode, .macOSSystem)
             XCTAssertEqual(settings.systemLightThemeName, "Harness Light")
-            XCTAssertEqual(settings.systemDarkThemeName, "Harness Default")
+            XCTAssertEqual(settings.systemDarkThemeName, "Harness Graphite")
         }
     }
 
@@ -597,7 +597,7 @@ final class HarnessSettingsTests: XCTestCase {
 
             XCTAssertEqual(settings.appearanceMode, .theme)
             XCTAssertEqual(settings.systemLightThemeName, "Harness Light")
-            XCTAssertEqual(settings.systemDarkThemeName, "Harness Default")
+            XCTAssertEqual(settings.systemDarkThemeName, "Harness Graphite")
             XCTAssertEqual(settings.paletteHex[0], "#ABCDEF")
             XCTAssertEqual(settings.importedConfigSignature, splitThemeImport.signature)
         }

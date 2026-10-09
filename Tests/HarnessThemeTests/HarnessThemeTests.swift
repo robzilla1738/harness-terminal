@@ -51,14 +51,18 @@ final class HarnessThemeCatalogTests: XCTestCase {
         XCTAssertNotNil(HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName))
     }
 
-    func testDefaultThemeIsBlackAndNavyIsKept() {
+    func testGraphiteIsDefaultAndBlackAndNavyAreKept() {
         let theme = HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName)
 
-        XCTAssertEqual(HarnessThemeCatalog.defaultThemeName, "Harness Default")
-        XCTAssertEqual(theme?.backgroundHex, "#000000")
-        XCTAssertEqual(theme?.foregroundHex, "#ffffff")
-        XCTAssertEqual(theme?.cursorHex, "#ffffff")
-        XCTAssertEqual(theme?.paletteHex, [
+        XCTAssertEqual(HarnessThemeCatalog.defaultThemeName, "Harness Graphite")
+        XCTAssertEqual(theme?.backgroundHex, "#151719")
+        XCTAssertEqual(theme?.foregroundHex, "#dce2e5")
+        XCTAssertEqual(HarnessThemeCatalog.featuredNames.first, "Harness Graphite")
+        let black = HarnessThemeCatalog.theme(named: "Harness Obsidian")
+        XCTAssertEqual(black?.backgroundHex, "#000000")
+        XCTAssertEqual(black?.foregroundHex, "#ffffff")
+        XCTAssertEqual(black?.cursorHex, "#ffffff")
+        XCTAssertEqual(black?.paletteHex, [
             "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
             "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
             "#6e6e6e", "#d54e53", "#b9ca4a", "#e7c547",
@@ -70,10 +74,14 @@ final class HarnessThemeCatalogTests: XCTestCase {
     }
 
     func testLegacyDefaultThemeNameStillResolves() {
+        XCTAssertTrue(HarnessThemeCatalog.isBuiltin("Harness Default"))
+        XCTAssertTrue(HarnessThemeCatalog.isBuiltin("Ghostty Default"))
         XCTAssertEqual(
             HarnessThemeCatalog.theme(named: "Ghostty Default"),
-            HarnessThemeCatalog.theme(named: HarnessThemeCatalog.defaultThemeName)
+            HarnessThemeCatalog.theme(named: "Harness Obsidian")
         )
+        XCTAssertEqual(HarnessThemeCatalog.theme(named: "Harness Default"),
+                       HarnessThemeCatalog.theme(named: "Harness Obsidian"))
     }
 
     func testAllFeaturedThemesPresent() {

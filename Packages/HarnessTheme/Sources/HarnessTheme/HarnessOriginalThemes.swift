@@ -1,9 +1,20 @@
-/// The Harness collection: 25 hand-tuned palettes, with the black default preserved.
+/// The Harness collection: 25 hand-tuned palettes, with Graphite as the default.
 /// Kept in Swift so selecting an original never needs to decode the community catalog.
 enum HarnessOriginalThemes {
     static let all: [HarnessThemeDefinition] = [
         .make(
-            "Harness Default",
+            "Harness Graphite",
+            bg: "#151719", fg: "#dce2e5", cursor: "#a6c4d5",
+            selectionBackground: "#343d44",
+            palette: [
+                "#24282c", "#e58a8a", "#a6bf8e", "#dfbd83",
+                "#89afd4", "#b9a0d5", "#89c2c8", "#cbd3d8",
+                "#7b878f", "#f2a1a1", "#bed3a5", "#eed09e",
+                "#a4c5e5", "#cfbae7", "#a6d8dc", "#f0f4f5",
+            ]
+        ),
+        .make(
+            "Harness Obsidian",
             bg: "#000000", fg: "#ffffff", cursor: "#ffffff",
             selectionBackground: "#333333",
             palette: [
@@ -33,17 +44,6 @@ enum HarnessOriginalThemes {
                 "#6fa8f5", "#b392f0", "#67c6cf", "#c4ccdb",
                 "#6c7b98", "#f08a92", "#b0dc98", "#f3d394",
                 "#8fbcff", "#c8aaff", "#86d7df", "#eef2f8",
-            ]
-        ),
-        .make(
-            "Harness Graphite",
-            bg: "#151719", fg: "#dce2e5", cursor: "#a6c4d5",
-            selectionBackground: "#343d44",
-            palette: [
-                "#24282c", "#e58a8a", "#a6bf8e", "#dfbd83",
-                "#89afd4", "#b9a0d5", "#89c2c8", "#cbd3d8",
-                "#7b878f", "#f2a1a1", "#bed3a5", "#eed09e",
-                "#a4c5e5", "#cfbae7", "#a6d8dc", "#f0f4f5",
             ]
         ),
         .make(

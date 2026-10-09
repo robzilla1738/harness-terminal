@@ -40,7 +40,8 @@ final class TerminalScrollbarView: NSScroller {
         isEnabled = true
         isHidden = false
         alphaValue = 1
-        guard scrollerStyle == .overlay, !tracking else { return }
+        // Harness uses a transient overlay even when macOS prefers the legacy thumb style.
+        guard !tracking else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.tracking else { return }
             self.isHidden = true

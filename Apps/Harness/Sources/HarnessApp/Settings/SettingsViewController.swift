@@ -1967,10 +1967,10 @@ final class SettingsViewController: NSViewController, NSFontChanging {
         return HarnessAppearanceMode.allCases.first { Self.appearanceModeTitle($0) == title } ?? .theme
     }
 
-    /// The theme menu lists "Harness Default" once: the "Default" baseline paints the same
-    /// black canvas, so a snapshot still named "Default" shows as Harness Default.
+    /// Resolve the default and renamed presets to their current catalog names.
     private static func themeMenuName(_ name: String) -> String {
-        name == ThemeManager.defaultDisplayName ? ThemeManager.defaultThemeName : name
+        name == ThemeManager.defaultDisplayName ? ThemeManager.defaultThemeName
+            : HarnessThemeCatalog.theme(named: name)?.name ?? name
     }
 
     private func populateThemePopup(_ popup: HarnessSelect, selectedThemeName: String) {

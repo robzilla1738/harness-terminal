@@ -15,6 +15,18 @@ final class DockTileRenderer {
 
     private var shown: (marks: [Mark], needsYou: Int)?
 
+    static func markFrames(count: Int, in bounds: NSRect) -> [NSRect] {
+        guard count > 0 else { return [] }
+        let gap = bounds.width * 0.02
+        let side = min(bounds.width * 0.3,
+                       (bounds.width * 0.92 - CGFloat(count - 1) * gap) / CGFloat(count))
+        let total = CGFloat(count) * side + CGFloat(count - 1) * gap
+        return (0..<count).map { index in
+            NSRect(x: bounds.midX - total / 2 + CGFloat(index) * (side + gap),
+                   y: bounds.minY + bounds.height * 0.02, width: side, height: side)
+        }
+    }
+
     func update(from snapshot: SessionSnapshot) {
         let tabs = snapshot.workspaces.flatMap(\.sessions).flatMap(\.tabs)
         let ranked = AttentionRank.sorted(tabs, rank: AttentionRank.of, lastActivity: { $0.agent?.lastActivityAt })
@@ -45,13 +57,8 @@ private final class DockTileView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         NSApp.applicationIconImage?.draw(in: bounds)
-        let side = bounds.width * 0.3
-        let gap = bounds.width * 0.02
-        let total = CGFloat(marks.count) * side + CGFloat(max(marks.count - 1, 0)) * gap
-        var x = bounds.midX - total / 2
-        let y = bounds.minY + bounds.height * 0.02
-        for mark in marks {
-            let disc = NSRect(x: x, y: y, width: side, height: side)
+        for (mark, disc) in zip(marks, DockTileRenderer.markFrames(count: marks.count, in: bounds)) {
+            let side = disc.width
             NSColor(white: 0.08, alpha: 0.92).setFill()
             NSBezierPath(ovalIn: disc).fill()
             let ring = NSBezierPath(ovalIn: disc.insetBy(dx: side * 0.05, dy: side * 0.05))
@@ -61,7 +68,6 @@ private final class DockTileView: NSView {
             let icon = AgentIconRenderer.templateOrMonogramImage(for: mark.kind, size: side * 0.55)
             let tint = NSColor.fromHex(SessionCoordinator.shared.settings.agentColorHex(for: mark.kind)) ?? .white
             Self.tinted(icon, tint).draw(in: disc.insetBy(dx: side * 0.225, dy: side * 0.225))
-            x += side + gap
         }
     }
 

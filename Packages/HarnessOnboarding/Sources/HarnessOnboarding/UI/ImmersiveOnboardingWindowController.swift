@@ -26,7 +26,8 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
-        panel.level = .modalPanel
+        // System permission dialogs must be able to appear above the welcome window.
+        panel.level = .normal
         panel.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces, .stationary]
         panel.isMovableByWindowBackground = false
         panel.alphaValue = 0.0
@@ -55,7 +56,7 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
 
         // Esc and ⌘. skip the rest of the wizard, except while a step is mid-install.
         panel.onCancel = { [weak self] in
-            guard let self, !self.setup.isBusy else { return }
+            guard let self, !self.setup.blocksNavigation else { return }
             self.closeWithFade()
         }
     }
@@ -82,6 +83,7 @@ final class ImmersiveOnboardingWindowController: NSWindowController, NSWindowDel
     /// Fade out, close, and hand focus back to a Harness window.
     private func closeWithFade() {
         guard !isClosing else { return }
+        setup.stopWaitingForNotifications()
         isClosing = true
 
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
