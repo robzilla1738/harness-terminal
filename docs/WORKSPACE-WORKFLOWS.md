@@ -32,15 +32,17 @@ Restore creates fresh shells from layout metadata. It does not resume a closed p
 
 **Session → Search All Sessions…** searches retained terminal output in open sessions across all attached hosts, the source host, or the source session. Search is literal, with optional case matching. Results arrive in pages of 100 per host, and partial host errors remain visible. No archive of closed terminal output is created.
 
-Opening a result checks the daemon incarnation, snapshot revision, exact pane identity, and captured line fingerprint, then validates the displayed buffer before highlighting. Output that moved or expired requests a fresh search. Searches run on bounded background workers and can be cancelled as the query changes or the window closes.
+Opening a result checks the daemon incarnation, snapshot revision, exact pane identity, and captured line fingerprint, then validates the displayed buffer before highlighting. Output that moved or expired requests a fresh search. Searches run on bounded background workers and can be cancelled as the query changes or the window closes, including result validation. Reopening search refreshes its source host/session. Excerpts and location details have separate typography; Return respects active IME composition.
 
 **Insert Path** (`⌥⌘I`, also in View and the palette) and **Go to Directory** (`⌥⌘G`) open a compact, themed popup beside the source pane's terminal cursor. It flips above the cursor near the bottom edge and stays on screen. Escape dismisses it and restores terminal focus; clicking elsewhere dismisses it without moving focus back. The picker searches on the source pane's host. Folder lists files and directories; Project uses Git's tracked and untracked, non-ignored paths. Outside Git, traversal is bounded and skips hidden folders, packages, symlinks, `node_modules`, `vendor`, and `build`; it will not recursively scan the home directory or filesystem root. Up to 200 matches are shown; narrow the query to find more.
 
-Insert Path supports multiple selected paths, shell-quotes them, and adds no Return. Paths containing control characters are rejected for insertion and `cd`. Go to Directory explicitly sends `cd`; Command-Return opens a tab in the source session. Switching the active pane while the picker is open does not change its destination.
+Insert Path supports multiple selected paths, shell-quotes them, and adds no Return. Paths containing control characters are rejected for insertion and `cd`. Go to Directory explicitly sends `cd`; Command-Return opens a tab in the source session. Switching the active pane while the picker is open does not change its destination. File names retain surrounding spaces. Project lookup limits subprocess output to 4 MiB and candidates to 20,000 files plus parent directories. An uncertain mutation outcome closes the popup and asks you to inspect the terminal before retrying; Harness never automatically retries that input or tab creation.
 
 ## Remote connections and migration
 
 A dropped SSH tunnel leaves the last terminal output visible with a reconnect notice. Automatic retries reattach to surviving processes. **Remote → [host] → Retry Connection** retries manually; **Connection Details** shows status and daemon capabilities with copyable diagnostics that exclude credentials and terminal output. Quitting the app differs from terminating its daemon: only surviving processes can be reattached. Sleeping a local machine pauses its local processes.
+
+Remote-host renames are saved atomically and reject an existing host name. Save/removal failures are reported before disconnecting a working host. Concurrent GUI attachment requests for one host are coalesced; disconnecting invalidates a pending attachment. Real network sleep/wake and recovery acceptance remains tracked in [#187](https://github.com/robzilla1738/harness-terminal/issues/187).
 
 Older daemons report that newer workflows require an update. The new workflows do not require an account or a separate transport.
 
@@ -66,5 +68,7 @@ Also available: `attention.read`, `attention.snooze`, `setup.save`, `setup.delet
 ## Appearance and local preview
 
 **Settings → Appearance → Panes** controls comfortable-mode spacing from 0 to 24 points, with an 8-point default. Outer and between-pane gutters match; the horizontal tab row stays vertically centered as spacing changes. Compact panes remain flush. Sidebar tabs share the horizontal tabs’ height and selected styling. Right-click empty sidebar or tab-bar space for workspace options; tab menus offer tab-specific actions.
+
+Fresh windows target **100 columns × 30 rows** with the configured font and padding, capped to the available display. **Settings → Appearance → Remember size and position** defaults on; saved frames take precedence. **Show machine indicator** defaults off and can also be changed from the chrome context menu. When enabled, it identifies the window’s local or remote owner and offers machine switching.
 
 `Scripts/preview.sh` builds and launches a development app. `HARNESS_PREVIEW_HOME` selects an isolated data directory and `HARNESS_PREVIEW_BUNDLE_ID` selects its application identity. Use both to keep a feature preview separate from an existing preview. Relaunching the GUI preserves the preview daemon and its sessions; daemon-code changes require a deliberate restart of that preview daemon to take effect.

@@ -495,6 +495,21 @@ No physical IME, live remote, power, or photon claim
 follows from these checks. W1 replay corruption reproduced after relaunch with fish (duplicated prompt/redraw fragments); it remains a release-quality defect. Existing monochrome emoji,
 Unicode-table age, and cross-terminal speed targets remain open.
 
+## Main integration and GitHub tracking
+
+User authorized integrating the reviewed work and documentation into `main`, with **no new
+release**. PR #185 carries the implementation, including the work from #180 and #184.
+The interactive scrollbar resolves #181 in source; it is not yet in the published download.
+README, experience-mode documentation, workflow documentation, and the release runbook
+now distinguish current development behavior from v1.13.0 and explicit user overrides.
+
+Remaining work has public tracking: [screen restoration #186](https://github.com/robzilla1738/harness-terminal/issues/186),
+[compatibility and acceptance #187](https://github.com/robzilla1738/harness-terminal/issues/187),
+and [performance #27](https://github.com/robzilla1738/harness-terminal/issues/27).
+Source-aware remote sessions (#99) retain their separate design/real-network acceptance
+question; source integration alone does not prove that every requested behavior is accepted.
+No version, release tag, update feed, or publication is changed by this integration.
+
 ## Completion disposition
 
 The candidate is reviewable, packaged, audited by subsystem, and supported by named
