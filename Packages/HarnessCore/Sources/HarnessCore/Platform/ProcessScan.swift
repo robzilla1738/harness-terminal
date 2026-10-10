@@ -49,7 +49,9 @@ public enum ProcessScan {
         }
         #else
         var bytes = [UInt8](repeating: 0, count: 4096)
-        let count = readlink("/proc/\(pid)/cwd", &bytes, bytes.count)
+        let count = bytes.withUnsafeMutableBytes { buffer in
+            readlink("/proc/\(pid)/cwd", buffer.baseAddress!, buffer.count)
+        }
         guard count > 0, count < bytes.count else { return nil }
         return String(decoding: bytes.prefix(count), as: UTF8.self)
         #endif

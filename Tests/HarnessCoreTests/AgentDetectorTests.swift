@@ -7,6 +7,13 @@ import XCTest
 @testable import HarnessCore
 
 final class AgentDetectorTests: XCTestCase {
+    func testProcessWorkingDirectoryUsesTheKernelPath() throws {
+        let directory = try XCTUnwrap(ProcessScan.workingDirectory(getpid()))
+        XCTAssertEqual(URL(fileURLWithPath: directory).resolvingSymlinksInPath(),
+                       URL(fileURLWithPath: FileManager.default.currentDirectoryPath).resolvingSymlinksInPath())
+        XCTAssertNil(ProcessScan.workingDirectory(-1))
+    }
+
     func testActivityTracksRecentOutputAndDecaysAfterQuietWindow() throws {
         let surfaceKey = UUID().uuidString
         let process = Process()

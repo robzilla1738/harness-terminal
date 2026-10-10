@@ -6,7 +6,7 @@
 extension ReleaseNotes {
     public static let current = ReleaseNotes(
         version: "2.2.0",
-        changelogDigest: "c05f385138ab3129",
+        changelogDigest: "b015f23971d841d4",
         sections: [
             Section(title: "Added", items: [
                 "Stable session-host ownership of shells and PTYs, with compatible daemon handover, bounded replay, recovery, and explicit session-preserving update controls",
@@ -33,6 +33,7 @@ extension ReleaseNotes {
                 "Build differences, failed health probes, and development conveniences no longer authorize terminating live sessions",
                 "Terminal size synchronization releases stale client votes and orders attachment sizing so coding TUIs receive the available grid size",
                 "Recovery, notification cancellation, Board selection, provider catalog storage, remote callbacks, and recording-share state follow their current operation identities",
+                "Linux process inspection uses bounded native buffers, and unavailable disk history retains live activity in memory",
             ]),
         ]
     )

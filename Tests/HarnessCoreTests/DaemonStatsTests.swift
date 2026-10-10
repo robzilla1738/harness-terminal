@@ -17,8 +17,10 @@ final class DaemonStatsTests: XCTestCase {
         }
         XCTAssertEqual(stats(build: nil, protocolLevel: nil).compatibility, .unknown)
         XCTAssertEqual(stats(build: 99999, protocolLevel: nil).compatibility, .unknown)
-        XCTAssertEqual(stats(build: HarnessVersion.build, protocolLevel: nil,
+        XCTAssertEqual(stats(build: 132, protocolLevel: nil,
                              capabilities: [DaemonStats.attachStream]).compatibility, .compatible)
+        XCTAssertEqual(stats(build: 133, protocolLevel: nil,
+                             capabilities: [DaemonStats.attachStream]).compatibility, .unknown)
         XCTAssertTrue(stats(build: HarnessVersion.build, protocolLevel: 1,
                             capabilities: [DaemonStats.attachStream]).updateAvailable,
                       "a same-build daemon missing capabilities must show the pending update")

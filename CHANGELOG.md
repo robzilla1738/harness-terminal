@@ -40,6 +40,7 @@ Harness 2.2 brings durable session ownership, agent workflows, and a unified nat
 - Build differences, failed health probes, and development conveniences no longer authorize terminating live sessions.
 - Terminal size synchronization releases stale client votes and orders attachment sizing so coding TUIs receive the available grid size.
 - Recovery, notification cancellation, Board selection, provider catalog storage, remote callbacks, and recording-share state follow their current operation identities.
+- Linux process inspection uses bounded native buffers, and unavailable disk history retains live activity in memory. Xcode targets include the complete source set and SQLite/MCP dependencies.
 
 
 ## [2.1.0] - 2026-10-09

@@ -1027,13 +1027,9 @@ final class PerformanceBenchmarks: XCTestCase {
 
     // MARK: - Scrollback on-disk compaction (streamed tail rewrite)
 
-    /// Compaction trims an over-high-water log back to its retention cap on the same serial
-    /// queue appends ride, so its cost directly stalls persistence under a sustained flood.
-    /// The streamed tail copy must be O(retentionCap) reads with bounded resident memory —
-    /// a regression to whole-file `Data(contentsOf:)` doubles the I/O (the cap can be 512 MiB)
-    /// and parks up to 1 GiB in the daemon. Exercised via init-path compaction over a
-    /// pre-seeded 64 MiB log with a 16 MiB cap, which shares `compactToTail` with the
-    /// flush-path compaction.
+    /// Migrate a pre-seeded 64 MiB plaintext log to a bounded 16 MiB protected
+    /// tail. The persisted envelope includes headers and authentication overhead;
+    /// retention is measured by replayed output, not physical file size.
     func testScrollbackCompaction64MiB() throws {
         try skipUnlessEnabled()
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -1049,11 +1045,12 @@ final class PerformanceBenchmarks: XCTestCase {
         while seed.count < total { seed.append(pattern) }
         try seed.prefix(total).write(to: log)
 
+        let protection = try HistoryProtection(keyMaterial: Data(repeating: 83, count: 32))
         let nanos = timedNanos {
-            _ = ScrollbackFile(url: log, retentionCap: cap)
+            _ = ScrollbackFile(url: log, retentionCap: cap, protection: protection)
         }
-        let size = (try? FileManager.default.attributesOfItem(atPath: log.path)[.size] as? Int) ?? 0
-        XCTAssertEqual(size, cap, "compaction must trim exactly to the retention cap")
+        let tail = ScrollbackFile.loadTail(url: log, maxBytes: cap, protection: protection)
+        XCTAssertEqual(tail, Data(seed.suffix(cap)), "Migration must retain the exact bounded output tail")
         printBenchmark("scrollback_compaction_64mib", nanos: nanos, fields: [
             ("fileBytes", "\(total)"), ("retentionCap", "\(cap)"),
         ])

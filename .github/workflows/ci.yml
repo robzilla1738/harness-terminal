@@ -103,8 +103,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install SQLite build dependency
-        run: apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
+      - name: Install Linux build and fixture dependencies
+        run: apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev python3
 
       - name: Toolchain versions
         run: swift --version

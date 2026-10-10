@@ -72,6 +72,10 @@ final class ActivityStore: @unchecked Sendable {
         protection = try HistoryProtection(keyMaterial: Data((0..<32).map { _ in UInt8.random(in: 0...255) }))
         let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         memoryIndexKey = key; indexProtection = try HistoryProtection(keyMaterial: key)
+        #else
+        // Linux has no Keychain encryption, but unavailable disk capture must still
+        // retain bounded live activity in this in-memory database.
+        protection = .system()
         #endif
         guard sqlite3_open_v2(":memory:", &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else { throw LedgerError.storage }
         try execute("PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON; PRAGMA max_page_count=8192")
