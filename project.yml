@@ -160,28 +160,10 @@ targets:
     type: tool
     platform: macOS
     sources:
-      - Tools/harness/Sources/HarnessCLI
+      - Tools/harness/Sources/HarnessCLIMain
     dependencies:
       - package: Harness
-        product: HarnessRemoteProtocol
-      - package: Harness
-        product: HarnessCore
-      - package: Harness
-        product: HarnessTerminalEngine
-      - package: Harness
-        product: HarnessTerminalKit
-      - package: Harness
-        product: HarnessTheme
-      - package: Harness
-        product: CHarnessSys
-      - package: Harness
-        product: CSQLite
-      - package: Harness
-        product: HarnessScript
-      - package: Harness
-        product: HarnessMCP
-      - package: Harness
-        product: CHarnessQR
+        product: HarnessCLI
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.robert.harness.cli
       PRODUCT_NAME: harness-cli
@@ -264,9 +246,8 @@ targets:
   # Product → Test previously ran only Core/Daemon/Kit/CopyMode — under 40% of the suite —
   # so engine conformance, reflow goldens, renderer parity, theme, onboarding and the
   # compositor parity suites never ran in Xcode (CI's `swift test` covered them, local
-  # development didn't). Two SPM test targets stay deliberately SPM-only: HarnessCLITests
-  # and HarnessAppTests depend on *executable* targets (harness-cli, HarnessApp), which an
-  # Xcode unit-test bundle can't link as a package product — run those via `swift test`.
+  # development didn't). HarnessCLITests and HarnessAppTests remain SPM-only; run
+  # them via `swift test`. CLI tests link the library, separate from executable startup.
   HarnessTerminalEngineTests:
     type: bundle.unit-test
     platform: macOS

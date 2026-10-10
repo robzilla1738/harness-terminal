@@ -179,7 +179,8 @@ let package = Package(
         .library(name: "HarnessMCP", targets: ["HarnessMCP"]),
         .executable(name: "HarnessDaemon", targets: ["HarnessDaemon"]),
         .executable(name: "HarnessSessionHost", targets: ["HarnessSessionHost"]),
-        .executable(name: "harness-cli", targets: ["HarnessCLI"]),
+        .library(name: "HarnessCLI", targets: ["HarnessCLI"]),
+        .executable(name: "harness-cli", targets: ["HarnessCLIMain"]),
     ] + platformProducts,
     dependencies: platformDependencies + [
         .package(path: "Vendor/swift-sdk"),
@@ -279,11 +280,16 @@ let package = Package(
             path: "Packages/HarnessDaemon/Sources/HarnessDaemonMain"
         ),
         .target(name: "HarnessMCP", dependencies: ["HarnessCore", .product(name: "MCP", package: "swift-sdk"), .product(name: "Logging", package: "swift-log"), .product(name: "TOML", package: "swift-toml")], path: "Packages/HarnessMCP/Sources/HarnessMCP"),
-        .executableTarget(
+        .target(
             name: "HarnessCLI",
             dependencies: cliDependencies,
             path: "Tools/harness/Sources/HarnessCLI",
             exclude: cliExclude
+        ),
+        .executableTarget(
+            name: "HarnessCLIMain",
+            dependencies: ["HarnessCLI"],
+            path: "Tools/harness/Sources/HarnessCLIMain"
         ),
         .testTarget(name: "HarnessMCPTests", dependencies: ["HarnessMCP", "HarnessCore"], path: "Tests/HarnessMCPTests"),
         .testTarget(
@@ -308,9 +314,8 @@ let package = Package(
             dependencies: ["HarnessTheme"],
             path: "Tests/HarnessThemeTests"
         ),
-        // Unit coverage for the CLI's pure argument-parsing helpers. The CLI is an executable
-        // target (`@main struct HarnessCLI`); `@testable import` reaches its internal statics
-        // without splitting out a library, so daemon-free helpers like `flagValue` are covered.
+        // Keep executable startup outside the testable module: async entry-point symbols
+        // must never be linked into XCTest or Swift Testing bundles.
         .testTarget(
             name: "HarnessCLITests",
             dependencies: ["HarnessCLI"],

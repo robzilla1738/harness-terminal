@@ -586,7 +586,7 @@ HARNESS_LIVE_DAEMON_TESTS=1 swift test        # + real shell / socket tests
 
 Bundle in `Harness.app/Contents/MacOS/`: `Harness`, `HarnessDaemon`, `harness-cli`; icon at `Contents/Resources/Harness.icns`.
 
-**Building in Xcode:** `xcodegen generate` (only after adding/removing files or editing `project.yml`), then `open Harness.xcodeproj`; pick the **`Harness`** scheme + **My Mac** and ⌘B / ⌘R. The app target depends on `HarnessDaemon` + `harness-cli` and a `postBuildScript` copies both into the bundle, so one build refreshes all three. The generated scheme runs ten test targets (Core, Daemon, TerminalKit, CopyMode, TerminalEngine, Theme, TerminalRenderer, Onboarding, GridCompositorParity, plus the env-gated Benchmarks); `HarnessCLITests` and `HarnessAppTests` stay SPM-only (they depend on executable targets, which Xcode test bundles can't link), and so does `HarnessScriptTests` — run those via `swift test`.
+**Building in Xcode:** `xcodegen generate` (only after adding/removing files or editing `project.yml`), then `open Harness.xcodeproj`; pick the **`Harness`** scheme + **My Mac** and ⌘B / ⌘R. The app target depends on `HarnessSessionHost`, `HarnessDaemon`, and `harness-cli`; its post-build script copies all three helpers into the bundle. The generated scheme runs ten test targets (Core, Daemon, TerminalKit, CopyMode, TerminalEngine, Theme, TerminalRenderer, Onboarding, GridCompositorParity, plus the env-gated Benchmarks); `HarnessCLITests` and `HarnessAppTests` stay SPM-only (CLI tests import its library; app tests still import the executable target), and so does `HarnessScriptTests` — run those via `swift test`.
 
 **Daemon restart (critical, learned the hard way):** `HarnessDaemon` is a separate launchd process (`KeepAlive`) — rebuilding/relaunching the app does **not** restart it. Daemon-code changes (PTY env like `COLORTERM`, IPC, session authority) only take effect after you restart it **and** open a fresh pane (PTY env is applied at shell spawn):
 
@@ -606,7 +606,7 @@ App/renderer changes (colors, chrome, opacity, Settings) need only ⌘R. The lau
 
 **HarnessThemeTests:** theme document import/export plus catalog/resource coverage.
 
-**HarnessCLITests:** `flagValue` argument-parsing coverage (the shared flag extractor behind the `harness-cli` subcommands, incl. the flag-present-but-no-value case) — a `@testable import` of the `@main` `HarnessCLI` executable target, no library split.
+**HarnessCLITests:** `flagValue` argument-parsing coverage (the shared flag extractor behind the `harness-cli` subcommands, incl. the flag-present-but-no-value case) — a `@testable import` of the `HarnessCLI` library. `HarnessCLIMain` owns async executable startup and never enters test bundles.
 
 **HarnessTerminalKitTests:** `GridCompositorTests`, `GridCompositorCopyModeTests`, `HarnessTerminalSurfaceWorkerTests` (experimental off-main parser/frame pipeline).
 

@@ -101,3 +101,5 @@ language totals. Harness’s Swift implementation, C interoperability shims, Pyt
 engineering tools, shell scripts and Makefile retain their actual languages. No
 source is relabeled to inflate Swift’s share. GitHub recalculates the language bar
 after processing the updated default branch.
+
+The `harness-cli` executable has a thin `HarnessCLIMain` entry target. Commands live in the testable `HarnessCLI` library, so async executable startup cannot be linked into XCTest or Swift Testing bundles. The CLI and its wire contracts are unchanged.

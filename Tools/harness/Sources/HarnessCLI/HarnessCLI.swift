@@ -10,9 +10,8 @@ import HarnessTerminalEngine
 import HarnessTheme
 import HarnessMCP
 
-@main
-struct HarnessCLI {
-    static func main() async {
+public struct HarnessCLI {
+    public static func main() async {
         var args = Array(CommandLine.arguments.dropFirst())
         guard let command = args.first else {
             printUsage()
